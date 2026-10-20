@@ -57,6 +57,9 @@ choice made by the build that stands until the owner says otherwise.
 - Freelance platforms are configurable sources, like job boards.
 - Job is renamed Opportunity everywhere (table, API, code, specs). Decided, not built yet: it
   comes after ingestion and mail.
+- 2026-10-20: the full rename runs LAST, in a freeze window, once find, apply and swipe are
+  merged (option 1 of #353). Spec and plan: [SPEC-opportunities.md](../SPEC-opportunities.md),
+  [tasks/opportunities/todo.md](../tasks/opportunities/todo.md).
 
 ## Mail (2026-10-13; paused 2026-10-14 after M4)
 

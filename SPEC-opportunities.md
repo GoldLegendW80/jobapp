@@ -1,0 +1,165 @@
+# Spec: opportunities
+
+Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md), lane product (#353). Depends on `jobs` (the postings the sweep fills, `set_status`, the add path), `profile` (the `search` section), `apply` (the Like of A12, the queue, Full auto), `ingestion` (the import of onboarding step 1), `documents` (the CV upload panel, the writers) and `browser` (the browser sources of B8 to B10). Plan: [tasks/opportunities/todo.md](tasks/opportunities/todo.md). Issues: the spec #72, the swipe deck #74, freelance and project platforms #75, the first login wizard #76, simple by default #77, the rename #73. Intent: `docs/intent/swipe-onboarding-opportunities.md` of the owner's job workspace (outside this repository), requested and decided on 2026-10-10.
+
+## Objective
+
+The app shows what it found one card at a time, and one gesture decides: a Like starts the CV, the letter and the application, a Pass hides the posting for good. A first login wizard asks what the person is looking for, in plain words, and every page shows the essentials first with the rest behind "Advanced". Postings are no longer only jobs: freelance missions from the platforms that allow it come in through the same sweep, and at the end of the lane the whole app calls a posting an **Opportunity** (table, API, code, specs, UI).
+
+User stories:
+- As a person, I open **Discover** and see one card: title, company or client, location or remote, contract type, pay when known, and why it matches me. I swipe right (or press Like) and the app writes my documents and starts the application; I swipe left (or press Pass) and I never see that posting again. I can undo my last swipe.
+- As a person in Review first (the default), every Like lands in the review queue ready for my Approve; in Full auto, a Like is the click, within the guardrails of apply.
+- As a new person, at my first sign in a wizard of seven short steps fills my profile from my CV or LinkedIn export, asks what I look for, where, which contracts, my pay, how the app should apply, and shows a summary. I can skip what is not essential and change everything later.
+- As a freelancer, I pick the freelance and project sources I want swept, the same way as the job boards, and the missions they list arrive in my deck.
+- As anyone, every settings page shows a few plain options first and keeps the rest under one "Advanced" section.
+
+## Owner decisions (never decide them again)
+
+1. **Full rename** (2026-10-10): Job becomes Opportunity everywhere: table, API routes, code, specs, UI. Not a `kind` field with a wording layer on top of `jobs`.
+2. **The rename runs last, in a freeze window** (owner, 2026-10-20): once find, apply and swipe are merged; every lane merges and pauses, one session renames, the captain ships, the lanes resume. This answers the choice #353 put to him (option 1 of 2).
+3. **A Like in Full auto is the click** (2026-10-10, refined 2026-10-19): for a person who turned Full auto on, the Like given while Full auto is on is the approval for forms and e-mails alike, within the guardrails (CLAUDE.md rule 4, SPEC-apply "Modes"). It stays valid at most 7 days and only while Full auto stays on (planner default of 2026-10-19 that the owner may change).
+4. **Review first is the default.** Full auto is off until the person turns it on (SPEC-apply decision 1).
+5. **Freelance sources are a configurable list per person**, declared like the job boards, not a fixed short list (2026-10-10).
+6. **Everything stays free** (CLAUDE.md rule 11): no paid source, no paid alert subscription, no paid scraping service.
+7. **Never a cybersecurity role** (CLAUDE.md rule 2): the deck never shows one, a Like on one is refused (apply's `never_apply` guardrail), and no source is added for security work.
+8. **Mail sending is paused by the owner** (2026-10-14): outreach by e-mail to a freelance client is planned here but waits on the mail lane (#357) and apply A14.
+9. **Onboarding step 1 reuses ingestion**; the new profile fields are the ones the intent names: seniority, industries, company types, compensation, tone and language, application behaviour.
+
+The intent's constraints hold in every mode: company caps; every claim of a generated document traces to the verified profile; a document that fails the fact check is never sent automatically and falls back to the review queue; one message per Like, no bulk outreach; a form that cannot be completed falls back to the review queue.
+
+## Names before the rename
+
+Until the rename task, the table stays `jobs` and the jobs module keeps its code. New code of this lane calls a row a **posting** (`posting_id`), as apply and mail do, lives in `api/app/opportunities/` and `web/src/features/opportunities/` and `web/src/features/onboarding/`, and its routes sit under `/api/postings/...` next to apply's Like (`POST /api/postings/{id}/like`). So the rename touches as little of it as possible.
+
+## The swipe deck (#74)
+
+**What is in the deck.** The person's postings with status `found` or `shortlisted`, no live or ended application, fit at or above "Show postings from" (`search.min_fit`, default 70) or no fit yet when the posting has no text, not matched by a `never_apply` rule (the sweep marks those `skipped`; the deck checks again with apply's folded matcher, `apply.guardrails.never_apply`, so a Cybersecurity title the sweep's whole word match missed never shows). Order: fit, highest first, then the newest `found_on`, then the id (a stable order, so a reload shows the same card). A filter row, collapsed under "Advanced": contract types, remote or on site, source. An empty deck says why ("Nothing new above your threshold of 70. Find new postings, or lower the threshold in Search options.") with the two links.
+
+**The card.** Title; company or client; location, or "Remote" / "Hybrid" when known; contract type in plain words (Permanent, Fixed term, VIE, Internship, Apprenticeship, Freelance mission); pay when known ("45,000 to 55,000 EUR a year", "600 EUR a day"), never a guess (new nullable columns of the posting, filled from what an ATS API states or what the posting's text states in a shape an allow list accepts, task O3); the fit badge; the match reason: up to three competencies the posting asks that the profile has, and the first gap ("Matches: Python, LLM evaluation, FastAPI. Gap: Kubernetes."), from the stored `competencies` and `gaps`; the source ("via Greenhouse", "via Remote OK" with its link, which some sources require); a "More" that opens the posting's text in a sheet. No dashes as separators in any of it.
+
+**The gestures.** Drag right past a threshold, the Like button, or the right arrow key: a Like. Drag left, the Pass button, or the left arrow key: a Pass. The card follows the pointer and springs back under the threshold; with reduced motion, no animation, buttons only. One card in flight at a time: the next gesture waits for the server's answer of the previous one.
+
+**A Like** calls apply's `POST /api/postings/{id}/like` (A12a, PR #428: `apply.on_like`, the contract with this deck; its signature and answers change only with both plans). 201: the card leaves, a toast says "Liked. Your documents are being written." in Review first, or "Liked. The app will apply after the hold unless you cancel." in Full auto, with Undo. 409 `{detail, code, application_id}`: the card stays, the sentence of the code is shown (never apply, the same role already under way, already applied, closed posting, ...), and "Pass" is offered. 404: the card leaves (another tab deleted it).
+
+**A Pass** is `POST /api/postings/{id}/pass`: the posting moves to `skipped` through the jobs module's `set_status` under its lock, with a `status` event whose data holds `{via: "swipe", from}`. A skipped posting never comes back: the sweep's duplicate rule (same URL, or same company and title) finds the row and adds nothing, and the deck never shows `skipped`. The Pass is kept as a signal (the event) for later matching; nothing reads it yet (open question 5).
+
+**Undo** acts on the person's last swipe only, while the toast shows (10 seconds) or from the "Undo last" button until the next swipe:
+- a Pass: `DELETE /api/postings/{id}/pass` puts back the status in the event's `from` when the posting is still `skipped` by that same event (any later event, a status changed elsewhere: 409 `changed`, nothing undone);
+- a Like: apply's `POST /api/applications/{id}/cancel` (A6) while the application has not reached `submitting`; documents already asked are kept (they cost nothing more to keep and belong to the posting). In Full auto the hold of at least 15 minutes means a Like can always be undone before any click.
+
+**Isolation and limits.** Every route acts on the caller's rows only (404 otherwise). The deck answers at most 20 cards per call, with a cursor. Swipes are idempotent: a second Pass of the same posting answers 200 with the same state; a second Like answers apply's 409 `in_progress` with the application id.
+
+## Freelance and project platforms as sources (#75)
+
+**The model.** A person's `search` section gets a list `feeds`, beside `boards` (the ATS boards of the sweep) and `browser_sources` (browser B8 to B10): each entry `{kind, terms (optional include terms on top of the person's title terms), enabled}`. The sweep runs every enabled feed after the boards, with the same rules as a board: the person's include, exclude and location terms, the days window, the `never_apply` rules, the duplicate rule, the score, status `found`. A posting gets `contract_type = Freelance` when the source says it is a contract or freelance mission, else the contract type the posting text states (the jobs module's existing rule). The source is recorded (`source` column, for instance `remoteok`), with the posting's own address on the source, so the card links back to it.
+
+**Allowed only when it is free and within the platform's terms.** Checked on 2026-10-20 by reading each platform's robots file, terms and API pages (the claims and their sources are in the table). The catalogue in code holds the supported kinds only; the Search options page lists the others as "Not supported" with the reason in one line, so the person knows why. A platform's terms change: each fetcher keeps the date and the address of the terms it was built against in its module, and the plan's measurements are redone when a task touches it.
+
+| Platform | Verdict | How, or why not | Sources (read on 2026-10-20) |
+|---|---|---|---|
+| **Remote OK** | supported | The public JSON API `https://remoteok.com/api`, one request per sweep. Its legal notice asks for a followed link back to the posting on Remote OK and the name Remote OK as the source, else API access is suspended; the logo is not used. The card shows "via Remote OK" linking to the posting. Freelance or contract postings are those whose tags say so. | the `legal` field of the first element of `https://remoteok.com/api` |
+| **We Work Remotely** | supported | The RSS feeds (`https://weworkremotely.com/remote-jobs.rss` and one per category, `/categories/remote-<category>-jobs.rss`). Its feed page says anyone can use the feed and asks that the links be attributed back to We Work Remotely. The page answered 403 to a plain fetch on 2026-10-20: the task checks the feed itself from the Jetson before it builds on it. | `https://weworkremotely.com/remote-job-rss-feed` (as quoted by a search on 2026-10-20) |
+| **Hacker News "Who is hiring?" and "Freelancer? Seeking freelancer?"** | supported | The official public API (`https://hacker-news.firebaseio.com/v0/`), no authentication, no rate limit stated: the month's thread of the `whoishiring` account and its top level comments, at most 500 per thread, each comment a posting (its text, the company as its first line states, the comment's address). The "Freelancer?" thread is the freelance one; its posts often give an e-mail contact, which is outreach by e-mail (below). | `https://github.com/HackerNews/API` ("making the public Hacker News data available", "There is currently no rate limit") |
+| **LinkedIn missions** (service requests) | not a new source | LinkedIn's User Agreement 8.2 forbids crawlers, bots and automated methods. The owner chose "Full use" for LinkedIn jobs with a per person opt in that names this risk (SPEC-browser decision 2, browser B10). Service requests are not covered by that decision: open question 3. | `https://www.linkedin.com/legal/user-agreement`, section 8.2 items 2, 3 and 13 |
+| **Malt** | not supported | Malt has no public mission board: clients find freelancers through its search and contact them in its messaging, so there is nothing public to read; its site refuses plain fetches (403 on the robots file and the terms on 2026-10-20). Missions reach the person by Malt's own e-mails, which the app could read from the person's own mailbox once the mail lane reads mail again (open question 2). | `https://www.keobiz.fr/fiches-pratiques/lancer-activite-freelance/plateformes-pour-freelances-malt/`, `https://copeps.fr/actualites/trouver-un-freelance-malt/`; 403 on `https://www.malt.fr/robots.txt` and `https://www.malt.fr/legal` |
+| **Free-Work** | not supported | Its robots file allows listing pages, but its terms grant a licence to display the site on a screen for personal browsing only (7.2), forbid extracting a substantial part of the database of job and mission offers, whose sui generis right it claims (7.3, 1.5 c), and any reproduction or professional use. No API or feed is offered. Its own e-mail alerts are the free path (open question 2). | `https://www.free-work.com/fr/terms` (7.2, 7.3, 1.5), `https://www.free-work.com/robots.txt` |
+| **Codeur.com** | not supported | Its legal notice says automated or semi automated requests on the data it publishes are unlawful without its authorisation; its terms forbid devices, software or algorithms that intercept and use its data (5). Alerts for new projects need a paid subscription (31.90 EUR a month excluding tax on 2026-10-20), so they are not free either. | `https://www.codeur.com/pages/mentions-legales`, `https://www.codeur.com/pages/termes-et-conditions-d-utilisation` (5, 9), `https://www.codeur.com/mission-freelance` |
+| **Upwork** | not supported | Its terms forbid robots, spiders, scrapers or other automated means without express written permission; its robots file disallows `/nx/` (the job search) and `/api*`; its RSS job feeds ended on 2024-08-20. The official GraphQL API needs a key Upwork approves per use (open question 2). | `https://www.upwork.com/robots.txt`, Upwork's notice on the end of RSS quoted at `https://hn.svelte.dev/item/41174888`, `https://www.upwork.com/developer/documentation/graphql` (the terms page answered 403 to a plain fetch; the clause is quoted by `https://oxylabs.io/products/scraper-api/web/upwork`) |
+| **Freelancer.com** | not supported | Its terms (section 33) forbid any robot, spider, scraper or other automated means, the API included unless it approves in writing, and (section 4, item 11) downloading and aggregating its listings for display with other websites' without written permission. | `https://www.freelancer.com/about/terms` (sections 4 and 33), `https://www.freelancer.com/robots.txt` |
+| **Comet** | not supported | Its robots file blocks nothing, but missions are shown only to selected freelancers signed in to its app; the public site lists none. Reading them would mean automating the person's signed in account, which no decision covers. | `https://www.comet.co/robots.txt`, `https://www.comet.co/` |
+| **Crème de la Crème** | not supported | Missions are proposed to selected members by its matching, by e-mail, Slack or phone; no public listing. Same path as Malt: the person's own e-mails, later. | `https://www.cremedelacreme.io/robots.txt`, `https://lefreelance.fr/articles/plateforme-freelance/`, `https://copeps.fr/actualites/creme-de-la-creme-freelance-avis/` |
+
+Three ways stay open for every platform, all free and within terms: **the person adds a mission by hand** (the jobs module's "Add a posting" dialog, with the contract Freelance and the text pasted; a card like any other); **a careers page source** of browser B9 for a client's own site; and, when the mail lane reads mail again, **the platforms' own alert e-mails** in the person's mailbox (open question 2).
+
+**What happens after a Like on a mission.** A mission from a feed whose posting links to an application form (an ATS, a company form) goes through apply like a job: Review first, and Full auto only on Ashby, Greenhouse and Lever (SPEC-apply decision 1). A mission whose only contact is an e-mail address is an **outreach**: a short proposal written from the profile (documents, a new kind `proposal`), sent through the mail module's `mail.gate.send` with apply A14's authorisations, one message per Like, on the client's own domain in Full auto, identifying the sender, and never by itself in Review first. Until the mail lane resumes and A14 lands, such a Like lands in the review queue with the proposal written and "Copy" and "Open in your mail" buttons: the person sends it himself.
+
+## The first login wizard (#76)
+
+**When.** At the first sign in of an account whose profile is empty, the app opens `/welcome` instead of the home page. "Skip for now" records `preferences.onboarding.dismissed_at` and the home page shows a small card "Finish setting up" until the wizard is done. Every later sign in goes to the home page. The owner's account and every account with a profile already filled never see the wizard by itself (open question 9); `/welcome` stays reachable from Account.
+
+**The steps.** A progress bar with the step names, Back and Next, "Skip this step" on every step but 2 and 7, each step saved when Next is pressed (through the profile's own `PUT /api/profile/{section}` with its revision, so a second tab gets the profile's 409), so a closed tab resumes at the first step not done:
+1. **Your profile.** Upload a CV (PDF or DOCX) or a LinkedIn data export (ZIP), or paste text: ingestion's upload (`POST /api/ingestion/documents`), its consent the first time, its estimate and its run (`POST /api/ingestion/runs`), with "Review the proposals" opening `/profile/fill` at its review step; a CV also becomes a base CV through documents' upload panel (`upload-panel.tsx` of D24, which was built for this wizard to embed). The run goes on in the background while the next steps are filled. Skippable.
+2. **What you are looking for.** Roles (title include terms, at least one), seniority, industries, company types. Essential.
+3. **Where.** Locations (at least one, or "Anywhere"), and remote, hybrid or on site (`search.remote_stance`).
+4. **How you want to work.** Several of: Permanent, Fixed term, Internship, Apprenticeship, VIE, Freelance mission (`search.contract_types`). Choosing Freelance mission shows the supported freelance sources with their switches (on by default for the person who chose freelance) and the line about the platforms that are not supported.
+5. **Pay.** Optional: a yearly salary range with its currency, a daily rate with its currency, or "Rather not say". Shown on cards next to the posting's pay; never sent in a form (salary answers stay apply's `salary_stance`).
+6. **How the app applies.** Review first (selected, "You approve every application") or Full auto ("A Like is enough. The app applies after a hold of at least 15 minutes, only above your threshold"), with apply's own settings route (`PUT /api/apply/settings`); Full auto is shown but disabled with "Available soon" until apply A13a has merged, and choosing it goes through A13b's settings card and its rehearsals, never around them. Then the language of documents (Automatic from the posting, English, French) and the tone (Plain, Formal, Warm).
+7. **Summary.** Every answer in plain words with "Change" per step, the counts the first sweep would cover ("12 boards and 2 freelance sources"), and "Start": it records `preferences.onboarding.completed_at`, starts a first sweep (`POST /api/jobs/sweeps`) and opens Discover.
+
+**The new profile fields** (all optional, validated, exported and imported, shown in the profile's tabs too):
+- in `search`: `seniority` (a list of `intern`, `junior`, `mid`, `senior`, `lead`, `principal`), `industries` (terms), `company_types` (a list of `startup`, `scaleup`, `large_company`, `public_sector`, `nonprofit`, `agency`, `consulting`), `compensation` (`{salary: {min, max, currency} | null, daily_rate: {min, max, currency} | null}`, whole numbers, currency an ISO 4217 code), `feeds` (above);
+- a new section `preferences`: `onboarding: {completed_at, dismissed_at}`, `documents_language` (`auto`, `en`, `fr`; `auto` reads the posting's language as documents do today), `documents_tone` (`plain`, `formal`, `warm`; the documents writers read it, a documents lane follow up);
+- application behaviour is apply's `apply_settings.mode_after_like` (A11), not a profile field, so there is one truth.
+
+The new fields do not change scoring or the sweep's filters (open question 8): the deck's filter uses contract types and remote stance; seniority, industries and company types are shown on the summary and kept for later matching.
+
+## Simple by default (#77)
+
+- **One shared component** `Advanced` (`web/src/components/advanced-section.tsx`): a section titled "Advanced", collapsed by default, its state kept per page in the browser (local storage wrapped in try and catch, so a blocked storage only means it starts collapsed), keyboard and screen reader friendly (a disclosure button with `aria-expanded`). Documents D13 created the first "Advanced" of the Search tab; it moves onto this component.
+- **What goes up front:** at most five options per card, each with a default that works; everything numeric (thresholds, ceilings, hold lengths, pacing), regular expressions, per board exclude terms and debug or measurement details go under Advanced.
+- **Plain labels.** No jargon in a label: "Fit score" stays (it is the app's own word) but "ATS" becomes "Application site", "sweep" becomes "Find new postings", "lease" never appears, "never apply rules" becomes "Roles to never apply for", contract codes read as words (CDI is "Permanent"). The word list lives in `web/src/lib/wording.ts`, one place, with a Vitest that every label of the listed pages comes from it or is plain English.
+- **The pass, page by page:** each page's lane makes its own page simple, in its own files, with the shared component; this lane does Discover, the wizard and the opportunities pages, and opens one issue per other page with the list of what moves under Advanced.
+- **Wording that follows the modes** (the intent: "UI wording adapts to the modes chosen in onboarding"): a person whose contract types are only Freelance mission reads "Missions", one without it reads "Jobs", one with both reads "Opportunities", in the navigation and the page titles. It is part of the rename's web slice, since that slice rewrites every label anyway.
+
+## The rename (#73), last, in a freeze window
+
+**What is renamed.** Every identifier, path and word that says job: the tables `jobs`, `job_events`, `job_files` and their enums (`job_status`, `job_event_kind`, ...), columns named `job_id`, indexes and constraints, the Python package `api/app/jobs/` (into `api/app/opportunities/`, beside this lane's code), its classes (`Job`, `NewJob`, `JobBusyError`, `lock_job`, ...), the routes `/api/jobs/...` (to `/api/opportunities/...`), the web feature `web/src/features/jobs/` and its routes `/jobs`, `/jobs/:id`, `/jobs/map`, `/jobs/:id/documents/:kind`, every UI string, the e2e specs, the deploy command `./deploy.sh jobs import`, `SPEC-jobs.md` (folded into this spec) and every mention in the other specs, plans, `CLAUDE.md`, `CAPABILITY-MAP.md`, `README.md` and `docs/`. Names that already say `posting` stay as they are: they were chosen neutral for this rename (intent, "Consequences"), so `posting_id` in apply, mail and documents is kept (planner default, open question 6).
+
+**The data.** One migration renames in place (`ALTER TABLE ... RENAME`, `ALTER TYPE ... RENAME`, `ALTER INDEX ... RENAME`): metadata only in Postgres, every row kept, no copy; its `downgrade` renames back. A backup first (`ops/remote.sh backup`), a count of rows per table before and after in the deploy's verify figures. Redis keys and arq queue names with `job` in them are renamed with a drain first (no sweep or apply run open during the deploy).
+
+**Old addresses keep working for a while.** The api answers every old `/api/jobs/...` path with 308 to the new one (method and body kept), for 30 days or two releases, whichever is later (planner default, open question 7), then a contract task removes them. The web keeps redirect routes from `/jobs...` to `/opportunities...` (query string kept, so bookmarked filters still open) for good: they cost nothing. Links stored in data (events, notifications, mail drafts) are rewritten by the migration when they hold an app path.
+
+**The freeze.** Its start needs the find, apply and swipe tasks merged (owner, 2026-10-20). The planner reads that as: jobs and browser sources B8, B9 and B10, this lane's freelance sources O7, apply A12, A13a and A13b, and the deck O2 (open question 1). Then: the captain announces the freeze on #354 and every lane issue; every lane merges what is approved and parks the rest (open pull requests stay open, no new push); the rename's slices are built on one stacked branch by one session, reviewed, and shipped as one batch by `ops/ship.sh`; the captain announces the end with the rebase script, and each parked pull request is rebased with it (`ops/rename-rebase.sh`, a mapping of old paths and names to new ones, run on a branch, its result reviewed). Mail (paused) and every task planned after the freeze is written against the new names.
+
+## API (this lane)
+
+All require a session and act on the caller's own rows only (404 otherwise); a person's writes carry the CSRF header like every route.
+
+| Method and path | Does |
+|---|---|
+| GET /api/postings/deck `?cursor=&limit=` (at most 20) `&type[]=&remote=&source=` | the deck: cards in order with the card fields, the mode in force (`review` or `full_auto`), the next cursor, the count left |
+| POST /api/postings/{id}/pass ; DELETE /api/postings/{id}/pass | a Pass, and its undo (409 `changed` when the posting moved since) |
+| POST /api/postings/{id}/like | apply's (A12a, #428), called as is |
+| POST /api/applications/{id}/cancel | apply's (A6), the undo of a Like |
+| GET /api/opportunities/feeds | the catalogue: supported kinds with their attribution text, and the not supported platforms with their one line reason and the date of the check |
+| PUT /api/profile/search, PUT /api/profile/preferences | the profile's own routes, with the new fields |
+| POST /api/opportunities/onboarding/complete ; POST /api/opportunities/onboarding/dismiss | record the end of the wizard (and start the first sweep) or its dismissal |
+
+## Frontend
+
+`/discover`: the deck (one card, Like and Pass buttons, Undo last, the mode badge, the filter row under Advanced, the empty state), first in the navigation after the rename's wording, mobile first (a thumb's reach, 375px). `/welcome`: the wizard. The profile's Search options tab: the new target fields, the pay, the card "Freelance and project sources" (switches, the not supported list), all through the shared Advanced section. Light and dark; no dashes as separators.
+
+## Testing strategy
+
+- Unit: the deck's query and order (fit ties, no fit, the `never_apply` fold over the 28 titles of apply A2's table), the card text (pay ranges, contract words, the match reason from competencies and gaps), each feed's parser against recorded fixtures (written from the public pages on the task's start date, no copy of their scripts, invented companies), the freelance tag rules (accept and refuse tables), the new profile fields (valid, missing, wrong type, oversize, currency codes), the wording list.
+- Integration (real Postgres and Redis): every route with two people A and B (B's posting answers 404 to A's Pass, undo and deck), the Pass under the jobs lock racing a sweep and a Like, the undo after a later status change, a sweep against a fake feeds server (`tests/feeds_stub.py`: ok, 404, 429, timeout, malformed, 5,000 items), the wizard's saves with stale revisions.
+- Journeys (Playwright, on the Mac stack, `e2e-*@example.org` accounts only, the fake ATS forms and fake feeds only): swipe through a deck, Like into the queue, Pass, undo each; the wizard from an empty account to the first sweep; freelance sources switched on and their missions in the deck; the rename's redirects of old addresses.
+- No test reads a real platform or applies to a real company.
+
+## Boundaries
+
+- **Always:** a Like goes through `apply.on_like`; a Pass through `set_status`; a source is read only when it is free and its terms allow it, with its attribution shown; user scoping on every query.
+- **Ask first:** a new source not in the table above; asking a platform for an API key or written permission; letting a Pass change scores; any change to apply's routes.
+- **Never:** scrape a platform whose terms forbid it; pay for a source or an alert; sign in to a platform on the person's behalf to read missions; send an outreach e-mail by itself in Review first, or at all while mail sending is paused; show or apply to a cybersecurity role.
+
+## Success criteria
+
+1. On the Jetson, the owner opens Discover on his phone, Likes three postings and Passes three; the Likes are in the review queue with their documents being written, the Passes never come back after the next sweep, and one undo of each works.
+2. A new invited account goes through the wizard from an empty profile to its first sweep without touching JSON, and finds its answers in the profile.
+3. A person who switches on Remote OK, We Work Remotely and the Hacker News freelance thread finds their missions in the deck, each card naming and linking its source.
+4. Every settings page of the app shows its essentials first and the rest under one Advanced section, with no jargon in labels.
+5. After the freeze, nothing in the code, the API, the UI or the specs says job, every old address still opens the right page, and every row is where it was.
+6. No person can see or swipe another's postings (automated isolation tests).
+
+## Open questions for the owner
+
+Listed in the pull request of this spec and in the plan; none blocks the first tasks (O1 to O6).
+1. Which tasks make "find, apply and swipe merged" for the freeze (the planner's reading is above).
+2. The platforms whose terms forbid automation (Malt, Free-Work, Codeur, Upwork, Freelancer.com, Comet, Crème de la Crème): keep them unsupported and read their alert e-mails from the person's mailbox once the mail lane reads mail again, or ask some of them for an API key or written permission (Upwork and Freelancer.com have APIs under approval).
+3. LinkedIn service requests (missions): extend browser B10's opt in, which covers LinkedIn jobs, to them, or not.
+4. Full auto for missions: the planner's default is the same as for jobs (Ashby, Greenhouse and Lever forms only, so a mission by e-mail is Review first until A14), confirm or change.
+5. A Pass as a signal: stored only (planner default), or later lowering the fit of similar postings.
+6. During the rename, keep `posting_id` and the other `posting` names (planner default) or rename them to `opportunity_id` too.
+7. How long old API addresses keep their 308 redirect (planner default: 30 days or two releases, whichever is later).
+8. Whether seniority, industries and company types should feed the score or the sweep's filters (planner default: stored and shown, not scored).
+9. Whether existing accounts with a profile (the owner's, the friends') see the wizard once (planner default: no, a "Finish setting up" card only for those with steps left).
