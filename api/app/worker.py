@@ -1047,6 +1047,13 @@ async def serve(
             run.done() for run in runs
         ):
             await asyncio.sleep(0.05)
+        # arq records a queue's health on its first poll, which comes after its own start up; the
+        # start hooks above can be slow on a loaded machine. Record every ready queue now, in
+        # arq's own key and format, so that `--check` passes as soon as the workers run. The
+        # periodic record is arq's and unchanged: it skips until the interval has elapsed.
+        for w in workers:
+            if getattr(w, "_pool", None) is not None:
+                await w.record_health()
         logger.info("worker started", extra={"queues": [w.queue_name for w in workers]})
         if on_ready is not None:
             await on_ready(workers)
