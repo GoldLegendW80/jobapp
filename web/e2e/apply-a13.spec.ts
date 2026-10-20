@@ -205,6 +205,8 @@ test("an invented person has the consent, a base CV, a company cap and three pos
 });
 
 test("Full auto is turned on in Settings after it says what a Like then does, and the hold set to its floor", async () => {
+  const before = await page.request.get("/api/apply/settings");
+  const { min_fit } = (await before.json()) as { min_fit: number };
   await page.goto("/settings/applications");
   const review = page.getByRole("radio", { name: "Review first" });
   await expect(review).toBeChecked();
@@ -215,7 +217,7 @@ test("Full auto is turned on in Settings after it says what a Like then does, an
   await expect(full).toBeChecked();
   const panel = page.getByRole("region", { name: "Turn on Full auto" });
   await expect(panel).toContainText(
-    "The app will submit applications for you when a posting's fit is at least 80, at least 1 minute after each Like unless you cancel, and never more than one application per company in 30 days.",
+    `The app will submit applications for you when a posting's fit is at least ${min_fit}, at least 1 minute after each Like unless you cancel, and never more than one application per company in 30 days.`,
   );
   await expect(panel).toContainText(
     'Your next Like is a rehearsal: the app fills the form and checks it, submits nothing, and asks you "Does this look right?" in Applications.',
@@ -228,11 +230,19 @@ test("Full auto is turned on in Settings after it says what a Like then does, an
 
   await page.getByText("Advanced", { exact: true }).click();
   await expect(page.getByText(/Never less than 1 minute/)).toBeVisible();
+  // The stack's floor is the hold already: Save waits for a change, then takes 2 and back 1.
   const hold = page.getByRole("textbox", { name: "Hold length in minutes" });
-  await hold.fill("1");
-  await page.getByRole("button", { name: "Save hold length" }).click();
-  await expect(page.getByText("Hold length saved.").first()).toBeVisible();
-  await expect(page.getByText(/1 minute between a Full auto/)).toBeVisible();
+  const save = page.getByRole("button", { name: "Save hold length" });
+  await expect(hold).toHaveValue("1");
+  await expect(save).toBeDisabled();
+  for (const [minutes, said] of [
+    ["2", "2 minutes between a Full auto"],
+    ["1", "1 minute between a Full auto"],
+  ] as const) {
+    await hold.fill(minutes);
+    await save.click();
+    await expect(page.getByText(said)).toBeVisible();
+  }
   const settings = await page.request.get("/api/apply/settings");
   expect(await settings.json()).toMatchObject({
     mode_after_like: "full_auto",
