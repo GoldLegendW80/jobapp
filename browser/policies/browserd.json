@@ -8,10 +8,7 @@
     "chrome://newtab",
     "chrome://new-tab-page",
     "chrome://new-tab-page-third-party",
-    "chrome://omnibox-popup.top-chrome",
-    "chrome://omnibox-everywhere.top-chrome",
-    "chrome://tab-search.top-chrome",
-    "chrome://webui-toolbar.top-chrome"
+    "chrome://top-chrome"
   ],
   "PolicyTestPageEnabled": false,
   "ExtensionInstallBlocklist": ["*"],
