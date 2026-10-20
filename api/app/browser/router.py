@@ -1,7 +1,8 @@
 """/api/browser: the person's browser and their own sessions in it (browser B3).
 
 - GET /api/browser answers `{available, profile, lease, holder, queue}`: whether browserd answers,
-  the person's profile (size and last use; never a file of it), their own current lease, who
+  the person's profile (size and last use; never a file of it), their own current lease (with,
+  during a sign in hand off, `waiting_person`, the site and the minutes left: B12a), who
   holds the browser as seen by this person (`you`, `other`, or null: never who, nor why), and
   their places in the queue with the estimated wait.
 - POST /api/browser/sessions `{purpose: "look" | "signin", address?}` starts a session of the
@@ -21,6 +22,7 @@ write answers 503 with UNAVAILABLE, and GET says `available: false`. Every answe
 build is `Cache-Control: no-store` (the 401, 403 and 422 built before them hold no data).
 """
 
+import math
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -110,6 +112,8 @@ class LeaseOut(BaseModel):
     wait_reason: str | None
     wait_site: str | None
     wait_deadline: datetime | None
+    # B12a: the whole minutes a sign in hand off still waits for the person, rounded up.
+    wait_minutes_left: int | None
     started_at: datetime
     active_s: int
     max_s: int
@@ -163,10 +167,17 @@ def _lease_out(lease: Lease, now: float) -> LeaseOut:
         wait_reason=lease.wait_reason,
         wait_site=lease.wait_site,
         wait_deadline=_when(lease.wait_deadline),
+        wait_minutes_left=_minutes_left(lease, now),
         started_at=datetime.fromtimestamp(lease.started_at, UTC),
         active_s=int(lease.active_s(now)),
         max_s=lease.max_s,
     )
+
+
+def _minutes_left(lease: Lease, now: float) -> int | None:
+    if lease.state != "waiting_person" or lease.wait_deadline is None:
+        return None
+    return max(0, math.ceil((lease.wait_deadline - now) / 60))
 
 
 def _queue_out(place: Waiting) -> QueueOut:
