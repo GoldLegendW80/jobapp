@@ -1,0 +1,144 @@
+{
+  "slug": "mono",
+  "version": 1,
+  "name": {
+    "en": "Mono",
+    "fr": "Mono"
+  },
+  "description": {
+    "en": "One column for engineering profiles: the name, the headings, the dates and the skills in a monospace face, the skills in a tinted block set like code, a green accent.",
+    "fr": "Une colonne pour les profils d'ingénieur : le nom, les titres, les dates et les compétences dans un caractère à chasse fixe, les compétences dans un bloc teinté composé comme du code, une couleur verte."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "no photo",
+    "colour"
+  ],
+  "photo": "none",
+  "fonts": [
+    "ibm-plex-mono",
+    "ibm-plex-sans"
+  ],
+  "accent": "#1a7f37",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 9.6,
+        "line_height": 1.42,
+        "section_gap": 10.0,
+        "item_gap": 5.0,
+        "margin": 15.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.38,
+        "section_gap": 9.4,
+        "item_gap": 4.6,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.2,
+        "line_height": 1.35,
+        "section_gap": 8.7,
+        "item_gap": 4.3,
+        "margin": 13.0
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.31,
+        "section_gap": 8.1,
+        "item_gap": 3.9,
+        "margin": 12.0
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.27,
+        "section_gap": 7.4,
+        "item_gap": 3.6,
+        "margin": 11.0
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.23,
+        "section_gap": 6.8,
+        "item_gap": 3.2,
+        "margin": 10.0
+      },
+      {
+        "body_size": 8.4,
+        "line_height": 1.2,
+        "section_gap": 6.1,
+        "item_gap": 2.9,
+        "margin": 9.0
+      },
+      {
+        "body_size": 8.2,
+        "line_height": 1.16,
+        "section_gap": 5.5,
+        "item_gap": 2.5,
+        "margin": 8.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 10.6,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.3,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.0,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "7c157078cf9cecfe64ff1bbf8d7b1ceee9afc16e81b98772193fb52a2974c2a2"
+}
