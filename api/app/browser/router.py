@@ -26,10 +26,10 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.browser import profiles
-from app.browser.address import check_address
+from app.browser.address import ADDRESS_MAX, check_address
 from app.browser.client import BrowserdClient, BrowserError
 from app.browser.leases import (
     DbProfiles,
@@ -125,7 +125,9 @@ class SessionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     purpose: Literal["look", "signin"]
-    address: str | None = None
+    # Bounded for the body limit only, with room above ADDRESS_MAX: a longer address still gets
+    # check_address's own bad_address answer, not a schema error.
+    address: Annotated[str, Field(max_length=4 * ADDRESS_MAX)] | None = None
 
 
 class SessionOut(BaseModel):
