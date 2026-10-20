@@ -250,7 +250,9 @@ script() {
 }
 # The fragment the script looks for in the logs, taken from the script: its default MESSAGE, cut
 # where the script cuts it.
+# shellcheck disable=SC2016 # the $ are the script's text, matched as written
 DEFAULT_MESSAGE="$(sed -n 's/^MESSAGE="\${MESSAGE:-\(.*\)}"$/\1/p' "$SCRIPT")"
+# shellcheck disable=SC2016 # the same
 CUT="$(sed -n 's/.*fragment="\${MESSAGE:\([0-9]*\):\([0-9]*\)}".*/\1 \2/p' "$SCRIPT")"
 [[ -n "$DEFAULT_MESSAGE" && "$CUT" =~ ^[0-9]+\ [0-9]+$ ]] || fail "the default MESSAGE or its cut is not found in $SCRIPT"
 DEFAULT_FRAGMENT="${DEFAULT_MESSAGE:${CUT% *}:${CUT#* }}"

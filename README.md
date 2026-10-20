@@ -147,7 +147,8 @@ ssh jetson                        # then, once: the browser's host firewall (sud
 cd ~/jobapp && sudo bash ops/browser-egress.sh install jobapp_egress
 tests/reboot_check.sh             # a reboot (sudo) and its recovery check
 # and the commands of ./deploy.sh that take an argument: restore <file> --into-live, admin create <email>,
-# admin unlock, profile import, jobs import, documents import-legacy, backup-schedule install
+# admin unlock, profile import, jobs import, documents import-legacy, ingestion close-run,
+# backup-schedule install
 ./deploy.sh                       # the first deploy and a new .env
 ```
 
@@ -1403,6 +1404,13 @@ curl -s -b cookies http://localhost/api/ingestion/consent                       
 curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
   -d '{"version":1}' http://localhost/api/ingestion/consent                      # record it
 ```
+
+A run that cannot move (its `advance` keeps failing) is closed by the cron after five failures in
+a row. The operator can close it at once: `./deploy.sh ingestion close-run <run id> --dry-run`
+prints what the close would do, the same without `--dry-run` closes it (`python -m
+app.ingestion.cli close-run` in the api container): `failed` with the stuck sentence, the planned
+steps cancelled, the running step's agent run asked to stop, the steps read kept for the next run.
+A run that has already ended is left as it is, so running it again changes nothing.
 
 ## The parser service
 
