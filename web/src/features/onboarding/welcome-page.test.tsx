@@ -9,13 +9,14 @@ import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { onboardingDone, server } from "@/test/server";
 
+import type { OnboardingState } from "./onboarding-api";
 import { writePassed } from "./steps";
 
-const fresh = {
+const fresh: OnboardingState = {
   completed_at: null,
   dismissed_at: null,
   profile_empty: true,
-  done: [] as string[],
+  done: [],
   steps_left: ["profile", "looking", "where", "work"],
   open_wizard: true,
   show_card: true,

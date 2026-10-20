@@ -28,6 +28,14 @@ function markChecked(userId: string): void {
 }
 
 /**
+ * What the gate decided, on the root element (`data-onboarding`): the journeys that create an
+ * account read it to know, without waiting on a clock, whether the wizard opened.
+ */
+function marker(decision: "welcome" | "stay"): void {
+  document.documentElement.dataset.onboarding = decision;
+}
+
+/**
  * The first login redirect (opportunities O5): once per browser session, a person the api says
  * should see the wizard (`open_wizard`: a member with an empty profile who neither finished nor
  * put it off) is sent to /welcome, once. The page asked for renders meanwhile; an api that fails
@@ -46,14 +54,24 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     enabled: !checked && userId !== undefined,
   });
   const decided = state.isSuccess || state.isError;
+  useEffect(
+    () => () => {
+      delete document.documentElement.dataset.onboarding;
+    },
+    [],
+  );
   const open = state.data?.open_wizard === true;
   useEffect(() => {
     // Once per mount and per session: after that the person goes wherever they like.
-    if (handled.current || !userId || !decided) return;
+    if (handled.current || !userId || !decided) {
+      if (handled.current) marker("stay");
+      return;
+    }
     handled.current = true;
     markChecked(userId);
-    if (open && location.pathname !== WELCOME)
-      void navigate(WELCOME, { replace: true });
+    const send = open && location.pathname !== WELCOME;
+    marker(send ? "welcome" : "stay");
+    if (send) void navigate(WELCOME, { replace: true });
   }, [decided, open, userId, location.pathname, navigate]);
   return children;
 }
