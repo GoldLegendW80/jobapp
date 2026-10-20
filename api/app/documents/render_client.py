@@ -76,6 +76,7 @@ GENERIC = frozenset(
 )
 
 
+PAGE_RATIO_MAX = 10  # page 1's height over its width: an A4 page is 1.41
 PDFIUM = threading.Lock()  # held around every use of PDFium in this process (module docstring)
 
 
@@ -288,15 +289,32 @@ def fonts_asked(fonts: list[str], asked: frozenset[str]) -> bool:
 
 
 def page1_png(pdf: bytes, width: int) -> bytes:
-    """Page 1 of a PDF as a PNG `width` pixels wide (a preview, a thumbnail)."""
+    """Page 1 of a PDF the app's renderer made, as a PNG `width` pixels wide (a preview, a
+    thumbnail). Raises RenderError("render_failed") when PDFium cannot open the file or draw
+    its first page, or when that page is no CV page (more than PAGE_RATIO_MAX times as long as
+    it is wide). Never give it a file from elsewhere: the api parses nothing (pyproject.toml)."""
     import pypdfium2 as pdfium
 
     with PDFIUM:
-        document = pdfium.PdfDocument(pdf)
         try:
-            page = document[0]
+            document = pdfium.PdfDocument(pdf)
+        except pdfium.PdfiumError:
+            raise RenderError("render_failed") from None
+        try:
+            if len(document) < 1:
+                raise RenderError("render_failed")
             try:
-                bitmap = page.render(scale=width / page.get_width())
+                page = document[0]
+            except pdfium.PdfiumError:
+                raise RenderError("render_failed") from None
+            try:
+                page_width, page_height = page.get_size()
+                if page_width <= 0 or not 0 < page_height <= page_width * PAGE_RATIO_MAX:
+                    raise RenderError("render_failed")
+                try:
+                    bitmap = page.render(scale=width / page_width)
+                except pdfium.PdfiumError:
+                    raise RenderError("render_failed") from None
                 try:
                     # A copy, so the image owns its pixels once the bitmap is closed.
                     image = bitmap.to_pil().copy()

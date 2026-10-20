@@ -49,6 +49,7 @@ type Version = {
   frozen_at: string | null;
   frozen_reason: string | null;
   has_pdf: boolean;
+  has_preview: boolean;
 };
 
 type PostingDocuments = {
@@ -284,7 +285,13 @@ test("the applied posting's CV and letter are frozen and serve the legacy PDFs",
       origin: "legacy",
       frozen_reason: "legacy_applied",
       has_pdf: true,
+      has_preview: false,
     });
+    // The command line's PDF never reaches PDFium in the api: no page image of it.
+    const image = await page.request.get(
+      `/api/documents/${document.id}/versions/1/page1.png`,
+    );
+    expect(image.status()).toBe(404);
     const served = await rawPdf(page.request, document.id, 1);
     expect(served.equals(pdfs[document.kind])).toBe(true);
     keep("documents-d15", `legacy-${document.kind}.pdf`, served);
