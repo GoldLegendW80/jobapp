@@ -27,7 +27,8 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.documents import eligibility, freeze, legacy, render_client, render_job, store, tick
+from app.config import get_settings
+from app.documents import cli, eligibility, freeze, legacy, render_client, render_job, store, tick
 from app.documents.models import (
     Author,
     Document,
@@ -514,6 +515,53 @@ def run_cli(url: str | None, *args: str) -> subprocess.CompletedProcess[str]:
         timeout=120,
         check=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("dry_run", "event"),
+    [(True, "documents.legacy.dry_run"), (False, "documents.legacy.imported")],
+)
+def test_the_command_logs_what_it_did_once_its_transaction_ended(
+    world: World,
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    dry_run: bool,
+    event: str,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", migrated_url)
+    get_settings.cache_clear()
+    try:
+        with caplog.at_level(logging.INFO, logger="app.documents"):
+            assert cli.run_import_legacy(ALEX, dry_run) == 0
+    finally:
+        get_settings.cache_clear()
+    records = [r for r in caplog.records if r.getMessage().startswith("documents.legacy.")]
+    assert [r.getMessage() for r in records] == [event]
+    assert (records[0].cvs, records[0].letters) == (5, 2)
+    with world.factory() as db:
+        written = set(rows_of(db, world.alex).values()) != {0}
+    assert written is not dry_run
+
+
+def test_a_failed_command_logs_no_import(
+    world: World,
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def busy(*args: Any, **kwargs: Any) -> legacy.Summary:
+        raise store.DocumentBusyError(store.BUSY)
+
+    monkeypatch.setenv("DATABASE_URL", migrated_url)
+    monkeypatch.setattr(legacy, "import_legacy", busy)
+    get_settings.cache_clear()
+    try:
+        with caplog.at_level(logging.INFO, logger="app.documents"):
+            assert cli.run_import_legacy(ALEX, False) == 1
+    finally:
+        get_settings.cache_clear()
+    assert not [r for r in caplog.records if r.getMessage().startswith("documents.legacy.")]
 
 
 def test_the_command_dry_run_then_import_then_nothing(world: World, migrated_url: str) -> None:
