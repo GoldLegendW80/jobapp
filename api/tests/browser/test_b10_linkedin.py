@@ -221,6 +221,25 @@ REFUSED_TARGETS = [
     "https://a.example.org:8443/x",
     "http://a.example.org:22/",
     "http://xn--/",
+    "http://8.8.8.8/jobs/1",  # any IP literal, even a global one
+    "http://[2001:4860:4860::8888]/",
+    "http://[64:ff9b::7f00:1]/",  # NAT64 to 127.0.0.1
+    "http://[::127.0.0.1]/",  # IPv4 compatible
+    "http://10.0.0%2e1/",  # percent encoded dot: the browser reads 10.0.0.1
+    "http://127.0.0.1%2e/",
+    "http://192.168.1%2E1/",
+    "http://169.254.169%2e254/",
+    "http://0x7f.0.0%2e1/",
+    "http://nas.home%2earpa/",
+    "http://router.local%2e/",
+    "http://x.ts%2enet/",
+    "http://a.b%00/",
+    "http://a.example%2eorg/",
+    "http://-a.example.org/",
+    "http://a-.example.org/",
+    "http://a_b.example.org/",
+    "http://a.example.org%25/",
+    "http://1.2.3.4a/",
     "http://" + "a" * 64 + ".example.org/",
 ]
 # Ten company addresses of the kinds LinkedIn links to: kept as they are.
@@ -234,7 +253,6 @@ COMPANY_TARGETS = [
     "https://www.example-robotics.fr/carrieres/ingenieur-ia",
     "https://jobs.smartrecruiters.com/ExampleRobotics/744000000000001",
     "https://bücher-beispiel.de/jobs/ki-ingenieur",
-    "https://8.8.8.8/jobs/1",  # a global address in its plain form
 ]
 
 
@@ -276,8 +294,12 @@ def test_external_url_keeps_a_company_address(target: str) -> None:
         ("\uff4a\uff4f\uff42\uff53.example.org", "jobs.example.org"),  # full width letters
         ("bücher-beispiel.de", "bücher-beispiel.de"),
         ("example.org.", "example.org"),
-        ("8.8.8.8", "8.8.8.8"),
-        ("2001:4860:4860::8888", "2001:4860:4860::8888"),
+        ("8.8.8.8", None),
+        ("2001:4860:4860::8888", None),
+        ("[::1]", None),
+        ("a.b%2ec", None),
+        ("a.b" + "c" * 250 + ".org", None),
+        ("xn--p1ai.xn--p1ai", "xn--p1ai.xn--p1ai"),
         ("", None),
         ("org", None),
         ("127.0.0.1", None),

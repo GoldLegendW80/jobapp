@@ -441,12 +441,12 @@ class Pace:
 
 def host_of(ats: str, form_url: str) -> str:
     """The host a click is paced on: the ATS for the known ones, else the form's host."""
-    if ats in KNOWN_HOSTS:
-        return ats
     url = guardrails.unstub(form_url or "", _setting("apply_stub_base_url"))
     host = (urlsplit(url).hostname or "").lower().rstrip(".").removeprefix("www.")
     if host == "linkedin.com" or host.endswith(".linkedin.com"):
-        return "linkedin"
+        return "linkedin"  # the host decides first, whatever ATS the address pretends to be
+    if ats in KNOWN_HOSTS:
+        return ats
     return host or "unknown"
 
 

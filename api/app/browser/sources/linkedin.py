@@ -35,9 +35,7 @@ one, is the job's address (apply then works on the company's form, and the posti
 API on that board is the same row by address); the LinkedIn address ends the posting text.
 """
 
-import ipaddress
 import re
-import socket
 import unicodedata
 from typing import NoReturn
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
@@ -179,47 +177,36 @@ INTERNAL_SUFFIXES = (
 DEFAULT_PORTS = {"http": 80, "https": 443}
 # Dots a browser reads as the label separator (UTS 46): the ideographic and the full width ones.
 DOTS = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
-_NUMERIC_LABEL = re.compile(r"^(?:0x[0-9a-f]*|[0-9]+)$")
-
-
-def _ipv4_any_form(host: str) -> ipaddress.IPv4Address | None:
-    """The address a browser reads in a host written as IPv4 in any form inet_aton takes
-    (dotted, decimal, hex, octal, short as 127.1), None when it is not one."""
-    if not all(_NUMERIC_LABEL.match(label) for label in host.split(".")):
-        return None
-    try:
-        return ipaddress.IPv4Address(socket.inet_aton(host))
-    except (OSError, ValueError):
-        return None
+# A public host, as an allow list: dot separated labels of letters, digits and hyphens, each 1 to
+# 63 characters and neither starting nor ending with a hyphen. The last label starts with a letter,
+# so no IPv4 literal in any form (dotted, decimal, hex, octal, short) can match.
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_TLD = re.compile(r"[a-z][a-z0-9-]*")
+HOST_MAX = 253
 
 
 def public_host(host: str) -> str | None:
     """`host` normalised (NFKC, browser dots, lowercase, IDNA checked) when it names a public
-    site, None otherwise: an IP address that is not global (in any form a browser reads), a
-    host whose last label is numeric, a single label, an internal or reserved suffix."""
-    if not host:
+    site, None otherwise. Fails closed: the ASCII form of the name must be two or more labels of
+    [a-z0-9-] with an alphabetic last label, so a percent sign, a bracket, an IPv6 or IPv4
+    literal, a control character or an empty label is refused; so is an internal or reserved
+    suffix."""
+    if not host or "%" in host:
         return None
     name = unicodedata.normalize("NFKC", host).translate(DOTS).lower().removesuffix(".")
-    if not name or any(c.isspace() or unicodedata.category(c)[0] == "C" for c in name):
+    if not name or "%" in name:
         return None
-    if ":" in name:  # an IPv6 literal (urlsplit drops its brackets)
-        try:
-            address = ipaddress.IPv6Address(name)
-        except ValueError:
-            return None
-        return name if address.is_global and address.ipv4_mapped is None else None
     try:
         ascii_name = name.encode("idna").decode("ascii")
     except UnicodeError:
         return None
     labels = ascii_name.split(".")
-    if _NUMERIC_LABEL.match(labels[-1]):
-        # An IPv4 literal in some form: kept only as the plain dotted form of a global address.
-        found = _ipv4_any_form(ascii_name)
-        if found is None or not found.is_global or str(found) != ascii_name:
-            return None
-        return ascii_name
-    if len(labels) < 2 or any(not label for label in labels):
+    if (
+        len(ascii_name) > HOST_MAX
+        or len(labels) < 2
+        or not all(_LABEL.fullmatch(label) for label in labels)
+        or not _TLD.fullmatch(labels[-1])
+    ):
         return None
     if any(ascii_name == s or ascii_name.endswith("." + s) for s in INTERNAL_SUFFIXES):
         return None
@@ -265,7 +252,7 @@ def external_url(href: str, page_url: str) -> str | None:
         host = public_host(out.hostname)
         if host is None or port not in (None, DEFAULT_PORTS[out.scheme]):
             return None
-    netloc = f"[{host}]" if ":" in host else host
+    netloc = host
     if port is not None and port != DEFAULT_PORTS[out.scheme]:
         netloc = f"{netloc}:{port}"
     return urlunsplit((out.scheme, netloc, out.path or "/", out.query, ""))
