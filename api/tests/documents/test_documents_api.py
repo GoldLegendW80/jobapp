@@ -561,8 +561,8 @@ def test_a_patch_that_changes_nothing_asks_for_no_render(
     [
         (("Søren Kierkegaard", "Lumen"), "CV", "Soren_Kierkegaard_Lumen_CV"),
         (("Łukasz Żółć", "Ørsted"), "CV", "Lukasz_Zolc_Orsted_CV"),
-        (("Æsa Hæð", "Straße AG"), "Letter", "AEsa_Haed_Strasse_AG_Letter"),
-        (("Þóra Ðorđević", "Œuvre"), "CV", "Thora_Dordevic_OEuvre_CV"),
+        (("Æsa Hæð", "Straße AG"), "Letter", "Aesa_Haed_Strasse_AG_Letter"),
+        (("Þóra Ðorđević", "Œuvre"), "CV", "Thora_Dordevic_Oeuvre_CV"),
         (("Hélène Müller", "Café Crème"), "CV", "Helene_Muller_Cafe_Creme_CV"),
         (("Ana-María O'Neil", "R&D, Inc."), "CV", "Ana_Maria_O_Neil_R_D_Inc_CV"),
         (("İlkay Işık", "Ħamrun Ŧech"), "CV", "Ilkay_Isik_Hamrun_Tech_CV"),
@@ -583,7 +583,7 @@ def test_a_patch_that_changes_nothing_asks_for_no_render(
         (('Alex"; x=1', "Lumen\r\nSet-Cookie"), "CV", "Alex_x_1_Lumen_Set_Cookie_CV"),
         (("Bjørn Øster", "Fjærland"), "Letter", "Bjorn_Oster_Fjaerland_Letter"),
         (("Paweł Wałęsa", ""), "CV", "Pawel_Walesa_CV"),
-        (("Ŋuolja Áilu", "ŊUOLJA"), "CV", "Nguolja_Ailu_NgUOLJA_CV"),
+        (("Ŋuolja Áilu", "ŊUOLJA"), "CV", "Nguolja_Ailu_NGUOLJA_CV"),
         (("Leŋŋa", ""), "Letter", "Lengnga_Letter"),
         (("Əliyev Rəşad", "ƏLİ"), "CV", "Eliyev_Resad_ELI_CV"),
         (("Ǝmeka", "ǝ"), "CV", "Emeka_e_CV"),
@@ -592,6 +592,26 @@ def test_a_patch_that_changes_nothing_asks_for_no_render(
         (("Ɖoe ɖa", "Ʋɔ"), "CV", "Doe_da_Vo_CV"),
         (("ǅuro", "Ǿresund"), "CV", "Dzuro_Oresund_CV"),
         (("ʃʒʔ Alex", ""), "CV", "Alex_CV"),
+        (("Ǽsa", "ǽble"), "CV", "Aesa_aeble_CV"),
+        (("Ǣrin", "ǣsc"), "CV", "Aerin_aesc_CV"),
+        (("ǼSA", "LǢR"), "CV", "AESA_LAER_CV"),
+        (("Æ\u0301sa", "æ\u0304"), "CV", "Aesa_ae_CV"),
+        (("Ǿle", "ǿre"), "CV", "Ole_ore_CV"),
+        (("Ʉkpo", "ʉwa"), "CV", "Ukpo_uwa_CV"),
+        (("ȷan", "ɟo ʄa"), "CV", "jan_jo_ja_CV"),
+        (("ĸaalaaq", ""), "CV", "qaalaaq_CV"),
+        (("ŊGUYEN", "Ŋuyen"), "CV", "NGGUYEN_Nguyen_CV"),
+        (("Ŋ-GUYEN", "Ŋ1"), "CV", "Ng_GUYEN_Ng1_CV"),
+        (("ÞÓRA", "ÞO"), "CV", "THORA_THO_CV"),
+        (("ÐÓRA", "ĐORĐE"), "CV", "DORA_DORDE_CV"),
+        (("STRAßE", "GROß"), "CV", "STRASSE_GROSS_CV"),
+        (("Aß", "ß"), "CV", "Ass_ss_CV"),
+        (("ÆØ", "Æ"), "CV", "AEO_Ae_CV"),
+        (("MÆRSK A/S", "Mærsk"), "CV", "MAERSK_A_S_Maersk_CV"),
+        (("ŒUVRE", "œuvre"), "CV", "OEUVRE_oeuvre_CV"),
+        (("LEŊŊA", "leŋŋa"), "CV", "LENGNGA_lengnga_CV"),
+        (("İSTANBUL", "IŞIK ıŞIK"), "CV", "ISTANBUL_ISIK_iSIK_CV"),
+        (("Ʒa Ƿynn", "ɐ"), "CV", "a_ynn_CV"),
     ],
 )
 def test_the_file_name_spells_letters_in_ascii(
@@ -600,10 +620,25 @@ def test_the_file_name_spells_letters_in_ascii(
     assert ascii_name(*parts, suffix=suffix) == name
 
 
+@pytest.mark.parametrize("char", [chr(code) for code in range(0xC0, 0x180) if chr(code).isalpha()])
+def test_every_letter_of_latin_1_and_latin_extended_a_is_spelled(char: str) -> None:
+    name = ascii_name(char)
+    assert name.isascii()
+    assert name.isalpha()
+    assert name[0].isupper() == char.isupper()
+
+
 @pytest.mark.parametrize("suffix", ["CV", "Letter"])
 @pytest.mark.parametrize(
     "parts",
-    [("A" * 300, "Lumen"), ("Alex", "B" * 300), ("Ø" * 200, "Æ" * 200), ("a " * 200, "")],
+    [
+        ("A" * 300, "Lumen"),
+        ("Alex", "B" * 300),
+        ("Ø" * 200, "Æ" * 200),
+        ("a " * 200, ""),
+        ("Ŋ" * 200, "ß" * 200),
+        ("Ǽ" * 300, ""),
+    ],
 )
 def test_the_cut_at_the_name_limit_keeps_the_suffix(parts: tuple[str, str], suffix: str) -> None:
     name = ascii_name(*parts, suffix=suffix)
