@@ -456,11 +456,18 @@ class Pace:
     daily_max: int
 
 
+def _fixture_linkedin(url: str) -> bool:
+    """Tests only: an address under the fixture pages' LinkedIn (BROWSER_SOURCES_BASE_URL plus
+    /linkedin/, browser B10's journey) is LinkedIn's. The setting is refused in production."""
+    base = _setting("browser_sources_base_url")
+    return bool(base) and url.startswith(str(base).rstrip("/") + "/linkedin/")
+
+
 def host_of(ats: str, form_url: str) -> str:
     """The host a click is paced on: the ATS for the known ones, else the form's host."""
     url = guardrails.unstub(form_url or "", _setting("apply_stub_base_url"))
     host = (urlsplit(url).hostname or "").lower().rstrip(".").removeprefix("www.")
-    if host == "linkedin.com" or host.endswith(".linkedin.com"):
+    if host == "linkedin.com" or host.endswith(".linkedin.com") or _fixture_linkedin(url):
         return "linkedin"  # the host decides first, whatever ATS the address pretends to be
     if ats in KNOWN_HOSTS:
         return ats

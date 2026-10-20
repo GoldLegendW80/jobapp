@@ -260,3 +260,31 @@ def test_full_auto_never_clicks_on_linkedin_before_a16_even_when_allowed(
     assert form.gate_clicks == []
     assert written == "unsupported_source"
     assert application(db, app_id).state is not State.held
+
+
+@pytest.mark.parametrize(
+    ("url", "host"),
+    [
+        ("http://pages:8080/b8/linkedin/jobs/view/4100000201/", "linkedin"),
+        ("http://pages:8080/b8/linkedin/", "linkedin"),
+        ("http://pages:8080/b8/linkedinx/jobs/view/1/", "pages"),
+        ("http://pages:8080/b8/google/jobs/results/1001/", "pages"),
+        ("http://pages:8080/linkedin/jobs/view/1/", "pages"),
+        ("https://jobs.example.org/fake-b10/1", "jobs.example.org"),
+    ],
+)
+def test_the_fixture_pages_linkedin_is_linkedin_in_a_test_stack(
+    url: str, host: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tests only: the journey's LinkedIn is the fixture server's /linkedin/ under
+    BROWSER_SOURCES_BASE_URL (refused in production), so its rows meet the guard there too."""
+    real = caps._setting
+    base = "http://pages:8080/b8"
+    monkeypatch.setattr(
+        caps, "_setting", lambda name: base if name == "browser_sources_base_url" else real(name)
+    )
+    assert caps.host_of("other", url) == host
+    monkeypatch.setattr(
+        caps, "_setting", lambda name: None if name == "browser_sources_base_url" else real(name)
+    )
+    assert caps.host_of("other", url) != "linkedin"
