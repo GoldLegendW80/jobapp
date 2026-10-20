@@ -506,7 +506,7 @@ SHEET_REFUSED = [
     (".summary{font-size:var(--body-size, 9pt)}", "size"),
     (".summary{color:var(--undefined)}", "colour"),
     (":root{--rail:9999mm}", "property"),
-    # the reviewer's contrast probes and the cascade
+    # the reviewer's contrast probes on one rule (those on another rule's background: below)
     (".summary { color: #1d232b; background: #1d232b; }", "contrast"),
     (".summary{color:var(--accent);background:var(--accent)}", "contrast"),
     # the follow ups: hidden by offsets, a generic family first, an at-rule that looks like @page

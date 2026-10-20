@@ -80,7 +80,6 @@ DENSITY_LENGTHS = frozenset(("--body-size", "--section-gap", "--item-gap", "--ma
 GENERIC = frozenset(("serif", "sans-serif", "monospace"))
 AA = 4.5  # WCAG 2, contrast of body text
 WHITE = "#ffffff"
-BLACK = "#000000"
 MAX_COMPOUNDS = 4
 MAX_CLASSES = 4
 CAPS = {"pt": 850.0, "px": 1134.0, "mm": 300.0, "em": 40.0, "%": 100.0}  # about one A4 height
@@ -237,31 +236,12 @@ class Compound:
     classes: frozenset[str]
     pseudo: frozenset[str]  # of PSEUDO_CLASSES
 
-    def covers(self, other: Compound) -> bool:
-        """Whether every element `other` matches is one this part matches too."""
-        return (
-            (self.tag is None or self.tag == other.tag)
-            and self.classes <= other.classes
-            and ("root" not in self.pseudo or "root" in other.pseudo or other.tag == "html")
-        )
-
 
 @dataclass(frozen=True)
 class Selector:
     compounds: tuple[Compound, ...]  # the subject last
     combinators: tuple[str, ...]  # between the parts: " ", ">", "+", "~"
     element: str | None  # a pseudo-element of PSEUDO_ELEMENTS
-
-    @property
-    def specificity(self) -> tuple[int, int]:
-        classes = sum(len(c.classes) + len(c.pseudo) for c in self.compounds)
-        return classes, sum(c.tag is not None for c in self.compounds) + (self.element is not None)
-
-    @property
-    def shaped(self) -> bool:
-        """Whether what it matches depends on the shape of the content."""
-        positional = any(c.pseudo - {"root"} for c in self.compounds)
-        return positional or bool(set(self.combinators) & {"+", "~"})
 
 
 @dataclass(frozen=True)
@@ -380,7 +360,6 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
         return [], [Problem(file, stop.line, stop.code, stop.detail)]
     rules: list[Rule] = []
     problems: list[Problem] = []
-    interned: dict[Selector, Selector] = {}  # one object per selector: the cascade keys by id
     i, n = 0, len(found)
     while i < n:
         if found[i].kind == "space":
@@ -408,7 +387,7 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
             wrong = [r for r in read if isinstance(r, str)]
             if wrong:
                 problems.append(Problem(file, line, "selector", wrong[0]))
-            selectors = tuple(interned.setdefault(r, r) for r in read if isinstance(r, Selector))
+            selectors = tuple(r for r in read if isinstance(r, Selector))
         i += 1
         declarations: list[Declaration] = []
         part: list[Token] = []
