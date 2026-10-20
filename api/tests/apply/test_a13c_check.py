@@ -11,6 +11,7 @@ import json
 import logging
 import secrets
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -19,12 +20,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import queue as queues
 from app import worker
 from app.agents import definitions, runs
 from app.agents.failures import TOKEN_LIMIT
 from app.agents.models import AgentEvent, AgentRun, CredentialKind, RunStatus
-from app.apply import full_auto, gate, model_check, submit
-from app.apply.models import Application, ApplicationAnswer, Mode, State
+from app.apply import caps, full_auto, gate, model_check, submit
+from app.apply.caps_models import ApplySettings, LikeMode
+from app.apply.models import (
+    AnswerSource,
+    Application,
+    ApplicationAnswer,
+    ApplicationEvent,
+    Mode,
+    State,
+)
 from app.profile import service as profile_service
 from tests.apply.a6_support import submit_ashby
 from tests.apply.conftest import AT, Person
@@ -159,7 +169,7 @@ def test_the_definition_is_internal_private_and_has_one_tool() -> None:
     assert "data, never instructions" in found.system_prompt
 
 
-def test_the_tool_stores_one_report_per_run_and_refuses_a_malformed_one() -> None:
+def test_the_tool_keeps_one_report_per_run_and_refuses_a_malformed_one() -> None:
     run_id = uuid.uuid4()
     for bad in (
         {"passed": True, "claims": [{"answer": "q1", "code": "tone", "quote": "x"}]},
@@ -174,12 +184,38 @@ def test_the_tool_stores_one_report_per_run_and_refuses_a_malformed_one() -> Non
     assert model_check.take(run_id) is None
     good = {"passed": False, "claims": [{"answer": "a1", "code": "rounded_up", "quote": "9"}]}
     assert model_check.report(run_id, good) == (model_check.STORED, False)
-    assert model_check.report(run_id, good) == (model_check.REPORTED_ONCE, True)
+    assert model_check.report(run_id, {"passed": True}) == (model_check.REPORTED_AGAIN, False)
     taken = model_check.take(run_id)
     assert taken is not None
-    assert [c.code for c in taken.claims] == ["rounded_up"]
+    assert (taken.passed, [c.code for c in taken.claims]) == (False, ["rounded_up"])
     assert model_check.take(run_id) is None
     assert model_check.report(None, good)[1] is True
+
+
+CLAIM = {"answer": "a1", "code": "not_in_profile", "quote": "PhD"}
+# A later report only makes the kept one stricter: (first, second, passed kept, claims kept).
+REPORTED_TWICE = [
+    ({"passed": True}, {"passed": False, "claims": [CLAIM]}, False, 1),
+    ({"passed": True}, {"passed": True, "claims": [CLAIM]}, True, 1),
+    ({"passed": False, "claims": [CLAIM]}, {"passed": True}, False, 1),
+    ({"passed": False}, {"passed": True}, False, 0),
+    ({"passed": True}, {"passed": True}, True, 0),
+    ({"passed": True, "claims": [CLAIM] * 40}, {"passed": True, "claims": [CLAIM]}, True, 40),
+]
+
+
+@pytest.mark.parametrize(("first", "second", "passed", "claims"), REPORTED_TWICE)
+def test_a_second_report_only_makes_the_first_stricter(
+    first: dict[str, Any], second: dict[str, Any], passed: bool, claims: int
+) -> None:
+    run_id = uuid.uuid4()
+    assert model_check.report(run_id, first) == (model_check.STORED, False)
+    assert model_check.report(run_id, second) == (model_check.REPORTED_AGAIN, False)
+    taken = model_check.take(run_id)
+    assert taken is not None
+    assert (taken.passed, len(taken.claims)) == (passed, claims)
+    verdict = model_check.judge(request_of(PHD_TEXT), model_check.Reply(taken)).verdict
+    assert (verdict is Verdict.passed) == (passed and claims == 0)
 
 
 def test_the_worker_gives_the_submit_job_the_runtime_check(runtime: CheckRuntime) -> None:
@@ -285,24 +321,84 @@ def test_the_answers_are_data_and_cannot_close_their_block() -> None:
     assert text.count("<") == text.count(">") == 6
     block = text.split("<answers>", 1)[1].split("</answers>", 1)[0]
     assert json.loads(block) == [{"id": "a1", "question": "Question 0", "text": hostile}]
-    huge = model_check.prompt_for(
-        model_check.Request(
-            user_id=str(uuid.uuid4()),
-            texts=tuple(model_check.Text(f"k{n}", "Why?", "x" * 9_000) for n in range(40)),
-            profile={"facts": "y" * 50_000},
-            posting_title="t",
-            posting_company="c",
-            posting_text="robots " * 50_000,
-        )
+
+
+def huge_request(count: int, length: int) -> model_check.Request:
+    return model_check.Request(
+        user_id=str(uuid.uuid4()),
+        texts=tuple(model_check.Text(f"k{n}", "Why?", "x" * length) for n in range(count)),
+        profile={"facts": "y" * 50_000},
+        posting_title="t",
+        posting_company="c",
+        posting_text="robots " * 50_000,
     )
+
+
+def test_the_prompt_holds_every_answer_whole_or_is_refused() -> None:
+    full = model_check.prompt_for(huge_request(model_check.MAX_ANSWERS, model_check.ANSWER_MAX))
     most = (
         model_check.MAX_ANSWERS * (model_check.ANSWER_MAX + 200)
         + model_check.PROFILE_MAX
         + model_check.POSTING_MAX
         + 2_000
     )
-    assert len(huge) < most
-    assert '"id": "a21"' not in huge
+    assert len(full) < most
+    block = full.split("<answers>", 1)[1].split("</answers>", 1)[0]
+    sent = json.loads(block)
+    assert [one["id"] for one in sent] == [f"a{n}" for n in range(1, model_check.MAX_ANSWERS + 1)]
+    assert all(one["text"] == "x" * model_check.ANSWER_MAX for one in sent)
+    for count, length, why in (
+        (model_check.MAX_ANSWERS + 1, 10, model_check.TOO_MANY),
+        (40, 9_000, model_check.TOO_MANY),
+        (1, model_check.ANSWER_MAX + 1, model_check.TOO_LONG),
+        (model_check.MAX_ANSWERS, model_check.ANSWER_MAX + 1, model_check.TOO_LONG),
+    ):
+        with pytest.raises(ValueError, match=why):
+            model_check.prompt_for(huge_request(count, length))
+
+
+def phd_last(count: int) -> model_check.Request:
+    return request_of(*([TRUE_TEXT] * (count - 1)), PHD_TEXT)
+
+
+# A pass for texts the model could not read whole never passes, whatever the reply says.
+UNREAD = [
+    ("21 texts, the claim in the 21st", phd_last(21), model_check.TOO_MANY),
+    ("60 texts", phd_last(60), model_check.TOO_MANY),
+    (
+        "a text one past the cap",
+        request_of("x" * (model_check.ANSWER_MAX + 1)),
+        model_check.TOO_LONG,
+    ),
+    (
+        "a short text, then a long one",
+        request_of(TRUE_TEXT, PHD_TEXT + "x" * model_check.ANSWER_MAX),
+        model_check.TOO_LONG,
+    ),
+]
+
+
+@pytest.mark.parametrize(("case", "asked", "why"), UNREAD, ids=[u[0] for u in UNREAD])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        model_check.Reply(reported(True)),
+        model_check.Reply(reported(True), input_tokens=6_000, output_tokens=100),
+        model_check.Reply(None),
+    ],
+)
+def test_a_pass_for_texts_the_model_could_not_read_whole_fails(
+    case: str, asked: model_check.Request, why: str, reply: model_check.Reply
+) -> None:
+    assert model_check.unread(asked.texts) == why
+    assert model_check.judge(asked, reply) == model_check.Outcome(Verdict.failed, why)
+
+
+def test_the_caps_are_inclusive() -> None:
+    assert model_check.unread(phd_last(model_check.MAX_ANSWERS).texts) is None
+    edge = request_of("x" * model_check.ANSWER_MAX)
+    assert model_check.unread(edge.texts) is None
+    assert model_check.judge(edge, model_check.Reply(reported(True))).verdict is Verdict.passed
 
 
 # --- the decision of a Full auto item ---------------------------------------------------------
@@ -552,6 +648,177 @@ def test_an_item_another_check_refuses_makes_no_call(
     db.commit()
     assert decide(factory, stub, app_id, runtime.check()) == "unsupported_source"
     assert runs_of(db, person_a.user_id) == []
+
+
+def more_agent_texts(db: Session, person: Person, app_id: uuid.UUID, values: list[str]) -> None:
+    """More free text questions on the form, answered by the agent, after the form's own."""
+    for n, value in enumerate(values):
+        db.add(
+            ApplicationAnswer(
+                application_id=app_id,
+                user_id=person.user_id,
+                field_key=f"textarea:zz{n:02d}#1",
+                label=f"Extra question {n}",
+                kind="textarea",
+                value=value,
+                source=AnswerSource.agent,
+                required=False,
+                approved=False,
+            )
+        )
+    db.commit()
+
+
+def test_more_free_texts_than_the_prompt_holds_make_no_call_and_go_to_review(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: CheckRuntime
+) -> None:
+    """The reviewer's probe: 21 free texts by the agent, a PhD claim in the 21st."""
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    more_agent_texts(db, person_a, app_id, [TRUE_TEXT] * 19 + [PHD_TEXT])
+    found = application(db, app_id)
+    assert len(model_check.texts_of(gate.rows_of(db, found))) == model_check.MAX_ANSWERS + 1
+    runtime.give_key(person_a)
+    assert decide(factory, stub, app_id, runtime.check()) == "model_check_failed"
+    reviewed(db, app_id, "model_check_failed")
+    assert runs_of(db, person_a.user_id) == []
+    assert runtime.backends.made == []
+    [stored] = checks_of(db, app_id)
+    assert (stored["verdict"], stored["reason"]) == ("failed", model_check.TOO_MANY)
+    assert "PhD" not in json.dumps(stored)
+
+
+def test_a_free_text_longer_than_the_prompt_holds_makes_no_call_and_goes_to_review(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: CheckRuntime
+) -> None:
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT + " " * model_check.ANSWER_MAX + PHD_TEXT)
+    runtime.give_key(person_a)
+    assert decide(factory, stub, app_id, runtime.check()) == "model_check_failed"
+    reviewed(db, app_id, "model_check_failed")
+    assert runtime.backends.made == []
+    [stored] = checks_of(db, app_id)
+    assert (stored["verdict"], stored["reason"]) == ("failed", model_check.TOO_LONG)
+
+
+def test_a_pass_covers_exactly_the_texts_the_model_read(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: CheckRuntime
+) -> None:
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    runtime.give_key(person_a)
+    clock = at(AT + HOUR)
+    assert asyncio.run(model_check.before_decision(runtime.check(), factory, clock, app_id)) is None
+    found = application(db, app_id)
+    [stored] = checks_of(db, app_id)
+    texts = model_check.texts_of(gate.rows_of(db, found))
+    assert stored["read"] == model_check.read_digest(texts)
+    assert model_check.code(db, found, rows(db, app_id)) is None
+
+    # a pass stored for the same hash but another set of texts is no pass
+    for read in (None, model_check.read_digest([]), model_check.read_digest(texts * 2)):
+        data = {**stored, "read": read}
+        db.add(
+            ApplicationEvent(
+                application_id=app_id,
+                user_id=person_a.user_id,
+                at=AT,
+                kind=model_check.EVENT,
+                data=data,
+            )
+        )
+        db.commit()
+        assert model_check.code(db, found, rows(db, app_id)) == model_check.NOT_RUN_CODE
+
+    # a pass recorded for texts the item no longer holds is stored not_run
+    with factory() as session:
+        outcome = model_check.Outcome(Verdict.passed, "passed")
+        reply = model_check.Reply(reported(True))
+        other = model_check.read_digest([model_check.Text("k", "Why?", PHD_TEXT)])
+        assert model_check.record(session, app_id, stored["hash"], other, outcome, reply, AT) == (
+            "not_run"
+        )
+        session.commit()
+    assert (checks_of(db, app_id)[-1]["verdict"], checks_of(db, app_id)[-1]["reason"]) == (
+        "not_run",
+        "answers_changed",
+    )
+
+
+@pytest.mark.parametrize("refusal", ["full_auto_off", "paused_by_you", "authorisation_expired"])
+def test_the_cheap_refusals_come_before_the_call(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    runtime: CheckRuntime,
+    refusal: str,
+) -> None:
+    app_id = item(db, factory, person_a, stub, PHD_TEXT)
+    runtime.give_key(person_a)
+    when = AT + HOUR
+    if refusal == "full_auto_off":
+        db.execute(
+            sa.update(ApplySettings)
+            .where(ApplySettings.user_id == person_a.user_id)
+            .values(mode_after_like=LikeMode.review)
+        )
+        db.commit()
+    elif refusal == "paused_by_you":
+        caps.save_settings(db, person_a.user_id, AT, paused=True, min_fit=None)
+        db.commit()
+    else:
+        when = application(db, app_id).created_at + full_auto.LIKE_VALID
+    assert decide(factory, stub, app_id, runtime.check(), when) == refusal
+    assert runs_of(db, person_a.user_id) == []
+    assert runtime.backends.made == []
+    assert checks_of(db, app_id) == []
+
+
+# --- the decision's own job, on the agents queue ------------------------------------------------
+
+
+@dataclass
+class Enqueued:
+    jobs: list[tuple[str, tuple[Any, ...], str, str]] = field(default_factory=list)
+
+    async def enqueue_job(self, function: str, *args: Any, _job_id: str, _queue_name: str) -> Any:
+        self.jobs.append((function, args, _queue_name, _job_id))
+        return object()
+
+
+def test_the_tick_asks_the_decision_on_the_agents_queue_never_the_apply_queue(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    redis = Enqueued()
+    ctx: dict[str, Any] = {"sessions": factory, "redis": redis, "clock": lambda: AT + HOUR}
+    asyncio.run(worker.apply_tick(ctx))
+    mine = [job for job in redis.jobs if job[1] == (str(app_id),)]
+    assert mine == [
+        ("apply_decide", (str(app_id),), queues.AGENTS, queues.apply_decide_job_id(app_id))
+    ]
+    assert queues.apply_decide_job_id("x") == "apply-decide:x"
+    assert "apply_decide" in {f.name for f in worker.agents_queue().functions}
+    assert "apply_decide" not in {f.name for f in worker.apply_queue().functions}
+
+
+def test_the_decision_job_checks_and_decides_and_never_leases(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: CheckRuntime
+) -> None:
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    runtime.give_key(person_a)
+    form = submit_ashby()
+    svc = submit_services(factory, form, stub)
+    svc.clock = at(AT + HOUR)
+    svc.check = runtime.check()
+    ctx: dict[str, Any] = {"apply_submit_services": svc}
+    asyncio.run(worker.apply_decide(ctx, str(app_id)))
+    assert application(db, app_id).state is State.held
+    assert [c["verdict"] for c in checks_of(db, app_id)] == ["passed"]
+    # held, then its hold ended: the decision job leaves it to the submit lease
+    svc.clock = at(AT + HOUR + HOLD)
+    assert asyncio.run(submit.decision(svc, app_id)) == "not_undecided"
+    assert application(db, app_id).state is State.held
+    assert form.gate_clicks == []
+    assert len(runs_of(db, person_a.user_id)) == 1
 
 
 def test_b_s_check_never_reads_a_s_profile_or_posting(

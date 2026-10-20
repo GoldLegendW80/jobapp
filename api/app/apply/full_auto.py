@@ -280,6 +280,18 @@ def _decided(db: Session, application: Application) -> bool:
     return found is not None
 
 
+def before_gate(db: Session, application: Application, now: datetime) -> str | None:
+    """The refusals `decide` makes before the gate's own: the Like decided once already, too old,
+    or Full auto off since before it. The check by model reads them too, to spare its call."""
+    if _decided(db, application):
+        return "authorisation_used"
+    if now >= application.created_at + LIKE_VALID:
+        return "authorisation_expired"
+    if not is_on(caps.settings_of(db, application.user_id), application.created_at):
+        return "full_auto_off"
+    return None
+
+
 def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any) -> str:
     """Step 1 of the module docstring. Returns what was written (a code, no value); the caller
     commits."""
@@ -296,14 +308,7 @@ def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any)
         return "superseded"
     liked_at = application.created_at
     expires = liked_at + LIKE_VALID
-    code = None
-    if _decided(db, application):
-        code = "authorisation_used"
-    elif now >= expires:
-        code = "authorisation_expired"
-    elif not is_on(caps.settings_of(db, user_id), liked_at):
-        code = "full_auto_off"
-    if code is not None:
+    if (code := before_gate(db, application, now)) is not None:
         to_review(db, application, code, now)
         gate._event(db, application, "decision", now, outcome="refused", code=code)
         return code

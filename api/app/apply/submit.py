@@ -50,12 +50,12 @@ application to `approved`. No model is called anywhere here.
    (the freeze rolls back with it), a second one records `submit_unknown` with `record_failed`,
    its freeze included.
 
-Full auto (A13a, `full_auto.py`): the job of a `ready` Full auto item runs the check by model of
-the agent's free text first when it needs one (A13c, `model_check.before_decision`), then its
-decision (`full_auto.decide`), and ends; a `held` item is asked only once its hold ended (`due`),
-and goes the same way as an `approved` one, with Full auto's lines in `recheck`. Any stop before
-the click sends it to the review queue (`mode` `review`), a kill switch included, never to the
-bin.
+Full auto (A13a, `full_auto.py`): the job of a `ready` Full auto item (`decision`, which the
+worker runs on the agents queue) runs the check by model of the agent's free text first when it
+needs one (A13c, `model_check.before_decision`), then its decision (`full_auto.decide`), and
+ends; a `held` item is asked only once its hold ended (`due`), and goes the same way as an
+`approved` one, with Full auto's lines in `recheck`. Any stop before the click sends it to the
+review queue (`mode` `review`), a kill switch included, never to the bin.
 
 A Review first approval that only the pace per host holds back stays valid past
 `APPLY_APPROVAL_TTL_S`, at most 7 days after it was given (`full_auto.expired`, planner default
@@ -477,6 +477,21 @@ def due(db: Session, now: datetime | None = None) -> list[uuid.UUID]:
     )
 
 
+def undecided_of(db: Session, ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    """Those of `ids` that are `ready` Full auto items: the tick asks their decision alone."""
+    if not ids:
+        return set()
+    return set(
+        db.execute(
+            sa.select(Application.id).where(
+                Application.id.in_(ids),
+                Application.state == State.ready,
+                Application.mode == Mode.full_auto,
+            )
+        ).scalars()
+    )
+
+
 # --- the browser steps -------------------------------------------------------------------------
 
 
@@ -775,6 +790,17 @@ async def _decide(services: Services, application_id: uuid.UUID) -> str:
         )
     except jobs_service.JobBusyError:
         return "busy"
+
+
+async def decision(services: Services, application_id: uuid.UUID) -> str:
+    """The job of a `ready` Full auto item's decision alone, its check by model included, never a
+    lease: the worker runs it on the agents queue, so the call never holds the browser's queue."""
+    undecided = await asyncio.to_thread(
+        _in_db, services.sessions, lambda db: full_auto.undecided(db, application_id)
+    )
+    if not undecided:
+        return "not_undecided"
+    return await _decide(services, application_id)
 
 
 async def submit(services: Services, application_id: uuid.UUID) -> str:

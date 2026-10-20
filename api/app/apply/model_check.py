@@ -8,23 +8,29 @@ and kind text or textarea, `FREE_TEXT`), against the profile and the posting, fo
 tone, and the person's rules (the topics the person keeps, the dash rule). One run per item and
 answers hash, before its decision.
 
-The order. The submit job of a `ready` Full auto item (`submit._decide`) calls `before_decision`
-first, outside any transaction:
-1. `request_for` reads the item's own free texts, the profile's allowlist (`agent.profile_for`:
-   facts, experience, skills, and of the answers only the motivation, the stated years and the
-   highest degree) and the item's posting, all of the item's own person. It asks for no call
-   when the item has no free text by the agent, or when the decision would refuse it anyway
-   (`full_auto.checks` answers anything but `model_check_not_run`, or the documents need a look),
-   which also covers a result already stored for the current hash: one call per item and hash.
+The order. The decision job of a `ready` Full auto item (`submit.decision`, on the agents queue,
+so the call never holds the apply queue) calls `before_decision` first, outside any transaction:
+1. `request_for` reads the item's own free texts and the answers hash from one read of its
+   answers, the profile's allowlist (`agent.profile_for`: facts, experience, skills, and of the
+   answers only the motivation, the stated years and the highest degree) and the item's posting,
+   all of the item's own person. It asks for no call when the item has no free text by the
+   agent, or when the decision would refuse it anyway (the Like used or too old, Full auto off,
+   `caps.check`, the documents need a look, `full_auto.checks` answers anything but
+   `model_check_not_run`), which also covers a result already stored for the current hash: one
+   call per item and hash. An item with more than `MAX_ANSWERS` free texts, or one longer than
+   `ANSWER_MAX`, gets no call either: it is stored `failed` (`too_many_answers`, `too_long`),
+   since the prompt holds every text whole or none.
 2. The run: `RuntimeCheck`, the agents runtime in this process (the pattern of
    `agents.RuntimeAnswerAgent`): `internal`, `private_io`, `live_text=False`,
    `model_by_credential`, `TOKEN_BUDGET` (twice the estimate of 6,500 tokens), one tool,
    `report_check` (app/apply/check_tools.py), and no other. The run's input holds a random key of
    the request held in this process, the budget and the fake stream's name: no text.
 3. `judge` (pure) turns the reply into a verdict, and `record` writes it as the application
-   event `model_check` (the hash it read, the verdict, the reason, the codes and their spans as
-   offsets in the answer, never a word of it) and its tokens on the application's `cost`. The
-   run itself is an agent run of the person: its tokens and cost count in the person's spend.
+   event `model_check` (the hash it read, the `read_digest` of the texts the model read, the
+   verdict, the reason, the codes and their spans as offsets in the answer, never a word of it)
+   and its tokens on the application's `cost`. A later report of the run only makes the first
+   stricter (`report`). The run itself is an agent run of the person: its tokens and cost count
+   in the person's spend.
 
 Fail closed: only a report of `passed` with no claim passes. A run that errs, is cancelled, times
 out or reaches its budget, a run with no report or a report that is not `passed`, and a person
@@ -32,10 +38,11 @@ without a credential are not `passed`. A person whose run slots are all busy is 
 the next tick (no event; the Like's own validity bounds the wait).
 
 The gate reads it (`code`, from `full_auto.checks`, in place of A13a's rule that sent every free
-text by the agent to the review queue): a stored `passed` for the current answers hash lets the
-decision go on; a flag, a failure or no result for that hash (`model_check_not_run`: never run,
-or the answers changed since) sends the item to the review queue with its reason. The same reading
-runs again before the click (`full_auto.recheck`). Submit services without a checker never call
+text by the agent to the review queue): a stored `passed` for the current answers hash and for
+exactly the free texts the item holds now (`read_digest`, recomputed) lets the decision go on;
+a flag, a failure or no result for that hash (`model_check_not_run`: never run, or the answers
+changed since) sends the item to the review queue with its reason. The same reading runs again
+before the click (`full_auto.recheck`). Submit services without a checker never call
 the model, so their items with free text by the agent still go to the queue.
 
 Nothing of an answer, the profile or the posting goes into a log, an event or the run's record:
@@ -46,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
@@ -97,9 +105,14 @@ MAX_CLAIMS = 40
 ANSWER_MAX = 2 * agent.VALUE_MAX
 POSTING_MAX = 6_000
 PROFILE_MAX = 9_000
-REPORTED_ONCE = "Your report is already stored. Stop and answer with one short line."
+REPORTED_AGAIN = (
+    "Added to your first report: a later report can only add claims. Stop and answer with one "
+    "short line."
+)
 STORED = "Stored. Stop and answer with one short line."
 NOT_RUN_CODE = "model_check_not_run"
+TOO_MANY = "too_many_answers"
+TOO_LONG = "too_long"
 
 
 class Verdict(StrEnum):
@@ -204,14 +217,38 @@ class Outcome:
     claims: tuple[Claim, ...] = ()
 
 
+def unread(texts: tuple[Text, ...] | list[Text]) -> str | None:
+    """Why the model could not read every text whole (`TOO_MANY`, `TOO_LONG`), or None. Such an
+    item gets no call and never passes: the prompt holds every text whole or nothing."""
+    if len(texts) > MAX_ANSWERS:
+        return TOO_MANY
+    if any(len(text.value) > ANSWER_MAX for text in texts):
+        return TOO_LONG
+    return None
+
+
+def read_digest(texts: tuple[Text, ...] | list[Text]) -> str:
+    """SHA-256 of exactly the texts the model reads, in the order sent: a stored verdict covers
+    this set and no other (`code` recomputes it from the current answers)."""
+    payload = json.dumps(
+        [[text.key, text.label, text.value] for text in texts],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def answer_ids(request: Request) -> dict[str, Text]:
     """`a1`, `a2`, ... in the order sent, to the answer."""
-    return {f"a{n}": text for n, text in enumerate(request.texts[:MAX_ANSWERS], start=1)}
+    return {f"a{n}": text for n, text in enumerate(request.texts, start=1)}
 
 
 def judge(request: Request, reply: Reply) -> Outcome:
     """The verdict of one reply, failing closed: only a report of `passed` with no claim, from a
-    run that ended well, passes. A claim makes it `flagged` whatever `passed` says."""
+    run that ended well on texts the model could read whole, passes. A claim makes it `flagged`
+    whatever `passed` says."""
+    if (why := unread(request.texts)) is not None:
+        return Outcome(Verdict.failed, why)
     if reply.stopped == "no_credential":
         return Outcome(Verdict.not_run, "no_credential")
     if reply.stopped:
@@ -237,10 +274,13 @@ def _claim(text: Text | None, reported: ReportedClaim) -> Claim:
 
 
 def prompt_for(request: Request) -> str:
-    """The first message of a run: what to do in one line, then the three data blocks."""
+    """The first message of a run: what to do in one line, then the three data blocks. Every
+    answer goes in whole: a request `unread` refuses raises ValueError, so its run fails."""
+    if (why := unread(request.texts)) is not None:
+        raise ValueError(why)
     answers = [
-        {"id": f"a{n}", "question": text.label, "text": agents._clip(text.value, ANSWER_MAX)}
-        for n, text in enumerate(request.texts[:MAX_ANSWERS], start=1)
+        {"id": key, "question": text.label, "text": text.value}
+        for key, text in answer_ids(request).items()
     ]
     profile: Any = json.loads(json.dumps(dict(request.profile), ensure_ascii=False, default=str))
     flat = json.dumps(profile, ensure_ascii=False)
@@ -296,7 +336,8 @@ class CheckDefinition(definitions.AgentDefinition):
 
 
 def report(run_id: uuid.UUID | None, raw: object) -> tuple[str, bool]:
-    """What `report_check` does: the arguments checked for shape and kept for the run, once.
+    """What `report_check` does: the arguments checked for shape and kept for the run. A later
+    report only makes the kept one stricter: `passed` only if both said it, the claims of both.
     Answers the tool's text and whether it is an error."""
     if run_id is None:
         return "This run cannot report.", True
@@ -307,10 +348,15 @@ def report(run_id: uuid.UUID | None, raw: object) -> tuple[str, bool]:
         where = ".".join(str(part) for part in first.get("loc", ())) or "report"
         return f"Not stored: {where}: {first.get('msg', 'invalid')}. Fix it and report again.", True
     with _LOCK:
-        if run_id in _REPORTED:
-            return REPORTED_ONCE, True
-        _REPORTED[run_id] = parsed
-    return STORED, False
+        kept = _REPORTED.get(run_id)
+        if kept is None:
+            _REPORTED[run_id] = parsed
+            return STORED, False
+        _REPORTED[run_id] = Reported(
+            passed=kept.passed and parsed.passed,
+            claims=[*kept.claims, *parsed.claims][:MAX_CLAIMS],
+        )
+    return REPORTED_AGAIN, False
 
 
 def take(run_id: uuid.UUID) -> Reported | None:
@@ -405,18 +451,18 @@ class RuntimeCheck:
 # --- the store -----------------------------------------------------------------------------------
 
 
-def _texts(db: Session, application: Application) -> list[Text]:
-    rows = db.execute(
-        sa.select(ApplicationAnswer.field_key, ApplicationAnswer.label, ApplicationAnswer.value)
-        .where(
-            ApplicationAnswer.application_id == application.id,
-            ApplicationAnswer.user_id == application.user_id,
-            ApplicationAnswer.source == AnswerSource.agent,
-            ApplicationAnswer.kind.in_(FREE_TEXT),
+def texts_of(rows: list[ApplicationAnswer]) -> list[Text]:
+    """The free texts by the agent among the item's answers (`gate.rows_of`, in its order); a
+    value that is not a string goes in as its JSON, so nothing the agent wrote is left out."""
+    return [
+        Text(
+            row.field_key,
+            row.label,
+            row.value if isinstance(row.value, str) else json.dumps(row.value, ensure_ascii=False),
         )
-        .order_by(ApplicationAnswer.field_key)
-    ).all()
-    return [Text(key, label, value) for key, label, value in rows if isinstance(value, str)]
+        for row in rows
+        if row.source is AnswerSource.agent and row.kind in FREE_TEXT and row.value is not None
+    ]
 
 
 def _stored(db: Session, application: Application) -> dict[str, Any] | None:
@@ -435,15 +481,23 @@ def _stored(db: Session, application: Application) -> dict[str, Any] | None:
 
 def code(db: Session, application: Application, rows: list[Any]) -> str | None:
     """The gate's reading (module docstring): None when the item has no free text by the agent
-    or its check passed for the current answers hash, else the review queue's code. `rows` are
-    the item's answers as (kind, source)."""
+    or its check passed for the current answers hash and for exactly the free texts it holds now,
+    else the review queue's code. `rows` are the item's answers as (kind, source)."""
     from app.apply import gate  # gate imports full_auto, which imports this module
 
     if not any(source is AnswerSource.agent and kind in FREE_TEXT for kind, source in rows):
         return None
+    answers = gate.rows_of(db, application)
+    texts = texts_of(answers)
     stored = _stored(db, application)
-    if stored is None or stored.get("hash") != gate.current_hash(db, application).hex():
+    if (
+        stored is None
+        or stored.get("hash") != gate.answers_hash(answers, application.document_versions).hex()
+        or stored.get("read") != read_digest(texts)
+    ):
         return NOT_RUN_CODE
+    if unread(texts) is not None:
+        return CODE_OF[Verdict.failed]
     try:
         verdict = Verdict(stored.get("verdict"))
     except ValueError:
@@ -467,8 +521,10 @@ def view(db: Session, application: Application) -> dict[str, Any] | None:
 
 
 def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[Request, str] | str:
-    """What one run reads, with the answers hash it covers, or why no run is needed."""
-    from app.apply import full_auto, gate  # both import this module
+    """What one run reads, with the answers hash it covers, both from one read of the answers,
+    or why no run is needed. The cheap refusals of the decision come first: no call is spent on
+    an item the decision refuses anyway."""
+    from app.apply import caps, full_auto, gate  # gate and full_auto import this module
 
     application = db.get(Application, application_id)
     if application is None:
@@ -480,11 +536,17 @@ def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[
     ).scalar_one_or_none()
     if posting is None:
         return "gone"
+    if full_auto.before_gate(db, application, now) is not None:
+        return "refused_anyway"
+    # Read without the gate's locks: it only spares a call, the decision checks again under them.
+    if caps.check(db, application, now) is not None:
+        return "refused_anyway"
     if gate.documents_need_review(application.document_versions):
         return "refused_anyway"
     if full_auto.checks(db, application, posting) != NOT_RUN_CODE:
         return "not_needed"
-    texts = _texts(db, application)
+    answers = gate.rows_of(db, application)
+    texts = texts_of(answers)
     if not texts:
         return "no_text"
     profile = profile_service.get_profile(db, application.user_id, now)
@@ -497,24 +559,32 @@ def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[
         posting_company=posting.company,
         posting_text=posting.posting_text or "",
     )
-    return request, gate.current_hash(db, application).hex()
+    return request, gate.answers_hash(answers, application.document_versions).hex()
 
 
 def record(
     db: Session,
     application_id: uuid.UUID,
     digest: str,
+    read: str,
     outcome: Outcome,
     reply: Reply,
     now: datetime,
 ) -> str:
     """The verdict as the event `model_check` and the tokens on the application's `cost`, under
-    the application's row lock. The caller commits."""
+    the application's row lock. `read` is the `read_digest` of the texts the model read: a pass
+    for texts the item no longer holds is stored `not_run`. The caller commits."""
+    from app.apply import gate  # gate imports full_auto, which imports this module
+
     application = db.execute(
         sa.select(Application).where(Application.id == application_id).with_for_update()
     ).scalar_one_or_none()
     if application is None:
         return "gone"
+    if outcome.verdict is Verdict.passed and read != read_digest(
+        texts_of(gate.rows_of(db, application))
+    ):
+        outcome = Outcome(Verdict.not_run, "answers_changed")
     spent = {
         "verdict": outcome.verdict.value,
         "input_tokens": reply.input_tokens,
@@ -529,6 +599,7 @@ def record(
             kind=EVENT,
             data={
                 "hash": digest,
+                "read": read,
                 "verdict": outcome.verdict.value,
                 "reason": outcome.reason,
                 "claims": [
@@ -558,18 +629,22 @@ async def before_decision(
     if isinstance(found, str):
         return None
     request, digest = found
-    try:
-        reply = await checker(request)
-    except Exception as exc:  # the model failing is a failed check, never a pass
-        logger.warning("apply.check_failed", extra={"error": type(exc).__name__})
-        reply = Reply(stopped="error")
+    read = read_digest(request.texts)
+    if unread(request.texts) is not None:
+        reply = Reply()
+    else:
+        try:
+            reply = await checker(request)
+        except Exception as exc:  # the model failing is a failed check, never a pass
+            logger.warning("apply.check_failed", extra={"error": type(exc).__name__})
+            reply = Reply(stopped="error")
     if reply.stopped == "busy":
         return "check_busy"
     outcome = judge(request, reply)
     verdict = await asyncio.to_thread(
         agents._in_db,
         sessions,
-        lambda db: record(db, application_id, digest, outcome, reply, clock()),
+        lambda db: record(db, application_id, digest, read, outcome, reply, clock()),
     )
     logger.info(
         "apply.check",
