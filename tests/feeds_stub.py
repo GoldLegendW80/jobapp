@@ -29,20 +29,26 @@ Variants:
 - timeout: answers after SLOW_S seconds
 - malformed: a body that is not JSON (Remote OK, Hacker News) or not XML (We Work Remotely)
 - shape: JSON or XML of another shape (an object, an HTML page, a user without submissions)
+- redirect: 302 to the same path under `ok` on this host (followed)
+- redirect-off: 302 to the same path under `ok` on another host name of this server, localhost
+  (refused: not the source's host)
+- redirect-loop: 302 to the same address, again and again (refused past the redirect limit)
 - anything else: 404
 
 What `ok` holds (the journeys and the api tests read these):
 - Remote OK: a contract "AI Engineer" mission at Quillfeather Example Labs (tags contract), a
   permanent "GenAI Engineer" at Brightmoor Example Co with a stated salary, the "Applied AI
   Engineer" of Larkspur Example Studio that We Work Remotely also lists, a "Cybersecurity AI
-  Engineer" contract and a "Security AI Engineer" written with a soft hyphen (never found: the
-  never apply rule), a "Sales Lead", and a posting whose address is off remoteok.com (refused).
+  Engineer" contract and a "Security AI Engineer" written with a soft hyphen (spellings the
+  sweep's whole word match lets through, as for a board: stored, never in the deck), a "Threat
+  AI Engineer" contract (the never apply rule: stored `skipped`), a "Sales Lead", and a posting
+  whose address is off remoteok.com (refused).
 - We Work Remotely: Larkspur's "Applied AI Engineer" again, a contract "Forward Deployed
-  Engineer" at Tamberlin Example, an "Ingénieur Cybersécurité" (never found).
+  Engineer" at Tamberlin Example, an "Ingénieur Cybersécurité" (never in the deck).
 - Hacker News: the account's three threads of the month; the freelance thread holds a client's
   "SEEKING FREELANCER" mission with a daily rate, a "SEEKING WORK" post (skipped), a deleted, a
-  dead and a reply comment (skipped), a security mission (never found) and a 50,000 character
-  post (cut); the hiring thread holds a permanent and a contract role.
+  dead and a reply comment (skipped), a "Security AI engineer" mission (stored `skipped`) and a
+  50,000 character post (cut); the hiring thread holds a permanent and a contract role.
 
 GET /_stats answers {path: count of requests}; POST /_reset clears it. GET /healthz answers ok.
 """
@@ -129,6 +135,7 @@ def remoteok_ok() -> list[dict[str, Any]]:
             url="https://jobs.example.org/remote-6",
         ),
         remoteok_item(7, "Secu\u00adrity AI Engineer", "Example Bastion", ["ai"]),
+        remoteok_item(8, "Threat AI Engineer", "Example Watchtower", ["ai", "contract"]),
     ]  # fmt: skip
 
 
@@ -220,7 +227,7 @@ def hn_ok() -> dict[int, dict[str, Any]]:
                    dead=True),
         hn_comment(4005, 4001, "SEEKING FREELANCER | Replying Example | AI engineer"),
         hn_comment(4006, freelance,
-                   "SEEKING FREELANCER | Example Guard | Cybersecurity AI engineer | Remote"),
+                   "SEEKING FREELANCER | Example Guard | Security AI engineer | Remote"),
         hn_comment(4007, freelance, "SEEKING FREELANCER | Longform Example | AI engineer | Remote"),
         hn_comment(5001, hiring, "Orbitwell Example | AI Engineer | Paris or Remote | Full-time"),
         hn_comment(5002, hiring, "Pinecrest Example | Senior GenAI Engineer | London | Contract"),
@@ -323,6 +330,7 @@ def hackernews(variant: str, path: str) -> tuple[int, Any]:
 
 
 VARIANTS = frozenset({"ok", "empty", "one", "many", "huge", "429-once", "shape"})
+REDIRECTS = frozenset({"redirect", "redirect-off", "redirect-loop"})
 STATUSES = {"404": 404, "403": 403, "500": 500, "429": 429}
 
 
@@ -380,6 +388,15 @@ def make_handler(state: State, slow_s: float) -> type[BaseHTTPRequestHandler]:
             seen = state.count(path)
             variant, _, rest = path.lstrip("/").partition("/")
             source, _, own = rest.partition("/")
+            if variant in REDIRECTS:
+                target = f"/ok/{rest}"
+                if variant == "redirect-off":
+                    port = self.server.server_address[1]
+                    target = f"http://localhost:{port}/ok/{rest}"
+                elif variant == "redirect-loop":
+                    target = path
+                self._send(302, b"", "text/plain", {"Location": target})
+                return
             if variant in STATUSES:
                 headers = {"Retry-After": "1"} if variant == "429" else None
                 self._send(STATUSES[variant], b"{}", "application/json", headers)

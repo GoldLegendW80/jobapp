@@ -17,7 +17,9 @@ a freelance or contract mission, is a freelance mission; any other has the contr
 says (the jobs module's rule).
 """
 
+import asyncio
 import email.utils
+import itertools
 import re
 
 from defusedxml import ElementTree
@@ -26,6 +28,7 @@ from defusedxml.common import DefusedXmlException
 from app.jobs import ats
 from app.opportunities.sources import (
     FREELANCE,
+    ITEMS_MAX,
     NAME_MAX,
     TITLE_MAX,
     FeedClient,
@@ -36,6 +39,7 @@ from app.opportunities.sources import (
     on_host,
     plain_text,
     remote_location,
+    too_many,
 )
 from app.profile.schemas import Feed
 
@@ -57,7 +61,8 @@ def freelance(kind: str, category: str, text: str) -> bool:
 
 async def read(client: FeedClient, feed: Feed) -> Found:
     url, hosts = client.address(FEED, STUB_PREFIX)
-    return parse(await client.get(url, hosts))
+    body = await client.get(url, hosts)
+    return await asyncio.to_thread(parse, body)
 
 
 def _published(raw: str | None) -> str:
@@ -70,7 +75,8 @@ def _published(raw: str | None) -> str:
 
 
 def parse(body: bytes) -> Found:
-    """The postings of a feed. Raises FeedError `invalid_response` when it is not RSS."""
+    """The postings of a feed. Raises FeedError `invalid_response` when it is not RSS,
+    `too_many` (before any item is parsed) when it holds more than ITEMS_MAX items."""
     try:
         root = ElementTree.fromstring(body, forbid_dtd=True)
     except (ElementTree.ParseError, DefusedXmlException, ValueError):
@@ -78,6 +84,7 @@ def parse(body: bytes) -> Found:
     channel = root.find("channel") if root.tag == "rss" else None
     if channel is None:
         raise FeedError("invalid_response")
+    too_many(sum(1 for _ in itertools.islice(channel.iter("item"), ITEMS_MAX + 1)))
     found: Found = []
     for item in channel.iter("item"):
         heading = line(item.findtext("title"), TITLE_MAX + NAME_MAX)

@@ -34,8 +34,10 @@ After the boards, the `feeds` hook reads the person's freelance and project feed
 O7, app/opportunities/sources), then the `browser` hook their browser sources (browser B8). Both
 store through `store_postings`; a feed's postings also count as duplicates of a posting with the
 same company and title (`loose`), whatever their locations say, so a mission on a board and on
-Remote OK is one row naming both sources. A posting may state its contract (`contract_type`, a
-feed's freelance mission); else the title, location and URL say it, as before.
+Remote OK is one row naming both sources; never when the company is UNNAMED_CLIENT, the
+placeholder of a client a feed does not name, which only its address makes a duplicate. A
+posting may state its contract (`contract_type`, a feed's freelance mission); else the title,
+location and URL say it, as before.
 
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
@@ -334,6 +336,24 @@ class Stats:
 
 # --- duplicates ---------------------------------------------------------------------------------
 
+# The company a feed gives a client it does not name (opportunities O7, a one part Hacker News
+# "SEEKING FREELANCER" post). Two such postings are two clients even with the same title and
+# location, so neither the company, title and location rule nor the loose rule (company and
+# title) matches on it: only its address makes one a duplicate.
+UNNAMED_CLIENT = "Client on Hacker News"
+_UNNAMED_KEY = slugs.PostingKey.of(UNNAMED_CLIENT, "", "", None).identity[0]
+
+
+def _identity(key: slugs.PostingKey) -> tuple[str, str, str] | None:
+    """The company, title and location rule's key, None for an unnamed client."""
+    return None if key.identity[0] == _UNNAMED_KEY else key.identity
+
+
+def _pair(key: slugs.PostingKey) -> tuple[str, str] | None:
+    """The company and title of the loose rule, None for an unnamed client."""
+    identity = _identity(key)
+    return None if identity is None else (identity[0], identity[1])
+
 
 class Known:
     """The user's postings as duplicate keys and slugs, loaded once per sweep and kept up to date
@@ -367,26 +387,31 @@ class Known:
     ) -> None:
         if key.url is not None:
             self.urls.add(key.url)
-        self.identities.add(key.identity)
-        pair = key.identity[:2]
-        if self.pairs.get(pair) is None:
+        identity = _identity(key)
+        if identity is not None:
+            self.identities.add(identity)
+        pair = _pair(key)
+        if pair is not None and self.pairs.get(pair) is None:
             self.pairs[pair] = job_id
         if slug:
             self.slugs.add(slug)
         if job_id is not None:
             if key.url is not None:
                 self.jobs.setdefault(key.url, job_id)
-            self.jobs.setdefault(key.identity, job_id)
+            if identity is not None:
+                self.jobs.setdefault(identity, job_id)
             self.sources[job_id] = source or ""
 
     def job_of(self, key: slugs.PostingKey, loose: bool = False) -> uuid.UUID | None:
         """The job a duplicate is: by URL first, else by identity, else (`loose`) by company and
         title."""
         found = self.jobs.get(key.url) if key.url is not None else None
-        if found is None:
-            found = self.jobs.get(key.identity)
-        if found is None and loose:
-            found = self.pairs.get(key.identity[:2])
+        identity = _identity(key)
+        if found is None and identity is not None:
+            found = self.jobs.get(identity)
+        pair = _pair(key)
+        if found is None and loose and pair is not None:
+            found = self.pairs.get(pair)
         return found
 
     def note(self, job_id: uuid.UUID, source: str) -> str | None:
@@ -403,8 +428,8 @@ class Known:
     def has(self, key: slugs.PostingKey, loose: bool = False) -> bool:
         return (
             (key.url is not None and key.url in self.urls)
-            or key.identity in self.identities
-            or (loose and key.identity[:2] in self.pairs)
+            or _identity(key) in self.identities
+            or (loose and _pair(key) in self.pairs)
         )
 
 

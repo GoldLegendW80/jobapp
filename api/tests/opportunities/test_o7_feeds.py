@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.jobs import ats, sweep
-from app.jobs.models import ContractType, Job, JobEvent, JobStatus, SweepStatus
+from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus, SweepStatus
 from app.opportunities import sources
 from app.opportunities.sources import (
     FeedClient,
@@ -38,7 +38,7 @@ from app.profile.schemas import Feed, SearchSection
 from tests.identity.api_helpers import Api
 from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import board, jobs_of, new_sweep, run, set_profile
-from tests.opportunities.conftest import Person, get_deck
+from tests.opportunities.conftest import OWNER_RULE, Person, get_deck
 from tests.opportunities.o7_support import (
     feed,
     feeds_search,
@@ -76,7 +76,7 @@ def test_remote_ok_parses_its_recorded_answer() -> None:
     titles = [posting.title for _, posting in found]
     # The legal notice is not a posting; the address off remoteok.com is refused.
     assert "AI Engineer, Platform" not in titles
-    assert len(found) == 6
+    assert len(found) == 7
     company, first = found[0]
     assert company == "Quillfeather Example Labs"
     assert first.title == "AI Engineer"
@@ -358,7 +358,7 @@ def test_a_timeout_is_reported(feeds_stub: Any) -> None:
 
 def test_429_once_is_retried(feeds_stub: Any) -> None:
     answers = read_all(feeds_stub, "429-once")
-    assert len(answers["remoteok"]) == 6
+    assert len(answers["remoteok"]) == 7
     assert len(answers["weworkremotely"]) == 3
 
 
@@ -433,14 +433,24 @@ def test_a_sweep_reads_the_enabled_feeds_and_stores_their_missions(
     done = sweep_feeds(factory, person_a, fake_ats, runner(feeds_stub))
     assert done.status is SweepStatus.done, done.error
     found = rows(factory, person_a)
-    assert set(found) == {
+    assert {title for title, job in found.items() if job.status is JobStatus.found} == {
         "AI Engineer",  # Remote OK, Quillfeather, contract
         "GenAI Engineer",  # Remote OK, Brightmoor
         "Applied AI Engineer",  # Remote OK and We Work Remotely: one row
         "Forward Deployed Engineer",  # We Work Remotely, contract
         "GenAI engineer for an LLM evaluation pipeline",  # Hacker News, a client
         "AI engineer",  # Hacker News, the long post
+        # Spellings the sweep's whole word match lets through, for a feed as for a board (the
+        # deck and apply read the rules folded: test_the_deck_shows_the_missions...).
+        "Cybersecurity AI Engineer",
+        "Secu\u00adrity AI Engineer",
     }
+    # The never apply rule, as for a board: stored `skipped`, the rule as the note.
+    ruled = {title: job for title, job in found.items() if job.status is JobStatus.skipped}
+    assert set(ruled) == {"Threat AI Engineer", "Security AI engineer"}
+    assert all(job.notes == OWNER_RULE for job in ruled.values())
+    assert ruled["Threat AI Engineer"].source == "remoteok"
+    assert ruled["Security AI engineer"].source == "hackernews:freelance"
     mission = found["AI Engineer"]
     assert mission.source == "remoteok"
     assert mission.url.startswith("https://remoteok.com/")
@@ -462,16 +472,27 @@ def test_a_sweep_reads_the_enabled_feeds_and_stores_their_missions(
     assert (hn.pay_min, hn.pay_max, hn.pay_currency, hn.pay_period) == (600, 600, "EUR", "day")
     assert len(found["AI engineer"].posting_text or "") == sources.TEXT_MAX
     assert "<p>" not in (hn.posting_text or "")
-    # Every never apply title (folded: "Cybersecurity", "Cybersécurité", a soft hyphen) is
-    # never stored, so never found; nor the excluded "Sales Lead" title.
-    assert not any("ecur" in title or "Cyber" in title for title in found)
+    # Never stored: the excluded "Sales Lead", and "Ingénieur Cybersécurité" (not included).
+    assert "Sales Lead" not in found
+    assert not any("Ingénieur" in title for title in found)
     reported = entries(done)
     assert reported["remoteok"]["error"] is None
-    assert reported["remoteok"]["excluded"] == 2
-    assert reported["weworkremotely"]["excluded"] == 1
-    assert reported["hackernews_freelance"]["excluded"] == 1
-    assert reported["remoteok"]["postings"] == 3
+    assert reported["remoteok"]["skipped_by_rule"] == 1
+    assert reported["weworkremotely"]["skipped_by_rule"] == 0
+    assert reported["hackernews_freelance"]["skipped_by_rule"] == 1
+    assert done.stats["skipped_by_rule"] == 2
+    assert reported["remoteok"]["postings"] == 6
     assert reported["weworkremotely"]["postings"] == 1  # Larkspur's was a duplicate
+    assert reported["hackernews_freelance"]["postings"] == 3
+    with factory() as db:
+        events = db.execute(
+            sa.select(JobEvent.kind, JobEvent.data).where(
+                JobEvent.job_id == ruled["Threat AI Engineer"].id
+            )
+        ).all()
+    pairs = [(kind, data) for kind, data in events]
+    assert (JobEventKind.status, {"from": "found", "to": "skipped", "via": "never_apply"}) in pairs
+    assert (JobEventKind.note, {"from": "", "to": OWNER_RULE, "via": "never_apply"}) in pairs
     # The events name the sweep and the feed.
     with factory() as db:
         boards = (
@@ -496,7 +517,10 @@ def test_the_deck_shows_the_missions_with_their_source(
     assert mission["source"] == "remoteok"
     assert mission["url"].startswith("https://remoteok.com/remote-jobs/")
     assert mission["contract_type"] == "Freelance"
-    assert not any("ecur" in card["title"] for card in cards)
+    # Every never apply spelling: skipped by the sweep ("Threat"), or stored by its whole word
+    # match and hidden by the deck's folded one ("Cybersecurity", a soft hyphen in "Security").
+    titles = [card["title"] for card in cards]
+    assert not any("ecur" in t or "Cyber" in t or "Threat" in t for t in titles), titles
 
 
 def test_a_disabled_feed_is_not_fetched(

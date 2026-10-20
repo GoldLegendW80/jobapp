@@ -24,8 +24,11 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * its `ok` variant: invented companies, never a real platform). A finds the missions in Discover:
  * the card says "via Remote OK" and links back to the posting on Remote OK, as Remote OK asks,
  * and the contract reads "Freelance mission"; the Hacker News client's mission links to its
- * comment. The cybersecurity mission of each feed never shows. Person B, who turned on no feed,
- * has an empty deck and never reads A's mission.
+ * comment. A feed follows the never apply rule exactly as a board does: the sweep stores a title
+ * its whole word match finds ("Threat AI Engineer", "Security AI engineer") as `skipped` with the
+ * rule as its note, and a spelling it lets through ("Cybersecurity", a soft hyphen in "Security")
+ * as a board's would be; no cybersecurity mission, in any spelling, ever shows in the deck. Person
+ * B, who turned on no feed, has an empty deck and never reads A's mission.
  *
  * Locally, as opportunities-all.config.ts says, with -f tests/feeds-stub.compose.yml added, then:
  *   E2E_CADDY_URL=... E2E_ATS_FORMS_URL=... E2E_COMPOSE_PROJECT=... \
@@ -44,6 +47,7 @@ type Row = {
   url: string | null;
   contract_type: string;
   status: string;
+  notes: string;
 };
 
 let a: Person;
@@ -68,11 +72,12 @@ function feedsOnly(person: Person) {
     min_fit: 0,
     days: 30,
     boards: [],
-    never_apply: [
-      "No cybersecurity roles: cyber, security, pentest, threat (journey rule)",
-    ],
+    never_apply: [RULE],
   };
 }
+
+const RULE =
+  "No cybersecurity roles: cyber, security, pentest, threat (journey rule)";
 
 const feed = (kind: string) => ({
   kind,
@@ -168,12 +173,16 @@ test("A turns on two feeds and the sweep stores their missions", async () => {
 
   await turnOnFeeds(pageA.request, ["remoteok", "hackernews_freelance"]);
   const done = await sweep(pageA.request);
+  // Exactly the two feeds A turned on, each read: never We Work Remotely, which A left off.
   expect(done.sources.map((s) => [s.kind, s.error])).toEqual([
     ["remoteok", null],
     ["hackernews_freelance", null],
   ]);
 
   const found = await rows(pageA.request);
+  expect(found.length).toBeGreaterThan(0);
+  // Read from the fake feeds server only: every company is one it invented.
+  for (const row of found) expect(row.company).toMatch(/Example/);
   const mission = found.find((r) => r.company === "Quillfeather Example Labs");
   expect(mission).toMatchObject({
     title: "AI Engineer",
@@ -188,10 +197,22 @@ test("A turns on two feeds and the sweep stores their missions", async () => {
     contract_type: "Freelance",
     url: "https://news.ycombinator.com/item?id=4001",
   });
-  // Never a cybersecurity mission, in any spelling the feeds use.
-  expect(found.filter((r) => /cyber|secu/i.test(r.title))).toEqual([]);
+  // The never apply rule, as for a board: what its whole word match finds is stored skipped,
+  // with the rule as its note, never found.
+  const ruled = found.filter((r) => /\b(?:threat|security)\b/i.test(r.title));
+  expect(
+    ruled.map((r) => [r.title, r.source, r.status, r.notes]).sort(),
+  ).toEqual([
+    ["Security AI engineer", "hackernews:freelance", "skipped", RULE],
+    ["Threat AI Engineer", "remoteok", "skipped", RULE],
+  ]);
   // Only what the two feeds hold: never We Work Remotely, which A left off.
   expect(found.every((r) => r.source !== "weworkremotely")).toBe(true);
+  expect(
+    found.every((r) =>
+      ["remoteok", "hackernews:freelance"].includes(r.source ?? ""),
+    ),
+  ).toBe(true);
 });
 
 test("Discover shows the missions with their source, linking back", async () => {
@@ -221,8 +242,15 @@ test("Discover shows the missions with their source, linking back", async () => 
   ).toHaveAttribute("href", "https://news.ycombinator.com/item?id=4001");
   await shots(pageA, "deck-hacker-news");
 
+  // Never a cybersecurity mission in the deck, in any spelling the feeds use (folded: a soft
+  // hyphen inside "Security" is read as "Security").
   const deck = await readDeck(pageA.request);
-  expect(deck.cards.some((c) => /cyber|secu/i.test(c.title))).toBe(false);
+  expect(deck.cards.length).toBeGreaterThan(0);
+  expect(
+    deck.cards.some((c) =>
+      /cyber|secu|threat/i.test(c.title.replace(/\u00ad/g, "")),
+    ),
+  ).toBe(false);
   expect(errors).toEqual([]);
 });
 

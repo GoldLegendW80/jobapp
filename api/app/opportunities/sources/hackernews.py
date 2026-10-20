@@ -12,6 +12,9 @@ story of that account whose title starts with the thread's words), then its top 
 (`kids`, at most FEEDS_HN_MAX_COMMENTS, HN_CONCURRENCY at a time). A comment that is deleted,
 dead, a reply (its parent is not the thread), without text, or that could not be read, is
 skipped; when every comment of a thread with comments failed, the feed reports the first error.
+A comment answered 429 (not retried), the sweep's time running out or a test stack without the
+fake server stops the feed at once with that code, nothing of it kept. Each item is read up to
+HN_ITEM_MAX_BODY (256 KB).
 
 A comment is one posting, read from its first line (the text before the first paragraph break),
 whose parts are separated by "|":
@@ -19,7 +22,8 @@ whose parts are separated by "|":
   "SEEKING FREELANCER"; the posts of freelancers offering their work ("SEEKING WORK") are not
   opportunities and are skipped. Every post kept is a freelance mission. The client is the first
   part after those words, the title the second (a post with one part is titled by it, its client
-  "Client on Hacker News").
+  "Client on Hacker News", sweep.UNNAMED_CLIENT: only its address makes such a posting a
+  duplicate, since two unnamed clients are not one client).
 - "Who is hiring?": the company is the first part, the title the first later part that names a
   role (engineer, developer, ...), else the second part; a post with one part is skipped. A
   part saying contract or freelance makes it a freelance mission, else the contract its title
@@ -34,9 +38,11 @@ import re
 from typing import Any
 
 from app.jobs import ats
+from app.jobs import sweep as sweeps
 from app.opportunities.sources import (
     FREELANCE,
     HN_CONCURRENCY,
+    HN_ITEM_MAX_BODY,
     HN_MAX_COMMENTS,
     NAME_MAX,
     TITLE_MAX,
@@ -58,9 +64,9 @@ THREADS = {
     "freelance": re.compile(r"^\s*ask hn:\s*freelancer\?\s*seeking freelancer\?", re.IGNORECASE),
     "hiring": re.compile(r"^\s*ask hn:\s*who is hiring\?", re.IGNORECASE),
 }
-UNNAMED_CLIENT = "Client on Hacker News"
+UNNAMED_CLIENT = sweeps.UNNAMED_CLIENT
 _SEEKING = re.compile(r"^\s*seeking\s+freelancers?\b[\s|:,.\-\u2013\u2014]*", re.IGNORECASE)
-_FIRST_BREAK = re.compile(r"<\s*p\b[^>]*>|\n", re.IGNORECASE)
+_FIRST_BREAK = re.compile(r"<\s*p\b[^<>]*>|\n", re.IGNORECASE)  # linear: never past a "<"
 _ROLE = re.compile(
     r"\b(?:engineers?|developers?|scientists?|designers?|managers?|leads?|architects?|analysts?"
     r"|researchers?|devops|sre|consultants?|specialists?|head|director|cto|programmers?"
@@ -79,9 +85,22 @@ def _item_url(client: FeedClient, path: str) -> tuple[str, frozenset[str]]:
     return client.address(f"{API}/{path}", STUB_PREFIX)
 
 
-async def _get_json(client: FeedClient, path: str) -> Any:
+async def _get_json(client: FeedClient, path: str, *, comment: bool = False) -> Any:
+    """One answer of the API: an item is read up to HN_ITEM_MAX_BODY; a comment answered 429 is
+    not retried (`read` stops the feed)."""
     url, hosts = _item_url(client, path)
-    return parse_json(await client.get(url, hosts))
+    body = await client.get(
+        url,
+        hosts,
+        max_body=HN_ITEM_MAX_BODY if path.startswith("item/") else None,
+        retry_rate_limited=not comment,
+    )
+    return parse_json(body)
+
+
+# A comment read failing with one of these stops the feed: the source asks to slow down, the
+# sweep's time is up, or a test stack has no fake server. Any other failure skips the comment.
+STOPS = frozenset({"rate_limited", "time_budget", "stub_missing"})
 
 
 async def thread_of(client: FeedClient, thread: str) -> dict[str, Any] | None:
@@ -116,19 +135,24 @@ async def read(client: FeedClient, thread: str, max_comments: int = HN_MAX_COMME
     kids = kids[:max_comments]
     gate = asyncio.Semaphore(HN_CONCURRENCY)
     errors: list[FeedError] = []
+    stopped: list[FeedError] = []
 
     async def one(item_id: int) -> Any:
         async with gate:
+            if stopped:
+                return None
             try:
-                return await _get_json(client, f"item/{item_id}.json")
+                return await _get_json(client, f"item/{item_id}.json", comment=True)
             except FeedError as exc:
-                errors.append(exc)
+                (stopped if exc.code in STOPS else errors).append(exc)
                 return None
 
     comments = await asyncio.gather(*(one(item_id) for item_id in kids))
+    if stopped:
+        raise FeedError(stopped[0].code)
     if kids and len(errors) == len(kids):
         raise errors[0]
-    return parse(thread, story.get("id"), comments)
+    return await asyncio.to_thread(parse, thread, story.get("id"), comments)
 
 
 def parse(thread: str, story_id: object, comments: list[Any]) -> Found:

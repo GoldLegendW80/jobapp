@@ -15,6 +15,7 @@ board lists only remote work). A posting whose tags say contract or freelance is
 mission; any other has the contract its title says (the jobs module's rule).
 """
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -34,6 +35,7 @@ from app.opportunities.sources import (
     parse_json,
     plain_text,
     remote_location,
+    too_many,
 )
 from app.profile.schemas import Feed
 
@@ -47,7 +49,8 @@ FREELANCE_TAGS = frozenset(
 
 async def read(client: FeedClient, feed: Feed) -> Found:
     url, hosts = client.address(API, STUB_PREFIX)
-    return parse(parse_json(await client.get(url, hosts)))
+    body = await client.get(url, hosts)
+    return await asyncio.to_thread(lambda: parse(parse_json(body)))
 
 
 def freelance(tags: object) -> bool:
@@ -71,9 +74,11 @@ def _published(item: dict[str, Any]) -> str:
 
 
 def parse(data: object) -> Found:
-    """The postings of an answer. Raises FeedError `invalid_response` when it is not a list."""
+    """The postings of an answer. Raises FeedError `invalid_response` when it is not a list,
+    `too_many` (before any item is parsed) when it holds more than ITEMS_MAX postings."""
     if not isinstance(data, list):
         raise FeedError("invalid_response")
+    too_many(sum(1 for item in data if isinstance(item, dict) and "id" in item))
     found: Found = []
     for item in data:
         if not isinstance(item, dict) or "id" not in item:
