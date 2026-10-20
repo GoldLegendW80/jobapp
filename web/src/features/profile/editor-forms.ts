@@ -19,6 +19,7 @@ import {
   REMOTE_STANCES,
   SENIORITIES,
   type Board,
+  BROWSER_KINDS,
   type PayRange,
   type BrowserSource,
   type Category,
@@ -40,6 +41,10 @@ export const GATES_MAX = 50;
 export const BOARDS_MAX = 300;
 export const NEVER_APPLY_MAX = 50;
 export const NEVER_APPLY_LINE = 500;
+/** schemas.py SearchSection.browser_sources: at most 10 sources. */
+export const BROWSER_SOURCES_MAX = 10;
+/** The kinds the sweep reads today (browser B8); `site` (B9) and `linkedin` (B10) come later. */
+export const BROWSER_KINDS_RUNNABLE = ["google_careers", "vie"] as const;
 export const ORG_MAX = 100;
 export const ORG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -293,6 +298,13 @@ const boardSchema = z.object({
 export const boardKey = (b: { ats: string; org: string }) =>
   `${b.ats}:${b.org.trim().toLowerCase()}`;
 
+const browserSourceSchema = z.object({
+  kind: z.enum(BROWSER_KINDS),
+  query: text("the search words", LINE_MAX, { required: true }),
+  location: text("a location", LINE_MAX),
+  enabled: z.boolean(),
+});
+
 const YEAR_DAYS = /^\d{1,3}$/;
 /** schemas.py DocumentsGeneration: the safety ceiling, postings a day. */
 const CEILING = /^\d{1,3}$/;
@@ -368,8 +380,10 @@ export const searchSchema = z
         }),
       )
       .max(NEVER_APPLY_MAX, `Keep at most ${NEVER_APPLY_MAX} rules.`),
-    // Browser B8: not edited here yet, carried through unchanged so a save never drops them.
-    browser_sources: z.array(z.custom<BrowserSource>()),
+    // Browser B8: edited by the browser sources card of this tab (browser-sources-card.tsx).
+    browser_sources: z
+      .array(browserSourceSchema)
+      .max(BROWSER_SOURCES_MAX, `Keep at most ${BROWSER_SOURCES_MAX} sources.`),
     // Not edited here (Jobs owns it): carried through unchanged so a save never resets it.
     sweep_schedule: z.object({
       enabled: z.boolean(),
@@ -418,6 +432,7 @@ export const searchSchema = z
   });
 export type SearchForm = z.infer<typeof searchSchema>;
 export type BoardForm = SearchForm["boards"][number];
+export type BrowserSourceForm = SearchForm["browser_sources"][number];
 
 export const toSearchForm = (search: Search): SearchForm => ({
   title_include: toTermList(search.title_include),
@@ -437,7 +452,12 @@ export const toSearchForm = (search: Search): SearchForm => ({
     extra_exclude: toTermList(b.extra_exclude),
   })),
   never_apply: search.never_apply.map((value) => ({ value })),
-  browser_sources: (search.browser_sources ?? []).map((s) => ({ ...s })),
+  browser_sources: (search.browser_sources ?? []).map((s) => ({
+    kind: s.kind,
+    query: s.query,
+    location: s.location ?? "",
+    enabled: s.enabled,
+  })),
   sweep_schedule: {
     ...search.sweep_schedule,
     days: [...search.sweep_schedule.days],
@@ -476,7 +496,14 @@ export const fromSearchForm = (values: SearchForm): Search => ({
   never_apply: values.never_apply.map((r) => cleanLine(r.value)),
   // Left out when empty: the api's default, so a section saved before B8 round trips as it was.
   ...(values.browser_sources.length > 0
-    ? { browser_sources: values.browser_sources.map((s) => ({ ...s })) }
+    ? {
+        browser_sources: values.browser_sources.map((s): BrowserSource => ({
+          kind: s.kind,
+          query: cleanLine(s.query),
+          location: cleanLine(s.location) || null,
+          enabled: s.enabled,
+        })),
+      }
     : {}),
   sweep_schedule: {
     ...values.sweep_schedule,

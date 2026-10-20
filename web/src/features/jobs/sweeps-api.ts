@@ -20,6 +20,18 @@ export const boardFailureSchema = z.object({
 });
 export type BoardFailure = z.infer<typeof boardFailureSchema>;
 
+/** One browser source of the sweep (browser B8, api/app/jobs/schemas.py SourceOut). */
+export const sweepSourceSchema = z.object({
+  kind: z.string(),
+  query: z.string(),
+  location: z.string().nullable(),
+  result_pages: z.number().int().nonnegative(),
+  found: z.number().int().nonnegative(),
+  new: z.number().int().nonnegative(),
+  error: z.string().nullable(),
+});
+export type SweepSource = z.infer<typeof sweepSourceSchema>;
+
 export const sweepSchema = z.object({
   id: z.string().min(1),
   trigger: z.string(),
@@ -38,6 +50,8 @@ export const sweepSchema = z.object({
   duplicates: z.number().int().nonnegative(),
   skipped_by_rule: z.number().int().nonnegative(),
   duration: z.number().nullable(),
+  // Absent from an api older than browser B8.
+  sources: z.array(sweepSourceSchema).default([]),
 });
 export type Sweep = z.infer<typeof sweepSchema>;
 

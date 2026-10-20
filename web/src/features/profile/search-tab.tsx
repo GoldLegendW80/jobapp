@@ -1,9 +1,10 @@
 /**
  * Search: what the sweep looks for. Title include and exclude terms and location terms as chips
  * (each list with its advanced switch), contract types as toggles, the remote stance, the minimum
- * fit to shortlist, the posting age window, the company boards (boards-table.tsx) and the
- * never-apply rules. Then what the person aims for (target-fields.tsx, O4) and, as a card with
- * its own Save, the preferences section (preferences-card.tsx).
+ * fit to shortlist, the posting age window, the company boards (boards-table.tsx), the job sites
+ * read in the browser (browser-sources-card.tsx) and the never-apply rules. Then what the person
+ * aims for (target-fields.tsx, O4) and, as a card with its own Save, the preferences section
+ * (preferences-card.tsx).
  */
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -31,6 +32,7 @@ import {
   type SweepSchedule,
 } from "./api";
 import { BoardsTable } from "./boards-table";
+import { BrowserSourcesCard } from "./browser-sources-card";
 import { PreferencesCard } from "./preferences-card";
 import { TargetFields } from "./target-fields";
 import { describeSchedule } from "./schedule";
@@ -204,6 +206,7 @@ export function SearchTab({
           </Group>
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           <BoardsTable form={form} />
+          <BrowserSourcesCard form={form} />
           <NeverApply form={form} />
           <DocumentsSearchOptions form={form} />
           <SaveBar
