@@ -35,6 +35,7 @@ describe("App shell", () => {
     ).getAllByRole("link");
     expect(links.map((link) => link.textContent)).toEqual([
       "Jobs",
+      "Discover",
       "Profile",
       "Applications",
       "Runs",
