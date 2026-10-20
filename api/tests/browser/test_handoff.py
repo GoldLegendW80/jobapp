@@ -266,7 +266,8 @@ def test_after_done_the_allow_list_is_back_with_cdp(stack: Stack, agent: Agent) 
 
     listed = agent.tool("browser_tabs", action="list")
     assert listed["ok"], listed
-    assert [t["url"] for t in listed["tabs"]] == [LOGIN], listed
+    # The restored tab and the one the noted address opened in: pages only, never client:8080.
+    assert {t["url"] for t in listed["tabs"]} == {LOGIN}, listed
     seen = agent.tool("browser_snapshot")
     assert seen["ok"], seen
     assert f"Signed in as {name}" in seen["snapshot"]
@@ -276,7 +277,7 @@ def test_after_done_the_allow_list_is_back_with_cdp(stack: Stack, agent: Agent) 
     assert away["error"] == "host_not_allowed", away
     assert away["url"] == LOGIN, away
     tabs = agent.tool("browser_tabs", action="list")["tabs"]
-    assert [t["url"] for t in tabs] == [LOGIN], tabs
+    assert {t["url"] for t in tabs} == {LOGIN}, tabs
 
 
 def test_cancel_releases_the_lease_and_leaves_no_chromium(stack: Stack) -> None:
