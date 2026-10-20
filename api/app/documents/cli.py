@@ -81,7 +81,8 @@ def run_import_legacy(email: str, dry_run: bool) -> int:
             if user is None:
                 _error("No account with that email. Nothing was imported.")
                 return 1
-            summary = legacy.import_legacy(session, user.id, identity_service.utcnow())
+            user_id = user.id
+            summary = legacy.import_legacy(session, user_id, identity_service.utcnow())
             if dry_run:
                 session.rollback()
     except JobBusyError:
@@ -92,6 +93,7 @@ def run_import_legacy(email: str, dry_run: bool) -> int:
         return 1
     finally:
         engine.dispose()
+    legacy.log_run(user_id, summary, dry_run=dry_run)
     print(report(summary, dry_run))
     return 0
 

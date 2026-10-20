@@ -262,10 +262,10 @@ def enabled_boards(search: SearchSection | None) -> list[Board]:
 
 
 def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
-    """The browser sources a sweep runs (browser B8): enabled, of a kind B8 reads, each once."""
+    """The browser sources a sweep runs (browser B8, B9): enabled, of a kind read, each once."""
     found: dict[tuple[str, str, str], BrowserSource] = {}
     for source in search.browser_sources if search else []:
-        if source.enabled and source.kind in ("google_careers", "vie"):
+        if source.enabled and source.kind in ("google_careers", "vie", "site"):
             found.setdefault((source.kind, source.query, source.location or ""), source)
     return list(found.values())
 
