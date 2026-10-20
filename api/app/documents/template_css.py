@@ -11,17 +11,18 @@ character outside the ASCII set of the rules below, functions nested deeper than
 FUNCTION_DEPTH, a sheet over SHEET_MAX characters. A sheet it stops on is refused whole. Then
 everything is held to allow lists:
 - the structure: rules and an exact `@page`, no other at-rule, no block inside a block;
-- the selectors (SELECTORS): type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
+- the selectors: type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
   `:last-child`, the combinators space, `>`, `+`, `~`, a final `::before`, `::after` or
   `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
 - the properties of VALUES, each with its own allow list of values; sizes of text in `em` or
   `%` or the density property, every other length from 0 up to CAPS; colours `#rrggbb` or the
   accent; strings only punctuation; functions only `var()`, `minmax()` in a grid template and
   one `rotate()` of a decoration;
-- nothing lays a box over another: `position` only static or relative, no offset (`left`,
-  `top`, `right`, `bottom`), no `z-index`, no negative margin, no `transform` on an element,
-  grid placement only by `grid-column` (an item placed on one axis is put by the browser where
-  it overlaps no other; `grid-row` and `grid-area` can put two items in one cell);
+- what places a box over another is refused (OVERLAY): `position` other than static and
+  relative, an offset (`left`, `top`, `right`, `bottom`, `inset`), `z-index`, `float`, a
+  negative margin, a `transform` of an element, a grid placement other than `grid-column` (the
+  grid placement algorithm, CSS Grid 1 section 8.5, puts an item placed on one axis only where
+  it overlaps no other item; `grid-row` and `grid-area` can put two items in one cell);
 - a `::before` or `::after` is a decoration: punctuation of CONTENT_CHARS with a colour, a font,
   space around it and at most one rotate; no fill, border, size or position (DECORATION); a
   `::marker` takes only a colour and a font (MARKER); `content` is set on nothing else;
@@ -37,8 +38,9 @@ everything is held to allow lists:
 Declared open points, left to D25b's render check: a text colour on a background set by another
 rule (the page's white, a band, a column); a box made smaller than its text (`width`, `height`,
 `flex`), whose text then runs over its neighbours, under the background of a later flex or grid
-item or of a `position: relative` box; a size made small by nesting `em` sizes; a box pushed off
-the page by its margins.
+item or of a `position: relative` box; the vertical padding or border of an inline box, which
+paints over the line above; a size made small by nesting `em` sizes; a box pushed off the page
+by its margins.
 """
 
 from __future__ import annotations
@@ -774,10 +776,6 @@ OVERLAY = frozenset(
      "grid-row", "grid-row-start", "grid-row-end", "grid-area", "grid-column-start",
      "grid-column-end", "float", "translate", "rotate", "scale", "offset", "margin-trim")
 )  # fmt: skip
-FUNCTIONS = {
-    "minmax": ("grid-template-columns", "grid-template-rows"),
-    "rotate": ("transform",),
-}
 
 
 def _target_problem(prop: str, targets: frozenset[str | None]) -> tuple[str, str] | None:
@@ -825,9 +823,6 @@ def value_problem(
         return None
     if any(p[0] == "fn" for p in found):
         return _CODE.get(d.prop, "property"), f"{d.prop}: a function outside the allowed list"
-    for name, props in FUNCTIONS.items():
-        if d.prop not in props and any(p[0] == name for p in found):
-            return "property", f"{d.prop}: {name}() outside {props[0]}"
     if d.prop in SPECIAL:
         return _special(d.prop, found, names)
     if not VALUES[d.prop](found):

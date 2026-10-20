@@ -839,7 +839,7 @@ ROUND_THREE_HTML_ACCEPTED = [
     '{% if content.summary %}<div class="a">{{ content.summary }}</div>'
     '{% else %}<p class="b"></p>{% endif %}',
     '<h2 class="a"><span>{{ content.summary }}</span></h2>',
-    "{% if name %}" * 10 + SUMMARY + "{% endif %}" * 10,
+    "{% if content.summary %}" * 10 + SUMMARY + "{% endif %}" * 10,
 ]
 
 

@@ -32,17 +32,18 @@ text of the template, so it can be logged. On top of the authoring rules every t
   (the HTML standard's "in body" and table insertion modes): no element the builder would close,
   move or wrap is accepted, rather than a model of the repair. So no block (_CLOSES_P) while a
   `p` is open below the nearest cell or table, a `li` only as a child of `ul` or `ol`, a heading
-  never right inside a heading, an `a` never inside an `a`, the parts of a table only in their
-  place (`tr` only in `thead` or `tbody`), no text in a table outside a cell, no `/>` on an
-  element that is not void, no `rowspan` (cells of two rows could then share a slot);
-- the CSS: `template_css.check`, a static filter of allow lists (see that module): nothing
-  lays a box over another, a `::before` or `::after` holds only punctuation.
+  never right inside a heading, the parts of a table only in their place (`tr` only in `thead`
+  or `tbody`), no text in a table outside a cell, no `/>` on an element that is not void, no
+  `rowspan` (cells of two rows could then share a slot);
+- the CSS: `template_css.check`, a static filter of allow lists (see that module): it refuses
+  what places a box over another (position, offsets, z-index, negative margins, grid rows and
+  areas, a transform of an element) and any box a `::before` or `::after` would draw.
 
-What the static filter guarantees: no text of the template, every field printed, nothing it
-lets through can place a box over another or draw one from a pseudo-element. Whether every field
-is truly visible (contrast on the painted background, a box smaller than its text, inside the
-page) is judged on the render by D25b (issue #220), with the fit check and the fields found in
-the PDF text, since D25b holds the renderer.
+What the static filter guarantees: no text of the template, every field printed in a tree the
+browser keeps as written, none of the CSS constructs above. Whether every field is truly
+visible (contrast on the painted background, a box smaller than its text, inside the page) is
+judged on the render by D25b (issue #220), with the fit check and the fields found in the PDF
+text, since D25b holds the renderer.
 
 **The tokens.** `from_pdf(DesignPdf)` and `from_docx(DesignDocx)` -> Tokens: what the layout
 extraction of D25a's sandbox kinds says of the look, as values the template system takes: the
@@ -653,8 +654,6 @@ class _Rendered(HTMLParser):
             return "a li outside a ul or an ol"
         if tag in _HEADINGS and parent in _HEADINGS:
             return "a heading inside a heading, which the browser closes before it"
-        if tag == "a" and "a" in self.open:
-            return "an a inside an a, which the browser closes before it"
         allowed = _TABLE.get(parent, ())
         if (allowed or tag in _TABLE_PARTS) and tag not in allowed:
             return "a table part outside its place"
