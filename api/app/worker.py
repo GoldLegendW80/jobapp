@@ -253,7 +253,25 @@ def ats_client(ctx: dict[str, Any]) -> ats.AtsClient:
 
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     async with ats_client(ctx) as client:
-        await sweep.run_sweep(sessions_of(ctx), uuid.UUID(sweep_id), client, clock_of(ctx))
+        await sweep.run_sweep(
+            sessions_of(ctx),
+            uuid.UUID(sweep_id),
+            client,
+            clock_of(ctx),
+            browser=browser_sources(ctx),
+        )
+
+
+def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The browser sources' run (browser B8): tests put theirs in the context."""
+    if "browser_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["browser_sources"]
+        return hook
+    if "redis" not in ctx:
+        return None
+    from app.browser import sources
+
+    return sources.runner_for(ctx["settings"], ctx["redis"], sessions_of(ctx))
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
