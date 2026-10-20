@@ -108,16 +108,19 @@ def test_each_queue_path_imports_every_registration_module(builder: str) -> None
 def test_a_fresh_worker_builds_the_tools_of_both_ingestion_agents() -> None:
     """N12 of the review of PR #148: the queue the worker builds leaves the tools of every
     ingestion agent registered, so its runs do not fail on a tool the definition names."""
+    names = [agents.EXTRACT.name, agents.TRANSCRIBE.name]
+    # The script names the agents and imports no ingestion module: only the queue registers them.
     script = (
         "import json, uuid\n"
         "from sqlalchemy.orm import sessionmaker\n"
         "from app import worker\n"
-        "from app.agents import tools\n"
+        "from app.agents import definitions, tools\n"
         "worker.agents_queue()\n"
-        "from app.ingestion import agents\n"
         "built = {\n"
-        "    one.name: tools.build(sessionmaker(), uuid.uuid4(), one.tools).allowed_names\n"
-        "    for one in (agents.EXTRACT, agents.TRANSCRIBE)\n"
+        "    name: tools.build(\n"
+        "        sessionmaker(), uuid.uuid4(), definitions.AGENTS[name].tools\n"
+        "    ).allowed_names\n"
+        f"    for name in {names!r}\n"
         "}\n"
         "print(json.dumps(built))\n"
     )
@@ -130,6 +133,6 @@ def test_a_fresh_worker_builds_the_tools_of_both_ingestion_agents() -> None:
     )
     assert ran.returncode == 0, ran.stderr[-2000:]
     built = json.loads(ran.stdout.strip().splitlines()[-1])
-    assert sorted(built) == sorted([agents.EXTRACT.name, agents.TRANSCRIBE.name])
+    assert sorted(built) == sorted(names)
     for one in (agents.EXTRACT, agents.TRANSCRIBE):
         assert len(built[one.name]) == len(one.tools) > 0
