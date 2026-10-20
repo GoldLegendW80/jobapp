@@ -19,8 +19,9 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
 /**
  * Opportunities O3 against the real stack through Caddy: the pay and the work mode of a
  * posting. An invented person A sweeps the board "fake-pay" of the fake ATS server
- * (api/tests/jobs/fake_ats.py, which the worker reads for every org on the scratch stack), once
- * on Ashby and once on Lever: one posting whose ATS states its pay and work mode, a freelance
+ * (api/tests/jobs/fake_ats.py, which the worker reads for every org on the scratch stack) on
+ * Ashby (Lever's salaryRange is the api tests' part: the same addresses on two boards are one
+ * row since browser B10): one posting whose ATS states its pay and work mode, a freelance
  * mission whose text states "TJM 600 €" and whose location says "Télétravail", one that states
  * no pay ("Competitive salary, selon profil"). The postings carry exactly what was stated, never
  * a guess; the deck's cards and the posting's page show it; A edits the pay and the work mode
@@ -75,7 +76,7 @@ function sweepsFakePay(person: Person) {
     location: { terms: ["paris"], advanced_regex: false },
     contract_types: [],
     min_fit: 0,
-    boards: [board("ashby"), board("lever")],
+    boards: [board("ashby")],
   };
 }
 
@@ -135,46 +136,26 @@ test.afterAll(async () => {
 test("the sweep stores the pay and work mode each posting states, never a guess", async () => {
   await sweep(pageA.request);
   const found = await rows(pageA.request);
-  const of = (title: string, ats: string) =>
-    found.find((r) => r.title === title && (r.source ?? "").startsWith(ats));
-  // Ashby's compensation and workplaceType, Lever's salaryRange and workplaceType.
-  expect(pay(of(STATED, "ashby"))).toEqual([
-    60000,
-    70000,
-    "EUR",
-    "year",
-    "hybrid",
-  ]);
-  expect(pay(of(STATED, "lever"))).toEqual([
-    50000,
-    60000,
-    "GBP",
-    "year",
-    "hybrid",
-  ]);
+  const of = (title: string) => found.find((r) => r.title === title);
+  expect(found).toHaveLength(3);
+  // Ashby's compensation and workplaceType.
+  expect(pay(of(STATED))).toEqual([60000, 70000, "EUR", "year", "hybrid"]);
   // No pay from the ATS: the text's daily rate, the location's "Télétravail".
-  expect(pay(of(FREELANCE, "ashby"))).toEqual([
-    600,
-    600,
-    "EUR",
-    "day",
-    "remote",
-  ]);
+  expect(pay(of(FREELANCE))).toEqual([600, 600, "EUR", "day", "remote"]);
   // "Competitive salary, selon profil": nothing.
-  expect(pay(of(UNSTATED, "ashby"))).toEqual([null, null, null, null, null]);
+  expect(pay(of(UNSTATED))).toEqual([null, null, null, null, null]);
 
   const deck = (await readDeck(pageA.request)) as unknown as {
     cards: Array<{ id: string; pay: string | null; work_mode: string | null }>;
   };
   const card = (row: Row | undefined) =>
     deck.cards.find((c) => c.id === row?.id);
-  expect(card(of(STATED, "ashby"))?.pay).toBe("60,000 to 70,000 EUR a year");
-  expect(card(of(STATED, "lever"))?.pay).toBe("50,000 to 60,000 GBP a year");
-  expect(card(of(FREELANCE, "ashby"))).toMatchObject({
+  expect(card(of(STATED))?.pay).toBe("60,000 to 70,000 EUR a year");
+  expect(card(of(FREELANCE))).toMatchObject({
     pay: "600 EUR a day",
     work_mode: "remote",
   });
-  expect(card(of(UNSTATED, "ashby"))).toMatchObject({
+  expect(card(of(UNSTATED))).toMatchObject({
     pay: null,
     work_mode: null,
   });
@@ -190,9 +171,7 @@ test("the sweep stores the pay and work mode each posting states, never a guess"
 });
 
 test("the posting's page shows them; A's edit stays through a rescore and a sweep", async () => {
-  const row = (await rows(pageA.request)).find(
-    (r) => r.title === STATED && (r.source ?? "").startsWith("ashby"),
-  );
+  const row = (await rows(pageA.request)).find((r) => r.title === STATED);
   if (!row) throw new Error("the posting was not swept");
   await pageA.goto(`/jobs/${row.id}`);
   await expect(fact(pageA, "Pay")).toHaveText("60,000 to 70,000 EUR a year");
@@ -209,7 +188,7 @@ test("the posting's page shows them; A's edit stays through a rescore and a swee
   await expect(dialog).toBeHidden();
   await expect(fact(pageA, "Pay")).toHaveText("65,000 to 75,000 EUR a year");
   await expect(fact(pageA, "Work mode")).toHaveText("Remote");
-  await expect(pageA.getByText("Edited the work mode, pay")).toBeVisible();
+  await expect(pageA.getByText("Edited the pay, work mode")).toBeVisible();
 
   const rescored = await pageA.request.post("/api/jobs/rescore", {
     headers: CSRF,
@@ -221,7 +200,7 @@ test("the posting's page shows them; A's edit stays through a rescore and a swee
   await expect(fact(pageA, "Pay")).toHaveText("65,000 to 75,000 EUR a year");
   await expect(fact(pageA, "Work mode")).toHaveText("Remote");
   const after = (await rows(pageA.request)).filter((r) => r.title === STATED);
-  expect(after).toHaveLength(2); // the sweep added nothing twice
+  expect(after).toHaveLength(1); // the sweep added nothing twice
   expect(errors).toEqual([]);
 
   // B never reads A's posting, and B's deck holds nothing of A's.
