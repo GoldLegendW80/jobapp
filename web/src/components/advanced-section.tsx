@@ -5,8 +5,9 @@
  * Collapsed by default. Give `pageKey` and the open state is kept in local storage under that key
  * (a blocked storage only means it starts collapsed). Children are rendered only while open; pass
  * `keepMounted` for a form whose fields must stay registered while folded. A field inside with an
- * error is named by `errorFieldId`: the section opens and that field takes the focus. Pass `open`
- * and `onOpenChange` instead to hold the state from outside.
+ * error is named by `errorFieldId`: the section opens and that field takes the focus, and it
+ * cannot be closed while `errorFieldId` is set. Pass `open` and `onOpenChange` instead to hold
+ * the state from outside.
  */
 import { ChevronDown } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";

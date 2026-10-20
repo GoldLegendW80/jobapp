@@ -8,10 +8,10 @@
 export const CONTRACT_WORDS: Record<string, string> = {
   CDI: "Permanent",
   CDD: "Fixed term",
-  VIE: "International volunteer (VIE)",
+  VIE: "VIE",
   Stage: "Internship",
-  Alternance: "Work study",
-  Freelance: "Freelance",
+  Alternance: "Apprenticeship",
+  Freelance: "Freelance mission",
 };
 
 export function contractWord(code: string): string {
@@ -32,6 +32,10 @@ export const WORDING = {
   like: "Like",
   pass: "Pass",
   undoLast: "Undo last",
-  deckEmpty: "Nothing new above your threshold.",
   deckEmptyHint: "Find new postings, or lower the threshold in Search options.",
 } as const;
+
+/** The empty deck line; it names the fit threshold in force so the number is never a mystery. */
+export function deckEmpty(threshold: number): string {
+  return `Nothing new above your threshold of ${threshold}.`;
+}

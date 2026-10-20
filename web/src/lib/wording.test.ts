@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CONTRACT_TYPES } from "@/features/jobs/labels";
 
-import { CONTRACT_WORDS, WORDING, contractWord } from "./wording";
+import { CONTRACT_WORDS, WORDING, contractWord, deckEmpty } from "./wording";
 
 const DASHES = /[‒–—―]|\s-\s/;
 const JARGON = /\b(ATS|sweep|lease|CDI)\b/;
@@ -30,6 +30,22 @@ describe("wording", () => {
     }
     expect(contractWord("CDI")).toBe("Permanent");
     expect(contractWord("Seasonal")).toBe("Seasonal");
+  });
+
+  it("pins the whole contract table to the spec words", () => {
+    expect(CONTRACT_WORDS).toEqual({
+      CDI: "Permanent",
+      CDD: "Fixed term",
+      VIE: "VIE",
+      Stage: "Internship",
+      Alternance: "Apprenticeship",
+      Freelance: "Freelance mission",
+    });
+  });
+
+  it("names the threshold in the empty deck line", () => {
+    expect(deckEmpty(70)).toBe("Nothing new above your threshold of 70.");
+    expect(deckEmpty(70)).not.toMatch(DASHES);
   });
 
   it("names the three thresholds apart", () => {
