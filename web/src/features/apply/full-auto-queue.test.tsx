@@ -246,6 +246,12 @@ describe("Full auto in the review queue", () => {
       "This posting's fit is below your threshold for Full auto, so it waits for you. (2)",
     );
     expect(why).toHaveTextContent("Safety ceiling. (1)");
+    expect(
+      screen.getByText(/In Full auto your Like is your approval/),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Nothing is sent until you approve it/),
+    ).toBeNull();
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
@@ -256,5 +262,6 @@ describe("Full auto in the review queue", () => {
     expect(
       screen.queryByRole("region", { name: "Full auto today" }),
     ).toBeNull();
+    await screen.findByText(/Nothing is sent until you approve it/);
   });
 });

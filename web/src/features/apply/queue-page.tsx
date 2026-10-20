@@ -70,9 +70,11 @@ export function QueuePage() {
           Applications
         </h1>
         <p className="text-muted-foreground">
-          {fullAuto
-            ? "Your review queue: in Full auto, the app submits what passes every check after the hold, and everything else waits here for you."
-            : "Your review queue: the assistant fills the form of each posting you like, then waits. Nothing is sent until you approve it."}
+          {settings.data === undefined
+            ? "Your review queue: the applications of the postings you like."
+            : fullAuto
+              ? "Your review queue. In Full auto your Like is your approval: the app submits what passes every check once the hold ends, unless you cancel it here, and everything else waits here for you."
+              : "Your review queue: the assistant fills the form of each posting you like, then waits. Nothing is sent until you approve it."}
         </p>
       </header>
       <FullAutoSummary on={fullAuto} />
