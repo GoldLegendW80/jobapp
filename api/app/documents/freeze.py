@@ -201,7 +201,8 @@ def pdf(db: Session, user_id: uuid.UUID, version_id: uuid.UUID) -> bytes | None:
         return None
     legacy = db.execute(
         sa.select(JobFile)
-        .where(JobFile.id == found.legacy_file_id)
+        .join(Job, Job.id == JobFile.job_id)
+        .where(JobFile.id == found.legacy_file_id, Job.user_id == user_id)
         .options(undefer(JobFile.content))
     ).scalar_one_or_none()
     return bytes(legacy.content) if legacy is not None else None

@@ -127,6 +127,10 @@ export const handlers = [
   ),
   // No application started for a posting (job detail's Apply section).
   http.get("*/api/applications", () => HttpResponse.json({ items: [] })),
+  // Nothing waits in the review queue (the app shell's Applications count).
+  http.get("*/api/apply/queue/count", () =>
+    HttpResponse.json({ waiting_on_you: 0 }),
+  ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),

@@ -136,4 +136,5 @@ const EMPTY_PROGRESS: Sweep = {
   duplicates: 0,
   skipped_by_rule: 0,
   duration: null,
+  sources: [],
 };

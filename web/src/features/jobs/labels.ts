@@ -129,3 +129,55 @@ export function bucketTone(low: number): string {
     none: "bg-muted-foreground/40",
   }[tone];
 }
+
+// Browser B8: the job sites of a sweep read in the person's browser (sweep-sources.tsx).
+const KIND_NAMES: Record<string, string> = {
+  google_careers: "Google Careers",
+  vie: "Business France VIE",
+  site: "Company site",
+  linkedin: "LinkedIn",
+};
+
+/** What each `error` of a source means, for the person. */
+export const SOURCE_PROBLEMS: Record<string, string> = {
+  layout_changed:
+    "The page looked different from what the app knows, so nothing was kept from it.",
+  browser_busy:
+    "Your browser was in use, so this site waits for the next search.",
+  lease_ended:
+    "You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
+  time_budget: "The search ran out of time. What was read is kept.",
+  lease_budget:
+    "The browser's time for this site ran out. What was read is kept, the rest comes at the next search.",
+  store_failed:
+    "What this site found could not be saved, so nothing was kept from it.",
+  page_failed: "A page did not load. What was read before is kept.",
+  browser_unavailable: "The browser could not be reached.",
+  not_started: "not read this time, it comes at the next search.",
+};
+
+export function sourceName(source: {
+  kind: string;
+  query: string;
+  location?: string | null;
+}): string {
+  const parts = [KIND_NAMES[source.kind] ?? source.kind, source.query];
+  if (source.location) parts.push(source.location);
+  return parts.join(", ");
+}
+
+/** A browser source as the sweep names it ("<kind>:<query>[/<location>]": its `current_board`
+ * while it runs, and the `source` of the postings it found), in words; any other name as it is. */
+export function sourceLabel(current: string): string {
+  const match = /^(google_careers|vie|site|linkedin):(.*)$/s.exec(current);
+  if (!match) return current;
+  const [, kind = "", rest = ""] = match;
+  const slash = rest.indexOf("/");
+  return slash < 0
+    ? sourceName({ kind, query: rest })
+    : sourceName({
+        kind,
+        query: rest.slice(0, slash),
+        location: rest.slice(slash + 1),
+      });
+}

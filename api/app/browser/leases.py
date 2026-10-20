@@ -21,7 +21,10 @@ at once (two tabs): the one that loses the turn to the other answers that same l
 place in the queue behind it. The first call queues, each call renews the ticket and takes the
 turn when the browser is free and this member is the head of the first non empty tier (one Lua
 script, so two callers never both win), then starts the lease in browserd on the person's one
-profile (app/browser/profiles.py). There is no preemption: a running lease ends first. A waiter
+profile (app/browser/profiles.py). There is no preemption but one: a `sweep` lease ends at
+once when a person asks for their own browser (`takeover`, `signin`; B8): the person is queued
+first, then the sweep ends, then the person claims, so no other waiter takes the turn in between.
+Any other lease ends first. A waiter
 keeps its place by asking again within TICKET_TTL_S; the caller that took the turn gets browserd's
 lease token once, in memory: it is never written to Redis nor logged.
 
@@ -112,6 +115,7 @@ TIERS = {
     "full_auto": 2,
     "sweep": 3,
 }
+PREEMPTS_SWEEP = ("takeover", "signin")  # a person's own browser ends a sweep lease (B8)
 QUEUES = tuple(f"{PREFIX}queue:{tier}" for tier in range(4))
 TICKET_TTL_S = 60  # a waiter that has not asked again for this long leaves the queue
 START_GRACE_S = 60  # a turn still starting after this is dropped (the caller died mid start)
@@ -373,6 +377,17 @@ class Leases:
             if held is not None and held.user_id == user_id and held.purpose == purpose:
                 return Acquired(lease=held)
             member = _member(user_id, purpose)
+            if held is not None and held.purpose == "sweep" and purpose in PREEMPTS_SWEEP:
+                # B8: the one preemption. A sweep ends at once when a person asks for their own
+                # browser, and resumes at the next sweep (app/browser/sources). The person's
+                # place is queued (tier 0) before the sweep ends: while browserd closes the
+                # sweep's Chromium, any other waiter's claim finds this member at the head and
+                # never takes the turn in between.
+                await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
+                await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
+                raw_held = _text(await r.get(HOLDER))
+                if raw_held is not None and Lease.loads(raw_held).lease_id == held.lease_id:
+                    await self._end(r, raw_held, held, "preempted", now)
             turn = Lease(
                 lease_id=f"starting:{uuid.uuid4()}",
                 user_id=user_id,

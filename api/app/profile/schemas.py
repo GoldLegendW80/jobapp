@@ -755,6 +755,19 @@ class Board(_Section):
     extra_exclude: TermList = Field(default_factory=TermList)
 
 
+class BrowserSource(_Section):
+    """A job source read through the person's browser (browser B8, app/browser/sources): the
+    words typed in the site's search box, and its location box when the site has one. B8 runs
+    `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
+    finder agent); `linkedin` (B10) is accepted and waits for its task. Off until the person
+    turns it on."""
+
+    kind: Literal["google_careers", "vie", "site", "linkedin"]
+    query: Line
+    location: OptLine = None
+    enabled: bool = False
+
+
 class SearchSection(_Section):
     title_include: TermList = Field(default_factory=TermList)
     title_exclude: TermList = Field(default_factory=TermList)
@@ -765,6 +778,9 @@ class SearchSection(_Section):
     days: Annotated[StrictInt, Field(ge=1, le=365)] = 30
     boards: Annotated[list[Board], Field(max_length=300)] = Field(default_factory=list)
     never_apply: Annotated[list[Text(500)], Field(max_length=50)] = Field(default_factory=list)
+    browser_sources: Annotated[list[BrowserSource], Field(max_length=10)] = Field(
+        default_factory=list
+    )
     # When the boards are swept automatically (jobs J5 schedules it and edits it next to Find
     # jobs). Off unless the user turns it on; a section saved before this field existed reads as
     # off.

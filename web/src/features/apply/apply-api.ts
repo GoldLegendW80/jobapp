@@ -10,7 +10,7 @@ import { API_BASE, isApiError, request } from "@/lib/api";
 
 const TIMEOUT_MS = 15_000;
 
-const applicationSchema = z.object({
+export const applicationSchema = z.object({
   id: z.string().min(1),
   posting_id: z.string().min(1),
   mode: z.string(),
