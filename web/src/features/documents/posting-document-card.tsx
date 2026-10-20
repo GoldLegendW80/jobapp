@@ -138,7 +138,7 @@ export function PostingDocumentCard({
 
       <StateLine state={state} kind={kind} hasVersion={latest !== null} />
 
-      {document !== undefined && latest !== null && latest.has_pdf ? (
+      {document !== undefined && latest !== null && latest.has_preview ? (
         <img
           src={versionPage1Url(document.id, latest.number, PREVIEW_WIDTH)}
           alt={`Page 1 of the ${NOUNS[kind]}, version ${String(latest.number)}`}
