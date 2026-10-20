@@ -1,0 +1,143 @@
+{
+  "slug": "plain",
+  "version": 1,
+  "name": {
+    "en": "Plain",
+    "fr": "Sobre"
+  },
+  "description": {
+    "en": "Made for applicant tracking systems: one column in black on white, no colour, no columns, no photo, the standard headings in bold capitals over a rule.",
+    "fr": "Pensé pour les logiciels de recrutement : une colonne en noir sur blanc, sans couleur, sans colonnes ni photo, les intitulés usuels en capitales grasses sur un filet."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "no photo",
+    "ats friendly"
+  ],
+  "photo": "none",
+  "fonts": [
+    "arimo"
+  ],
+  "accent": "#000000",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.0,
+        "line_height": 1.38,
+        "section_gap": 10.0,
+        "item_gap": 5.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.35,
+        "section_gap": 9.0,
+        "item_gap": 4.5,
+        "margin": 15.0
+      },
+      {
+        "body_size": 9.5,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.29,
+        "section_gap": 7.0,
+        "item_gap": 3.5,
+        "margin": 13.0
+      },
+      {
+        "body_size": 9.1,
+        "line_height": 1.25,
+        "section_gap": 6.5,
+        "item_gap": 3.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 8.9,
+        "line_height": 1.22,
+        "section_gap": 5.5,
+        "item_gap": 2.5,
+        "margin": 11.0
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.19,
+        "section_gap": 4.5,
+        "item_gap": 2.0,
+        "margin": 10.0
+      },
+      {
+        "body_size": 8.4,
+        "line_height": 1.16,
+        "section_gap": 3.5,
+        "item_gap": 1.5,
+        "margin": 9.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "96e7cb6fd2196e161047160a0ff4a805c2c0c0478fb852316fd5339b4c427963"
+}

@@ -1,0 +1,84 @@
+/* plain: strict ats, Arimo in black on white. No colour, no grey, no column, no picture: the
+   standard headings in bold capitals over a black rule, every entry's lines stacked in the order
+   they are read. The density comes from the step on :root: --body-size, --line-height,
+   --section-gap, --item-gap, --margin. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Arimo", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #000000;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.name {
+  font-size: 2em;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.headline {
+  font-size: 1.1em;
+  margin-top: 2pt;
+}
+/* a line wraps between contact lines, never inside an address unless it alone is wider */
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 1pt;
+  margin-top: 3pt;
+}
+.contact li { overflow-wrap: break-word; max-width: 100%; }
+.contact li + li {
+  border-left: 0.5pt solid #000000;
+  margin-left: 6pt;
+  padding-left: 6pt;
+}
+
+.block { margin-top: var(--section-gap); }
+.label {
+  font-size: 1em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 0.75pt solid #000000;
+  padding-bottom: 1pt;
+  margin-bottom: var(--item-gap);
+}
+
+.block > ul { padding-left: 1.2em; }
+.block li { margin-bottom: 1pt; }
+
+.entry { margin-bottom: var(--item-gap); break-inside: avoid; }
+.entry:last-child { margin-bottom: 0; }
+.entry-title { font-size: 1em; font-weight: 700; }
+.entry ul { padding-left: 1.2em; margin-top: 1pt; }
+
+.school { margin-bottom: var(--item-gap); }
+.school:last-child { margin-bottom: 0; }
+.school .org { font-style: italic; }
+
+.group-label { display: inline; font-size: 1em; font-weight: 700; }
+.group-label::after { content: ":"; }
+:lang(fr) .group-label::after { content: "\a0:"; }
+.items { display: inline; }
+.skill-group { margin-bottom: 1pt; }
+
+.block > .languages { list-style: none; padding-left: 0; }
+.languages li { display: inline; }
+.languages li:not(:last-child)::after { content: ";"; }
+
+/* a heading and a role's title stay with the text that follows them across a page end */
+.label, .entry-head, .entry-title { break-after: avoid; }
+
+.letter-body { margin-top: var(--section-gap); }
+.letter-body p { margin-bottom: var(--item-gap); }
+.recipient { margin-top: var(--section-gap); white-space: pre-line; }
+.subject { margin: var(--section-gap) 0; }
+.paragraph { white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }
