@@ -771,6 +771,41 @@ def test_a_continue_applies_the_figure_the_click_carried_or_nothing(
     assert raised.status is RunStatus.running
 
 
+def test_two_continues_at_the_same_instant_from_two_connections_raise_the_ceiling_once(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """N12 of the review of PR #148: two tabs click Continue on the same figure at once."""
+    run_id = started(factory, alice, settings, count=1)
+    budget = eh.running(factory, run_id).token_budget
+    assert budget is not None
+    eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.TOKEN_LIMIT, budget)
+    paused = eh.run_of(factory, run_id)
+    with factory() as db:
+        figure = shown(db, run_id)
+    go = threading.Barrier(2, timeout=10)
+    outcomes: list[str] = []
+
+    def one() -> None:
+        go.wait()
+        try:
+            with factory() as db, db.begin():
+                engine.continue_(db, alice, run_id, now(), figure)
+            outcomes.append("raised")
+        except engine.WrongStateError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=one) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    assert sorted(outcomes) == ["raised", "refused"]
+    run = eh.run_of(factory, run_id)
+    assert run.status is RunStatus.running
+    assert run.token_ceiling == paused.token_ceiling + figure
+    assert [entry["to"] for entry in run.ceiling_history] == [run.token_ceiling]
+
+
 def test_a_cut_step_whose_floor_the_remainder_does_not_reach_pauses_without_a_model_call(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
