@@ -40,10 +40,11 @@ everything is held to allow lists:
 
 Declared open points, left to D25b's render check: a text colour on a background set by another
 rule (the page's white, a band, a column); a box made smaller than its text (`width`, `height`,
-`flex`), whose text then runs over its neighbours, under the background of a later flex or grid
-item or of a `position: relative` box; the vertical padding or border of an inline box, which
-paints over the line above; a size made small by nesting `em` sizes; a box pushed off the page
-by its margins; the one glyph of an outside marker, at the size of its item, beside a list
+`flex`, a `minmax(0, 1fr)` track), whose text, a `::before` or `::after` too, then runs over its
+neighbours, under the background of a later flex or grid item or of a `position: relative` box;
+the vertical padding or border of an inline box, which paints over the line above; a size made
+small or large by nesting `em` sizes; a box pushed off the page by its margins; the one glyph of
+an outside marker, at the size of its item (any box with `display: list-item`), beside a box
 without padding.
 """
 
