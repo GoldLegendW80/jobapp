@@ -388,14 +388,28 @@ def test_chrome_pages_are_blocked_by_the_managed_policy_in_an_agents_lease(
     assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
 
 
+TARGETS = """
+import json, urllib.request
+port = json.load(open("/tmp/browserd/current.json"))["port"]
+print(json.dumps(json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list"))))
+"""
+
+
 def test_the_chrome_pages_the_image_needs_stay_open(stack: Stack) -> None:
     """browserd.probe reads chrome://sandbox and chrome://policy; Ctrl+T opens the new tab
-    page."""
+    page. The browser's own UI is made of chrome://*.top-chrome pages: blocked, the omnibox
+    popup became an error page among the tabs, and a tab a page opened never loaded for CDP."""
     stack.lease(F, UID_F)
     sandbox = stack.probe("sandbox")["text"]
     policy = stack.probe("policy")
     seen = stack.probe("navigate", "chrome://new-tab-page", "20")
+    front = stack.probe("front", f"{PAGES}/form.html")
+    targets = json.loads(stack.python(TARGETS))
     end(stack)
+    assert front["visibility"] == "visible", front
+    assert [t for t in targets if ".top-chrome" in t["url"]], targets
+    assert not [t for t in targets if ".top-chrome" in t["url"] and t["type"] == "page"], targets
+    assert not [t for t in targets if t["url"].startswith("chrome-error:")], targets
     assert "You are adequately sandboxed." in sandbox, sandbox[:800]
     assert all(policy.values()), policy
     assert seen["ok"] is True, seen

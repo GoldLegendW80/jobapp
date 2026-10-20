@@ -855,16 +855,16 @@ def test_a_local_state_without_the_switch_is_left_as_it_is(
 
 
 def test_the_managed_policy_blocks_every_chrome_page_and_keeps_cdp() -> None:
-    """Every chrome:// page is blocked (owner, 2026-10-20) but the two browserd.probe reads and
-    the new tab page; no extension may be installed. The policies that would also block CDP
-    (measured for B7: RemoteDebuggingAllowed false ignores --remote-debugging-port,
-    DeveloperToolsAvailability 2 breaks Playwright's pages) are never set: the agents' leases
-    need CDP."""
+    """Every chrome:// page is blocked (owner, 2026-10-20) but the two browserd.probe reads, the
+    new tab page and the browser's own UI (*.top-chrome); no extension may be installed. The
+    policies that would also block CDP (measured for B7: RemoteDebuggingAllowed false ignores
+    --remote-debugging-port, DeveloperToolsAvailability 2 breaks Playwright's pages) are never
+    set: the agents' leases need CDP."""
     policy = json.loads((ROOT / "browser/policies/browserd.json").read_text())
     assert policy["URLBlocklist"] == ["chrome://*"]
     assert sorted(policy["URLAllowlist"]) == [
         "chrome://new-tab-page", "chrome://new-tab-page-third-party", "chrome://newtab",
-        "chrome://policy", "chrome://sandbox",
+        "chrome://policy", "chrome://sandbox", "chrome://top-chrome",
     ]  # fmt: skip
     assert policy["ExtensionInstallBlocklist"] == ["*"]
     assert "RemoteDebuggingAllowed" not in policy

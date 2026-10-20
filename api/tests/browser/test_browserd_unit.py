@@ -598,6 +598,7 @@ def test_the_image_installs_the_managed_webrtc_policy() -> None:
             "chrome://newtab",
             "chrome://new-tab-page",
             "chrome://new-tab-page-third-party",
+            "chrome://top-chrome",
         ],
         "ExtensionInstallBlocklist": ["*"],
         "PasswordManagerEnabled": False,

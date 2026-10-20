@@ -7,7 +7,8 @@
     "chrome://sandbox",
     "chrome://newtab",
     "chrome://new-tab-page",
-    "chrome://new-tab-page-third-party"
+    "chrome://new-tab-page-third-party",
+    "chrome://top-chrome"
   ],
   "ExtensionInstallBlocklist": ["*"],
   "PasswordManagerEnabled": false
