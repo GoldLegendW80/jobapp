@@ -38,10 +38,13 @@ Rehearsals: the Yes (`confirm_rehearsal`) is the one way out of `rehearsed`, to 
 took the posting or the form address since; it counts one rehearsal done. The No records itself
 and changes nothing: Full auto stays in rehearsal.
 
+Any free text the agent wrote (an answer of source `agent` and kind text or textarea) is judged
+by the check by model (A13c, `model_check`) before the decision, beside the answer agent's own
+fact check (`agent.judge` keeps only what passes it): `checks` lets it go on only on a stored
+`passed` for the current answers hash, so submit services without a checker still send it to
+the queue (`model_check_not_run`).
+
 Declared open points (each toward the review queue):
-- until the check by model (A13c) lands, any free text the agent wrote (an answer of source
-  `agent` and kind text or textarea) goes to the queue; the fact check of that text is the
-  answer agent's own (`agent.judge` keeps only what passes it), so this rule covers it;
 - a submit element the generic form agent designated (#343's hand over on `form_changed`) goes to
   the queue as well (`agent_designated`): no person saw the highlighted screenshot;
 - any field left, optional ones and widgets the app cannot fill included, goes to the queue.
@@ -56,7 +59,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.apply import caps, guardrails, service, states
+from app.apply import caps, guardrails, model_check, service, states
 from app.apply.caps_models import ApplySettings, LikeMode
 from app.apply.models import (
     AnswerSource,
@@ -72,7 +75,6 @@ from app.jobs.models import Job
 
 FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever"})
 LIKE_VALID = timedelta(days=7)
-FREE_TEXT = frozenset({"text", "textarea"})
 DESIGNATED = "designated"
 
 SENTENCES = {
@@ -95,6 +97,7 @@ SENTENCES = {
         "Another application to this posting or this form started since the rehearsal."
     ),
     "hold_too_short": "The hold cannot be shorter than the server's minimum.",
+    **model_check.SENTENCES,
 }
 
 
@@ -208,8 +211,6 @@ def checks(db: Session, application: Application, posting: Job) -> str | None:
     ).all()
     if any(source is AnswerSource.left for _, source in rows):
         return "fields_left"
-    if any(source is AnswerSource.agent and kind in FREE_TEXT for kind, source in rows):
-        return "agent_text"
     if any(source is AnswerSource.agent and kind == DESIGNATED for kind, source in rows):
         return "agent_designated"
     if _captcha_seen(db, application):
@@ -217,7 +218,7 @@ def checks(db: Session, application: Application, posting: Job) -> str | None:
     rules = service._rules(db, application.user_id)
     if guardrails.never_apply(posting, rules, swept=False, mode=Mode.full_auto) is not None:
         return "never_apply_text"
-    return None
+    return model_check.code(db, application, list(rows))
 
 
 def recheck(db: Session, application: Application, posting: Job, now: datetime) -> str | None:

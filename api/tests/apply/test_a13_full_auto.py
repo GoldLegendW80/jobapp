@@ -315,7 +315,7 @@ CHECKS = [
     ("below_min_fit", lambda db, p, a: _fit(db, p, 79)),
     ("below_min_fit", lambda db, p, a: _fit(db, p, None)),
     ("fields_left", _left),
-    ("agent_text", _agent_text),
+    ("model_check_not_run", _agent_text),
     ("agent_designated", _designated),
     ("captcha_seen", _captcha),
     ("unsupported_source", _source),

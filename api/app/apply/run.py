@@ -59,7 +59,7 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, full_auto, guardrails, shots, states
+from app.apply import agent, full_auto, guardrails, model_check, shots, states
 from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
@@ -128,6 +128,7 @@ class Services:
     stub_base: str | None = None
     before_tool: Callable[[], Awaitable[None]] | None = None  # B4's Live.agent_turn
     form_agent: forms.FormAgent | None = None  # the generic strategy's (A8)
+    check: model_check.Checker | None = None  # the check by model before a Full auto decision
 
 
 @dataclass

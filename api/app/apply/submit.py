@@ -50,10 +50,12 @@ application to `approved`. No model is called anywhere here.
    (the freeze rolls back with it), a second one records `submit_unknown` with `record_failed`,
    its freeze included.
 
-Full auto (A13a, `full_auto.py`): the job of a `ready` Full auto item runs its decision
-(`full_auto.decide`) and ends; a `held` item is asked only once its hold ended (`due`), and goes
-the same way as an `approved` one, with Full auto's lines in `recheck`. Any stop before the click
-sends it to the review queue (`mode` `review`), a kill switch included, never to the bin.
+Full auto (A13a, `full_auto.py`): the job of a `ready` Full auto item runs the check by model of
+the agent's free text first when it needs one (A13c, `model_check.before_decision`), then its
+decision (`full_auto.decide`), and ends; a `held` item is asked only once its hold ended (`due`),
+and goes the same way as an `approved` one, with Full auto's lines in `recheck`. Any stop before
+the click sends it to the review queue (`mode` `review`), a kill switch included, never to the
+bin.
 
 A Review first approval that only the pace per host holds back stays valid past
 `APPLY_APPROVAL_TTL_S`, at most 7 days after it was given (`full_auto.expired`, planner default
@@ -87,7 +89,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, full_auto, gate, guardrails, run, shots, states
+from app.apply import caps, full_auto, gate, guardrails, model_check, run, shots, states
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
@@ -122,6 +124,7 @@ class Services:
     paused: Callable[[], Awaitable[bool]]  # the administrator's pause (admin.paused)
     enabled: bool  # APPLY_SUBMIT_ENABLED
     stub_base: str | None = None
+    check: model_check.Checker | None = None  # the check by model (A13c)
 
 
 def from_fill(base: run.Services, settings: Any, redis: Any) -> Services:
@@ -142,6 +145,7 @@ def from_fill(base: run.Services, settings: Any, redis: Any) -> Services:
         paused=paused,
         enabled=settings.apply_submit_enabled,
         stub_base=base.stub_base,
+        check=base.check,
     )
 
 
@@ -756,6 +760,12 @@ async def _drive(
 
 
 async def _decide(services: Services, application_id: uuid.UUID) -> str:
+    if services.check is not None:
+        waiting = await model_check.before_decision(
+            services.check, services.sessions, services.clock, application_id
+        )
+        if waiting is not None:
+            return waiting
     switches = gate.Switches(enabled=services.enabled, paused=await services.paused())
     try:
         return await asyncio.to_thread(

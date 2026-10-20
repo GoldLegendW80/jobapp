@@ -322,7 +322,7 @@ First slice (A12a, issue #249, measured on 2026-10-19: `likes.py` and `queue_rou
 Nothing yet.
 
 ### A13c
-Nothing yet. (The tokens of the check by model per item, against the estimate of about 6,500.)
+First slice (issue #250, measured on 2026-10-20 on the fake backend): one `apply_check` run per Full auto item whose free text the agent wrote, none for an item without one or one another Full auto check refuses (`test_a_fill_with_no_free_text_by_the_agent_makes_no_call`, `test_an_item_another_check_refuses_makes_no_call`). For the fixture person's one free text, what the app sends (the system prompt, the first message with its three data blocks and the tool's schema) stays under 6,000 tokens at 3 characters per token (`test_the_prompt_of_the_fake_form_fits_the_estimate`). The recorded stream `apply_check` reports 6,200 tokens in and 156 out: the stream's figures, not a measurement. The ceiling is twice the estimate of 6,500, 13,000 (`model_check.TOKEN_BUDGET`); Checkpoint A reads the real runs' `input_tokens` and `output_tokens` (on the agent run, on the `model_check` event and on the application's `cost`). The A13c tests (34) run in about 60 s with `-n 2`.
 
 ### A14
 Nothing yet.

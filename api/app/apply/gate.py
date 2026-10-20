@@ -22,7 +22,8 @@ person's apply lock and the application's row lock, the checks of the spec in or
    (a newer version written since the fill: nothing frozen, nothing refused on content). In Full
    auto, apply's own rule (`documents_need_review`);
 7. Full auto only: `full_auto.checks` (A13a: the fit threshold, a supported source, nothing left,
-   no free text by the agent, no captcha, never apply in the posting's text).
+   no captcha, never apply in the posting's text; A13c: the check by model passed on the agent's
+   free text, `model_check.code`).
 
 Its audit event (`decision`, with the outcome and the code) is written whatever the outcome, and
 the caller commits before any click. A pass spends the authorisation (`used_at`), marks every
