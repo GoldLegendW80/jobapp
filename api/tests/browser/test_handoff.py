@@ -272,7 +272,7 @@ def test_after_done_the_allow_list_is_back_with_cdp(stack: Stack, agent: Agent) 
     assert seen["ok"], seen
     assert f"Signed in as {name}" in seen["snapshot"]
 
-    # A link off the list, clicked by the agent: the route guard is on the new CDP context.
+    # A link off the list, clicked by the agent: refused, the tab taken back to the list.
     away = agent.tool("browser_click", ref=ref(seen["snapshot"], "link", "Elsewhere"))
     assert away["error"] == "host_not_allowed", away
     assert away["url"] == LOGIN, away

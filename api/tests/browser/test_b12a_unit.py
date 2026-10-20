@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "browser"))
 from browserd import app, handoff, live  # noqa: E402
 from browserd.config import Config  # noqa: E402
 from browserd.leases import LeaseError, Manager, Request  # noqa: E402
-from browserd.tools import actions  # noqa: E402
+from browserd.tools import actions, routes  # noqa: E402
 
 SESSION_MAX_S = 1800
 FORM = "https://jobs.example.org/apply/42?step=2&ref=e2e"
@@ -549,6 +549,8 @@ def test_done_guards_the_new_context_before_it_opens_the_noted_address(refuse: b
         w.manager._start = with_context
         lease = await w.lease()
         w.watch(lease.lease_id)
+        # The agent's first Chromium was guarded already: a guard cached per lease fails here.
+        routes.state_of(lease).guarded = w.manager.browser.browser.contexts[0]
         await ask(lease)
         status, body = await route(w.svc, "done", lease.lease_id)
         assert (status, body["restarted"]) == (200, True)
