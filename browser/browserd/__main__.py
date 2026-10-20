@@ -15,7 +15,7 @@ import os
 import sys
 import time
 
-from browserd import chromium, live, proxy, signin
+from browserd import chromium, handoff, live, proxy, signin
 from browserd import config as c
 from browserd.app import Service, handler_for
 from browserd.leases import Manager, Request
@@ -83,6 +83,7 @@ async def main() -> None:
     manager = Manager(cfg, start, measure=chromium.measure_profile)
     service = Service(manager, cfg.secret)
     service.display_ok = lambda: display.returncode is None
+    handoff.bind(service)  # B12: browser_request_signin finds the lease, its viewers and swap
     egress = await proxy.serve(proxy.Proxy(cfg.proxy_allow), c.PROXY_PORT)
     server = await asyncio.start_server(handler_for(service), "0.0.0.0", c.CONTROL_PORT)  # noqa: S104 - `browsing` only
     viewers = await live.serve(live.live_of(service))  # B4: the live view on :6080
