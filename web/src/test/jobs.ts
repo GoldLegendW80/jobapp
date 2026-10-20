@@ -271,6 +271,23 @@ export function fakeEditableJob(
           changes[name] = { from: job[name], to: body[name] };
           (job as Record<string, unknown>)[name] = body[name];
         }
+      if ("work_mode" in body && body.work_mode !== job.work_mode) {
+        changes.work_mode = { from: job.work_mode, to: body.work_mode };
+        job.work_mode = body.work_mode as string | null;
+      }
+      if ("pay" in body) {
+        const pay = body.pay as {
+          min: number;
+          max: number;
+          currency: string;
+          period: string;
+        } | null;
+        changes.pay_min = { from: job.pay_min, to: pay?.min ?? null };
+        job.pay_min = pay?.min ?? null;
+        job.pay_max = pay?.max ?? null;
+        job.pay_currency = pay?.currency ?? null;
+        job.pay_period = pay?.period ?? null;
+      }
       if (Object.keys(changes).length) event("edit", { changes });
       version += 1;
       job.updated_at = `2026-10-09T09:00:${String(version).padStart(2, "0")}Z`;

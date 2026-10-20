@@ -20,6 +20,7 @@ import { JobChat } from "@/features/agents/job-chat";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
+import { WORDING, WORK_MODE_WORDS } from "@/lib/wording";
 
 import { sourceLabel } from "./labels";
 import { getJob, jobKey, type JobDetail } from "./api";
@@ -31,6 +32,7 @@ import {
   NotesEditor,
   StatusControl,
 } from "./job-editor";
+import { payWords } from "./pay-words";
 import { useJobEditor } from "./use-job-editor";
 import { formatDate, formatDateTime } from "./format";
 import {
@@ -157,6 +159,10 @@ function JobDetailView({ job }: { job: JobDetail }) {
   const save = useJobEditor(job.id);
   const link = safeHttpUrl(job.url);
   const legacy = Object.entries(job.legacy);
+  const pay = payWords(job);
+  const workMode = job.work_mode
+    ? (WORK_MODE_WORDS[job.work_mode] ?? job.work_mode)
+    : null;
   return (
     <article aria-labelledby="job-title" className="flex flex-col gap-8">
       <header className="flex flex-col gap-4">
@@ -195,6 +201,8 @@ function JobDetailView({ job }: { job: JobDetail }) {
           {job.applied_on ? (
             <Fact label="Applied">{formatDate(job.applied_on)}</Fact>
           ) : null}
+          {pay ? <Fact label={WORDING.pay}>{pay}</Fact> : null}
+          {workMode ? <Fact label={WORDING.workMode}>{workMode}</Fact> : null}
           {job.source ? (
             <Fact label="Source">{sourceLabel(job.source)}</Fact>
           ) : null}

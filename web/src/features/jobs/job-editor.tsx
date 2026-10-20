@@ -38,10 +38,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { CURRENCIES } from "@/features/profile/api";
 import { describeError, errorDetail } from "@/lib/api";
+import { PAY_PERIOD_WORDS, WORDING, WORK_MODE_WORDS } from "@/lib/wording";
 
 import { duplicateOf, isStale, type JobDetail, type JobPatch } from "./api";
 import { CONTRACT_TYPES, STATUSES, statusLabel } from "./labels";
+import { typedPay } from "./pay-words";
 import {
   failure,
   NOTES_DEBOUNCE_MS,
@@ -355,7 +358,24 @@ interface Details {
   location: string;
   contract_type: string;
   url: string;
+  work_mode: string;
+  pay_min: string;
+  pay_max: string;
+  pay_currency: string;
+  pay_period: string;
 }
+
+const PAY_KEYS = ["pay_min", "pay_max", "pay_currency", "pay_period"] as const;
+const DETAIL_KEYS = [
+  "company",
+  "title",
+  "location",
+  "contract_type",
+  "url",
+  "work_mode",
+] as const;
+const PAY_INVALID =
+  "The pay needs whole numbers from 1 to 10,000,000, the lowest first, a currency and a period. Leave both figures empty for none.";
 
 function detailsOf(job: JobDetail): Details {
   return {
@@ -364,6 +384,11 @@ function detailsOf(job: JobDetail): Details {
     location: job.location,
     contract_type: job.contract_type,
     url: job.url ?? "",
+    work_mode: job.work_mode ?? "",
+    pay_min: job.pay_min == null ? "" : String(job.pay_min),
+    pay_max: job.pay_max == null ? "" : String(job.pay_max),
+    pay_currency: job.pay_currency ?? "EUR",
+    pay_period: job.pay_period ?? "year",
   };
 }
 
@@ -431,11 +456,27 @@ function EditDetailsDialog({
     event.preventDefault();
     if (missing) return;
     const patch: JobPatch = {};
-    for (const name of Object.keys(values) as Array<keyof Details>) {
+    for (const name of DETAIL_KEYS) {
       if (values[name].trim() === initial[name].trim()) continue;
       if (name === "url") patch.url = values.url.trim() || null;
+      else if (name === "work_mode") patch.work_mode = values.work_mode || null;
       else patch[name] = values[name].trim();
     }
+    const pay = typedPay(
+      values.pay_min,
+      values.pay_max,
+      values.pay_currency,
+      values.pay_period,
+    );
+    if (pay === undefined) {
+      setError({ text: PAY_INVALID });
+      return;
+    }
+    const payChanged = PAY_KEYS.some(
+      (name) => values[name].trim() !== initial[name].trim(),
+    );
+    const hadPay = initial.pay_min !== "" || initial.pay_max !== "";
+    if (payChanged && (pay !== null || hadPay)) patch.pay = pay;
     if (Object.keys(patch).length === 0) {
       onClose();
       return;
@@ -472,7 +513,8 @@ function EditDetailsDialog({
         <DialogHeader>
           <DialogTitle>Edit details</DialogTitle>
           <DialogDescription>
-            Company, title, location, contract type and link of this posting.
+            Company, title, location, contract type, work mode, pay and link of
+            this posting.
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-3">
@@ -498,6 +540,52 @@ function EditDetailsDialog({
               ))}
             </NativeSelect>
           </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor={`${id}-work_mode`}>{WORDING.workMode}</Label>
+            <NativeSelect {...field("work_mode")}>
+              <option value="">{WORDING.notStated}</option>
+              {Object.entries(WORK_MODE_WORDS).map(([mode, word]) => (
+                <option key={mode} value={mode}>
+                  {word}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+          <fieldset className="grid gap-1.5">
+            <legend className="mb-1.5 text-sm font-medium">
+              {WORDING.pay}
+            </legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Input
+                {...field("pay_min")}
+                aria-label="Lowest pay"
+                inputMode="numeric"
+                placeholder="From"
+                maxLength={8}
+              />
+              <Input
+                {...field("pay_max")}
+                aria-label="Highest pay"
+                inputMode="numeric"
+                placeholder="To"
+                maxLength={8}
+              />
+              <NativeSelect {...field("pay_currency")} aria-label="Currency">
+                {CURRENCIES.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </NativeSelect>
+              <NativeSelect {...field("pay_period")} aria-label="Per">
+                {Object.entries(PAY_PERIOD_WORDS).map(([period, words]) => (
+                  <option key={period} value={period}>
+                    {words}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+          </fieldset>
           <div className="grid gap-1.5">
             <Label htmlFor={`${id}-url`}>Link to the posting</Label>
             <Input

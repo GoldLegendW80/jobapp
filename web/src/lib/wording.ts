@@ -18,6 +18,21 @@ export function contractWord(code: string): string {
   return CONTRACT_WORDS[code] ?? code;
 }
 
+/** Where a posting's work is done (opportunities O3), as words. */
+export const WORK_MODE_WORDS: Record<string, string> = {
+  remote: "Remote",
+  hybrid: "Hybrid",
+  office: "On site",
+};
+
+/** What a posting's pay is counted per, as the end of a sentence ("a year"). */
+export const PAY_PERIOD_WORDS: Record<string, string> = {
+  year: "a year",
+  month: "a month",
+  day: "a day",
+  hour: "an hour",
+};
+
 export const WORDING = {
   advanced: "Advanced",
   applicationSite: "Application site",
@@ -36,6 +51,10 @@ export const WORDING = {
   fullAuto: "Full auto",
   searchOptions: "Search options",
   deckEmptyHint: "Find new postings, or lower the threshold in Search options.",
+  // Opportunities O3.
+  pay: "Pay",
+  workMode: "Work mode",
+  notStated: "Not stated",
 } as const;
 
 /** The empty deck line; it names the fit threshold in force so the number is never a mystery. */

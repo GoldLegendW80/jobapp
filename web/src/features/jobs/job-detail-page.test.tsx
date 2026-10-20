@@ -46,6 +46,30 @@ async function openDetail(path = PATH) {
 }
 
 describe("job detail", () => {
+  it("shows the pay and the work mode the posting states, and nothing when none", async () => {
+    fakeJobDetail(
+      makeDetail({
+        pay_min: 45000,
+        pay_max: 55000,
+        pay_currency: "EUR",
+        pay_period: "year",
+        work_mode: "office",
+      }),
+    );
+    const app = await openDetail();
+    expect(screen.getByText("Pay").nextSibling).toHaveTextContent(
+      "45,000 to 55,000 EUR a year",
+    );
+    expect(screen.getByText("Work mode").nextSibling).toHaveTextContent(
+      "On site",
+    );
+    app.unmount();
+    fakeJobDetail(makeDetail());
+    await openDetail();
+    expect(screen.queryByText("Pay")).toBeNull();
+    expect(screen.queryByText("Work mode")).toBeNull();
+  });
+
   it("shows the header: company, title, location, badges, dates, source and link", async () => {
     fakeJobDetail(
       makeDetail({
