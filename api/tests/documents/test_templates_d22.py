@@ -210,7 +210,9 @@ def test_columns_header_prints_five_contact_lines_under_the_name() -> None:
     assert body.index("Alex Example") < body.index(str(lines[0]["text"]))
     contact = re.search(r'<ul class="contact">(.*?)</ul>', html, re.S)
     assert contact
-    assert contact.group(1).count("<li>") == 5
+    assert contact.group(1).count("<li") == 5
+    spans = re.findall(r'<li class="span(\d)">', contact.group(1))
+    assert spans == ["2", "1", "2", "2", "2"], spans  # 43, 17, 30, 56 and 44 characters
 
 
 # --- static: every template of the set ----------------------------------------------------------

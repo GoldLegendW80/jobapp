@@ -11,13 +11,13 @@
 {% macro words(text, class="word") %}{% for word in text.split(" ") if word %}{% if not loop.first %} {% endif %}<span class="{{ class }}">{{ word }}</span>{% endfor %}{% endmacro %}
 
 {#- `spans`: (one cell, two cells), the most characters a line holds in one and in two cells of
-    a grid of three; a longer line gets the class `span2` or `span3`. -#}
+    a grid of three; each line gets the class `span1`, `span2` or `span3`. -#}
 {% macro contact_lines(class="contact", spans=none) %}
 {% if contact %}
 <ul class="{{ class }}">
 {% for line in contact %}
 {% set size = line.text | length %}
-<li{% if spans and size > spans[1] %} class="span3"{% elif spans and size > spans[0] %} class="span2"{% endif %}>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+<li{% if spans %} class="span{{ 3 if size > spans[1] else 2 if size > spans[0] else 1 }}"{% endif %}>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
 {% endfor %}
 </ul>
 {% endif %}
