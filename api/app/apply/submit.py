@@ -27,15 +27,17 @@ application to `approved`. No model is called anywhere here.
 4. The "before" screenshot again, the dwell (`DWELL_S`, the paced wait before a submit that the
    fake ATS's invisible check asks for), a fresh read checked the same way, whose submit ref is
    the one clicked.
-5. Under the gate's locks again, just before the click: the kill switches
-   (`APPLY_SUBMIT_ENABLED`, the administrator's pause read from Redis just before): a switch off
-   is `cancelled` with its code. Then `recheck` again, as in step 1: the person's apply lock makes
-   two approved postings of one role go one at a time, and the second sees the first
-   `submitting` or `submitted`. A rehearsal (`dry_run`) ends here as `rehearsed`, so it reports
-   these refusals too. Then the host's slot, under its lock (`caps.reserve`: another person's
-   click since step 1 keeps it `approved` and waiting, as in step 1). Otherwise `submitting` is
-   committed with its `click` event, then the one click: `gate_click` with the lease's capability
-   on the adapter's submit element.
+5. Under the gate's locks again, just before the click: still the decision step 1 read (the
+   same spent authorisation, answers hash and `dry_run`, else `superseded`: no click, and the
+   next job refills with the values approved since; a stop of this lease is `superseded` too).
+   Then the kill switches (`APPLY_SUBMIT_ENABLED`, the administrator's pause read from Redis just
+   before): a switch off is `cancelled` with its code. Then `recheck` again, as in step 1: the
+   person's apply lock makes two approved postings of one role go one at a time, and the second
+   sees the first `submitting` or `submitted`. A rehearsal (`dry_run`) ends here as `rehearsed`,
+   so it reports these refusals too. Then the host's slot, under its lock (`caps.reserve`:
+   another person's click since step 1 keeps it `approved` and waiting, as in step 1). Otherwise
+   `submitting` is committed with its `click` event, then the one click: `gate_click` with the
+   lease's capability on the adapter's submit element.
 6. The page is read every `POLL_S` until `CONFIRM_WAIT_S` (60 s, by the injected clock, and at
    most `MAX_POLLS` reads): the adapter's confirmation is `submitted`, the form's errors are
    `refused_by_site`, nothing is `submit_unknown`. Never a second click.
@@ -155,11 +157,16 @@ class Row:
 
 @dataclass
 class Plan:
+    """What step 1 read under the gate's locks. `authorisation_id`, `answers_hash` and `dry_run`
+    bind the click to that decision (`_bound`)."""
+
     user_id: uuid.UUID
     application_id: uuid.UUID
     form_url: str
     dry_run: bool
     rows: list[Row]
+    authorisation_id: uuid.UUID | None
+    answers_hash: bytes = field(repr=False)
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
 
 
@@ -216,7 +223,7 @@ def _spent(db: Session, application: Application) -> Authorisation | None:
             Authorisation.user_id == application.user_id,
             Authorisation.used_at.is_not(None),
         )
-        .order_by(Authorisation.used_at.desc())
+        .order_by(Authorisation.used_at.desc(), Authorisation.id.desc())
         .limit(1)
     ).scalar_one_or_none()
 
@@ -266,6 +273,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
     if refused := recheck(db, application, posting, now):
         _stop(db, application, refused, now)
         return refused.code
+    spent = _spent(db, application)
     rows = gate.rows_of(db, application)
     if application.answers_hash is None or gate.answers_hash(
         rows, application.document_versions
@@ -291,13 +299,37 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         form_url=application.form_url,
         dry_run=application.dry_run,
         rows=[Row(r.field_key, r.label, r.kind, r.value, r.source.value, r.required) for r in rows],
+        authorisation_id=spent.id if spent is not None else None,
+        answers_hash=bytes(application.answers_hash),
         pdfs=pdfs,
     )
 
 
-def stopped(db: Session, application_id: uuid.UUID, stop: Stop, now: datetime) -> str:
-    found = run._locked(db, application_id)
+def _bound(db: Session, plan: Plan) -> tuple[Application, Job] | None:
+    """The application under the gate's locks while it is still the decision `plan` was read
+    from: `approved` or `held` with the same spent authorisation, the same answers hash and the
+    same `dry_run`. None otherwise (a new approval since, an answer changed, a rehearsal released):
+    the lease that holds this plan refilled the form with values nobody approved since."""
+    found = _locked(db, plan.application_id)
     if found is None or found[0].state not in states.DECIDED:
+        return None
+    application = found[0]
+    spent = _spent(db, application)
+    if (
+        spent is None
+        or plan.authorisation_id is None
+        or spent.id != plan.authorisation_id
+        or application.answers_hash is None
+        or bytes(application.answers_hash) != plan.answers_hash
+        or application.dry_run != plan.dry_run
+    ):
+        return None
+    return found
+
+
+def stopped(db: Session, plan: Plan, stop: Stop, now: datetime) -> str:
+    found = _bound(db, plan)
+    if found is None:
         return "superseded"
     _stop(db, found[0], stop, now)
     return stop.state.value
@@ -309,14 +341,14 @@ def wait(db: Session, application_id: uuid.UUID, needs: str, now: datetime, **da
         run._wait(db, found[0], needs, now, **data)
 
 
-def arm(
-    db: Session, application_id: uuid.UUID, now: datetime, switches: gate.Switches, read: Read
-) -> str:
-    """Step 5, before the click, under the gate's locks: the screenshot, the kill switches, the
-    gate's checks again (`recheck`), then `rehearsed` or `submitting` (committed by the caller
-    before the click). Returns what was written."""
-    found = _locked(db, application_id)
-    if found is None or found[0].state not in states.DECIDED:
+def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: Read) -> str:
+    """Step 5, before the click, under the gate's locks: still the decision `plan` was read from
+    (`_bound`, else `superseded`: nothing written, no click, the next job refills with what was
+    approved), the screenshot, the kill switches, the gate's checks again (`recheck`), then
+    `rehearsed` or `submitting` (committed by the caller before the click). Returns what was
+    written."""
+    found = _bound(db, plan)
+    if found is None:
         return "superseded"
     application, posting = found
     if read.shot is not None:
@@ -702,20 +734,20 @@ async def _drive(
         return await asyncio.to_thread(
             _in_db,
             services.sessions,
-            lambda db: stopped(db, plan.application_id, read, services.clock()),
+            lambda db: stopped(db, plan, read, services.clock()),
         )
     if capability is None and not plan.dry_run:
         stop = Stop(State.ready, "no_capability")
         return await asyncio.to_thread(
             _in_db,
             services.sessions,
-            lambda db: stopped(db, plan.application_id, stop, services.clock()),
+            lambda db: stopped(db, plan, stop, services.clock()),
         )
     switches = gate.Switches(enabled=services.enabled, paused=await services.paused())
     written = await asyncio.to_thread(
         _in_db,
         services.sessions,
-        lambda db: arm(db, plan.application_id, services.clock(), switches, read),
+        lambda db: arm(db, plan, services.clock(), switches, read),
     )
     if written != "submitting" or capability is None:
         return written
