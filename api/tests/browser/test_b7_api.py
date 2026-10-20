@@ -25,9 +25,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import profiles, removals
+from app.browser.address import ADDRESS_MAX
 from app.browser.client import BrowserdClient, BrowserError, ended_of
 from app.browser.leases import DbProfiles, Leases
 from app.browser.live_router import OWN_SESSION
+from app.browser.profile_router import FORGET_LIMIT, FORGETS_PER_DAY
 from app.browser.router import BAD_ADDRESS
 from app.main import create_app
 from tests.browser.b3_support import IDLE_S, SESSION_MAX_S, Clock, FakeBrowserd, flush, redis_url
@@ -187,13 +189,20 @@ def test_both_sessions_start_without_automation_and_signin_opens_the_address(
         ("signin", "data:text/html,x"),
         ("signin", "https://"),
         ("signin", "https://" + "a" * 5000 + ".org"),
+        ("signin", "https://example.org/" + "a" * (ADDRESS_MAX - 19)),
         ("signin", ""),
         ("look", "https://example.org"),
+        ("signin", 123),
+        ("signin", 1.5),
+        ("signin", True),
+        ("signin", ["https://example.org"]),
+        ("signin", {"href": "https://example.org"}),
+        ("look", 123),
     ],
 )
 def test_a_bad_address_is_refused_and_nothing_starts(
     app: FastAPI, api: Api, browserd: FakeBrowserd, user_a: tuple[uuid.UUID, str], purpose: str,
-    address: str,
+    address: Any,
 ) -> None:  # fmt: skip
     _, a = user_a
     answer = start(api, a, purpose, address=address)
@@ -204,6 +213,18 @@ def test_a_bad_address_is_refused_and_nothing_starts(
     assert browserd.calls == []
     shown = api.get("/api/browser", token=a).json()
     assert (shown["lease"], shown["queue"]) == (None, [])
+
+
+def test_an_address_of_the_cap_is_opened_and_the_schema_says_the_cap(
+    app: FastAPI, api: Api, browserd: FakeBrowserd, user_a: tuple[uuid.UUID, str]
+) -> None:
+    _, a = user_a
+    address = "https://example.org/" + "a" * (ADDRESS_MAX - 20)
+    assert len(address) == ADDRESS_MAX
+    assert start(api, a, "signin", address=address).status_code == 201
+    assert [s.address for s in browserd.starts] == [address]
+    shown = app.openapi()["components"]["schemas"]["SessionIn"]["properties"]["address"]
+    assert {"type": "string", "maxLength": ADDRESS_MAX} in shown["anyOf"]
 
 
 def test_the_typed_address_goes_to_browserd_only(
@@ -299,6 +320,62 @@ def test_forget_with_nothing_to_forget_is_204_twice(
         assert answer.status_code == 204
         assert answer.headers["cache-control"] == "no-store"
     assert queued(factory) == []
+
+
+def test_forget_is_capped_per_person_and_utc_day(
+    app: FastAPI,
+    api: Api,
+    clock: Clock,
+    factory: sessionmaker[Session],
+    user_a: tuple[uuid.UUID, str],
+    user_b: tuple[uuid.UUID, str],
+) -> None:
+    """Each Forget then a lease spends a uid for good: FORGETS_PER_DAY a day per person, the
+    next one 429 with nothing ended nor deleted, another person's count apart, a new UTC day a
+    new count."""
+    a_id, a = user_a
+    _, b = user_b
+    clock.now = datetime(2026, 10, 19, 23, 0, tzinfo=UTC).timestamp()
+    for _ in range(FORGETS_PER_DAY):
+        assert start(api, a).status_code == 201
+        assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 204
+    assert start(api, a).status_code == 201
+    kept = row(factory, a_id)
+    refused = api.request("DELETE", "/api/browser/profile", token=a)
+    assert refused.status_code == 429
+    assert refused.json() == {"detail": FORGET_LIMIT, "code": "forget_limit"}
+    assert refused.headers["cache-control"] == "no-store"
+    assert api.get("/api/browser", token=a).json()["lease"] is not None
+    assert row(factory, a_id).profile_id == kept.profile_id
+    assert api.request("DELETE", "/api/browser/sessions/current", token=a).status_code == 204
+    assert start(api, b).status_code == 201
+    assert api.request("DELETE", "/api/browser/profile", token=b).status_code == 204
+    clock.now = datetime(2026, 10, 20, 0, 0, tzinfo=UTC).timestamp()
+    assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 204
+    assert row(factory, a_id) is None
+
+
+def test_a_forget_with_nothing_to_forget_spends_none(
+    api: Api, factory: sessionmaker[Session], user_a: tuple[uuid.UUID, str]
+) -> None:
+    a_id, a = user_a
+    for _ in range(FORGETS_PER_DAY + 2):
+        assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 204
+    assert start(api, a).status_code == 201
+    assert row(factory, a_id) is not None
+    assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 204
+    assert row(factory, a_id) is None
+
+
+def test_two_forgets_at_once_never_both_spend_the_last_one(app: FastAPI, api: Api) -> None:
+    store = app.state.browser_leases
+
+    async def at_once() -> list[str | None]:
+        return list(await asyncio.gather(*(store.take_forget("e2e-424", 1) for _ in range(8))))
+
+    spent = call(api, at_once)
+    assert sum(key is not None for key in spent) == 1
+    assert call(api, at_once) == [None] * 8
 
 
 def test_forget_needs_a_session_and_csrf(api: Api, user_a: tuple[uuid.UUID, str]) -> None:
@@ -450,6 +527,122 @@ def test_the_drain_waits_for_the_lease_and_never_touches_another_directory(
     assert asyncio.run(removals.drain_with(factory, client)) == 1  # B's own, no directory
     assert queued(factory) == [(str(a_row.profile_id), b_row.uid)]  # kept: not B's directory
     assert (a_dir / "Cookies").read_text() == "a"
+
+
+def queue_rows(factory: sessionmaker[Session], *rows: tuple[str, int]) -> None:
+    """Queued a second apart, oldest first, as the trigger would have queued them."""
+    with factory() as db:
+        for at, (profile, uid) in enumerate(rows):
+            db.execute(
+                sa.text("INSERT INTO browser_profile_removals (profile_id, uid, queued_at)"
+                        " VALUES (:p, :u, :t)"),
+                {"p": profile, "u": uid, "t": datetime(2026, 10, 19, 8, 0, at, tzinfo=UTC)},
+            )  # fmt: skip
+        db.commit()
+
+
+def test_a_row_browserd_keeps_is_skipped_counted_and_never_holds_back_a_newer_one(
+    browserd: FakeBrowserd,
+    factory: sessionmaker[Session],
+    volume: Volume,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Oldest first: a directory that is another uid's (kept for good), one browserd cannot
+    remove (503 not_removed), then one that goes. With one removal asked per run, the third goes
+    on the third run; the two kept rows stay queued and are counted in the log."""
+    mismatch, stuck, fine = (str(uuid.uuid4()) for _ in range(3))
+    volume.own(mismatch, 20999, "m")
+    volume.own(stuck, 20102, "s")
+    fine_dir = volume.own(fine, 20103, "f")
+
+    async def as_uid(uid: int, *argv: str, timeout: float = 15) -> int:  # noqa: ASYNC109
+        import shutil
+
+        if not argv[-1].endswith(stuck):
+            shutil.rmtree(argv[-1])
+        return 0
+
+    monkeypatch.setattr(signin.chromium, "as_uid", as_uid)
+    queue_rows(factory, (mismatch, 20101), (stuck, 20102), (fine, 20103))
+    client = browserd.client()
+    with caplog.at_level(logging.WARNING, logger="app.browser.removals"):
+        assert [asyncio.run(removals.drain_with(factory, client, limit=1)) for _ in range(3)] == [
+            0, 0, 1
+        ]  # fmt: skip
+    assert not fine_dir.exists()
+    assert sorted(queued(factory)) == sorted([(mismatch, 20101), (stuck, 20102)])
+    kept = [r.getMessage() for r in caplog.records if "kept" in r.getMessage()]
+    assert kept == ["browser profile removals kept: profile_uid_mismatch 1",
+                    "browser profile removals kept: not_removed 1"]  # fmt: skip
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.browser.removals"):
+        assert asyncio.run(removals.drain_with(factory, client)) == 0
+    assert "not_removed 1, profile_uid_mismatch 1" in caplog.text
+
+
+def test_a_failing_row_at_the_head_does_not_stop_the_pass(
+    browserd: FakeBrowserd,
+    factory: sessionmaker[Session],
+    volume: Volume,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stuck, fine = str(uuid.uuid4()), str(uuid.uuid4())
+    volume.own(stuck, 20111, "s")
+    fine_dir = volume.own(fine, 20112, "f")
+
+    async def as_uid(uid: int, *argv: str, timeout: float = 15) -> int:  # noqa: ASYNC109
+        import shutil
+
+        if not argv[-1].endswith(stuck):
+            shutil.rmtree(argv[-1])
+        return 1
+
+    monkeypatch.setattr(signin.chromium, "as_uid", as_uid)
+    queue_rows(factory, (stuck, 20111), (fine, 20112))
+    assert asyncio.run(removals.drain_with(factory, browserd.client())) == 1
+    assert queued(factory) == [(stuck, 20111)]
+    assert not fine_dir.exists()
+
+
+def test_the_pass_stops_only_when_browserd_does_not_answer(
+    browserd: FakeBrowserd, factory: sessionmaker[Session]
+) -> None:
+    queue_rows(factory, (str(uuid.uuid4()), 20121), (str(uuid.uuid4()), 20122))
+    browserd.down = True
+    assert asyncio.run(removals.drain_with(factory, browserd.client())) == 0
+    assert len(browserd.calls) == 1  # one call, then the pass waits
+    assert len(queued(factory)) == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "outcome"),
+    [(204, None, "removed"), (409, {"error": "profile_in_use"}, "profile_in_use"),
+     (409, {"error": "profile_uid_mismatch"}, "profile_uid_mismatch"),
+     (503, {"error": "not_removed"}, "not_removed"), (409, {"error": "busy"}, "failed"),
+     (400, {"error": "bad_uid"}, "failed"), (500, {"error": "internal"}, "failed"),
+     (503, {"error": "other"}, "failed"), (404, None, "failed"), (500, None, "failed")],
+)  # fmt: skip
+def test_every_answer_about_one_directory_is_an_outcome(
+    status: int, payload: Any, outcome: str
+) -> None:
+    import httpx
+
+    def answer(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload) if payload else httpx.Response(status)
+
+    client = BrowserdClient("http://browser:9300", "s", httpx.MockTransport(answer))
+    assert asyncio.run(client.remove_profile(str(uuid.uuid4()), 20131)) == outcome
+
+
+def test_a_refused_secret_stops_the_pass_like_a_browserd_down() -> None:
+    import httpx
+
+    client = BrowserdClient(
+        "http://browser:9300", "s", httpx.MockTransport(lambda _: httpx.Response(401))
+    )
+    with pytest.raises(BrowserError):
+        asyncio.run(client.remove_profile(str(uuid.uuid4()), 20131))
 
 
 def test_the_drain_without_a_secret_asks_nothing(factory: sessionmaker[Session]) -> None:
