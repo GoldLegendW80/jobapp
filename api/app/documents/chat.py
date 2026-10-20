@@ -39,7 +39,9 @@ replaced with a version of origin `chat` when nobody wrote it since the message,
 is kept as a version beside the person's draft. A base CV keeps its own fixed block: what the
 writer sent as `fixed` is replaced by the draft's. A template asked through `set_template` is
 applied with the result (the version carries it), or alone as a version of origin `template`
-with the same content (`render_job.switch`). A run that ends any other way
+with the same content (`render_job.switch`); the generation records it
+(`generate.WRITE_TEMPLATE`), so a later write from another base CV reads it as the person's
+switch by hand. A version records the template it is printed with. A run that ends any other way
 changes nothing (`failed` with a code of `ERRORS`, or `cancelled`). Every end writes the
 assistant's message: what changed, what the fact check corrected (and the profile, when a claim
 it does not state went), the version number, or why nothing changed; an unknown template
@@ -668,6 +670,8 @@ def apply(
     )
     template = render_job.template_of(db, user_id, switch_to or document.template_slug)
     name = (template.name.get("en") or template.slug) if switch_to is not None else None
+    if switch_to is not None:
+        generation.estimate = {**generation.estimate, generate.WRITE_TEMPLATE: switch_to}
     orgs = _orgs(db, document, at)
     if accepted is None:
         if switch_to is None:
@@ -701,6 +705,7 @@ def apply(
             at=at,
             generation_id=generation.id,
             corrections=records,
+            template_slug=template.slug,
             template_version=template.version,
             profile_revision=_profile_revision(db, user_id),
             content=c.dump(content),
@@ -722,6 +727,7 @@ def apply(
             at=at,
             generation_id=generation.id,
             corrections=records,
+            template_slug=template.slug,
             template_version=template.version,
             profile_revision=_profile_revision(db, user_id),
         )

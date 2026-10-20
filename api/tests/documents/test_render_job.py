@@ -614,6 +614,39 @@ def test_a_document_locked_while_the_pdf_is_stored_is_waited_for(
         )
 
 
+@pytest.mark.parametrize("change", [{"template_slug": "sidebar"}, {"language": Language.fr}])
+def test_a_store_refused_its_lock_every_time_keeps_a_switch_queued_for_the_cron(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, change: dict[str, Any]
+) -> None:
+    made = _setup(factory)
+    refusals: list[int] = []
+    lock = store.lock_document
+
+    def locking(*args: Any, **kwargs: Any) -> Any:
+        if refusals:
+            refusals.pop()
+            raise store.DocumentBusyError(store.BUSY)
+        return lock(*args, **kwargs)
+
+    def switch_then_hold() -> None:
+        with factory() as db:
+            assert render_job.switch(db, made["user"], made["document"], at=AT, **change)
+            render_job.mark_edited(db, made["user"], made["document"])
+            db.commit()
+        refusals.extend([1] * render_job.STORE_ATTEMPTS)
+
+    monkeypatch.setattr(store, "lock_document", locking)
+    revision = _ask(factory, made["user"], made["document"], RecordingQueue())
+    renderer = FakeRenderer(during=switch_then_hold)
+    _run(context(factory, renderer, AT), made["document"], revision)
+    assert refusals == []
+    assert all(v.pdf_sha256 is None for v in _versions(factory, made["document"]))
+    document = _document(factory, made["document"])
+    assert (document.render_state, document.render_error) == (RenderState.queued, None)
+    assert render_job._waiting(factory) == [(made["document"], revision)]
+    assert len(renderer.calls) == 1  # the lost store ends the job: the cron renders the switch
+
+
 def test_the_status_moves_once_only_when_retention_pruned_the_one_page_versions(
     factory: sessionmaker[Session],
 ) -> None:
