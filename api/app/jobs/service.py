@@ -393,7 +393,10 @@ def supersede_status_proposals(
     # The rows are locked in id order before the update (an UPDATE locks them in scan order):
     # the second half of the one lock order, jobs by id, then proposals by id (issue #166).
     db.execute(
-        sa.select(Proposal.id).where(condition).order_by(Proposal.id).with_for_update(no_key=True)
+        sa.select(Proposal.id)
+        .where(condition)
+        .order_by(Proposal.id)
+        .with_for_update(key_share=True)
     ).all()
     db.execute(
         sa.update(Proposal)
@@ -1023,7 +1026,7 @@ def _lock(db: Session, query: sa.Select[tuple[Job]], *, skip_locked: bool = Fals
     read under the lock. A lock wait over the timeout raises JobBusyError. With `skip_locked`
     a row another transaction holds is left out at once instead of waited for."""
     _begin_locking(db)
-    locking = query.with_for_update(no_key=True, skip_locked=skip_locked)
+    locking = query.with_for_update(key_share=True, skip_locked=skip_locked)  # FOR NO KEY UPDATE
     try:
         jobs = list(db.execute(locking.execution_options(populate_existing=True)).scalars())
     except DBAPIError as exc:
