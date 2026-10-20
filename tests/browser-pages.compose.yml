@@ -9,6 +9,9 @@
 #   proxy's set, and the browser lets it through its proxy although its address is private
 #   (BROWSER_PROXY_ALLOW_PRIVATE, refused by browserd under APP_ENV=production).
 # - `egress` is compose.yml's own network, so this file names it and does not define it.
+# - api and worker get BROWSER_SOURCES_BASE_URL (browser B8): the sweep's browser sources read the
+#   search pages of b8/ instead of Google Careers and mon-vie-via, one fixture per search word
+#   (server.py). Only the browser opens that address; refused under APP_ENV=production.
 services:
   pages:
     # Standard library only: the same pinned base image as the other stubs.
@@ -40,3 +43,11 @@ services:
   browser:
     environment:
       BROWSER_PROXY_ALLOW_PRIVATE: pages
+
+  api:
+    environment:
+      BROWSER_SOURCES_BASE_URL: http://pages:8080/b8
+
+  worker:
+    environment:
+      BROWSER_SOURCES_BASE_URL: http://pages:8080/b8

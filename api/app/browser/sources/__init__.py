@@ -34,10 +34,13 @@ under the source: a person asked for their browser, the one preemption of SPEC-b
 service", or a timer; what was read completely is stored, the sweep's other sources do not run,
 and the next sweep starts again), `time_budget` (the sweep's time limit is near: what was read is
 stored), `page_failed` (a page did not load), `browser_busy`, `browser_unavailable` (browserd or
-the lease store did not answer, also in the middle of a source). A company career site (B9,
-site.py) adds `bad_address`, `no_credential` (skipped before any lease), `ats_board` (the site's
-postings sit on Ashby, Greenhouse or Lever: the entry's `board` names the API board to add
-instead), `token_budget` and `agent_failed` (what the finder reported and code kept is stored).
+the lease store did not answer, also in the middle of a source), and `not_started` for every
+source after one that stopped the sweep's sources (`lease_ended`, `browser_busy`,
+`browser_unavailable`): it never asked for the browser and read nothing. A company career site
+(B9, site.py) adds `bad_address`, `no_credential` (skipped before any lease), `ats_board` (the
+site's postings sit on Ashby, Greenhouse or Lever, on strong evidence only: the entry's `board`
+names the API board, added to the person's swept boards), `token_budget` and `agent_failed` (what
+the finder reported and code kept is stored).
 
 BROWSER_SOURCES_BASE_URL (tests only, refused in production) points every source at a fixture
 server instead of the real host (tests/browser_pages/b8/).
@@ -99,6 +102,9 @@ ERRORS = (
 )
 # The codes after which no other source of this sweep starts: the browser is wanted elsewhere.
 STOPS_SWEEP = ("lease_ended", "browser_busy", "browser_unavailable")
+# What a source reports when an earlier source stopped the sweep's sources before it began: it
+# never asked for the browser and read nothing (never raised, so not in ERRORS).
+NOT_STARTED = "not_started"
 
 
 class SourceError(Exception):
@@ -465,7 +471,7 @@ def host_of(url: str) -> str:
 
 StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
 # B9: (user id, the board, its company) to whether the board was added (site.add_board).
-AddBoard = Callable[[str, Any, str], Awaitable[bool]]
+AddBoard = Callable[[str, Any, str], Awaitable[str]]
 ToolsFor = Callable[[str, str, str], Tools]
 
 
@@ -507,8 +513,9 @@ class Runner:
                 "query": source.query,
                 "location": source.location,
                 "result_pages": 0,
+                "found": 0,
                 "postings": 0,
-                "error": stop,
+                "error": None if stop is None else NOT_STARTED,
             }
             stats.sources.append(entry)
             if stop is not None:
@@ -609,6 +616,7 @@ class Runner:
                 # sweep._store_found puts the stats and the known postings back: nothing stored.
                 logger.warning("browser source not stored: error=%s", type(exc).__name__)
                 return "store_failed", code
+            entry["found"] = len(read.postings)
             entry["postings"] = stats.new - new_before
         return code, code
 
@@ -616,21 +624,24 @@ class Runner:
         self, user: str, source: BrowserSource, entry: dict[str, Any], code: str | None
     ) -> None:
         """B9: a site whose postings live on an API board adds that board to the person's swept
-        boards (`add_board`); the entry's board says whether it was added. A failure to add is
-        logged and the entry says not added: the source's own code stands."""
+        boards (`add_board`); the entry's board says whether it was added, and when not because
+        the person removed it once, `removed_by_person`. A failure to add is logged and the entry
+        says not added: the source's own code stands."""
         board = entry.get("board")
         if code != "ats_board" or not isinstance(board, dict):
             return
         from app.browser.sources import site
 
         found = site.Board(str(board["ats"]), str(board["org"]))
-        added = False
+        outcome = site.NOT_ADDED
         if self.add_board is not None:
             try:
-                added = await self.add_board(user, found, site.company_for(source, found))
+                outcome = await self.add_board(user, found, site.company_for(source, found))
             except Exception as exc:
                 logger.warning("a board was not added: error=%s", type(exc).__name__)
-        board["added"] = added
+        board["added"] = outcome == site.ADDED
+        if outcome == site.REMOVED:
+            board["removed_by_person"] = True
 
     async def _give_back(self, user: str, held: str | None) -> None:
         if held is None:
@@ -689,7 +700,7 @@ def _add_board(sessions: Any) -> AddBoard:
 
     from app.browser.sources import site
 
-    def add(user: str, board: Any, company: str) -> bool:
+    def add(user: str, board: Any, company: str) -> str:
         with sessions() as db:
             try:
                 added = site.add_board(db, uuid.UUID(user), board, company, datetime.now(UTC))
@@ -699,7 +710,7 @@ def _add_board(sessions: Any) -> AddBoard:
                 raise
             return added
 
-    async def call(user: str, board: Any, company: str) -> bool:
+    async def call(user: str, board: Any, company: str) -> str:
         return await asyncio.to_thread(add, user, board, company)
 
     return call

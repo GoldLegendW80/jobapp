@@ -21,7 +21,17 @@ from app.profile.schemas import BrowserSource
 from tests.browser.test_b8_sources import FakeLeases, FakeTools, Plan, Stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
-from browserd.tools.policy import HOST_ENTRY
+from browserd.tools.policy import parse_hosts
+
+
+def browserd_leases(hosts: list[str]) -> bool:
+    """Whether browserd's own rule (policy.parse_hosts) accepts every host of a lease."""
+    try:
+        parse_hosts(hosts)
+    except ValueError:
+        return False
+    return True
+
 
 SITE = "https://careers.example-robotics.test/jobs"
 
@@ -96,11 +106,11 @@ class ScriptedFinder(finder.FinderAgent):
 
 
 class Leases(FakeLeases):
-    """The B8 fake leases, refusing what browserd refuses: a host outside its pattern
-    (browser/browserd/tools/policy.py HOST_ENTRY), as the client's BrowserError("refused")."""
+    """The B8 fake leases, refusing what browserd refuses: a host its `parse_hosts` refuses
+    (browser/browserd/tools/policy.py), as the client's BrowserError("refused")."""
 
     async def acquire(self, user: str, purpose: str, automation: bool, *, hosts: Any) -> Any:
-        if not hosts or any(not HOST_ENTRY.fullmatch(h) for h in hosts):
+        if not hosts or not browserd_leases(list(hosts)):
             self.refused.append(list(hosts))
             raise BrowserError("refused")
         return await super().acquire(user, purpose, automation, hosts=hosts)
@@ -116,12 +126,12 @@ class Boards:
     def __init__(self) -> None:
         self.held: dict[str, list[tuple[str, str, str]]] = {}
 
-    async def __call__(self, user: str, board: site.Board, company: str) -> bool:
+    async def __call__(self, user: str, board: site.Board, company: str) -> str:
         mine = self.held.setdefault(user, [])
         if any((a, o.lower()) == (board.ats, board.org.lower()) for a, o, _ in mine):
-            return False
+            return site.HELD
         mine.append((board.ats, board.org, company))
-        return True
+        return site.ADDED
 
 
 async def _run(
@@ -129,7 +139,7 @@ async def _run(
     tools: FakeTools,
     agent: finder.FinderAgent | None,
     *,
-    boards: Callable[[str, site.Board, str], Awaitable[bool]] | None = None,
+    boards: Callable[[str, site.Board, str], Awaitable[str]] | None = None,
     deadline: float = 1e9,
     clock: Callable[[list[float]], float] | None = None,
 ) -> Any:
@@ -245,13 +255,22 @@ def test_other_addresses_are_not_boards(url: str) -> None:
 
 
 def test_a_page_whose_links_lead_to_one_board_is_that_board() -> None:
-    frame = "  - iframe [ref=e50]:\n" + link(
-        "AI Engineer", "https://boards.greenhouse.io/exro/jobs/7", 51
+    three = "\n".join(
+        link(f"Role {n}", f"https://boards.greenhouse.io/exro/jobs/{n}", 51 + n) for n in range(3)
     )
-    assert site.board_on_page(listing([], extra=frame), SITE) == site.Board("greenhouse", "exro")
-    two = frame + "\n" + link("Apply", "https://jobs.lever.co/other/1", 60)
-    assert site.board_on_page(listing([], extra=two), SITE) is None  # two boards: the agent reads
-    assert site.board_on_page(listing(["AI Engineer"]), SITE) is None
+    found = site.board_on_page(listing([], extra=three), SITE)
+    assert found == (site.Board("greenhouse", "exro"), True)
+    two = (
+        three
+        + "\n"
+        + "\n".join(link("Apply", f"https://jobs.lever.co/other/{n}", 60 + n) for n in range(3))
+    )
+    assert site.board_on_page(listing([], extra=two), SITE) == (None, False)  # two boards
+    assert site.board_on_page(listing([]), "https://jobs.lever.co/exro") == (
+        site.Board("lever", "exro"),
+        True,
+    )  # the page itself is the board
+    assert site.board_on_page(listing(["AI Engineer"]), SITE) == (None, False)
 
 
 @pytest.mark.parametrize(
@@ -271,7 +290,7 @@ def test_a_page_whose_links_lead_to_one_board_is_that_board() -> None:
         ("https://careers.example.test:99999/", ""),
         ("/jobs/1", ""),
         ("", ""),
-        # Hosts as browserd accepts them (policy.py HOST_ENTRY), or not an address.
+        # Hosts as browserd accepts them (policy.py parse_hosts), or not an address.
         ("https://karriere.müller.de/jobs", "https://karriere.xn--mller-kva.de/jobs"),
         ("https://karriere.xn--mller-kva.de/jobs", "https://karriere.xn--mller-kva.de/jobs"),
         ("https://KARRIERE.MÜLLER.DE/", "https://karriere.xn--mller-kva.de/"),
@@ -294,7 +313,13 @@ def test_a_page_whose_links_lead_to_one_board_is_that_board() -> None:
         ("https://careers.example.test\\jobs", ""),
         ("https://careers.example.test/jobs\\1", ""),
         ("https://pages/b9/careers.html", "https://pages/b9/careers.html"),
-        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080/"),
+        # An IP v4 literal, or any last label all digits: browserd's parse_hosts refuses it.
+        ("http://127.0.0.1:8080/", ""),
+        ("https://10.0.0.1/careers", ""),
+        ("https://jobs.example.123/", ""),
+        ("https://jobs.example.123./", ""),
+        ("https://jobs.123.example/", "https://jobs.123.example/"),
+        ("https://jobs.example.a123/", "https://jobs.example.a123/"),
         # Paths and queries percent encoded outside printable ASCII, never twice.
         (
             "https://careers.example.test/jobs/ingénieur",
@@ -318,7 +343,7 @@ def test_canonical_addresses(raw: str, kept: str) -> None:
     assert canonical(raw) == kept
     if kept:
         host = urlsplit(kept).hostname or ""
-        assert HOST_ENTRY.fullmatch(host), host  # browserd leases it
+        assert browserd_leases([host]), host  # browserd leases it
         assert all(0x21 <= ord(c) <= 0x7E for c in kept)  # browserd's bad_url rule
         assert canonical(kept) == kept
 
@@ -326,11 +351,12 @@ def test_canonical_addresses(raw: str, kept: str) -> None:
 @pytest.mark.parametrize(
     "host",
     ["pages", "a.b", "x" * 63, "a-b.c-d.e", "1.2.3.4", "*.example.test", "a_b", "-a", "a-",
-     "A.example", "a..b", "", ".a", "a.", "x" * 64, "xn--mller-kva.de", "a b"],
+     "A.example", "a..b", "", ".a", "a.", "x" * 64, "xn--mller-kva.de", "a b", "10.0.0.1",
+     "127.0.0.1", "a.example.123", "a.example.123.", "123", "a.123.b", "a.b1", "1a.2b"],
 )  # fmt: skip
 def test_the_host_rule_is_browserds(host: str) -> None:
     wild = host.startswith("*.")
-    assert bool(finder.HOST.fullmatch(host)) == (bool(HOST_ENTRY.fullmatch(host)) and not wild)
+    assert bool(finder.ascii_host(host)) == (browserd_leases([host]) and not wild)
 
 
 @pytest.mark.parametrize(
@@ -638,10 +664,118 @@ def test_an_ats_address_is_proposed_as_an_api_board_without_a_lease() -> None:
     assert agent.ran == 0
 
 
+EMBED = "  - iframe [ref=e50]:\n    - /url: https://boards.greenhouse.io/embed/job_board?for=examplerobotics"
+
+
+def lever(n: int, org: str = "example-robotics") -> str:
+    return link(f"Role {n}", f"https://jobs.lever.co/{org}/{n:04d}", 60 + n)
+
+
+@pytest.mark.parametrize(
+    ("extra", "titles", "board", "strong"),
+    [
+        # Strong: an iframe whose address is the board, Greenhouse's embed form included.
+        (EMBED, [], ("greenhouse", "examplerobotics"), True),
+        ("  - iframe [ref=e50]:\n    - /url: https://jobs.ashbyhq.com/example", [],
+         ("ashby", "example"), True),
+        # Strong: 3 or more posting like links, and over half of them, lead to one board.
+        ("\n".join(lever(n) for n in range(3)), [], ("lever", "example-robotics"), True),
+        ("\n".join(lever(n) for n in range(3)), ["A", "B"], ("lever", "example-robotics"), True),
+        ("\n".join(lever(n) for n in range(5)), ["A", "B", "C"], ("lever", "example-robotics"),
+         True),
+        # Weak: under 3, half or less, or several boards.
+        ("\n".join(lever(n) for n in range(2)), [], ("lever", "example-robotics"), False),
+        ("\n".join(lever(n) for n in range(3)), ["A", "B", "C"], ("lever", "example-robotics"),
+         False),
+        (lever(1), ["AI Engineer", "ML Engineer"], ("lever", "example-robotics"), False),
+        (link("Partner jobs", "https://boards.greenhouse.io/partnerco", 80), [],
+         ("greenhouse", "partnerco"), False),
+        ("\n".join([lever(1), lever(2), lever(3, "partner-co"), lever(4, "partner-co")]), [],
+         None, False),
+        # The same posting's title and Apply link are one vote.
+        ("\n".join([lever(1), link("Apply", "https://jobs.lever.co/example-robotics/0001", 70),
+                     link("Apply", "https://jobs.lever.co/example-robotics/0001#apply", 71),
+                     lever(2)]), [], ("lever", "example-robotics"), False),
+        # An iframe of something else, a board link inside a frame without an address: weak.
+        ("  - iframe [ref=e50]:\n    - /url: https://video.example.test/embed/1", [], None,
+         False),
+        ("  - iframe [ref=e50]:\n" + link("Role", "https://jobs.lever.co/x/1", 51), [],
+         ("lever", "x"), False),
+        # No board at all.
+        ("", ["AI Engineer"], None, False),
+        (link("About", "https://example-robotics.test/about", 80), [], None, False),
+    ],
+)  # fmt: skip
+def test_a_board_on_the_page_is_the_sites_only_on_strong_evidence(
+    extra: str, titles: list[str], board: tuple[str, str] | None, strong: bool
+) -> None:
+    found, is_strong = site.board_on_page(listing(titles, extra=extra), SITE)
+    assert (None if found is None else (found.ats, found.org)) == board
+    assert is_strong is strong
+
+
+@pytest.mark.parametrize(
+    ("url", "posting"),
+    [
+        ("https://careers.example-robotics.test/jobs/ai-engineer", True),
+        ("https://careers.example-robotics.test/jobs/", False),
+        ("https://careers.example-robotics.test/jobs", False),
+        ("https://careers.example-robotics.test/jobs?page=2", False),
+        ("https://www.careers.example-robotics.test/jobs/ai-engineer", True),
+        ("https://careers.example-robotics.test/fr/offres/123", True),
+        ("https://careers.example-robotics.test/positions/ml", True),
+        ("https://careers.example-robotics.test/about", False),
+        ("https://careers.example-robotics.test/blog/jobs", False),
+        ("https://careers.example-robotics.test/jobsite/x", False),
+        ("https://other.example.test/jobs/ai-engineer", False),
+        ("mailto:jobs@example.test", False),
+    ],
+)
+def test_a_posting_link_of_the_site(url: str, posting: bool) -> None:
+    assert site._site_posting(url, SITE) is posting
+
+
+def test_a_stray_apply_link_to_a_board_adds_nothing_and_the_agent_reads_the_site() -> None:
+    boards, agent = Boards(), ScriptedFinder(reports("AI Engineer"))
+    pages = site_pages("AI Engineer", "ML Engineer")
+    pages[SITE] = listing(["AI Engineer", "ML Engineer"], extra=lever(1, "partner-co"))
+    stats, stored, _ = run(Plan([s()]), Tools(pages), agent, boards=boards)
+    [entry] = stats.sources
+    assert entry["error"] is None
+    assert entry["board"] == {"ats": "lever", "org": "partner-co", "added": False}
+    assert agent.ran == 1
+    assert [p.title for _, p in stored[0][1]] == ["AI Engineer"]
+    assert boards.held == {}
+
+
+def test_a_footer_link_to_another_companys_board_adds_nothing() -> None:
+    boards, agent = Boards(), ScriptedFinder(reports())
+    footer = link("Our partner is hiring", "https://boards.greenhouse.io/partnerco", 80)
+    stats, _, _ = run(Plan([s()]), Tools({SITE: listing([], extra=footer)}), agent, boards=boards)
+    [entry] = stats.sources
+    assert entry["error"] != "ats_board"
+    assert entry["board"] == {"ats": "greenhouse", "org": "partnerco", "added": False}
+    assert agent.ran == 1
+    assert boards.held == {}
+
+
+def test_a_page_whose_postings_all_go_to_one_board_adds_it() -> None:
+    boards, agent = Boards(), ScriptedFinder(reports())
+    page = listing([], extra="\n".join(lever(n) for n in range(4)))
+    plan = Plan([s()])
+    stats, stored, _ = run(plan, Tools({SITE: page}), agent, boards=boards)
+    [entry] = stats.sources
+    assert entry["error"] == "ats_board"
+    assert entry["board"] == {"ats": "lever", "org": "example-robotics", "added": True}
+    assert agent.ran == 0
+    assert stored == []
+    assert boards.held[str(plan.user_id)] == [
+        ("lever", "example-robotics", "example-robotics.test")
+    ]
+
+
 def test_a_careers_page_on_an_embedded_board_is_proposed_and_the_agent_does_not_run() -> None:
-    frame = "  - iframe [ref=e50]:\n" + link(
-        "AI Engineer", "https://boards.greenhouse.io/examplerobotics/jobs/4001", 51
-    )
+    frame = EMBED
     agent = ScriptedFinder(reports())
     tools = Tools({SITE: listing([], extra=frame)})
     stats, stored, leases = run(Plan([s()]), tools, agent)
@@ -663,7 +797,7 @@ def test_a_lease_that_ends_under_the_agent_keeps_what_was_validated_and_stops_th
 
     tools = Tools(site_pages("AI Engineer"), end_after=1)
     stats, _stored, _ = run(Plan([s(), s(query=SITE + "/b")]), tools, ScriptedFinder(long))
-    assert [e["error"] for e in stats.sources] == ["lease_ended", "lease_ended"]
+    assert [e["error"] for e in stats.sources] == ["lease_ended", "not_started"]
     assert stats.sources[0]["postings"] == 1
 
 
@@ -701,6 +835,9 @@ def test_the_finder_is_internal_read_only_and_bounded() -> None:
         "https://evil.example\\@careers.example.test/",
         "https://linkedin.com/jobs",
         "https://www.linkedin.com/company/example-robotics/jobs",
+        "https://10.0.0.1/careers",
+        "http://127.0.0.1:8080/",
+        "https://jobs.example.123/",
     ],
 )
 def test_a_site_browserd_would_refuse_is_a_bad_address_and_the_sweep_goes_on(query: str) -> None:
@@ -866,9 +1003,7 @@ def test_an_ats_address_adds_its_board_once() -> None:
 
 
 def test_a_board_found_on_a_careers_page_is_added_under_the_sites_company() -> None:
-    frame = "  - iframe [ref=e50]:\n" + link(
-        "AI Engineer", "https://boards.greenhouse.io/examplerobotics/jobs/4001", 51
-    )
+    frame = EMBED
     boards = Boards()
     plan = Plan([s()])
     tools = Tools({SITE: listing([], extra=frame)})
@@ -890,10 +1025,22 @@ def test_boards_are_added_per_person() -> None:
 
 
 def test_a_board_that_cannot_be_added_leaves_the_code() -> None:
-    async def broken(user: str, board: site.Board, company: str) -> bool:
+    async def broken(user: str, board: site.Board, company: str) -> str:
         raise RuntimeError("the database went away")
 
     lever = "https://jobs.lever.co/example-robotics"
     stats, _, _ = run(Plan([s(query=lever)]), Tools({}), ScriptedFinder(reports()), boards=broken)
     assert stats.sources[0]["error"] == "ats_board"
     assert stats.sources[0]["board"]["added"] is False
+
+
+def test_a_timeout_of_the_agent_itself_is_agent_failed_not_the_sweeps_time() -> None:
+    async def model_timeout(session: FinderSession) -> Ran:
+        session.report([posting_of("AI Engineer")])
+        raise TimeoutError  # the model call timed out, the sweep has time left
+
+    stats, _stored, _ = run(
+        Plan([s()]), Tools(site_pages("AI Engineer")), ScriptedFinder(model_timeout)
+    )
+    assert stats.sources[0]["error"] == "agent_failed"
+    assert stats.sources[0]["postings"] == 1

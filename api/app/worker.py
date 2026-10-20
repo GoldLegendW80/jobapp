@@ -62,7 +62,8 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
   person whose fill is not running (a new one, one waiting for its documents or behind another
   person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
-  of every `approved` application (A6).
+  job of every `approved` application (A6), every `held` one whose hold ended and every `ready`
+  Full auto one, whose job runs Full auto's decision (A13a, `submit.due`).
   The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus the wait of a
   sign in hand off (BROWSER_SESSION_MAX_S, browser B12a) plus a margin, the submit's the
   `apply_submit` lease's ceiling plus a margin. At start, every application left `filling` by a dead

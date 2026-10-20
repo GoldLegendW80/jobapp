@@ -17,9 +17,10 @@ circle:
 
 1. the person's row (`users`, `FOR NO KEY UPDATE`), only when the list of base CVs changes
    (create, make default, delete): it serializes the count, the default and the promotion;
-2. the posting row (`jobs`), only when a status moves (the jobs service takes it; the freeze of
-   D14 runs under it), or shared (`lock_posting`) by a write that inserts a row referencing the
-   posting (a posting document, a writer run) while it holds lock 3;
+2. the posting row (`jobs`), only when a status moves (the jobs service takes it `FOR NO KEY
+   UPDATE`; the freeze of D14 runs under it), or shared (`lock_posting`, `FOR SHARE`) by a write
+   that inserts a row referencing the posting (a posting document, a writer run) while it holds
+   lock 3;
 3. the document row (`documents`, `FOR UPDATE`): every write of a draft, a version, a
    generation or a message takes it first. Between two documents, the posting documents come
    before the base CV they name: `create_generation` holds its document and then needs a key
@@ -49,7 +50,7 @@ import hashlib
 import logging
 import re
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any
@@ -215,16 +216,36 @@ def _lock_person(db: Session, user_id: uuid.UUID) -> None:
 
 @_busy
 def lock_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> JobStatus | None:
-    """Lock 2, shared: the user's posting `FOR KEY SHARE`, the lock the foreign key of a row that
-    references it takes, so that lock comes before lock 3 instead of after it. Returns the
+    """Lock 2, shared: the user's posting `FOR SHARE`, taken before lock 3 by a write that
+    inserts a row referencing the posting. It waits for a status move, which holds the posting
+    `FOR NO KEY UPDATE` (jobs.service, issue #341), so the status read here is the one after the
+    move; the foreign key check of the insert (`KEY SHARE`) then waits for nothing. Returns the
     posting's status, None when the posting is not the user's."""
     _wait(db)
     query = (
         sa.select(Job.status)
         .where(Job.user_id == user_id, Job.id == posting_id)
-        .with_for_update(read=True, key_share=True)
+        .with_for_update(read=True)
     )
     return _execute(db, query).scalar_one_or_none()
+
+
+@_busy
+def lock_postings(db: Session, user_id: uuid.UUID, posting_ids: Collection[uuid.UUID]) -> None:
+    """Lock 2 for many postings at once: the user's postings `FOR SHARE`, in id order, the order
+    every other transaction that locks several job rows follows (jobs.service lock order). A
+    pass that will lock several postings takes them here first; `lock_posting` later finds them
+    held."""
+    if not posting_ids:
+        return
+    _wait(db)
+    query = (
+        sa.select(Job.id)
+        .where(Job.user_id == user_id, Job.id.in_(list(posting_ids)))
+        .order_by(Job.id)
+        .with_for_update(read=True)
+    )
+    _execute(db, query).all()
 
 
 @_busy

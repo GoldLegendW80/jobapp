@@ -1,0 +1,96 @@
+/* academic: one column in Tinos, black on white, a dark blue name and nothing else in colour.
+   Plain headings (bold, a little larger than the text, no rule, no capitals), the text of each
+   section indented under its heading; the education comes before the experience, each school and
+   each role a row of a 30 mm column of dates and its text. The achievements are numbered, the
+   competencies and the languages run on as lists split by semicolons, a skill group is a line.
+   The density comes from the step on :root: --body-size, --line-height, --section-gap,
+   --item-gap, --margin. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Tinos", serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #111111;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p, h1, h3 { overflow-wrap: anywhere; }
+/* a name breaks between its words; inside a word only when that word alone is wider than the line */
+.w { display: inline-block; max-width: 100%; }
+
+.head {
+  padding-bottom: 5pt;
+  border-bottom: 1pt solid #111111;
+}
+.name {
+  font-size: 2.2em;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--accent);
+}
+.headline { font-size: 1.1em; font-style: italic; margin-top: 1pt; }
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 1pt;
+  margin-top: 3pt;
+}
+.contact li { padding-right: 8pt; overflow-wrap: break-word; max-width: 100%; }
+.contact li + li { border-left: 0.6pt solid #111111; padding-left: 8pt; }
+
+.block { margin-top: var(--section-gap); }
+.label {
+  font-size: 1.22em;
+  font-weight: 700;
+  line-height: 1.25;
+  margin-bottom: var(--item-gap);
+}
+.text { padding-left: 6mm; }
+
+.summary { text-align: justify; }
+
+.dated {
+  display: grid;
+  grid-template-columns: 30mm minmax(0, 1fr);
+  column-gap: 4mm;
+}
+.dated + .dated { margin-top: var(--item-gap); }
+.when { color: #3a3a3a; }
+.entry-title { font-size: 1em; font-weight: 700; }
+.org { font-style: italic; }
+.what ul { padding-left: 1.1em; margin-top: 1pt; }
+.what li { margin-bottom: 1pt; }
+
+.highlights { list-style: decimal; padding-left: 1.4em; }
+.highlights li { margin-bottom: 1pt; }
+
+.competencies, .languages {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+}
+.competencies li, .languages li { margin-right: 0.4em; }
+.competencies li:not(:last-child)::after,
+.languages li:not(:last-child)::after { content: ";"; }
+
+.skill-group {
+  display: grid;
+  grid-template-columns: 30mm minmax(0, 1fr);
+  column-gap: 4mm;
+  margin-bottom: 1pt;
+}
+.group-label { font-size: 1em; font-weight: 700; }
+
+.languages strong { font-weight: 700; }
+
+.letter-body { padding-top: 16pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }

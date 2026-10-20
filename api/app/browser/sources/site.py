@@ -8,15 +8,20 @@ The steps of one site, in the source's own lease (which opens the careers page's
    underscore) and is not LinkedIn's (`finder.NOT_SITES`), `bad_address` otherwise; the person
    must have a credential for the agents (else `no_credential`: the source is skipped with that
    reason, nothing is opened). An address on Ashby, Greenhouse or Lever (`ats_board`) is not
-   read at all: the board is added to the person's swept boards at once (`add_board`, the
-   owner's decision of 2026-10-20), which read it whole and for free, and the entry says so
-   (`board: {ats, org, added}`; `added` is false when it was there already).
+   read at all (the person typed it: strong evidence): the board is added to the person's swept
+   boards at once (`add_board`, the owner's decision of 2026-10-20), which read it whole and for
+   free, and the entry says so (`board: {ats, org, added}`; `added` is false when it was there
+   already, and `removed_by_person` is true when the person once had it and removed it: a
+   removal sticks). A board added during a sweep is first read by the next sweep.
 2. Code opens the careers page (the first of PAGES_MAX pages; the lease opens its host and the
    host's `www.` twin, `finder.host_pair`, so http to https and apex to www redirects load) and
-   looks at its links: when they lead to postings on one of those three (an embedded Greenhouse
-   board, "Apply" links to jobs.lever.co, ...), the site is handled the same way (`ats_board`)
-   and the agent does not run. A redirect to any other host (an ATS's own page included) is
-   blocked by browserd and ends as `page_failed`.
+   looks at its links (`board_on_page`). On strong evidence that the site's postings live on
+   one of those three boards (an iframe whose address is the board, or most of the page's
+   posting like links leading to one board), the site is handled the same way (`ats_board`)
+   and the agent does not run. Weaker evidence (one stray "Apply" link, a footer or partner
+   link: page content is untrusted) adds nothing: the agent reads the site, and the entry only
+   reports the board (`board: {ats, org, added: false}`). A redirect to any other host (an
+   ATS's own page included) is blocked by browserd and ends as `page_failed`.
 3. The finder runs over the open page (`finder.FinderSession`). What it reported and code kept is
    stored, also when the run stopped: `token_budget` (the run's token budget is used up),
    `agent_failed` (the run ended in any other way but done: its turn limit, an error), and the
@@ -100,17 +105,61 @@ def board_of(url: str) -> Board | None:
     return Board(name, org)
 
 
-def board_on_page(text: str, page_url: str) -> Board | None:
-    """The one board the page's links lead to: the page itself, an iframe's links or "Apply"
-    links. None when no link is a board's, or when they name several boards (then the agent
-    reads the site)."""
-    found = {board_of(page_url)} - {None}
+# Path segments that mark a link of the site itself as a posting's (or a list of them) when
+# another segment follows: /jobs/ai-engineer, /fr/offres/123. The last segment alone is a list.
+POSTING_WORDS = frozenset(
+    {"job", "jobs", "career", "careers", "position", "positions", "opening", "openings", "role",
+     "roles", "vacancy", "vacancies", "posting", "postings", "offre", "offres", "emploi",
+     "emplois", "stelle", "stellen", "apply", "opportunities"}
+)  # fmt: skip
+# A board is the site's only on strong evidence (BOARD_LINKS_MIN of the page's posting like
+# links, and over half of them, lead to it); anything less is only reported.
+BOARD_LINKS_MIN = 3
+
+
+def _site_posting(url: str, page_url: str) -> bool:
+    """Whether a link of the careers page's own site looks like a posting's: under the careers
+    page's path, or a POSTING_WORDS segment followed by another one."""
+    page = finder.canonical(page_url)
+    link = finder.canonical(url)
+    if not page or not link or not same_site(page, link):
+        return False
+    base = urlsplit(page).path.rstrip("/")
+    path = urlsplit(link).path
+    if base and path.startswith(base + "/") and path.rstrip("/") != base:
+        return True
+    segments = [s.lower() for s in path.split("/") if s]
+    return any(s in POSTING_WORDS for s in segments[:-1])
+
+
+def board_on_page(text: str, page_url: str) -> tuple[Board | None, bool]:
+    """The board the careers page leads to, and whether the evidence is strong (then the board
+    is the site's: it is added and the agent does not run). Strong: the page itself is the
+    board; an iframe whose address is the board (Greenhouse's `embed/job_board?for=` included);
+    or BOARD_LINKS_MIN or more of the page's posting like links (to a board, or to a posting of
+    the site itself), and over half of them, lead to one board. Anything less (a footer link,
+    a partner's or one stray "Apply" link) is weak: the agent reads the site, and the board is
+    only reported, when the page links exactly one. (None, False) when no link is a board's."""
+    own = board_of(page_url)
+    if own is not None:
+        return own, True
+    links: dict[str, Board | None] = {}  # one vote per address: a title and its Apply link
     for node in parse_snapshot(text).walk():
-        if node.url:
-            board = board_of(urljoin(page_url, node.url))
-            if board is not None:
-                found.add(board)
-    return found.pop() if len(found) == 1 else None
+        if not node.url:
+            continue
+        url = urljoin(page_url, node.url).split("#", 1)[0]
+        board = board_of(url)
+        if node.role == "iframe" and board is not None:
+            return board, True
+        if board is not None or _site_posting(url, page_url):
+            links[url] = board
+    votes = Counter(b for b in links.values() if b is not None)
+    if not votes:
+        return None, False
+    top, count = votes.most_common(1)[0]
+    if count >= BOARD_LINKS_MIN and count * 2 > len(links):
+        return top, True
+    return (top, False) if len(votes) == 1 else (None, False)
 
 
 def address(source: BrowserSource) -> str:
@@ -144,11 +193,45 @@ def company_for(source: BrowserSource, board: Board) -> str:
     return company_of(host)
 
 
-def add_board(db: Session, user_id: uuid.UUID, board: Board, company: str, now: datetime) -> bool:
+def _same_board(entry: object, board: Board) -> bool:
+    return (
+        isinstance(entry, dict)
+        and entry.get("ats") == board.ats
+        and str(entry.get("org", "")).lower() == board.org.lower()
+    )
+
+
+def removed_by_person(db: Session, user_id: uuid.UUID, board: Board) -> bool:
+    """Whether a saved revision of the person's search section ever held the board (same ATS,
+    org case ignored): once the board is not in the section now, the person removed it."""
+    import sqlalchemy as sa
+
+    from app.profile.models import ProfileRevision
+
+    rows = db.execute(
+        sa.select(ProfileRevision.data).where(
+            ProfileRevision.user_id == user_id, ProfileRevision.section == "search"
+        )
+    ).scalars()
+    for data in rows:
+        boards = data.get("boards") if isinstance(data, dict) else None
+        if isinstance(boards, list) and any(_same_board(b, board) for b in boards):
+            return True
+    return False
+
+
+# What add_board did: the board was added; it was there already; the person removed it once
+# (never added again); or it could not be (no search section, one that does not validate, full).
+ADDED, HELD, REMOVED, NOT_ADDED = "added", "held", "removed", "not_added"
+
+
+def add_board(db: Session, user_id: uuid.UUID, board: Board, company: str, now: datetime) -> str:
     """Add the board to the person's swept boards (owner, 2026-10-20: at once, the person sees
-    it in the Search tab and can remove it), in the caller's transaction. False, nothing
-    written, when it is there already (same ATS, org case ignored, enabled or not), the search
-    section was never saved or does not validate, or it holds the most boards it can."""
+    it in the Search tab and can remove it), in the caller's transaction. Nothing is written
+    unless it answers ADDED: HELD when it is there already (same ATS, org case ignored, enabled
+    or not), REMOVED when an earlier revision held it (the person removed it: that sticks),
+    NOT_ADDED when the search section was never saved or does not validate, or it holds the most
+    boards it can."""
     from app.profile import service
     from app.profile.schemas import validate_section
 
@@ -156,26 +239,23 @@ def add_board(db: Session, user_id: uuid.UUID, board: Board, company: str, now: 
         profile = service.get_profile(db, user_id, now)
         raw = (profile.sections or {}).get("search")
         if not isinstance(raw, dict):
-            return False
+            return NOT_ADDED
         boards = raw.get("boards") if isinstance(raw.get("boards"), list) else []
-        if any(
-            isinstance(b, dict)
-            and b.get("ats") == board.ats
-            and str(b.get("org", "")).lower() == board.org.lower()
-            for b in boards
-        ):
-            return False
+        if any(_same_board(b, board) for b in boards):
+            return HELD
+        if removed_by_person(db, user_id, board):
+            return REMOVED
         new = {"company": company[:LINE_MAX], "ats": board.ats, "org": board.org, "enabled": True}
         try:
             data = validate_section("search", raw | {"boards": [*boards, new]})
         except ValueError:
-            return False  # full, or a section the person must save again
+            return NOT_ADDED  # full, or a section the person must save again
         try:
             service.save_section(db, user_id, "search", data, profile.revision, now)
         except service.StaleRevisionError:
             continue  # saved meanwhile: read it again
-        return True
-    return False
+        return ADDED
+    return NOT_ADDED
 
 
 class Site:
@@ -215,19 +295,24 @@ class Site:
             # No address, or another site: browserd lets only the lease's two hosts load
             # (finder.host_pair), so this is a page it should not have shown. Nothing is read.
             raise SourceError("page_failed")
-        board = board_on_page(pages.last_text, opened)
-        if board is not None:
+        board, strong = board_on_page(pages.last_text, opened)
+        if board is not None and strong:
             read.extra["board"] = {"ats": board.ats, "org": board.org}
             raise SourceError("ats_board")
+        if board is not None:  # weak evidence: reported, never added, and the agent reads on
+            read.extra["board"] = {"ats": board.ats, "org": board.org, "added": False}
         session = finder.FinderSession(pages, opened, pages.last_text, user_id=read.user_id)
         # The run ends with the sweep's time, before the job's own timeout would cancel it
         # (worker.SWEEP_JOB_TIMEOUT_S): what was validated stays.
         remaining = max(pages.deadline - pages.monotonic(), 0.0)
+        cap = asyncio.timeout(remaining)
         try:
-            async with asyncio.timeout(remaining):
+            async with cap:
                 ran = await self.agent(session)
         except TimeoutError:
-            ran = finder.Ran(stopped="time_budget")
+            # The sweep's time cap, or a timeout of the agent's own (a model call's): only the
+            # first is time_budget.
+            ran = finder.Ran(stopped="time_budget" if cap.expired() else "error")
         except Exception:
             ran = finder.Ran(stopped="error")
         finally:

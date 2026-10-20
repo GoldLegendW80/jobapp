@@ -215,7 +215,7 @@ def search_of(factory_: sessionmaker[Session], user: uuid.UUID) -> tuple[list[An
         return list(raw.get("boards", [])), profile.revision
 
 
-def add(factory_: sessionmaker[Session], user: uuid.UUID, ats_: str, org: str) -> bool:
+def add(factory_: sessionmaker[Session], user: uuid.UUID, ats_: str, org: str) -> str:
     from app.browser import sources
     from app.browser.sources import site
 
@@ -229,7 +229,7 @@ def test_a_board_found_is_added_once_and_kept_as_the_person_saved_the_rest(
 ) -> None:
     save_search(factory, alice, [GREENHOUSE])
     _, before = search_of(factory, alice)
-    assert add(factory, alice, "lever", "example-robotics") is True
+    assert add(factory, alice, "lever", "example-robotics") == "added"
     boards, revision = search_of(factory, alice)
     assert revision == before + 1
     assert [(b["ats"], b["org"], b["enabled"]) for b in boards] == [
@@ -238,9 +238,9 @@ def test_a_board_found_is_added_once_and_kept_as_the_person_saved_the_rest(
     ]
     assert boards[1]["company"] == "example-robotics.test"
     # Idempotent: the same board again, its org in another case, adds nothing.
-    assert add(factory, alice, "lever", "example-robotics") is False
-    assert add(factory, alice, "lever", "Example-Robotics") is False
-    assert add(factory, alice, "greenhouse", "ExampleLabs") is False
+    assert add(factory, alice, "lever", "example-robotics") == "held"
+    assert add(factory, alice, "lever", "Example-Robotics") == "held"
+    assert add(factory, alice, "greenhouse", "ExampleLabs") == "held"
     assert search_of(factory, alice) == (boards, revision)
 
 
@@ -251,11 +251,11 @@ def test_a_board_is_added_for_its_person_only(
 ) -> None:
     save_search(factory, alice, [])
     save_search(factory, bob, [GREENHOUSE])
-    assert add(factory, alice, "ashby", "example-robotics") is True
+    assert add(factory, alice, "ashby", "example-robotics") == "added"
     assert [(b["ats"], b["org"]) for b in search_of(factory, bob)[0]] == [
         ("greenhouse", "examplelabs")
     ]
-    assert add(factory, bob, "ashby", "example-robotics") is True  # bob's own copy
+    assert add(factory, bob, "ashby", "example-robotics") == "added"  # bob's own copy
     assert [b["org"] for b in search_of(factory, alice)[0]] == ["example-robotics"]
 
 
@@ -264,12 +264,12 @@ def test_a_board_is_not_added_without_a_search_section_or_when_the_list_is_full(
     alice: uuid.UUID,  # noqa: F811
     bob: uuid.UUID,  # noqa: F811
 ) -> None:
-    assert add(factory, alice, "lever", "example-robotics") is False
+    assert add(factory, alice, "lever", "example-robotics") == "not_added"
     assert search_of(factory, alice)[0] == []
     full = [{"company": f"C{n}", "ats": "lever", "org": f"org{n}"} for n in range(300)]
     save_search(factory, bob, full)
     _, revision = search_of(factory, bob)
-    assert add(factory, bob, "lever", "example-robotics") is False
+    assert add(factory, bob, "lever", "example-robotics") == "not_added"
     assert search_of(factory, bob)[1] == revision
 
 
@@ -291,3 +291,32 @@ def test_an_ats_source_in_the_sweep_adds_its_board(
         ("ashby", "example-robotics", "example-robotics")
     ]
     assert leases.acquired == []
+
+
+def test_a_board_the_person_removed_is_never_added_again(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+    bob: uuid.UUID,  # noqa: F811
+) -> None:
+    from app.browser import sources
+
+    save_search(factory, alice, [GREENHOUSE])
+    save_search(factory, bob, [])
+    assert add(factory, alice, "lever", "example-robotics") == "added"
+    save_search(factory, alice, [GREENHOUSE])  # the person removes it in the Search tab
+    kept = search_of(factory, alice)
+    assert add(factory, alice, "lever", "example-robotics") == "removed"
+    assert add(factory, alice, "lever", "EXAMPLE-ROBOTICS") == "removed"
+    assert search_of(factory, alice) == kept  # nothing written, no revision
+    assert add(factory, alice, "ashby", "example-robotics") == "added"  # another ATS is not it
+    assert add(factory, bob, "lever", "example-robotics") == "added"  # bob never removed it
+    # In the sweep, the entry says why.
+    plan = Plan([s(query="https://jobs.lever.co/example-robotics")], user_id=alice)
+    stats, _, _ = run(plan, Tools({}), finder.FinderAgent(), boards=sources._add_board(factory))
+    assert stats.sources[0]["board"] == {
+        "ats": "lever",
+        "org": "example-robotics",
+        "added": False,
+        "removed_by_person": True,
+    }
+    assert [b["ats"] for b in search_of(factory, alice)[0]] == ["greenhouse", "ashby"]

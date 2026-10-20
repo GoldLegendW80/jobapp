@@ -48,6 +48,9 @@ POSTING_PATH = re.compile(r"/jobs/results/\d{1,30}-[a-z0-9]+(?:-[a-z0-9]+)*/?$")
 STATUS = re.compile(r"Showing (\d[\d,]*) to (\d[\d,]*) of (\d[\d,]*)")
 MORE = re.compile(r"\+\s*\d+\s+more")
 LEGAL = "Information collected"
+# The icon ligatures of the posting page, left out of its text when printed without
+# `[aria-hidden]` (see `_is_icon`).
+ICONS = frozenset({"corporate_fare", "place", "share", "bar_chart"})
 
 
 def results_base(base_url: str | None) -> str:
@@ -82,13 +85,25 @@ def posting_url(href: str, page_url: str) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc.lower(), parts.path, "", ""))
 
 
+def _is_icon(node: Node, icon: str) -> bool:
+    """The icon `icon`: the ligature's text alone in its element. Playwright 1.55, browserd's
+    pinned version, prints an `aria-hidden` element without the `[aria-hidden]` attribute that
+    newer versions add (seen on the fixture pages, tests/browser_pages/b8/), so both are read."""
+    return node.label() == icon and not node.children and node.role in ("generic", "text")
+
+
 def _after_icon(card: Node, icon: str) -> list[str]:
-    """The visible texts that follow the hidden icon `icon` in its parent."""
+    """The visible texts that follow the icon `icon` in its parent."""
     for parent in card.walk():
         kids = parent.children
         for index, kid in enumerate(kids):
-            if kid.hidden and kid.label() == icon:
-                return [t for k in kids[index + 1 :] if not k.hidden for t in own_texts(k)]
+            if _is_icon(kid, icon):
+                return [
+                    t
+                    for k in kids[index + 1 :]
+                    if not k.hidden and not _is_icon(k, icon)
+                    for t in own_texts(k)
+                ]
     return []
 
 
@@ -143,7 +158,11 @@ def parse_posting(root: Node, title: str) -> str | None:
         raise SourceError("layout_changed")
     if not same_title(heading.label(), title):
         return None
-    lines = visible_lines(main, stop=lambda n: n.label().startswith(LEGAL))
+    lines = [
+        line
+        for line in visible_lines(main, stop=lambda n: n.label().startswith(LEGAL))
+        if line not in ICONS
+    ]
     if title not in lines[:1]:
         lines.insert(0, title)
     return "\n".join(lines)

@@ -116,8 +116,9 @@ def _norm(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-# browserd's own host rule (browser/browserd/tools/policy.py, `_LABEL` and the part of HOST_ENTRY
-# without a wildcard): a lease is refused for any other host, so code never asks for one.
+# browserd's own host rule (browser/browserd/tools/policy.py, `_LABEL`, the part of HOST_ENTRY
+# without a wildcard, and `parse_hosts`, which refuses a last label all digits): a lease is
+# refused for any other host, so code never asks for one.
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 HOST = re.compile(rf"{_LABEL}(?:\.{_LABEL})*")
 # What a path or query keeps as it is; every other character (a space, a letter outside ASCII,
@@ -132,13 +133,16 @@ NOT_SITES = ("linkedin.com",)
 def ascii_host(host: str) -> str:
     """The host in the form browserd accepts: lower case, one final dot dropped, a name written
     in another script in its `xn--` form (full width letters folded, IDNA 2003). "" when it is
-    none: an IP v6 literal, an underscore, an empty label, a label over 63 characters."""
+    none: an IP literal (v6, or a last label all digits, which browserd's `parse_hosts` also
+    refuses), an underscore, an empty label, a label over 63 characters."""
     name = host[:-1] if host.endswith(".") else host
     try:
         name = name.encode("idna").decode("ascii").lower()
     except UnicodeError:
         return ""
-    return name if HOST.fullmatch(name) else ""
+    if not HOST.fullmatch(name) or name.rsplit(".", 1)[-1].isdigit():
+        return ""
+    return name
 
 
 def canonical(url: str) -> str:
