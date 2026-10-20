@@ -36,7 +36,7 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-10-14 | Faster, more accurate delivery: pull requests under about 1500 lines, a self review checklist, reviewers push mechanical fixups, `ops/ship.sh` (gate, merge, deploy, Jetson check in one command), `ops/agent-test.sh` so the gate can run beside agents. |
 | 2026-10-14 | Priority: documents, browser and apply first. The MVP is ONE CLICK APPLY (see Apply); Full auto comes after it. |
 | 2026-10-15 | The repository is public, at the owner's explicit request. |
-| 2026-10-20 | Merges go only through `ops/ship.sh` (gate, merge, deploy), from the main Mac. This replaces the same day's rule that both machines merge approved pull requests directly into main and the gate then checks a commit of main (#354). |
+| 2026-10-20 | This Mac (the main Mac's orchestrator) merges approved pull requests only through `ops/ship.sh` (gate, merge, deploy), the owner's answer of 2026-10-20 after the classifier refused direct merges. The second laptop's rule of the same day stands unchanged: it merges approved pull requests directly into main, then the gate checks a commit of main (#354). |
 | 2026-10-20 | The board's Status columns are the pipeline steps: Needs you, Paused, Blocked, Spec, Ready, Building, In review, Fix & re-check, Approved, Gating, Merged, Live, Dropped, Epic, kept by the board sync. Every open card is Ready or Done; a blocked card shows as Ready with what it waits for. |
 | 2026-10-20 | Everything the owner must do himself lives in one checklist issue, #506. |
 | 2026-10-21 | Distributed sign in flood (#152): a rate limit in front of the api, a Caddy build with a free, open source rate limit module (arm64 image, tests). Everything stays free. |
@@ -108,8 +108,8 @@ choice made by the build that stands until the owner says otherwise.
   also appears in Search options, for accounts that skipped the wizard or want more boards later (a
   follow-up issue after the merge). Google Careers and VIE are always proposed to everyone, the
   person unticks what he does not want, not only VIE when VIE is a chosen contract type.
-- 2026-10-20: feeds (O7) follow the boards' never apply rule: what a feed brings is stored as
-  skipped.
+- 2026-10-21, orchestrator decision (not the owner's), implemented by the fix round of PR #505:
+  feeds (O7) follow the boards' never apply rule: what a feed brings is stored as skipped.
 - 2026-10-21, owner decisions on the rename (#73): the freeze starts once every lane adding job
   names is merged (jobs, B8, B9, B10, O7, O7b, O8, A12, A13, O2). `posting_id` and the other
   `posting` names are renamed too (to `opportunity_id` and so on) in O11b's migration. Old API
