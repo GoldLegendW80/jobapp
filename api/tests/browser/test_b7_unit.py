@@ -829,6 +829,34 @@ def test_prepare_drops_the_saved_chrome_flags(tmp_path: Path, umask: None, brows
     }
 
 
+TEST_POLICIES = '[{"name":"URLBlocklist","value":[],"level":1,"scope":1,"source":0}]'
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [TEST_POLICIES, "[]", "", "not json", [{"name": "URLAllowlist", "value": ["chrome://*"]}],
+     None, {"nested": TEST_POLICIES}],
+)  # fmt: skip
+def test_prepare_drops_the_saved_test_policies(tmp_path: Path, umask: None, saved: object) -> None:
+    """chrome://policy/test's "Restart and apply" saves a policy set in Local State, which
+    replaced the image's managed policy at the next start: prep drops it, whatever its shape,
+    and keeps the rest of Local State."""
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    (profile / "data").mkdir(parents=True)
+    local = profile / "data" / "Local State"
+    local.write_text(json.dumps({
+        "local_test_policies_for_next_startup": saved,
+        "browser": {"local_test_policies_for_next_startup": "kept, not where Chromium reads it"},
+        "policy": {"last_statistics_update": "1"},
+    }))  # fmt: skip
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    assert json.loads(local.read_text()) == {
+        "browser": {"local_test_policies_for_next_startup": "kept, not where Chromium reads it"},
+        "policy": {"last_statistics_update": "1"},
+        "devtools": {"remote_debugging": {"user-enabled": False}},
+    }
+
+
 @pytest.mark.parametrize("browser", [None, "a string", ["enabled_labs_experiments"]])
 def test_a_browser_entry_that_is_not_an_object_is_left_as_it_is(
     tmp_path: Path, umask: None, browser: object
@@ -856,7 +884,9 @@ def test_a_local_state_without_the_switch_is_left_as_it_is(
 
 def test_the_managed_policy_blocks_every_chrome_page_and_keeps_cdp() -> None:
     """Every chrome:// page is blocked (owner, 2026-10-20) but the two browserd.probe reads, the
-    new tab page and the browser's own UI (*.top-chrome); no extension may be installed. The
+    new tab page and the few pieces of the browser's own UI it draws as *.top-chrome pages (the
+    omnibox popup, the tab search, the toolbar), never a side panel; chrome://policy's test page
+    is off, its "Apply policies" replaced the image's policy; no extension may be installed. The
     policies that would also block CDP (measured for B7: RemoteDebuggingAllowed false ignores
     --remote-debugging-port, DeveloperToolsAvailability 2 breaks Playwright's pages) are never
     set: the agents' leases need CDP."""
@@ -864,8 +894,11 @@ def test_the_managed_policy_blocks_every_chrome_page_and_keeps_cdp() -> None:
     assert policy["URLBlocklist"] == ["chrome://*"]
     assert sorted(policy["URLAllowlist"]) == [
         "chrome://new-tab-page", "chrome://new-tab-page-third-party", "chrome://newtab",
-        "chrome://policy", "chrome://sandbox", "chrome://top-chrome",
+        "chrome://omnibox-everywhere.top-chrome", "chrome://omnibox-popup.top-chrome",
+        "chrome://policy", "chrome://sandbox", "chrome://tab-search.top-chrome",
+        "chrome://webui-toolbar.top-chrome",
     ]  # fmt: skip
+    assert policy["PolicyTestPageEnabled"] is False
     assert policy["ExtensionInstallBlocklist"] == ["*"]
     assert "RemoteDebuggingAllowed" not in policy
     assert "DeveloperToolsAvailability" not in policy

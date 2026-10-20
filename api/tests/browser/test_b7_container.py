@@ -16,18 +16,22 @@ new size.
 Hardening (issue #424): an end whose helper raises leaves no browser on the display for the next
 lease (the end reaps, and every start reaps what an end could not); every chrome:// page but
 chrome://policy, chrome://sandbox and the new tab page is blocked by the managed policy, in an
-agent's lease and in a person's session (owner, 2026-10-20); a remote debugging switch kept on in
-the profile's Local State opens no port in a person's session, a flag saved there does not
-survive a restart, and a port opened in a person's session ends it `debugging_port`.
+agent's lease and in a person's session (owner, 2026-10-20); chrome://policy/test shows
+chrome://policy, and its "Apply policies" message reopens no page; a remote debugging switch kept
+on in the profile's Local State opens no port in a person's session, a flag or a test policy set
+saved there does not survive a restart, and a port opened in a person's session ends it
+`debugging_port`.
 
 The fixture site is tests/browser_pages/b7/site.html: its title says who is signed in, which the
 test reads from the display's window list (xwininfo), since nothing may attach to a session
 without CDP. Marked `docker`, like the module it borrows the stack from.
 """
 
+import contextlib
 import json
 import subprocess
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
@@ -471,12 +475,14 @@ def type_address(stack: Stack, address: str) -> None:
     stack.execute("browser", "python", "-c", TYPE, address, user="1000")
 
 
-# What the person types, the title of the page when it opens, and when it is blocked (its
-# address). chrome://policy and the new tab page open: the controls.
+# What the person types, the title of the page when it opens, and what shows instead when it is
+# blocked (its address, or chrome://policy for its test page, which is off). chrome://policy and
+# the new tab page open: the controls.
 TYPED = [
     ("chrome://policy", "Policies", None),
     ("chrome://flags", "Experiments", "chrome://flags/"),
     ("chrome://newtab", "New Tab", None),
+    ("chrome://policy/test", "Policy Tests", "Policies"),
     ("chrome://settings", "Settings", "chrome://settings/"),
     ("chrome://extensions", "Extensions", "chrome://extensions/"),
     ("chrome://net-internals", "net-internals", "chrome://net-internals/"),
@@ -543,6 +549,99 @@ def test_a_saved_chrome_flag_does_not_survive_a_restart(stack: Stack, purpose: s
     assert json.loads(stack.python(FLAGS_SAVED, F, user=str(UID_F))) == []
 
 
+POLICY_SET = '[{"name":"URLBlocklist","value":["example.invalid"],"level":1,"scope":1,"source":0}]'
+
+POLICY_TEST = """
+import asyncio, json, sys
+from playwright.async_api import async_playwright
+from browserd import probe
+
+seen = {}
+
+async def main():
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{probe.cdp_port()}")
+        page = browser.contexts[0].pages[0]
+        await page.goto("chrome://policy/test")
+        seen["url"], seen["title"] = page.url, await page.title()
+        seen["flags"] = []
+        try:
+            await page.evaluate(
+                "p => chrome.send('setLocalTestPolicies', ['b7', p, ''])", sys.argv[1])
+            for _ in range(3):
+                try:
+                    await page.goto("chrome://flags", timeout=20000)
+                    seen["flags"].append(await page.title())
+                except Exception as exc:
+                    seen["flags"].append(str(exc)[:300])
+        except Exception as exc:
+            seen["flags"].append(type(exc).__name__)
+
+try:
+    asyncio.run(main())
+except Exception as exc:
+    seen["error"] = type(exc).__name__
+print(json.dumps(seen))
+"""
+
+
+def test_the_policy_test_page_is_off_in_an_agents_lease(stack: Stack) -> None:
+    """chrome://policy/test's "Apply policies" (the message the page sends) replaced the image's
+    policy and chrome://flags opened (review of #429). With PolicyTestPageEnabled false the page
+    shows chrome://policy, and the same message leaves chrome://flags blocked, or ends the lease
+    when Chromium refuses it by stopping."""
+    stack.lease(F, UID_F)
+    seen = json.loads(stack.python(POLICY_TEST, POLICY_SET))
+    lease = stack.current()["lease"]
+    if lease is not None:
+        end(stack)
+    assert seen["title"] == "Policies", seen
+    assert seen["url"].rstrip("/") == "chrome://policy", seen
+    assert seen["flags"], seen
+    assert not [t for t in seen["flags"] if "Experiments" in t], seen
+    assert lease is None or all("ERR_BLOCKED_BY_ADMINISTRATOR" in t for t in seen["flags"]), seen
+
+
+TEST_POLICIES_ON = """
+import json, sys
+path = f"/profiles/{sys.argv[1]}/data/Local State"
+state = json.load(open(path))
+state["local_test_policies_for_next_startup"] = sys.argv[2]
+json.dump(state, open(path, "w"))
+"""
+
+TEST_POLICIES_SAVED = """
+import json, sys
+state = json.load(open(f"/profiles/{sys.argv[1]}/data/Local State"))
+print(json.dumps("local_test_policies_for_next_startup" in state))
+"""
+
+NO_BLOCK = '[{"name":"URLBlocklist","value":[],"level":1,"scope":1,"source":0}]'
+
+
+@pytest.mark.parametrize("purpose", ["signin", "apply_fill"])
+def test_a_saved_test_policy_does_not_survive_a_restart(stack: Stack, purpose: str) -> None:
+    """chrome://policy/test's "Restart and apply" saves its set in Local State for the next
+    start: here one that blocks nothing, which would reopen chrome://flags. prep drops it."""
+    sign_in(stack, F, UID_F, "e2e-browser-f")
+    end(stack)
+    stack.python(TEST_POLICIES_ON, F, NO_BLOCK, user=str(UID_F))
+    assert json.loads(stack.python(TEST_POLICIES_SAVED, F, user=str(UID_F))) is True
+    if purpose == "signin":
+        session(stack, purpose, F, UID_F, SITE)
+        wait_title(stack, "signed in as e2e-browser-f")
+        type_address(stack, "chrome://flags")
+        wait_title(stack, '"chrome://flags/ - Chromium"')
+        assert '"Experiments - Chromium"' not in window_titles(stack)
+    else:
+        stack.lease(F, UID_F, purpose)
+        seen = stack.probe("navigate", "chrome://flags", "20")
+        assert seen["ok"] is False
+        assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
+    end(stack)
+    assert json.loads(stack.python(TEST_POLICIES_SAVED, F, user=str(UID_F))) is False
+
+
 def test_a_switch_kept_on_in_the_profile_opens_no_port_in_a_persons_session(
     stack: Stack,
 ) -> None:
@@ -565,20 +664,40 @@ def test_a_switch_kept_on_in_the_profile_opens_no_port_in_a_persons_session(
         end(stack)
 
 
-def test_a_port_opened_in_a_persons_session_ends_it(stack: Stack) -> None:
-    sign_in(stack, G, UID_G, "e2e-browser-g")
-    listener = (
-        "import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 9222))\n"
-        "s.listen()\ntime.sleep(600)"
-    )
+LISTENER = (
+    "import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 9222))\n"
+    "s.listen()\ntime.sleep(600)"
+)
+
+# kill(-1) as the uid: every process of that uid but the caller.
+KILL_UID = """
+import contextlib, os, signal
+with contextlib.suppress(ProcessLookupError):
+    os.kill(-1, signal.SIGKILL)
+"""
+
+
+@contextlib.contextmanager
+def port_listener(stack: Stack, uid: int) -> Iterator[None]:
+    """A listener on 9222 under the uid, detached; the lease end reaps it, and the way out kills
+    it if a failing test left it running."""
     subprocess.run(
-        ["docker", "exec", "-d", "-u", str(UID_G), stack.container("browser"), "python", "-c",
-         listener],
+        ["docker", "exec", "-d", "-u", str(uid), stack.container("browser"), "python", "-c",
+         LISTENER],
         check=True,
     )  # fmt: skip
-    ended = stack.wait_ended()
-    assert ended["last_end"]["reason"] == "debugging_port"
-    assert not [p for p in processes(stack) if p[0] == UID_G]
+    try:
+        yield
+    finally:
+        stack.python(KILL_UID, user=str(uid))
+
+
+def test_a_port_opened_in_a_persons_session_ends_it(stack: Stack) -> None:
+    sign_in(stack, G, UID_G, "e2e-browser-g")
+    with port_listener(stack, UID_G):
+        ended = stack.wait_ended()
+        assert ended["last_end"]["reason"] == "debugging_port"
+        assert not [p for p in processes(stack) if p[0] == UID_G]
 
 
 def test_a_window_that_closes_ends_the_session_browser_closed(stack: Stack) -> None:

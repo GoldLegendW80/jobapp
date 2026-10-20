@@ -21,7 +21,6 @@ Marked `docker`, like the module it borrows the stack from.
 
 import json
 import secrets
-import subprocess
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -32,6 +31,7 @@ from tests.browser.test_b5_container import ref
 from tests.browser.test_b7_container import (
     browser_argv,
     listening,
+    port_listener,
     type_address,
     wait_title,
     window_titles,
@@ -318,15 +318,7 @@ def test_the_persons_phase_blocks_chrome_pages_and_ends_on_a_port(
     assert '"Experiments - Chromium"' not in window_titles(stack)
     type_address(stack, "chrome://policy")
     wait_title(stack, '"Policies - Chromium"')
-    listener = (
-        "import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 9222))\n"
-        "s.listen()\ntime.sleep(600)"
-    )
-    subprocess.run(
-        ["docker", "exec", "-d", "-u", str(agent.uid), stack.container("browser"), "python",
-         "-c", listener],
-        check=True,
-    )  # fmt: skip
-    ended = stack.wait_ended()
-    assert ended["last_end"]["reason"] == "debugging_port"
-    assert agent.chromium() == []
+    with port_listener(stack, agent.uid):
+        ended = stack.wait_ended()
+        assert ended["last_end"]["reason"] == "debugging_port"
+        assert agent.chromium() == []
