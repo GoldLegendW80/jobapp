@@ -406,6 +406,7 @@ def test_profile_section_is_read_only_and_trimmed(factory: sessionmaker[Session]
     assert search["never_apply"] == [RULE]
     assert "boards" not in search
     assert "sweep_schedule" not in search
+    assert "browser_sources" not in search
     skills = json.loads(text(call(tools, "get_profile_section", {"section": "skills"})))
     assert skills["years_experience"] == 3.5
     for wrong in ("secrets", "", None, 3):
