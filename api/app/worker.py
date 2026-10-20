@@ -62,9 +62,11 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
   person whose fill is not running (a new one, one waiting for its documents or behind another
   person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
-  of every `approved` application (A6).
-  The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus a margin, the
-  submit's the `apply_submit` lease's. At start, every application left `filling` by a dead
+  job of every `approved` application (A6), every `held` one whose hold ended and every `ready`
+  Full auto one, whose job runs Full auto's decision (A13a, `submit.due`).
+  The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus the wait of a
+  sign in hand off (BROWSER_SESSION_MAX_S, browser B12a) plus a margin, the submit's the
+  `apply_submit` lease's ceiling plus a margin. At start, every application left `filling` by a dead
   process ends `failed` as `interrupted`, and every one left `submitting` ends `submit_unknown`:
   the click may have gone through (reset_fills_at_start).
 
@@ -251,7 +253,25 @@ def ats_client(ctx: dict[str, Any]) -> ats.AtsClient:
 
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     async with ats_client(ctx) as client:
-        await sweep.run_sweep(sessions_of(ctx), uuid.UUID(sweep_id), client, clock_of(ctx))
+        await sweep.run_sweep(
+            sessions_of(ctx),
+            uuid.UUID(sweep_id),
+            client,
+            clock_of(ctx),
+            browser=browser_sources(ctx),
+        )
+
+
+def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The browser sources' run (browser B8): tests put theirs in the context."""
+    if "browser_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["browser_sources"]
+        return hook
+    if "redis" not in ctx:
+        return None
+    from app.browser import sources
+
+    return sources.runner_for(ctx["settings"], ctx["redis"], sessions_of(ctx))
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
@@ -689,7 +709,13 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
 
     # The lease's own ceiling, BROWSER_LEASE_MAX_S included, and a margin to write the end.
     table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
-    fill_timeout_s = table["apply_fill"] + APPLY_JOB_MARGIN_S
+    session_max_s = (
+        settings.browser_session_max_s
+        if settings is not None
+        else Settings.model_fields["browser_session_max_s"].default
+    )
+    # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
+    fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
     submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,

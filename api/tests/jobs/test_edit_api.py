@@ -618,6 +618,7 @@ def test_rescore_counts_and_keeps_manual_fits(
         "unchanged": 0,
         "skipped_manual": 1,
         "skipped_no_text": 2,
+        "skipped_busy": 0,
         "remaining": 0,
         "next_after": None,
     }

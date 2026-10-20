@@ -21,6 +21,7 @@ import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
+import { sourceLabel } from "./labels";
 import { getJob, jobKey, type JobDetail } from "./api";
 import { FitBadge, StatusBadge } from "./badges";
 import { FilesSection } from "./files-section";
@@ -194,7 +195,9 @@ function JobDetailView({ job }: { job: JobDetail }) {
           {job.applied_on ? (
             <Fact label="Applied">{formatDate(job.applied_on)}</Fact>
           ) : null}
-          {job.source ? <Fact label="Source">{job.source}</Fact> : null}
+          {job.source ? (
+            <Fact label="Source">{sourceLabel(job.source)}</Fact>
+          ) : null}
           {job.url ? (
             <Fact label="Posting">
               {link ? (

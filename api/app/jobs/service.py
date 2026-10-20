@@ -390,6 +390,14 @@ def supersede_status_proposals(
     )
     if keep is not None:
         condition = sa.and_(condition, Proposal.id != uuid.UUID(str(keep)))
+    # The rows are locked in id order before the update (an UPDATE locks them in scan order):
+    # the second half of the one lock order, jobs by id, then proposals by id (issue #166).
+    db.execute(
+        sa.select(Proposal.id)
+        .where(condition)
+        .order_by(Proposal.id)
+        .with_for_update(key_share=True)
+    ).all()
     db.execute(
         sa.update(Proposal)
         .where(condition)
@@ -645,11 +653,11 @@ class _Index:
     """The user's rows as the import goes: by slug, by URL, by duplicate key, and their files."""
 
     def __init__(self, db: Session, user_id: uuid.UUID) -> None:
-        self.jobs = list(
-            db.execute(
-                jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.created_at, Job.id)
-            ).scalars()
-        )
+        # Every row is locked first, in id order (the lock order below), because the import
+        # updates many of them with plain UPDATEs: it must not wait for one row while holding
+        # another in a different order than the documents tick (documents.tick.person).
+        locked = _lock(db, jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.id))
+        self.jobs = sorted(locked, key=lambda job: (job.created_at, job.id))
         self.by_slug = {job.slug: job for job in self.jobs}
         self.by_url = {job.url: job for job in self.jobs if job.url}
         self.keys = {job.id: self.key_of(job) for job in self.jobs}
@@ -905,9 +913,27 @@ NOTE_COALESCE = timedelta(minutes=2)
 
 # --- the row lock: what it marks, how long it waits (J8) ----------------------------------------
 
+# The lock order (issue #166), for the rows of the jobs table: a transaction that locks several
+# job rows takes them in id order, whatever it does to them next. In the jobs service that is
+# lock_jobs, undo_bulk, rescore_batch, import_jobs and mark_overridden (they lock through _lock
+# before any UPDATE); in the agents, the status proposals follow the jobs, in id order
+# (supersede_status_proposals; accept locks its one job, then its one proposal), and the paths
+# that lock proposals alone (agents.proposals.create and reject) hold no job row. In the
+# documents, the tick pass takes its postings FOR SHARE in id order up front (store.lock_postings,
+# called by tick.person); the single posting locks of a click or a letter hold one posting at a
+# time. Paths outside these (a transaction that gathers several postings by another road) are
+# not covered: Postgres breaks such a cycle (40P01) and the app answers 503, see is_retryable.
+# The lock is FOR NO KEY UPDATE (issue #341): no holder deletes a job or changes its key, so a
+# row that references a posting (an event, a document, a run) can be inserted while the posting
+# is held, and the foreign key KEY SHARE of that insert is no longer half of a deadlock.
 LOCK_TIMEOUT_MS = 5_000  # how long a lock on a job row waits, per transaction (SET LOCAL)
 BUSY = "This job is being changed. Try again."
+RETRY_BUSY = "The server is busy. Try again in a moment."
+RETRY_AFTER_S = 2  # the Retry-After of a 503 RETRY_BUSY
 _LOCK_NOT_AVAILABLE = "55P03"  # Postgres' lock_not_available, what lock_timeout raises
+# query_canceled (the statement timeout, a wait on several rows one after the other) and
+# deadlock_detected (Postgres broke a cycle the lock order did not prevent): both are retryable.
+_RETRYABLE = frozenset({"57014", "40P01"})
 _LOCKED_KEY = "jobs.locked_ids"
 
 
@@ -927,6 +953,13 @@ def is_lock_timeout(exc: BaseException) -> bool:
     return (
         isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE
     )
+
+
+def is_retryable(exc: BaseException) -> bool:
+    """Whether `exc` is a statement timeout (SQLSTATE 57014) or a deadlock Postgres broke
+    (40P01): the transaction was rolled back whole, so none of its database changes
+    stayed. Every other database error keeps its behaviour."""
+    return isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) in _RETRYABLE
 
 
 def _marks(session: Session) -> dict[SessionTransaction, set[uuid.UUID]]:
@@ -994,14 +1027,14 @@ def _begin_locking(db: Session) -> None:
     )
 
 
-def _lock(db: Session, query: sa.Select[tuple[Job]]) -> list[Job]:
-    """Run a `FOR UPDATE` select under the lock timeout and mark the rows it returns as read
-    under the lock. A lock wait over the timeout raises JobBusyError."""
+def _lock(db: Session, query: sa.Select[tuple[Job]], *, skip_locked: bool = False) -> list[Job]:
+    """Run a `FOR NO KEY UPDATE` select under the lock timeout and mark the rows it returns as
+    read under the lock. A lock wait over the timeout raises JobBusyError. With `skip_locked`
+    a row another transaction holds is left out at once instead of waited for."""
     _begin_locking(db)
+    locking = query.with_for_update(key_share=True, skip_locked=skip_locked)  # FOR NO KEY UPDATE
     try:
-        jobs = list(
-            db.execute(query.with_for_update().execution_options(populate_existing=True)).scalars()
-        )
+        jobs = list(db.execute(locking.execution_options(populate_existing=True)).scalars())
     except DBAPIError as exc:
         if is_lock_timeout(exc):
             raise JobBusyError(BUSY) from exc
@@ -1303,6 +1336,7 @@ class RescoreOutcome:
     unchanged: int = 0
     skipped_manual: int = 0  # fit set by hand, kept (competencies and gaps still refreshed)
     skipped_no_text: int = 0
+    skipped_busy: int = 0  # held by another transaction: not waited for, the next rescore does it
     last_id: uuid.UUID | None = None  # the last job looked at, where a next call resumes
 
 
@@ -1319,15 +1353,30 @@ def rescore_batch(
     outcome: RescoreOutcome,
 ) -> int:
     """Rescore up to `limit` of the user's jobs in id order after `after` (only `ids` when
-    given), adding to `outcome`. Returns how many jobs it looked at (0 when none are left)."""
-    query = jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.id).limit(limit)
+    given), adding to `outcome`. Returns how many jobs it looked at (0 when none are left).
+
+    A job another transaction holds (a status change, an accept) is not waited for: it keeps
+    its score, counts in `skipped_busy` and is scored again by the next rescore. So a held row
+    neither stalls the batch until the statement timeout nor fails the jobs around it."""
+    window = sa.select(Job.id).where(Job.user_id == user_id).order_by(Job.id).limit(limit)
     if ids is not None:
-        query = query.where(Job.id.in_(list(ids)))
+        window = window.where(Job.id.in_(list(ids)))
     if after is not None:
-        query = query.where(Job.id > after)
-    jobs = list(db.execute(query.with_for_update()).scalars())
+        window = window.where(Job.id > after)
+    looked = list(db.scalars(window))
+    if not looked:
+        return 0
+    jobs = _lock(
+        db,
+        jobs_of(user_id)
+        .where(Job.id.in_(looked))
+        .options(undefer(Job.posting_text))
+        .order_by(Job.id),
+        skip_locked=True,
+    )
+    outcome.skipped_busy += len(looked) - len(jobs)
+    outcome.last_id = looked[-1]
     for job in jobs:
-        outcome.last_id = job.id
         result = computed_score(job, skills)
         if result is None:
             outcome.skipped_no_text += 1
@@ -1344,7 +1393,7 @@ def rescore_batch(
         else:
             outcome.unchanged += 1
     db.flush()
-    return len(jobs)
+    return len(looked)
 
 
 def count_after(
@@ -1396,7 +1445,16 @@ def override_candidates(
 
 
 def mark_overridden(db: Session, candidates: Sequence[OverrideCandidate], now: datetime) -> int:
-    """Mark these fits as set by hand (fit unchanged), with a `fit` event each."""
+    """Mark these fits as set by hand (fit unchanged), with a `fit` event each. The rows are
+    locked first, in id order (the lock order below), then updated."""
+    if candidates:
+        _lock(
+            db,
+            sa.select(Job)
+            .where(Job.id.in_([c.job.id for c in candidates]))
+            .options(undefer(Job.posting_text))
+            .order_by(Job.id),
+        )
     for candidate in candidates:
         job = candidate.job
         add_event(

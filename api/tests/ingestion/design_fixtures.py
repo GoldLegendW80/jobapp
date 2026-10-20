@@ -70,11 +70,28 @@ def picture(x: float, y: float, width: float, height: float) -> bytes:
     return b"q %g 0 0 %g %g %g cm /Im1 Do Q\n" % (width, height, x, y)
 
 
-def build(pages: Sequence[bytes], *, form: bytes = b"", size: tuple = A4) -> bytes:
-    """A PDF of these content streams, with the fonts F1 to F4, the image /Im1 and the form
-    /Fm1 (whose content is `form`, moved by 100 and 50 points) in every page's resources."""
+# F5: Helvetica whose ToUnicode reads "A" as U+0958 and "B" as U+2ADC, characters PDFium keeps
+# and NFC writes as two.
+_GROWING = (
+    b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Growing def "
+    b"1 begincodespacerange <00> <FF> endcodespacerange "
+    b"2 beginbfchar <41> <0958> <42> <2ADC> endbfchar "
+    b"endcmap CMapName currentdict /CMap defineresource pop end end"
+)
+
+
+def build(
+    pages: Sequence[bytes], *, form: bytes = b"", size: tuple = A4, count: int | None = None
+) -> bytes:
+    """A PDF of these content streams, with the fonts F1 to F5, the image /Im1 and the form
+    /Fm1 (whose content is `form`, moved by 100 and 50 points) in every page's resources.
+    `count` is the page count the tree claims, the number of pages when None."""
     built = pdf.Built()
     fonts = {name: built.add(body) for name, body in STANDARD.items()}
+    fonts["F5"] = built.add(
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode %d 0 R >>"
+        % built.stream(_GROWING)
+    )
     descriptor = built.add(_DESCRIPTOR)
     widths = b" ".join(b"%d" % (400 + n % 3 * 100) for n in range(95))
     fonts["F3"] = built.add(
@@ -101,13 +118,13 @@ def build(pages: Sequence[bytes], *, form: bytes = b"", size: tuple = A4) -> byt
         stream = built.stream(content)
         kids.append(
             built.add(
-                b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %d %d] /Resources " % (tree, *size)
+                b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %g %g] /Resources " % (tree, *size)
                 + resources
                 + b" /Contents %d 0 R >>" % stream
             )
         )
     built.objects[tree] = b"<< /Type /Pages /Count %d /Kids [%s] >>" % (
-        len(kids),
+        len(kids) if count is None else count,
         b" ".join(b"%d 0 R" % kid for kid in kids),
     )
     root = built.add(b"<< /Type /Catalog /Pages %d 0 R >>" % tree)
