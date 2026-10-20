@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import sqlalchemy as sa
@@ -806,3 +806,288 @@ def test_bs_full_auto_never_touches_as_likes(
 
 def test_the_rehearsed_exit_is_the_only_new_move() -> None:
     assert states.TRANSITIONS[State.rehearsed] == {State.ready}
+
+
+# --- one Like, one click -------------------------------------------------------------------------
+
+LATER = AT + 3 * HOUR
+
+
+def _clicked(
+    factory: sessionmaker[Session], person: Person, stub: str, app_id: uuid.UUID, answer: str
+) -> None:
+    """The held item clicked after its hold, the site answering `answer`, then "Try again"."""
+    written, form = job(factory, stub, app_id, AT + HOLD, form=submit_ashby(answer=answer))
+    assert (written, len(form.gate_clicks)) == (
+        "submit_unknown" if answer == "silent" else "refused_by_site",
+        1,
+    )
+    with factory() as s:
+        gate.retry(s, person.user_id, app_id, AT + HOLD + SECOND)
+        s.commit()
+
+
+def _interrupted(
+    factory: sessionmaker[Session], person: Person, stub: str, app_id: uuid.UUID
+) -> None:
+    with factory() as s:
+        assert submit.interrupted(s, app_id, AT + SECOND, "interrupted") == "ready"
+        s.commit()
+
+
+def _read_back(
+    factory: sessionmaker[Session], person: Person, stub: str, app_id: uuid.UUID
+) -> None:
+    form = submit_ashby()
+    form.fields = [f for f in form.fields if f.label != "Phone"]
+    assert job(factory, stub, app_id, AT + HOLD, form=form)[0] == "ready"
+
+
+def _turned_off(
+    factory: sessionmaker[Session], person: Person, stub: str, app_id: uuid.UUID
+) -> None:
+    with factory() as s:
+        ids = full_auto.turn(s, person.user_id, False, AT + SECOND)
+        s.commit()
+    with factory() as s:
+        assert [full_auto.release(s, person.user_id, i, AT + SECOND) for i in ids] == [True]
+        s.commit()
+
+
+def _paused(factory: sessionmaker[Session], person: Person, stub: str, app_id: uuid.UUID) -> None:
+    with factory() as s:
+        caps.save_settings(s, person.user_id, AT, paused=True, min_fit=None)
+        s.commit()
+    assert job(factory, stub, app_id, AT + HOLD)[0] == "paused_by_you"
+    with factory() as s:
+        caps.save_settings(s, person.user_id, AT, paused=False, min_fit=None)
+        s.commit()
+
+
+BACK_TO_READY = {
+    "try_again_after_submit_unknown": lambda f, p, s, a: _clicked(f, p, s, a, "silent"),
+    "try_again_after_refused_by_site": lambda f, p, s, a: _clicked(f, p, s, a, "errors"),
+    "crash_before_the_click": _interrupted,
+    "read_back_differs": _read_back,
+    "full_auto_turned_off": _turned_off,
+    "persons_pause": _paused,
+}
+
+
+@pytest.mark.parametrize("path", sorted(BACK_TO_READY))
+def test_every_way_back_to_ready_needs_the_persons_approve_to_click(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, path: str
+) -> None:
+    turn_on(db, person_a)
+    app_id = held(db, factory, person_a, stub)
+    BACK_TO_READY[path](factory, person_a, stub, app_id)
+    found = application(db, app_id)
+    assert (found.state, found.mode, found.dry_run) == (State.ready, Mode.review, False)
+    assert "sent_to_review" in [e.kind for e in events(db, app_id)]
+    before = len(authorisations(db, app_id))
+    for when in (AT + HOLD + HOUR, AT + 2 * HOLD + HOUR):
+        assert app_id not in submit.due(db, when)
+        written, form = job(factory, stub, app_id, when)
+        assert (written, form.gate_clicks) == ("not_approved", [])
+    assert len(authorisations(db, app_id)) == before
+    likes_rows = [
+        a for a in authorisations(db, app_id) if a.kind is AuthorisationKind.full_auto_like
+    ]
+    assert len(likes_rows) == 1
+
+    assert approve(factory, person_a, app_id, now=LATER).passed
+    written, form = job(factory, stub, app_id, LATER)
+    assert (written, len(form.gate_clicks)) == ("submitted", 1)
+
+
+def test_a_like_already_decided_is_never_decided_again(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    turn_on(db, person_a)
+    app_id = held(db, factory, person_a, stub)
+    # Any path that would bring the item back to `ready` still in Full auto.
+    db.execute(sa.update(Application).where(Application.id == app_id).values(state=State.ready))
+    db.commit()
+    written, form = job(factory, stub, app_id, AT + HOLD)
+    assert (written, form.gate_clicks) == ("authorisation_used", [])
+    reviewed(db, app_id, "authorisation_used")
+    assert len(authorisations(db, app_id)) == 1
+    assert job(factory, stub, app_id, AT + 2 * HOLD)[0] == "not_approved"
+
+
+# --- the click bound to the decision the lease read ----------------------------------------------
+
+
+def _why_key(factory: sessionmaker[Session], app_id: uuid.UUID) -> str:
+    with factory() as s:
+        rows = s.execute(
+            sa.select(ApplicationAnswer).where(ApplicationAnswer.application_id == app_id)
+        ).scalars()
+        return next(r.field_key for r in rows if r.label == WHY)
+
+
+def _typed(form: SubmitForm) -> list[str]:
+    return [c[1]["text"] for c in form.calls if c[0] == "type"]
+
+
+def _edit_and_approve(
+    factory: sessionmaker[Session], person: Person, app_id: uuid.UUID, value: str
+) -> None:
+    when = AT + HOLD + SECOND
+    with factory() as s:
+        gate.set_answer(s, person.user_id, app_id, _why_key(factory, app_id), value, when)
+        s.commit()
+    assert approve(factory, person, app_id, now=when).passed
+
+
+def _superseded_then_clicked(
+    db: Session,
+    factory: sessionmaker[Session],
+    stub: str,
+    app_id: uuid.UUID,
+    form: SubmitForm,
+    mine: str,
+) -> None:
+    written, _ = job(factory, stub, app_id, AT + HOLD, form=form)
+    assert (written, form.gate_clicks) == ("superseded", [])
+    assert WHY_TEXT in _typed(form)  # the lease refilled what it read, and did not click it
+    found = application(db, app_id)
+    assert (found.state, found.mode) == (State.approved, Mode.review)
+    assert "click" not in [e.kind for e in events(db, app_id)]
+    written, form = job(factory, stub, app_id, AT + HOLD + HOUR)
+    assert (written, len(form.gate_clicks)) == ("submitted", 1)
+    assert mine in _typed(form)
+    assert WHY_TEXT not in _typed(form)
+
+
+def test_full_auto_off_mid_lease_then_an_edit_and_approve_never_clicks_the_old_values(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    turn_on(db, person_a)
+    app_id = held(db, factory, person_a, stub)
+    mine = "Marker " + uuid.uuid4().hex
+    form = submit_ashby()
+
+    def the_person_changes_it() -> None:
+        _turned_off(factory, person_a, stub, app_id)
+        _edit_and_approve(factory, person_a, app_id, mine)
+
+    at_the_dwell(form, the_person_changes_it)
+    _superseded_then_clicked(db, factory, stub, app_id, form, mine)
+
+
+def test_a_review_first_edit_and_approve_mid_lease_never_clicks_the_old_values(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = filled(db, factory, person_a, stub)
+    assert application(db, app_id).mode is Mode.review
+    assert approve(factory, person_a, app_id, now=AT + HOLD).passed
+    mine = "Marker " + uuid.uuid4().hex
+    form = submit_ashby()
+    at_the_dwell(form, lambda: _edit_and_approve(factory, person_a, app_id, mine))
+    _superseded_then_clicked(db, factory, stub, app_id, form, mine)
+
+
+def test_a_rehearsal_released_mid_lease_and_approved_is_not_clicked_on_its_dry_run_plan(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    turn_on(db, person_a, done=0)
+    app_id = filled(db, factory, person_a, stub)
+    assert job(factory, stub, app_id, AT + HOUR)[0] == "held"
+    form = submit_ashby()
+
+    def released_and_approved() -> None:
+        _turned_off(factory, person_a, stub, app_id)
+        assert approve(factory, person_a, app_id, now=AT + HOUR + SECOND).passed
+
+    at_the_dwell(form, released_and_approved)
+    written, _ = job(factory, stub, app_id, AT + HOUR, form=form)
+    assert (written, form.gate_clicks) == ("superseded", [])
+    found = application(db, app_id)
+    assert (found.state, found.dry_run) == (State.approved, False)
+    written, form = job(factory, stub, app_id, AT + 2 * HOUR)
+    assert (written, len(form.gate_clicks)) == ("submitted", 1)
+
+
+def _spent_again(db: Session, found: Application) -> None:
+    db.add(
+        Authorisation(
+            id=uuid.uuid4(),
+            user_id=found.user_id,
+            application_id=found.id,
+            kind=AuthorisationKind.person_approval,
+            answers_hash=bytes(found.answers_hash or b""),
+            created_at=AT,
+            expires_at=AT + HOUR,
+            used_at=AT + SECOND,
+        )
+    )
+
+
+def _hash_changed(db: Session, found: Application) -> None:
+    found.answers_hash = bytes(32)
+
+
+def _dry_run_changed(db: Session, found: Application) -> None:
+    found.dry_run = not found.dry_run
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_spent_again, _hash_changed, _dry_run_changed, None],
+    ids=["authorisation", "answers_hash", "dry_run", "unchanged"],
+)
+def test_arm_clicks_only_the_decision_the_plan_was_read_from(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, change: Any
+) -> None:
+    app_id = filled(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    with factory() as s:
+        plan = submit.prepare(s, app_id, AT)
+        s.commit()
+    assert isinstance(plan, submit.Plan)
+    if change is not None:
+        with factory() as s:
+            found = s.get(Application, app_id)
+            assert found is not None
+            change(s, found)
+            s.commit()
+    read = submit.Read(adapter=cast(Any, None), submit_ref="e1")
+    with factory() as s:
+        written = submit.arm(s, plan, AT + SECOND, ON, read)
+        s.commit()
+    kinds = [e.kind for e in events(db, app_id)]
+    if change is None:
+        assert (written, application(db, app_id).state) == ("submitting", State.submitting)
+        assert "click" in kinds
+        return
+    assert (written, application(db, app_id).state) == ("superseded", State.approved)
+    assert not {"click", "screenshot_failed", "rehearsed"} & set(kinds)
+    with factory() as s:
+        assert submit.stopped(s, plan, submit.Stop(State.ready, "form_changed"), AT) == "superseded"
+        s.commit()
+    assert application(db, app_id).state is State.approved
+
+
+# --- the minor points ----------------------------------------------------------------------------
+
+
+def test_unreadable_rules_at_a_full_auto_like_record_their_own_reason(
+    db: Session, person_a: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    turn_on(db, person_a)
+    monkeypatch.setattr(service, "_rules", lambda db, user_id: None)
+    posting = db.get(Job, person_a.posting_id)
+    assert posting is not None
+    values = caps.settings_of(db, person_a.user_id)
+    assert full_auto.mode_of_like(db, person_a.user_id, posting, values, AT) == (
+        Mode.review,
+        "rules_unreadable",
+    )
+
+
+@pytest.mark.parametrize("short", [899, 60, 59, 1, 0, -1])
+def test_any_hold_under_the_floor_is_hold_too_short(api: Api, person_a: Person, short: int) -> None:
+    token = api.login_token(person_a.email)
+    put = api.request("PUT", "/api/apply/settings", token=token, json={"hold_s": short})
+    assert (put.status_code, put.json()["code"]) == (422, "hold_too_short")

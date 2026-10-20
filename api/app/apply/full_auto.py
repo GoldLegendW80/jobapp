@@ -9,7 +9,9 @@ that) are rehearsals (`dry_run`).
 The order, after the documents and the fill (A5), every step through the gate:
 
 1. `decide`, which the submit job runs for a `ready` Full auto item (`submit.due` lists them):
-   under the gate's locks, the Like still valid (`LIKE_VALID` after it, and Full auto on since
+   under the gate's locks, the Like never decided before (a `full_auto_like` row of this
+   application already written sends it to the review queue with `authorisation_used`: one Like
+   gives at most one click), still valid (`LIKE_VALID` after it, and Full auto on since
    before it, else the review queue with `authorisation_expired` or `full_auto_off` and no
    authorisation row), then the `full_auto_like` authorisation written, bound to the hash of the
    filled answers and the documents, expiring 7 days after the Like, and `gate.decide` with it:
@@ -23,9 +25,10 @@ The order, after the documents and the fill (A5), every step through the gate:
    the caps and the pace, then the read back, then the click. A rehearsal ends `rehearsed`
    before it.
 
-Every refusal sends the item to the review queue (`to_review`): `ready` with its code (a stop for
-the person keeps `needs_person`), `mode` `review` and `dry_run` false in the same transaction, so
-the person's Approve writes a `person_approval` the gate accepts and is clicked for real. Codes
+Every refusal, and "Try again" after the click (`gate.retry`), sends the item to the review
+queue (`to_review`, `hand_over`): `ready` with its code (a stop for the person keeps
+`needs_person`), `mode` `review` and `dry_run` false in the same transaction, so the person's
+Approve writes a `person_approval` the gate accepts and is clicked for real. Codes
 that end an application in every mode (never apply on the company or the title, duplicates) still
 end it `blocked`. A never apply term found only in the posting's text sends it to the queue
 (`never_apply_text`).
@@ -116,12 +119,14 @@ def mode_of_like(
 ) -> tuple[Mode, str | None]:
     """The mode of the application a Like creates, and why it is not Full auto when Full auto is
     on: a never apply term in the posting's text alone (the company and the title refuse the
-    Like itself, in every mode)."""
+    Like itself, in every mode), or rules that cannot be read (`rules_unreadable`)."""
     if not is_on(values, now):
         return Mode.review, None
     rules = service._rules(db, user_id)
     found = guardrails.never_apply(posting, rules, swept=False, mode=Mode.full_auto)
-    return (Mode.review, "never_apply_text") if found else (Mode.full_auto, None)
+    if found is None:
+        return Mode.full_auto, None
+    return Mode.review, "rules_unreadable" if rules is None else "never_apply_text"
 
 
 def is_rehearsal(values: caps.Values) -> bool:
@@ -260,6 +265,20 @@ def hold_end(values: caps.Values, application: Application, now: datetime) -> da
     return now if application.dry_run else now + timedelta(seconds=hold_s(values))
 
 
+def _decided(db: Session, application: Application) -> bool:
+    """Whether this Like was already decided once: it authorises one decision, ever."""
+    found = db.scalar(
+        sa.select(Authorisation.id)
+        .where(
+            Authorisation.application_id == application.id,
+            Authorisation.user_id == application.user_id,
+            Authorisation.kind == AuthorisationKind.full_auto_like,
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
 def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any) -> str:
     """Step 1 of the module docstring. Returns what was written (a code, no value); the caller
     commits."""
@@ -277,7 +296,9 @@ def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any)
     liked_at = application.created_at
     expires = liked_at + LIKE_VALID
     code = None
-    if now >= expires:
+    if _decided(db, application):
+        code = "authorisation_used"
+    elif now >= expires:
         code = "authorisation_expired"
     elif not is_on(caps.settings_of(db, user_id), liked_at):
         code = "full_auto_off"

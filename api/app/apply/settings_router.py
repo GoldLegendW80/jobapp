@@ -86,7 +86,7 @@ class SettingsIn(BaseModel):
     mode_after_like: Literal["review", "full_auto"] | None = None
     paused: Annotated[bool, Field(strict=True)] | None = None
     min_fit: Annotated[int, Field(strict=True, ge=0, le=100)] | None = None
-    hold_s: Annotated[int, Field(strict=True, ge=60, le=86_400)] | None = None
+    hold_s: Annotated[int, Field(strict=True, le=86_400)] | None = None
 
 
 class CapIn(BaseModel):

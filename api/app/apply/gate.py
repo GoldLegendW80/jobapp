@@ -687,7 +687,9 @@ def set_answer(
 
 def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime) -> Application:
     """ "Try again" after `submit_unknown` or `refused_by_site`: back to `ready`, where only a new
-    approval (a new authorisation through `decide`) leads to a click again."""
+    approval (a new authorisation through `decide`) leads to a click again. A Full auto item
+    becomes a review item in the same transaction: its Like was spent on the first click, so
+    only the person's Approve clicks again."""
     application, _ = lock(db, user_id, application_id)
     if application.state not in (State.submit_unknown, State.refused_by_site):
         raise RefusedError("not_retryable")
@@ -695,4 +697,5 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
     states.move(application, State.ready, now)
     application.error_code = None
     _event(db, application, "retry", now, previous=previous)
+    full_auto.hand_over(db, application, "authorisation_used", now)
     return application
