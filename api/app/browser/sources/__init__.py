@@ -87,6 +87,12 @@ ERRORS = (
     "page_failed",
     "browser_busy",
     "browser_unavailable",
+    # LinkedIn (browser B10, linkedin.py and app/browser/linkedin_guard.py)
+    "linkedin_off",
+    "linkedin_paused",
+    "linkedin_daily",
+    "linkedin_signin",
+    "linkedin_checkpoint",
 )
 # The codes after which no other source of this sweep starts: the browser is wanted elsewhere.
 STOPS_SWEEP = ("lease_ended", "browser_busy", "browser_unavailable")
@@ -377,8 +383,10 @@ class Pages:
         host: str = "",
         pacer: Pacer | None = None,
         lease_until: float = math.inf,
+        pause: tuple[float, float] = PAGE_PAUSE_S,
     ) -> None:
         self.tools, self.deadline = tools, deadline
+        self.pause = pause
         self.sleep, self.rng, self.monotonic = sleep, rng, monotonic
         self.host, self.pacer = host, pacer or MemoryPacer(monotonic)
         self.lease_until = lease_until  # monotonic time at which the lease's active time ends
@@ -388,7 +396,7 @@ class Pages:
     async def _act(self, action: Callable[[], Awaitable[dict[str, Any]]]) -> tuple[Node, str]:
         if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
             raise SourceError("time_budget")
-        wait = await self.pacer.reserve(self.host, self.rng.uniform(*PAGE_PAUSE_S))
+        wait = await self.pacer.reserve(self.host, self.rng.uniform(*self.pause))
         if self.monotonic() + wait + PAGE_LOAD_S > self.lease_until:
             raise SourceError("lease_budget")
         self.pauses.append(wait)
@@ -433,9 +441,13 @@ class Reader(Protocol):
 
 
 def readers() -> dict[str, Reader]:
-    from app.browser.sources import google_careers, vie
+    from app.browser.sources import google_careers, linkedin, vie
 
-    return {"google_careers": google_careers.READER, "vie": vie.READER}
+    return {
+        "google_careers": google_careers.READER,
+        "vie": vie.READER,
+        "linkedin": linkedin.READER,
+    }
 
 
 def source_name(source: BrowserSource) -> str:
@@ -450,6 +462,9 @@ def host_of(url: str) -> str:
 
 StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
 ToolsFor = Callable[[str, str, str], Tools]
+# A check before a source of a kind takes the browser (browser B10: LinkedIn's guard): given the
+# plan, the code the source reports when it must not run, None when it may.
+Check = Callable[[Any], Awaitable[str | None]]
 
 
 class Runner:
@@ -465,8 +480,10 @@ class Runner:
         rng: random.Random | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         pacer: Pacer | None = None,
+        checks: dict[str, Check] | None = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
+        self.checks = checks or {}
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
@@ -512,6 +529,17 @@ class Runner:
         the store failed after a read that ended the lease: the sweep's other sources then still
         do not start)."""
         reader = readers()[source.kind]
+        check = self.checks.get(source.kind)
+        if source.kind == "linkedin" and check is None:
+            return "linkedin_off", None  # fail closed: LinkedIn never runs without its guard
+        if check is not None:
+            try:
+                refused = await check(plan)
+            except Exception as exc:
+                logger.warning("browser source check failed: error=%s", type(exc).__name__)
+                refused = "browser_unavailable"
+            if refused is not None:
+                return refused, None
         user = str(plan.user_id)
         host = reader.host(self.base_url)
         asked = self.monotonic()  # the lease's active time counts from its start, after this
@@ -535,6 +563,7 @@ class Runner:
             host=host,
             pacer=self.pacer,
             lease_until=asked + got.lease.max_s,
+            pause=getattr(reader, "pause", PAGE_PAUSE_S),
         )
         read = Read()
         code: str | None = None
@@ -615,9 +644,12 @@ def runner_for(settings: Any, redis: Any, sessions: Any) -> Runner:
         session_max_s=settings.browser_session_max_s,
         max_table=lease_max_table(settings.browser_lease_max_s),
     )
+    from app.browser import linkedin_guard
+
     return Runner(
         leases,
         lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         base_url=settings.browser_sources_base_url,
         pacer=RedisPacer(pool),
+        checks={"linkedin": linkedin_guard.sweep_check(sessions)},
     )
