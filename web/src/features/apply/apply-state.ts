@@ -119,9 +119,10 @@ export function statusLine(application: Application | null | undefined) {
     case "ready":
       return "Filled and waiting for your approval. Nothing is sent until you approve.";
     case "approved":
-    case "held":
     case "submitting":
       return "Approved. The form is filled again with exactly the answers you approved, then submitted.";
+    case "held":
+      return "Full auto: your Like approved it. It is held so you can cancel, then checked once more and submitted.";
     case "submitted":
       return "Applied. The form was submitted.";
     case "submit_unknown":
@@ -139,7 +140,7 @@ export function statusLine(application: Application | null | undefined) {
     case "posting_closed":
       return "The site says this posting is closed. Nothing was sent.";
     case "rehearsed":
-      return "A rehearsal ran. Nothing was sent.";
+      return "A rehearsal ran: the form was filled and checked. Nothing was sent.";
     default:
       return "This application is in a state this page does not know. Nothing more can be done here.";
   }

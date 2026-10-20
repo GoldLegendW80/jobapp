@@ -35,17 +35,20 @@ import { blockingFields, statusLine } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
+import { HeldCountdown } from "./held-countdown";
 import { queueKey, rejectQueued, type QueueItem } from "./queue-api";
 import {
   canCancel,
   canReject,
   checkLine,
+  isHeld,
   isReviewable,
   leftLine,
   needsLook,
   needsPostingPage,
   reasonLine,
 } from "./queue-state";
+import { RehearsalQuestion } from "./rehearsal-question";
 import { ShotView } from "./shot-view";
 
 const CANCEL = {
@@ -59,15 +62,19 @@ const CANCEL = {
  * where the application stands, why it came back, the documents with their check, what is left,
  * the form before the click, and the answers to read and correct. Approve goes through the same
  * gate route and confirmation as the posting's Apply section, with the hash of the form shown
- * here; Reject asks first and can also skip the posting. `onLeave` is called when the card is
+ * here; Reject asks first and can also skip the posting. A Full auto item in its hold shows the
+ * countdown with Cancel (`offset`: the server's clock minus the page's), and a rehearsal asks
+ * "Does this look right?" over its answers, read only. `onLeave` is called when the card is
  * gone after a Reject or a Cancel of its own.
  */
 export function QueueCard({
   item,
   onLeave,
+  offset = 0,
 }: {
   item: QueueItem;
   onLeave: () => void;
+  offset?: number;
 }) {
   const queryClient = useQueryClient();
   const titleId = useId();
@@ -84,11 +91,12 @@ export function QueueCard({
   const [rejecting, setRejecting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const reviewable = isReviewable(item);
+  const rehearsal = item.rehearsal === true;
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(item.id),
     queryFn: ({ signal }) => getApproval(item.id, signal),
-    enabled: reviewable,
+    enabled: reviewable || rehearsal,
   });
   const approval = approvalQuery.data;
 
@@ -285,6 +293,22 @@ export function QueueCard({
 
       {left ? <p className="text-sm font-medium">{left}</p> : null}
 
+      {isHeld(item) && item.hold_until ? (
+        <HeldCountdown
+          applicationId={item.id}
+          until={item.hold_until}
+          offset={offset}
+        />
+      ) : null}
+      {rehearsal ? (
+        <RehearsalQuestion
+          applicationId={item.id}
+          onLeave={() => {
+            leaving.current = true;
+          }}
+        />
+      ) : null}
+
       {item.shot_id ? (
         <div className="sm:max-w-sm">
           <ShotView
@@ -295,7 +319,7 @@ export function QueueCard({
         </div>
       ) : null}
 
-      {reviewable ? (
+      {reviewable || rehearsal ? (
         <div className="flex flex-col gap-3">
           <Button
             variant="outline"
@@ -312,7 +336,7 @@ export function QueueCard({
             {approval ? (
               <FieldsList
                 answers={approval.answers}
-                editable
+                editable={reviewable}
                 saving={save.isPending}
                 onSave={async (answer, value) => {
                   try {
