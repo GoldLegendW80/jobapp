@@ -54,19 +54,16 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     enabled: !checked && userId !== undefined,
   });
   const decided = state.isSuccess || state.isError;
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    if (checked) marker("stay"); // decided earlier in this session
+    return () => {
       delete document.documentElement.dataset.onboarding;
-    },
-    [],
-  );
+    };
+  }, [checked]);
   const open = state.data?.open_wizard === true;
   useEffect(() => {
     // Once per mount and per session: after that the person goes wherever they like.
-    if (handled.current || !userId || !decided) {
-      if (handled.current) marker("stay");
-      return;
-    }
+    if (handled.current || !userId || !decided) return;
     handled.current = true;
     markChecked(userId);
     const send = open && location.pathname !== WELCOME;

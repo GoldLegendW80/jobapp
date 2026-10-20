@@ -86,10 +86,15 @@ describe("the first login redirect", () => {
     await waitFor(() => {
       expect(first.location()).toBe("/welcome");
     });
+    // the decision the journeys read, kept after the move to /welcome
+    await screen.findByRole("heading", { level: 1, name: "Welcome" });
+    expect(document.documentElement.dataset.onboarding).toBe("welcome");
     first.unmount();
+    expect(document.documentElement.dataset.onboarding).toBeUndefined();
     const again = renderApp("/jobs");
     await screen.findByRole("heading", { level: 1, name: "Jobs" });
     expect(again.location()).toBe("/jobs");
+    expect(document.documentElement.dataset.onboarding).toBe("stay");
   });
 
   it("never sends a person the api does not send", async () => {
