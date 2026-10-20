@@ -36,6 +36,7 @@ from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from app.jobs.schemas import (
     BoardFailureOut,
     ScheduleOut,
+    SourceOut,
     SweepConflictOut,
     SweepDetail,
     SweepJobOut,
@@ -89,6 +90,23 @@ def sweep_out(row: Sweep) -> SweepOut:
         value = stats.get(name)
         return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
+    def count(item: dict[str, Any], name: str) -> int:
+        value = item.get(name)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    sources = [
+        SourceOut(
+            kind=str(item.get("kind", "")),
+            query=str(item.get("query", "")),
+            location=item["location"] if isinstance(item.get("location"), str) else None,
+            result_pages=count(item, "result_pages"),
+            found=count(item, "found"),
+            new=count(item, "postings"),
+            error=item["error"] if isinstance(item.get("error"), str) else None,
+        )
+        for item in stats.get("sources") or []
+        if isinstance(item, dict)
+    ]
     duration = stats.get("duration")
     current = stats.get("current_board")
     return SweepOut(
@@ -111,6 +129,7 @@ def sweep_out(row: Sweep) -> SweepOut:
         duplicates=number("duplicates"),
         skipped_by_rule=number("skipped_by_rule"),
         duration=float(duration) if isinstance(duration, int | float) else None,
+        sources=sources,
     )
 
 

@@ -11,6 +11,8 @@ import { defineConfig, devices } from "@playwright/test";
  *   browser-b4   the live view of an assistant's lease: Take over and Give back (task B4)
  *   browser-b7   Sign in to a site, the profile kept across leases and a restart, Forget all
  *                logins (task B7)
+ *   browser-b8   job sites read in the browser by the sweep: the Search tab's card, Find jobs
+ *                on the fixture pages of tests/browser_pages/b8/, another person sees none (B8)
  *   browser-b12  the sign in hand off: the banner, the live view at the person's keyboard,
  *                I'm signed in, Cancel, and nobody watching (task B12b)
  *

@@ -265,3 +265,80 @@ describe("search schema", () => {
     ]);
   });
 });
+
+describe("browser sources (browser B8)", () => {
+  const withSources = () => {
+    const profile = haraldLike();
+    return {
+      ...profile.search,
+      browser_sources: [
+        {
+          kind: "google_careers" as const,
+          query: "ai engineer",
+          location: "Paris",
+          enabled: true,
+        },
+        { kind: "vie" as const, query: "data", location: null, enabled: false },
+        // B9's kind, saved by another client: kept as it is.
+        {
+          kind: "site" as const,
+          query: "agents",
+          location: null,
+          enabled: true,
+        },
+      ],
+    };
+  };
+
+  it("keeps every source through a save of the Search tab", () => {
+    const search = withSources();
+    expect(fromSearchForm(toSearchForm(search)).browser_sources).toEqual(
+      search.browser_sources,
+    );
+  });
+
+  it("leaves the field out when there is none, as before B8", () => {
+    const search = { ...withSources(), browser_sources: [] };
+    expect(fromSearchForm(toSearchForm(search))).not.toHaveProperty(
+      "browser_sources",
+    );
+    const older: Partial<typeof search> = { ...search };
+    delete older.browser_sources;
+    expect(
+      fromSearchForm(toSearchForm(older as typeof search)),
+    ).not.toHaveProperty("browser_sources");
+  });
+
+  it("trims the words, sends an empty location as null", () => {
+    const form = toSearchForm(withSources());
+    form.browser_sources[0] = {
+      ...form.browser_sources[0]!,
+      query: "  ai engineer ",
+      location: "   ",
+    };
+    expect(fromSearchForm(form).browser_sources?.[0]).toEqual({
+      kind: "google_careers",
+      query: "ai engineer",
+      location: null,
+      enabled: true,
+    });
+  });
+
+  it("asks for the words and keeps at most 10 sources", () => {
+    const form = toSearchForm(withSources());
+    form.browser_sources[1] = { ...form.browser_sources[1]!, query: " " };
+    expect(issues(searchSchema.safeParse(form))).toEqual([
+      ["browser_sources.1.query", "Enter the search words."],
+    ]);
+    const full = toSearchForm(withSources());
+    full.browser_sources = Array.from({ length: 11 }, (_, n) => ({
+      kind: "vie" as const,
+      query: `words ${n}`,
+      location: "",
+      enabled: true,
+    }));
+    expect(issues(searchSchema.safeParse(full))).toEqual([
+      ["browser_sources", "Keep at most 10 sources."],
+    ]);
+  });
+});
