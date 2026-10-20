@@ -933,7 +933,10 @@ def test_completeness_of_an_empty_profile() -> None:
     result = completeness({})
     assert result.overall == 0
     assert set(result.sections) == set(SECTIONS)
-    for section in result.sections.values():
+    for name, section in result.sections.items():
+        if name == "preferences":  # every field has a default (opportunities O4)
+            assert (section.percent, section.missing) == (100, [])
+            continue
         assert section.percent == 0
         assert section.missing
     assert result.sections["identity"].missing == [
