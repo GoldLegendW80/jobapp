@@ -106,6 +106,32 @@ def test_nothing_left_is_an_empty_key(name: str) -> None:
     assert caps.company_key(name) == ""
 
 
+# Issue #362 (a): an unseen character glued to a legal form or a word must not hide the company
+# from a cap. One row per unseen character, then the true neighbours that must stay other keys.
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Example Robotics\u200bInc",
+        "Example Robotics\u00adInc.",
+        "Example Robotics\u2060SAS",
+        "Example Robotics\ufeffGmbH",
+        "Example\u200bRobotics\u200bInc",
+        "Example Robotics\u200b",
+        "\u200bExample Robotics",
+    ],
+)
+def test_an_unseen_character_still_answers_to_the_company(name: str) -> None:
+    assert SAME in caps.company_keys(name, "other", "https://example.org/jobs/1")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Example Robotics\u200bLabs", "Example Robotics\u00ad2", "Northwind\u200bLabs"],
+)
+def test_an_unseen_character_never_makes_another_company_this_one(name: str) -> None:
+    assert SAME not in caps.company_keys(name, "other", "https://example.org/jobs/1")
+
+
 def test_a_huge_name_is_cut() -> None:
     assert len(caps.company_key("Example " * 10_000)) == 200
 
