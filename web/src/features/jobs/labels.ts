@@ -161,8 +161,9 @@ export function sourceName(source: {
   return parts.join(", ");
 }
 
-/** The sweep's `current_board` while a source runs is "<kind>:<query>[/<location>]". */
-export function currentName(current: string): string {
+/** A browser source as the sweep names it ("<kind>:<query>[/<location>]": its `current_board`
+ * while it runs, and the `source` of the postings it found), in words; any other name as it is. */
+export function sourceLabel(current: string): string {
   const match = /^(google_careers|vie|site|linkedin):(.*)$/s.exec(current);
   if (!match) return current;
   const [, kind = "", rest = ""] = match;

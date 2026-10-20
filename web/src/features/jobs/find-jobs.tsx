@@ -34,7 +34,7 @@ import { FitBadge, StatusBadge } from "./badges";
 import { formatDateTime } from "./format";
 import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
-import { currentName } from "./labels";
+import { sourceLabel } from "./labels";
 import { SweepSources } from "./sweep-sources";
 import { getSweep, listSweeps, sweepsKey, type Sweep } from "./sweeps-api";
 import { scheduleLine } from "./use-schedule";
@@ -79,7 +79,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
         </span>
         {sweep.current_board ? (
           <span className="min-w-0 truncate text-muted-foreground">
-            Reading {currentName(sweep.current_board)}
+            Reading {sourceLabel(sweep.current_board)}
           </span>
         ) : null}
         <span className="tabular-nums text-muted-foreground">
