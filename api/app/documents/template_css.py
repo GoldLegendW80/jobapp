@@ -563,7 +563,7 @@ def _tracks(found: list[Part]) -> bool:
 
 def _grid_line(found: list[Part]) -> bool:
     def ok(p: Part) -> bool:
-        whole = p[0] == "num" and p[1] == int(p[1]) and 0 < abs(p[1]) <= 20
+        whole = p[0] == "num" and 0 < abs(p[1]) <= 20 and p[1] == int(p[1])
         return whole or p in (("kw", "span"), ("kw", "auto"), ("sep", "/"))
 
     return 1 <= len(found) <= 7 and all(map(ok, found))

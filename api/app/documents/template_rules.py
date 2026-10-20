@@ -503,6 +503,8 @@ def check_html(kind: str, file: str, source: str) -> list[Problem]:
         return [Problem(file, error.lineno or 0, "syntax", "Jinja that does not parse")]
     except RecursionError:
         return [Problem(file, 0, "syntax", "Jinja nested deeper than Python reads")]
+    except ValueError:  # an integer literal over Python's 4,300 digits
+        return [Problem(file, 0, "syntax", "a number longer than Python reads")]
     parser = _Html(walk)
     cut: set[int] = set()
     for line, data in walk.html:

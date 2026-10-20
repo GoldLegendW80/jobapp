@@ -349,6 +349,12 @@ def test_a_problem_never_carries_text_of_the_template():
         ({**FILES, "style.css": FILES["style.css"] + ".x{}" * 16000}, "too_large"),
         (_cv(SUMMARY, SUMMARY + "{% if name %}" * 2000 + "{% endif %}" * 2000), "syntax"),
         (_cv(SUMMARY, SUMMARY + "{{ " + "(" * 3000 + "name" + ")" * 3000 + " }}"), "syntax"),
+        (_cv(SUMMARY, SUMMARY + "{{ " + "9" * 5000 + " }}"), "syntax"),
+        (_letter("{{ content.closing }}", "{% if " + "9" * 4301 + " %}{% endif %}"), "syntax"),
+        (
+            {**FILES, "style.css": FILES["style.css"] + ".x{grid-column:" + "9" * 400 + "}"},
+            "property",
+        ),
     ],
 )
 def test_the_largest_and_deepest_files_end_as_a_problem_not_an_error(files, code):
