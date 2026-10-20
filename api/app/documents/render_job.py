@@ -611,7 +611,8 @@ def _store(
     sessions: sessionmaker[Session], claim: Claim, fitted: fitting.Fitted, at: datetime
 ) -> Stored:
     """`_store_once` until it is not refused a lock: the PDF is lost only when the document
-    stayed locked through STORE_ATTEMPTS waits (then `render_failed`)."""
+    stayed locked through STORE_ATTEMPTS waits (then `render_failed`, which `_render_once`
+    writes like a failed render: a switch asked meanwhile stays `queued`)."""
     for attempt in range(1, STORE_ATTEMPTS):
         try:
             return _store_moving(sessions, claim, fitted, at)
@@ -685,7 +686,17 @@ async def _render_once(ctx: dict[str, Any], document_id: uuid.UUID, revision: in
             _fail, sessions, document_id, revision, error.code, rendering_only=True
         )
         return Stored(error.code)
-    stored = await asyncio.to_thread(_store, sessions, claim, fitted, clock())
+    try:
+        stored = await asyncio.to_thread(_store, sessions, claim, fitted, clock())
+    except store.DocumentBusyError:
+        logger.warning(
+            "documents.render.store_busy",
+            extra={"document_id": str(document_id), "attempt": STORE_ATTEMPTS},
+        )
+        await asyncio.to_thread(
+            _fail, sessions, document_id, revision, "render_failed", rendering_only=True
+        )
+        return Stored("render_failed")
     if stored.outcome == "overflow" and not stored.again:
         await _overflowed(document_id, claim.version_id)
     return stored

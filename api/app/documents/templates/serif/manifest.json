@@ -7,7 +7,7 @@
   },
   "description": {
     "en": "One column in a book serif, the name centred, each section under a centred heading between two hairlines. Reads well for applicant tracking systems.",
-    "fr": "Une colonne dans un caractère à empattements de livre, le nom centré, chaque section sous un titre centré entre deux filets. Se lit bien par un logiciel de recrutement."
+    "fr": "Une colonne dans un caractère à empattements de livre, le nom centré, chaque section sous un titre centré entre deux filets. Bien lu par les logiciels de recrutement."
   },
   "tags": [
     "one column",
@@ -140,5 +140,5 @@
       "paragraph": 900
     }
   },
-  "thumbnail_of": "e7241eae09ca597107edd6c45c2d78543aecdf188823600a0fc0506fb90a54ae"
+  "thumbnail_of": "ce7beef37d1f620cd75012f4c15951eb749807e13171f994b6accab3bfe9f7db"
 }

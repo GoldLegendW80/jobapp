@@ -1,0 +1,144 @@
+{
+  "slug": "executive",
+  "version": 1,
+  "name": {
+    "en": "Executive",
+    "fr": "Direction"
+  },
+  "description": {
+    "en": "One column in a refined serif, in two tones of navy and bronze: small caps headings along a fine rule, the contact lines on the right of the name. Reads well for applicant tracking systems.",
+    "fr": "Une colonne dans un caractère à empattements soigné, en deux tons de bleu marine et de bronze : des titres en petites capitales le long d'un filet, les coordonnées à droite du nom. Bien lu par les logiciels de recrutement."
+  },
+  "tags": [
+    "one column",
+    "serif",
+    "no photo",
+    "colour",
+    "ats friendly"
+  ],
+  "photo": "none",
+  "fonts": [
+    "source-serif-4"
+  ],
+  "accent": "#1b2a4a",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.2,
+        "line_height": 1.4,
+        "section_gap": 11.0,
+        "item_gap": 5.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.9,
+        "line_height": 1.36,
+        "section_gap": 10.1,
+        "item_gap": 4.6,
+        "margin": 14.8
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.31,
+        "section_gap": 9.1,
+        "item_gap": 4.1,
+        "margin": 13.6
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.27,
+        "section_gap": 8.2,
+        "item_gap": 3.7,
+        "margin": 12.4
+      },
+      {
+        "body_size": 9.1,
+        "line_height": 1.23,
+        "section_gap": 7.3,
+        "item_gap": 3.3,
+        "margin": 11.1
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.19,
+        "section_gap": 6.4,
+        "item_gap": 2.9,
+        "margin": 9.9
+      },
+      {
+        "body_size": 8.5,
+        "line_height": 1.14,
+        "section_gap": 5.4,
+        "item_gap": 2.4,
+        "margin": 8.7
+      },
+      {
+        "body_size": 8.2,
+        "line_height": 1.1,
+        "section_gap": 4.5,
+        "item_gap": 2.0,
+        "margin": 7.5
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.2,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.8,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.4,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 10.0,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.2,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "61f43edd49ef285d3d74ee08b42107f6f96d38c0c1f5bcca1a5c80e4c5f9c2e4"
+}

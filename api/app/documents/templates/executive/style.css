@@ -1,0 +1,149 @@
+/* executive: one column in Source Serif 4, in two tones: navy (the accent) for the name and the
+   headings, bronze for the rules, the organisations and the list markers. The name on the
+   left, the contact lines stacked on the right, a double rule under the header, small caps
+   headings that run into a bronze rule. The density comes from the step on :root. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Source Serif 4", serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #1f2430;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.head {
+  display: flex;
+  /* The contact block drops under the name when the two do not fit side by side. */
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 4pt 16pt;
+  padding-bottom: 7pt;
+}
+.headtext { flex: 1 1 auto; min-width: 50%; }
+.name {
+  font-size: 2.6em;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+.headline {
+  font-size: 1.12em;
+  font-style: italic;
+  color: #7d5a1e;
+  margin-top: 3pt;
+  /* The name alone sizes the column: the headline wraps in whatever width is left. */
+  contain: inline-size;
+}
+.contact {
+  list-style: none;
+  flex: 0 1 auto;
+  margin-left: auto;
+  text-align: right;
+  font-size: 0.92em;
+  color: #4a4f5c;
+}
+.rules {
+  border-top: 2pt solid var(--accent);
+  border-bottom: 0.8pt solid #7d5a1e;
+  height: 3.6pt;
+}
+
+.block { margin-top: var(--section-gap); }
+.label {
+  display: flex;
+  align-items: center;
+  gap: 8pt;
+  font-size: 1.22em;
+  font-weight: 600;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: var(--item-gap);
+}
+.label::after {
+  content: "";
+  flex: 1 1 auto;
+  border-top: 0.8pt solid #7d5a1e;
+}
+
+.summary {
+  font-style: italic;
+  font-size: 1.04em;
+  border-left: 2pt solid #7d5a1e;
+  padding-left: 8pt;
+  text-align: justify;
+}
+
+.block ul { padding-left: 1.1em; }
+.block li { margin-bottom: 1.2pt; }
+.block li::marker { color: #7d5a1e; }
+.block ul.competencies {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1.5pt 14pt;
+  list-style: square;
+}
+.block ul.competencies li { margin: 0 0 0 0.9em; }
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10pt;
+  align-items: baseline;
+}
+.entry-title { font-size: 1.06em; font-weight: 700; color: var(--accent); }
+.org { font-style: italic; font-weight: 600; color: #7d5a1e; }
+.period, .place { font-style: italic; color: #4a4f5c; }
+.entry-head .period { flex: 0 0 auto; text-align: right; }
+.place { font-size: 0.94em; }
+
+.school {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 12pt;
+  margin-bottom: 2pt;
+}
+.school .entry-title { grid-column: 1; grid-row: 1; font-size: 1em; }
+.school .org { grid-column: 1; grid-row: 2; }
+.school .period { grid-column: 2; grid-row: 1; text-align: right; max-width: 62mm; }
+
+.skill-group {
+  display: grid;
+  grid-template-columns: 36mm 1fr;
+  gap: 8pt;
+  margin-bottom: 1.5pt;
+}
+.group-label { font-size: 1em; font-weight: 700; color: var(--accent); }
+
+.block ul.languages {
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 18pt;
+}
+
+.letter-body { padding-top: 16pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; font-style: italic; color: #4a4f5c; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { color: var(--accent); }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature {
+  font-weight: 600;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  font-size: 1.1em;
+  color: var(--accent);
+  margin-top: var(--section-gap);
+}

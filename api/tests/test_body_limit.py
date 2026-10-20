@@ -145,6 +145,52 @@ def test_policy_by_route_class(method: str, path: str, expected: int | None) -> 
     assert limit_for(method, path) == expected
 
 
+DRAFT = SIZED[("PUT", "/api/documents/{document_id}/draft")]
+DOC = "3f2b8c1e-0d4a-4c6e-9a7b-5e1f2d3c4b5a"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("PUT", f"/api/documents/{DOC}/draft", DRAFT),
+        ("PUT", "/api/documents/x/draft", DRAFT),
+        ("PUT", "/api/documents/not-a-uuid.v2/draft", DRAFT),
+        ("GET", f"/api/documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("PATCH", f"/api/documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("POST", f"/api/documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("DELETE", f"/api/documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("put", f"/api/documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/draft/", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/draft/x", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/x/draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/drafts", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/Draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/draf", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/xdraft", DEFAULT_MAX_BYTES),
+        ("PUT", "/api/documents//draft", DEFAULT_MAX_BYTES),
+        ("PUT", "/api/documents/draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api//documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/document/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("PUT", "/api/documents/a/b/draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/x/api/documents/{DOC}/draft", DEFAULT_MAX_BYTES),
+        ("PUT", f"/api/documents/{DOC}/draft\n", DEFAULT_MAX_BYTES),
+        ("PUT", f"/documents/{DOC}/draft", None),
+        ("PUT", f"/api/auth/documents/{DOC}/draft", PUBLIC_MAX_BYTES),
+        ("POST", "/api/jobs/", DEFAULT_MAX_BYTES),
+        ("POST", "/api/jobs/x", DEFAULT_MAX_BYTES),
+        ("POST", "/api//jobs", DEFAULT_MAX_BYTES),
+        ("post", "/api/jobs", DEFAULT_MAX_BYTES),
+        ("PATCH", "/api/jobs", DEFAULT_MAX_BYTES),
+    ],
+)
+def test_near_misses_of_a_sized_route_get_the_default(
+    method: str, path: str, expected: int | None
+) -> None:
+    assert limit_for(method, path) == expected
+
+
 def test_the_routes_under_auth_get_the_short_times() -> None:
     public = class_for("POST", "/api/auth/login")
     other = class_for("POST", "/api/agents/runs")
