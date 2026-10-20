@@ -20,7 +20,11 @@ Sections and what they replace in the engine:
 - skills: the scoring model (`profile/skills.json`): years_experience 0 to 60, categories
   have, adjacent, none (names unique across the three), gates with a penalty 0 to 100.
 - search: title include, title exclude and location terms, contract types, remote stance,
-  min_fit, posting age window, boards, never-apply rules (`engine/boards.json`, hard rule 11).
+  min_fit, posting age window, boards, never-apply rules (`engine/boards.json`, hard rule 11),
+  and what the person aims for (opportunities O4): seniority levels, industries, company types
+  (a small bonus to the fit, never a filter) and the pay sought (changes no score).
+- preferences: the language and tone of the generated documents, and the dates of the first
+  login wizard (written by its routes only).
 - answers: standard answers of application forms (`facts.md` PRACTICALITIES), and the optional
   fields the apply module reads: preferred name, pronouns, years as stated, highest degree and
   year, on site and hybrid willingness, the previously applied default, background and reference
@@ -37,7 +41,8 @@ Within one list duplicate terms (ignoring case) are dropped, the first kept.
 
 Completeness. `completeness(sections)` gives, per section, a percentage (whole number, the share
 of its required fields that are filled) and the list of the required fields still missing,
-plus an overall percentage (the mean of the six). A section never saved counts as empty.
+plus an overall percentage (the mean of the six sections that have required fields; preferences
+has none and always reads 100). A section never saved counts as empty.
 Required fields, chosen as what search and CV generation cannot run without:
 - identity: full_name, headline, email, phone, city, country, languages (at least one)
 - experience: employers (at least one), education (at least one)
@@ -57,7 +62,7 @@ import re
 import unicodedata
 import zoneinfo
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Literal, get_args
 
@@ -788,6 +793,53 @@ class BrowserSource(_Section):
         return self
 
 
+# What the person aims for (opportunities O4). Seniority, industries and company types add a
+# small bonus to the fit (app.jobs.scoring.bonus) and never filter anything; compensation is
+# stored for the person and the forms, and changes no score.
+Seniority = Literal["intern", "junior", "mid", "senior", "lead", "principal"]
+SENIORITIES: tuple[str, ...] = get_args(Seniority)
+CompanyType = Literal[
+    "startup", "scaleup", "large_company", "public_sector", "nonprofit", "agency", "consulting"
+]
+COMPANY_TYPES: tuple[str, ...] = get_args(CompanyType)
+INDUSTRIES_MAX = 30  # terms in the industries list
+PAY_MAX = 10_000_000
+# The ISO 4217 codes a compensation may name: a fixed list, so a typo is a clear 422.
+CURRENCIES = (
+    "AED", "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD", "HUF",
+    "ILS", "INR", "JPY", "KRW", "MAD", "MXN", "NOK", "NZD", "PLN", "RON", "SAR", "SEK", "SGD",
+    "THB", "TND", "TRY", "TWD", "USD", "ZAR",
+)  # fmt: skip
+
+
+class PayRange(_Section):
+    """A pay the person aims for, whole numbers in one currency, `min` at most `max`."""
+
+    min: Annotated[StrictInt, Field(ge=0, le=PAY_MAX)]
+    max: Annotated[StrictInt, Field(ge=0, le=PAY_MAX)]
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+
+    @field_validator("currency")
+    @classmethod
+    def _known_currency(cls, value: str) -> str:
+        if value not in CURRENCIES:
+            raise ValueError(f"unknown currency; one of {', '.join(CURRENCIES)}")
+        return value
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "PayRange":
+        if self.max < self.min:
+            raise ValueError("the maximum is below the minimum")
+        return self
+
+
+class Compensation(_Section):
+    """A yearly salary and a daily rate (freelance), each optional."""
+
+    salary: PayRange | None = None
+    daily_rate: PayRange | None = None
+
+
 class SearchSection(_Section):
     title_include: TermList = Field(default_factory=TermList)
     title_exclude: TermList = Field(default_factory=TermList)
@@ -807,6 +859,15 @@ class SearchSection(_Section):
     sweep_schedule: SweepSchedule = Field(default_factory=lambda: SweepSchedule())
     # The automatic generation of documents (documents D10), defaulted when absent.
     documents: DocumentsGeneration = Field(default_factory=lambda: DocumentsGeneration())
+    # Opportunities O4; a section saved before them reads them empty.
+    seniority: Annotated[list[Seniority], Field(max_length=len(SENIORITIES))] = Field(
+        default_factory=list
+    )
+    industries: TermList = Field(default_factory=TermList)
+    company_types: Annotated[list[CompanyType], Field(max_length=len(COMPANY_TYPES))] = Field(
+        default_factory=list
+    )
+    compensation: Compensation = Field(default_factory=lambda: Compensation())
 
     @model_validator(mode="before")
     @classmethod
@@ -821,6 +882,23 @@ class SearchSection(_Section):
     @classmethod
     def _unique_contracts(cls, value: list[str]) -> list[str]:
         return _unique(value, str, "contract type")
+
+    @field_validator("seniority")
+    @classmethod
+    def _unique_seniority(cls, value: list[str]) -> list[str]:
+        return _unique(value, str, "seniority")
+
+    @field_validator("company_types")
+    @classmethod
+    def _unique_company_types(cls, value: list[str]) -> list[str]:
+        return _unique(value, str, "company type")
+
+    @field_validator("industries")
+    @classmethod
+    def _few_industries(cls, value: TermList) -> TermList:
+        if len(value.terms) > INDUSTRIES_MAX:
+            raise ValueError(f"at most {INDUSTRIES_MAX} industries")
+        return value
 
     @field_validator("boards")
     @classmethod
@@ -934,6 +1012,46 @@ class AnswersSection(_Section):
         return "sentence" if self.salary_policy else "leave_blank"
 
 
+# --- preferences --------------------------------------------------------------------------------
+
+
+def _instant(value: str | None) -> str | None:
+    """An ISO 8601 date and time with its offset, stored in UTC (`2026-10-20T08:30:00+00:00`)."""
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError("must be an ISO 8601 date and time") from None
+    if parsed.tzinfo is None:
+        raise ValueError("must name its offset from UTC")
+    return parsed.astimezone(UTC).isoformat()
+
+
+OptInstant = Annotated[OptText(40), AfterValidator(_instant)]
+DocumentsLanguage = Literal["auto", "en", "fr"]
+DocumentsTone = Literal["plain", "formal", "warm"]
+
+
+class Onboarding(_Section):
+    """When the first login wizard was finished or put off (opportunities O5). Only the wizard's
+    routes write it (service.record_onboarding): a save of the section or an import keeps the
+    stored dates."""
+
+    completed_at: OptInstant = None
+    dismissed_at: OptInstant = None
+
+
+class PreferencesSection(_Section):
+    """How the person wants the app to work for them (opportunities O4): the language and tone
+    of the generated CV and letter (`auto` follows the posting's language), and the wizard's
+    dates. Every field has a default, so the section always counts as filled."""
+
+    onboarding: Onboarding = Field(default_factory=lambda: Onboarding())
+    documents_language: DocumentsLanguage = "auto"
+    documents_tone: DocumentsTone = "plain"
+
+
 # --- registry -----------------------------------------------------------------------------------
 
 SECTION_MODELS: dict[str, type[_Section]] = {
@@ -943,9 +1061,12 @@ SECTION_MODELS: dict[str, type[_Section]] = {
     "skills": SkillsSection,
     "search": SearchSection,
     "answers": AnswersSection,
+    "preferences": PreferencesSection,
 }
 SECTIONS = tuple(SECTION_MODELS)
-SectionName = Literal["identity", "experience", "facts", "skills", "search", "answers"]
+SectionName = Literal[
+    "identity", "experience", "facts", "skills", "search", "answers", "preferences"
+]
 
 
 def validate_section(section: str, data: Any) -> dict[str, Any]:
@@ -989,6 +1110,9 @@ REQUIRED: dict[str, dict[str, Callable[[Any], bool]]] = {
         "salary_policy": lambda s: _filled(s.salary_policy),
         "motivation": lambda s: _filled(s.motivation),
     },
+    # Every field has a default: always filled, and left out of the overall mean so a new
+    # section does not move anyone's figure.
+    "preferences": {},
 }
 
 
@@ -1011,9 +1135,10 @@ def completeness(sections: dict[str, Any]) -> Completeness:
         instance = model.model_validate(stored) if stored is not None else model()
         rules = REQUIRED[name]
         missing = [field for field, ok in rules.items() if not ok(instance)]
-        percent = round(100 * (len(rules) - len(missing)) / len(rules))
+        percent = round(100 * (len(rules) - len(missing)) / len(rules)) if rules else 100
         result[name] = SectionCompleteness(percent=percent, missing=missing)
-    overall = round(sum(c.percent for c in result.values()) / len(result))
+    counted = [result[name].percent for name in SECTION_MODELS if REQUIRED[name]]
+    overall = round(sum(counted) / len(counted))
     return Completeness(overall=overall, sections=result)
 
 
@@ -1081,7 +1206,7 @@ class RevisionOut(RevisionSummary):
 # The whole profile as one JSON file (GET /api/profile/export, POST /api/profile/import, the CLI
 # and the importer of Harald's engine files all speak it):
 #   {"format": "jobapp-profile", "version": 1, "exported_at": "<ISO 8601>",
-#    "sections": {<the six sections, each in its stored form>},
+#    "sections": {<the seven sections, each in its stored form; `preferences` optional on import>},
 #    "photo": {"mime": "image/png" | "image/jpeg", "base64": "<standard base64>"}  (optional)}
 # An import may add "base_revision": the revision the client loaded (409 when stale).
 
@@ -1141,7 +1266,8 @@ class PhotoData(BaseModel):
 
 
 class ExportSections(BaseModel):
-    """All six sections, each required (an empty profile exports its empty sections)."""
+    """All seven sections (an empty profile exports its empty sections). The six of version 1
+    are required; `preferences`, added later, reads its defaults when an older file lacks it."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1151,6 +1277,7 @@ class ExportSections(BaseModel):
     skills: SkillsSection
     search: SearchSection
     answers: AnswersSection
+    preferences: PreferencesSection = Field(default_factory=lambda: PreferencesSection())
 
 
 class ExportDocument(BaseModel):

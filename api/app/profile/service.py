@@ -9,7 +9,10 @@ A save locks the profile row (SELECT ... FOR UPDATE) before comparing `base_revi
 stored revision, so two concurrent saves based on the same revision are serialised: the first
 increments the revision and appends its profile_revisions row, the second then sees the new
 revision and is refused as stale. The unique (user_id, revision) constraint is a second guard.
-An import takes the same lock and writes all six sections at once, one revision each.
+An import takes the same lock and writes all seven sections at once, one revision each.
+`preferences.onboarding` belongs to the first login wizard (opportunities O5): only
+`record_onboarding` writes it; a save that changes it is refused (ReservedFieldError) and an
+import keeps the stored dates.
 The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
@@ -24,7 +27,7 @@ The caller owns the transaction and commits it. Nothing here logs profile conten
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -36,6 +39,13 @@ from app.profile.photo import Photo
 from app.profile.schemas import SECTION_MODELS, SECTIONS
 
 REVISIONS_PAGE_MAX = 100
+
+
+ONBOARDING_FIELDS = ("completed_at", "dismissed_at")
+
+
+class ReservedFieldError(Exception):
+    """A save tried to change a field only the app writes (preferences.onboarding)."""
 
 
 class StaleRevisionError(Exception):
@@ -130,8 +140,9 @@ def save_section(
     """Replace one section with already validated `data` and record the revision.
 
     Raises StaleRevisionError (with the current profile, still locked) when `base_revision`
-    is not the stored revision. The LinkedIn consent of a `search` section is kept as stored
-    unless `linkedin_consent` (the module docstring).
+    is not the stored revision, and ReservedFieldError when a `preferences` save changes the
+    onboarding dates. The LinkedIn consent of a `search` section is kept as stored unless
+    `linkedin_consent` (the module docstring).
     """
     if section not in SECTIONS:
         raise ValueError(f"unknown section {section!r}")
@@ -140,6 +151,22 @@ def save_section(
         raise StaleRevisionError(profile)
     if section == "search" and not linkedin_consent:
         data = _keep_consent((profile.sections or {}).get("search"), data)
+    if section == "preferences" and data.get("onboarding") != _onboarding(profile):
+        raise ReservedFieldError("onboarding")
+    return _write(db, profile, section, data, now)
+
+
+def _onboarding(profile: Profile) -> dict[str, Any]:
+    """The stored onboarding dates, in their stored form (null each when never written)."""
+    stored = (profile.sections or {}).get("preferences")
+    model = SECTION_MODELS["preferences"]
+    return model.model_validate(stored or {}).model_dump(mode="json")["onboarding"]
+
+
+def _write(
+    db: Session, profile: Profile, section: str, data: dict[str, Any], now: datetime
+) -> Profile:
+    user_id = profile.user_id
     profile.sections = {**(profile.sections or {}), section: data}
     profile.revision = profile.revision + 1
     profile.updated_at = now
@@ -164,7 +191,7 @@ def import_profile(
     base_revision: int | None,
     now: datetime,
 ) -> Profile:
-    """Replace all six sections at once with already validated data, one revision each (in
+    """Replace all seven sections at once with already validated data, one revision each (in
     SECTIONS order), under the same row lock as a save, in the caller's transaction.
 
     `photo` is the normalized photo of the file; None leaves the stored photo as it is.
@@ -172,15 +199,18 @@ def import_profile(
     the import is applied after any save in progress (serialised by the lock).
     """
     if set(sections) != set(SECTIONS):
-        raise ValueError("an import replaces exactly the six sections")
+        raise ValueError("an import replaces exactly the seven sections")
     profile = _locked(db, user_id, now)
     if base_revision is not None and profile.revision != base_revision:
         raise StaleRevisionError(profile)
-    # An imported file never carries a LinkedIn acceptance (another account's, or an old one).
+    # An imported file never carries a LinkedIn acceptance (another account's, or an old one),
+    # nor onboarding dates (the stored ones stay).
     sections = {
         **sections,
         "search": _keep_consent((profile.sections or {}).get("search"), sections["search"]),
+        "preferences": {**sections["preferences"]},
     }
+    sections["preferences"]["onboarding"] = _onboarding(profile)
     revision = profile.revision
     for name in SECTIONS:
         revision += 1
@@ -200,6 +230,21 @@ def import_profile(
         profile.photo, profile.photo_mime = photo.data, photo.mime
     db.flush()
     return profile
+
+
+def record_onboarding(db: Session, user_id: uuid.UUID, field: str, now: datetime) -> Profile:
+    """Record `now` as the wizard's `completed_at` or `dismissed_at` (opportunities O5), one
+    revision of `preferences`, whatever revision the caller loaded (the person never edits
+    these dates, so there is nothing to conflict with)."""
+    if field not in ONBOARDING_FIELDS:
+        raise ValueError(f"unknown onboarding field {field!r}")
+    profile = _locked(db, user_id, now)
+    stored = (profile.sections or {}).get("preferences") or {}
+    model = SECTION_MODELS["preferences"]
+    data = model.model_validate(stored).model_dump(mode="json")
+    data["onboarding"][field] = now.astimezone(UTC).isoformat()
+    data = model.model_validate(data).model_dump(mode="json")
+    return _write(db, profile, "preferences", data, now)
 
 
 # --- photo --------------------------------------------------------------------------------------

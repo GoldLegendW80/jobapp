@@ -34,9 +34,9 @@ import { cn } from "@/lib/utils";
 import {
   getProfile,
   profileKey,
-  SECTIONS,
+  TAB_SECTIONS,
   type Profile,
-  type SectionName,
+  type TabSection,
 } from "./api";
 import { CvTab } from "@/features/documents/cv-tab";
 
@@ -50,12 +50,12 @@ import { ProfileFileMenu } from "./profile-file";
 import { SearchTab } from "./search-tab";
 import { SkillsTab } from "./skills-tab";
 
-const isSection = (value: string | null): value is SectionName =>
-  value !== null && (SECTIONS as readonly string[]).includes(value);
+const isSection = (value: string | null): value is TabSection =>
+  value !== null && (TAB_SECTIONS as readonly string[]).includes(value);
 
 /** The CV tab is not a profile section: it lives at /profile/cv and /profile/cv/:id. */
 const CV_TAB = "cv";
-type TabName = SectionName | typeof CV_TAB;
+type TabName = TabSection | typeof CV_TAB;
 
 /**
  * /profile: the completeness of the whole profile, then one tab per section, each an editor that
@@ -76,7 +76,7 @@ export function ProfilePage() {
   const navigate = useNavigate();
   const onCv = /^\/profile\/cv(\/|$)/.test(useLocation().pathname);
   const requested = params.get("tab");
-  const tab: SectionName = isSection(requested) ? requested : "identity";
+  const tab: TabSection = isSection(requested) ? requested : "identity";
   const active: TabName = onCv ? CV_TAB : tab;
   const [dirty, setDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<TabName>();
@@ -184,7 +184,7 @@ export function ProfilePage() {
           className="grid h-auto grid-cols-4 gap-1 sm:grid-cols-7"
         >
           <TabsTrigger value={CV_TAB}>CV</TabsTrigger>
-          {SECTIONS.map((name) => {
+          {TAB_SECTIONS.map((name) => {
             const percent = profile.completeness.sections[name]?.percent ?? 0;
             return (
               <TabsTrigger
@@ -201,7 +201,7 @@ export function ProfilePage() {
         <TabsContent value={CV_TAB} className="flex flex-col gap-4">
           <CvTab />
         </TabsContent>
-        {SECTIONS.map((name) => (
+        {TAB_SECTIONS.map((name) => (
           <TabsContent key={name} value={name} className="flex flex-col gap-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <Missing

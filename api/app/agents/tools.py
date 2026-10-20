@@ -62,10 +62,13 @@ EMPTY_SECTION = "The profile has no {section} section yet."
 
 # What get_profile_section shows of a section. Identity is an allow list: a contact field
 # added to the profile later never reaches the model by default. Search drops the board list,
-# the browser sources and the schedule (not needed to judge a posting); the other sections are
-# shown whole.
+# the browser sources and the schedule (not needed to judge a posting) and the pay sought (the
+# person's own figures); preferences drops the wizard's dates; the other sections are shown whole.
 SHOWN_FIELDS = {"identity": ("headline", "city", "country", "languages")}
-HIDDEN_FIELDS = {"search": ("boards", "browser_sources", "sweep_schedule")}
+HIDDEN_FIELDS = {
+    "search": ("boards", "browser_sources", "sweep_schedule", "compensation"),
+    "preferences": ("onboarding",),
+}
 
 
 def full_name(name: str) -> str:
@@ -201,8 +204,8 @@ def _get_profile_section(scope: Scope) -> SdkMcpTool[Any]:
         "claims), skills (competencies the user has, has adjacent to and lacks, years of "
         "experience, hard gates), search (what the user looks for and never_apply rules), "
         "experience (employers and education with dates), identity (headline, city, country, "
-        "languages) or answers (work authorization, notice, relocation and other standard "
-        "answers).",
+        "languages), answers (work authorization, notice, relocation and other standard "
+        "answers) or preferences (the language and tone the user wants for documents).",
         {
             "type": "object",
             "properties": {
