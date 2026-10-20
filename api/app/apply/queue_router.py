@@ -52,7 +52,7 @@ from app.apply.router import (
     ApplicationOut,
     RefusalOut,
 )
-from app.db import get_session
+from app.db import get_session, read_snapshot
 from app.documents import store as documents_store
 from app.identity import deps
 from app.identity.models import User
@@ -280,6 +280,7 @@ def _reason(application: Application, refused: dict[uuid.UUID, str]) -> ReasonOu
 @router.get("/api/apply/queue", response_model=QueueOut)
 def read_queue(user: CurrentUser, db: Db) -> QueueOut:
     """The review queue: what waits for the person, then what is under way."""
+    read_snapshot(db)  # the items, their details and the count are one moment of the tables
     group = sa.case((Application.state.in_(WAITING_ON_YOU), 0), else_=1)
     rows = db.execute(
         _queued(user.id, WAITING_ON_YOU + UNDER_WAY)

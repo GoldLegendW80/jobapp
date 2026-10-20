@@ -113,24 +113,10 @@ def _has_version(db: Session, document_id: uuid.UUID) -> bool:
 
 
 def _give_way(db: Session, document: Document, at: datetime, *, follows: bool = False) -> None:
-    """An open generation of the document: an automatic one not started gives way to the click
-    (cancelled, never started, so never counted); a running one, or another click, is a 409,
-    unless the document `follows` the CV (a letter of both kinds: then it is left as it is).
-    The caller holds the posting (`store.lock_posting`); the document is locked before the read,
-    the lock the tick takes before it starts a generation, so the read below is never older than a
-    start the tick committed."""
-    store.lock_document(db, document.user_id, document.id)
-    current = store.open_generation(db, document.user_id, document.id)
-    if current is None:
-        return
-    if current.status is GenerationStatus.running or current.trigger is not GenerationTrigger.auto:
-        if follows:
-            return
+    """`generate.give_way`; a running generation, or another click, is a 409, unless the document
+    `follows` the CV (a letter of both kinds: then it is left as it is)."""
+    if not generate.give_way(db, document, at) and not follows:
         raise _error(status.HTTP_409_CONFLICT, RUNNING)
-    current.status = GenerationStatus.cancelled
-    current.wait_reason = None
-    current.finished_at = at
-    db.flush()
 
 
 @router.post(
