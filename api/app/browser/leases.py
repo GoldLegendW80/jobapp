@@ -31,7 +31,11 @@ lease token once, in memory: it is never written to Redis nor logged.
 Time (SPEC-browser, "Leases"): the purpose's maximum counts active time only, and the idle timer
 (BROWSER_IDLE_S without a tool call or input, `touch`) ends a lease; while the lease is
 `waiting_person` (B12 sets it, with a reason, a site and a deadline of BROWSER_SESSION_MAX_S)
-neither runs, and `resume` gives the lease back the active time it had left. browserd applies the
+neither runs, and `resume` gives the lease back the active time it had left. The sign in hand off
+(app/browser/handoff.py) sets and clears this copy's wait in step with browserd's, with the
+seconds browserd has left; a lease already waiting keeps its deadline, and after a Redis restart
+the wait is read back from browserd with what it has left, never a fresh deadline. A wait for a
+sign in past its deadline ends `signin_timeout`. browserd applies the
 same rules to its own copy and sees every tool call and every input, so while it answers and still
 holds the lease, it decides idle and maximum (nobody has to `touch` this copy in step). Two
 timers of this copy still apply:
@@ -120,6 +124,9 @@ SEEN_TTL_S = 86400  # a sighting nobody refreshed for a day is forgotten (renewe
 HISTORY = 10
 DEFAULT_LEASE_S = 300  # the estimate's lease length while no lease has ended yet
 UPDATE_ATTEMPTS = 5
+SITE_MAX = (
+    80  # browserd/handoff.py's SITE_MAX: the site a sign in waits for, as the person reads it
+)
 
 # Drops the members whose ticket is gone, then, when ARGV[1] names a member, gives it the turn
 # if nobody holds one and it is the head of the first non empty tier.
@@ -235,7 +242,7 @@ class Lease:
             return "start_failed" if now - self.started_at >= START_GRACE_S else None
         if self.state == "waiting_person":
             if self.wait_deadline is not None and now >= self.wait_deadline:
-                return "person_timeout"
+                return self._wait_timeout()
             return None
         if self.active_s(now) >= self.max_s:
             return "lease_max"
@@ -248,11 +255,14 @@ class Lease:
         active time, or past the deadline of the wait for the person."""
         if self.state == "waiting_person":
             if self.wait_deadline is not None and now >= self.wait_deadline + MAX_GRACE_S:
-                return "person_timeout"
+                return self._wait_timeout()
             return None
         if self.state == "active" and self.active_s(now) >= self.max_s + MAX_GRACE_S:
             return "lease_max"
         return None
+
+    def _wait_timeout(self) -> str:
+        return "signin_timeout" if self.wait_reason == "signin" else "person_timeout"
 
     def dumps(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
@@ -483,14 +493,20 @@ class Leases:
         return await self._update(user_id, lease_id, lambda lease, now: lease.touch(now))
 
     async def wait_person(
-        self, user_id: str, lease_id: str, reason: str, site: str
+        self, user_id: str, lease_id: str, reason: str, site: str, left_s: int | None = None
     ) -> Lease | None:
-        """B12: the lease waits for the person, both timers suspended, until the deadline."""
-        return await self._update(
-            user_id,
-            lease_id,
-            lambda lease, now: lease.wait_person(now, reason, site, self.session_max_s),
+        """B12: the lease waits for the person, both timers suspended, until the deadline:
+        `left_s` from now (browserd's own, at most BROWSER_SESSION_MAX_S). A lease that already
+        waits keeps its deadline."""
+        deadline_s = (
+            self.session_max_s if left_s is None else max(0, min(left_s, self.session_max_s))
         )
+
+        def wait(lease: Lease, now: float) -> None:
+            if lease.state != "waiting_person":
+                lease.wait_person(now, reason, site, deadline_s)
+
+        return await self._update(user_id, lease_id, wait)
 
     async def resume(self, user_id: str, lease_id: str) -> Lease | None:
         return await self._update(user_id, lease_id, lambda lease, now: lease.resume(now))
@@ -612,8 +628,15 @@ class Leases:
                 lease = None
             if lease is not None and lease.purpose in TIERS:
                 if found.get("state") == "waiting_person":
+                    # browserd's deadline, not a fresh one (#291): what it has left, else none.
+                    left = found.get("wait_left_s")
+                    left = left if isinstance(left, int) and not isinstance(left, bool) else 0
+                    site = found.get("wait_site")
                     lease.wait_person(
-                        now, str(found.get("wait_reason") or "signin"), "", self.session_max_s
+                        now,
+                        str(found.get("wait_reason") or "signin"),
+                        site[:SITE_MAX] if isinstance(site, str) else "",
+                        max(0, min(left, self.session_max_s)),
                     )
                 if await r.set(HOLDER, lease.dumps(), nx=True):
                     logger.info("browser lease taken back from browserd: purpose=%s", lease.purpose)
