@@ -134,7 +134,7 @@ def test_settings_are_typed_setting() -> None:
         "search.browser_sources[].text_version",
         *[path for path in types if path.startswith("search.feeds")],
         "search.feeds[].kind",
-        "search.feeds[].terms[]",
+        "search.feeds[].terms.terms[]",
         "experience.employers[].key",
     ]
     assert all(types[path] is FieldType.SETTING for path in settings)

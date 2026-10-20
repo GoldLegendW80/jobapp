@@ -1219,7 +1219,8 @@
       "compensation": {
         "salary": null,
         "daily_rate": null
-      }
+      },
+      "feeds": []
     },
     "answers": {
       "work_authorization": [

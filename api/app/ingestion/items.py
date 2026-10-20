@@ -492,6 +492,7 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             industries=_K.terms,
             company_types=_K.setting,
             compensation=_K.setting,
+            feeds=_K.setting,
         ),
         "answers": _slots(
             "answers",
