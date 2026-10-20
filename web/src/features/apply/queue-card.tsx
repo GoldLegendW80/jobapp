@@ -277,7 +277,9 @@ export function QueueCard({
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-muted-foreground">No document yet.</p>
+          <p className="text-sm text-muted-foreground">
+            The documents show here once the form is filled.
+          </p>
         )}
       </section>
 

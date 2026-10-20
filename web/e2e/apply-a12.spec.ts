@@ -231,6 +231,8 @@ test("the Greenhouse item: its documents, an edited answer, approved, submitted 
   await expect(dialog).toContainText("Letter version");
   await dialog.getByRole("button", { name: "Approve and submit" }).click();
 
+  // An open dialog hides the page from the accessibility tree: the card is looked for once it closed.
+  await expect(dialog).toBeHidden();
   // Under way, then submitted: a submitted application leaves the queue.
   await expect(card).toHaveCount(0, { timeout: 420_000 });
   const accepted = (await stub.submissions()).filter(
@@ -264,6 +266,7 @@ test("the second Greenhouse item: approved as the assistant filled it, submitted
   );
   await dialog.getByRole("button", { name: "Approve and submit" }).click();
 
+  await expect(dialog).toBeHidden();
   await expect(card).toHaveCount(0, { timeout: 420_000 });
   const accepted = (await stub.submissions()).filter(
     (one) => one.ats === "greenhouse" && one.accepted,
@@ -299,6 +302,7 @@ test("the Ashby item: rejected on a phone by keyboard, the posting skipped, noth
   await dialog.getByRole("button", { name: "Reject", exact: true }).focus();
   await page.keyboard.press("Enter");
 
+  await expect(dialog).toBeHidden();
   await expect(card).toHaveCount(0);
   await expect(
     page.getByRole("heading", { level: 1, name: "Applications" }),

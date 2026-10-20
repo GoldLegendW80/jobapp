@@ -85,7 +85,9 @@ describe("the review queue page", () => {
     expect(queued).toHaveTextContent(
       "Waiting for your CV and letter to be written.",
     );
-    expect(queued).toHaveTextContent("No document yet.");
+    expect(queued).toHaveTextContent(
+      "The documents show here once the form is filled.",
+    );
     within(queued).getByRole("button", { name: "Cancel application" });
     expect(
       within(queued).queryByRole("button", { name: "Approve and submit" }),
