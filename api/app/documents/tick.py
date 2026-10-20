@@ -550,6 +550,30 @@ def _running_auto(db: Session, user_id: uuid.UUID) -> int:
     )
 
 
+def lock_postings(db: Session, user_id: uuid.UUID, eligible_now: Sequence[Candidate]) -> None:
+    """Lock 2 of every posting the rest of the pass may touch, shared and in id order, before
+    the first of them is claimed: the postings of the clicks and automatic generations not
+    started, and the eligible ones. Any other transaction that holds several job rows (an
+    import, a bulk) takes them in id order too (jobs.service lock order), so none waits for a
+    row the pass holds while holding one the pass asks for next."""
+    ids = {
+        posting_id
+        for posting_id in db.scalars(
+            sa.select(Document.posting_id)
+            .join(DocumentGeneration, DocumentGeneration.document_id == Document.id)
+            .where(
+                DocumentGeneration.user_id == user_id,
+                DocumentGeneration.mode == GenerationMode.posting,
+                DocumentGeneration.status.in_(NOT_STARTED),
+                Document.scope == Scope.posting,
+            )
+        )
+        if posting_id is not None
+    }
+    ids.update(posting.id for posting in eligible_now)
+    store.lock_postings(db, user_id, ids)
+
+
 def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings) -> Outcome | None:
     """One pass for one person (module docstring). The caller commits, then queues the runs.
     None when another pass holds the person."""
@@ -567,6 +591,16 @@ def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings)
     today = eligibility.ceiling_day(at, timezone)
     auto = setting.auto
     out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings, auto=auto)
+    postings = eligible(
+        db,
+        user_id,
+        setting,
+        search,
+        eligibility.found_day(at),
+        settings.documents_auto_lookback_days,
+        eligibility.LETTER_STATUSES,
+    )
+    lock_postings(db, user_id, postings)
     out.runs += start_clicks(db, user_id, at, settings)
     create = auto
     if auto and not store.base_cvs(db, user_id):
@@ -582,15 +616,6 @@ def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings)
             out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings)
         else:
             create = False  # nothing to write from: nothing created, the rest still settled
-    postings = eligible(
-        db,
-        user_id,
-        setting,
-        search,
-        eligibility.found_day(at),
-        settings.documents_auto_lookback_days,
-        eligibility.LETTER_STATUSES,
-    )
     if create:
         docs = posting_docs(db, user_id)
         for posting in postings:

@@ -528,6 +528,8 @@ class RescoreOut(BaseModel):
     unchanged: int
     skipped_manual: int
     skipped_no_text: int
+    # Held by another change at that moment: kept as they were, a new rescore scores them.
+    skipped_busy: int
     # Jobs not looked at yet (the time budget or the row cap stopped this call): call again
     # with after = next_after. 0 and null when done.
     remaining: int
@@ -563,6 +565,22 @@ class BoardFailureOut(BaseModel):
     message: str
 
 
+class SourceOut(BaseModel):
+    """One browser source of the sweep (browser B8, app/browser/sources): the postings it read
+    completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
+    layout_changed, store_failed, lease_budget, lease_ended, time_budget, page_failed,
+    browser_busy, browser_unavailable, or not_started for a source after one that stopped the
+    sweep's sources)."""
+
+    kind: str
+    query: str
+    location: str | None = None
+    result_pages: int = 0
+    found: int = 0
+    new: int = 0
+    error: str | None = None
+
+
 class SweepOut(BaseModel):
     """A sweep and its progress: while it runs the counters grow board by board."""
 
@@ -583,6 +601,7 @@ class SweepOut(BaseModel):
     duplicates: int = 0
     skipped_by_rule: int = 0
     duration: float | None = None
+    sources: list[SourceOut] = Field(default_factory=list)
 
 
 class SweepJobOut(BaseModel):

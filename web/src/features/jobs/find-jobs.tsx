@@ -34,6 +34,8 @@ import { FitBadge, StatusBadge } from "./badges";
 import { formatDateTime } from "./format";
 import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
+import { sourceLabel } from "./labels";
+import { SweepSources } from "./sweep-sources";
 import { getSweep, listSweeps, sweepsKey, type Sweep } from "./sweeps-api";
 import { scheduleLine } from "./use-schedule";
 import type { SweepRunner } from "./use-sweep-runner";
@@ -71,11 +73,13 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
         <span className="font-medium">
           {total
             ? `${sweep.boards_done} of ${plural(total, "board")} read`
-            : "Waiting for the worker"}
+            : sweep.current_board
+              ? "Reading job sites in your browser"
+              : "Waiting for the worker"}
         </span>
         {sweep.current_board ? (
           <span className="min-w-0 truncate text-muted-foreground">
-            Reading {sweep.current_board}
+            Reading {sourceLabel(sweep.current_board)}
           </span>
         ) : null}
         <span className="tabular-nums text-muted-foreground">
@@ -191,6 +195,7 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
             ) : null}
           </section>
         ) : null}
+        <SweepSources sources={sweep.sources} />
         {sweep.boards_failed.length ? (
           <section aria-label="Failed boards" className="flex flex-col gap-1">
             <h3 className="flex items-center gap-1.5 text-sm font-medium">

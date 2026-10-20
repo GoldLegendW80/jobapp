@@ -239,6 +239,7 @@ export const rescoreResultSchema = z.object({
   unchanged: z.number().int().nonnegative(),
   skipped_manual: z.number().int().nonnegative(),
   skipped_no_text: z.number().int().nonnegative(),
+  skipped_busy: z.number().int().nonnegative(),
   remaining: z.number().int().nonnegative(),
   next_after: z.string().nullable(),
 });
@@ -268,6 +269,7 @@ export async function rescoreAll(
     unchanged: 0,
     skipped_manual: 0,
     skipped_no_text: 0,
+    skipped_busy: 0,
     remaining: 0,
     next_after: null,
   };
@@ -284,6 +286,7 @@ export async function rescoreAll(
     total.unchanged += part.unchanged;
     total.skipped_manual += part.skipped_manual;
     total.skipped_no_text += part.skipped_no_text;
+    total.skipped_busy += part.skipped_busy;
     total.remaining = part.remaining;
     onProgress?.({ ...total });
     if (!part.next_after || part.remaining === 0) break;

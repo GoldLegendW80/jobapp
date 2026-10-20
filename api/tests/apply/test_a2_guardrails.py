@@ -308,8 +308,8 @@ def test_company_key(one: str, two: str, same: bool) -> None:
 # --- states --------------------------------------------------------------------------------------
 
 
-def _application(state: State) -> Application:
-    return Application(id=uuid.uuid4(), state=state, submitted_at=None)
+def _application(state: State, mode: Mode = Mode.full_auto) -> Application:
+    return Application(id=uuid.uuid4(), state=state, mode=mode, submitted_at=None)
 
 
 def test_every_state_has_a_row() -> None:
@@ -330,8 +330,18 @@ def test_move_follows_the_table(current: State, to: State) -> None:
 
 
 def test_the_ends_have_no_way_out() -> None:
+    # A13a: the Yes to a Full auto rehearsal is the one exit, to the review queue.
     for end in (*ENDED, State.submitted):
-        assert states.TRANSITIONS[end] == frozenset()
+        wanted = {State.ready} if end is State.rehearsed else set()
+        assert states.TRANSITIONS[end] == wanted
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.manual])
+def test_only_a_full_auto_rehearsal_leaves_rehearsed(mode: Mode) -> None:
+    application = _application(State.rehearsed, mode)
+    with pytest.raises(states.TransitionError):
+        states.move(application, State.ready, AT)
+    assert application.state is State.rehearsed
 
 
 def test_submit_only_after_a_decision() -> None:
@@ -750,7 +760,10 @@ def test_no_path_reaches_submitting_around_a_decision() -> None:
 
 def _walk(rng: random.Random, start: State, *, gate: bool, dry_run: bool) -> list[State]:
     """A random walk through `states.move`, the gate's flag passed only when `gate`."""
-    application = Application(id=uuid.uuid4(), state=start, dry_run=dry_run, submitted_at=None)
+    # Full auto, so the walk may take the one exit of `rehearsed` (A13a) too.
+    application = Application(
+        id=uuid.uuid4(), state=start, mode=Mode.full_auto, dry_run=dry_run, submitted_at=None
+    )
     path, clicked = [start], False
     for _ in range(40):
         targets = sorted(states.TRANSITIONS[State(application.state)], key=lambda s: s.value)
@@ -772,7 +785,7 @@ def _walk(rng: random.Random, start: State, *, gate: bool, dry_run: bool) -> lis
 def test_random_walks_never_submit_without_the_gate_or_in_a_rehearsal(start: State) -> None:
     rng = random.Random(296)  # noqa: S311  # a fixed seed, so the walks repeat
     clicked = 0
-    for _ in range(500):
+    for _ in range(3000):
         assert State.submitting not in _walk(rng, start, gate=False, dry_run=False)
         assert State.submitting not in _walk(rng, start, gate=True, dry_run=True)
         path = _walk(rng, start, gate=True, dry_run=False)
