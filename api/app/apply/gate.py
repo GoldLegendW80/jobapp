@@ -21,7 +21,8 @@ person's apply lock and the application's row lock, the checks of the spec in or
 6. documents: `documents.current` returns the versions the hash covers, else `documents_changed`
    (a newer version written since the fill: nothing frozen, nothing refused on content). In Full
    auto, apply's own rule (`documents_need_review`);
-7. Full auto only: refused (`full_auto_unavailable`) until A13 writes its checks.
+7. Full auto only: `full_auto.checks` (A13a: the fit threshold, a supported source, nothing left,
+   no free text by the agent, no captcha, never apply in the posting's text).
 
 Its audit event (`decision`, with the outcome and the code) is written whatever the outcome, and
 the caller commits before any click. A pass spends the authorisation (`used_at`), marks every
@@ -32,12 +33,15 @@ freezes a document: the freeze is in the transaction that records the click (`su
 
 A refusal by a kill switch, the authorisation, the caps or the documents leaves the application
 `ready`; a refusal by never apply or a duplicate ends it `blocked` with the code
-(`posting_closed` for a closed posting), as at the start (A2).
+(`posting_closed` for a closed posting), as at the start (A2). In Full auto (`full_auto_like`,
+written by `full_auto.decide`) a pass moves the item to `held` with the end of its hold, and a
+refusal that leaves it `ready` sends it to the review queue (`full_auto.to_review`).
 
 The decision is not the last word: the submit lease runs the checks that can change after it
 again under the same locks, when it starts and just before the click (`submit.recheck`: the
-approval's expiry, never apply, duplicates, caps), so an approval past its validity, a posting
-applied or closed since, or the same role clicked since on another posting is never clicked.
+approval's expiry, never apply, duplicates, caps, and Full auto's `full_auto.recheck`), so an
+approval past its validity, a posting applied or closed since, or the same role clicked since on
+another posting is never clicked.
 """
 
 import hashlib
@@ -52,7 +56,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.apply import caps, guardrails, service, states
+from app.apply import caps, full_auto, guardrails, service, states
 from app.apply.models import (
     AnswerSource,
     Application,
@@ -91,7 +95,6 @@ SENTENCES = {
     ),
     "documents_review": "Your documents need a look before they are sent.",
     "manual": "You apply yourself to this one: the app does not click Submit.",
-    "full_auto_unavailable": "Full auto is not available yet.",
     "not_cancellable": "This application can no longer be stopped or rejected.",
     "not_unknown": "This application is not waiting for you to confirm it.",
     "not_retryable": "Only an unconfirmed or refused application can be tried again.",
@@ -107,6 +110,7 @@ SENTENCES = {
     ),
     **guardrails.SENTENCES,
     **caps.SENTENCES,
+    **full_auto.SENTENCES,
 }
 # Refusals that leave the application as it is (`ready`): the person may approve again later.
 KEEP = frozenset(
@@ -121,9 +125,8 @@ KEEP = frozenset(
         "documents_changed",
         "documents_review",
         "manual",
-        "full_auto_unavailable",
     }
-).union(caps.KEEP)
+).union(caps.KEEP, full_auto.SENTENCES)
 # The authorisation each mode needs.
 KIND_OF_MODE = {
     Mode.review: AuthorisationKind.person_approval,
@@ -412,6 +415,8 @@ def decide(
             to = State.posting_closed if code == "posting_closed" else State.blocked
             states.move(application, to, now)
             application.error_code = code
+        elif application.mode is Mode.full_auto and application.state is State.ready:
+            full_auto.to_review(db, application, code, now)
         _event(
             db,
             application,
@@ -431,7 +436,7 @@ def decide(
         posting,
         _rules(db, user_id),
         swept=guardrails.swept_never_apply(db, user_id, posting.id),
-        mode=application.mode,
+        mode=full_auto.blocking_mode(application.mode),
     )
     if code is not None:
         return refused(code)
@@ -447,7 +452,8 @@ def decide(
     if application.mode is Mode.full_auto:
         if documents_need_review(application.document_versions):
             return refused("documents_review")
-        return refused("full_auto_unavailable")  # A13 writes Full auto's checks and the hold
+        if code := full_auto.checks(db, application, posting):
+            return refused(code)
 
     authorisation.used_at = now
     db.execute(
@@ -460,18 +466,24 @@ def decide(
     )
     application.answers_hash = authorisation.answers_hash
     application.error_code = None
-    states.move(application, State.approved, now, by_gate=True)
+    to = State.held if application.mode is Mode.full_auto else State.approved
+    held: dict[str, Any] = {}
+    if to is State.held:
+        values = caps.settings_of(db, user_id)
+        held["until"] = full_auto.hold_end(values, application, now).isoformat()
+    states.move(application, to, now, by_gate=True)
     _event(
         db,
         application,
         "decision",
         now,
-        outcome="approved",
+        outcome=to.value,
         code=None,
         authorisation_id=str(authorisation.id),
         dry_run=application.dry_run,
+        **held,
     )
-    return Decision(True, None, State.approved)
+    return Decision(True, None, to)
 
 
 # --- the freeze and the person's other decisions ------------------------------------------------

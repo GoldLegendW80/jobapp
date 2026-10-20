@@ -18,14 +18,18 @@ plans. A Like is the application itself:
    rendered, or written by a running generation or a click, is not asked again: all of it is
    read under the locks of the posting's documents, so no run settles between the read and
    the ask.
-3. `service.start` with the mode in force (`apply_settings.mode_after_like`; Full auto makes a
-   Review first item until A13a writes its checks): its refusals (no address, duplicates) roll
+3. `service.start` with the mode in force (`full_auto.mode_of_like`: Full auto when it is on,
+   unless a never apply term is in the posting's text alone, which makes a Review first item
+   with that reason; a Full auto item is a rehearsal while fewer than `APPLY_REHEARSALS` were
+   answered Yes): its refusals (no address, duplicates) roll
    the ask back with them; else the application is created `queued` and committed with the ask
    in one transaction, so the fill (A5's tick) never reads the application before its documents
    were asked. The fill waits for them with their reason (`needs` = `documents:<reason>`) and
    ends `blocked` with `no_documents` when none come.
-4. A `liked` event (the mode in force, the kinds asked), in a second transaction: the timeline's
-   only, so a failure there leaves the Like as it is.
+4. A `liked` event (the mode in force, the kinds asked, and for a Full auto Like the settings in
+   force, `full_auto.settings_in_force`), in a second transaction: the timeline's only, so a
+   failure there leaves the Like as it is. The Like's time that Full auto reads is the
+   application's `created_at`, written with it.
 
 Raises `service.PostingNotFoundError` (404), `service.RefusedError` (409, the code and
 `sentence(code)`), `jobs_service.JobBusyError` and `store.DocumentBusyError` (409 busy). The
@@ -41,8 +45,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.apply import caps, guardrails, service, states
-from app.apply.caps_models import LikeMode
+from app.apply import caps, full_auto, guardrails, service, states
 from app.apply.models import ENDED, Application, Mode
 from app.documents import estimate, generate, store, writer_base
 from app.documents import freeze as documents
@@ -60,9 +63,6 @@ logger = logging.getLogger(__name__)
 SENTENCES = {
     "same_role_live": "An application to the same role at this company is already under way.",
 }
-# The mode of the application a Like creates. A11 refuses to turn Full auto on until A13a; a
-# stored `full_auto` makes a Review first item until then, never an item no approval can pass.
-LIKE_MODES = {LikeMode.review: Mode.review, LikeMode.full_auto: Mode.review}
 
 
 def sentence(code: str) -> str:
@@ -161,13 +161,14 @@ def on_like(
     if posting is None:
         raise service.PostingNotFoundError(str(posting_id))
     service._lock_person(db, user_id)
-    in_force = caps.settings_of(db, user_id).mode_after_like
-    mode = LIKE_MODES[in_force]
+    values = caps.settings_of(db, user_id)
+    in_force = values.mode_after_like
+    mode, why = full_auto.mode_of_like(db, user_id, posting, values, now)
     code = guardrails.never_apply(
         posting,
         service._rules(db, user_id),
         swept=guardrails.swept_never_apply(db, user_id, posting.id),
-        mode=mode,
+        mode=full_auto.blocking_mode(mode),
     )
     if code is not None:
         raise service.RefusedError(guardrails.Refusal(code))
@@ -175,8 +176,10 @@ def on_like(
     if other is not None:
         raise service.RefusedError(guardrails.Refusal("same_role_live", other))
     asked = ask_documents(db, user_id, posting.id, now)
-    started = service.start(db, user_id, posting.id, mode, False, now=now, stub_base=stub_base)
+    rehearsal = mode is Mode.full_auto and full_auto.is_rehearsal(values)
+    started = service.start(db, user_id, posting.id, mode, rehearsal, now=now, stub_base=stub_base)
     application = started.application
+    extra = {"full_auto": full_auto.settings_in_force(values)} if mode is Mode.full_auto else {}
     try:
         service._event(
             db,
@@ -185,6 +188,8 @@ def on_like(
             now,
             mode_after_like=in_force.value,
             documents=[kind.value for kind in asked],
+            **({"not_full_auto": why} if why else {}),
+            **extra,
         )
         db.commit()
     except DBAPIError:

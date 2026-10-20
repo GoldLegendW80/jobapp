@@ -48,6 +48,15 @@ application to `approved`. No model is called anywhere here.
    (the freeze rolls back with it), a second one records `submit_unknown` with `record_failed`,
    its freeze included.
 
+Full auto (A13a, `full_auto.py`): the job of a `ready` Full auto item runs its decision
+(`full_auto.decide`) and ends; a `held` item is asked only once its hold ended (`due`), and goes
+the same way as an `approved` one, with Full auto's lines in `recheck`. Any stop before the click
+sends it to the review queue (`mode` `review`), a kill switch included, never to the bin.
+
+A Review first approval that only the pace per host holds back stays valid past
+`APPLY_APPROVAL_TTL_S`, at most 7 days after it was given (`full_auto.expired`, planner default
+of 2026-10-19), and every other check runs again before the click.
+
 Once `submitting` is committed nothing moves the application to a state that frees its posting:
 a crash, a cancelled job or a failed record ends `submit_unknown` (shielded from the
 cancellation), and `reset_interrupted`, run when the queue's worker starts, moves a `submitting`
@@ -76,11 +85,11 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, gate, guardrails, run, shots, states
+from app.apply import caps, full_auto, gate, guardrails, run, shots, states
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
-from app.apply.models import Application, Authorisation, ShotKind, State
+from app.apply.models import Application, Authorisation, Mode, ShotKind, State
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.documents import freeze as documents
@@ -180,6 +189,8 @@ def _stop(db: Session, application: Application, stop: Stop, now: datetime) -> N
     application.error_code = stop.code if stop.state is not State.needs_person else None
     application.needs = stop.needs
     gate._event(db, application, "submit_stopped", now, state=stop.state.value, code=stop.code)
+    if stop.state in (State.ready, State.needs_person):
+        full_auto.hand_over(db, application, stop.code, now)
 
 
 def _locked(db: Session, application_id: uuid.UUID) -> tuple[Application, Job] | None:
@@ -212,24 +223,27 @@ def _spent(db: Session, application: Application) -> Authorisation | None:
 
 def recheck(db: Session, application: Application, posting: Job, now: datetime) -> Stop | None:
     """The gate's checks that can change after its decision, again (the caller holds the gate's
-    locks): the approval still valid (else `ready`, `authorisation_expired`), never apply,
-    duplicates (this application excluded), the caps. A refusal ends as `decide`'s does,
-    `blocked` with its code (`posting_closed` for a closed posting), except that a code `decide`
-    keeps at `ready` goes back to `ready`: an approved application never waits on it."""
+    locks): the approval still valid (`full_auto.expired`, else `ready`,
+    `authorisation_expired`), never apply, duplicates (this application excluded), the caps, and
+    in Full auto `full_auto.recheck`. A refusal ends as `decide`'s does, `blocked` with its code
+    (`posting_closed` for a closed posting), except that a code `decide` keeps at `ready` goes
+    back to `ready`: an approved application never waits on it."""
     spent = _spent(db, application)
-    if spent is None or now >= spent.expires_at:
+    if spent is None or full_auto.expired(application, spent, now):
         return Stop(State.ready, "authorisation_expired")
     code = guardrails.never_apply(
         posting,
         gate._rules(db, application.user_id),
         swept=guardrails.swept_never_apply(db, application.user_id, posting.id),
-        mode=application.mode,
+        mode=full_auto.blocking_mode(application.mode),
     )
     if code is None:
         duplicate = guardrails.duplicates(
             db, application.user_id, posting, application.canonical_key, now, exclude=application.id
         )
         code = duplicate.code if duplicate is not None else caps.check(db, application, now)
+    if code is None and application.mode is Mode.full_auto:
+        code = full_auto.recheck(db, application, posting, now)
     if code is None:
         return None
     if code in gate.KEEP:
@@ -243,8 +257,12 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
     if found is None:
         return "gone"
     application, posting = found
-    if application.state is not State.approved:
+    if application.state not in states.DECIDED:
         return "not_approved"
+    if application.state is State.held:
+        until = full_auto.hold_until(db, application)
+        if until is None or now < until:
+            return "holding"
     if refused := recheck(db, application, posting, now):
         _stop(db, application, refused, now)
         return refused.code
@@ -279,7 +297,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
 
 def stopped(db: Session, application_id: uuid.UUID, stop: Stop, now: datetime) -> str:
     found = run._locked(db, application_id)
-    if found is None or found[0].state is not State.approved:
+    if found is None or found[0].state not in states.DECIDED:
         return "superseded"
     _stop(db, found[0], stop, now)
     return stop.state.value
@@ -287,7 +305,7 @@ def stopped(db: Session, application_id: uuid.UUID, stop: Stop, now: datetime) -
 
 def wait(db: Session, application_id: uuid.UUID, needs: str, now: datetime, **data: Any) -> None:
     found = run._locked(db, application_id)
-    if found is not None and found[0].state is State.approved:
+    if found is not None and found[0].state in states.DECIDED:
         run._wait(db, found[0], needs, now, **data)
 
 
@@ -298,7 +316,7 @@ def arm(
     gate's checks again (`recheck`), then `rehearsed` or `submitting` (committed by the caller
     before the click). Returns what was written."""
     found = _locked(db, application_id)
-    if found is None or found[0].state is not State.approved:
+    if found is None or found[0].state not in states.DECIDED:
         return "superseded"
     application, posting = found
     if read.shot is not None:
@@ -306,7 +324,10 @@ def arm(
         gate._event(db, application, "screenshot", now, kind="before", id=str(shot.id))
     else:
         gate._event(db, application, "screenshot_failed", now)
-    if code := gate.switch_code(switches):
+    if (code := gate.switch_code(switches)) and application.mode is Mode.full_auto:
+        _stop(db, application, Stop(State.ready, code), now)
+        return State.ready.value
+    if code:
         states.move(application, State.cancelled, now)
         application.error_code = code
         gate._event(db, application, "kill_switch", now, code=code)
@@ -383,7 +404,7 @@ def interrupted(db: Session, application_id: uuid.UUID, now: datetime, code: str
     application = found[0]
     if application.state is State.submitting:
         return record(db, application_id, State.submit_unknown, now, code=code)
-    if application.state is State.approved:
+    if application.state in states.DECIDED:
         _stop(db, application, Stop(State.ready, code), now)
         return "ready"
     return "kept"
@@ -400,12 +421,20 @@ def reset_interrupted(db: Session, now: datetime) -> int:
     return len(ids)
 
 
-def due(db: Session) -> list[uuid.UUID]:
-    """The `approved` applications whose submit the tick asks for, oldest first."""
+def due(db: Session, now: datetime | None = None) -> list[uuid.UUID]:
+    """The applications whose submit job the tick asks for, oldest first: `approved` ones, `held`
+    ones whose hold ended at `now` (the database's clock when None), and `ready` Full auto ones,
+    whose job runs the decision."""
     return list(
         db.execute(
             sa.select(Application.id)
-            .where(Application.state == State.approved)
+            .where(
+                sa.or_(
+                    Application.state == State.approved,
+                    Application.id.in_(full_auto.held_over(now)),
+                    sa.and_(Application.state == State.ready, Application.mode == Mode.full_auto),
+                )
+            )
             .order_by(Application.updated_at, Application.id)
             .limit(200)
         ).scalars()
@@ -694,9 +723,26 @@ async def _drive(
     return await _after_arm(services, plan.application_id, read, tools, capability)
 
 
+async def _decide(services: Services, application_id: uuid.UUID) -> str:
+    switches = gate.Switches(enabled=services.enabled, paused=await services.paused())
+    try:
+        return await asyncio.to_thread(
+            _in_db,
+            services.sessions,
+            lambda db: full_auto.decide(db, application_id, services.clock(), switches),
+        )
+    except jobs_service.JobBusyError:
+        return "busy"
+
+
 async def submit(services: Services, application_id: uuid.UUID) -> str:
-    """The job: one approved application to its outcome. Returns a code for the log (no value of
-    the person's)."""
+    """The job: one approved or held application to its outcome, or the decision of a `ready`
+    Full auto one. Returns a code for the log (no value of the person's)."""
+    undecided = await asyncio.to_thread(
+        _in_db, services.sessions, lambda db: full_auto.undecided(db, application_id)
+    )
+    if undecided:
+        return await _decide(services, application_id)
     plan = await asyncio.to_thread(
         _in_db, services.sessions, lambda db: prepare(db, application_id, services.clock())
     )
