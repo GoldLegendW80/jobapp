@@ -132,11 +132,10 @@ def _begin(
         body = MessageIn(text=text)
     except ValidationError:
         raise operator.Refused(422, TOO_LONG if text.strip() else operator.EMPTY) from None
+    cleaned = operator.clean_text(body.text)
     thread, created = operator.open_thread(sessions, user_id, job_id, now(), only)
     told: dict[str, object] = {"thread_id": str(thread.id), "thread_created": created}
-    sent = operator.send_message(
-        sessions, user_id, thread.id, operator.clean_text(body.text), now(), only
-    )
+    sent = operator.send_message(sessions, user_id, thread.id, cleaned, now(), only)
     told["message_id"] = sent.message.id
     return sent.run.id, told
 
