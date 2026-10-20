@@ -375,7 +375,7 @@ def test_a_thread_whose_every_comment_failed_reports_the_error() -> None:
     async def go() -> Any:
         calls = {"n": 0}
 
-        async def get(url: str, hosts: frozenset[str]) -> bytes:
+        async def get(url: str, hosts: frozenset[str], **_: Any) -> bytes:
             calls["n"] += 1
             if url.endswith("whoishiring.json"):
                 return b'{"submitted": [3002]}'

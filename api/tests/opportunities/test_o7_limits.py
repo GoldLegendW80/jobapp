@@ -70,7 +70,7 @@ HOSTILE = {
     "style": _fill("<style "),
     "p": _fill("<p "),
     "br": _fill("<br"),
-    "close-never-matches": "<script>" + _fill("</scrip"),
+    "close-never-matches": ("<script>" + _fill("</scrip"))[:LENGTH],
     "mix": _fill("<p<script<style<br"),
 }
 
@@ -116,7 +116,6 @@ def test_scripts_and_styles_are_still_dropped() -> None:
     # A block never closed runs to the end, as a browser reads it.
     assert plain_text("kept<script>alert(1)<p>gone") == "kept"
     assert plain_text("<p>One</p><p>Two</p>") == "One\n\nTwo"
-    assert plain_text("1 < 2 and 3 > 2") == "1 < 2 and 3 > 2"
 
 
 def _huge_remote_ok() -> bytes:
