@@ -1,0 +1,159 @@
+/* portrait: Carlito for the text, Caladea for the name and the headings, a warm brown accent.
+   A 36 mm frame at the top left holds the photo, or the initials on a light tint; the name,
+   the headline and the contact lines stand beside it. Below, one column of sections under
+   serif headings with a short rule. The density comes from the step on :root: --body-size,
+   --line-height, --section-gap, --item-gap, --margin. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Carlito", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #24201c;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+/* The frame is second in the document and first on the page: the grid places it, so the
+   order the page is painted, and so extracted, in keeps the name first. */
+.head {
+  display: grid;
+  grid-template-columns: 36mm minmax(0, 1fr);
+  column-gap: 7mm;
+  align-items: start;
+  padding-bottom: 8pt;
+  border-bottom: 1.2pt solid var(--accent);
+}
+.head.bare { grid-template-columns: minmax(0, 1fr); }
+.headtext { grid-column: 2; grid-row: 1; min-width: 0; }
+.head.bare .headtext { grid-column: 1; }
+.frame {
+  grid-column: 1;
+  grid-row: 1;
+  width: 36mm;
+  height: 36mm;
+  border-radius: 3mm;
+  overflow: hidden;
+}
+.photo {
+  display: block;
+  width: 36mm;
+  height: 36mm;
+  object-fit: cover;
+}
+.initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3e9df;
+  color: var(--accent);
+  font-family: "Caladea", serif;
+  font-size: 3.6em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.name {
+  font-family: "Caladea", serif;
+  font-size: 2.9em;
+  font-weight: 700;
+  line-height: 1.05;
+}
+.headline {
+  font-size: 1.15em;
+  font-style: italic;
+  color: var(--accent);
+  margin-top: 3pt;
+}
+/* one contact line under the other, each whole unless it alone is wider than the column */
+.contact {
+  list-style: none;
+  margin-top: 6pt;
+  color: #4a423a;
+}
+.contact li { overflow-wrap: break-word; }
+
+.block { margin-top: var(--section-gap); }
+.label {
+  font-family: "Caladea", serif;
+  font-size: 1.3em;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.15;
+  margin-bottom: var(--item-gap);
+}
+.label::after {
+  content: "";
+  display: block;
+  width: 14mm;
+  border-top: 1.2pt solid var(--accent);
+  margin-top: 2pt;
+}
+
+.highlights, .entry ul { padding-left: 1.1em; }
+.highlights li, .entry li { margin-bottom: 1pt; }
+.highlights li::marker, .entry li::marker { color: var(--accent); }
+
+.competencies {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 12pt;
+}
+.competencies li::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border: 2pt solid var(--accent);
+  margin-right: 4pt;
+  vertical-align: 0.15em;
+}
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10pt;
+}
+.entry-title { font-size: 1.05em; font-weight: 700; }
+.entry-head .period { flex: 0 0 auto; text-align: right; font-style: italic; }
+.period, .place { color: #5a5048; font-size: 0.95em; }
+
+.school { margin-bottom: var(--item-gap); }
+.school:last-child { margin-bottom: 0; }
+.school .period { font-style: italic; }
+
+.skill-group { margin-bottom: 1.5pt; }
+.group-label {
+  display: inline;
+  font-size: 1em;
+  font-weight: 700;
+  color: var(--accent);
+}
+.group-label::after { content: ":"; }
+:lang(fr) .group-label::after { content: "\a0:"; }
+.items { display: inline; }
+
+.languages {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1pt 16pt;
+}
+
+/* a heading and a role's title stay with the text that follows them across a page end */
+.label, .entry-head, .entry-title { break-after: avoid; }
+
+.letter-body { margin-top: var(--section-gap); }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; color: #4a423a; }
+.recipient { margin-top: var(--section-gap); white-space: pre-line; }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { color: var(--accent); }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-family: "Caladea", serif; font-weight: 700; margin-top: var(--section-gap); }
