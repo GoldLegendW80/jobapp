@@ -586,7 +586,8 @@ def bulk_undo(body: UndoIn, user: CurrentUser, request: Request, db: Db) -> Undo
 def rescore(body: RescoreIn, user: CurrentUser, request: Request, db: Db) -> Any:
     """Score the caller's jobs again against the profile's skills: all of them, or `ids`. A fit
     set by hand is kept unless `overwrite_manual`. Runs in batches of 100, each committed, and
-    stops after 2,000 jobs or 20 seconds: `remaining` and `next_after` say where to resume."""
+    stops after 2,000 jobs or 20 seconds: `remaining` and `next_after` say where to resume. A job
+    another transaction holds is not waited for: it counts in `skipped_busy`."""
     skills = service.user_skills(db, user.id)
     if skills is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NO_SKILLS)
@@ -626,6 +627,7 @@ def rescore(body: RescoreIn, user: CurrentUser, request: Request, db: Db) -> Any
         unchanged=outcome.unchanged,
         skipped_manual=outcome.skipped_manual,
         skipped_no_text=outcome.skipped_no_text,
+        skipped_busy=outcome.skipped_busy,
         remaining=remaining,
         next_after=after if remaining else None,
     )

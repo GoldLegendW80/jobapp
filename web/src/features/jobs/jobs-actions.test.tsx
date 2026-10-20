@@ -419,6 +419,7 @@ describe("rescore", () => {
     unchanged: 0,
     skipped_manual: 0,
     skipped_no_text: 0,
+    skipped_busy: 0,
     remaining: 0,
     next_after: null,
     ...over,
@@ -432,6 +433,7 @@ describe("rescore", () => {
         changed: 10,
         unchanged: 1960,
         skipped_manual: 30,
+        skipped_busy: 1,
         remaining: 433,
         next_after: "abc",
       }),
@@ -441,6 +443,7 @@ describe("rescore", () => {
         unchanged: 388,
         skipped_manual: 10,
         skipped_no_text: 33,
+        skipped_busy: 2,
       }),
     ]);
     const user = userEvent.setup();
@@ -453,7 +456,7 @@ describe("rescore", () => {
     });
     await user.click(within(dialog).getByRole("button", { name: "Rescore" }));
     await screen.findByText(
-      "Rescored 2,400 postings: 12 changed, 2,348 unchanged, 40 fits set by hand kept, 33 postings without text skipped.",
+      "Rescored 2,400 postings: 12 changed, 2,348 unchanged, 40 fits set by hand kept, 33 postings without text skipped. 3 postings were busy and kept their score. Rescore again to include them.",
     );
     expect(sent).toEqual([
       { overwrite_manual: false },
