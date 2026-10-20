@@ -86,6 +86,12 @@ def _posting_cv(db: Session, user: uuid.UUID, text: str = ENGLISH) -> Document:
     return store.get_or_create(db, user, add_posting(db, user, text), Kind.cv, at=AT)
 
 
+def _switch(db: Session, document: Document, slug: str) -> None:
+    """The document's template changed, as `render_job.switch` changes it before its snapshot."""
+    document.template_slug = slug
+    db.flush()
+
+
 def _version(db: Session, document: Document, headline: str = "One") -> int:
     store.save_draft(
         db,
@@ -444,9 +450,11 @@ def test_a_snapshot_of_an_unchanged_draft_reuses_the_version_another_template_ma
     one = _version(db, document)
     again, made = store.snapshot(db, user, document.id, Origin.edited, at=AT)
     assert (again.number, made) == (one, False)
-    switched = store.set_template(db, user, document.id, "sidebar", at=AT)
-    assert (switched.number, switched.origin, switched.template_slug) == (
+    _switch(db, document, "sidebar")
+    switched, made = store.snapshot(db, user, document.id, Origin.template, at=AT)
+    assert (switched.number, made, switched.origin, switched.template_slug) == (
         2,
+        True,
         Origin.template,
         "sidebar",
     )
@@ -487,12 +495,14 @@ def test_a_user_template_must_be_the_persons_own(db: Session) -> None:
     db.add(_template(b, "upload-abcd1234"))
     db.add(_template(a, "upload-a1a1a1a1", version=3))
     db.flush()
-    document = _posting_cv(db, a)
     for slug in ("upload-abcd1234", "../classic", "Classic", ""):
         with pytest.raises(store.TemplateUnknownError):
-            store.set_template(db, a, document.id, slug, at=AT)
-    made = store.set_template(db, a, document.id, "upload-a1a1a1a1", at=AT)
-    assert (made.template_slug, made.template_version) == ("upload-a1a1a1a1", 3)
+            store.create_base(db, a, "Mine", BaseSource.built, at=AT, template_slug=slug)
+    assert store.base_cvs(db, a) == []
+    made = store.create_base(
+        db, a, "Mine", BaseSource.built, at=AT, template_slug="upload-a1a1a1a1"
+    )
+    assert made.template_slug == "upload-a1a1a1a1"
     assert [t.slug for t in store.user_templates(db, a)] == ["upload-a1a1a1a1"]
 
 
@@ -599,7 +609,8 @@ def test_every_store_function_leaves_a_frozen_version_as_it_was(db: Session) -> 
     reused, made = store.snapshot(db, user, document.id, Origin.edited, at=AT)
     assert made
     assert reused.number == number + 1
-    store.set_template(db, user, document.id, "banner", at=AT)
+    _switch(db, document, "banner")
+    store.snapshot(db, user, document.id, Origin.template, at=AT)
     store.restore(db, user, document.id, number, at=AT)
     store.save_draft(
         db,
@@ -1025,7 +1036,6 @@ def test_one_user_never_reads_or_writes_the_others_documents(db: Session) -> Non
         lambda: store.set_language(db, b, doc, Language.fr, AT),
         lambda: store.restore(db, b, doc, number, at=AT),
         lambda: store.snapshot(db, b, doc, Origin.edited, at=AT),
-        lambda: store.set_template(db, b, doc, "banner", at=AT),
         lambda: store.attach_pdf(
             db, b, doc, number, PDF, fit=FitResult.one_page, fit_step=0, pages=1
         ),
@@ -1055,7 +1065,7 @@ def test_one_user_never_reads_or_writes_the_others_documents(db: Session) -> Non
         with pytest.raises(store.NotFoundError):
             write()
     with pytest.raises(store.TemplateUnknownError):
-        store.set_template(db, b, _posting_cv(db, b).id, "upload-aaaaaaaa", at=AT)
+        store.create_base(db, b, "Theirs", BaseSource.built, at=AT, template_slug="upload-aaaaaaaa")
     with pytest.raises(store.NotFoundError):  # an upload of another person
         _base(db, b, source=BaseSource.uploaded, source_document_id=add_upload(db, a))
     db.expire_all()
