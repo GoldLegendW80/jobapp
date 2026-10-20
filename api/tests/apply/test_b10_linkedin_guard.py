@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import caps
-from app.apply.models import Application, State
+from app.apply.models import Application, Mode, State
 from app.browser import linkedin_guard as guard
 from app.profile import service as profile_service
 from tests.apply.a5_support import FakeLeases, run_ashby
@@ -184,3 +184,79 @@ def test_a_pause_after_the_decision_stops_the_click(
     assert (found.state, found.error_code) == (State.blocked, "linkedin_paused")
     assert form.gate_clicks == []
     assert submit.recheck  # the check runs in the submit lease's recheck
+
+
+# --- Full auto (apply A13a): every path of a LinkedIn item meets the guard ---------------------
+
+
+def test_a_full_auto_like_on_linkedin_is_blocked_before_the_lease(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    from tests.apply.test_a13_full_auto import liked, turn_on
+
+    turn_on(db, person_a)
+    app_id = liked(db, person_a, stub)
+    assert application(db, app_id).mode is Mode.full_auto
+    on_linkedin(db, app_id)
+    leases, form = FakeLeases(), run_ashby()
+    assert fill(services(factory, form, leases, stub_base=stub), app_id) == "blocked"
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.blocked, "linkedin_off")
+    assert leases.acquired == []
+    assert form.calls == []
+
+
+@pytest.mark.parametrize("case", list(CASES))
+def test_full_autos_decision_refuses_a_linkedin_item_when_the_guard_does(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    case: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.apply.test_a13_full_auto import HOUR, authorisations, filled, job, turn_on
+
+    turn_on(db, person_a)
+    app_id = filled(db, factory, person_a, stub)  # filled while the form was elsewhere
+    on_linkedin(db, app_id)
+    arrange(factory, person_a, case, monkeypatch)
+    written, form = job(factory, stub, app_id, AT + HOUR)
+    assert (written, form.gate_clicks) == (EXPECTED[case], [])
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.blocked, EXPECTED[case])
+    [row] = authorisations(db, app_id)
+    assert row.used_at is None  # refused: the Like was never spent
+
+
+def test_a_held_full_auto_item_on_linkedin_is_stopped_before_the_click(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    from tests.apply.test_a13_full_auto import HOLD, held, job, turn_on
+
+    turn_on(db, person_a)
+    app_id = held(db, factory, person_a, stub)
+    on_linkedin(db, app_id)
+    switch(factory, person_a)
+    checkpoint(factory, person_a)
+    written, form = job(factory, stub, app_id, AT + HOLD)
+    assert (written, form.gate_clicks) == ("linkedin_paused", [])
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.blocked, "linkedin_paused")
+
+
+def test_full_auto_never_clicks_on_linkedin_before_a16_even_when_allowed(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    """LinkedIn accepted and on, no pause: the guard lets it through, but Full auto's own
+    sources (Ashby, Greenhouse, Lever) still keep the item from a click until A16."""
+    from tests.apply.test_a13_full_auto import HOUR, filled, job, turn_on
+
+    turn_on(db, person_a)
+    app_id = filled(db, factory, person_a, stub)
+    on_linkedin(db, app_id)
+    switch(factory, person_a)
+    written, form = job(factory, stub, app_id, AT + HOUR)
+    assert form.gate_clicks == []
+    assert written == "unsupported_source"
+    assert application(db, app_id).state is not State.held
