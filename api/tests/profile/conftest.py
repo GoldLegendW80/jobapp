@@ -186,7 +186,12 @@ FULL: dict[str, dict[str, Any]] = {
     },
     # The onboarding dates stay null: only the wizard's routes write them, a save refuses them.
     "preferences": {
-        "onboarding": {"completed_at": None, "dismissed_at": None, "steps_passed": []},
+        "onboarding": {
+            "completed_at": None,
+            "dismissed_at": None,
+            "steps_passed": [],
+            "starter_handled": [],
+        },
         "documents_language": "fr",
         "documents_tone": "warm",
     },
