@@ -44,7 +44,7 @@ import logging
 import math
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -1030,6 +1030,20 @@ def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
     run.advance_failed_at = now
     if run.advance_failures < ADVANCE_FAILURES:
         return False
+    _close_stuck(db, run, now)
+    logger.error(
+        "ingestion_run_closed_stuck",
+        extra={
+            "ingestion_run_id": str(run.id),
+            "user_id": str(run.user_id),
+            "failures": run.advance_failures,
+        },
+    )
+    return True
+
+
+def _close_stuck(db: Session, run: IngestionRun, now: datetime) -> None:
+    """Close the locked active run `failed` with `STUCK`: the exit of a run that cannot move."""
     current = _running(_steps(db, run.id))
     if current is not None and current.agent_run_id is not None:
         try:
@@ -1067,15 +1081,45 @@ def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
     run.paused_at = None
     run.closed_reason = STUCK
     run.finished_at = now
-    logger.error(
-        "ingestion_run_closed_stuck",
-        extra={
-            "ingestion_run_id": str(run.id),
-            "user_id": str(run.user_id),
-            "failures": run.advance_failures,
-        },
+
+
+@dataclass(frozen=True)
+class HandClose:
+    """What `close_by_hand` found, and did: the run's status before it, its planned steps, the
+    agent run of its running step (asked to stop by the close), and whether it closed the run."""
+
+    status: RunStatus
+    planned: int
+    agent_run_id: uuid.UUID | None
+    closed: bool
+
+
+def close_by_hand(
+    db: Session, run_id: uuid.UUID, now: datetime, dry_run: bool = False
+) -> HandClose | None:
+    """The operator's close of a run that cannot move (`python -m app.ingestion.cli close-run`):
+    the close `advance_failed` makes at its last failure, at once, under the run's row lock, in
+    the caller's transaction. A run that has already ended is left untouched, so a second call
+    changes nothing; so is any run on a dry run. None when there is no such run."""
+    run = _lock(db, run_id)
+    if run is None:
+        return None
+    steps = _steps(db, run.id)
+    current = _running(steps)
+    found = HandClose(
+        status=run.status,
+        planned=sum(1 for step in steps if step.status is StepStatus.planned),
+        agent_run_id=current.agent_run_id if current is not None else None,
+        closed=False,
     )
-    return True
+    if dry_run or run.status not in ACTIVE:
+        return found
+    _close_stuck(db, run, now)
+    logger.warning(
+        "ingestion_run_closed_by_hand",
+        extra={"ingestion_run_id": str(run.id), "user_id": str(run.user_id)},
+    )
+    return replace(found, closed=True)
 
 
 def _advance_failed(sessions: sessionmaker[Session], run_id: uuid.UUID, now: datetime) -> bool:
