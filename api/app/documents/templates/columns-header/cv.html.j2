@@ -7,7 +7,7 @@
 {% block body %}
 <header class="head">
 <div class="headtext">
-<h1 class="name">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</h1>
+<h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 </div>
 {{ base.portrait() }}

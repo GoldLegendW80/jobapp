@@ -3,15 +3,19 @@
     closing and the name) and the contact lines in the narrow column on the right. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{#- A contact line longer than the narrow column holds whole: the lines set smaller, or past
+    31 characters all under the headline. -#}
+{% set longest = contact | map(attribute="text") | map("length") | max if contact else 0 %}
 {% block body %}
 <header class="head">
 <div class="headtext">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+{% if longest > 31 %}{{ base.contact_lines("contact across") }}{% endif %}
 </div>
 {{ base.portrait() }}
 </header>
-<div class="cols">
+<div class="cols{% if longest > 31 %} solo{% endif %}">
 <main class="main letter-body">
 {{ base.letter_date() }}
 {% if content.recipient %}<p class="recipient">{{ content.recipient }}</p>{% endif %}
@@ -19,15 +23,15 @@
 {% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
 {{ base.paragraphs(content.paragraphs) }}
 {% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
-<p class="signature">{{ name }}</p>
+<p class="signature">{{ base.words(name) }}</p>
 </main>
+{% if contact and longest <= 31 %}
 <aside class="side">
-{% if contact %}
 <section class="block">
 <h2 class="side-label">{{ base.label("contact") }}</h2>
-{{ base.contact_lines() }}
+{{ base.contact_lines("contact small" if longest > 25 else "contact") }}
 </section>
-{% endif %}
 </aside>
+{% endif %}
 </div>
 {% endblock %}

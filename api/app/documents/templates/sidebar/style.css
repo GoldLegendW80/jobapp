@@ -22,14 +22,17 @@ li, p { overflow-wrap: anywhere; }
   grid-template-columns: 66mm minmax(0, 1fr);
   min-height: 296mm;
 }
+/* both columns repeat their padding on every page, not only at the top of the first */
 .side {
   grid-area: 1 / 1;
+  box-decoration-break: clone;
   background: #eceef6;
   border-right: 2.5px solid var(--accent);
   padding: var(--margin) 4mm var(--margin) var(--margin);
 }
 .main {
   grid-area: 1 / 2;
+  box-decoration-break: clone;
   min-width: 0;
   padding: var(--margin) var(--margin) var(--margin) 8mm;
 }
@@ -71,6 +74,13 @@ li, p { overflow-wrap: anywhere; }
 .contact, .languages, .competencies { list-style: none; }
 .contact li, .languages li, .competencies li { margin-bottom: 2pt; }
 .contact { color: #3b4052; font-size: 0.92em; }
+/* a long contact line: the column's lines set smaller, or all of them in a row under the headline */
+.contact.small { font-size: 0.8em; }
+/* a letter's contact lines in the CV's sizes, on its larger body */
+.letter .contact { font-size: 0.8em; }
+.letter .contact.small { font-size: 0.7em; }
+.contact.across { display: flex; flex-wrap: wrap; gap: 1pt 12pt; margin-top: 5pt; }
+.contact.across li { margin-bottom: 0; max-width: 100%; overflow-wrap: break-word; }
 .side .group-label {
   font-size: 0.85em;
   font-weight: 700;
@@ -109,3 +119,6 @@ li, p { overflow-wrap: anywhere; }
 .paragraph { text-align: justify; white-space: pre-line; }
 .closing { margin-top: var(--section-gap); }
 .signature { font-weight: 700; margin-top: var(--section-gap); }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }

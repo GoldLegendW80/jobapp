@@ -59,6 +59,7 @@ li, p { overflow-wrap: anywhere; }
   font-size: 0.94em;
 }
 .letter .side { align-self: start; }
+.cols.solo { grid-template-columns: minmax(0, 1fr); }
 
 .block { margin-bottom: var(--section-gap); }
 .block:last-child { margin-bottom: 0; }
@@ -92,6 +93,13 @@ li, p { overflow-wrap: anywhere; }
 
 .contact, .competencies, .languages { list-style: none; }
 .contact li, .competencies li, .languages li { margin-bottom: 2pt; }
+/* a long contact line: the column's lines set smaller, or all of them in a row under the headline */
+.contact.small { font-size: 0.8em; }
+/* a letter's contact lines in the CV's sizes, on its larger body */
+.letter .contact { font-size: 0.9em; }
+.letter .contact.small { font-size: 0.72em; }
+.contact.across { display: flex; flex-wrap: wrap; gap: 1pt 12pt; margin-top: 5pt; }
+.contact.across li { margin-bottom: 0; max-width: 100%; overflow-wrap: break-word; }
 .competencies li {
   border-left: 2pt solid var(--accent);
   padding-left: 5pt;
@@ -126,3 +134,6 @@ li, p { overflow-wrap: anywhere; }
 .paragraph { text-align: justify; white-space: pre-line; }
 .closing { margin-top: var(--section-gap); }
 .letter-body .signature { font-family: "Lora", serif; font-weight: 700; margin-top: var(--section-gap); }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
