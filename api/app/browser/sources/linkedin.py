@@ -35,7 +35,9 @@ one, is the job's address (apply then works on the company's form, and the posti
 API on that board is the same row by address); the LinkedIn address ends the posting text.
 """
 
+import ipaddress
 import re
+import socket
 import unicodedata
 from typing import NoReturn
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
@@ -137,9 +139,83 @@ def posting_url(href: str, page_url: str) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc.lower(), path, "", ""))
 
 
+# Host suffixes that never name a company's public site: names of a home or office network, of
+# this stack's own containers and tailnet, and the reserved names (RFC 6761, RFC 8375). A label
+# equal to one, or a host ending with "." and one, is refused.
+INTERNAL_SUFFIXES = (
+    "localhost",
+    "localdomain",
+    "local",
+    "internal",
+    "intranet",
+    "lan",
+    "home",
+    "corp",
+    "private",
+    "arpa",  # home.arpa, in-addr.arpa, ip6.arpa
+    "ts.net",
+    "test",
+    "invalid",
+    "onion",
+    "nip.io",  # wildcard DNS that answers the address written in the name
+    "sslip.io",
+    "localtest.me",
+)
+DEFAULT_PORTS = {"http": 80, "https": 443}
+# Dots a browser reads as the label separator (UTS 46): the ideographic and the full width ones.
+DOTS = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
+_NUMERIC_LABEL = re.compile(r"^(?:0x[0-9a-f]*|[0-9]+)$")
+
+
+def _ipv4_any_form(host: str) -> ipaddress.IPv4Address | None:
+    """The address a browser reads in a host written as IPv4 in any form inet_aton takes
+    (dotted, decimal, hex, octal, short as 127.1), None when it is not one."""
+    if not all(_NUMERIC_LABEL.match(label) for label in host.split(".")):
+        return None
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except (OSError, ValueError):
+        return None
+
+
+def public_host(host: str) -> str | None:
+    """`host` normalised (NFKC, browser dots, lowercase, IDNA checked) when it names a public
+    site, None otherwise: an IP address that is not global (in any form a browser reads), a
+    host whose last label is numeric, a single label, an internal or reserved suffix."""
+    if not host:
+        return None
+    name = unicodedata.normalize("NFKC", host).translate(DOTS).lower().removesuffix(".")
+    if not name or any(c.isspace() or unicodedata.category(c)[0] == "C" for c in name):
+        return None
+    if ":" in name:  # an IPv6 literal (urlsplit drops its brackets)
+        try:
+            address = ipaddress.IPv6Address(name)
+        except ValueError:
+            return None
+        return name if address.is_global and address.ipv4_mapped is None else None
+    try:
+        ascii_name = name.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None
+    labels = ascii_name.split(".")
+    if _NUMERIC_LABEL.match(labels[-1]):
+        # An IPv4 literal in some form: kept only as the plain dotted form of a global address.
+        found = _ipv4_any_form(ascii_name)
+        if found is None or not found.is_global or str(found) != ascii_name:
+            return None
+        return ascii_name
+    if len(labels) < 2 or any(not label for label in labels):
+        return None
+    if any(ascii_name == s or ascii_name.endswith("." + s) for s in INTERNAL_SUFFIXES):
+        return None
+    return name
+
+
 def external_url(href: str, page_url: str) -> str | None:
     """The company's Apply address behind LinkedIn's redirect, None when it is not one: http or
-    https, a host that is not LinkedIn's, no user or password, at most URL_MAX characters."""
+    https, a public host (`public_host`), no user or password, no port other than the
+    scheme's, no space or control character, at most URL_MAX characters. On the fixture server
+    (tests), a target on the server's own site is kept too."""
     if len(href) > URL_MAX:
         return None
     parts = urlsplit(urljoin(page_url, href))
@@ -151,21 +227,33 @@ def external_url(href: str, page_url: str) -> str | None:
     if not any(segments[i : i + len(r)] == r for r in REDIRECTS for i in range(len(segments))):
         return None
     target = parse_qs(parts.query).get("url", [""])[0]
+    if len(target) > URL_MAX or any(
+        c.isspace() or unicodedata.category(c)[0] == "C" for c in target
+    ):
+        return None
     out = urlsplit(target)
     try:
-        out.port  # noqa: B018  a malformed port is refused
+        port = out.port
     except ValueError:
-        return None
+        return None  # a malformed port
     if (
         out.scheme not in ("http", "https")
         or not out.hostname
         or _linkedin(out.hostname)
         or out.username is not None
         or out.password is not None
-        or len(target) > URL_MAX
     ):
         return None
-    return urlunsplit((out.scheme, out.netloc.lower(), out.path or "/", out.query, ""))
+    if not _linkedin(urlsplit(page_url).hostname) and same_site(out, page_url):
+        host = out.hostname  # the fixture server's own site
+    else:
+        host = public_host(out.hostname)
+        if host is None or port not in (None, DEFAULT_PORTS[out.scheme]):
+            return None
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None and port != DEFAULT_PORTS[out.scheme]:
+        netloc = f"{netloc}:{port}"
+    return urlunsplit((out.scheme, netloc, out.path or "/", out.query, ""))
 
 
 def _segments(page_url: str, base_url: str | None) -> list[str]:

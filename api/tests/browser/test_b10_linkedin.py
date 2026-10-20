@@ -6,6 +6,7 @@ rules over Postgres are tests/jobs/test_b10_linkedin_sweep.py."""
 import asyncio
 import random
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 from pydantic import ValidationError
@@ -162,6 +163,115 @@ def test_posting_url_on_the_fixture_server_keeps_its_prefix() -> None:
 
 
 GO = "https://www.linkedin.com/safety/go/?url="
+PAGE = "https://www.linkedin.com/jobs/view/4100000001/"
+
+
+# Review round 1, B3: every internal address a redirect can name, refused; the posting then keeps
+# its LinkedIn address.
+REFUSED_TARGETS = [
+    "http://127.0.0.1/",
+    "http://localhost:8000/",
+    "http://localhost./",
+    "http://app.localhost/",
+    "http://api:8000/",
+    "http://db/",
+    "http://10.0.0.1/",
+    "http://172.16.5.4/",
+    "http://192.168.1.1/",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::1]/",
+    "http://[fd00::1]/",
+    "http://[fe80::1%25en0]/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://[::ffff:8.8.8.8]/",
+    "http://100.100.100.100/",
+    "http://100.64.0.1/",
+    "http://0.0.0.0/",
+    "http://255.255.255.255/",
+    "http://2130706433/",
+    "http://0x7f000001/",
+    "http://0x7f.1/",
+    "http://127.1/",
+    "http://0177.0.0.1/",
+    "http://010.8.8.8/",  # octal: the browser reads 8.8.8.8, a form never kept
+    "http://8.8.8.8.9/",
+    "http://a.123/",
+    "http://\uff11\uff12\uff17.0.0.1/",  # full width digits
+    "http://127\u30020\u30020\u30021/",  # ideographic dots
+    "http://router.local/",
+    "http://x.internal/",
+    "http://host.docker.internal/",
+    "http://nas.home.arpa/",
+    "http://1.0.0.127.in-addr.arpa/",
+    "http://host.ts.net/",
+    "http://my-box.tail1234.ts.net/",
+    "http://printer.lan/",
+    "http://wiki.corp/",
+    "http://a.test/",
+    "http://a.invalid/",
+    "http://abc.onion/",
+    "http://127.0.0.1.nip.io/",
+    "http://10.0.0.1.sslip.io/",
+    "http://x.localtest.me/",
+    "http://a..example.org/",
+    "http://a.example.org/x y",
+    "http://a.example.org/x\ty",
+    "http://a.example.org/x\u0000",
+    "http://a.example.org/\u200bx",
+    "https://a.example.org:8443/x",
+    "http://a.example.org:22/",
+    "http://xn--/",
+    "http://" + "a" * 64 + ".example.org/",
+]
+# Ten company addresses of the kinds LinkedIn links to: kept as they are.
+COMPANY_TARGETS = [
+    "https://boards.greenhouse.io/examplerobotics/jobs/4100000001",
+    "https://job-boards.eu.greenhouse.io/examplerobotics/jobs/4100000002",
+    "https://jobs.lever.co/example-robotics/0a1b2c3d-0000-4000-8000-000000000001/apply",
+    "https://jobs.ashbyhq.com/example-robotics/0a1b2c3d-0000-4000-8000-000000000002",
+    "https://examplerobotics.wd3.myworkdayjobs.com/en-US/Careers/job/Paris/AI-Engineer_R1",
+    "https://careers.example-robotics.com/jobs/ai-engineer?src=linkedin",
+    "https://www.example-robotics.fr/carrieres/ingenieur-ia",
+    "https://jobs.smartrecruiters.com/ExampleRobotics/744000000000001",
+    "https://bücher-beispiel.de/jobs/ki-ingenieur",
+    "https://8.8.8.8/jobs/1",  # a global address in its plain form
+]
+
+
+@pytest.mark.parametrize("target", REFUSED_TARGETS)
+def test_external_url_refuses_an_internal_target(target: str) -> None:
+    assert li.external_url(GO + quote(target, safe=""), PAGE) is None
+
+
+@pytest.mark.parametrize("target", COMPANY_TARGETS)
+def test_external_url_keeps_a_company_address(target: str) -> None:
+    assert li.external_url(GO + quote(target, safe="") + "&urlhash=x", PAGE) == target
+
+
+@pytest.mark.parametrize(
+    ("host", "kept"),
+    [
+        ("Jobs.Example.ORG", "jobs.example.org"),
+        ("\uff4a\uff4f\uff42\uff53.example.org", "jobs.example.org"),  # full width letters
+        ("bücher-beispiel.de", "bücher-beispiel.de"),
+        ("example.org.", "example.org"),
+        ("8.8.8.8", "8.8.8.8"),
+        ("2001:4860:4860::8888", "2001:4860:4860::8888"),
+        ("", None),
+        ("org", None),
+        ("127.0.0.1", None),
+        ("0x7f.1", None),
+        ("2130706433", None),
+        ("a.local", None),
+        ("local", None),
+        ("notlocal.org", "notlocal.org"),  # a suffix is a whole label, not a word ending
+        ("my-internal.com", "my-internal.com"),
+        ("internal.example.com", "internal.example.com"),
+        ("xn--bcher-kva.de", "xn--bcher-kva.de"),
+    ],
+)
+def test_public_host(host: str, kept: str | None) -> None:
+    assert li.public_host(host) == kept
 
 
 @pytest.mark.parametrize(
