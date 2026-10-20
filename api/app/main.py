@@ -214,12 +214,31 @@ def create_app(
             status_code=500, content={"detail": "internal server error"}, headers=headers or None
         )
 
-    async def job_busy(_: Request, exc: Exception) -> JSONResponse:
+    async def job_busy(request: Request, exc: Exception) -> JSONResponse:
         """The one mapping from a lock wait that outlasted the lock timeout to 409 BUSY, for every
         route: JobBusyError (lock_job, lock_jobs, undo_bulk) and a raw SQLSTATE 55P03 from any
         later statement of the same transaction (the proposal row an accept locks after the job).
         Nothing is rolled back here: the session is closed, so rolled back, as the error leaves
-        the request's dependencies. Every other database error goes on to `unhandled`."""
+        the request's dependencies. A statement timeout (57014, a wait on many rows one after the
+        other) or a deadlock Postgres broke (40P01) answers 503 with Retry-After: the transaction
+        was rolled back whole, so none of its database changes stayed (issue #166). Every other
+        database error goes on to `unhandled`."""
+        if jobs_service.is_retryable(exc):
+            logger.warning(
+                "retryable database error",
+                extra={
+                    "path": request.url.path,
+                    "sqlstate": getattr(getattr(exc, "orig", None), "sqlstate", None),
+                },
+            )
+            return JSONResponse(
+                status_code=503,
+                content={"detail": jobs_service.RETRY_BUSY},
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": str(jobs_service.RETRY_AFTER_S),
+                },
+            )
         if not isinstance(exc, jobs_service.JobBusyError) and not jobs_service.is_lock_timeout(exc):
             raise exc
         return JSONResponse(

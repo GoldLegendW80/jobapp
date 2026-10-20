@@ -159,6 +159,9 @@ def run_import(email: str, file: str) -> int:
             summary = service.import_jobs(
                 session, user.id, document.jobs, identity_service.utcnow()
             )
+    except service.JobBusyError:
+        _error(f"{service.BUSY} Nothing was imported.")
+        return 1
     except SQLAlchemyError as exc:
         _error(f"Database error, nothing was imported: {type(exc).__name__}")
         return 1
@@ -208,6 +211,9 @@ def run_mark_overrides(email: str, apply: bool) -> int:
                 service.mark_overridden(session, candidates, identity_service.utcnow())
             else:
                 session.rollback()
+    except service.JobBusyError:
+        _error(f"{service.BUSY} Nothing was changed.")
+        return 1
     except SQLAlchemyError as exc:
         _error(f"Database error, nothing was changed: {type(exc).__name__}")
         return 1
