@@ -1,0 +1,130 @@
+/* columns-header: one column in IBM Plex Sans with a deep teal accent. The contact lines stand in
+   three columns under the name, each under a teal rule; the competencies and the skill groups
+   take the same three columns further down. The density comes from the step on :root:
+   --body-size, --line-height, --section-gap, --item-gap, --margin. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #1e2529;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12pt;
+}
+.headtext { flex: 1 1 auto; min-width: 0; }
+.name {
+  font-size: 2.6em;
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.005em;
+}
+.headline {
+  font-size: 1.12em;
+  color: var(--accent);
+  font-weight: 600;
+  margin-top: 3pt;
+}
+.photo {
+  flex: 0 0 auto;
+  width: 24mm;
+  height: 24mm;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+/* Three columns of 30 % with gaps of 5 %: a line takes a wider cell when its text needs it and
+   moves to the next row whole; it breaks inside only when it alone is wider than the page. */
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 5%;
+  row-gap: 6pt;
+  margin-top: 8pt;
+  font-size: 0.92em;
+  color: #3b464d;
+}
+.contact li {
+  flex: 0 1 auto;
+  min-width: 30%;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  border-top: 1.5pt solid var(--accent);
+  padding-top: 2pt;
+}
+
+.block { margin-top: var(--section-gap); }
+.label {
+  font-size: 0.95em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  border-bottom: 0.6pt solid #b9c9cf;
+  padding-bottom: 1.5pt;
+  margin-bottom: var(--item-gap);
+}
+
+.highlights, .entry ul { padding-left: 1.1em; }
+.highlights li, .entry li { margin-bottom: 1pt; }
+.highlights li::marker, .entry li::marker { color: var(--accent); }
+
+.competencies, .skills {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 5%;
+  row-gap: 2pt;
+}
+.competencies { list-style: none; }
+.competencies li {
+  border-left: 2pt solid var(--accent);
+  padding-left: 5pt;
+}
+.skill-group { margin-bottom: 2pt; }
+.group-label { font-size: 0.95em; font-weight: 700; color: var(--accent); }
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10pt;
+}
+.entry-title { font-size: 1.03em; font-weight: 700; }
+.entry .org { color: var(--accent); }
+.entry-head .period { flex: 0 0 auto; text-align: right; }
+.period, .place { color: #4a555c; font-size: 0.92em; }
+
+.school { margin-bottom: var(--item-gap); }
+.school:last-child { margin-bottom: 0; }
+.school .org { font-weight: 600; }
+
+.languages {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1pt 16pt;
+}
+
+/* a heading and a role's title stay with the text that follows them across a page end */
+.label, .entry-head, .entry-title { break-after: avoid; }
+
+.letter-body { margin-top: var(--section-gap); }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; color: #3b464d; }
+.recipient { margin-top: var(--section-gap); white-space: pre-line; }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { color: var(--accent); }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }

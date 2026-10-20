@@ -1,0 +1,77 @@
+{#- columns-header: the name and the headline across the top (the photo on the right when there
+    is one), the contact lines under them in three columns, each under a coloured rule. Then one
+    column of sections under coloured headings; the competencies and the skill groups set in
+    three columns as well. An empty section is not printed. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<header class="head">
+<div class="headtext">
+<h1 class="name">{{ name }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+</div>
+{{ base.portrait() }}
+</header>
+{{ base.contact_lines() }}
+
+{% if content.summary %}
+<section class="block">
+<h2 class="label">{{ base.label("summary") }}</h2>
+<p class="summary">{{ content.summary }}</p>
+</section>
+{% endif %}
+
+{% if content.highlights %}
+<section class="block">
+<h2 class="label">{{ base.label("highlights") }}</h2>
+{{ base.bullets(content.highlights, "highlights") }}
+</section>
+{% endif %}
+
+{% if content.competencies %}
+<section class="block">
+<h2 class="label">{{ base.label("competencies") }}</h2>
+{{ base.bullets(content.competencies, "competencies") }}
+</section>
+{% endif %}
+
+{% if roles %}
+<section class="block">
+<h2 class="label">{{ base.label("experience") }}</h2>
+{% for role in roles %}
+{{ base.employer(role) }}
+{% endfor %}
+</section>
+{% endif %}
+
+{% if schools %}
+<section class="block">
+<h2 class="label">{{ base.label("education") }}</h2>
+{% for item in schools %}
+{{ base.school(item) }}
+{% endfor %}
+</section>
+{% endif %}
+
+{% if content.skills %}
+<section class="block">
+<h2 class="label">{{ base.label("skills") }}</h2>
+<div class="skills">
+{% for group in content.skills %}
+{{ base.skill_group(group) }}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if languages %}
+<section class="block">
+<h2 class="label">{{ base.label("languages") }}</h2>
+<ul class="languages">
+{% for item in languages %}
+{{ base.language(item) }}
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+{% endblock %}
