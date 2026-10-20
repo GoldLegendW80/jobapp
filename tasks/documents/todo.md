@@ -378,6 +378,7 @@ Written on 2026-10-14 from `api/app/documents/estimate.py` (its docstring holds 
 
 ### D25a, D25b
 To be measured: tokens and wall time of one design capture on the Jetson; per invented fixture (one column, two columns, two pages, scanned, DOCX) the repairs needed and a note on fidelity judged side by side.
+**The sandbox kinds (D25a, first slice),** measured on the Mac on 2026-10-19 in the parser's container under its own limits (`tests/ingestion/parser/test_design_container.py`, `DESIGN_MEASURE_OUT`): the highest address space of a `design_pdf` child was 71 MiB (two pages of 600 dpi scans), 69 MiB at the character cap, 60 to 61 MiB for the invented CV pages, the run and object caps and a file of 200 pages; of a `design_docx` child 45 MiB (20 MiB of images) and 39 MiB at the style cap; under 0.5 s of wall time each. Both kinds keep the 256 MiB of `pdf_render` and `docx`. The largest answer the caps allow is under 1 MB (`parser_client.DESIGN_MAX_ANSWER`), far under the 4 MiB of an answer. There is no `render_pdf` kind to validate: D3 chose the Chromium renderer container, not WeasyPrint in the parser.
 
 ### D10
 To be measured: tokens and wall time of one posting (CV, letter, correction and shortening passes) on the Jetson; how many postings of a typical sweep reach a fit of 70; a typical week at that threshold.

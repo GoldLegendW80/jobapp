@@ -14,6 +14,7 @@ the bytes to the handler of `kind`, one file of this directory per kind:
 
     pdf_text.py (G2b)   docx.py, linkedin_zip.py (G7)   image.py, pdf_render.py (G8)
     mail_html.py (mail M3: the HTML of a mail, an answer of its own shape)
+    design_pdf.py, design_docx.py (documents D25a: the layout of an uploaded CV, its own shape)
 
 A handler is `handle(data: bytes, options: dict, budget: Budget) -> dict` and returns the whole
 answer: `{"ok": true, ...}` or `{"ok": false, "failure": "file", "code": "..."}` with integers
@@ -74,6 +75,8 @@ HANDLERS = {
     "image": "image",
     "pdf_render": "pdf_render",
     "mail_html": "mail_html",
+    "design_pdf": "design_pdf",
+    "design_docx": "design_docx",
 }
 
 MIB = 1024 * 1024
@@ -154,6 +157,11 @@ LIMITS["pdf_render"]["as"] = PDF_RENDER_AS
 # worker stores the mail with its plain text and no HTML.
 MAIL_HTML_AS = 128 * MIB
 LIMITS["mail_html"]["as"] = MAIL_HTML_AS
+# The layout readers of the design capture (documents D25a) open the file as pdf_render and
+# docx do, with the same guards, and keep less: the limits of those two kinds, which
+# tests/ingestion/parser/test_design_container.py holds each fixture under, at 80 %.
+LIMITS["design_pdf"]["as"] = PDF_RENDER_AS
+LIMITS["design_docx"]["as"] = 256 * MIB
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
 # SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
 # kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight
