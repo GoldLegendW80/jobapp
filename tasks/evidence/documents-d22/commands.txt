@@ -1,0 +1,16 @@
+Task D22, 2026-10-20, on the Mac (renderer image of D3 built under its own tag jobapp-renderer:d22-test with the extra CA as a build secret, removed afterwards).
+
+docker build -q --secret id=extra_ca,src="$JOBAPP_EXTRA_CA" -t jobapp-renderer:d22-test renderer
+cd api
+thumbnails.make(<slug>) through the test stack's renderer (the Stack of tests/documents/test_renderer_container.py) for nordic, columns-header, portrait, plain
+  the CV thumbnails fit at step 0 (plain, portrait) or 1 (nordic, columns-header), the letters at 0
+RENDERER_TEST_IMAGE=jobapp-renderer:d22-test uv run pytest -q -m docker tests/documents/test_templates.py tests/documents/test_template_reading_order.py tests/documents/test_templates_d19.py tests/documents/test_templates_d22.py -k "plain or nordic or columns-header or portrait"
+  272 passed, 8 skipped (the photo cases of the two templates without a photo slot)
+
+The journey, on a stack of its own (compose.yml, tests/ats-stub.compose.yml, compose.mac.yml, its own image tags d22-*, the CI .env of .github/scripts/ci_env.sh with the fake backend), taken down with its volumes afterwards:
+ops/agent-test.sh --name d22 --playwright -c e2e/documents-all.config.ts e2e/documents-d22.spec.ts
+  6 passed
+ops/agent-test.sh --name d22 --playwright -c e2e/documents-all.config.ts, the documents group
+  47 passed, 1 failed (documents-d17 "shorter summary", a chat answer not shown in time); documents-d17.spec.ts alone right after: 3 passed
+
+Files: <slug>-cv-typical.pdf (D1's cv-typical, English, at its fitted step) and <slug>-letter-en.pdf; <slug>-cv-page1.png and <slug>-letter-page1.png, page 1 of each journey render (an invented person, no photo: portrait shows the initials).
