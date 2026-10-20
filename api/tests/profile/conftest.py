@@ -127,6 +127,9 @@ FULL: dict[str, dict[str, Any]] = {
             },
         ],
         "never_apply": ["No cybersecurity roles."],
+        "browser_sources": [
+            {"kind": "vie", "query": "data engineer", "location": "Germany", "enabled": False}
+        ],
         "sweep_schedule": {
             "enabled": False,
             "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
