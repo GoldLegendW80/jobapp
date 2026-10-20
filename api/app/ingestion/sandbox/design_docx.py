@@ -32,7 +32,9 @@ hundredths of a line when `line_rule` is "auto", else in tenths of a point. A th
 theme colour is resolved through the theme. A DOCX has no pages: nothing here is a box.
 
 Caps: STYLES_MAX styles, SECTIONS_MAX sections, KEYS_MAX distinct style uses and formats
-counted, the SHOWN most used of each returned. Each one met is a note and `truncated`.
+counted, the SHOWN most used of each returned. Each one met is a note and `truncated`. A count
+is given as COUNT_MAX at most, and a value the client would refuse is left out (null), so one
+odd value never costs the whole answer.
 
 What comes back otherwise is docx.py's: `not_docx`, `macros`, `unreadable`, `bomb`,
 `nested_archive`, `protected`, `too_slow`.
@@ -54,6 +56,7 @@ KEYS_MAX = 2_000
 SHOWN = 40
 NAME_MAX = 64
 TWIPS_MAX = 200_000  # a length Word may write, in twentieths of a point (139 inches)
+COUNT_MAX = 10_000_000  # parser_client.DESIGN_COUNT: a count past it is given as this
 
 _A = frozenset(
     {
@@ -81,6 +84,7 @@ _ALIGN = {
 _LINE_RULES = {"auto": "auto", "exact": "exact", "atLeast": "at_least"}
 _STYLE_TYPES = frozenset({"paragraph", "character", "table", "numbering"})
 _FALSE = frozenset({"0", "false", "off", "none"})
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 PROPS = (
     "font", "size", "bold", "italic", "caps", "colour", "before", "after", "line", "line_rule",
     "align", "border", "shading",
@@ -114,13 +118,15 @@ def _number(value: str | None, high: int = TWIPS_MAX) -> int | None:
 
 
 def _hex(value: str | None) -> str | None:
-    if value is None or len(value) != 6:
-        return None
-    try:
-        int(value, 16)
-    except ValueError:
+    """`#rrggbb` when `value` is six ASCII hex digits and nothing else; None for anything else
+    ("+abcde", "ab_cde", " abcd ", "0xabcd", "١٢٣٤٥٦")."""
+    if value is None or len(value) != 6 or not set(value) <= _HEX_DIGITS:
         return None
     return "#" + value.lower()
+
+
+def _counted(number: int) -> int:
+    return min(number, COUNT_MAX)
 
 
 def _local(key: str, spaces: frozenset[str]) -> str | None:
@@ -345,9 +351,9 @@ class _Document(_Target):
 
     def _count(self, table: dict, key, amount: int) -> None:
         if key in table:
-            table[key] += amount
+            table[key] = _counted(table[key] + amount)
         elif len(table) < KEYS_MAX:
-            table[key] = amount
+            table[key] = _counted(amount)
         else:
             self.notes.add("formats_limit")
 
@@ -469,10 +475,10 @@ def read(archive: zipcaps.Archive, budget) -> dict:
         "defaults": styles.defaults,
         "styles": styles.styles,
         "sections": document.sections,
-        "tables": document.tables,
-        "table_columns": document.table_columns,
-        "drawings": document.drawings,
-        "paragraphs": document.paragraphs,
+        "tables": _counted(document.tables),
+        "table_columns": _counted(document.table_columns),
+        "drawings": _counted(document.drawings),
+        "paragraphs": _counted(document.paragraphs),
         "paragraph_styles": [
             {"style": style, "count": count} for style, count in _shown(document.paragraph_styles)
         ],

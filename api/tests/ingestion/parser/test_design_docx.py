@@ -2,6 +2,7 @@
 sandbox/design_docx.py), in the test process on files made in code, every answer read back
 through the worker's own check (parser_client.check_design_docx)."""
 
+import html
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -209,7 +210,85 @@ def test_a_number_the_file_writes_is_read_or_left_out_never_the_whole_file(
     assert (item["size"], item["before"]) == (size, before)
 
 
+# A colour the file writes, and what is kept of it. Only six ASCII hex digits are a colour.
+COLOURS = [
+    ("1F4E79", "#1f4e79"),
+    ("1f4e79", "#1f4e79"),
+    ("aBcDeF", "#abcdef"),
+    ("000000", "#000000"),
+    ("FFFFFF", "#ffffff"),
+    ("1e3456", "#1e3456"),
+    ("+abcde", None),
+    ("-abcde", None),
+    ("ab_cde", None),
+    ("a_bcde", None),
+    (" abcd ", None),
+    (" abcde", None),
+    ("abcde ", None),
+    ("\tabcde", None),
+    ("0xabcd", None),
+    ("0Xabcd", None),
+    ("١٢٣٤٥٦", None),
+    ("۱۲۳۴۵۶", None),
+    ("１２３４５６", None),
+    ("ＡＢＣＤＥＦ", None),
+    ("𝟙𝟚𝟛𝟜𝟝𝟞", None),
+    ("²³⁴⁵⁶⁷", None),
+    ("ab.cde", None),
+    ("ab,cde", None),
+    ("12 456", None),
+    ("abcdeg", None),
+    ("ABCDEG", None),
+    ("abcde", None),
+    ("abcdef0", None),
+    ("#abcde", None),
+    ("#abcdef", None),
+    ("auto", None),
+    ("", None),
+    ("Infini", None),
+    ("&bcdef", None),
+]
+
+
+@pytest.mark.parametrize(("value", "colour"), COLOURS, ids=[repr(r[0]) for r in COLOURS])
+def test_a_colour_the_file_writes_is_read_or_left_out_never_the_whole_file(
+    value: str, colour: str | None
+) -> None:
+    written = html.escape(value, quote=True)
+    hostile = (
+        f'<w:style w:type="paragraph" w:styleId="Odd"><w:rPr><w:color w:val="{written}"/>'
+        f'</w:rPr><w:pPr><w:shd w:fill="{written}"/><w:pBdr><w:bottom w:val="single"'
+        f' w:color="{written}"/></w:pBdr></w:pPr></w:style>'
+    )
+    theme = fx.THEME.replace('val="4472C4"', f'val="{written}"')
+    theme = theme.replace('lastClr="000000"', f'lastClr="{written}"')
+    run = f'<w:r><w:rPr><w:color w:val="{written}"/></w:rPr><w:t>Word</w:t></w:r>'
+    data = archives.docx(
+        archives.paragraph(run),
+        extra=[("word/styles.xml", fx.styles(hostile)), ("word/theme/theme1.xml", theme)],
+    )
+    found = ask(data)
+    item = style(found, "Odd")
+    assert (item["colour"], item["shading"]) == (colour, colour)
+    assert item["border"] == (colour or "#000000")
+    assert found.theme is not None
+    assert found.theme["colours"].get("accent1") == colour
+    assert found.theme["colours"].get("dk1") == colour
+    assert [entry["colour"] for entry in found.formats] == [colour]
+
+
+def test_a_count_past_the_clients_cap_is_clamped_never_the_whole_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(design_docx, "COUNT_MAX", 3)
+    found = ask(fx.styled_docx())
+    assert (found.paragraphs, found.table_columns, found.tables, found.drawings) == (3, 3, 1, 1)
+    assert [entry["chars"] for entry in found.formats] == [3, 3]
+    assert [count for _, count in found.paragraph_styles] == [2]
+
+
 def test_the_caps_are_the_clients() -> None:
+    assert design_docx.COUNT_MAX == pc.DESIGN_COUNT
     assert design_docx.STYLES_MAX == pc.DESIGN_STYLES
     assert design_docx.SECTIONS_MAX == pc.DESIGN_SECTIONS
     assert design_docx.SHOWN == pc.DESIGN_SHOWN
