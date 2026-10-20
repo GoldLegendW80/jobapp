@@ -8,6 +8,7 @@ another test, a CSS that ignores or pins the density steps, and what would hide 
 """
 
 import json
+import random
 import secrets
 
 import pytest
@@ -15,7 +16,7 @@ from jinja2 import Environment, nodes
 
 from app.documents import content as c
 from app.documents import template_rules, templates
-from app.documents.template_rules import FIELDS, LABELS, MACROS, Problem, check
+from app.documents.template_rules import FIELDS, LABELS, MACROS, Problem, check, check_css
 
 CLASSIC = templates.ROOT / "classic"
 MANIFEST = json.loads((CLASSIC / "manifest.json").read_text(encoding="utf-8"))
@@ -565,3 +566,27 @@ def test_the_contrast_of_many_rules_is_linear_in_their_number():
     sheet = FILES["style.css"] + backs + colours
     assert len(sheet) <= template_rules.FILE_MAX
     assert not {p.code for p in _check({**FILES, "style.css": sheet})} - {"contrast"}
+
+
+def test_a_construct_at_any_place_inside_a_tag_is_refused_and_between_tags_passes():
+    line = '<p class="summary">{{ content.summary }}</p>'
+    inside = [*range(1, line.index(">") + 1), *range(line.rindex("<") + 1, len(line))]
+    for at in range(len(line) + 1):
+        if line.index("{{") < at <= line.index("}}") + 1:
+            continue
+        files = _cv(SUMMARY, line[:at] + "{% if name %}{% endif %}" + line[at:])
+        codes = {problem.code for problem in _check(files)}
+        assert ("literal" in codes) == (at in inside), at
+
+
+def test_whatever_the_sheet_the_check_ends_with_problems_of_its_codes_not_an_error():
+    rng = random.Random(427)  # noqa: S311, a repeatable draw of sheets, nothing secret
+    pieces = [
+        ".x", " ", "{", "}", ";", ":", "color", "#1d232b", "var(", "--a", ")", '"', "'", "\\",
+        "/*", "*/", "url(", "@page", "@media", "1em", "-2px", "minmax(", ",", "/", ">", "+",
+        "~", "::before", ":root", "!important", "content", "é", "\n", "0", "%", "--rail",
+    ]  # fmt: skip
+    for _ in range(300):
+        sheet = "".join(rng.choice(pieces) for _ in range(rng.randrange(1, 60)))
+        found = check_css(sheet, ("nunito-sans",), "#1f4e79")
+        assert {problem.code for problem in found} <= set(template_rules.CODES)
