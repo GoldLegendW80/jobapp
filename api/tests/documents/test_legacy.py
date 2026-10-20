@@ -27,7 +27,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.documents import eligibility, freeze, legacy, render_job, store, tick
+from app.documents import eligibility, freeze, legacy, render_client, render_job, store, tick
 from app.documents.models import (
     Author,
     Document,
@@ -36,6 +36,7 @@ from app.documents.models import (
     Kind,
     Origin,
 )
+from app.documents.router import NO_PREVIEW
 from app.jobs.models import JobFile
 from tests.documents.canary import find, marker
 from tests.documents.conftest import load
@@ -456,8 +457,12 @@ def test_the_apply_module_reads_the_imported_versions(world: World) -> None:
 
 
 def test_the_api_serves_the_legacy_pdf_byte_for_byte_to_its_owner_only(
-    world: World, api: Api
+    world: World, api: Api, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    def never(pdf: bytes, width: int) -> bytes:
+        raise AssertionError("the command line's file reached PDFium in the api")
+
+    monkeypatch.setattr(render_client, "page1_png", never)
     run_import(world.factory, world.alex)
     alex, blake = api.login_token(ALEX), api.login_token(BLAKE)
     cv = documents_of(world.factory, world.applied)[Kind.cv]
@@ -466,18 +471,18 @@ def test_the_api_serves_the_legacy_pdf_byte_for_byte_to_its_owner_only(
     listed = api.get(f"/api/documents/{cv.id}/versions", token=alex)
     assert listed.status_code == 200
     (summary,) = listed.json()
-    assert (summary["origin"], summary["frozen_reason"], summary["has_pdf"]) == (
-        "legacy",
-        "legacy_applied",
-        True,
-    )
+    assert (
+        summary["origin"],
+        summary["frozen_reason"],
+        summary["has_pdf"],
+        summary["has_preview"],
+    ) == ("legacy", "legacy_applied", True, False)
     served = api.get(f"/api/documents/{cv.id}/versions/1/pdf", token=alex)
     assert served.status_code == 200
     assert served.headers["content-type"] == "application/pdf"
     assert served.content == pdf
     page = api.get(f"/api/documents/{cv.id}/versions/1/page1.png", token=alex)
-    assert page.status_code == 200
-    assert page.headers["content-type"] == "image/png"
+    assert (page.status_code, page.json()) == (404, {"detail": NO_PREVIEW})
 
     posting = api.get(f"/api/jobs/{world.applied}/documents", token=alex).json()
     assert [d["sent"] for d in posting["documents"]] == [[1], [1]]
