@@ -156,8 +156,14 @@ export interface Board {
   enabled: boolean;
   extra_exclude: TermList;
 }
+export const BROWSER_KINDS = [
+  "google_careers",
+  "vie",
+  "site",
+  "linkedin",
+] as const;
 export interface BrowserSource {
-  kind: "google_careers" | "vie" | "site" | "linkedin";
+  kind: (typeof BROWSER_KINDS)[number];
   query: string;
   location: string | null;
   enabled: boolean;
@@ -172,7 +178,7 @@ export interface Search {
   days: number;
   boards: Board[];
   never_apply: string[];
-  /** browser B8: job sites read in the person's browser; kept as is by this tab */
+  /** browser B8: job sites read in the person's browser (browser-sources-card.tsx) */
   browser_sources?: BrowserSource[];
   /** when the boards are swept automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;

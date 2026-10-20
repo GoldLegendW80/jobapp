@@ -32,6 +32,7 @@ function makeSweep(overrides: Partial<Sweep> = {}): Sweep {
     duplicates: 0,
     skipped_by_rule: 0,
     duration: null,
+    sources: [],
     ...overrides,
   };
 }
@@ -215,6 +216,60 @@ describe("Find jobs", () => {
     });
     await user.click(within(dialog).getByRole("link", { name: /Applied AI/ }));
     expect(app.location()).toBe("/jobs/aaaaaaaa-0000-4000-9000-000000000001");
+  });
+
+  it("shows each job site read in the browser in plain words", async () => {
+    const source = (
+      kind: string,
+      query: string,
+      found: number,
+      fresh: number,
+      error: string | null,
+      location: string | null = null,
+    ) => ({ kind, query, location, result_pages: 1, found, new: fresh, error });
+    fakeSweeps({
+      states: [
+        makeSweep({
+          boards_total: 0,
+          current_board: "google_careers:ai engineer/Paris",
+        }),
+        finished({
+          sources: [
+            source("google_careers", "ai engineer", 3, 2, null, "Paris"),
+            source("google_careers", "agents", 0, 0, "layout_changed"),
+            source("vie", "data", 0, 0, "browser_busy"),
+            source("vie", "ml", 1, 1, "lease_ended"),
+            { ...source("vie", "cv", 0, 0, "not_started"), result_pages: 0 },
+          ],
+        }),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading job sites in your browser");
+    expect(progress).toHaveTextContent(
+      "Reading Google Careers, ai engineer, Paris",
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    const sites = within(dialog).getByRole("region", {
+      name: "Job sites in your browser",
+    });
+    const lines = within(sites)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(lines).toEqual([
+      "Google Careers, ai engineer, Paris: 3 postings found, 2 new.",
+      "Google Careers, agents: 0 postings found, 0 new. The page looked different from what the app knows, so nothing was kept from it.",
+      "Business France VIE, data: 0 postings found, 0 new. Your browser was in use, so this site waits for the next search.",
+      "Business France VIE, ml: 1 posting found, 1 new. You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
+      "Business France VIE, cv: not read this time, it comes at the next search.",
+    ]);
   });
 
   it("follows the sweep already running on a second start (409)", async () => {

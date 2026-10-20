@@ -764,3 +764,96 @@ describe("search tab: add company with the board check", () => {
     ).toBeVisible();
   });
 });
+
+describe("search tab: job sites in your browser (browser B8)", () => {
+  it("adds, edits, turns off and removes a site, and saves them", async () => {
+    const { user, state } = await openSearch();
+    const card = () =>
+      screen.getByRole("heading", { name: "Job sites in your browser" })
+        .parentElement!.parentElement!.parentElement!;
+    expect(within(card()).getByText("No site yet.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add site" }));
+    await user.click(screen.getByRole("button", { name: "Add site" }));
+    const sites = screen.getByRole("list", {
+      name: "Job sites in your browser",
+    });
+    const kinds = within(sites).getAllByRole("combobox");
+    // Company sites and LinkedIn are listed as coming later and cannot be picked.
+    expect(
+      within(kinds[0]!).getByRole("option", {
+        name: "LinkedIn (coming later)",
+      }),
+    ).toBeDisabled();
+    await user.selectOptions(kinds[1]!, "vie");
+    await user.click(save());
+    expect(await screen.findAllByText("Enter the search words.")).toHaveLength(
+      2,
+    );
+    await user.type(
+      screen.getByLabelText("Search words of site 1"),
+      " ai engineer ",
+    );
+    await user.type(
+      screen.getByLabelText("Location (optional) of site 1"),
+      "Paris",
+    );
+    await user.type(screen.getByLabelText("Search words of site 2"), "data");
+    await user.click(screen.getByRole("switch", { name: "Read site 2" }));
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).browser_sources).toEqual([
+      {
+        kind: "google_careers",
+        query: "ai engineer",
+        location: "Paris",
+        enabled: true,
+      },
+      { kind: "vie", query: "data", location: null, enabled: false },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
+    await user.click(save());
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(2);
+    });
+    expect(saved(state, 1).browser_sources).toEqual([
+      { kind: "vie", query: "data", location: null, enabled: false },
+    ]);
+  });
+
+  it("keeps the sources through a save of another field", async () => {
+    const initial = haraldLike();
+    const sources: Search["browser_sources"] = [
+      { kind: "google_careers", query: "ai", location: null, enabled: true },
+      { kind: "linkedin", query: "genai", location: "Lyon", enabled: false },
+    ];
+    const { user, state } = await openSearch({
+      ...initial,
+      search: { ...initial.search, browser_sources: sources },
+    });
+    expect(screen.getByText(/This site is not read yet/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.type(
+      screen.getByLabelText(`Rule ${initial.search.never_apply.length + 1}`),
+      "No defence roles.",
+    );
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).browser_sources).toEqual(sources);
+  });
+
+  it("stops at 10 sites", async () => {
+    const initial = haraldLike();
+    const sources = Array.from({ length: 10 }, (_, n) => ({
+      kind: "vie" as const,
+      query: `words ${n}`,
+      location: null,
+      enabled: true,
+    }));
+    await openSearch({
+      ...initial,
+      search: { ...initial.search, browser_sources: sources },
+    });
+    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
+    expect(screen.getByText("At most 10 sites.")).toBeVisible();
+  });
+});
