@@ -455,8 +455,8 @@ export function StepApply({
             </span>
             <span id={`${id}-full-text`} className="text-muted-foreground">
               A Like is enough. The app applies after a hold of at least {hold},
-              only above your threshold. It is turned on in Applications
-              settings, with its own checks, never from here.
+              only above your threshold. Once available, it is turned on in
+              Applications settings, with its own checks.
             </span>
           </span>
         </label>
