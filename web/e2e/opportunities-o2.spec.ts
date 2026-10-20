@@ -14,8 +14,10 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * Opportunities O2 against the real stack through Caddy plus the fake ATS forms server: the
  * swipe deck. An invented person A has three postings: one on the fake Greenhouse form, one on
  * the fake Ashby form, and a "Cyber­security Engineer" whose soft hyphen the jobs module's whole
- * word match does not see, with the highest fit. On /discover the cybersecurity card never
- * shows. A Likes the first card (Review first: the toast says the documents are being written),
+ * word match does not see, with the highest fit. A carries the owner's rule against
+ * cybersecurity roles (set before the sign up: the invented profile has no never apply rule and
+ * the deck adds none of its own), so the card exists and is kept out only by the deck's folded
+ * match of that rule: on /discover the cybersecurity card never shows. A Likes the first card (Review first: the toast says the documents are being written),
  * Passes the second with the left arrow, undoes the Pass (the card is back), Passes it again by
  * a mouse drag, reloads (the deck is empty, with the threshold named, and Undo last has nothing
  * to undo). The Like is in the review queue (/applications). Person B, signed in beside A, has
@@ -45,6 +47,11 @@ const titles = { first: "", second: "" };
 test.beforeAll(async ({ browser }) => {
   a = invented("o2a");
   b = invented("o2b");
+  (
+    a.profile as { sections: { search: { never_apply: string[] } } }
+  ).sections.search.never_apply = [
+    "No cybersecurity roles: cyber, security, pentest, threat",
+  ];
   clearAttempts([a.email, b.email]);
   contextA = await newContext(browser);
   pageA = await contextA.newPage();

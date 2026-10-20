@@ -14,7 +14,7 @@ import { MODE_WORDS, SWIPE_TEXT } from "./card-text";
 import { DeckFilterRow } from "./filter-row";
 import { PostingSheet } from "./posting-sheet";
 import { SwipeCard } from "./swipe-card";
-import { useDeck } from "./use-deck";
+import { useDeck, type Swipe } from "./use-deck";
 import { useReducedMotion } from "./use-reduced-motion";
 
 /** Keys a deck listens to, unless the focus is in a field or a dialog is open. */
@@ -40,7 +40,21 @@ export function DeckPage() {
   const deck = useDeck(filters);
   const motion = !useReducedMotion();
   const [moreOpen, setMoreOpen] = useState(false);
-  const { top, busy, refusal, swipe, undo, last } = deck;
+  const { top, busy, refusal, last } = deck;
+  // Once the person swiped or undid, a new card on top takes the focus and is announced.
+  const [moved, setMoved] = useState(false);
+  const swipe = (kind: Swipe) => {
+    setMoved(true);
+    deck.swipe(kind);
+  };
+  const undo = () => {
+    setMoved(true);
+    deck.undo();
+  };
+  const changeFilters = (next: DeckFilters) => {
+    setMoved(false);
+    setFilters(next);
+  };
 
   // The boards of the cards read ("greenhouse" of "greenhouse:acme", the api matches its every
   // company), plus the one chosen, so a chosen source stays in the list.
@@ -99,7 +113,7 @@ export function DeckPage() {
         <DeckFilterRow
           filters={filters}
           sources={sources}
-          onChange={setFilters}
+          onChange={changeFilters}
         />
       </AdvancedSection>
 
@@ -128,11 +142,15 @@ export function DeckPage() {
           <p className="text-sm text-muted-foreground" aria-live="polite">
             {deck.left === 1 ? "1 posting left" : `${deck.left} postings left`}
           </p>
+          <p className="sr-only" aria-live="polite" data-testid="deck-announce">
+            {moved ? `Now showing ${top.title} at ${top.company}.` : ""}
+          </p>
           <SwipeCard
             key={top.id}
             card={top}
             motion={motion}
             disabled={busy}
+            focusTitle={moved}
             onSwipe={swipe}
             onMore={() => {
               setMoreOpen(true);

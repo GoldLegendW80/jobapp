@@ -293,6 +293,24 @@ describe("keyboard", () => {
     ).toEqual([`POST pass ${id}`, `DELETE pass ${id}`, `POST like ${id}`]);
   });
 
+  it("moves the focus to the new card's title and announces it", async () => {
+    await open();
+    const announce = screen.getByTestId("deck-announce");
+    expect(announce).toHaveAttribute("aria-live", "polite");
+    expect(announce).toHaveTextContent("");
+    // Nothing takes the focus before a swipe.
+    expect(document.activeElement).toBe(document.body);
+    await userEvent.keyboard("{ArrowLeft}");
+    await onTop("Example Role 2");
+    const heading = within(await card()).getByRole("heading", { level: 2 });
+    await waitFor(() => {
+      expect(heading).toHaveFocus();
+    });
+    expect(announce).toHaveTextContent(
+      "Now showing Example Role 2 at Example Robotics 2.",
+    );
+  });
+
   it("does nothing while the focus is in a filter field", async () => {
     const { deck } = await open();
     await userEvent.click(screen.getByRole("button", { name: "Advanced" }));

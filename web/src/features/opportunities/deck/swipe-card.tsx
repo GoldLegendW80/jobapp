@@ -1,5 +1,5 @@
 import { ExternalLink } from "lucide-react";
-import { useId, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useId, useRef, useState, type PointerEvent } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,8 @@ const LEAVE = "transform 240ms cubic-bezier(0.32, 0.72, 0, 1)";
  * past SWIPE_THRESHOLD it leaves to that side and calls `onSwipe`, under it springs back. With
  * reduced motion it never moves: the buttons and the arrow keys do the swipes. While `disabled`
  * (a swipe under way) a drag does not start; when it ends with the card still here (a refusal)
- * the card comes back to the middle.
+ * the card comes back to the middle. With `focusTitle` (a card that replaced a swiped one) the
+ * focus moves to its title when it appears, so a keyboard person never lands on the page's body.
  */
 export function SwipeCard({
   card,
@@ -39,17 +40,23 @@ export function SwipeCard({
   disabled,
   onSwipe,
   onMore,
+  focusTitle = false,
 }: {
   card: Card;
   motion: boolean;
   disabled: boolean;
   onSwipe: (kind: Swipe) => void;
   onMore: () => void;
+  focusTitle?: boolean;
 }) {
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
   const start = useRef<{ x: number; pointer: number } | null>(null);
   const reasonId = useId();
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusTitle) titleRef.current?.focus();
+  }, [focusTitle]);
 
   // A swipe answered with the card still here (a refusal): back to the middle.
   const [wasDisabled, setWasDisabled] = useState(disabled);
@@ -135,7 +142,11 @@ export function SwipeCard({
       ) : null}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <h2 className="text-xl leading-tight font-semibold text-balance">
+          <h2
+            ref={titleRef}
+            tabIndex={-1}
+            className="text-xl leading-tight font-semibold text-balance outline-none"
+          >
             {card.title}
           </h2>
           <p className="text-base text-muted-foreground">{card.company}</p>

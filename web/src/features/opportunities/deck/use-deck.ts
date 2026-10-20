@@ -3,7 +3,14 @@ import {
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 
 import {
@@ -33,10 +40,11 @@ export const PREFETCH_AT = 2;
 /** How long the toast of a swipe, with its Undo, stays (the spec's 10 seconds). */
 export const UNDO_TOAST_MS = 10_000;
 /**
- * The states apply's cancel accepts (api/app/apply/gate.py, CANCELLABLE). Past them the
- * application is being sent or was sent: the undo says it is too late and sends nothing.
+ * The states apply's cancel accepts (api/app/apply/gate.py, CANCELLABLE; use-deck.test.ts reads
+ * that file and fails when the two differ). Past them the application is being sent or was
+ * sent: the undo says it is too late and sends nothing.
  */
-const CANCELLABLE = new Set([
+export const CANCELLABLE: ReadonlySet<string> = new Set([
   "queued",
   "filling",
   "needs_person",
@@ -66,6 +74,9 @@ export interface Refusal {
  *
  * A passed card leaves the deck and only its undo can bring it back: no Like is ever sent for a
  * card whose Pass has not been undone first (apply's Like may accept a skipped posting, #428).
+ * The truth a handler acts on lives in refs written synchronously (the cards swiped here, the
+ * last swipe, the cards shown), never in a render's closure: a key handler or a drag release
+ * kept from the render before a Pass's answer would otherwise still see the passed card on top.
  */
 export function useDeck(filters: DeckFilters) {
   const queryClient = useQueryClient();
@@ -90,6 +101,12 @@ export function useDeck(filters: DeckFilters) {
   const inFlight = useRef(false);
   const [last, setLast] = useState<LastSwipe | null>(null);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
+  /** The ids swiped here and not put back: written before a swipe's `exclusive` returns. */
+  const swipedRef = useRef(new Set<string>());
+  /** `last`, written together with it, so an undo kept from an earlier render acts on the truth. */
+  const lastRef = useRef<LastSwipe | null>(null);
+  /** The id of the toast that offers the Undo of the last swipe, dismissed when it no longer does. */
+  const undoToastRef = useRef<string | number | null>(null);
 
   const pages = query.data?.pages;
   const first = pages?.[0];
@@ -108,6 +125,10 @@ export function useDeck(filters: DeckFilters) {
     }
     return out;
   }, [pages, restored, removed]);
+  const cardsRef = useRef(cards);
+  useLayoutEffect(() => {
+    cardsRef.current = cards;
+  }, [cards]);
 
   const lastPage = pages?.[pages.length - 1];
   const unread = lastPage
@@ -128,10 +149,12 @@ export function useDeck(filters: DeckFilters) {
   }, [cards.length, hasNextPage, isFetchingNextPage, isError, fetchNextPage]);
 
   const remove = useCallback((card: Card) => {
+    swipedRef.current.add(card.id);
     setRemoved((now) => new Set(now).add(card.id));
     setRestored((now) => now.filter((one) => one.id !== card.id));
   }, []);
   const putBack = useCallback((card: Card) => {
+    swipedRef.current.delete(card.id);
     setRemoved((now) => {
       const next = new Set(now);
       next.delete(card.id);
@@ -154,22 +177,31 @@ export function useDeck(filters: DeckFilters) {
     return true;
   }, []);
 
-  const undoRef = useRef<() => void>(() => {});
-  const offerUndo = (message: string) => {
-    toast.success(message, {
+  const markLast = useCallback((swiped: LastSwipe | null) => {
+    lastRef.current = swiped;
+    setLast(swiped);
+  }, []);
+  const dismissUndo = () => {
+    if (undoToastRef.current !== null) toast.dismiss(undoToastRef.current);
+    undoToastRef.current = null;
+  };
+  /** The toast of `swiped`: its Undo acts only while `swiped` is still the last swipe. */
+  const offerUndo = (message: string, swiped: LastSwipe) => {
+    dismissUndo();
+    undoToastRef.current = toast.success(message, {
       duration: UNDO_TOAST_MS,
       action: {
         label: "Undo",
         onClick: () => {
-          undoRef.current();
+          if (lastRef.current === swiped) undo();
         },
       },
     });
   };
 
   const swipe = (kind: Swipe) => {
-    const card = cards[0];
-    if (!card) return;
+    const card = cardsRef.current[0];
+    if (!card || swipedRef.current.has(card.id)) return;
     if (kind === "like" && refusal?.cardId === card.id) return;
     void exclusive(async () => {
       try {
@@ -177,18 +209,24 @@ export function useDeck(filters: DeckFilters) {
           const liked = await likePosting(card.id);
           remove(card);
           setRefusal(null);
-          setLast({ kind, card, applicationId: liked.application.id });
+          const swiped: LastSwipe = {
+            kind,
+            card,
+            applicationId: liked.application.id,
+          };
+          markLast(swiped);
           void queryClient.invalidateQueries({ queryKey: queueKey });
           void queryClient.invalidateQueries({
             queryKey: applicationsKey(card.id),
           });
-          offerUndo(LIKED[mode]);
+          offerUndo(LIKED[mode], swiped);
         } else {
           await passPosting(card.id);
           remove(card);
           setRefusal(null);
-          setLast({ kind, card });
-          offerUndo(SWIPE_TEXT.passed);
+          const swiped: LastSwipe = { kind, card };
+          markLast(swiped);
+          offerUndo(SWIPE_TEXT.passed, swiped);
         }
       } catch (error) {
         const refused = refusedOf(error);
@@ -210,10 +248,12 @@ export function useDeck(filters: DeckFilters) {
     });
   };
 
-  const undo = () => {
-    const swiped = last;
+  function undo() {
+    const swiped = lastRef.current;
     if (!swiped) return;
     void exclusive(async () => {
+      if (lastRef.current !== swiped) return;
+      dismissUndo();
       try {
         if (swiped.kind === "pass") {
           await undoPass(swiped.card.id);
@@ -221,7 +261,7 @@ export function useDeck(filters: DeckFilters) {
           const application = await getApplication(swiped.applicationId);
           if (application.state !== "cancelled") {
             if (!CANCELLABLE.has(application.state)) {
-              setLast(null);
+              markLast(null);
               toast.error(SWIPE_TEXT.tooLate);
               return;
             }
@@ -232,14 +272,14 @@ export function useDeck(filters: DeckFilters) {
             queryKey: applicationsKey(swiped.card.id),
           });
         }
-        setLast(null);
+        markLast(null);
         setRefusal(null);
         putBack(swiped.card);
         toast(SWIPE_TEXT.undone);
       } catch (error) {
         const refused = refusedOf(error);
         // A refusal or a vanished posting is final; a lost connection leaves the undo to retry.
-        if (refused || isGone(error)) setLast(null);
+        if (refused || isGone(error)) markLast(null);
         if (refused?.code === "not_cancellable")
           toast.error(SWIPE_TEXT.tooLate);
         else if (refused) toast.error(refused.detail);
@@ -247,10 +287,7 @@ export function useDeck(filters: DeckFilters) {
         else toast.error(describeError(error));
       }
     });
-  };
-  useEffect(() => {
-    undoRef.current = undo;
-  });
+  }
 
   return {
     query,
