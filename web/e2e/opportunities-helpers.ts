@@ -8,19 +8,25 @@ export const STACK_FORMS = "http://atsforms:8080";
 
 /**
  * A posting of `person` with this title, on the fake form of `ats` (or none), and the fit set by
- * hand, so the deck shows it above any threshold. Its id.
+ * hand, so the deck shows it above any threshold. Its id. One address is one posting for a
+ * person (duplicates are refused), so two postings of one person on one `ats` need a `variant`.
  */
 export async function deckPosting(
   request: APIRequestContext,
   person: Person,
-  { title, ats, fit }: { title: string; ats: string | null; fit: number },
+  {
+    title,
+    ats,
+    fit,
+    variant,
+  }: { title: string; ats: string | null; fit: number; variant?: string },
 ): Promise<string> {
   const job = await addPosting(request, {
     ...person,
     posting: { ...person.posting, title },
   });
   const url = ats
-    ? (await stub.posting(ats)).replace(
+    ? (await stub.posting(ats, variant)).replace(
         process.env.E2E_ATS_FORMS_URL ?? "",
         STACK_FORMS,
       )

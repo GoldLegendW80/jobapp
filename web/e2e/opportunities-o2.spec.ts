@@ -72,6 +72,7 @@ test.beforeAll(async ({ browser }) => {
   ids.cyber = await deckPosting(pageA.request, a, {
     title: CYBER,
     ats: "greenhouse",
+    variant: "slow",
     fit: 97,
   });
   contextB = await newContext(browser);
