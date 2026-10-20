@@ -36,6 +36,10 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-10-14 | Faster, more accurate delivery: pull requests under about 1500 lines, a self review checklist, reviewers push mechanical fixups, `ops/ship.sh` (gate, merge, deploy, Jetson check in one command), `ops/agent-test.sh` so the gate can run beside agents. |
 | 2026-10-14 | Priority: documents, browser and apply first. The MVP is ONE CLICK APPLY (see Apply); Full auto comes after it. |
 | 2026-10-15 | The repository is public, at the owner's explicit request. |
+| 2026-10-20 | Merges go only through `ops/ship.sh` (gate, merge, deploy), from the main Mac. This replaces the same day's rule that both machines merge approved pull requests directly into main and the gate then checks a commit of main (#354). |
+| 2026-10-20 | The board's Status columns are the pipeline steps: Needs you, Paused, Blocked, Spec, Ready, Building, In review, Fix & re-check, Approved, Gating, Merged, Live, Dropped, Epic, kept by the board sync. Every open card is Ready or Done; a blocked card shows as Ready with what it waits for. |
+| 2026-10-20 | Everything the owner must do himself lives in one checklist issue, #506. |
+| 2026-10-21 | Distributed sign in flood (#152): a rate limit in front of the api, a Caddy build with a free, open source rate limit module (arm64 image, tests). Everything stays free. |
 
 ## Agents and ingestion
 
@@ -47,6 +51,31 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-10-10 | Explicit consent the first time a run sends documents to Anthropic, recorded with the date and the version of the text. |
 | 2026-10-10 | A run pauses at twice its high estimate; an explicit Continue raises the ceiling by one estimate. Applies to every user. |
 | 2026-10-10 | Parsers run in their own `parser` service (own uid, no credentials, no network beyond what it needs). Backups keep 7 nightly dumps. The profile accepts a year alone as a date. |
+
+### Ingestion and profile fill (owner decisions of 2026-10-21, through the orchestrator)
+
+- #408: `EXTRACTOR_VERSION` stays 1, no re-read; the merge drops the reused list removals that
+  `tools._removes_a_list` now refuses (no token cost).
+- #186: a secret found only in a transcribed page is extracted anyway (the image was already sent
+  under the same consent); no refusal in the run under way. A confirmation given for the parsed
+  pages of a mixed PDF still covers a secret found later in its transcribed pages (no reset).
+- #184: hand typed values that differ from a document need their own click: excluded from Accept
+  all (`bulk_exclusion`), shown as typed by the person. Derived years accepted after their
+  employer was rejected are kept, shown stale with "check it" and Edit.
+- #174 and #111: two positions or degrees at one organisation starting the same year keep the year
+  key, with the list line "these may be two entries".
+- #111: boards proposed by a document keep today's behaviour (inserted enabled, Accept all can add
+  them). Accept all takes additions only: every `replace` needs its own click (`_takes_away`
+  extended).
+- #145: LinkedIn `Profile.csv`: every column is kept, none dropped at read time.
+- #117: the documents a person may have waiting at once are capped (a 429 or 409 rule with a plain
+  message); no fair order needed.
+- #115: consent text version 2 adds "The proposals it writes are stored in your account until you
+  accept or reject them."; everyone consents again once. The dialog stays as is (no "pauses at
+  about 2 x high" line).
+- #114: the laptop analysis prompt stays as is (no new prohibition). `/profile/fill`: when the
+  person has documents it opens on Documents and keeps the prompt step visible and one click away;
+  with no document, the prompt step as today.
 
 ## Opportunities and Full auto (intent of 2026-10-10)
 
@@ -67,6 +96,25 @@ choice made by the build that stands until the owner says otherwise.
   person who opted in per platform, with the risk sentence, a recorded acceptance and a 7 day pause on
   a checkpoint (task O7b); Full auto for missions follows the rule of jobs (Ashby, Greenhouse and
   Lever forms only).
+- 2026-10-20, owner answers on the first login wizard (PR #480, O5): only members are sent to the
+  wizard (admins never redirected). The step is stored in the profile (the preferences section's
+  onboarding part, written only through the onboarding routes, never by a profile PUT or an import,
+  never proposable by ingestion, hidden from the model), so another device resumes at the same step,
+  skipped steps included. A starter list of boards comes from the person's targets: from the roles
+  and industries typed in the wizard, public Ashby, Greenhouse and Lever boards plus Google Careers
+  and VIE sources; one click accepts all, each removable.
+- 2026-10-20, owner answers on the starter list (PR #496, O5b): the catalog keeps Elastic, Datadog,
+  GitLab and Palantir (the board's role filter still drops cybersecurity titles). The starter list
+  also appears in Search options, for accounts that skipped the wizard or want more boards later (a
+  follow-up issue after the merge). Google Careers and VIE are always proposed to everyone, the
+  person unticks what he does not want, not only VIE when VIE is a chosen contract type.
+- 2026-10-20: feeds (O7) follow the boards' never apply rule: what a feed brings is stored as
+  skipped.
+- 2026-10-21, owner decisions on the rename (#73): the freeze starts once every lane adding job
+  names is merged (jobs, B8, B9, B10, O7, O7b, O8, A12, A13, O2). `posting_id` and the other
+  `posting` names are renamed too (to `opportunity_id` and so on) in O11b's migration. Old API
+  paths answer 308 for 30 days or two releases, whichever is later. Existing accounts with a
+  profile never see the wizard, only a "Finish setting up" card for those with steps left.
 
 ## Mail (2026-10-13; paused 2026-10-14 after M4)
 
@@ -81,6 +129,36 @@ choice made by the build that stands until the owner says otherwise.
 - Consent first, before the assistant reads any mail. Planner default: 20,000 messages or 300 MB
   of mail text per user.
 - 2026-10-14: mail M5 onward is PAUSED; documents, browser and apply go first.
+- 2026-10-20 (#357): the pause is LIFTED. Mail is built after the job search tickets
+  (opportunities O7 to O10 and apply A16), two tasks at a time, each through review and the gate.
+- 2026-10-21, M3 parsing (#190): `dkim=pass` with an explicit `dmarc=fail` is not trusted (veto).
+  Forged imported mail faking Gmail's authentication lines: stage B also looks for a mark real
+  imports carry, besides never auto applying on mail older than the connection. Aliases: always the
+  person's real Gmail account; only the connected address counts as the person, no alias handling
+  (such threads fail closed). `in_reply_to` is appended to `references_header` by M7 (no
+  migration). The quote depth limit stays 100. The French market ATS sending domains (welcomekit.co,
+  join.com, flatchr.io, taleez.com, digitalrecruiters.com, jobaffinity.fr, beetween.com, breezy.hr,
+  applytojob.com, pinpointhq.com, comeet.com, homerun.co, eightfold.ai, avature.net, csod.com,
+  oraclecloud.com) are added before M5 ships, corrected from the real mailbox at stage B.
+- 2026-10-21 (#190): mail goes through an MCP server rather than the Gmail API directly. This
+  changes SPEC-mail; a spec revision is being written and its questions go to the owner before any
+  mail code changes.
+- 2026-10-21, M4 (#187): the consent tick is bound to the person and 10 minutes and cleared at sign
+  out. On hold until the MCP redesign: CSRF on the OAuth start, the localhost redirect, the callback
+  without a session.
+- 2026-10-21, M2 public pages (#182): the contact address on `/privacy` and `/terms` is the owner's
+  Gmail address, set as a build setting on the Jetson, never committed. The 13 sentences are
+  approved with two changes: name Anthropic as the model provider, and state the lifetime of third
+  parties' text and that deletion also removes the Gmail side copy. The home page sentence "the
+  documents you prepare for them" is dropped. The `/privacy` search terms come from the same
+  constants as the sync's query, with a comparing test.
+- 2026-10-21, M9 fact check (#183): "3 years" against 3.5 years is flagged softly with its own code
+  (`duration_below_profile`), never silently allowed. Fact check participants are the posting's
+  company and its address domains only, never display names.
+- 2026-10-21, M1 (#175): the canary fixtures move to `api/tests/conftest.py` in the first mail
+  task; the sync's batches stay under 150 `messages.get` a minute.
+- 2026-10-21 (#17): the points of the mail spec review are answered in the plan; closed.
+- 2026-10-21 (#251): applications by e-mail stay behind mail M12, M18 and M23, as planned.
 
 ## Documents (2026-10-14)
 
@@ -97,6 +175,9 @@ choice made by the build that stands until the owner says otherwise.
 - Import the command line's CVs and letters; those of applied postings stay byte for byte.
 - Filling the profile from an uploaded CV is one click, never automatic.
 - The renderer is the builders' choice: a headless Chromium service (measured in D1).
+- 2026-10-21 (#358): a posting that leaves `applied` before the approved version's render lands is
+  frozen by the next trigger (Try again, Mark as sent, apply's send, a return to applied): one
+  `SPEC-documents.md` sentence plus a test pinning it.
 
 ## Browser and apply (2026-10-14)
 
