@@ -3,6 +3,7 @@ the test process on files made in code, every answer read back through the worke
 (parser_client.check_design_pdf). The container tests run the same files in the real child."""
 
 import json
+import unicodedata
 from collections.abc import Iterator
 from typing import Any
 
@@ -427,8 +428,51 @@ def test_the_caps_are_the_clients() -> None:
         (design_pdf.FONT_NAME_MAX, pc.DESIGN_FONT_NAME),
         (design_pdf.LENGTH_MAX, pc.DESIGN_LENGTH),
         (design_pdf.STROKE_MAX, pc.DESIGN_STROKE),
+        (design_pdf.PAGES_MAX, pc.MAX_PAGES),
     ]
     assert all(mine == theirs for mine, theirs in pairs), pairs
+
+
+# --- values the client would refuse: cleaned or left out, never the whole answer ----------------
+
+
+@pytest.mark.parametrize(("letter", "written"), [(b"A", "\u0958"), (b"B", "\u2adc")])
+def test_a_run_that_nfc_writes_longer_is_cut_at_the_run_cap(letter: bytes, written: str) -> None:
+    content = b"BT /F5 1 Tf 1 0 0 1 20 700 Tm (%s) Tj ET" % (letter * 310)
+    (page,) = ask(fx.build([content])).read
+    whole = unicodedata.normalize("NFC", written * 310)
+    assert all(len(run.text) <= design_pdf.RUN_TEXT_MAX for run in page.runs)
+    assert len(unicodedata.normalize("NFC", written * 300)) > design_pdf.RUN_TEXT_MAX
+    assert texts(page)[0] == whole[: design_pdf.RUN_TEXT_MAX]
+
+
+@pytest.mark.parametrize("claimed", [pc.MAX_PAGES, pc.MAX_PAGES + 1, 500_000])
+def test_a_page_count_past_the_clients_cap_is_given_as_the_cap(claimed: int) -> None:
+    found = ask(fx.build([fx.text("Page 1", 56, 780)], count=claimed))
+    assert found.pages == min(claimed, pc.MAX_PAGES)
+    assert [texts(page) for page in found.read] == [["Page 1"]]
+
+
+# A page size in points, and whether the page is read: a side under a twentieth of a point is
+# zero tenths, and the page is not read.
+TINY = [
+    ((0.01, 0.01), False),
+    ((0.04, 0.04), False),
+    ((0.04, 0.3), False),
+    ((0.3, 0.04), False),
+    ((0.05, 0.05), True),
+    ((0.06, 0.5), True),
+    ((0.1, 1), True),
+    ((1, 1), True),
+]
+
+
+@pytest.mark.parametrize(("size", "read"), TINY, ids=[repr(row[0]) for row in TINY])
+def test_a_page_too_small_for_a_tenth_of_a_point_is_not_read(size: tuple, read: bool) -> None:
+    found = ask(fx.build([b"0 0 1 rg 0 0 0.01 0.01 re f"], size=size))
+    assert found.pages == 1
+    assert len(found.read) == int(read)
+    assert {note.code for note in found.notes} == (set() if read else {"pages_not_read"})
 
 
 # --- the budget and hostile files ---------------------------------------------------------------

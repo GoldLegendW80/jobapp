@@ -47,6 +47,9 @@ Caps: RUNS_MAX runs, SHAPES_MAX shapes (the largest kept), IMAGES_MAX images and
 objects looked at per page, CHARS_MAX characters per page, TEXT_MAX characters and FONTS_MAX
 fonts per answer. Each one met is a note and `truncated`. Together they hold the answer under
 parser_client.DESIGN_MAX_ANSWER (tests/ingestion/parser/test_design_pdf.py builds the largest).
+A value the client would refuse is cleaned here, so one odd value never costs the whole answer:
+a run's text is cut at RUN_TEXT_MAX after NFC too, the page count is given as PAGES_MAX at most,
+and a page under a tenth of a point on a side is not read (`pages_not_read`).
 
 What comes back otherwise, `{"ok": false, "failure": "file", "code": ...}`, is pdf_render.py's:
 `unreadable`, `protected`, `encryption`, `bomb` (a page whose content decodes to more than
@@ -81,6 +84,7 @@ COVER = pdf_render.COVER
 BUDGET_EVERY = 500  # characters or objects between two looks at the budget
 LENGTH_MAX = 144_000  # tenths of a point: parser_client.DESIGN_LENGTH, the most a size may be
 STROKE_MAX = 1_000  # tenths of a point: parser_client.DESIGN_STROKE
+PAGES_MAX = 100_000  # parser_client.MAX_PAGES: a file that claims more is given as this
 FILLED = frozenset({0, 2, 4, 6})  # text render modes that fill the glyphs
 STROKED = frozenset({1, 5})  # text render modes that only stroke them
 RIGHT, UP, LEFT, DOWN = range(4)  # the direction a line of text runs in on the page
@@ -371,7 +375,8 @@ class _Page:
     def _close(self, run: dict | None) -> None:
         if run is None:
             return None
-        text = unicodedata.normalize("NFC", "".join(run["chars"]).strip())
+        # NFC writes some characters as two or three (U+0958, U+FB2C): cut again after it.
+        text = unicodedata.normalize("NFC", "".join(run["chars"]).strip())[:RUN_TEXT_MAX]
         if not text:
             return None
         if len(self.runs) == RUNS_MAX:
@@ -632,7 +637,7 @@ def read(pdf, total: int, budget, contents=None) -> dict:
             continue
         try:
             width, height = page.get_size()
-            if not pdf_render.renderable(width, height):
+            if not pdf_render.renderable(width, height) or min(_tenths(width), _tenths(height)) < 1:
                 skipped += 1
                 continue
             read_page = _Page(page, fonts, room, budget)
@@ -661,7 +666,7 @@ def read(pdf, total: int, budget, contents=None) -> dict:
     return {
         "ok": True,
         "kind": "design_pdf",
-        "pages": total,
+        "pages": min(total, PAGES_MAX),
         "scanned": covered and not any(page["runs"] for page in pages),
         "truncated": bool(notes),
         "notes": found,
