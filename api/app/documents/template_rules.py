@@ -37,7 +37,7 @@ text of the template, so it can be logged. On top of the authoring rules every t
   `rowspan` (cells of two rows could then share a slot);
 - the CSS: `template_css.check`, a static filter of allow lists (see that module): it refuses
   what places a box over another (position, offsets, z-index, negative margins, grid rows and
-  areas, a transform of an element) and any box a `::before` or `::after` would draw.
+  areas, any transform), any box a `::before` or `::after` would draw, and a marker string.
 
 What the static filter guarantees: no text of the template, every field printed in a tree the
 browser keeps as written, none of the CSS constructs above. Whether every field is truly

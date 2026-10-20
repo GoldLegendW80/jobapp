@@ -299,7 +299,6 @@ def test_a_style_sheet_that_breaks_a_rule_is_refused_with_its_code(files, code):
 
 CSS_ACCEPTED = [
     _css('.x::before { content: "\\00b7\\00a0"; } .y::after { content: "•"; }'),
-    _css('.z::marker { content: ""; }'),
     _css(".band { background: #1f4e79; } .band h2 { color: #ffffff; }"),
     _css(".band { background: var(--accent); } .band p { color: #dff3ef; }"),
     _css("@page { size: A4; margin: 0; } .page { padding: var(--margin); }"),
@@ -308,7 +307,7 @@ CSS_ACCEPTED = [
     _css(":root { --rail: 27mm; } .x { grid-template-columns: var(--rail) minmax(0, 1fr); }"),
     _css("/* a comment with { braces } and ; */ .x { color: #1d232b; }"),
     _css(".x { position: relative; }"),
-    _css('.x { list-style: "• " inside; } .y { list-style-type: none; }'),
+    _css(".x { list-style: square inside; } .y { list-style-type: none; }"),
 ]
 
 
@@ -632,7 +631,7 @@ def test_what_only_a_render_shows_passes_the_static_filter(addition):
 
 DEEP = "minmax(" * 2000 + "1px" + ")" * 2000
 ROUND_THREE_SHEET_REFUSED = [
-    # the bundled values' neighbours: a rotate of a decoration only, contain, punctuation
+    # the bundled values' neighbours: no transform at all, contain, punctuation
     (".x::before { transform: scale(0); }", "property"),
     (".x::before { transform: translate(1px, 0); }", "property"),
     (".x::before { transform: rotate(45deg) scale(2); }", "property"),
@@ -642,6 +641,12 @@ ROUND_THREE_SHEET_REFUSED = [
     (".x { transform: rotate(45deg); }", "property"),
     (".x, .x::before { transform: rotate(45deg); }", "property"),
     (".x::marker { transform: rotate(45deg); }", "property"),
+    ('.x::before { content: "•"; transform: rotate(45deg); }', "property"),
+    ('.y::after { content: ":"; transform: ROTATE(-90DEG); }', "property"),
+    ('.x::before { content: "•"; transform: rotate(0deg); }', "property"),
+    ('.x::before { content: "•"; transform: none; }', "property"),
+    ('.x::after { content: "•"; transform: rotate(-6deg) !important; }', "property"),
+    ('.x::before { content: "•"; TRANSFORM: rotate(1deg); }', "property"),
     (".x { contain: paint; }", "property"),
     (".x { contain: size; }", "property"),
     (".x { contain: strict; }", "property"),
@@ -716,10 +721,9 @@ def test_round_three_sheet_probes_are_refused(addition, code):
 ROUND_THREE_SHEET_ACCEPTED = [
     '.x::before { content: "#"; } .y::before { content: ">"; } .z::after { content: "+"; }',
     ".x { contain: inline-size; } .y { contain: none; }",
-    '.x::before { content: "•"; transform: rotate(45deg); }',
-    '.y::after { content: ":"; transform: ROTATE(-90DEG); }',
     '.x::before { content: "•"; color: var(--accent); font-weight: 700; padding: 0 6pt; }',
-    '.x::marker { color: var(--accent); content: "•"; }',
+    ".x::marker { color: var(--accent); font-weight: 700; font-family: 'Nunito Sans'; }",
+    ".x { list-style: decimal outside; } .y { list-style-type: circle; }",
     "html { --gap: 4pt; } .x { gap: var(--gap); }",
     "html:root { --rail: 20mm; } .x { grid-template-columns: minmax(var(--rail), 1fr) 1fr; }",
     ".x { display: grid; } .x > .a { grid-column: 1 / -1; } .x > .b { grid-column: 2; }",
@@ -858,3 +862,58 @@ def test_a_private_use_character_is_never_read_as_an_output():
     source = FILES["cv.html.j2"].replace(SUMMARY, SUMMARY + "<p>\ue000</p>")
     expected = Problem("cv.html.j2", 0, "literal", "a character of the private use area")
     assert expected in template_rules.check_html("cv", "cv.html.j2", source)
+
+
+# --- round 4: no transform at all, no marker string ---------------------------------------------
+
+SQUARES = "▪"
+ROUND_FOUR_SHEET_REFUSED = [
+    # the reviewer's probes: a turned decoration and an outside marker string paint over the
+    # text of other fields
+    (
+        f".row .body::before{{content:'{SQUARES * 60}';display:block;white-space:nowrap;"
+        "font-size:2.5em;font-weight:700;line-height:0.9;letter-spacing:-0.05em;color:#ffffff;"
+        "transform:rotate(-6deg)}",
+        "transform: it can lay a box over another",
+    ),
+    (
+        f".competencies li{{list-style:outside '{SQUARES * 40}'}}"
+        ".competencies li::marker{color:#ffffff;font-size:4em;font-weight:700}",
+        "list-style: a value outside the allowed list",
+    ),
+    # their neighbours, one change each
+    ('.x::before { content: "•"; transform: rotate(-6deg); }', "transform: it can lay a box"),
+    ('.x::after { content: "•"; transform: rotate(1deg); }', "transform: it can lay a box"),
+    (".x { transform: none; }", "transform: it can lay a box"),
+    (".x::marker { transform: rotate(45deg); }", "transform: it can lay a box"),
+    (f".x {{ list-style: '{SQUARES}' outside; }}", "list-style: a value outside"),
+    (f".x {{ list-style: inside '{SQUARES}'; }}", "list-style: a value outside"),
+    (".x { list-style: '•'; }", "list-style: a value outside"),
+    (".x { list-style-type: '•'; }", "list-style-type: a value outside"),
+    (".x { list-style-type: ''; }", "list-style-type: a value outside"),
+    ('.x::marker { content: "•"; }', "content: a ::marker takes only a colour and a font"),
+    ('.x::marker { content: ""; }', "content: a ::marker takes only a colour and a font"),
+    (".x::marker { content: none; }", "content: a ::marker takes only a colour and a font"),
+    (".x::marker { font-size: 4em; }", "font-size: a ::marker takes only a colour and a font"),
+    (".x::marker { font-size: 100%; }", "font-size: a ::marker takes only a colour and a font"),
+    (".x li::marker { letter-spacing: 0.5em; }", "letter-spacing: a ::marker takes only"),
+]
+
+
+@pytest.mark.parametrize(("addition", "detail"), ROUND_FOUR_SHEET_REFUSED)
+def test_round_four_sheet_probes_are_refused(addition, detail):
+    found = _check(_css(addition))
+    assert any(p.code == "property" and p.detail.startswith(detail) for p in found), found
+
+
+ROUND_FOUR_SHEET_ACCEPTED = [
+    ".x { list-style: square outside; } .y { list-style: inside; } .z { list-style: none; }",
+    ".x { list-style-type: decimal; list-style-position: outside; }",
+    ".x li::marker { color: #6b6b6b; font-style: italic; font-variant: small-caps; }",
+    '.x::before { content: "•"; color: var(--accent); margin-right: 4pt; }',
+]
+
+
+@pytest.mark.parametrize("addition", ROUND_FOUR_SHEET_ACCEPTED)
+def test_round_four_sheets_written_another_way_pass(addition):
+    assert _check(_css(addition)) == []

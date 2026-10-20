@@ -16,16 +16,19 @@ everything is held to allow lists:
   `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
 - the properties of VALUES, each with its own allow list of values; sizes of text in `em` or
   `%` or the density property, every other length from 0 up to CAPS; colours `#rrggbb` or the
-  accent; strings only punctuation; functions only `var()`, `minmax()` in a grid template and
-  one `rotate()` of a decoration;
+  accent; strings only punctuation; functions only `var()` and `minmax()` in a grid template;
 - what places a box over another is refused (OVERLAY): `position` other than static and
   relative, an offset (`left`, `top`, `right`, `bottom`, `inset`), `z-index`, `float`, a
-  negative margin, a `transform` of an element, a grid placement other than `grid-column` (the
+  negative margin, any `transform` (it paints above the text and carries glyphs off their own
+  box), a grid placement other than `grid-column` (the
   grid placement algorithm, CSS Grid 1 section 8.5, puts an item placed on one axis only where
   it overlaps no other item; `grid-row` and `grid-area` can put two items in one cell);
-- a `::before` or `::after` is a decoration: punctuation of CONTENT_CHARS with a colour, a font,
-  space around it and at most one rotate; no fill, border, size or position (DECORATION); a
-  `::marker` takes only a colour and a font (MARKER); `content` is set on nothing else;
+- a `::before` or `::after` is a decoration: punctuation of CONTENT_CHARS with a colour, a font
+  and space around it; no fill, border, size or position (DECORATION); `content` is set on
+  nothing else;
+- a list marker is a glyph of LIST_TYPES: no marker string (`list-style`, `list-style-type` or
+  `::marker` `content`, which Chromium lays out of the list's box, over the column beside it),
+  and a `::marker` takes only a colour and a font without a size (MARKER);
 - custom properties: set only on `:root` or `html`, once each, to one length, number or
   `#rrggbb` (minimal's `--rail`), and read in their place by `var()`; `var()` reads too a
   density property or `--accent`, which the sheet never sets (the step sets them);
@@ -40,7 +43,8 @@ rule (the page's white, a band, a column); a box made smaller than its text (`wi
 `flex`), whose text then runs over its neighbours, under the background of a later flex or grid
 item or of a `position: relative` box; the vertical padding or border of an inline box, which
 paints over the line above; a size made small by nesting `em` sizes; a box pushed off the page
-by its margins.
+by its margins; the one glyph of an outside marker, at the size of its item, beside a list
+without padding.
 """
 
 from __future__ import annotations
@@ -417,7 +421,7 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
 
 # A value read into parts: ("kw", ident), ("num", n), ("len", n, unit), ("colour", "#rrggbb"),
 # ("str", text), ("sep", "," or "/"), ("var", a density property), ("minmax", parts),
-# ("rotate", parts), ("fn", name), ("delim", ch).
+# ("fn", name), ("delim", ch).
 Part = tuple
 
 
@@ -466,7 +470,7 @@ def parts(value: Sequence[Token], customs: Mapping[str, Part], accent: str) -> l
             name = token.text.lower()
             if name == "var":
                 out.append(_var(inner, customs, accent))
-            elif name in ("minmax", "rotate"):
+            elif name == "minmax":
                 out.append((name, tuple(parts(inner, customs, accent))))
             else:
                 out.append(("fn", name))
@@ -572,7 +576,7 @@ def _grid_line(found: list[Part]) -> bool:
 def _list_style(found: list[Part]) -> bool:
     places = ("inside", "outside")
     return 1 <= len(found) <= 2 and all(
-        p[0] == "str" or (p[0] == "kw" and (p[1] in LIST_TYPES or p[1] in places)) for p in found
+        p[0] == "kw" and (p[1] in LIST_TYPES or p[1] in places) for p in found
     )
 
 
@@ -654,14 +658,12 @@ VALUES = {
         for p in found
     ),
     "list-style": _list_style,
-    "list-style-type": lambda found: len(found) == 1 and (
-        found[0][0] == "str" or (found[0][0] == "kw" and found[0][1] in LIST_TYPES)
-    ),
+    "list-style-type": _kw(*LIST_TYPES),
     "list-style-position": _kw("inside", "outside"),
 }  # fmt: skip
 SPECIAL = frozenset(
     ("color", "background", "background-color", "display", "position", "content", "font-family",
-     "font-size", "line-height", "letter-spacing", "transform")
+     "font-size", "line-height", "letter-spacing")
 )  # fmt: skip
 PROPERTIES = frozenset(VALUES) | SPECIAL
 
@@ -687,11 +689,6 @@ def _special(prop: str, found: list[Part], names: frozenset[str]) -> tuple[str, 
     elif prop == "position":
         if not (one and one[0] == "kw" and one[1] in POSITION):
             return "property", "position: static or relative"
-    elif prop == "transform":
-        inner = one[1] if one and one[0] == "rotate" else ()
-        turn = len(inner) == 1 and _within(inner[0], "deg", -360, 360)
-        if not turn:
-            return "property", "transform: one rotate(), from -360deg to 360deg"
     elif prop == "content":
         if not (one and (one[0] == "str" or one in (("kw", "none"), ("kw", "normal")))):
             return "content", "content: punctuation only"
@@ -741,19 +738,19 @@ DECORATIONS = frozenset(("before", "after"))
 DECORATION = frozenset(
     ("content", "color", "font-family", "font-size", "font-weight", "font-style", "font-variant",
      "font-variant-caps", "letter-spacing", "line-height", "vertical-align", "white-space",
-     "display", "text-transform", "text-decoration", "transform", "margin", "margin-top",
+     "display", "text-transform", "text-decoration", "margin", "margin-top",
      "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right",
      "padding-bottom", "padding-left")
 )  # fmt: skip
 MARKER = frozenset(
-    ("content", "color", "font-family", "font-size", "font-weight", "font-style", "font-variant",
-     "font-variant-caps")
+    ("color", "font-family", "font-weight", "font-style", "font-variant", "font-variant-caps")
 )  # fmt: skip
-# what moves or places a box over another; position and transform are held in _special
+# what moves or places a box over another; position is held in _special
 OVERLAY = frozenset(
     ("left", "top", "right", "bottom", "inset", "inset-block", "inset-inline", "z-index",
      "grid-row", "grid-row-start", "grid-row-end", "grid-area", "grid-column-start",
-     "grid-column-end", "float", "translate", "rotate", "scale", "offset", "margin-trim")
+     "grid-column-end", "float", "transform", "translate", "rotate", "scale", "offset",
+     "margin-trim")
 )  # fmt: skip
 
 
@@ -763,8 +760,8 @@ def _target_problem(prop: str, targets: frozenset[str | None]) -> tuple[str, str
     if targets & DECORATIONS and prop not in DECORATION:
         return "property", f"{prop}: a ::before or ::after holds punctuation only, no box"
     if "marker" in targets and prop not in MARKER:
-        return "property", f"{prop}: a ::marker takes only a colour and a font"
-    if None in targets and prop in ("content", "transform"):
+        return "property", f"{prop}: a ::marker takes only a colour and a font, no size"
+    if None in targets and prop == "content":
         return "property", f"{prop}: only on a ::before or ::after"
     return None
 
