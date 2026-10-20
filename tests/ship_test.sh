@@ -848,11 +848,11 @@ fresh
 mkpr 96
 echo 37.25 >"$STATE/board_sleep"
 started="$SECONDS"
-SHIP_SYNC_SECONDS=1 run 0 ship --approved
-((SECONDS - started < 30)) || fail "three hung syncs took $((SECONDS - started)) s with SHIP_SYNC_SECONDS=1"
+SHIP_SYNC_SECONDS=2 run 0 ship --approved
+((SECONDS - started < 30)) || fail "three hung syncs took $((SECONDS - started)) s with SHIP_SYNC_SECONDS=2"
 [[ "$(last_line)" == "SHIP: OK" ]] || fail "a hung sync failed the ship: $(last_line)"
-[[ "$(grep -c '^board  sync .* failed (killed after 1 s, ' "$OUT")" == 3 ]] || fail "one line per killed sync expected: $(grep '^board' "$OUT")"
-out_has "board  sync at the start of the gate failed (killed after 1 s, "
+[[ "$(grep -c '^board  sync .* failed (killed after 2 s, ' "$OUT")" == 3 ]] || fail "one line per killed sync expected: $(grep '^board' "$OUT")"
+out_has "board  sync at the start of the gate failed (killed after 2 s, "
 out_has "board:    3 sync(s), failed at the start of the gate, after the merges, after the deploy"
 out_has "merged:   #96"
 [[ "$(cat "$STATE/deploy.log")" == "deploy $(git -C "$MAIN" rev-parse HEAD)" ]] || fail "a hung sync stopped the deploy"
@@ -866,11 +866,11 @@ for n in 97 98; do mkpr "$n"; done
 echo 97 >"$STATE/term_after_merge"
 echo 37.25 >"$STATE/board_sleep"
 started="$SECONDS"
-SHIP_SYNC_SECONDS=1 run 130 ship --approved
+SHIP_SYNC_SECONDS=2 run 130 ship --approved
 ((SECONDS - started < 30)) || fail "the TERM path waited $((SECONDS - started)) s on a hung sync"
 out_has "merged:   #97"
 out_has "not merged: #98"
-out_has "board  sync after the merges failed (killed after 1 s, "
+out_has "board  sync after the merges failed (killed after 2 s, "
 out_has "SHIP: FAIL interrupted during the merges: nothing deployed"
 board_calls "--apply batch=97 98" "--apply batch="
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after an interrupt"
@@ -882,9 +882,9 @@ fresh
 mkpr 99
 echo 3 >"$STATE/gate_exit"
 echo 37.25 >"$STATE/board_sleep"
-SHIP_SYNC_SECONDS=1 run 1 ship --approved
+SHIP_SYNC_SECONDS=2 run 1 ship --approved
 out_has "SHIP: FAIL the gate refused to start"
-out_has "board  sync after the stop failed (killed after 1 s, "
+out_has "board  sync after the stop failed (killed after 2 s, "
 board_calls "--apply batch=99" "--apply batch="
 [[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left"
 no_sleeper

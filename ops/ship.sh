@@ -283,11 +283,12 @@ kill_sync() { # KILL the process group of the running sync, if any
 board_sync() { # board_sync <when>: ops/board-sync.py --apply, bounded; a failure is one line, never a stop
   local log="$LOGS/board-$((SYNCS + 1)).log" code=0 start="$SECONDS" killed=0
   SYNCS=$((SYNCS + 1))
+  # A signal landing between this line and SYNC_PID=$! leaves that one sync to its own 240 s deadline.
   group "$ROOT/$BOARD_SYNC" --apply >"$log" 2>&1 </dev/null &
   SYNC_PID=$!
   # The watchdog: no signal needs to reach the sync, KILL to its group ends it.
   while kill -0 "$SYNC_PID" 2>/dev/null; do
-    if ((SECONDS - start >= SYNC_SECONDS)); then
+    if ((SECONDS - start > SYNC_SECONDS)); then # strict: SECONDS ticks in whole seconds, so the sync gets its full budget
       kill_sync
       killed=1
       break
