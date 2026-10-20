@@ -76,7 +76,8 @@ export function LiveBrowser({
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    const run = { gone: false, opened: null as Screen | null };
+    // `closed`: the socket is already gone (noVNC logs an error when a closed view is closed again).
+    const run = { gone: false, closed: false, opened: null as Screen | null };
     // A function, not the field: TypeScript would keep its narrowing across the awaits.
     const gone = () => run.gone;
     const connect = async () => {
@@ -94,6 +95,7 @@ export function LiveBrowser({
               if (!gone()) setProblem(TOO_MANY);
             },
             disconnect: () => {
+              run.closed = true;
               if (gone()) return;
               screen.current = null;
               setPhase("closed");
@@ -102,7 +104,7 @@ export function LiveBrowser({
         );
         run.opened = opened;
         if (gone()) {
-          opened.disconnect();
+          if (!run.closed) opened.disconnect();
           return;
         }
         opened.viewOnly = inputRef.current !== "you";
@@ -117,7 +119,7 @@ export function LiveBrowser({
     return () => {
       run.gone = true;
       screen.current = null;
-      run.opened?.disconnect();
+      if (!run.closed) run.opened?.disconnect();
     };
   }, [viewer, attempt]);
 

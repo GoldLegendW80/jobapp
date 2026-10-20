@@ -13,6 +13,8 @@
   keeps what the file's text states (`upload.apply`), and the checks read the file
   (`writer_base.upload_context`); the corrections of the fixed block are kept for the final hook
   once the submit is stored (`writer_base.keep_fixed`). A file gone meanwhile ends the submits.
+  In a chat (D17) the checks read the draft's own fixed block and, for a base CV converted from
+  an upload still readable, the file (`upload_context`); without it, the profile only.
 
 The writer reads the profile with D7's `read_profile_section` (`writer_tools`).
 """
@@ -29,7 +31,7 @@ from claude_agent_sdk import SdkMcpTool, tool
 
 from app.agents import tools as app_tools
 from app.documents import content as c
-from app.documents import submit, upload, writer_base
+from app.documents import store, submit, upload, writer_base
 from app.documents import writer_tools as _cv_tools  # noqa: F401 (read_profile_section)
 from app.documents.corrections import Correction
 from app.documents.models import GenerationMode
@@ -102,6 +104,14 @@ def _submit(scope: app_tools.Scope, raw: object) -> tuple[str, bool]:
                 data, fixed = applied.data, applied.corrections
                 context = writer_base.upload_context(
                     db, scope.user_id, context, applied.fixed or c.Fixed(), text, scope.clock()
+                )
+        elif mode == GenerationMode.chat and context is not None:
+            text = writer_base.upload_text(db, scope.user_id, _upload_id(scope))
+            document = store.get(db, scope.user_id, uuid.UUID(str(scope.binding["document_id"])))
+            own = c.parse("base", document.draft) if document is not None else None
+            if text is not None and isinstance(own, c.BaseCvContent):
+                context = writer_base.upload_context(
+                    db, scope.user_id, context, own.fixed, text, scope.clock()
                 )
     answer, error = submit.handle(context, scope.run_id, data)
     if answer == submit.STORED:
