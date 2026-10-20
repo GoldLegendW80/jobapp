@@ -59,8 +59,10 @@ const before = { payments: NO_ROW, build: NO_ROW, ledger: NO_ROW };
 
 const FINTECH_TEXT =
   "Brindle Example Labs is a fintech company hiring a Senior Platform Engineer.\n\nYou will run our deployment platform on Kubernetes and write backend services in Python.";
+// Frontend work the invented profile only has adjacent keeps this fit below the Payments one, so the Payments
+// card leads the deck after the rescore.
 const PLAIN_TEXT =
-  "Brindle Example Labs is hiring a Platform Engineer.\n\nYou will run our deployment platform on Kubernetes and write backend services in Python.";
+  "Brindle Example Labs is hiring a Platform Engineer.\n\nYou will run our deployment platform on Kubernetes and build its dashboard in React and TypeScript.";
 
 /** The person with the posting text replaced, for addPosting and deckPosting. */
 const withText = (person: Person, title: string, text: string): Person => ({
@@ -91,6 +93,17 @@ const rate = (page: Page, which: "From" | "To" | "Currency") =>
   page.getByLabel(`${which} ${RATE}`, { exact: true });
 const industries = (page: Page) =>
   page.getByRole("list", { name: "Terms of Industries" });
+/** Opens the Advanced of "What you aim for" by keyboard (the boards table has one of its own). */
+async function openAdvanced(page: Page) {
+  const advanced = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "What you aim for" }) })
+    .getByRole("button", { name: "Advanced", exact: true });
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await advanced.focus();
+  await page.keyboard.press("Enter");
+  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+}
 const tone = (page: Page) => page.getByLabel("Tone of documents");
 
 test.beforeAll(async ({ browser }) => {
@@ -158,10 +171,7 @@ test("A sets seniority, industries and a daily rate by keyboard at 375 px; the 4
     "true",
   );
 
-  const advanced = pageA.getByRole("button", { name: "Advanced", exact: true });
-  await advanced.focus();
-  await pageA.keyboard.press("Enter");
-  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await openAdvanced(pageA);
   await pageA.getByLabel("New term for Industries", { exact: true }).focus();
   await pageA.keyboard.type("fintech");
   await pageA.keyboard.press("Enter");
@@ -244,6 +254,7 @@ test("at desktop width a reload keeps the values; Preferences sets the tone with
     "aria-pressed",
     "false",
   );
+  await openAdvanced(pageA);
   await expect(industries(pageA).getByRole("listitem")).toHaveCount(2);
   await expect(industries(pageA)).toContainText("fintech");
   await expect(industries(pageA)).toContainText("gaming");
@@ -349,6 +360,7 @@ test("B sees none of A's fields", async () => {
     "aria-pressed",
     "false",
   );
+  await openAdvanced(pageB);
   await expect(industries(pageB).getByRole("listitem")).toHaveCount(0);
   await expect(rate(pageB, "From")).toHaveValue("");
   await expect(rate(pageB, "To")).toHaveValue("");
