@@ -1,9 +1,17 @@
 # Proposal: Gmail through an MCP server
 
-Status: **proposal, waiting for the owner's answers.** Nothing here is decided until the owner
-answers the questions at the end; `SPEC-mail.md` and `tasks/mail/todo.md` are not changed by this
-document and still describe the module as built and planned. Refs #190 (the owner's decision),
-#187 (three questions held for this revision), #357 (the mail lane).
+Status: **decided on 2026-10-21: option A**, the app's own Gmail MCP server (variant A1: the
+refresh token stays in M4's store and the server gets a short lived access token per call). The
+owner's answers are on PR #509 and recorded as decisions 15 to 22 of `tasks/mail/todo.md`;
+`SPEC-mail.md` ("Gmail through the app's own MCP server") holds the design and task M1b (#510)
+builds it. Where the answers differ from the recommendations below, the answers win: everything goes
+through the server (question 2, a), the send needs the gate's one time key (question 3, a), the
+agents get the server's full read tools on the person's own mailbox (question 5, c), the OAuth start
+is a POST with the CSRF header and the connected address is shown on return (question 6, a), the
+localhost redirect leaves the production client for a second client (question 7, a), and a callback
+without a session redirects to `/login`, drops and masks the code, then resumes after sign in
+(question 8, a with c). The rest of this file is the proposal as it was put to the owner. Refs #190
+(the owner's decision), #187 (three questions held for this revision), #357 (the mail lane).
 
 ## The decision this answers
 
