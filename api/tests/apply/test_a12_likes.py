@@ -217,7 +217,7 @@ def test_a_cv_without_its_letter_asks_the_letter_alone(
 
 
 def _auto(db: Session, user_id: uuid.UUID, job: uuid.UUID, **kw: Any) -> DocumentGeneration:
-    document = store.get_or_create(db, user_id, job, Kind.cv, at=AT)
+    document = store.get_or_create(db, user_id, job, kw.pop("kind", Kind.cv), at=AT)
     made = generate.create(
         db,
         document,
@@ -285,6 +285,112 @@ def test_a_write_on_its_way_is_not_asked_again(
     [(_, found)] = generations(db, job)
     assert (found.id, found.status) == (made.id, status)
     assert applications(db, person_a.user_id)[0].id == liked.application.id
+
+
+def test_a_write_finishing_between_the_read_and_the_lock_is_not_asked_again(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = posting(db, person_a.user_id, form(stub), kinds=())
+    running = _auto(db, person_a.user_id, job, status=GenerationStatus.running)
+    real = likes.store.lock_posting
+
+    def settled_meanwhile(*args: Any, **kw: Any) -> Any:
+        with factory() as other:
+            other.execute(
+                sa.text("UPDATE document_generations SET status = 'done' WHERE id = :g"),
+                {"g": running.id},
+            )
+            other.execute(
+                sa.text("UPDATE documents SET render_state = 'queued' WHERE id = :d"),
+                {"d": running.document_id},
+            )
+            other.commit()
+        return real(*args, **kw)
+
+    monkeypatch.setattr(likes.store, "lock_posting", settled_meanwhile)
+    liked = like(db, person_a, job)
+    found = generations(db, job)
+    assert [g.trigger for _, g in found if g.trigger is GenerationTrigger.click] == []
+    assert liked.documents == ()
+
+
+@pytest.mark.parametrize("before", ["lock_posting", "lock_document"])
+@pytest.mark.parametrize(("there", "running_kind"), [((), Kind.cv), ((Kind.cv,), Kind.letter)])
+def test_a_write_settling_before_any_lock_of_the_like_is_not_asked_again(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    monkeypatch: pytest.MonkeyPatch,
+    before: str,
+    there: tuple[Kind, ...],
+    running_kind: Kind,
+) -> None:
+    """The family of the probe above: the CV and its letter, or the letter alone, settling just
+    before the Like's posting lock or its first document lock."""
+    job = posting(db, person_a.user_id, form(stub), kinds=there)
+    running = _auto(db, person_a.user_id, job, kind=running_kind, status=GenerationStatus.running)
+    real = getattr(likes.store, before)
+    calls: list[object] = []
+
+    def settled_meanwhile(*args: Any, **kw: Any) -> Any:
+        if not calls:
+            with factory() as other:
+                other.execute(
+                    sa.text("UPDATE document_generations SET status = 'done' WHERE id = :g"),
+                    {"g": running.id},
+                )
+                other.execute(
+                    sa.text("UPDATE documents SET render_state = 'queued' WHERE id = :d"),
+                    {"d": running.document_id},
+                )
+                other.commit()
+        calls.append(args)
+        return real(*args, **kw)
+
+    monkeypatch.setattr(likes.store, before, settled_meanwhile)
+    liked = like(db, person_a, job)
+    assert calls
+    assert [g for _, g in generations(db, job) if g.trigger is GenerationTrigger.click] == []
+    assert liked.documents == ()
+
+
+def test_the_like_reads_the_documents_under_their_locks(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """While the Like reads what the posting has, no other transaction can lock its CV or its
+    letter: no run settles or starts on them between the read and the ask."""
+    job = posting(db, person_a.user_id, form(stub), kinds=(Kind.cv,))
+    _auto(db, person_a.user_id, job, kind=Kind.letter, status=GenerationStatus.running)
+    ids = [d.id for d in store.posting_documents(db, person_a.user_id, job)]
+    db.commit()
+    real = likes.documents.current
+    refused: list[str] = []
+
+    def read_while_others_try(*args: Any, **kw: Any) -> Any:
+        for document_id in ids if not refused else ():
+            with factory() as other:
+                try:
+                    other.execute(
+                        sa.text("SELECT id FROM documents WHERE id = :d FOR UPDATE NOWAIT"),
+                        {"d": document_id},
+                    )
+                except sa.exc.OperationalError as error:
+                    refused.append(type(error.orig).__name__)
+                other.rollback()
+        return real(*args, **kw)
+
+    monkeypatch.setattr(likes.documents, "current", read_while_others_try)
+    assert like(db, person_a, job).documents == ()
+    assert refused == ["LockNotAvailable", "LockNotAvailable"]
 
 
 def test_a_like_before_the_consent_is_not_held_by_the_ceiling_after_it(
