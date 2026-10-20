@@ -664,8 +664,8 @@ quiet_phase() {
     awk -F '\t' -v OFS='\t' '$1 == "pytest" { $2 = 0 } { print }' "$WORK/results" >"$WORK/results.new"
     mv "$WORK/results.new" "$WORK/results"
     cat "$WORK/flaky-ids" >>"$WORK/flaky"
+    echo "pytest: counted as passed, its failed tests passed when run again alone: $(tr '\n' ' ' <"$WORK/flaky-ids")"
     rm -f "$WORK/flaky-ids"
-    echo "pytest: counted as passed, its failed tests passed when run again alone: $(tr '\n' ' ' <"$WORK/flaky")"
   fi
   if passed pytest; then
     run_step pytest-alone s_pytest_alone || true
@@ -813,8 +813,9 @@ journey_specs() { # journey_specs <part>: the Playwright arguments of a group (a
 # its stack's one browser: alone it took 1135 s of a 1697 s check (2026-10-20), the longest step by
 # far. A group named in JOURNEY_SHARDS (<group>:<shards>, separated by spaces) is split by
 # Playwright's --shard across that many stacks side by side, each a step journeys-<group>.<i> of
-# its own; Playwright puts every spec file of the group in exactly one shard, so a spec added to
-# the group runs without a list to edit here.
+# its own; with fullyParallel false (every <group>-all.config.ts) Playwright puts each spec file of
+# the group in exactly one shard, so a spec added to the group runs without a list to edit here.
+# A group name holds no dot: the dot separates the group from its shard.
 JOURNEY_SHARDS="${LOCAL_CHECK_JOURNEY_SHARDS-apply:2}"
 
 shard_count() { # shard_count <group>: how many stacks the group is split across, 1 when it is not
@@ -895,8 +896,10 @@ stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or o
 }
 
 s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` keeps the first run's stack log
-  local part="$1" group="${1%%.*}" project="$PREFIX-${1//./-}" rc=0 files=() specs one slot
-  local run="$1${2:+-$2}"
+  # The run again is a compose project of its own: the first run's stack may still be up (a step
+  # stopped by STEP_TIMEOUT is killed before its `down`), so it is never reused.
+  local part="$1" group="${1%%.*}" run="$1${2:+-$2}" rc=0 files=() specs one slot project
+  project="$PREFIX-${run//./-}"
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
   slot="$(claim_net_slot)" || return 1
   files+=(-f "$(stack_networks "$part" "$slot")")

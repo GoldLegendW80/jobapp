@@ -705,6 +705,28 @@ run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="$NET0 10.213.9.0/27 19
 [[ "$(subnets_up)" == "10.213.10.0/27 10.213.10.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
 ok "a slot whose subnets a network already holds is skipped, and Pool overlaps moves the stack to another slot, three starts at most"
 
+# A shard and its run again, with the same fake docker: each its own compose project, stack log and
+# Playwright output, so a first stack that was never taken down (a step stopped on its timeout)
+# is never the stack of the run again.
+sed '/^stub_plan() {/,/^}/d' "$WORK/slots.sh" >"$WORK/again-stack.sh"
+cat >>"$WORK/again-stack.sh" <<'EOF2'
+stub_plan() {
+  : >"$TREE/compose.yml"
+  mkdir -p "$TREE/web"
+  run_step journeys-apply.1 s_journey apply.1 || true
+  run_step journeys-apply.1-again s_journey apply.1 again || true
+}
+EOF2
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/again-stack.sh" "$CHECK" --only checks
+logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+grep -qE ' compose -p [^ ]+-apply-1 .* up ' "$STUB_CALLS" || fail "the shard did not start its own project: $(grep ' up ' "$STUB_CALLS")"
+grep -qE ' compose -p [^ ]+-apply-1-again .* up ' "$STUB_CALLS" || fail "the run again reused the first project: $(grep ' up ' "$STUB_CALLS")"
+grep -qF -- "--output=test-results/apply.1-again" "$STUB_CALLS" || fail "the run again writes over the first run's results"
+grep -qF -- "-c e2e/apply-all.config.ts --shard=1/2" "$STUB_CALLS" || fail "the shard does not run its share: $(grep '^pnpm' "$STUB_CALLS")"
+[[ -f "$logs/stack-apply.1.log" && -f "$logs/stack-apply.1-again.log" ]] || fail "the stack logs of the shard and of its run again: $(ls "$logs")"
+ok "a shard and its run again each have a compose project, a stack log and a Playwright output of their own"
+
 # --- flaky tests of the parallel suite: run again alone ---------------------------------------------
 # A fake uv on PATH stands for pytest: the parallel run (with xdist) fails the tests named in
 # STUB_FAILED, with STUB_ERROR one error too; the run again (-p no:xdist) fails those in STUB_AGAIN.
