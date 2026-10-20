@@ -436,7 +436,8 @@ def clean(text: str) -> str:
 
 
 class ChatRefusedError(Exception):
-    """The chat cannot start a run now: `reason` is `consent` or `credential`."""
+    """The chat cannot start a run now: `reason` is `consent` or `credential`, or `kind` for a
+    document that has no chat (an outreach proposal)."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -568,6 +569,8 @@ def post(
     if not stored or len(stored) > settings.documents_chat_max_chars:
         raise store.MessageInvalidError("text")
     document = store.lock_document(db, user_id, document_id)
+    if kind_of(document) not in KINDS:
+        raise ChatRefusedError("kind")  # an outreach proposal: edited by hand, no chat
     reason = writer_base.wait_reason(db, user_id)
     if reason is not None:
         raise ChatRefusedError(reason.value)

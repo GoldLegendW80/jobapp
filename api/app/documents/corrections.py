@@ -138,7 +138,12 @@ def _record(path: str, before: str, after: str, code: str, by: By) -> Correction
 # --- paths in the JSON of a content -------------------------------------------------------------
 
 _LISTS = ("highlights", "competencies", "paragraphs")
-_REQUIRED = {"cv": ("headline", "summary"), "base": ("headline", "summary"), "letter": ("subject",)}
+_REQUIRED = {
+    "cv": ("headline", "summary"),
+    "base": ("headline", "summary"),
+    "letter": ("subject",),
+    "proposal": ("subject", "body"),
+}
 
 
 def _parts(path: str) -> list[str | int]:
@@ -189,6 +194,7 @@ def field_max(path: str) -> int:
         "highlights": c.BULLET_MAX,
         "experience": c.BULLET_MAX,
         "paragraphs": c.PARAGRAPH_MAX,
+        "body": c.PROPOSAL_BODY_MAX,
     }.get(head, c.LINE_MAX)
 
 
@@ -356,6 +362,7 @@ class Fallbacks:
     summary: str = ""
     subject: str = ""
     paragraph: str = ""
+    body: str = ""  # a proposal's
 
 
 _SUBJECT = {"en": "Application for {title}", "fr": "Candidature au poste de {title}"}
@@ -377,13 +384,62 @@ _ROLE = {
 }
 
 
+# A proposal's subject and its one sentence when nothing of the body is left and the person
+# wrote no motivation answer, by what the posting gives, as `_ROLE`.
+_PROPOSAL_SUBJECT = {
+    "en": ("About your {title} posting", "A proposal for {company}", "A proposal"),
+    "fr": (
+        "À propos de votre annonce {title}",
+        "Une proposition pour {company}",
+        "Une proposition",
+    ),
+}
+_PROPOSAL = {
+    "en": (
+        "I am writing about your {title} posting at {company}, and I would be glad to talk "
+        "about how I can help.",
+        "I am writing about your {title} posting, and I would be glad to talk about how I "
+        "can help.",
+        "I am writing about your posting at {company}, and I would be glad to talk about how "
+        "I can help.",
+        "I am writing about your posting, and I would be glad to talk about how I can help.",
+    ),
+    "fr": (
+        "Je vous écris au sujet de votre annonce {title} chez {company}, et je vous propose "
+        "d'en parler.",
+        "Je vous écris au sujet de votre annonce {title}, et je vous propose d'en parler.",
+        "Je vous écris au sujet de votre annonce chez {company}, et je vous propose d'en parler.",
+        "Je vous écris au sujet de votre annonce, et je vous propose d'en parler.",
+    ),
+}
+
+
+def clip_words(text: str, limit: int) -> str:
+    """At most `limit` words, cut after the last whole sentence that fits, else after the
+    `limit`th word."""
+    text = text.strip()
+    if c.word_count(text) <= limit:
+        return text
+    cut = 0
+    for _, end in rules.sentences(text):
+        if c.word_count(text[:end]) > limit:
+            break
+        cut = end
+    if cut:
+        return text[:cut].strip()
+    return " ".join(text.split()[:limit])
+
+
 def fallbacks_for(
     view: ProfileView,
     base: c.CvContent | None,
     posting: PostingView | None,
     language: Literal["en", "fr"] = "en",
 ) -> Fallbacks:
-    """The fallbacks of the spec's step 5, from the person's own words and the posting."""
+    """The fallbacks of the spec's step 5, from the person's own words and the posting. A
+    proposal's body is the person's motivation answer cut to its words, else one sentence about
+    the posting: the generic proposal of a posting with no text says no more than its title and
+    company."""
     headline = (base.headline if base else "") or view.identity.headline
     if not headline and view.employers:
         headline = view.employers[0].title
@@ -391,11 +447,34 @@ def fallbacks_for(
     company = posting.company.strip() if posting else ""
     choice = (not title) * 2 + (not company)
     sentence = _ROLE[language][choice].format(title=title, company=company)
+    body = clip_words(clip(view.motivation, c.PROPOSAL_BODY_MAX), c.PROPOSAL_WORDS)
     return Fallbacks(
         headline=clip(headline, c.HEADLINE_MAX),
         summary=clip(base.summary if base else "", c.SUMMARY_MAX),
         subject=clip(_SUBJECT[language].format(title=title), c.LINE_MAX) if title else "",
         paragraph=clip(view.motivation, c.PARAGRAPH_MAX) or clip(sentence, c.PARAGRAPH_MAX),
+        body=body or _PROPOSAL[language][choice].format(title=title, company=company),
+    )
+
+
+def proposal_fallbacks(
+    view: ProfileView,
+    base: c.CvContent | None,
+    posting: PostingView | None,
+    language: Literal["en", "fr"] = "en",
+) -> Fallbacks:
+    """`fallbacks_for` a proposal: its subject names the posting rather than an application."""
+    found = fallbacks_for(view, base, posting, language)
+    title = posting.title.strip() if posting else ""
+    company = posting.company.strip() if posting else ""
+    which = 0 if title else 1 if company else 2
+    subject = _PROPOSAL_SUBJECT[language][which].format(title=title, company=company)
+    return Fallbacks(
+        headline=found.headline,
+        summary=found.summary,
+        subject=clip(subject, c.LINE_MAX),
+        paragraph=found.paragraph,
+        body=found.body,
     )
 
 

@@ -53,6 +53,7 @@ EMPTY_OR_LONG = "Write a message of 1 to {limit} characters."
 RUNNING = "The assistant is still answering the last message of this document."
 ALL_BUSY = "Your assistants are all busy. Try again in a moment."
 REFUSED = {"consent": chat.NO_CONSENT, "credential": chat.NO_CREDENTIAL}
+NO_CHAT = "A proposal has no chat: edit its text."
 
 
 def _private(response: Response) -> None:
@@ -199,6 +200,8 @@ def send_message(
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
     except chat.ChatRefusedError as refused:
         db.rollback()
+        if refused.reason == "kind":
+            raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, NO_CHAT) from None
         raise _error(status.HTTP_409_CONFLICT, REFUSED[refused.reason]) from None
     except store.GenerationOpenError:
         db.rollback()

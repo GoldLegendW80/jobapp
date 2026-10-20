@@ -1,10 +1,11 @@
 """Tables of the documents module (D5, migration 0015; SPEC-documents.md, "Data model").
 
-- `documents`: one CV or letter of a person. A base CV (`scope = base`) has a name, a source and
-  maybe the default mark (one default per person, a partial unique index); a posting's document
-  (`scope = posting`) points at its posting through `(posting_id, user_id)`, so it can never
-  point at another person's posting, and there is one of each kind per posting (a partial
-  unique index). The draft is the one mutable copy, saved against `draft_revision`.
+- `documents`: one CV, letter or outreach proposal of a person. A base CV (`scope = base`) has
+  a name, a source and maybe the default mark (one default per person, a partial unique
+  index); a posting's document (`scope = posting`) points at its posting through
+  `(posting_id, user_id)`, so it can never point at another person's posting, and there is one
+  of each kind per posting (a partial unique index). The draft is the one mutable copy, saved
+  against `draft_revision`.
 - `document_versions`: immutable snapshots of a draft, numbered per document. A frozen version
   (sent with an application) is protected by a trigger of 0015: its content, PDF and fit can
   never change, `frozen_at` never clears, and it is deleted only with its document. The PDF
@@ -55,6 +56,11 @@ class BaseSource(enum.StrEnum):
 class Kind(enum.StrEnum):
     cv = "cv"
     letter = "letter"
+    proposal = "proposal"  # an outreach proposal (issue #485, migration 0022): text only
+
+
+# The kinds a template prints and the renderer draws; a proposal is text only.
+RENDERED_KINDS = frozenset((Kind.cv, Kind.letter))
 
 
 class Language(enum.StrEnum):
