@@ -654,6 +654,24 @@ async def apply_submit(ctx: dict[str, Any], application_id: str) -> None:
     await apply_submit_run.submit(services, uuid.UUID(application_id))
 
 
+async def apply_manual(ctx: dict[str, Any], application_id: str) -> None:
+    """One Apply myself session (apply A9, app/apply/manual.py): the person's, on the lease."""
+    from app.apply import manual
+
+    fill = apply_services(ctx)
+    services = ctx.get("apply_manual_services") or manual.Services(
+        fill, manual.RedisChannel(ctx["redis"]), fill.leases.client, _manual_max_s(ctx["settings"])
+    )
+    await manual.session(services, uuid.UUID(application_id))
+
+
+def _manual_max_s(settings: Settings | None) -> int:
+    from app.browser.leases import LEASE_MAX_S, lease_max_table
+
+    table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
+    return table["apply_manual"]
+
+
 async def apply_tick(ctx: dict[str, Any]) -> int:
     """Queues a fill for every application waiting for one, and the submit of every approved
     one (apply A6). Answers a count, nothing else."""
@@ -719,6 +737,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
     fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
     submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
+    manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,
         functions=[
@@ -733,6 +752,13 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 keep_result=0,
             ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
+            func(
+                apply_manual,
+                name="apply_manual",
+                timeout=manual_timeout_s,
+                max_tries=1,
+                keep_result=0,
+            ),
         ],
         cron_jobs=[
             cron(
@@ -745,7 +771,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         ],
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
-        job_timeout_s=max(fill_timeout_s, submit_timeout_s),
+        job_timeout_s=max(fill_timeout_s, submit_timeout_s, manual_timeout_s),
         on_start=reset_fills_at_start,
     )
 

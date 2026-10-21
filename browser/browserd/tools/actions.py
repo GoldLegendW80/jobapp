@@ -86,13 +86,15 @@ class State:
     page: Any = None
     guarded: Any = None  # the context the navigation guard is installed on
     blocked: list[str] = field(default_factory=list)
+    # A9: the file chooser the person opened during Apply myself, until a document answers it.
+    chooser: Any = None
 
     def end(self) -> None:
         """The lease ended: its documents and its tab are dropped at once, not when the old
         context's route handler (which holds this state) is collected."""
         self.files.clear()
         self.blocked.clear()
-        self.page = self.guarded = None
+        self.page = self.guarded = self.chooser = None
 
 
 @dataclass
@@ -157,8 +159,16 @@ class Tab:
                 "page",
                 lambda tab: asyncio.ensure_future(close_off_list(tab, hosts, tag)),
             )
+            if self.request.purpose == "apply_manual":
+                # A listener makes Playwright intercept every chooser: no dialog over a folder.
+                for tab in context.pages:
+                    tab.on("filechooser", self._chosen)
+                context.on("page", lambda tab: tab.on("filechooser", self._chosen))
             self.state.guarded = context
         return context
+
+    def _chosen(self, chooser: Any) -> None:
+        self.state.chooser = chooser
 
     async def page(self) -> Any:
         context = await self.guard()
@@ -271,9 +281,13 @@ async def title(page: Any) -> str:
         return ""
 
 
+def _chooser(tab: Tab) -> dict[str, Any]:
+    return {"chooser": True} if tab.state.chooser is not None else {}
+
+
 async def _here(tab: Tab) -> dict[str, Any]:
     page = await tab.page()
-    return {"ok": True, "url": page.url, "title": await title(page)}
+    return {"ok": True, "url": page.url, "title": await title(page), **_chooser(tab)}
 
 
 async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -285,6 +299,7 @@ async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         "title": await title(page),
         "snapshot": text,
         "cut": cut,
+        **_chooser(tab),
     }
 
 
@@ -411,6 +426,14 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     payloads = [
         {"name": n, "mimeType": "application/pdf", "buffer": tab.state.files[n]} for n in names
     ]
+    if not args.get("ref") and tab.request.purpose == "apply_manual":
+        # A9: no element names the answer to the file chooser the person opened.
+        chooser, tab.state.chooser = tab.state.chooser, None
+        if chooser is None:
+            return failure("no_chooser", "No file chooser is open.")
+        await tab.pacer.dwell()
+        await chooser.set_files(payloads, timeout=ACTION_S * 1000)
+        return await tab.settle({**await _here(tab), "uploaded": names})
     locator, gone = await tab.element(args)
     if gone:
         return gone
