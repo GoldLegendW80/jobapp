@@ -37,9 +37,9 @@ from tests.browser.test_b7_container import (
     wait_title,
     window_titles,
 )
-from tests.browser.test_browser_container import PAGES, Stack, processes, stack
+from tests.browser.test_browser_container import PAGES, Stack, no_lease_left, processes, stack
 
-__all__ = ["stack"]
+__all__ = ["no_lease_left", "stack"]
 
 pytestmark = [pytest.mark.docker]
 
@@ -275,7 +275,7 @@ def test_after_done_the_allow_list_is_back_with_cdp(stack: Stack, agent: Agent) 
 
     listed = agent.tool("browser_tabs", action="list")
     assert listed["ok"], listed
-    # The restored tab and the one the noted address opened in: pages only, never client:8080.
+    # The tab the noted address opened in, the only one (#488): pages only, never client:8080.
     assert {t["url"] for t in listed["tabs"]} == {LOGIN}, listed
     seen = agent.tool("browser_snapshot")
     assert seen["ok"], seen

@@ -328,6 +328,8 @@ test("export, change, import the export back: data and completeness restored", a
     /^Skills: 1 category, 0 gatesUnchanged$/,
     /^Search: 1 board, 1 enabledUnchanged$/,
     /^Answers: 1 countryReplaced$/,
+    // Never touched by this journey: the defaults, exported and imported back unchanged.
+    /^Preferences: Documents: language auto, tone plainUnchanged$/,
     /^Photo: none in the fileKept$/,
   ]);
   await expect(summary).toContainText(
