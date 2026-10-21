@@ -24,12 +24,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.browser import profiles, removals
+from app.browser import profile_router, profiles, removals
 from app.browser.address import ADDRESS_MAX
 from app.browser.client import BrowserdClient, BrowserError, ended_of
-from app.browser.leases import DbProfiles, Leases
+from app.browser.leases import DbProfiles, Leases, StoreUnavailableError
 from app.browser.live_router import OWN_SESSION
-from app.browser.profile_router import FORGET_LIMIT, FORGETS_PER_DAY
+from app.browser.profile_router import FORGET_LIMIT, FORGETS_PER_DAY, forget_limit
 from app.browser.router import BAD_ADDRESS
 from app.main import create_app
 from tests.browser.b3_support import IDLE_S, SESSION_MAX_S, Clock, FakeBrowserd, flush, redis_url
@@ -343,7 +343,10 @@ def test_forget_is_capped_per_person_and_utc_day(
     kept = row(factory, a_id)
     refused = api.request("DELETE", "/api/browser/profile", token=a)
     assert refused.status_code == 429
-    assert refused.json() == {"detail": FORGET_LIMIT, "code": "forget_limit"}
+    assert refused.json() == {
+        "detail": f"{FORGET_LIMIT} Try again in 60 minutes.",
+        "code": "forget_limit",
+    }
     assert refused.headers["cache-control"] == "no-store"
     assert api.get("/api/browser", token=a).json()["lease"] is not None
     assert row(factory, a_id).profile_id == kept.profile_id
@@ -365,6 +368,77 @@ def test_a_forget_with_nothing_to_forget_spends_none(
     assert row(factory, a_id) is not None
     assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 204
     assert row(factory, a_id) is None
+
+
+@pytest.mark.parametrize(
+    ("at", "wait"),
+    [
+        ((0, 0, 0), "Try again in 24 hours."),
+        ((0, 0, 1), "Try again in 24 hours."),
+        ((12, 30, 0), "Try again in 12 hours."),
+        ((22, 0, 0), "Try again in 2 hours."),
+        ((22, 0, 1), "Try again in 2 hours."),
+        ((22, 59, 59), "Try again in 2 hours."),
+        ((23, 0, 0), "Try again in 60 minutes."),
+        ((23, 0, 1), "Try again in 60 minutes."),
+        ((23, 58, 30), "Try again in 2 minutes."),
+        ((23, 59, 0), "Try again in 1 minute."),
+        ((23, 59, 59), "Try again in 1 minute."),
+    ],
+)
+def test_the_limit_says_how_long_until_the_next_utc_day(
+    at: tuple[int, int, int], wait: str
+) -> None:
+    now = datetime(2026, 10, 19, *at, tzinfo=UTC).timestamp()
+    assert forget_limit(now) == f"{FORGET_LIMIT} {wait}"
+
+
+def test_the_stated_wait_is_never_shorter_than_the_utc_day_left() -> None:
+    """The figure is rounded up, so the person never tries again before the count is new."""
+    start = datetime(2026, 10, 19, tzinfo=UTC).timestamp()
+    for second in range(0, 86400, 7):
+        words = forget_limit(start + second).split()
+        figure, unit = int(words[-2]), words[-1]
+        stated = figure * (3600 if unit.startswith("hour") else 60)
+        left = 86400 - second
+        assert left <= stated < left + (3600 if unit.startswith("hour") else 60), second
+
+
+@pytest.mark.parametrize("failing", ["release", "remove"])
+def test_a_forget_that_fails_before_the_row_goes_spends_none(
+    app: FastAPI,
+    api: Api,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    user_a: tuple[uuid.UUID, str],
+    failing: str,
+) -> None:
+    """Redis lost after the count was taken (503), or Postgres failing on the delete: the
+    profile stays and so do the day's FORGETS_PER_DAY Forgets."""
+    a_id, a = user_a
+    assert start(api, a).status_code == 201
+    kept = row(factory, a_id)
+    store = app.state.browser_leases
+
+    async def release(*_: Any, **__: Any) -> bool:
+        raise StoreUnavailableError
+
+    def remove(*_: Any) -> None:
+        raise RuntimeError("e2e-452 the database went away")
+
+    with monkeypatch.context() as patch:
+        if failing == "release":
+            patch.setattr(store, "release", release)
+            assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 503
+        else:
+            patch.setattr(profile_router.profiles, "remove", remove)
+            with pytest.raises(RuntimeError, match="e2e-452"):
+                api.request("DELETE", "/api/browser/profile", token=a)
+    assert row(factory, a_id).profile_id == kept.profile_id
+    for _ in range(FORGETS_PER_DAY):
+        assert start(api, a).status_code in (200, 201)
+        assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 204
+        assert row(factory, a_id) is None
 
 
 def test_two_forgets_at_once_never_both_spend_the_last_one(app: FastAPI, api: Api) -> None:

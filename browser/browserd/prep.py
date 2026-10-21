@@ -1,9 +1,12 @@
 """Run as the profile's own uid, never as root: `python -m browserd.prep prepare <profile dir>
-<lease dir> <languages>`, `killpg <pgid>`, `kill <pid ...>`, `quit <pid>`, `rmtree <lease dir>`,
-`measure <profile dir> <trim bytes>`, `rmprofile <profile dir>`. browserd is root with SETUID
-and SETGID only (no DAC_OVERRIDE, no CHOWN, no KILL), so it cannot read or write a profile nor
-signal its Chromium itself; this child does it under the profile's uid, then exits.
+<lease dir> <languages>`, `killpg <pgid>`, `kill <pid ...>`, `killuid`, `quit <pid>`,
+`rmtree <lease dir>`, `measure <profile dir> <trim bytes>`, `rmprofile <profile dir>`. browserd
+is root with SETUID and SETGID only (no DAC_OVERRIDE, no CHOWN, no KILL), so it cannot read or
+write a profile nor signal its Chromium itself; this child does it under the profile's uid, then
+exits.
 
+- `killuid`: SIGKILL to every process of the profile's uid at once (kill(-1), which no fork
+  outruns), this one excepted; refused under any uid outside the profile range;
 - `quit`: SIGINT to Chromium's browser process alone, its clean exit (measured for B7:
   SIGTERM, to the process or to its group, exits without writing the cookies of the last
   seconds, and SIGINT writes them, a cookie without an expiry date included);
@@ -32,6 +35,8 @@ import shutil
 import signal
 import stat
 import sys
+
+from browserd.config import UID_MAX, UID_MIN
 
 LOCKS = ("SingletonLock", "SingletonSocket", "SingletonCookie")
 PROFILE = re.compile(r"/profiles/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -175,6 +180,10 @@ if __name__ == "__main__":
         for pid in args:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pid), signal.SIGKILL)
+    elif command == "killuid" and UID_MIN <= os.getuid() <= UID_MAX:
+        # kill(-1): every process this uid may signal but this one, in one pass forks cannot outrun.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(-1, signal.SIGKILL)
     elif command == "quit":
         with contextlib.suppress(ProcessLookupError):
             os.kill(int(args[0]), signal.SIGINT)
