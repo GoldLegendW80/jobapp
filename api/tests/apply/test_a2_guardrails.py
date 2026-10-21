@@ -797,3 +797,323 @@ def test_random_walks_never_submit_without_the_gate_or_in_a_rehearsal(start: Sta
             if i + 1 < len(path):
                 assert path[i + 1] in CLICK_OUTCOMES, path
     assert clicked > 0  # the walks with the gate do reach the click
+
+
+# --- issue #335: what a reader does not see, polytonic Greek, hosts, the same role keys ----------
+
+
+def _unseen_characters() -> list[str]:
+    """Drawn as nothing or as a blank, from Unicode's categories rather than the module's: every
+    control but tab, line feed and carriage return (drawn as a gap), every format character, the
+    Hangul fillers, the Braille blank, and the ends of the surrogate, private use and unassigned
+    ranges."""
+    found = [
+        c
+        for c in map(chr, range(0x110000))
+        if unicodedata.category(c) in ("Cc", "Cf") and c not in "\t\n\r"
+    ]
+    found += ["\u115f", "\u1160", "\u3164", "\uffa0", "\u2800"]
+    found += ["\ud800", "\udfff", "\ue000", "\uf8ff", "\U000f0000", "\U0010fffd", "\u0378"]
+    return found
+
+
+UNSEEN_CHARACTERS = _unseen_characters()
+
+# Where an unseen character `{u}` stands, its rule must still refuse the title: read as nothing
+# inside a term, as a gap beside it.
+UNSEEN_SHAPES = [
+    (OWNER, "Secu{u}rity Engineer"),
+    (OWNER, "Pen{u}{u}{u}test Lead"),
+    (OWNER, "Cyber{u}security Analyst"),
+    (OWNER, "AI{u}Security{u}Engineer"),
+    (OWNER, "Applied AI Engineer, Cyber{u}harness"),
+    (OWNER, "Anti{u}cyber{u}fraud Analyst"),
+    (OWNER, "AppThreat{u}s Lead"),
+    (OWNER, "{u}Security{u}"),
+    (SECURITY_ONLY, "Security{u}Engineer"),
+    (SECURITY_ONLY, "Senior{u}Security{u}{u}Engineers"),
+    (SHORT_TERMS, "Red{u}Team Lead"),
+]
+
+
+@pytest.mark.parametrize(("rule", "shape"), UNSEEN_SHAPES, ids=range(len(UNSEEN_SHAPES)))
+def test_an_unseen_character_never_hides_a_term(rule: NeverApplyRule, shape: str) -> None:
+    missed = [
+        f"U+{ord(u):04X}"
+        for u in UNSEEN_CHARACTERS
+        if matching_rule([rule], "Example Robotics", shape.format(u=u)) is not rule
+    ]
+    assert not missed, missed[:20]
+
+
+def test_an_unseen_character_in_a_true_title_refuses_nothing() -> None:
+    titles = [title for title in TRUE_TITLES + KEPT_BY_OWNER if title.strip("\u200b")]
+    every_place = [
+        title[:i] + u + title[i:]
+        for title in titles
+        for u in ("\u200b", "\x1f", "\x85", "\u00ad", "\ufeff", "\u2800", "\u3164")
+        for i in range(len(title) + 1)
+    ]
+    every_character = [title.replace(" ", u, 1) for title in titles for u in UNSEEN_CHARACTERS]
+    refused = [
+        ascii(title)
+        for title in every_place + every_character
+        if matching_rule([OWNER], "Example Robotics", title) is not None
+    ]
+    assert not refused, refused[:10]
+
+
+def test_random_disguises_of_a_term_are_refused() -> None:
+    # An independent generator: case, lookalike letters, unseen characters and glued neighbours.
+    rng = random.Random(335)  # noqa: S311  # a fixed seed, so the titles repeat
+    lookalikes: dict[str, list[str]] = {}
+    for key, value in guardrails._LOOKALIKES.items():
+        lookalikes.setdefault(chr(value), []).append(chr(key))
+    missed = []
+    for _ in range(400):
+        term = rng.choice(OWNER.terms)
+        letters = [rng.choice(lookalikes.get(c, [c])) if rng.random() < 0.3 else c for c in term]
+        letters = [c.upper() if rng.random() < 0.5 else c for c in letters]
+        written = ""
+        for c in letters:
+            written += c + "".join(rng.choices(UNSEEN_CHARACTERS, k=rng.choice((0, 0, 1, 2))))
+        before = rng.choice(("", "Senior ", "App", "AI\u200b", "Data\x1f"))
+        after = rng.choice(("", " Engineer", "\u200bEngineer", "\u2060Lead", "s"))
+        title = before + written + after
+        if matching_rule([OWNER], "Example Robotics", title) is not OWNER:
+            missed.append(ascii(title))
+    assert not missed, missed[:10]
+
+
+def test_every_character_with_a_case_folds_alike_in_every_case() -> None:
+    cased = [
+        c
+        for c in map(chr, range(0x110000))
+        if len({c, c.upper(), c.lower(), c.casefold(), c.title()}) > 1
+    ]
+    split = [
+        f"U+{ord(c):04X}"
+        for c in cased
+        if len({guardrails.fold(f) for f in (c, c.upper(), c.lower(), c.casefold(), c.title())}) > 1
+    ]
+    assert len(cased) > 2_000
+    assert not split, split[:20]
+
+
+# The polytonic letters with an iota subscript or adscript, which the case fold writes as an iota.
+IOTA_SUBSCRIPTS = [
+    c
+    for c in map(chr, range(0x1F00, 0x2000))
+    if unicodedata.category(c) in ("Ll", "Lt")
+    and " WITH " in unicodedata.name(c, "")
+    and unicodedata.name(c).endswith(("YPOGEGRAMMENI", "PROSGEGRAMMENI"))
+]
+
+
+@pytest.mark.parametrize("letter", IOTA_SUBSCRIPTS, ids=lambda c: f"U+{ord(c):04X}")
+def test_a_greek_rule_with_an_iota_subscript_matches_in_every_case(letter: str) -> None:
+    term = f"{letter}\u03b4\u03b7"
+    written = (
+        str.lower,
+        str.upper,
+        str.title,
+        str.casefold,
+        lambda t: unicodedata.normalize("NFD", t),
+        lambda t: unicodedata.normalize("NFD", t.upper()),
+    )
+    for rule_form, title_form in product(written, written):
+        rule = _greek(rule_form(term))
+        assert matching_rule([rule], "Example Robotics", f"{title_form(term)} Lead") is rule
+
+
+def test_the_iota_subscript_letters_are_the_63_of_the_issue() -> None:
+    assert len(IOTA_SUBSCRIPTS) == 63
+    assert guardrails.fold("\u1fb3") == guardrails.fold("\u0391\u0399") == "ai"
+
+
+# --- the same role keys: the never apply reading, then glued -------------------------------------
+
+SAME_ROLE_SHAPES = [
+    "Applied AI Engi{u}neer",
+    "Applied AI{u}Engineer",
+    "{u}Applied AI Engineer{u}",
+    "Applied{u}{u} AI Engineer",
+    "Applied AI Engineer (H{u}/F)",
+    "Applied AI Engineer{u}(m/w/d)",
+]
+SAME_COMPANY_SHAPES = [
+    "Example{u}Robotics",
+    "Exam{u}ple Robotics",
+    "Example Robotics{u}Inc",
+    "{u}Example Robotics, Inc.{u}",
+]
+
+
+def test_the_same_role_reads_through_unseen_characters() -> None:
+    title, company = title_key("Applied AI Engineer"), company_key("Example Robotics")
+    missed = [
+        (shape, f"U+{ord(u):04X}")
+        for u in UNSEEN_CHARACTERS
+        for shape, key, of in (
+            *((shape, title, title_key) for shape in SAME_ROLE_SHAPES),
+            *((shape, company, company_key) for shape in SAME_COMPANY_SHAPES),
+        )
+        if of(shape.format(u=u)) != key
+    ]
+    assert not missed, missed[:20]
+
+
+def test_the_same_role_reads_lookalike_letters_as_latin() -> None:
+    table = {chr(k): chr(v) for k, v in guardrails._LOOKALIKES.items()}
+    missed = []
+    for text, of in (("Applied AI Engineer", title_key), ("Example Robotics", company_key)):
+        for i, c in enumerate(text):
+            for lookalike in (k for k, v in table.items() if v == c.lower()):
+                for form in {lookalike, lookalike.upper()}:
+                    written = text[:i] + form + text[i + 1 :]
+                    if of(written) != of(text):
+                        missed.append(ascii(written))
+    assert not missed, missed[:10]
+
+
+@pytest.mark.parametrize(
+    ("one", "two", "same"),
+    [
+        ("Front End Engineer", "Frontend Engineer", True),
+        ("Front End Engineer", "Front-End Engineer", True),
+        ("Applied AI Engineer", "APPLIED AI ENGINEER (F/H)", True),
+        ("Applied AI Engineer", "Applied AI Engineer II", False),
+        ("Applied AI Engineer", "Applied AI Engineer (Paris)", False),
+        ("Applied AI Engineer", "Applied AI Engineers Lead", False),
+    ],
+)
+def test_title_key_glues_its_words(one: str, two: str, same: bool) -> None:
+    assert (title_key(one) == title_key(two)) is same
+
+
+@pytest.mark.parametrize(
+    ("one", "two", "same"),
+    [
+        ("Example Robotics", "ExampleRobotics", True),
+        ("Example Robotics", "EXAMPLE-ROBOTICS SAS", True),
+        ("Example Robotics", "Example Robotics\u200bGmbH", True),
+        ("Example Robotics", "Example Robotics Europe", False),
+        ("Northwind Labs", "Northwind", False),
+    ],
+)
+def test_company_key_glues_its_words(one: str, two: str, same: bool) -> None:
+    assert (company_key(one) == company_key(two)) is same
+
+
+# --- the host of a form address, as a browser reads it -------------------------------------------
+
+HOSTS = [
+    ("boards.greenhouse.io", "/examplerobotics/jobs/4012345", "greenhouse:4012345"),
+    ("job-boards.eu.greenhouse.io", "/examplerobotics/jobs/4012345", "greenhouse:4012345"),
+    ("boards-api.greenhouse.io", "/v1/boards/examplerobotics/jobs/4012345", "greenhouse:4012345"),
+    ("jobs.ashbyhq.com", f"/example-robotics/{ASHBY}", f"ashby:{ASHBY}"),
+    ("jobs.eu.lever.co", f"/example-robotics/{LEVER}/apply", f"lever:{LEVER}"),
+    ("careers.example.org", "/jobs?gh_jid=4012345", "greenhouse:4012345"),
+    ("www.example.org", "/careers/42", "url:http://example.org/careers/42"),
+]
+
+
+def _writings(host: str) -> list[str]:
+    """`host` written the ways a browser still reads as it: the other dots IDNA knows, escaped
+    dots, capitals, full width letters, a soft hyphen or a zero width space inside a label, a
+    trailing dot."""
+    first, _, rest = host.partition(".")
+    return [
+        *(host.replace(".", dot) for dot in ("\u3002", "\uff0e", "\uff61", "%2E", "%2e")),
+        host.upper(),
+        "".join(chr(ord(c) + 0xFEE0) for c in host),
+        f"{first[:2]}\u00ad{first[2:]}.{rest}",
+        f"{first[:2]}\u200b{first[2:]}.{rest}",
+        f"{host}.",
+        host.replace(".", "\uff0e") + "\uff0e",
+    ]
+
+
+@pytest.mark.parametrize(("host", "path", "key"), HOSTS)
+def test_a_host_is_read_as_a_browser_reads_it(host: str, path: str, key: str) -> None:
+    for scheme, written in product(("https", "http"), _writings(host)):
+        assert canonical_key(f"{scheme}://{written}{path}") == key, ascii(written)
+        assert guardrails.ats_of(f"{scheme}://{written}{path}") == guardrails.ats_of(
+            f"https://{host}{path}"
+        )
+
+
+def test_an_international_host_has_one_key_however_it_is_written() -> None:
+    key = "url:http://xn--bcher-kva.example/jobs/1"
+    for written in (
+        "b\u00fccher.example",
+        "B\u00dcCHER.example",
+        "bu\u0308cher.example",
+        "xn--bcher-kva.example",
+        "XN--BCHER-KVA.EXAMPLE",
+        "b\u00fccher\uff0eexample",
+        "b%C3%BCcher.example",
+    ):
+        assert canonical_key(f"https://{written}/jobs/1") == key, ascii(written)
+    assert canonical_key("https://bucher.example/jobs/1") != key
+    assert canonical_key("https://example\uff0eorg:8443/careers/42") == (
+        "url:http://example.org:8443/careers/42"
+    )
+    assert canonical_key("https://example\uff0eorg:443/careers/42") == (
+        "url:http://example.org/careers/42"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example\uff0eorg\uff0fcareers/1",  # a full width slash in the host
+        "https://example.org\uff1a443/careers/1",  # a full width colon
+        "https://exa[mple.org/careers/1",
+        "http://[::1/careers/1",
+    ],
+)
+def test_an_address_no_browser_opens_shows_no_form(url: str) -> None:
+    assert canonical_key(url) is None
+    assert guardrails.ats_of(url) == "other"
+
+
+def test_a_host_idna_refuses_is_keyed_as_written() -> None:
+    url = "https://exa\u200emple.org/careers/42"  # a bidi mark, which IDNA refuses
+    assert canonical_key(url) == "url:http://exa\u200emple.org/careers/42"
+
+
+# What A2 stored for these addresses before hosts were read through IDNA, and their key now.
+STORED_UNDER_OLDER_RULES = [
+    (
+        "url:http://boards\uff0egreenhouse\uff0eio/examplerobotics/jobs/4012345",
+        "greenhouse:4012345",
+    ),
+    (
+        "url:http://boards\u3002greenhouse\u3002io/examplerobotics/jobs/4012345",
+        "greenhouse:4012345",
+    ),
+    (f"url:http://jobs\uff0eashbyhq\uff0ecom/example-robotics/{ASHBY}", f"ashby:{ASHBY}"),
+    (f"url:http://jobs\uff61lever\uff61co/example-robotics/{LEVER}", f"lever:{LEVER}"),
+    ("url:http://boards%2egreenhouse%2eio/examplerobotics/jobs/4012345", "greenhouse:4012345"),
+    ("url:http://example\uff0eorg/careers/42", "url:http://example.org/careers/42"),
+    ("url:http://example.org./careers/42", "url:http://example.org/careers/42"),
+    ("url:http://b\u00fccher.example/jobs/1", "url:http://xn--bcher-kva.example/jobs/1"),
+]
+
+
+@pytest.mark.parametrize(("stored", "key"), STORED_UNDER_OLDER_RULES)
+def test_a_key_stored_under_older_rules_answers_to_its_key_now(stored: str, key: str) -> None:
+    assert guardrails.current_key(stored) == key
+
+
+def test_every_key_made_today_is_its_own_current_key() -> None:
+    urls = [url for _, url in SAME_KEY] + [url for url, _ in KEYED_AS_THE_ATS]
+    urls += KEYED_AS_AN_ADDRESS + [one for pair in DIFFERENT for one in pair]
+    urls += [f"https://{w}{path}" for host, path, _ in HOSTS for w in _writings(host)]
+    for url in urls:
+        key = canonical_key(url)
+        assert key is not None, ascii(url)
+        assert guardrails.current_key(key) == key, ascii(url)
+    for key in ("url:a11/0", "url:", "greenhouse:1", "url:mailto:jobs@example.org"):
+        assert guardrails.current_key(key) == key

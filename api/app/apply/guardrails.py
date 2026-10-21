@@ -142,13 +142,17 @@ _GAP_CONTROLS = frozenset("\t\n\r")
 # Format characters (soft hyphen, zero width space and joiners, word joiner, BOM, bidi marks), the
 # other controls (U+001C to U+001F, U+0085, \x0b and \x0c too), surrogates, private use, unassigned.
 _UNSEEN_CATEGORIES = frozenset({"Cf", "Cc", "Cs", "Co", "Cn"})
-# Drawn blank: the Hangul fillers (NFKC maps U+3164 and U+FFA0 here) and the Braille blank.
-_BLANKS = frozenset("\u115f\u1160\u2800")
+# Drawn blank: the Hangul fillers (NFKC maps U+3164 and U+FFA0 to U+1160) and the Braille blank.
+_BLANKS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 # Keys are small letters as NFKC, the case fold and NFKD leave them: any other key is never reached.
 _LOOKALIKES = str.maketrans(
     "авекмнорстхуѕіјһԁԛԝүӏαβεζηικμνορτυχϳᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢıȷɑɡɩ",
     "abekmhopctxysijhdqwyiabezhikmnoptyxjabcdefghijklmnoprstuvwyzijagi",
 )
+
+
+def _unseen(c: str) -> bool:
+    return unicodedata.category(c) in _UNSEEN_CATEGORIES or c in _BLANKS
 
 
 def _read(c: str) -> str:
@@ -157,7 +161,7 @@ def _read(c: str) -> str:
     category = unicodedata.category(c)
     if category in _GAPS or c in _GAP_CONTROLS:
         return " "
-    if category in _UNSEEN_CATEGORIES or c in _BLANKS:
+    if _unseen(c):
         return UNSEEN
     if category in ("Mn", "Me") or unicodedata.combining(c):
         return ""
@@ -191,6 +195,12 @@ def fold(text: str) -> str:
     "red team". A capital and its small letter read alike (Greek capital and small eta are both
     "h"), so a rule matches a title whatever the case of either."""
     return _marked(text).replace(UNSEEN, "")
+
+
+def spaced(text: str) -> str:
+    """`text` with each character a reader does not see written as a space: the reading as a gap
+    that `fold`, which drops them, leaves out ("Example<zero width space>Inc" is "Example Inc")."""
+    return "".join(" " if _unseen(c) else c for c in text)
 
 
 def _spelled(term: str) -> str:

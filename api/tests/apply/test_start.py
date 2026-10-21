@@ -21,10 +21,11 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import service
+from app.apply import guardrails, service
 from app.apply.models import Application, Mode, State
 from app.config import Settings
 from app.jobs import service as jobs_service
+from app.jobs.models import Job
 from app.main import create_app
 from app.profile import service as profile_service
 from tests.conftest import make_settings
@@ -814,3 +815,79 @@ def test_a_start_past_the_lock_timeout_is_busy_with_a_code(
     assert answer.headers["cache-control"] == "no-store"
     with factory() as check:
         assert count(check, "applications", a) == 0
+
+
+# --- both warnings of Apply myself, and form keys stored under older rules ----------------------
+
+LEGACY_GH = "url:http://boards\uff0egreenhouse\uff0eio/examplerobotics/jobs/4012345"
+
+
+def test_one_careers_page_and_the_same_role_warn_both_in_apply_myself(
+    db: Session, a: uuid.UUID
+) -> None:
+    posting(db, a, "Applied AI Engineer", "https://example.org/careers", status="applied")
+    job = posting(db, a, "Applied AI Engineer (H/F)", "https://www.example.org/careers/")
+    assert refused(db, a, job, Mode.review) == "same_address"
+    assert refused(db, a, job, Mode.full_auto) == "same_address"
+    assert start(db, a, job, Mode.manual).warnings == ("same_address", "same_role")
+
+
+def _stored(db: Session, user_id: uuid.UUID, job: uuid.UUID, key: str) -> uuid.UUID:
+    """A clicked application row as an older A2 wrote it, with the form key it stored then."""
+    found = db.execute(
+        sa.text(
+            "INSERT INTO applications (user_id, posting_id, mode, state, ats, form_url, "
+            "canonical_key, submitted_at) VALUES (:u, :p, 'review', 'submitted', 'other', "
+            "'https://x', :k, :at) RETURNING id"
+        ),
+        {"u": user_id, "p": job, "k": key, "at": AT - timedelta(days=400)},
+    ).scalar_one()
+    db.commit()
+    return found
+
+
+@pytest.mark.parametrize(
+    ("stored", "url"),
+    [
+        (LEGACY_GH, GH.format(4012345)),
+        (LEGACY_GH, "https://example.org/careers/ai?gh_jid=4012345"),
+        ("url:http://example\uff0eorg/careers/42", "https://www.example.org/careers/42/"),
+        ("url:http://example.org./careers/42", "https://example.org/careers/42"),
+    ],
+)
+def test_a_form_key_stored_under_older_rules_still_holds_its_form(
+    db: Session, a: uuid.UUID, stored: str, url: str
+) -> None:
+    old = _stored(db, a, posting(db, a, "Agent Engineer", "https://example.org/other"), stored)
+    job = posting(db, a, "Applied AI Engineer", url)
+    for mode in Mode:
+        with pytest.raises(service.RefusedError) as caught:
+            start(db, a, job, mode)
+        assert caught.value.refusal.code == "same_form"
+        assert caught.value.refusal.application_id == old
+
+
+def test_a_stored_key_under_decision_is_read_with_todays_rules(db: Session, a: uuid.UUID) -> None:
+    # The gate passes the key the application stored, perhaps under older rules.
+    live = start(db, a, posting(db, a, "Agent Engineer", GH.format(4012345))).application
+    other = db.get(Job, posting(db, a, "Applied AI Engineer", "https://example.org/x"))
+    assert other is not None
+    found = guardrails.duplicates(db, a, other, LEGACY_GH, AT)
+    assert found == guardrails.Refusal("same_form", live.id)
+
+
+def test_full_width_dots_in_a_form_address_key_its_ats(db: Session, a: uuid.UUID) -> None:
+    url = "https://boards\uff0egreenhouse\uff0eio/examplerobotics/jobs/4012345"
+    live = start(db, a, posting(db, a, "Agent Engineer", url)).application
+    assert (live.canonical_key, live.ats) == ("greenhouse:4012345", "greenhouse")
+    assert refused(db, a, posting(db, a, "Applied AI Engineer", GH.format(4012345))) == "same_form"
+
+
+def test_an_address_no_browser_opens_has_no_form_and_breaks_no_other_start(
+    db: Session, a: uuid.UUID
+) -> None:
+    job = posting(db, a, url="https://example\uff0eorg\uff0fcareers/1")
+    for mode in Mode:
+        assert refused(db, a, job, mode) == "no_address"
+    posting(db, a, "Agent Engineer", "https://example.org\uff1a443/careers/2", status="applied")
+    assert start(db, a, posting(db, a, "Robotics Engineer")).warnings == ()

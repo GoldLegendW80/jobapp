@@ -23,7 +23,8 @@ applications never refuse each other and the first to click takes the slot. A cl
 
 A company matches a cap by its key (`company_key`) on the posting's company or on the ATS
 organisation of the form address (jobs.ashbyhq.com/<org>/..., boards.greenhouse.io/<org>/...,
-jobs.lever.co/<org>/...).
+jobs.lever.co/<org>/...). A cap answers to the key stored with it and to its label's key under
+today's fold (`cap_keys`), so a change of the fold never drops a cap saved before it.
 
 The pace per ATS host (`next_slot`, `reserve`) is shared by every person, who all go out through
 the Jetson's one address: one click every `APPLY_HOST_MIN_INTERVAL_S` and at most
@@ -47,7 +48,6 @@ Declared open points (`company_key`, each toward refusing more, except the last 
 
 import hashlib
 import json
-import unicodedata
 import uuid
 import zoneinfo
 from dataclasses import dataclass
@@ -157,20 +157,20 @@ def _org(ats: str, url: str) -> str | None:
     return dict(parse_qsl(parts.query)).get("for")
 
 
-def _spaced(text: str) -> str:
-    """`text` with the format and control characters a reader does not see (a zero width space,
-    a soft hyphen, a word joiner) read as spaces, where `fold` drops them."""
-    return "".join(" " if unicodedata.category(c) in ("Cf", "Cc") else c for c in text)
-
-
 def company_keys(company: str, ats: str, form_url: str) -> frozenset[str]:
     """The keys an application answers to: its posting's company, read both with the unseen
     characters dropped and read as spaces (so "Example Robotics<ZWSP>Inc" answers to a cap on
     "Example Robotics"), and its form's ATS org."""
-    keys = {company_key(company), company_key(_spaced(company or ""))}
+    keys = {company_key(company), company_key(guardrails.spaced(company or ""))}
     if (org := _org(ats, form_url)) is not None:
         keys.add(company_key(org))
     return frozenset(k for k in keys if k)
+
+
+def cap_keys(cap: CompanyCap) -> frozenset[str]:
+    """The keys a cap answers to: the one stored with it, and its label's key under today's
+    fold, so a cap saved before the fold last changed still names its company."""
+    return frozenset({cap.company_key, company_key(cap.label)})
 
 
 # --- the person's settings -----------------------------------------------------------------------
@@ -326,7 +326,7 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
     if posting is None:
         return None
     keys = company_keys(posting.company, application.ats, application.form_url)
-    caps = [cap for cap in caps_of(db, application.user_id) if cap.company_key in keys]
+    caps = [cap for cap in caps_of(db, application.user_id) if cap_keys(cap) & keys]
     full_auto = application.mode is Mode.full_auto
     if not caps and not full_auto:
         return None
@@ -343,7 +343,8 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
     )
     role = guardrails.title_key(posting.title)
     for cap in caps:
-        mine = [o for o in others if cap.company_key in o.keys]
+        answers = cap_keys(cap)
+        mine = [o for o in others if answers & o.keys]
         if sum(o.at >= now - timedelta(days=cap.window_days) for o in mine) >= cap.max_count:
             return "company_cap"
         role_since = now - timedelta(days=cap.same_role_days or 0)
@@ -395,9 +396,10 @@ def used(db: Session, user_id: uuid.UUID, caps: list[CompanyCap], now: datetime)
         return []
     longest = max(cap.window_days for cap in caps)
     others = counted(db, user_id, now, now - timedelta(days=longest))
+    keys = [cap_keys(c) for c in caps]
     return [
-        sum(c.company_key in o.keys and o.at >= now - timedelta(days=c.window_days) for o in others)
-        for c in caps
+        sum(bool(k & o.keys) and o.at >= now - timedelta(days=c.window_days) for o in others)
+        for c, k in zip(caps, keys, strict=True)
     ]
 
 

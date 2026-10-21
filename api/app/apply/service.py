@@ -9,8 +9,8 @@ order of the gate (SPEC-apply, "Guardrails"), so two starts at once make one row
    first and Full auto a refusal; the same for rules that cannot be read;
 3. the form address: none (`no_address`) refuses in every mode;
 4. duplicates (`guardrails.duplicates`): every code refuses in every mode, except `same_role` and
-   `same_address`, which Apply myself shows as warnings (the person decides; the app never clicks
-   there).
+   `same_address`, which Apply myself shows as warnings, both when both hold (the person decides;
+   the app never clicks there).
 
 Then the `applications` row (`queued`, attempt 0) and its `created` event, which holds the mode,
 whether it is a rehearsal and the warning codes: ids and codes only. Full auto's own checks (the
@@ -138,6 +138,8 @@ def start(
     refusal = guardrails.duplicates(db, user_id, posting, key, now)
     if refusal is not None:
         _refuse(refusal.code, mode, warnings, refusal.application_id)
+        for code in refusal.also:
+            _refuse(code, mode, warnings)
 
     application = Application(
         id=uuid.uuid4(),

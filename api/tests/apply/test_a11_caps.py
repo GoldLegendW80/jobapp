@@ -121,6 +121,36 @@ def test_a_company_under_two_spellings_and_its_ats_organisation(
     assert caps.check(db, mine(db, person_a), AT) is None
 
 
+def test_a_cap_keyed_by_an_older_fold_still_holds(db: Session, person_a: Person) -> None:
+    # The key the fold gave this label before it read the iota subscript as an iota: the label's
+    # key is another one today, and the cap answers to both.
+    label, stored = "\u1fa0\u03b4\u03ae Labs", "\u03c9\u03b4hlabs"
+    assert caps.company_key(label) != stored
+    db.add(
+        CompanyCap(
+            user_id=person_a.user_id, company_key=stored, label=label, max_count=1, window_days=90
+        )
+    )
+    db.flush()
+    a11.clicked(db, person_a.user_id, AT - DAY, company=label)
+    where = a11.posting(db, person_a.user_id, company=label, title="Applied AI Engineer")
+    found = a11.application(db, person_a.user_id, where, state=State.ready)
+    assert caps.check(db, found, AT) == "company_cap"
+    assert caps.used(db, person_a.user_id, caps.caps_of(db, person_a.user_id), AT) == [1]
+
+
+@pytest.mark.parametrize("unseen", ["\u2800", "\u3164", "\u200b", "\x1f", "\u00ad"])
+def test_an_unseen_character_before_a_legal_form_is_read_both_ways(
+    db: Session, person_a: Person, unseen: str
+) -> None:
+    # "Example<unseen>SA" is "ExampleSA" read as nothing and "Example SA" read as a gap.
+    a11.cap(db, person_a.user_id, label="Example", max_count=1)
+    a11.clicked(db, person_a.user_id, AT - DAY, company=f"Example{unseen}SA")
+    where = a11.posting(db, person_a.user_id, company="Example", title="Applied AI Engineer")
+    found = a11.application(db, person_a.user_id, where, state=State.ready)
+    assert caps.check(db, found, AT) == "company_cap"
+
+
 def test_the_same_role_cool_down(db: Session, person_a: Person) -> None:
     a11.cap(db, person_a.user_id, max_count=5, window_days=30, same_role_days=365)
     # 200 days ago: past the 180 days of the duplicates rule, inside the person's 365
