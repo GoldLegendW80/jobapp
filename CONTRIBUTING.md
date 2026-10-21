@@ -10,7 +10,7 @@ in the job folder that holds this repository (it is not part of the repository).
    for example `jobs/j4-rescore`, `platform/7-ci` or `profile/p5-import-preview`.
    The agent that starts the task puts its card in Building with
    `ops/card.sh <issue url> doing <module> now`. Every other move on the board (one column per
-   step: Needs you, Paused, Blocked, Spec, Ready, Building, In review, Fix & re-check, Approved,
+   step: Needs you, Paused, Blocked (kept in the field, no card is put there), Spec, Ready, Building, In review, Fix & re-check, Approved,
    Gating, Merged, Live, Dropped, Epic) is made by `ops/board-sync.py` from GitHub facts, never
    by hand (docs/agents/orchestration.md, The board).
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat(jobs): ...`,
@@ -89,10 +89,10 @@ in the job folder that holds this repository (it is not part of the repository).
    on that order.** No run in between:
 
    ```bash
-   ops/local-check.sh --merge <n1> --merge <n2> --merge <n3>   # main, then each head merged in that order. The proof is the last line, exactly: LOCAL CHECK: PASS <tree sha> <seconds>s
-   gh pr merge <n1> --merge --delete-branch                    # the same order, back to back
-   gh pr merge <n2> --merge --delete-branch
-   gh pr merge <n3> --merge --delete-branch
+   ops/local-check.sh --merge <n1>@<sha1> --merge <n2>@<sha2> --merge <n3>@<sha3>   # main, then each approved head merged in that order. The proof is the last line, exactly: LOCAL CHECK: PASS <tree sha> <seconds>s
+   gh pr merge <n1> --merge --delete-branch --match-head-commit <sha1>              # the same order, back to back
+   gh pr merge <n2> --merge --delete-branch --match-head-commit <sha2>
+   gh pr merge <n3> --merge --delete-branch --match-head-commit <sha3>
    git fetch origin && git rev-parse 'origin/main^{tree}'      # must print the tree sha of the PASS line
    ops/deploy-checked.sh                                       # step 7
    ```
@@ -109,6 +109,12 @@ in the job folder that holds this repository (it is not part of the repository).
    names the ref: that branch is updated first, which is a new head and so a new review
    confirmation), 3 another check holds the lock or the disk is under 12 GiB free.
 
+   Pin each head (issue #468). `--merge <n>` merges the head the pull request has when the check
+   fetches it, which may be a push made after the approval; `--merge <n>@<full sha>` merges
+   exactly the commit the `Head:` line of the approval names, and refuses (exit 4, nothing
+   checked) unless that commit is the head of pull request n or in its history. The record then
+   lists the approved commit, and `--match-head-commit <sha>` merges only that commit.
+
    What counts as proof. Only a last line that begins with exactly `LOCAL CHECK: PASS `,
    followed by the tree sha, and the record `.local-check/<tree sha>.json` written next to it.
    That line is printed by a run of the full set with the real steps and by nothing else. A
@@ -123,7 +129,8 @@ in the job folder that holds this repository (it is not part of the repository).
    (50 commits before the base when there is none), and prints that range.
 
    What the batch check does not give. There is no check per pull request: a failure belongs
-   to the batch, and is bisected by running the check again with fewer `--merge` refs. It runs
+   to the batch, and is bisected by running the check again with fewer `--merge` refs, pinned to
+   the same heads. It runs
    only while the Mac is awake and Docker Desktop is open, one check at a time. Nothing on
    GitHub shows its result: the record on the Mac and the `LOCAL CHECK: PASS` line are the
    proof, so the orchestrator quotes that whole line when it merges.
@@ -147,6 +154,10 @@ in the job folder that holds this repository (it is not part of the repository).
    bisected: the pull request that makes it fail is dropped with its dependents and gets a
    comment with the step blamed and the last 30 lines of its log (each line that may hold a
    secret withheld), and the rest is checked again; a main that fails alone stops the run.
+   Every gate run, the bisect included, checks each pull request at the head its approval names
+   (`--merge <n>@<sha>`), and the heads are read again before each run: a push to a pull request
+   of the batch during the ship stops the run before anything is merged (`SHIP: FAIL the head of
+   #n moved while shipping`), so the next run selects it again once it is approved again.
    It merges only when main and every head are still what the PASS record lists (`gh pr merge
    --repo <owner/repo> --match-head-commit`), and keeps the board current with
    `ops/board-sync.py --apply` at the start of the gate (the batch shows as Gating), right after

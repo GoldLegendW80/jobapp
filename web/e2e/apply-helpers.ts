@@ -51,7 +51,13 @@ export type Submission = {
   reason: string;
 };
 
-type Posting = { ats: string; variant: string; path: string; company: string };
+type Posting = {
+  ats: string;
+  job: string;
+  variant: string;
+  path: string;
+  company: string;
+};
 
 async function call<T>(path: string, method = "GET"): Promise<T> {
   if (!atsFormsUrl) throw new Error("set E2E_ATS_FORMS_URL");
@@ -71,9 +77,14 @@ export const stub = {
     const response = await fetch(`${atsFormsUrl}/_stub/files/${sha}`);
     return Buffer.from(await response.arrayBuffer());
   },
-  posting: async (ats: string, variant = ""): Promise<string> => {
+  posting: async (ats: string, variant = "", job?: string): Promise<string> => {
     const rows = await call<Posting[]>("/_stub/postings");
-    const found = rows.find((r) => r.ats === ats && r.variant === variant);
+    const found = rows.find(
+      (r) =>
+        r.ats === ats &&
+        r.variant === variant &&
+        (job === undefined || r.job === job),
+    );
     if (!found) throw new Error(`no ${ats} posting for variant "${variant}"`);
     return `${atsFormsUrl ?? ""}${found.path}`;
   },

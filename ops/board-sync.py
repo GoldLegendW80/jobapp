@@ -5,9 +5,9 @@ The stage of a task is computed from GitHub facts only, so the command is safe t
 
   Needs you       open, label `owner`, no open pull request
   Paused          open, label `paused`
-  Blocked         open, a "Depends on #N" line names an open issue or pull request
   Spec            open, label `spec`
-  Ready           open, nothing started
+  Ready           open, nothing started (also when a "Depends on #N" line names an open issue or
+                  pull request: blocked_by in the snapshot names it, the card is not parked)
   Building        open, an agent works on it (--building, or the card already said so)
   In review       its pull request has no verdict yet
   Fix & re-check  the latest verdict asks for changes, or a commit came after the approval
@@ -205,8 +205,6 @@ def issue_stage(
         return pr_stage(pr, gating, live), pr
     if "owner" in labels:
         return "Needs you", None
-    if depends_on(issue["body"]) & open_numbers:
-        return "Blocked", None
     if "spec" in labels:
         return "Spec", None
     if issue["number"] in building or prev_status in ("In Progress", "Building"):

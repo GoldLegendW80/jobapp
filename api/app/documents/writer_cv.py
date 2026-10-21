@@ -14,7 +14,8 @@ can ask of a run"):
 - turns and wall time from the settings (DOCUMENTS_GENERATION_MAX_TURNS, _WALL_S), and the
   `token_budget` of the input (the generation's ceiling).
 
-The input holds ids, the document's language, the template's soft limits (numbers), the mode,
+The input holds ids, the document's language, the person's tone (a code, their
+`preferences.documents_tone`), the template's soft limits (numbers), the mode,
 the fields a `shorten` pass must bring under their limits (paths), and the fake backend's
 `script`: never a text of the person or of the posting. The first message is built from it.
 """
@@ -55,6 +56,12 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "cv.md"
 TOOLS = ("get_job", "read_profile_section", "get_base_cv", "get_draft", "submit_cv")
 MODES = (GenerationMode.posting.value, GenerationMode.shorten.value)
 LANGUAGES = {"en": "English", "fr": "French"}
+# The person's `preferences.documents_tone` (opportunities O4), as the first message names it.
+TONES = {
+    "plain": "plain: simple, direct sentences",
+    "formal": "formal: courteous and measured, no familiar turns",
+    "warm": "warm: personal and enthusiastic, still concrete",
+}
 FIELD_PATH = r"^[a-z_]+(\.[0-9]+)?(\.[a-z_]+)?(\.[0-9]+)?$"
 
 
@@ -66,6 +73,7 @@ class CvInput(BaseModel):
     generation_id: uuid.UUID = Field(strict=False)
     mode: Literal["posting", "shorten"] = "posting"
     language: Literal["en", "fr"] = "en"
+    tone: Literal["plain", "formal", "warm"] = "plain"
     # The template's soft limits, in characters (rules.SoftLimits); null: no counter.
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
     # `shorten` only: the fields over their soft limits, longest first.
@@ -117,6 +125,11 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     return bind_for(db, run, Kind.cv)
 
 
+def tone_line(data: Mapping[str, Any]) -> str:
+    """The tone sentence of a writer's first message, `plain` when the input names none."""
+    return f"Tone: {TONES.get(str(data.get('tone')), TONES['plain'])}."
+
+
 def limits_line(limits: Mapping[str, Any]) -> str:
     shown = [f"{name} {value}" for name, value in limits.items() if value]
     if not shown:
@@ -130,6 +143,7 @@ class CvWriter(definitions.AgentDefinition):
 
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         language = LANGUAGES.get(str(data.get("language")), "English")
+        tone = tone_line(data)
         limits = limits_line(data.get("limits") or {})
         if data.get("mode") == GenerationMode.shorten.value:
             fields = ", ".join(str(path) for path in data.get("long_fields") or ()) or "the longest"
@@ -137,12 +151,13 @@ class CvWriter(definitions.AgentDefinition):
                 "The CV of this posting overflows one page. Read the draft with get_draft, then "
                 "shorten these fields under their soft lengths, longest first: "
                 f"{fields}. Cut words, never facts you would have to invent; change nothing "
-                f"else. Submit the whole CV with submit_cv. Language: {language}. {limits}"
+                f"else. Submit the whole CV with submit_cv. Language: {language}. {tone} "
+                f"{limits}"
             )
         else:
             text = (
                 "Write the CV of this posting for the person, from their profile and base CV. "
-                f"Language: {language}. {limits}"
+                f"Language: {language}. {tone} {limits}"
             )
         if job_id is not None:
             text += f"\n\nJob id: {job_id}"

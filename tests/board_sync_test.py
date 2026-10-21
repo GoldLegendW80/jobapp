@@ -240,9 +240,10 @@ class IssueStage(unittest.TestCase):
     def test_open_issue_with_a_merged_pull_request(self):
         self.assertEqual(self.stage(issue(1), [pr(2, "MERGED")]), "Merged")
 
-    def test_blocked_only_by_open_numbers(self):
+    def test_dependency_does_not_park_the_card(self):
+        # Owner rule 2026-10-21: every open card is Ready or Done, plus in-flight steps.
         i = issue(1, body="Depends on #7")
-        self.assertEqual(self.stage(i, open_numbers={7}), "Blocked")
+        self.assertEqual(self.stage(i, open_numbers={7}), "Ready")
         self.assertEqual(self.stage(i, open_numbers={8}), "Ready")
         self.assertEqual(
             self.stage(
@@ -303,7 +304,7 @@ class LinkAndPlan(unittest.TestCase):
         one, two = by[("issue", 1)], by[("issue", 2)]
         self.assertEqual(
             (one["stage"], one["blocked_by"], one["module"], one["item"]),
-            ("Blocked", "#2", "apply", "IT1"),
+            ("Ready", "#2", "apply", "IT1"),
         )
         self.assertEqual(
             (two["stage"], two["pr"], two["verdict"], two["module"], two["item"]),
@@ -317,7 +318,7 @@ class LinkAndPlan(unittest.TestCase):
         self.assertEqual(
             (by[("pr", 13)]["stage"], by[("pr", 13)]["module"]), ("Dropped", "jobs")
         )
-        self.assertEqual(one["stage_order"], bs.ORDER["Blocked"])
+        self.assertEqual(one["stage_order"], bs.ORDER["Ready"])
 
     def test_archived_linked_card_is_not_archived_again(self):
         rows, to_archive = bs.plan(

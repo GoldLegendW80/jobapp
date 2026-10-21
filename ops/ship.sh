@@ -23,7 +23,11 @@
 #    its head (the record still lands in .local-check/ of the main checkout, see the header of
 #    local-check.sh). A second one that changes the gate, or one that depends on another pull
 #    request of the batch, is deferred to a later run: one gate script per batch.
-# 3. Gate. ops/local-check.sh --merge <n> ... once for the batch. On a merge conflict the pull
+# 3. Gate. ops/local-check.sh --merge <n>@<approved head> ... once for the batch (issue #468): each
+#    pull request is checked at the head its approval names, never at a later push, and so is
+#    every run of the bisect. Before each run the heads are read again: a head that moved since the
+#    selection stops the run before anything is merged ("the head of #n moved while shipping"), so
+#    the batch is selected again, and approved again, by the next run. On a merge conflict the pull
 #    request it names is dropped. A failed step counts once it repeats: the batch is checked again
 #    as it is, a PASS then ships (the first failure is named "flaky" in the summary) and another
 #    list of failed steps stops the run ("flaky gate"), nothing dropped. The same failure twice is
@@ -489,9 +493,9 @@ labels() { # labels <n ...>: "#n abc1234, ..."
 }
 note deferred "$(joined ${DEFERRED[@]+"${DEFERRED[@]}"})"
 note order "$(labels "${ORDER[@]}")"
-merge_args() { # merge_args <n ...>: the --merge arguments, printed
+merge_args() { # merge_args <n ...>: the --merge arguments, printed, each pinned to its approved head
   local n
-  for n in "$@"; do printf -- ' --merge %s' "$n"; done
+  for n in "$@"; do printf -- ' --merge %s@%s' "$n" "$(head_of "$n")"; done
 }
 
 if ((PLAN)); then
@@ -584,13 +588,28 @@ G_KIND=""
 G_TREE=""
 G_STEPS=""
 G_CULPRIT=""
-run_gate() { # run_gate [<n> ...]: the gate on main with these merged (none: main alone)
+heads_unmoved() { # heads_unmoved <n ...>: stops the run when a head is not the approved one any more
+  local n now
+  for n in "$@"; do
+    now="$(gh pr view "$n" --json headRefOid --jq .headRefOid 2>/dev/null)" || {
+      gate_notes
+      die "gh cannot read the head of #$n: nothing merged"
+    }
+    [[ "$now" == "$(head_of "$n")" ]] || {
+      gate_notes
+      die "the head of #$n moved while shipping ($(short "$(head_of "$n")") approved, $(short "$now") now): nothing merged, run ops/ship.sh again"
+    }
+  done
+}
+run_gate() { # run_gate [<n> ...]: the gate on main with these merged at their approved heads (none: main alone)
   local script="$MAIN/$GATE_SCRIPT" from="main" args=() n
   if [[ -n "$GATE_PR" && $# -gt 0 && "$1" == "$GATE_PR" ]]; then
     script="$GATE_TREE/$GATE_SCRIPT"
     from="#$GATE_PR"
   fi
-  for n in "$@"; do args+=(--merge "$n"); done
+  # A push since the selection: the batch is not what was approved any more.
+  heads_unmoved ${BATCH[@]+"${BATCH[@]}"}
+  for n in "$@"; do args+=(--merge "$n@$(head_of "$n")"); done
   GATE_RUNS=$((GATE_RUNS + 1))
   G_LOG="$LOGS/gate-$GATE_RUNS.log"
   say "gate   run $GATE_RUNS, the $GATE_SCRIPT of $from:${args[*]+ ${args[*]}}"

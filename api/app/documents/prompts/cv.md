@@ -20,4 +20,4 @@ The shape of submit_cv:
 - experience: the employers in the order of the profile, the most relevant bullets first, each bullet one claim the sources state.
 - notes: anything the person should know (for example a requirement of the posting the profile does not meet), not printed.
 - Keep each field under the soft lengths given in the message: they are what fits one page of the template. The hard limits are higher and refused.
-- Write in the language the message names. Plain, concrete sentences.
+- Write in the language and the tone the message names, in concrete sentences. A tone changes the wording, never the facts.

@@ -61,9 +61,8 @@ own (the sync archives it); one that closes no issue keeps its card.
 |---|---|
 | Needs you | open, label `owner`, no open pull request |
 | Paused | open, label `paused`, no open pull request |
-| Blocked | open, a `Depends on #N` line names an open issue or pull request |
 | Spec | open, label `spec` |
-| Ready | open, nothing started |
+| Ready | open, nothing started; also when a `Depends on #N` line names an open issue or pull request (the snapshot column `blocked_by` names it) |
 | Building | an agent started it (`ops/card.sh <issue url> doing <module> now`), or its pull request is a draft |
 | In review | its pull request has no verdict yet |
 | Fix & re-check | the latest verdict asks for changes, or a commit came after the approval |

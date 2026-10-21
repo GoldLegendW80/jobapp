@@ -84,6 +84,7 @@ from PIL import Image
 
 BATCH = 8  # images of one answer
 PAGES_MAX = 200  # page indexes a job may name: the pages pdf_text.py reads at most
+CLAIMED_MAX = 100_000  # parser_client.MAX_PAGES: a file that claims more is given as this
 PAGE_MAX_INCHES = 200
 PAGE_MAX_POINTS = PAGE_MAX_INCHES * 72
 NARROW = 10  # a page narrower than a tenth of its length is not rendered
@@ -146,7 +147,7 @@ def open_document(data: bytes):
     """The document and how many pages it has. Raises _Refused."""
     try:
         pdf = pdfium.PdfDocument(data)
-        total = len(pdf)
+        total = min(len(pdf), CLAIMED_MAX)  # /Count is whatever the file says
     except MemoryError:
         raise
     except pdfium.PdfiumError as error:

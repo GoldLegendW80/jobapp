@@ -17,6 +17,7 @@ import pytest
 from PIL import Image
 
 from app.ingestion import parser_client as pc
+from tests.ingestion import design_fixtures as designs
 from tests.ingestion import pdf_fixtures as pdfs
 from tests.ingestion import scan_fixtures as fx
 from tests.ingestion.parser.helpers import (
@@ -415,3 +416,23 @@ def test_a_file_pypdf_cannot_weigh_is_left_to_pdfium(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(pdf_render._Contents, "_size", broken)
     assert len(render(fx.scan(2), [0, 1]).images) == 2
+
+
+# --- a page count that PDFium takes from /Count --------------------------------------------------
+
+
+@pytest.mark.parametrize("claimed", [pc.MAX_PAGES, pc.MAX_PAGES + 1, 500_000])
+@pytest.mark.parametrize("job", ["render", "text"])
+def test_a_page_count_past_the_clients_cap_is_given_as_the_cap(claimed: int, job: str) -> None:
+    data = designs.build([designs.text("A page of text " * 8, 56, 780)], count=claimed)
+    found = ask(data, {"text": True} if job == "text" else {"pages": [0]})
+    assert found.pages == min(claimed, pc.MAX_PAGES)
+
+
+def test_a_page_count_of_the_file_below_the_cap_is_given_as_it_is() -> None:
+    data = designs.build([designs.text("Page 1", 56, 780)], count=7)
+    assert ask(data, {"pages": [0]}).pages == 7
+
+
+def test_the_cap_of_the_reader_is_the_one_of_the_client() -> None:
+    assert pdf_render.CLAIMED_MAX == pdf_text.CLAIMED_MAX == pc.MAX_PAGES
