@@ -163,3 +163,56 @@ def test_other_purposes_keep_their_input_rules(purpose: str) -> None:
         assert made.app_turn is False
 
     run(go)
+
+
+def _tool_route(w: World) -> Any:
+    from browserd import app as browserd_app
+
+    service = browserd_app.Service(w.manager, b"e2e-a9")
+    route = next(r for r in browserd_app.ROUTES if "/tools/" in r.pattern.pattern)
+
+    async def call(lease_id: str, token: str, name: str, body: bytes = b"{}") -> Any:
+        match = route.pattern.fullmatch(f"/leases/{lease_id}/tools/{name}")
+        req = browserd_app.HttpRequest("POST", "/", {"x-lease-token": token}, body)
+        return await route.handler(service, req, match)
+
+    return call
+
+
+def test_a_take_over_during_the_apps_turn_stops_the_apps_next_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ran: list[str] = []
+
+    async def acted(tab: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        ran.append(name)
+        return {"ok": True}
+
+    monkeypatch.setattr(actions, "run", acted)
+
+    async def go(w: World) -> None:
+        made, token = await w.manager.acquire(manual_request())
+        lease_id = made.lease_id
+        tool, live = _tool_route(w), _input_route(w)
+        # The person's time: the app reads and answers a chooser, never types nor clicks.
+        for name in ("browser_type", "browser_click", "browser_press_key",
+                     "browser_select_option", "browser_check", "browser_tabs"):  # fmt: skip
+            status, found = await tool(lease_id, token, name)
+            assert (status, found["ok"], found["error"]) == (200, False, "person_input")
+        for name in ("browser_snapshot", "browser_file_upload", "browser_navigate"):
+            assert (await tool(lease_id, token, name))[1] == {"ok": True}
+        assert ran == ["browser_snapshot", "browser_file_upload", "browser_navigate"]
+        # "Fill my details": the app's turn, its keys reach the page.
+        await live(lease_id, b'{"viewer": null}')
+        assert (await tool(lease_id, token, "browser_type"))[1] == {"ok": True}
+        # The person clicks Take over: the app's next key is refused, the fill stops there.
+        assert await live(lease_id, f'{{"viewer": "{VIEWER}"}}'.encode()) == (
+            200,
+            {"input": "person"},
+        )
+        status, found = await tool(lease_id, token, "browser_type")
+        assert found["error"] == "person_input"
+        assert ran.count("browser_type") == 1
+        assert w.live.person(lease_id) is True
+
+    run(go)

@@ -24,7 +24,9 @@ the lease's token for the session's whole length (one session at a time, like a 
      (the next chooser is answered). Code only, never a model; never a dialog over a folder.
    - "Fill my details": the input goes to the app (browserd's `app_turn`), the adapter types the
      identity fields only (resolver answers whose source is `identity.*`) into fields that are
-     still empty, then the input goes back to the person, whatever happened.
+     still empty, then the input goes back to the person, whatever happened. A Take over during
+     the fill gives the person the input at once: browserd refuses the app's next key
+     (`person_input`) and the fill stops (`taken`): no further field is typed by the app.
 5. The end: the lease ended (idle, its maximum, the person closed the window) or the person
    closed the session: an application still `filling` is `cancelled` (`closed` or the lease's
    reason). An application the person recorded meanwhile is left as it is.
@@ -75,6 +77,7 @@ IDLE_WARN_S = 60  # the panel warns this long before the idle timeout (at 4 of 5
 END_GRACE_S = 60  # past the lease's maximum, the session ends whatever browserd answers
 DOCUMENT_OF = {"attach_cv": ("cv", run.CV_NAME), "attach_letter": ("letter", run.LETTER_NAME)}
 OPEN = frozenset({State.queued, State.filling, State.needs_person})
+TAKEN = "person_input"  # browserd's refusal once the person took the input back (Take over)
 
 
 def job_id(application_id: object) -> str:
@@ -340,6 +343,8 @@ async def _fill_details(
             if not isinstance(answer, Answer) or not answer.source.startswith("identity."):
                 continue
             result = await reader.fill(tools, item, answer)
+            if result.code == TAKEN:
+                return f"taken:{filled}"
             filled += result.status in run.FILLED
         return f"filled:{filled}"
     finally:

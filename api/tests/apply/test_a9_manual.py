@@ -300,6 +300,35 @@ def test_fill_my_details_types_identity_fields_only_with_the_input_to_the_app(
     assert note.data["outcome"] == "filled"
 
 
+class TakenForm(ManualForm):
+    """The person clicks Take over once the app typed its first field: browserd refuses the
+    app's next key (browserd/tools/routes.py, PERSON_TIME)."""
+
+    async def type(self, ref: str, text: str, element: str = "", submit: bool = False) -> Any:
+        if any(c[0] == "type" for c in self.calls):
+            self._log("refused", ref=ref)
+            return {"ok": False, "error": manual.TAKEN}
+        return await super().type(ref, text, element, submit)
+
+
+def test_a_take_over_during_fill_my_details_stops_the_fill(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    form = manual_ashby()
+    taken, browser = TakenForm(form.fields, submit=form.submit, title=form.title), FakeBrowser()
+    channel = FakeChannel(["fill_details"])
+    session(manual_services(factory, taken, channel, browser, stub=stub), app_id)
+
+    assert taken.spec("Full name").value == full("identity")["full_name"]
+    assert taken.spec("Email").value == ""
+    assert [c[0] for c in taken.calls].count("refused") == 1  # nothing typed after the refusal
+    assert browser.inputs == ["app", "person"]
+    note = next(e for e in events(db, app_id) if e.kind == "manual")
+    assert (note.data["outcome"], note.data["count"]) == ("taken", 1)
+    assert channel.statuses[-2]["last"] == {"action": "fill_details", "outcome": "taken:1"}
+
+
 def test_a_chooser_the_person_opened_is_answered_with_the_document_named(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
