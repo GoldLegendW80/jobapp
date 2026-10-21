@@ -2,12 +2,14 @@
  * Search: what the sweep looks for. Title include and exclude terms and location terms as chips
  * (each list with its advanced switch), contract types as toggles, the remote stance, the minimum
  * fit to shortlist, the posting age window, the company boards (boards-table.tsx), the job sites
- * read in the browser (browser-sources-card.tsx) and the never-apply rules. Then what the person
+ * read in the browser (browser-sources-card.tsx), the freelance and project sources
+ * (opportunities/sources, O8) and the never-apply rules. Then what the person
  * aims for (target-fields.tsx, O4) and, as a card with its own Save, the preferences section
- * (preferences-card.tsx).
+ * (preferences-card.tsx). On top, the starter list of boards and sites (starter-card.tsx, O5c).
  */
+import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
 
@@ -23,17 +25,21 @@ import {
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
+import { FreelanceSourcesCard } from "@/features/opportunities/sources/freelance-sources-card";
+import { starterKey } from "@/features/onboarding/starter-api";
 import { cn } from "@/lib/utils";
 
 import {
   CONTRACT_TYPES,
   REMOTE_STANCES,
   type Profile,
+  profileKey,
   type SweepSchedule,
 } from "./api";
 import { BoardsTable } from "./boards-table";
 import { BrowserSourcesCard } from "./browser-sources-card";
 import { PreferencesCard } from "./preferences-card";
+import { StarterCard } from "./starter-card";
 import { TargetFields } from "./target-fields";
 import { describeSchedule } from "./schedule";
 import {
@@ -71,6 +77,58 @@ const STANCE_LABELS: Record<(typeof REMOTE_STANCES)[number], string> = {
 };
 
 export function SearchTab({
+  profile,
+  onDirtyChange,
+}: {
+  profile: Profile;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
+  const client = useQueryClient();
+  const [dirty, setDirty] = useState(false);
+  // Bumped once the profile is read again after a starter choice: the forms below remount on
+  // it, so their values and the revision their next save is based on include what was added.
+  const [generation, setGeneration] = useState(0);
+  const reloadForms = useRef(false);
+  const onFormsDirty = useCallback(
+    (now: boolean) => {
+      setDirty(now);
+      onDirtyChange(now);
+    },
+    [onDirtyChange],
+  );
+  const onStarterChanged = useCallback(() => {
+    reloadForms.current = true;
+    void client.invalidateQueries({ queryKey: profileKey });
+  }, [client]);
+  // A new revision: after a starter choice the forms reload; after a save of the search the
+  // targets the list is built from may have changed, so the list is read again.
+  const seen = useRef(profile.revision);
+  useEffect(() => {
+    if (seen.current === profile.revision) return;
+    seen.current = profile.revision;
+    if (reloadForms.current) {
+      reloadForms.current = false;
+      setGeneration((n) => n + 1);
+    }
+    void client.invalidateQueries({ queryKey: starterKey });
+  }, [client, profile.revision]);
+  return (
+    <div className="flex flex-col gap-6">
+      <StarterCard
+        profile={profile}
+        dirty={dirty}
+        onChanged={onStarterChanged}
+      />
+      <SearchForms
+        key={generation}
+        profile={profile}
+        onDirtyChange={onFormsDirty}
+      />
+    </div>
+  );
+}
+
+function SearchForms({
   profile,
   onDirtyChange,
 }: {
@@ -207,6 +265,7 @@ export function SearchTab({
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           <BoardsTable form={form} />
           <BrowserSourcesCard form={form} />
+          <FreelanceSourcesCard form={form} />
           <NeverApply form={form} />
           <DocumentsSearchOptions form={form} />
           <SaveBar

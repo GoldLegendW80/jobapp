@@ -24,6 +24,7 @@ import { ConflictDialog } from "@/features/profile/section-ui";
 import { PageLoading, PageUnavailable } from "@/features/shell/page-status";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
+import { WORDING } from "@/lib/wording";
 import { cn } from "@/lib/utils";
 
 import {
@@ -35,6 +36,8 @@ import {
   saveLikeMode,
   type OnboardingState,
 } from "./onboarding-api";
+import { starterKey } from "./starter-api";
+import { StarterBoards } from "./starter-boards";
 import {
   StepApply,
   StepLooking,
@@ -87,7 +90,7 @@ const SWEEP_SENTENCE = {
  * saved, never what was typed and then skipped.
  */
 export function WelcomePage() {
-  useTitle("Welcome");
+  useTitle(WORDING.welcome);
   const me = useMe();
   const profile = useQuery({
     queryKey: profileKey,
@@ -212,6 +215,8 @@ function Wizard({
     },
     onSuccess: async (saved, current) => {
       if (saved) client.setQueryData(profileKey, saved);
+      // The starter list is built from the saved answers: never show a stale one on step 7.
+      void client.invalidateQueries({ queryKey: starterKey });
       try {
         await recordPass(current);
       } catch (error) {
@@ -286,13 +291,23 @@ function Wizard({
   const busy =
     save.isPending || skip.isPending || finish.isPending || later.isPending;
   const stored = (client.getQueryData<Profile>(profileKey) ?? profile).sections;
-  const panel: PanelProps = { draft, change };
+  const panel: PanelProps = {
+    draft,
+    change,
+    problem,
+    patterns: {
+      roles: stored.search.title_include.advanced_regex,
+      places: stored.search.location.advanced_regex,
+    },
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <header className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">Welcome</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {WORDING.welcome}
+          </h1>
           {state.completed_at ? null : (
             <Button
               variant="ghost"
@@ -301,7 +316,7 @@ function Wizard({
                 later.mutate();
               }}
             >
-              Skip for now
+              {WORDING.skipForNow}
             </Button>
           )}
         </div>
@@ -335,7 +350,7 @@ function Wizard({
           {STEP_NAMES[step]}
         </h2>
         {problem ? (
-          <Alert variant="destructive" role="alert">
+          <Alert id="welcome-problem" variant="destructive" role="alert">
             <CircleAlert aria-hidden="true" />
             <AlertDescription>{problem}</AlertDescription>
           </Alert>
@@ -344,7 +359,7 @@ function Wizard({
         {step === "looking" ? <StepLooking {...panel} /> : null}
         {step === "where" ? <StepWhere {...panel} /> : null}
         {step === "work" ? <StepWork {...panel} /> : null}
-        {step === "pay" ? <StepPay {...panel} /> : null}
+        {step === "pay" ? <StepPay {...panel} problem={problem} /> : null}
         {step === "apply" ? <StepApply {...panel} settings={settings} /> : null}
         {step === "summary" ? (
           <StepSummary
@@ -354,12 +369,13 @@ function Wizard({
             onChange={(changed) => {
               goTo(changed, true);
             }}
+            footer={<StarterBoards />}
           />
         ) : null}
       </section>
 
       <nav
-        aria-label="Wizard"
+        aria-label={WORDING.wizard}
         className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t bg-background py-3"
       >
         <Button
@@ -370,7 +386,7 @@ function Wizard({
           }}
         >
           <ArrowLeft aria-hidden="true" />
-          Back
+          {WORDING.back}
         </Button>
         <div className="flex flex-wrap gap-2">
           {ESSENTIAL.has(step) ? null : (
@@ -381,7 +397,7 @@ function Wizard({
                 skip.mutate(step);
               }}
             >
-              Skip this step
+              {WORDING.skipThisStep}
             </Button>
           )}
           {step === "summary" ? (
@@ -394,14 +410,14 @@ function Wizard({
               {finish.isPending ? (
                 <LoaderCircle aria-hidden="true" className="animate-spin" />
               ) : null}
-              Start
+              {WORDING.start}
             </Button>
           ) : (
             <Button disabled={busy} onClick={onNext}>
               {save.isPending ? (
                 <LoaderCircle aria-hidden="true" className="animate-spin" />
               ) : null}
-              Next
+              {WORDING.next}
               <ArrowRight aria-hidden="true" />
             </Button>
           )}
@@ -410,7 +426,7 @@ function Wizard({
 
       <ConflictDialog
         open={conflict !== undefined}
-        label="Your profile"
+        label={WORDING.yourProfile}
         onKeepEditing={() => {
           if (conflict) applyConflict(conflict);
           setConflict(undefined);
@@ -438,10 +454,10 @@ function Progress({
   onOpen: (step: StepId) => void;
 }) {
   return (
-    <nav aria-label="Progress">
+    <nav aria-label={WORDING.progress}>
       <div
         role="progressbar"
-        aria-label="Wizard progress"
+        aria-label={WORDING.wizardProgress}
         aria-valuemin={1}
         aria-valuemax={STEP_IDS.length}
         aria-valuenow={current + 1}

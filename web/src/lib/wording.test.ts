@@ -2,7 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import { CONTRACT_TYPES } from "@/features/jobs/labels";
 
-import { CONTRACT_WORDS, WORDING, contractWord, deckEmpty } from "./wording";
+import {
+  CONTRACT_WORDS,
+  WORDING,
+  SENIORITY_WORDS,
+  COMPANY_WORDS,
+  REMOTE_WORDS,
+  LANGUAGE_WORDS,
+  TONE_WORDS,
+  WIZARD_STEP_WORDS,
+  FEED_NAMES,
+  FEED_SHORT_NAMES,
+  contractWord,
+  deckEmpty,
+} from "./wording";
 
 const DASHES = /[‒–—―]|\s-\s/;
 const JARGON = /\b(ATS|sweep|lease|CDI)\b/;
@@ -12,6 +25,16 @@ describe("wording", () => {
     for (const value of [
       ...Object.values(WORDING),
       ...Object.values(CONTRACT_WORDS),
+      ...[
+        SENIORITY_WORDS,
+        COMPANY_WORDS,
+        REMOTE_WORDS,
+        LANGUAGE_WORDS,
+        TONE_WORDS,
+        WIZARD_STEP_WORDS,
+        FEED_NAMES,
+        FEED_SHORT_NAMES,
+      ].flatMap((table) => Object.values(table)),
     ]) {
       expect(value, value).not.toMatch(DASHES);
     }

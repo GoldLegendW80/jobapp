@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/sheet";
 import { getJob, jobKey } from "@/features/jobs/api";
 import { paragraphs } from "@/features/jobs/text";
+import { WORDING } from "@/lib/wording";
 import { describeError } from "@/lib/api";
 
 import type { Card } from "../opportunities-api";
@@ -69,7 +70,7 @@ export function PostingSheet({
             to={`/jobs/${encodeURIComponent(card.id)}`}
             className="w-fit text-primary underline-offset-4 hover:underline"
           >
-            Open the posting page
+            {WORDING.openPostingPage}
           </Link>
         </div>
       </SheetContent>

@@ -2,7 +2,7 @@ import { useId } from "react";
 
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
-import { CONTRACT_WORDS } from "@/lib/wording";
+import { CONTRACT_WORDS, WORDING } from "@/lib/wording";
 
 import type { DeckFilters, Remote } from "../opportunities-api";
 import { sourceLine } from "./card-text";
@@ -33,7 +33,9 @@ export function DeckFilterRow({
   return (
     <div className="flex flex-col gap-4">
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-sm font-medium">Contract types</legend>
+        <legend className="mb-2 text-sm font-medium">
+          {WORDING.contractTypes}
+        </legend>
         <div className="flex flex-wrap gap-2">
           {Object.entries(CONTRACT_WORDS).map(([code, word]) => (
             <label
@@ -54,7 +56,7 @@ export function DeckFilterRow({
       </fieldset>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <Label htmlFor={remoteId}>Remote or on site</Label>
+          <Label htmlFor={remoteId}>{WORDING.remoteOrOnSite}</Label>
           <NativeSelect
             id={remoteId}
             value={filters.remote ?? ANY}
@@ -65,13 +67,13 @@ export function DeckFilterRow({
               });
             }}
           >
-            <option value={ANY}>Either</option>
-            <option value="remote">Remote</option>
-            <option value="on_site">On site</option>
+            <option value={ANY}>{WORDING.either}</option>
+            <option value="remote">{WORDING.remote}</option>
+            <option value="on_site">{WORDING.onSite}</option>
           </NativeSelect>
         </div>
         <div className="flex flex-col gap-2">
-          <Label htmlFor={sourceId}>Source</Label>
+          <Label htmlFor={sourceId}>{WORDING.source}</Label>
           <NativeSelect
             id={sourceId}
             value={filters.source ?? ANY}
@@ -79,7 +81,7 @@ export function DeckFilterRow({
               onChange({ ...filters, source: event.target.value || null });
             }}
           >
-            <option value={ANY}>Any source</option>
+            <option value={ANY}>{WORDING.anySource}</option>
             {sources.map((source) => (
               <option key={source} value={source}>
                 {sourceLabel(source)}
@@ -94,5 +96,5 @@ export function DeckFilterRow({
 
 /** "Greenhouse" for "greenhouse" (the api matches every company page of that board). */
 function sourceLabel(source: string): string {
-  return sourceLine(source)?.replace(/^via /, "") ?? "Added by you";
+  return sourceLine(source)?.replace(/^via /, "") ?? WORDING.addedByYou;
 }

@@ -10,13 +10,12 @@ stored revision, so two concurrent saves based on the same revision are serialis
 increments the revision and appends its profile_revisions row, the second then sees the new
 revision and is refused as stale. The unique (user_id, revision) constraint is a second guard.
 An import takes the same lock and writes all seven sections at once, one revision each.
-`preferences.onboarding` belongs to the first login wizard (opportunities O5): only
-`record_onboarding` and `record_onboarding_step` write it. A save that changes a date is refused
-(ReservedFieldError); a date left out of the save, and the steps passed whatever the save holds,
-keep their stored value (a page loaded before the steps existed, or before the last step, still
-saves). An import keeps the stored value (the dates and the steps passed). A step passed is no
-revision: it updates `updated_at` only, like the photo, so a second tab editing the profile is
-not sent a 409 by each step of the wizard.
+`preferences.onboarding` belongs to the first login wizard (opportunities O5, O5b): only
+`record_onboarding`, `record_onboarding_step` and `record_starter` write it. A save that changes
+an onboarding date or the starter entries handled is refused (ReservedFieldError). Omitted keys
+and the steps passed, whatever the save holds, keep their stored value. An import keeps the
+stored dates, steps and starter entries handled. A step passed is no revision: it updates
+`updated_at` only, like the photo, so a second tab editing the profile is not sent a 409 by it.
 The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
@@ -292,6 +291,23 @@ def record_onboarding_step(db: Session, user_id: uuid.UUID, step: str, now: date
     profile.updated_at = now
     db.flush()
     return profile
+
+
+def record_starter(db: Session, user_id: uuid.UUID, keys: list[str], now: datetime) -> Profile:
+    """Keep `keys` among the starter list's entries handled (opportunities O5b: added or
+    removed by the person), one revision of `preferences`, under the profile row lock. Keys
+    already kept add no revision."""
+    profile = _locked(db, user_id, now)
+    stored = (profile.sections or {}).get("preferences") or {}
+    model = SECTION_MODELS["preferences"]
+    data = model.model_validate(stored).model_dump(mode="json")
+    known = data["onboarding"]["starter_handled"]
+    fresh = [key for key in dict.fromkeys(keys) if key not in known]
+    if not fresh:
+        return profile
+    data["onboarding"]["starter_handled"] = [*known, *fresh]
+    data = model.model_validate(data).model_dump(mode="json")
+    return _write(db, profile, "preferences", data, now)
 
 
 # --- photo --------------------------------------------------------------------------------------
