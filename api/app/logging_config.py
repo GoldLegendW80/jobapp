@@ -19,6 +19,8 @@ text of the exception and of the stack. It replaces two things:
 The formatter looks at the finished line once more, for a value the filter could not walk (an
 object that only shows its text when it is encoded). What stays out of reach is what `scrub` of
 app/agents/runner.py names too: a credential cut somewhere else than at its end, or rewritten.
+Out of reach in particular (issue #155): upper case, whitespace inside the key (what follows it),
+the key without its head, base64 of the key or of `user:key`, hex, another dash.
 """
 
 import json

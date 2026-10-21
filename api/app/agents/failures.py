@@ -25,9 +25,8 @@ from app.agents import runs
 
 NO_CREDENTIAL = "No model credential is saved. Add one on the Account page."
 UNREADABLE = "The saved credential cannot be read with this server's key. Paste it again."
-# What was decrypted is shorter than any credential the app accepts (credentials.MIN_LENGTH):
-# never used, because replacing a value that short in everything a run stores and logs would
-# mangle the run and hide nothing.
+# What was decrypted is off the shape of every credential the app accepts (prefix, characters,
+# length: credentials.shape_error): never used, because the scrub and the log filter rely on it.
 UNUSABLE = "The saved credential is not a whole one. Paste it again."
 UNKNOWN_AGENT = "This agent no longer exists."
 THREAD_GONE = "This conversation no longer exists."

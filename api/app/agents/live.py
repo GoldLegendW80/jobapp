@@ -48,9 +48,9 @@ lock is not counted: it is another attempt's time, issue #155), and the wait for
 already under way (the pump's) is taken out of the timeout of the next, so `close_block` costs
 one timeout at most, never two.
 At the end of the run the buffer is cleared whatever the back off (`aclose`, one retry), after
-the run's final status is stored. From then on nothing is written (issue #155): a pump the run
-could not stop writes nothing more once its call comes back, and clears what that call wrote,
-which may have landed after the final clear.
+the run's final status is stored. From then on no write starts (issue #155): a pump the run could
+not stop writes nothing more once its call comes back, and clears what that call wrote, which may
+have landed after the final clear.
 
 Which agents are live, and when the api reads. An agent definition can turn its live text off
 (`AgentDefinition.live_text`, for agents reading private documents): the runner then asks for
@@ -398,8 +398,8 @@ class LiveText:
         for at every block. The wait for the lock is not counted there: a call queued behind
         a slow one is not slow itself.
 
-        Once the live text is closed (`aclose`) nothing is written. An attempt that was under
-        way then, which comes back later (a pump the run could not stop), is followed under the
+        Once the live text is closed (`aclose`) no write starts. An attempt that was under way
+        then, which comes back later (a pump the run could not stop), is followed under the
         same lock by one that clears what its calls wrote: they may have landed after the
         final clear."""
         began = self._clock()
@@ -541,7 +541,7 @@ class LiveText:
         await self._sync()
 
     async def aclose(self) -> None:
-        """The run has ended: nothing may stay live, and nothing is written any more (a pump
+        """The run has ended: nothing may stay live, and no write starts any more (a pump
         still running ends, and clears behind a call that comes back late, `_sync`). The back
         off does not apply (this is the last chance to clear the buffer, and the run's end is
         already stored), and a clear that fails is tried once more. What still fails expires by

@@ -1,5 +1,5 @@
 """The live text at the end of a run, and what counts as slow (issue #155, point 4), on the
-worker's side. Once the live text is closed nothing is written: a pump the run could not stop
+worker's side. Once the live text is closed no write starts: a pump the run could not stop
 within `pump_stop_s` writes nothing more when its call comes back, and what that call wrote,
 which lands after the final clear, is cleared at once. And an attempt is slow on its own calls,
 not on its wait for the lock. Memory stores, the test's clock for the slow mark, and a real

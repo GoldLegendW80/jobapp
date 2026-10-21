@@ -1540,6 +1540,7 @@ async def _execute(
             pump.cancel()
             stopped, _ = await asyncio.wait({pump}, timeout=context.pump_stop_s)
             if not stopped:
+                # Left running: once closed below, it starts no write and clears behind its call.
                 logger.warning("live text pump did not stop", extra=log)
             elif not pump.cancelled():
                 pump.exception()  # looked at, so that asyncio does not report it at exit
