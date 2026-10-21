@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import chat, operator, runner
@@ -378,3 +379,24 @@ def test_the_bound_is_the_transactions_own(stage: Stage, factory: sessionmaker[S
         assert db.scalar(sa.text("SHOW lock_timeout")) == "250ms"
         db.rollback()
         assert db.scalar(sa.text("SHOW lock_timeout")) == "0"
+
+
+def test_only_a_refused_lock_becomes_thread_locked(
+    stage: Stage, factory: sessionmaker[Session]
+) -> None:
+    """`chat.bounded_lock_waits`, the bound of a send and a delete (5 seconds): a lock wait
+    that outlasts it raises ThreadLockedError with the transaction rolled back, so the session
+    goes on at once; any other database error inside the block goes through as it is."""
+    _, user, thread = stage
+    assert chat.LOCK_WAIT_S == 5.0
+    with factory() as db, pytest.raises(DBAPIError), chat.bounded_lock_waits(db, 0.25):
+        db.execute(sa.text("SELECT 1 / 0"))
+    with factory() as holder, factory() as db:
+        held = holder.scalar(
+            sa.select(AgentThread.id).where(AgentThread.id == thread).with_for_update()
+        )
+        assert held == thread
+        with pytest.raises(chat.ThreadLockedError), chat.bounded_lock_waits(db, 0.05):
+            chat.get_thread(db, user, thread, lock=True)
+        assert db.scalar(sa.text("SHOW lock_timeout")) == "0"
+        holder.rollback()

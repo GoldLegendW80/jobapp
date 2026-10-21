@@ -31,11 +31,11 @@ cancel endpoint, claim, the reapers) take no thread lock and fit any order. Noth
 a job or a user today; a path that did would cascade to runs and threads in trigger order, so it
 would have to lock the threads itself first.
 
-Bounded waits (issue #161): no path waits for the thread without an end. A send and a delete
-wait LOCK_WAIT_S at most for each lock of their transaction (`bounded_lock_waits`), then answer
-409 with nothing written. The worker ending a chat run waits its own bound for the thread; when
-that passes, it stores no answer and fails the run at once, writing the run's row alone, which
-fits the order above (runner.py, `_record_end`).
+Bounded waits (issue #161): a send and a delete wait LOCK_WAIT_S at most for each lock of their
+transaction (`bounded_lock_waits`), then answer 409 with nothing written. The worker ending a
+chat run waits its own bound for the thread; when that passes, it stores no answer and fails the
+run at once, in a transaction that locks the run's row alone and so fits the order above
+(runner.py, `_record_end`).
 
 Quoting (issue #27): in the prompt, every message sits inside <message> tags, with "&" and "<"
 written as "&amp;" and "&lt;" (`quoted`), so no message can close its own block, fake another

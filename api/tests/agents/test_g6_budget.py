@@ -1041,6 +1041,7 @@ KINDS = {
     "INTERNAL": "box",
     "UNKNOWN_AGENT": "box",
     "THREAD_GONE": "own",
+    "ANSWER_NOT_STORED": "own",
     "BINDING_GONE": "own",
     "TIME_LIMIT": "own",
     "TURN_LIMIT": "own",
