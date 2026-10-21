@@ -12,9 +12,14 @@ before any decision. One job at a time (the queue's concurrency is 1, the browse
    or `linkedin_paused`, before the lease too.
 2. The documents through `documents.current` (D14): no CV and none coming is `blocked` with
    `no_documents`; a CV or a letter still being written keeps the application `queued` with
-   `needs` = `documents:<reason>`, and the tick asks again. Nothing is refused on content: the
-   versions sent, their fit and their corrections are stored on the application
-   (`document_versions`) for the run report.
+   `needs` = `documents:<reason>`, and the tick asks again. An approved version whose render is
+   queued or running is waited for the same way (`documents:rendering`) instead of the older
+   rendered one (test_which_version_the_run_takes). A wait on a render ends with it: its PDF
+   stored, or the render failed (back to idle with its code), and `documents.current` answers
+   the latest rendered version; a render still on its way RENDER_WAIT_S after the wait began
+   ends the application `failed` with `documents_rendering`, before any lease. Nothing is
+   refused on content: the versions sent, their fit and their corrections are stored on the
+   application (`document_versions`) for the run report.
 3. The lease (purpose `apply_fill`, the adapter's hosts and the form's host only). Behind another
    person's lease the application stays `queued` with `needs` = `browser_queue` and an event with
    its place (written when the place changes); the tick asks again within the ticket's 60 s. A
@@ -255,6 +260,36 @@ def _bank(db: Session, user_id: uuid.UUID) -> AnswerBank:
     return AnswerBank(user_id, {key: value for key, value in rows if isinstance(value, str)})
 
 
+# render_job.JOB_TIMEOUT_S is 19 minutes: a render still on its way after an hour never ends.
+RENDER_WAIT_S = 3600
+RENDERING = f"documents:{documents.RENDERING}"
+RENDERING_CODE = "documents_rendering"
+
+
+def _render_wait_began(db: Session, application: Application, kind: str, now: datetime) -> datetime:
+    """When the application began to wait on the render of its `kind` document: the time of
+    that wait's `waiting` event, else `now` (this ask begins the wait and writes the event). A
+    wait the application left (`needs` took another value) and took again begins anew, though
+    its last `waiting` event reads the same."""
+    wanted = {"needs": RENDERING, "document": kind}
+    last = db.execute(
+        sa.select(ApplicationEvent.at, ApplicationEvent.data)
+        .where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "waiting",
+        )
+        .order_by(ApplicationEvent.id.desc())
+        .limit(1)
+    ).first()
+    if application.needs == RENDERING and last is not None and last.data == wanted:
+        return last.at
+    _event(db, application, "waiting", now, **wanted)
+    # `_wait` reads the last event next, and the sessions do not autoflush.
+    db.flush()
+    return now
+
+
 def _wait(db: Session, application: Application, needs: str, now: datetime, **data: Any) -> None:
     """Stays `queued`; the event only when what it waits for changed."""
     if application.needs != needs or data:
@@ -311,8 +346,18 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         return "blocked"
     for kind, slot in (("cv", current.cv), ("letter", current.letter)):
         if slot.version is None and slot.coming is not None:
-            _wait(db, application, f"documents:{slot.coming}", now, document=kind)
-            return "waiting_documents"
+            needs = f"documents:{slot.coming}"
+        elif slot.awaits_render:
+            needs = RENDERING
+        else:
+            continue
+        if needs == RENDERING:
+            began = _render_wait_began(db, application, kind, now)
+            if (now - began).total_seconds() >= RENDER_WAIT_S:
+                _end(db, application, State.failed, RENDERING_CODE, now)
+                return "failed"
+        _wait(db, application, needs, now, document=kind)
+        return "waiting_documents"
     versions: dict[str, Any] = {}
     pdfs: dict[str, bytes] = {}
     letter_text = ""
