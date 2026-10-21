@@ -1,11 +1,14 @@
 """/api/agents/threads through the app (real Postgres, the queue recorded instead of Redis):
 default deny and CSRF on every route, one thread per job, validation, the run each message
 starts, 409 while an answer is pending (also for two sends at once), isolation between users,
-deletion (cascading to the messages, cancelling a pending answer), and chat agents refused by
+deletion (cascading to the messages, cancelling a pending answer), the bound of a send's and a
+delete's wait for the thread, reads of one snapshot, and chat agents refused by
 POST /api/agents/runs."""
 
+import contextlib
 import threading
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -13,8 +16,15 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
-from app.agents import chat, runs
-from app.agents.models import AgentMessage, AgentRun, AgentThread, MessageRole, RunStatus
+from app.agents import chat, operator, runs, runs_router
+from app.agents.models import (
+    AgentEvent,
+    AgentMessage,
+    AgentRun,
+    AgentThread,
+    MessageRole,
+    RunStatus,
+)
 from tests.agents.run_helpers import add_job, now
 from tests.agents.test_runs_api import RecordingQueue, recorded, save_key, user_id
 from tests.identity.api_helpers import Api, assert_pooled_connection_is_at_default, backend_pid
@@ -369,6 +379,95 @@ def test_delete_while_running_asks_the_worker_to_stop(
         assert row.cancel_requested_at is not None
 
 
+@contextlib.contextmanager
+def held(factory: sessionmaker[Session], thread: str) -> Iterator[None]:
+    """The thread's row locked by another session (a stuck request) until the block ends."""
+    with factory() as holder:
+        locked = holder.scalar(
+            sa.select(AgentThread.id).where(AgentThread.id == uuid.UUID(thread)).with_for_update()
+        )
+        assert locked == uuid.UUID(thread)
+        yield
+        holder.rollback()
+
+
+def stored(factory: sessionmaker[Session]) -> dict[str, Any]:
+    """What the chat tables hold, enough to tell that a refused request wrote nothing."""
+    with factory() as db:
+        return {
+            "threads": db.execute(sa.select(AgentThread.id, AgentThread.updated_at)).all(),
+            "messages": db.execute(sa.select(AgentMessage.id, AgentMessage.run_id)).all(),
+            "runs": db.execute(
+                sa.select(AgentRun.id, AgentRun.status, AgentRun.cancel_requested_at)
+            ).all(),
+            "events": db.scalar(sa.select(sa.func.count()).select_from(AgentEvent)),
+        }
+
+
+def test_a_send_waits_for_a_held_thread_at_most_its_bound(
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    recorded: RecordingQueue,
+    factory: sessionmaker[Session],
+    one_connection: sa.Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #161, point 2. Another session holds the thread's row: the send waits
+    chat.LOCK_WAIT_S for it, not the statement timeout, then answers 409 with the chat's own
+    sentence and writes nothing. The bound is the transaction's own: the pooled connection the
+    send used has none afterwards, and the same send goes through once the row is free."""
+    alice, _, thread = ready
+    monkeypatch.setattr(chat, "LOCK_WAIT_S", 0.2)
+    before = stored(factory)
+    probes: list[tuple[int, str | None]] = []
+    real = chat.get_thread
+
+    def get_thread(db: Session, *args: Any, **kwargs: Any) -> AgentThread | None:
+        probes.append((backend_pid(db), db.scalar(sa.text("SHOW lock_timeout"))))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(chat, "get_thread", get_thread)
+    with held(factory, thread):
+        refused = send(api, alice, thread)
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": operator.THREAD_LOCKED, "active_run_id": None}
+    assert refused.headers["cache-control"] == "no-store"
+    assert stored(factory) == before
+    assert recorded.jobs == []
+    assert [timeout for _, timeout in probes] == ["200ms"]
+    with one_connection.connect() as conn:
+        assert conn.scalar(sa.text("SELECT pg_backend_pid()")) == probes[0][0]
+        assert conn.scalar(sa.text("SHOW lock_timeout")) == "0"
+    assert send(api, alice, thread).status_code == 202
+    assert len(recorded.jobs) == 1
+
+
+def test_a_delete_waits_for_a_held_thread_at_most_its_bound(
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #161, point 2, for the delete: while another session holds the thread's row, the
+    delete answers 409 with the chat's sentence after chat.LOCK_WAIT_S, and neither deletes the
+    thread nor cancels its pending answer; once the row is free, it goes through."""
+    alice, _, thread = ready
+    run = send(api, alice, thread).json()["run"]["id"]
+    monkeypatch.setattr(chat, "LOCK_WAIT_S", 0.2)
+    before = stored(factory)
+    with held(factory, thread):
+        refused = api.request("DELETE", f"{THREADS}/{thread}", token=alice)
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": operator.THREAD_LOCKED}
+    assert refused.headers["cache-control"] == "no-store"
+    assert stored(factory) == before
+    assert api.request("DELETE", f"{THREADS}/{thread}", token=alice).status_code == 204
+    with factory() as db:
+        row = db.get(AgentRun, uuid.UUID(run))
+        assert row is not None
+        assert row.status is RunStatus.cancelled
+
+
 def test_thread_detail_marks_unanswered_messages(
     api: Api, ready: tuple[str, uuid.UUID, str], factory: sessionmaker[Session]
 ) -> None:
@@ -508,3 +607,53 @@ def test_run_detail_is_read_at_one_snapshot(
     assert api.get(f"/api/agents/runs/{run}", token=alice).status_code == 200
     assert levels == ["repeatable read"]
     assert_pooled_connection_is_at_default(one_connection, pids)
+
+
+@pytest.mark.parametrize(
+    "one_snapshot", [True, False], ids=["one snapshot", "read committed, the control"]
+)
+def test_an_end_committed_during_the_run_detail_is_in_none_of_it(
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    one_snapshot: bool,
+) -> None:
+    """Issue #161, point 3. The run's end commits after the run is read and before its events
+    are, the way the worker writes it: the final status and the last event in one transaction.
+    The detail shows both or neither. The control runs the same read without its snapshot and
+    shows the torn answer the test is there to catch: a queued run whose log says done."""
+    alice, _, thread = ready
+    run = send(api, alice, thread).json()["run"]["id"]
+    run_id = uuid.UUID(run)
+    if not one_snapshot:
+        monkeypatch.setattr(runs_router, "read_snapshot", lambda db: None)
+    real = runs.events_after
+    ended: list[bool] = []
+
+    def events_after_the_end(db: Session, *args: Any, **kwargs: Any) -> Any:
+        if not ended:
+            with factory() as other, other.begin():
+                other.execute(
+                    sa.update(AgentRun)
+                    .where(AgentRun.id == run_id)
+                    .values(status=RunStatus.done, finished_at=now())
+                )
+                seq = runs.next_seq(other, run_id)
+                runs.append_event(other, run_id, seq, "status", {"status": "done"}, now())
+            ended.append(True)
+        return real(db, *args, **kwargs)
+
+    def shown(detail: dict[str, Any]) -> tuple[str, list[str]]:
+        logged = [e["data"]["status"] for e in detail["events"] if e["kind"] == "status"]
+        return detail["status"], logged
+
+    monkeypatch.setattr(runs, "events_after", events_after_the_end)
+    response = api.get(f"/api/agents/runs/{run}", token=alice)
+    monkeypatch.setattr(runs, "events_after", real)
+    assert response.status_code == 200, response.text
+    assert ended == [True]
+    torn = ("queued", ["queued", "done"])
+    assert shown(response.json()) == (("queued", ["queued"]) if one_snapshot else torn)
+    after = api.get(f"/api/agents/runs/{run}", token=alice).json()
+    assert shown(after) == ("done", ["queued", "done"])
