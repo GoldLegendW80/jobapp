@@ -24,7 +24,7 @@
 #             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
 #             (one that neither runs nor is left out with a reason fails the step shell-tests);
 #             the journey group apps and one group per web/e2e/<group>-all.config.ts other than
-#             identity (today ingestion, mail, apply and browser; mail on a stack that also runs
+#             identity (today ingestion, mail, apply, browser and documents; mail on a stack that also runs
 #             the fake Google of tests/gmail-stub.compose.yml, never a real account; apply on a
 #             stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
 #             never a real job site; browser on a stack that runs its browser and the static
@@ -937,7 +937,7 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
   stack_up "$part" "$project" "${files[@]}" &&
     docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
     journey_play "$run" "$specs" || rc=$?
-  docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$run.log" 2>&1 || true
+  docker compose -p "$project" "${files[@]}" logs --no-color >"$LOGS/stack-$run.log" 2>&1 || true
   # The slot is free again only when its stack is gone: one that could not be taken down keeps
   # its networks, so it keeps its slot until the trap removes everything under the prefix.
   if docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0; then

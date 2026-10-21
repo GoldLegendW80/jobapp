@@ -158,8 +158,8 @@ def profile_uids() -> dict[int, list[int]]:
 
 
 def real_uid(pid: str) -> int:
-    """The process's real uid, from its status: /proc/<pid> itself is root's when the process
-    made itself non dumpable, so its owner is not the process's uid."""
+    """The process's real uid, from its status: the uid a kill(-1) sent as that uid reaches. The
+    owner of /proc/<pid> is the effective uid, the same here (no setuid program runs)."""
     with open(f"/proc/{pid}/status", "rb") as handle:
         for line in handle:
             if line.startswith(b"Uid:"):

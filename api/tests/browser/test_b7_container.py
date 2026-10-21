@@ -327,7 +327,7 @@ asyncio.run(main())
 
 @pytest.mark.parametrize(
     ("end_with", "failing", "left_by_the_end"),
-    [("stop", "quit", False), ("kill", "killpg", False), ("stop", "quit,kill", True)],
+    [("stop", "quit", False), ("kill", "killpg", False), ("stop", "quit,killuid", True)],
 )
 def test_an_end_whose_helper_raises_leaves_no_browser_for_the_next_lease(
     stack: Stack, end_with: str, failing: str, left_by_the_end: bool
@@ -518,22 +518,23 @@ print(json.dumps(sorted(os.listdir(folder)) if os.path.isdir(folder) else None))
 """
 
 
-def test_save_page_as_opens_no_dialog_and_saves_outside_the_profile(stack: Stack) -> None:
-    """Ctrl+S in a person's session: with no file dialog (AllowFileSelectionDialogs) the page goes
-    to the lease's download folder, which the end removes, never to a folder the person picks,
-    the profile among them."""
-    lease = session(stack, "signin", F, UID_F, SITE)["lease_id"]
+def test_save_page_as_is_off_in_a_persons_session(stack: Stack) -> None:
+    """Ctrl+S in a person's session: with no file dialog (AllowFileSelectionDialogs) Chromium
+    turns "Save page as" off, so no dialog opens to write into a folder the person picks, the
+    profile among them, and nothing is saved. The control: the next keys reach the window."""
+    profile, uid = str(uuid.uuid4()), 20026
+    lease = session(stack, "signin", profile, uid, SITE)["lease_id"]
     try:
-        wait_title(stack, "Example Portal")
-        assert json.loads(stack.python(SAVED, lease, user=str(UID_F))) == []
+        wait_title(stack, "Example Portal: signed out")
+        stack.execute("browser", "python", "-c", TYPE, "focus", user="1000")
+        for _ in range(10):
+            window_titles(stack)
         stack.execute("browser", "python", "-c", TYPE, "save", user="1000")
-        for _ in range(300):
-            saved = json.loads(stack.python(SAVED, lease, user=str(UID_F)))
-            if saved and not [n for n in saved if n.endswith(".crdownload")]:
-                break
-        else:
-            raise AssertionError(f"nothing saved: {window_titles(stack)[-1500:]}")
-        assert [n for n in saved if n.endswith((".html", ".mhtml"))], saved
+        for _ in range(30):
+            assert "Save File" not in window_titles(stack)
+        assert json.loads(stack.python(SAVED, lease, user=str(uid))) == []
+        type_address(stack, "chrome://policy")
+        wait_title(stack, '"Policies - Chromium"')
         assert "Save File" not in window_titles(stack)
     finally:
         if stack.current()["lease"] is not None:

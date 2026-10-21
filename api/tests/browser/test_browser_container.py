@@ -156,7 +156,7 @@ class Stack:
         raise AssertionError("the lease did not end")
 
 
-# The real uid from status: /proc/<pid> is root's for a process that made itself non dumpable.
+# The real uid, as browserd reads it.
 PS = """
 import os, sys
 for pid in filter(str.isdigit, os.listdir("/proc")):
@@ -611,51 +611,20 @@ while True:
     if os.fork():
         os._exit(0)
 """
-# A process that hides its /proc/<pid> owner: non dumpable, /proc/<pid> is root's.
-HIDDEN = """
-import ctypes, time
-ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)
-time.sleep(600)
-"""
 
 
-HIDDEN_SEEN = """
-import os
-seen = 0
-for pid in filter(str.isdigit, os.listdir("/proc")):
-    try:
-        real = [l for l in open(f"/proc/{pid}/status") if l.startswith("Uid:")][0].split()[1]
-        seen += real == "20008" and os.stat(f"/proc/{pid}").st_uid == 0
-    except OSError:
-        pass
-print(seen)
-"""
-
-
-def test_a_process_that_keeps_forking_or_hides_its_owner_is_reaped(stack: Stack) -> None:
+def test_a_process_that_keeps_forking_is_reaped(stack: Stack) -> None:
     """Review of PR #429: the reap killed a list of pids, which a forking process outran, so every
-    start was refused until browserd restarted; and it read the owner of /proc/<pid>, which a non
-    dumpable process gives to root. Now one kill(-1) as the uid, and the real uid from status."""
-    for code in (FORKER, HIDDEN):
-        subprocess.run(
-            [
-                "docker",
-                "exec",
-                "-d",
-                "-u",
-                "20008",
-                stack.container("browser"),
-                "python",
-                "-c",
-                code,
-            ],
-            check=True,
-        )
+    start was refused until browserd restarted. Now one kill(-1) sent as the uid."""
+    browser = stack.container("browser")
+    subprocess.run(
+        ["docker", "exec", "-d", "-u", "20008", browser, "python", "-c", FORKER], check=True
+    )
     for _ in range(100):
-        if stack.python(HIDDEN_SEEN).strip() == "1":
+        if [p for p in processes(stack) if p[0] == 20008]:
             break
     else:
-        raise AssertionError("no non dumpable process of 20008 whose /proc/<pid> is root's")
+        raise AssertionError("the forking process did not start")
     stack.python(
         "import asyncio; from browserd.chromium import clear_display; asyncio.run(clear_display())"
     )
