@@ -181,7 +181,10 @@ chmod +x "$TOP/bin/gh" "$TOP/bin/ssh"
 # record, and logs "<which gate> <merges>" in $STATE/gate.log. Line k of $STATE/gate_plan, when
 # there is one, decides run k instead: "pass", "auto" (gate_fail decides) or the steps that fail.
 # The log of a failed step is $STATE/fail_tail-<step>, else $STATE/fail_tail. WHO is "main" here;
-# a pull request that changes the gate sets it to "pr".
+# a pull request that changes the gate sets it to "pr". Each --merge is <n>@<sha> as ship.sh pins it
+# (issue #468): that commit is merged, after the check that it is in the history of the head, and
+# "<run> <n> <sha>" goes to $STATE/gate_merged.log; the pull request named in $STATE/move_in_gate
+# gets a new head (approved again) at the start of the next run, before its fetch.
 cat >"$TOP/fake-gate" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -189,9 +192,13 @@ WHO=main
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)")"
 merges=()
+pins=()
 while (($#)); do
   [[ "$1" == --merge ]] || exit 64
-  merges+=("$2")
+  # <n>@<full sha>, as ops/ship.sh pins each approved head (issue #468); a bare number is refused.
+  [[ "$2" =~ ^([0-9]+)@([0-9a-f]{40})$ ]] || exit 64
+  merges+=("${BASH_REMATCH[1]}")
+  pins+=("${BASH_REMATCH[2]}")
   shift 2
 done
 printf '%s %s\n' "$WHO" "${merges[*]-}" >>"$STATE/gate.log"
@@ -206,9 +213,21 @@ base="$(git -C "$MAIN" rev-parse FETCH_HEAD)"
 git -C "$MAIN" worktree add -q --detach "$work/t" "$base"
 : >"$work/merged"
 failed=""
-for n in ${merges[@]+"${merges[@]}"}; do
+# A hook of the tests: a push to the pull request named in $STATE/move_in_gate, during this run.
+if [[ -s "$STATE/move_in_gate" ]]; then
+  "$STATE/move-head" "$(cat "$STATE/move_in_gate")" >/dev/null 2>&1
+  rm -f "$STATE/move_in_gate"
+fi
+for i in ${merges[@]+"${!merges[@]}"}; do
+  n="${merges[i]}"
   git -C "$MAIN" fetch -q origin "pull/$n/head"
-  sha="$(git -C "$MAIN" rev-parse FETCH_HEAD)"
+  # As ops/local-check.sh: the pinned commit, which must be in the history of the head.
+  sha="${pins[i]}"
+  git -C "$MAIN" merge-base --is-ancestor "$sha" FETCH_HEAD || {
+    echo "ops/local-check.sh: pull request $n: $sha is not in the history of its head"
+    exit 4
+  }
+  printf '%s %s %s\n' "$run" "$n" "$sha" >>"$STATE/gate_merged.log"
   if grep -qx "$n" "$STATE/conflict" 2>/dev/null; then
     echo "MERGE CONFLICT: pull request $n ($sha) does not merge into origin/main after the refs before it. Files:"
     echo "  file.txt"
@@ -416,7 +435,7 @@ out_has "skip   #24: GitHub says UNKNOWN"
 out_lacks "#25"
 out_has "defer  #22: it changes ops/local-check.sh as #17 does"
 out_has "plan   gate: the ops/local-check.sh of #17 at $(h 17) (it changes the gate)"
-out_has "plan   ops/local-check.sh --merge 17 --merge 11 --merge 18 --merge 20 --merge 21;"
+out_has "plan   ops/local-check.sh --merge 17@$(cat "$STATE/pr/17/head") --merge 11@$(cat "$STATE/pr/11/head") --merge 18@$(cat "$STATE/pr/18/head") --merge 20@$(cat "$STATE/pr/20/head") --merge 21@$(cat "$STATE/pr/21/head");"
 out_has "plan   move to Done on the board right after the merges: #1017, #1011, #1018, #1020, #1021"
 [[ "$before" == "$(snapshot)" ]] || fail "--plan changed the repositories or the checkout"
 for f in gate.log deploy.log ssh.log; do [[ ! -e "$STATE/$f" ]] || fail "--plan ran $f"; done
@@ -527,6 +546,10 @@ grep -qF "E   assert 1 == 2" "$STATE/comment-43.txt" || fail "comment lacks the 
 grep -qF "test_answer_table_refuses_another_country FAILED" "$STATE/comment-43.txt" || fail "comment withheld a test name"
 [[ "$(grep -cF '[line withheld: it may hold a secret]' "$STATE/comment-43.txt")" -ge 3 ]] || fail "the three secret lines should be withheld: $(cat "$STATE/comment-43.txt")"
 ! grep -qF "$CANARY" "$STATE/comment-43.txt" || fail "the comment holds the planted secret"
+while read -r gate_run n sha; do
+  [[ "$sha" == "$(cat "$STATE/pr/$n/head")" ]] || fail "gate run $gate_run merged $sha for #$n, not its approved head"
+done <"$STATE/gate_merged.log"
+[[ "$(wc -l <"$STATE/gate_merged.log" | tr -d ' ')" == 16 ]] || fail "the gate runs merged: $(cat "$STATE/gate_merged.log")"
 ! grep -qF "Zx81Qp0LmN4vT7rKs2Yb6Hc9Wd3Fj5Ga" "$STATE/comment-43.txt" || fail "the comment holds a token"
 out_lacks "$CANARY"
 ! grep -qF "the last 40 lines of" "$STATE/comment-43.txt" || fail "the comment holds the local log header"
@@ -655,6 +678,37 @@ out_has "nothing merged"
 log_lacks gh.log "pr merge"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after a head moved"
 ok "a head that moved after the gate (and was approved again) is refused before any merge"
+
+# Issue #468: a push after the approval is never what the gate checks, and stops the run.
+fresh
+mkpr 65
+mkpr 66
+approved66="$(cat "$STATE/pr/66/head")"
+echo 66 >"$STATE/move_in_gate"
+printf 'api-pytest\n' >"$STATE/gate_plan"
+run 1 ship --approved
+[[ "$(cat "$STATE/pr/66/head")" != "$approved66" ]] || fail "the test did not move the head of #66"
+[[ "$(cat "$STATE/gate_merged.log")" == "$(printf '1 65 %s\n1 66 %s' "$(cat "$STATE/pr/65/head")" "$approved66")" ]] ||
+  fail "the gate did not check the approved heads: $(cat "$STATE/gate_merged.log")"
+[[ "$(cat "$STATE/gate.log")" == "main 65 66" ]] || fail "gate runs after the head moved: $(cat "$STATE/gate.log")"
+out_has "SHIP: FAIL the head of #66 moved while shipping ($(cut -c1-7 <<<"$approved66") approved, $(cut -c1-7 "$STATE/pr/66/head") now): nothing merged, run ops/ship.sh again"
+log_lacks gh.log "pr merge"
+log_lacks gh.log "pr comment"
+[[ ! -e "$STATE/deploy.log" ]] || fail "deployed after a head moved during the ship"
+ok "a head pushed during the ship: the gate checked the approved head, the run stops before the next gate run, no bisect, no comment, nothing merged"
+
+fresh
+mkpr 67
+approved67="$(cat "$STATE/pr/67/head")"
+echo 67 >"$STATE/move_in_gate"
+run 1 ship --approved
+[[ "$(cat "$STATE/gate_merged.log")" == "1 67 $approved67" ]] || fail "the gate did not check the approved head: $(cat "$STATE/gate_merged.log")"
+record="$(ls "$MAIN"/.local-check/*.json)"
+[[ "$(jq -r '.merged[0].commit' "$record")" == "$approved67" ]] || fail "the record lists $(jq -r '.merged[0].commit' "$record")"
+out_has "SHIP: FAIL the head of #67 moved since the gate ($(cut -c1-7 <<<"$approved67") checked, $(cut -c1-7 "$STATE/pr/67/head") now): nothing merged"
+log_lacks gh.log "pr merge"
+[[ ! -e "$STATE/deploy.log" ]] || fail "deployed after a head moved during the gate"
+ok "a head pushed during a passing gate run: the PASS is for the approved head, the merge step refuses the new one"
 
 fresh
 mkpr 63
