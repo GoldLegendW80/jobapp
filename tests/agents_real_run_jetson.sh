@@ -260,7 +260,7 @@ memory_json() { # the summary of the samples file $1 as JSON
 }
 
 start() { # start <triage|chat>: prints one line of JSON {http, run_id, ...}; no session, no HTTP
-  jq -cn --arg owner "$OWNER" --arg message "$MESSAGE" '{owner: $owner, message: $message}' |
+  OWNER="$OWNER" MESSAGE="$MESSAGE" jq -cn '{owner: env.OWNER, message: env.MESSAGE}' |
     ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T api python -m app.agents.cli start $1 $JOB --role $OWNER_ROLE --credential-kind $OWNER_CREDENTIAL"
 }
 
