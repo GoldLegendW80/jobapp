@@ -10,24 +10,36 @@
     breaks between two words, never at a hyphen; a no break space stays inside its word. -#}
 {% macro words(text, class="word") %}{% for word in text.split(" ") if word %}{% if not loop.first %} {% endif %}<span class="{{ class }}">{{ word }}</span>{% endfor %}{% endmacro %}
 
-{#- `spans`: (one cell, two cells), the most characters a line holds in one and in two cells of
-    a grid of three; each line gets the class `span1`, `span2` or `span3`. -#}
-{% macro contact_lines(class="contact", spans=none) %}
+{% macro contact_lines(class="contact") %}
 {% if contact %}
 <ul class="{{ class }}">
 {% for line in contact %}
-{% set size = line.text | length %}
-<li{% if spans %} class="span{{ 3 if size > spans[1] else 2 if size > spans[0] else 1 }}"{% endif %}>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+<li>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
 {% endfor %}
 </ul>
 {% endif %}
 {% endmacro %}
 
-{#- The first letter of a word with its accents (combining marks after it), past any sign. -#}
-{% macro first_letter(word) %}{% set ns = namespace(out="", done=false) %}{% for ch in word if not ns.done %}{% if ns.out and "\u0300" <= ch <= "\u036f" %}{% set ns.out = ns.out ~ ch %}{% elif ns.out %}{% set ns.done = true %}{% elif ch.isalpha() %}{% set ns.out = ch %}{% endif %}{% endfor %}{{ ns.out | upper }}{% endmacro %}
+{#- The contact lines of a narrow column (`sidebar`, `split-right`), each kept whole: under a
+    heading of class `heading`, set smaller past 25 characters (a letter's larger body: 23), and
+    not printed past 31 (28), where `contact_across` prints them in a row under the headline. -#}
+{% macro contact_column(heading="label") %}
+{% set small, wide = (25, 31) if kind == "cv" else (23, 28) %}
+{% set longest = contact | map(attribute="text") | map("length") | max if contact else 0 %}
+{% if contact and longest <= wide %}
+<section class="block">
+<h2 class="{{ heading }}">{{ label("contact") }}</h2>
+{{ contact_lines("contact small" if longest > small else "contact") }}
+</section>
+{% endif %}
+{% endmacro %}
 
-{#- The initials of a name: the first letters of its first and last words that hold a letter. -#}
-{% macro initials(text) %}{% set ns = namespace(first="", last="") %}{% for part in text.split() %}{% set letter = first_letter(part) %}{% if letter and not ns.first %}{% set ns.first = letter %}{% elif letter %}{% set ns.last = letter %}{% endif %}{% endfor %}{{ ns.first }}{{ ns.last }}{% endmacro %}
+{% macro contact_across(class="contact across") %}
+{% set wide = 31 if kind == "cv" else 28 %}
+{% if contact and contact | map(attribute="text") | map("length") | max > wide %}
+{{ contact_lines(class) }}
+{% endif %}
+{% endmacro %}
 
 {% macro portrait(class="photo") %}
 {% if photo %}<img class="{{ class }}" src="{{ photo }}" alt="{{ name }}">{% endif %}

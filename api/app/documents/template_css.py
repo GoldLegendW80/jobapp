@@ -10,7 +10,8 @@ input it does not know: `url(`, an escape outside a string, a comment or a strin
 character outside the ASCII set of the rules below, functions nested deeper than
 FUNCTION_DEPTH, a sheet over SHEET_MAX characters. A sheet it stops on is refused whole. Then
 everything is held to allow lists:
-- the structure: rules and an exact `@page`, no other at-rule, no block inside a block;
+- the structure: rules and an exact `@page` (or `@page :first`, page 1's), no other at-rule,
+  no block inside a block;
 - the selectors: type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
   `:last-child`, the combinators space, `>`, `+`, `~`, a final `::before`, `::after` or
   `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
@@ -378,7 +379,9 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
         if i == n or found[i].text != "{":
             return [], [Problem(file, line, "structure", "a rule without a block")]
         if prelude and prelude[0].kind == "at":
-            if len(prelude) != 1 or prelude[0].text.lower() != "page":
+            pseudo = [(t.kind, t.text.lower()) for t in _strip(prelude[1:])]
+            first = pseudo in ([], [("delim", ":"), ("ident", "first")])
+            if prelude[0].text.lower() != "page" or not first:
                 return [], [Problem(file, line, "structure", "an at-rule other than @page")]
             selectors: tuple[Selector, ...] | None = None
         else:
@@ -616,6 +619,7 @@ VALUES = {
     ),
     "border-collapse": _kw("collapse", "separate"),
     "box-sizing": _kw("border-box", "content-box"),
+    "box-decoration-break": _kw("slice", "clone"),
     "font-weight": _weight,
     "font-style": _kw("normal", "italic"),
     "font-variant": _kw("normal", "small-caps", "all-small-caps"),

@@ -48,14 +48,13 @@ WHOLE = {"banner", "classic", "compact", "grid"}
 
 # D21's and D22's repository templates need not pass the filter of an upload (decision on #427):
 # each is pinned to exactly what it uses, its HTML set holding for cv.html.j2 and letter.html.j2.
-_LOOP = {
-    ("construct", "a for over a list field, into one name"),
-    ("construct", "the expression Call"),
-    ("unprinted", "name is not printed, or only under another test"),
-}
 _CUT = ("literal", "markup cut by a Jinja construct")
 _OUTSIDE = ("property", "a property outside the allowed list")
 _SELECTOR = ("selector", "a selector outside the allowed forms")
+# the helpers of _base/layout.html.j2, which only the repository's templates import
+_LAYOUT = {
+    ("construct", "import only _base/macros.html.j2 as base with context"),
+}
 
 
 def _box(*properties):
@@ -70,9 +69,9 @@ def _over(*properties):
 
 
 REPOSITORY = {
-    "academic": (_LOOP, {_SELECTOR}),
+    "academic": (set(), {_SELECTOR}),
     "bold": (
-        _LOOP | {("construct", "the expression Compare"), _CUT},
+        {("construct", "the expression Compare"), _CUT},
         {
             _OUTSIDE,
             ("property", "grid-template-columns: a function outside the allowed list"),
@@ -81,24 +80,32 @@ REPOSITORY = {
         | _box("border"),
     ),
     "cards": (
-        _LOOP,
-        {_OUTSIDE, ("property", "margin: a value outside the allowed list")}
+        set(),
+        {("property", "margin: a value outside the allowed list")}
         | _box("border", "border-radius"),
     ),
     "columns-header": (
-        _LOOP,
+        _LAYOUT
+        | {
+            ("construct", "a call of anything but a macro of base"),
+            ("unprinted", "contact[].text is not printed, or only under another test"),
+        },
         {("property", "grid-template-columns: a function outside the allowed list")},
     ),
     "elegant": (
-        _LOOP,
+        set(),
         {_OUTSIDE, ("property", "position: static or relative")}
         | _box("border-bottom", "flex")
         | _over("bottom", "grid-row", "left", "right", "top"),
     ),
-    "nordic": (_LOOP, _box("border-top", "width")),
-    "plain": (_LOOP, {_SELECTOR}),
+    "nordic": (set(), _box("border-top", "width")),
+    # a negative margin and `overflow: hidden` clip the rule that would open a row of contact lines
+    "plain": (
+        set(),
+        {_SELECTOR, _OUTSIDE, ("property", "margin: a value outside the allowed list")},
+    ),
     "portrait": (
-        _LOOP
+        _LAYOUT
         | {("construct", "the construct Assign"), _CUT, ("name", "a name that is not a field")},
         {_OUTSIDE, _SELECTOR, ("property", "vertical-align: a value outside the allowed list")}
         | _box("border", "border-top", "height", "width")
@@ -603,6 +610,14 @@ SHEET_REFUSED = [
     (".summary { font-family: serif; }", "font"),
     ('.summary { font-family: sans-serif, "Nunito Sans"; }', "font"),
     ("@pagex { size: A4; }", "structure"),
+    # page 1's rule: `:first` written as CSS reads it, and nothing else
+    ("@page :left { margin: 0; }", "structure"),
+    ("@page : first { margin: 0; }", "structure"),
+    ("@page :first:left { margin: 0; }", "structure"),
+    ("@page .first { margin: 0; }", "structure"),
+    ("@page :first { color: #000000; }", "page"),
+    ("@page :first { size: letter; }", "page"),
+    (".x { box-decoration-break: auto; }", "property"),
     # selectors outside the allow list
     ("[title] { color: #000000; }", "structure"),
     (".x:not(.y) { color: #000000; }", "selector"),
@@ -642,6 +657,9 @@ SHEET_ACCEPTED = [
     ".a > .b + .c ~ .d { color: #1d232b; }",
     ".x { border: 1px solid #1d232b; } .y { border-bottom: 0; }",
     "@PAGE { size: A4; }",
+    "@page :first { margin-top: 0; } .x { padding: var(--margin); }",
+    "@page:FIRST { size: A4; margin: 0 0 12mm; } .x { padding: var(--margin); }",
+    ".x { box-decoration-break: clone; } .y { box-decoration-break: slice; }",
     ".x { grid-template-columns: minmax(0, 1fr) 58mm; grid-column: 1 / -1; }",
     ".x:last-child { color: #1d232b; }",
     ".summary { background: #1f4e79; color: #ffffff; }",

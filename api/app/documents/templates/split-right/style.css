@@ -58,8 +58,9 @@ li, p { overflow-wrap: anywhere; }
   padding: 5mm 4.5mm;
   font-size: 0.94em;
 }
-.letter .side { align-self: start; }
-.cols.solo { grid-template-columns: minmax(0, 1fr); }
+/* the letter's panel is its contact block: empty, when the lines go under the headline, it shows nothing */
+.letter .side { align-self: start; padding: 0; }
+.letter .side .block { padding: 5mm 4.5mm; }
 
 .block { margin-bottom: var(--section-gap); }
 .block:last-child { margin-bottom: 0; }

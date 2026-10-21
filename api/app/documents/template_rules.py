@@ -155,7 +155,10 @@ REQUIRED = {
 # name, a field of that kind or that path); then the fields a call prints besides its arguments.
 MACROS: dict[str, tuple[tuple[str, str], ...]] = {
     "label": (("key", "key"),),
+    "words": (("text", "text"), ("class", "class")),
     "contact_lines": (("class", "class"),),
+    "contact_column": (("heading", "class"),),
+    "contact_across": (("class", "class"),),
     "portrait": (("class", "class"),),
     "header": (("headline", "text"),),
     "bullets": (("items", "list"), ("class", "class")),
@@ -169,6 +172,8 @@ MACROS: dict[str, tuple[tuple[str, str], ...]] = {
 MACRO_PRINTS = {
     "header": ("name", "contact[].text", "photo"),
     "contact_lines": ("contact[].text",),
+    "contact_column": ("contact[].text",),
+    "contact_across": ("contact[].text",),
     "portrait": ("photo",),
     "letter_date": ("date",),
 }

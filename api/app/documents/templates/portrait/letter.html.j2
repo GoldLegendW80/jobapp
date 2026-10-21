@@ -3,8 +3,9 @@
     subject, the salutation, the paragraphs, the closing and the name. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{% import "_base/layout.html.j2" as layout with context %}
 {% block body %}
-{% set initials = base.initials(name) %}
+{% set initials = layout.initials(name) %}
 <header class="head{% if not photo and not initials %} bare{% endif %}">
 <div class="headtext">
 <h1 class="name">{{ base.words(name) }}</h1>
