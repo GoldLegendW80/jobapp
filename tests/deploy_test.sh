@@ -50,7 +50,20 @@ run() {
   [[ "$got" == "$want" ]] || fail "$* exited $got, expected $want: $(head -c 400 "$WORK/out")"
 }
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
-out_lacks() { ! grep -q -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -- "$1" "$WORK/out" | head -c 400)"; }
+out_lacks() { ! grep -Fq -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -F -- "$1" "$WORK/out" | head -c 400)"; }
+
+step "literal privacy assertions"
+# This filename used to match the planted IP as a regex through its 1021T203 fragment.
+printf '%s\n' 'alembic upgrade head failed (exit 1; the whole output is on this machine in migrate-20261021T203102Z-3194.log)' >"$WORK/out"
+out_lacks "10.1.2.3"
+ok "a redacted failure with the reported migration timestamp holds no planted address"
+for leak in rowvalue parameters DETAIL 10.1.2.3 "already exists" Traceback CANARYPASSWORD postgresql e2e-leak; do
+  printf 'planted value: %s\n' "$leak" >"$WORK/out"
+  if (out_lacks "$leak") >"$WORK/privacy-assertion" 2>&1; then
+    fail "the privacy assertion accepted the planted value '$leak'"
+  fi
+done
+ok "literal planted addresses, row values, SQL details and credentials are refused"
 
 step "shellcheck"
 SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
