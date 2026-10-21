@@ -33,10 +33,8 @@ none is ever skipped, and the run is green when every job is.
 
 from __future__ import annotations
 
-import ast
 import fnmatch
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -370,21 +368,19 @@ def verify_problems(
 # <base> (the merged tree against the main it was merged onto), each file judged by the first of
 # these that answers:
 #
-# 1. RULES above: a file whose units leave out e2e (documentation, task notes, Claude Code's
+# 1. Every api/app/ path runs every group. Python dependencies, reflective loaders and
+#    registrations are not inferred.
+# 2. RULES above: a file whose units leave out e2e (documentation, task notes, Claude Code's
 #    configuration) touches no group. The same rules as the pull request plan of CI, not a copy.
-# 2. JOURNEY_RULES below: the gate itself and this mapping run every group, the fakes of a group
+# 3. JOURNEY_RULES below: the gate itself and this mapping run every group, the fakes of a group
 #    run that group, the scripts of operations and the shell tests run none.
-# 3. A file of an api module (api/app/<module>/) or of a web feature (web/src/features/<feature>/)
-#    touches the groups of its module and of every module that imports it, directly or through
-#    other files: the imports are read from the tree (python's ast, the import lines of
-#    TypeScript), file by file, so a module that shares one helper with another passes on only
-#    that file. The files that only wire everything together (api/app/main.py, worker.py,
-#    models.py; web/src/routes.tsx, App.tsx, main.tsx) carry nothing on, and any other file
-#    outside a module (api/app/db.py, web/src/lib/) is shared: every group runs. AREA_GROUPS
-#    names the groups of each module.
-# 4. A spec or a group config of web/e2e touches its own group; any other file there (stack.ts,
+# 4. A web feature (web/src/features/<feature>/) touches its
+#    groups and those of every feature that imports the file, directly or transitively.
+#    Web wiring (routes.tsx, App.tsx, main.tsx) carries nothing on; files outside a feature
+#    (web/src/lib/) are shared. AREA_GROUPS names the groups of web features.
+# 5. A spec or a group config of web/e2e touches its own group; any other file there (stack.ts,
 #    a helper, playwright.config.ts) every group.
-# 5. Anything else runs every group: a path nobody decided is checked in full.
+# 6. Anything else runs every group: a path nobody decided is checked in full.
 #
 # Input on stdin: one line per group, `<group>\t<its Playwright arguments>` as journey_specs of
 # ops/local-check.sh prints them (a list of spec files, or `-c e2e/<group>-all.config.ts`). Output:
@@ -470,8 +466,8 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     (".rsyncignore", NO_GROUP, "the file list of a deploy"),
 )
 
-# The journey groups of each module: an api module (api/app/<module>) or a web feature
-# (web/src/features/<feature>), by folder name. EVERY for the modules every group goes through:
+# The journey groups of web features (web/src/features/<feature>), by folder name.
+# EVERY for the features every group goes through:
 # each journey signs in (identity, auth), seeds postings and a profile (jobs, profile), sets a
 # model credential (agents) and moves through the shell, the account and the onboarding pages.
 # A module missing here runs every group.
@@ -495,10 +491,6 @@ AREA_GROUPS: dict[str, frozenset[str] | str] = {
     "opportunities": frozenset({"opportunities"}),
 }
 
-API_WIRING = frozenset({"app.main", "app.worker", "app.models"})
-# Kept in step with worker.REGISTRATION_MODULES by a drift test. These files install
-# callbacks/jobs in other modules, whose callers need not import the provider.
-API_REGISTRATIONS = frozenset({"agents", "engine", "freeze", "jobs", "writers"})
 WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
 SHARED = "<shared>"
 TS_TOKEN = re.compile(
@@ -510,126 +502,6 @@ TS_TOKEN = re.compile(
 
 class MappingError(ValueError):
     """Uncertain dependencies require every journey group."""
-
-
-def python_loader_calls(tree: ast.AST) -> dict[ast.Call, str]:
-    """Allow direct calls only. Escaped loader/module references can hide dependencies."""
-    module_loaders = {"importlib": "import_module", "builtins": "__import__"}
-    modules = {}
-    loaders = {"__import__": "__import__"}
-    reflective = {"__builtins__", "globals", "locals", "vars", "eval", "exec"}
-    nodes = list(ast.walk(tree))
-    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
-    for node in nodes:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                module = alias.name.split(".")[0]
-                if module in module_loaders:
-                    if alias.name != module:
-                        raise MappingError("unsupported Python loader module")
-                    modules[alias.asname or module] = module_loaders[module]
-        elif isinstance(node, ast.ImportFrom) and node.module in module_loaders:
-            for alias in node.names:
-                if node.module == "builtins" and alias.name in reflective:
-                    reflective.add(alias.asname or alias.name)
-                if (
-                    alias.name == "*"
-                    or node.module == "importlib"
-                    and alias.name != "import_module"
-                ):
-                    raise MappingError("unsupported Python loader import")
-                if alias.name == module_loaders[node.module]:
-                    loaders[alias.asname or alias.name] = alias.name
-    calls = {}
-    for node in nodes:
-        loader = None
-        reference = node
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            if node.id in reflective:
-                raise MappingError("reflective Python namespace or code access")
-            if node.id in modules:
-                reference = parents.get(node)
-                if (
-                    not isinstance(reference, ast.Attribute)
-                    or reference.attr != modules[node.id]
-                ):
-                    raise MappingError("indirect Python loader module")
-                loader = modules[node.id]
-            elif node.id in loaders:
-                loader = loaders[node.id]
-        elif isinstance(node, ast.Attribute) and node.attr in module_loaders.values():
-            if (
-                not isinstance(node.value, ast.Name)
-                or modules.get(node.value.id) != node.attr
-            ):
-                raise MappingError("unknown Python loader receiver")
-        if loader:
-            call = parents.get(reference)
-            if not isinstance(call, ast.Call) or call.func is not reference:
-                raise MappingError("indirect Python import loader")
-            calls[call] = loader
-    return calls
-
-
-def python_dynamic_targets(call: ast.Call, loader: str) -> list[str]:
-    # The two loaders have different signatures. Bind arguments before interpreting them;
-    # unknown keywords, unpacking and computed values cannot justify a narrower scope.
-    names = (
-        ("name", "package")
-        if loader == "import_module"
-        else ("name", "globals", "locals", "fromlist", "level")
-    )
-    if len(call.args) > len(names) or any(
-        isinstance(a, ast.Starred) for a in call.args
-    ):
-        raise MappingError("unsupported Python loader arguments")
-    args = dict(zip(names, call.args, strict=False))
-    for keyword in call.keywords:
-        if keyword.arg not in names or keyword.arg in args:
-            raise MappingError("unsupported Python loader arguments")
-        args[keyword.arg] = keyword.value
-
-    def literal(key, default):
-        value = args.get(key, ast.Constant(value=default))
-        if not isinstance(value, ast.Constant):
-            raise MappingError(f"computed Python import {key}")
-        return value.value
-
-    target = literal("name", None)
-    if not isinstance(target, str):
-        raise MappingError("computed Python import target")
-    if loader == "import_module":
-        package = literal("package", None)
-        if package is not None and not isinstance(package, str):
-            raise MappingError("unsupported Python import package")
-        if target.startswith("."):
-            target = importlib.util.resolve_name(target, package)
-        targets = [target]
-    else:
-        if (
-            literal("globals", None) is not None
-            or literal("locals", None) is not None
-            or literal("level", 0) != 0
-            or target.startswith(".")
-        ):
-            raise MappingError("unsupported __import__ context")
-        targets = [target]
-        fromlist = args.get("fromlist", ast.Tuple(elts=[]))
-        if not isinstance(fromlist, (ast.List, ast.Tuple)):
-            raise MappingError("computed Python import fromlist")
-        for item in fromlist.elts:
-            if (
-                not isinstance(item, ast.Constant)
-                or not isinstance(item.value, str)
-                or not item.value.isidentifier()
-            ):
-                raise MappingError("unsupported Python import fromlist")
-            # May be a submodule, or an attribute supplied by the package. Keeping both
-            # targets lets the graph reader resolve the known submodule when it exists.
-            targets.append(f"{target}.{item.value}")
-    if target.split(".")[0] in ("importlib", "builtins"):
-        raise MappingError("dynamically imported Python loader module")
-    return targets
 
 
 def source_files(root: Path, suffixes: tuple[str, ...]):
@@ -711,81 +583,11 @@ def web_test_file(path: str) -> bool:
 
 
 class Imports:
-    """Who imports whom in the tree at `root`, file by file, read once: for the api, python
-    modules (app.jobs.sweep); for the web, paths (web/src/features/jobs/List.tsx)."""
+    """Web paths and their importers in the tree at `root`, read once."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        self._api: dict[str, set[str]] | None = None
         self._web: dict[str, set[str]] | None = None
-
-    def api(self) -> dict[str, set[str]]:
-        if self._api is None:
-            graph: dict[str, set[str]] = {}
-            base = self.root / "api"
-            modules: dict[str, Path] = {}
-            for path in source_files(base / "app", (".py",)):
-                name = ".".join(path.relative_to(base).with_suffix("").parts)
-                modules[name.removesuffix(".__init__")] = path
-            packages = {name.rpartition(".")[0] for name in modules}
-
-            def local(name: str) -> bool:
-                return name == "app" or name.startswith("app.")
-
-            for name, path in modules.items():
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-                package = (
-                    name if path.name == "__init__.py" else name.rpartition(".")[0]
-                )
-                loader_calls = python_loader_calls(tree)
-                for node in ast.walk(tree):
-                    targets: list[str] = []
-                    if isinstance(node, ast.Import):
-                        targets = [alias.name for alias in node.names]
-                    elif isinstance(node, ast.ImportFrom):
-                        # Python's documented package-relative name resolution.
-                        # https://docs.python.org/3/library/importlib.html#importlib.util.resolve_name
-                        module = importlib.util.resolve_name(
-                            "." * node.level + (node.module or ""), package
-                        )
-                        if (
-                            local(module)
-                            and module not in modules
-                            and module not in packages
-                        ):
-                            raise MappingError(f"unresolved Python import {module}")
-                        targets = [
-                            f"{module}.{a.name}"
-                            if f"{module}.{a.name}" in modules
-                            else module
-                            for a in node.names
-                        ]
-                    elif isinstance(node, ast.Call) and node in loader_calls:
-                        targets = python_dynamic_targets(node, loader_calls[node])
-                        # __import__ fromlist items can be attributes rather than modules.
-                        targets = (
-                            [
-                                target
-                                if target in modules or target in packages
-                                else targets[0]
-                                for target in targets
-                            ]
-                            if loader_calls[node] == "__import__"
-                            else targets
-                        )
-                    for target in targets:
-                        if not local(target):
-                            continue
-                        if target not in modules and target not in packages:
-                            raise MappingError(f"unresolved Python import {target}")
-                        found = target
-                        # Importing a module executes its packages' __init__.py too.
-                        while found and found != "app":
-                            if found != name:
-                                graph.setdefault(found, set()).add(name)
-                            found = found.rpartition(".")[0]
-            self._api = graph
-        return self._api
 
     def web(self) -> dict[str, set[str]]:
         if self._web is None:
@@ -818,15 +620,6 @@ class Imports:
                         raise MappingError(f"unresolved TypeScript import {spec}")
             self._web = graph
         return self._web
-
-
-def api_area(module: str, root: Path) -> str:
-    """app.jobs.sweep and app.jobs (its __init__.py) -> jobs; app.db (a file of the core) ->
-    SHARED."""
-    parts = module.split(".")
-    if len(parts) > 2 or (len(parts) == 2 and (root / "api/app" / parts[1]).is_dir()):
-        return parts[1]
-    return SHARED
 
 
 def web_area(path: str) -> str:
@@ -866,6 +659,8 @@ def journey_groups_for(
 ) -> tuple[frozenset[str] | str, str]:
     """(the groups one changed path touches, or EVERY; why). `specs` maps a spec file name to its
     group, `configs` a config path (web/e2e/x-all.config.ts) to its group."""
+    if path.startswith("api/app/"):
+        return EVERY, "API application changes run every group"
     units, why = units_for(path)
     if "e2e" not in units:
         return NO_GROUP, why
@@ -873,24 +668,6 @@ def journey_groups_for(
         if matches(pattern, path):
             return groups, why
     parts = path.split("/")
-    if path.startswith("api/app/"):
-        if len(parts) < 4:
-            return EVERY, "the api core"
-        area = parts[2]
-        if not path.endswith(".py"):
-            return areas_groups({area})
-        module = ".".join(Path(path).with_suffix("").parts[1:]).removesuffix(
-            ".__init__"
-        )
-        if parts[3].removesuffix(".py") in API_REGISTRATIONS:
-            return EVERY, "a module that registers callbacks or jobs in other modules"
-        users = importers(module, imports.api(), lambda name: name in API_WIRING)
-        if any(
-            len(user.split(".")) > 2 and user.split(".")[2] in API_REGISTRATIONS
-            for user in users
-        ):
-            return EVERY, "a consumer registers callbacks or jobs in other modules"
-        return areas_groups({api_area(name, imports.root) for name in users} | {area})
     if path.startswith("web/src/"):
         if web_test_file(path):
             return NO_GROUP, "a Vitest file, the gate runs Vitest in full"
@@ -932,10 +709,7 @@ def journey_plan(
         try:
             # --no-renames exposes old and new paths. A deletion can have consumers only
             # in the base, so the head graph cannot justify skipping any group.
-            if (
-                path.startswith(("api/app/", "web/src/"))
-                and not (root / path).is_file()
-            ):
+            if path.startswith("web/src/") and not (root / path).is_file():
                 raise MappingError("deleted or missing source path")
             groups, why = journey_groups_for(path, specs, configs, imports)
         except (OSError, UnicodeError, SyntaxError, ValueError, ImportError) as error:

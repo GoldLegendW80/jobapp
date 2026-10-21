@@ -60,11 +60,12 @@ in the job folder that holds this repository (it is not part of the repository).
    runs only the groups its changed files touch, the files of the merged tree against the main it
    starts from. `python3 .github/scripts/ci_plan.py journeys` decides, from the tree it checks:
    documentation, task notes, Claude Code configuration, operations scripts and shell tests run
-   no group; a file of one module (`api/app/<module>/`, `web/src/features/<feature>/`) runs the
-   groups of that module (`AREA_GROUPS`) and of every module that imports that file, read from
-   the imports file by file; a spec or a group config runs its own group; anything shared or
-   unknown runs every group: the api core (`db.py`, `config.py`, `main.py`, ...), identity, auth,
-   jobs, profile, agents and the shell pages that every journey goes through, `web/src/lib/` and
+   no group; every change under `api/app/` runs every group, including assets, new modules and
+   deleted paths. Python imports and registration dependencies are not inferred. A web feature
+   (`web/src/features/<feature>/`) runs its groups (`AREA_GROUPS`) and those of every feature
+   that imports the file, read from the imports file by file; a spec or a group config runs its
+   own group; anything shared or unknown runs every group: identity, auth, jobs, profile, agents
+   and the shell pages that every journey goes through, `web/src/lib/` and
    the components, migrations, lockfiles, Dockerfiles, compose files, the e2e helpers and
    configs, `ops/local-check.sh`, `ops/ship.sh`, the mapping itself, and any path no rule names.
    Every group also runs when `LOCAL_CHECK_FULL=1` is set (`LOCAL_CHECK_FULL=1 ops/ship.sh ...`
@@ -81,21 +82,20 @@ in the job folder that holds this repository (it is not part of the repository).
    and missing or failed mappers. If the change list itself cannot be established, every group
    runs and the check fails without a PASS record. `ops/ship.sh` prints the scope in its summary
    (`journeys:`) and checks both count and digest against base and head before any merge, for
-   full and scoped records. A new module gets its line in `AREA_GROUPS` (`ci_plan_test.py` fails
-   without one); until then its files run every group.
+   full and scoped records. A new web feature gets its line in `AREA_GROUPS` (`ci_plan_test.py`
+   fails without one); until then its files run every group.
 
-   Dependencies include relative Python imports, literal `importlib.import_module` and
-   `__import__` calls with literal fromlists, TypeScript side-effect, multiline, type-only, re-export and literal dynamic
-   imports, including literal template targets and JSON assets. Deleted source paths and renames
+   Web dependencies include TypeScript side-effect, multiline, type-only, re-export and literal
+   dynamic imports, including literal template targets and JSON assets. Deleted source paths and renames
    run every group: the base can hold consumers the head no longer contains. Unreadable sources,
    decode, parse or traversal errors, unresolved local modules and computed or unsupported
    imports also run every group. The reader is deliberately conservative, with no full
-   TypeScript parser: template interpolation and ambiguous syntax force full. Reflective Python
-   loader access and unsupported arguments force full. Runtime test data mounted by the gate's
-   compose files or read by journeys has explicit group rules. Worker registration providers and
+   TypeScript parser: template interpolation and ambiguous syntax force full. Runtime test data
+   mounted by the gate's compose files or read by journeys has explicit group rules. Worker registration providers and
    their dependencies run every group because callbacks can affect modules that do not import them.
-   Current computed or unsupported API loaders and conservative JSX slash handling cause full
-   fallback on this tree. The synthetic fixtures demonstrate narrower supported cases.
+   API changes deliberately run all journeys. Conservative JSX slash handling also causes full
+   fallback for current web source changes. The synthetic web fixtures demonstrate narrower
+   supported cases.
    The first real gate of this change must use `LOCAL_CHECK_FULL=1`; fixture results are not a
    genuine scoped PASS, and no real scoped PASS has been established yet.
 

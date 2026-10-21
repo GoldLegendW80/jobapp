@@ -1428,6 +1428,67 @@ class JourneysTest(unittest.TestCase):
     def ran(self, paths: list[str], files: dict[str, str] | None = None) -> list[str]:
         return [g for g, v in self.plan(paths, files).items() if v.startswith("run")]
 
+    def test_every_api_application_path_runs_every_group_without_a_python_reader(
+        self,
+    ) -> None:
+        paths = [
+            "api/app/__init__.py",
+            "api/app/db.py",
+            "api/app/main.py",
+            "api/app/worker.py",
+            "api/app/models.py",
+            "api/app/mail/sync.py",
+            "api/app/mail/__init__.py",
+            "api/app/mail/nested/__init__.py",
+            "api/app/mail/nested/consumer.py",
+            "api/app/mail/template.html",
+            "api/app/mail/README.md",
+            "api/app/mail/assets/nested/value.json",
+            "api/app/new_module/consumer.py",
+            "api/app/new_module/assets/value.json",
+            "api/app/documents/freeze.py",
+            "api/app/documents/freeze/nested.py",
+        ]
+        self.assertFalse(hasattr(ci_plan.Imports, "api"))
+        self.assertFalse(hasattr(ci_plan, "python_loader_calls"))
+        self.assertFalse(hasattr(ci_plan, "python_dynamic_targets"))
+        for path in paths:
+            for exists in (True, False):
+                files = {
+                    p: text for p, text in self.BASE.items() if p.startswith("web/")
+                }
+                if exists:
+                    files[path] = ""
+                root = self.tree(files)
+                with (
+                    self.subTest(path=path, exists=exists),
+                    mock.patch.object(
+                        ci_plan.Imports,
+                        "api",
+                        create=True,
+                        side_effect=AssertionError("retired API graph was consulted"),
+                    ),
+                    mock.patch.multiple(
+                        ci_plan,
+                        python_loader_calls=mock.Mock(side_effect=AssertionError),
+                        python_dynamic_targets=mock.Mock(side_effect=AssertionError),
+                        source_files=mock.Mock(side_effect=AssertionError),
+                        create=True,
+                    ),
+                ):
+                    groups, why = ci_plan.journey_groups_for(
+                        path, {}, {}, ci_plan.Imports(root)
+                    )
+                    self.assertEqual(groups, ci_plan.EVERY)
+                    self.assertEqual(why, "API application changes run every group")
+                    self.assertEqual(
+                        ci_plan.journey_plan(root, [path], self.GROUPS),
+                        [
+                            ("run", group, f"every group, {path}: {why}")
+                            for group, _ in self.GROUPS
+                        ],
+                    )
+
     def test_documentation_and_operations_run_no_group(self) -> None:
         paths = [
             "CONTRIBUTING.md",
@@ -1449,11 +1510,6 @@ class JourneysTest(unittest.TestCase):
         )
 
     def test_one_module_runs_its_groups_only(self) -> None:
-        self.assertEqual(self.ran(["api/app/mail/sync.py"]), ["mail"])
-        self.assertEqual(
-            self.plan(["api/app/mail/sync.py"])["mail"],
-            "run: api/app/mail/sync.py: the module mail",
-        )
         self.assertEqual(self.ran(["web/src/features/mail/Row.tsx"]), ["mail"])
         self.assertEqual(self.ran(["web/e2e/mail-m1.spec.ts"]), ["mail"])
         self.assertEqual(self.ran(["web/e2e/apply-all.config.ts"]), ["apply"])
@@ -1463,12 +1519,13 @@ class JourneysTest(unittest.TestCase):
     def test_a_file_imported_by_another_module_runs_that_module_s_groups_too(
         self,
     ) -> None:
-        # documents/store.py imports mail/rules.py: rules touches mail and the groups of documents;
-        # the wiring of main.py carries nothing on.
+        # API imports and wiring cannot narrow the full-journey policy.
         self.assertEqual(
-            self.ran(["api/app/mail/rules.py"]), ["mail", "documents", "apply"]
+            self.ran(["api/app/mail/rules.py"]), [g for g, _ in self.GROUPS]
         )
-        self.assertEqual(self.ran(["api/app/mail/router.py"]), ["mail"])
+        self.assertEqual(
+            self.ran(["api/app/mail/router.py"]), [g for g, _ in self.GROUPS]
+        )
         # Badge is imported by the account feature, which every journey goes through; a Vitest
         # file that imports it does not count.
         plan = self.plan(["web/src/features/mail/Badge.tsx"])
@@ -1480,8 +1537,10 @@ class JourneysTest(unittest.TestCase):
         )
         self.assertEqual(self.ran(["web/src/features/mail/Mail.test.tsx"]), [])
 
-    def test_python_relative_and_dynamic_consumers_are_transitive(self) -> None:
+    def test_python_static_relative_and_dynamic_consumers_run_every_group(self) -> None:
         forms = [
+            "import app.mail.rules",
+            "from app.mail.rules import Sources",
             "from ..mail.rules import Sources",
             "from ..mail import rules",
             "import importlib; importlib.import_module('app.mail.rules')",
@@ -1501,13 +1560,7 @@ class JourneysTest(unittest.TestCase):
                 }
                 self.assertEqual(
                     self.ran(["api/app/mail/rules.py"], files),
-                    ["mail", "documents", "apply"],
-                )
-                root = self.tree({**self.BASE, **files})
-                graph = ci_plan.Imports(root).api()
-                self.assertIn(
-                    "app.opportunities.use",
-                    ci_plan.importers("app.mail.rules", graph, lambda _: False),
+                    [g for g, _ in self.GROUPS],
                 )
 
     def test_unknown_python_import_targets_force_every_group(self) -> None:
@@ -1570,7 +1623,7 @@ class JourneysTest(unittest.TestCase):
                     ci_plan.Imports(root).web()["web/src/features/mail/Badge.tsx"],
                 )
 
-    def test_python_fromlist_arguments_retain_transitive_consumers(self) -> None:
+    def test_python_fromlist_arguments_run_every_group(self) -> None:
         forms = [
             "__import__('app.mail', fromlist=['rules'])",
             "__import__('app.mail', None, None, ['rules'])",
@@ -1593,12 +1646,6 @@ class JourneysTest(unittest.TestCase):
                             "api/app/opportunities/use.py": "from app.documents.store import value",
                         }
                     )
-                    graph = ci_plan.Imports(root).api()
-                    self.assertIn("app.documents.store", graph["app.mail.rules"])
-                    self.assertIn(
-                        "app.opportunities.use",
-                        ci_plan.importers("app.mail.rules", graph, lambda _: False),
-                    )
                     self.assertEqual(
                         [
                             g
@@ -1607,7 +1654,7 @@ class JourneysTest(unittest.TestCase):
                             )
                             if v == "run"
                         ],
-                        ["mail", "documents", "apply"],
+                        [g for g, _ in self.GROUPS],
                     )
 
     def test_python_unsupported_loader_families_force_every_group(self) -> None:
@@ -1647,12 +1694,18 @@ class JourneysTest(unittest.TestCase):
             "from builtins import globals as namespace; namespace()['__builtins__']",
             "eval(\"__import__('app.mail.rules')\")",
             "from builtins import exec as execute; execute(source)",
+            "from builtins import __dict__ as namespace; module = namespace['__import__']('app.mail', fromlist=['rules']); value = module.rules.value",
+            "from builtins import __dict__; __dict__['__import__']('app.mail.rules')",
+            "import sys; getattr(sys.modules['importlib'], 'import_module')('app.mail.rules')",
+            "from sys import modules; getattr(modules['importlib'], 'import_module')('app.mail.rules')",
+            "from builtins import __dict__ as namespace; module = namespace['__import__']('app.mail', fromlist=['value']); VALUE = module.value.VALUE",
+            "from builtins import __dict__; module = __dict__['__import__']('app.mail', fromlist=['value']); VALUE = module.value.VALUE",
+            "import sys; getattr(sys.modules['importlib'], 'import_module')('app.mail.value')",
+            "from sys import modules; getattr(modules['importlib'], 'import_module')('app.mail.value')",
         ]
         for source in forms:
             with self.subTest(source=source):
                 root = self.tree({**self.BASE, "api/app/documents/store.py": source})
-                with self.assertRaises(ci_plan.MappingError):
-                    ci_plan.Imports(root).api()
                 self.assertEqual(
                     [
                         g
@@ -1796,7 +1849,9 @@ class JourneysTest(unittest.TestCase):
                     )
         for path in ("api/app/documents/freeze_extra.py", "api/app/documents/store.py"):
             with self.subTest(path=path):
-                self.assertEqual(self.ran([path], {path: ""}), ["documents", "apply"])
+                self.assertEqual(
+                    self.ran([path], {path: ""}), [g for g, _ in self.GROUPS]
+                )
 
     def test_worker_registration_registry_and_status_callbacks_have_full_scope(
         self,
@@ -1812,9 +1867,19 @@ class JourneysTest(unittest.TestCase):
             )
         ]
         self.assertEqual(len(registries), 1)
+        registered = frozenset(ast.literal_eval(registries[0]))
         self.assertEqual(
-            frozenset(ast.literal_eval(registries[0])), ci_plan.API_REGISTRATIONS
+            registered,
+            frozenset({"agents", "engine", "freeze", "jobs", "writers"}),
         )
+        providers = {
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "api/app").rglob("*.py")
+            if path.stem in registered
+            or path.name == "__init__.py"
+            and path.parent.name in registered
+        }
+        self.assertIn("api/app/documents/writers.py", providers)
         callbacks = []
         for path in (ROOT / "api/app").rglob("*.py"):
             tree = ast.parse(path.read_text())
@@ -1830,11 +1895,12 @@ class JourneysTest(unittest.TestCase):
             ):
                 callbacks.append(path.relative_to(ROOT).as_posix())
         self.assertIn("api/app/documents/freeze.py", callbacks)
-        for path in callbacks:
-            # No graph read: another computed loader must not conceal missing registration rules.
+        for path in providers | set(callbacks):
+            # The policy covers registry and callback providers without dependency inference.
             with mock.patch.object(
                 ci_plan.Imports,
                 "api",
+                create=True,
                 side_effect=AssertionError("unexpected graph read"),
             ):
                 groups, _ = ci_plan.journey_groups_for(
@@ -1989,7 +2055,9 @@ class JourneysTest(unittest.TestCase):
                     rows = [row.split("\t") for row in done.stdout.splitlines()]
                     self.assertEqual(int(rows[0][1]), 2 if operation == "rename" else 1)
                     expected = (
-                        ["mail"] if operation == "add" else [g for g, _ in self.GROUPS]
+                        ["mail"]
+                        if operation == "add" and path.startswith("web/")
+                        else [g for g, _ in self.GROUPS]
                     )
                     self.assertEqual(
                         [row[1] for row in rows[1:] if row[0] == "run"], expected
@@ -2067,76 +2135,77 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(self.ran(["api/app/mail/sync.py", "compose.yml"]), every)
 
     def test_the_command_prints_the_change_set_and_one_line_per_group(self) -> None:
-        root = self.tree(
-            {
-                **self.BASE,
-                ".github/scripts/ci_plan.py": SCRIPT.read_text(),
-                ".github/scripts/e2e_groups.py": (
-                    SCRIPT.parent / "e2e_groups.py"
-                ).read_text(),
-            }
-        )
-        git(root, "init", "-q", "-b", "main")
-        git(root, "add", "-A")
-        git(root, "commit", "-q", "-m", "base")
-        base = git(root, "rev-parse", "HEAD")
-        (root / "api/app/mail/sync.py").write_text("x = 1\n")
-        (root / "README.md").write_text("read me\n")
-        git(root, "add", "-A")
-        git(root, "commit", "-q", "-m", "change")
-        done = subprocess.run(
-            [
-                sys.executable,
-                str(root / ".github/scripts/ci_plan.py"),
-                "journeys",
-                base,
-                "HEAD",
-            ],
-            input="".join(f"{g}\t{a}\n" for g, a in self.GROUPS),
-            capture_output=True,
-            text=True,
-            check=False,
-            env=CLEAN_ENV,
-        )
-        self.assertEqual(done.returncode, 0, done.stderr)
-        lines = done.stdout.splitlines()
-        self.assertEqual(
-            lines[0],
-            f"changed\t2\t{ci_plan.changes_digest(['api/app/mail/sync.py', 'README.md'])}",
-        )
-        self.assertEqual(
-            lines[1:],
-            [
-                "skip\tapps\tno changed file touches it",
-                "run\tmail\tapi/app/mail/sync.py: the module mail",
-                "skip\tdocuments\tno changed file touches it",
-                "skip\tapply\tno changed file touches it",
-                "skip\tsweep\tno changed file touches it",
-            ],
-        )
-        bad = subprocess.run(
-            [
-                sys.executable,
-                str(root / ".github/scripts/ci_plan.py"),
-                "journeys",
-                "nope",
-                "HEAD",
-            ],
-            input="",
-            capture_output=True,
-            text=True,
-            check=False,
-            env=CLEAN_ENV,
-        )
-        self.assertEqual(bad.returncode, 1)
+        for path in ("api/app/mail/sync.py", "web/src/features/mail/Row.tsx"):
+            root = self.tree(
+                {
+                    **self.BASE,
+                    ".github/scripts/ci_plan.py": SCRIPT.read_text(),
+                    ".github/scripts/e2e_groups.py": (
+                        SCRIPT.parent / "e2e_groups.py"
+                    ).read_text(),
+                }
+            )
+            git(root, "init", "-q", "-b", "main")
+            git(root, "add", "-A")
+            git(root, "commit", "-q", "-m", "base")
+            base = git(root, "rev-parse", "HEAD")
+            (root / path).write_text("x = 1\n")
+            (root / "README.md").write_text("read me\n")
+            git(root, "add", "-A")
+            git(root, "commit", "-q", "-m", "change")
+            done = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / ".github/scripts/ci_plan.py"),
+                    "journeys",
+                    base,
+                    "HEAD",
+                ],
+                input="".join(f"{g}\t{a}\n" for g, a in self.GROUPS),
+                capture_output=True,
+                text=True,
+                check=False,
+                env=CLEAN_ENV,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            lines = done.stdout.splitlines()
+            self.assertEqual(
+                lines[0],
+                f"changed\t2\t{ci_plan.changes_digest([path, 'README.md'])}",
+            )
+            self.assertEqual(
+                lines[1:],
+                [
+                    f"run\t{g}\tevery group, {path}: API application changes run every group"
+                    for g, _ in self.GROUPS
+                ]
+                if path.startswith("api/")
+                else [
+                    "skip\tapps\tno changed file touches it",
+                    f"run\tmail\t{path}: the module mail",
+                    "skip\tdocuments\tno changed file touches it",
+                    "skip\tapply\tno changed file touches it",
+                    "skip\tsweep\tno changed file touches it",
+                ],
+            )
+            bad = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / ".github/scripts/ci_plan.py"),
+                    "journeys",
+                    "nope",
+                    "HEAD",
+                ],
+                input="",
+                capture_output=True,
+                text=True,
+                check=False,
+                env=CLEAN_ENV,
+            )
+            self.assertEqual(bad.returncode, 1)
 
     def test_this_repository_decides_every_module_and_names_real_groups(self) -> None:
-        modules = {
-            p.name
-            for p in (ROOT / "api/app").iterdir()
-            if p.is_dir() and not p.name.startswith("_")
-        }
-        modules |= {p.name for p in (ROOT / "web/src/features").iterdir() if p.is_dir()}
+        modules = {p.name for p in (ROOT / "web/src/features").iterdir() if p.is_dir()}
         self.assertEqual(
             sorted(modules - set(ci_plan.AREA_GROUPS)),
             [],
@@ -2155,7 +2224,7 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(
             sorted(named - groups), [], "a rule names a group that does not exist"
         )
-        # The local check's own groups, as it would pass them: a file of one module runs a part.
+        # The local check's own groups, as it would pass them: API files run every group.
         plan = ci_plan.journey_plan(
             ROOT,
             ["api/app/mail/parse.py"],
@@ -2164,12 +2233,13 @@ class JourneysTest(unittest.TestCase):
                 for g in sorted(groups - {"apps", "sweep"})
             ],
         )
-        # Production registries contain computed importlib targets. Those need every group
-        # until dependency evidence can establish them; the precise fixtures above still scope.
+        # The policy is independent of the application's current loader spellings.
         self.assertEqual(
             [g for v, g, _ in plan if v == "run"], sorted(groups - {"apps", "sweep"})
         )
-        self.assertTrue(all("dependency mapping failed" in why for _, _, why in plan))
+        self.assertTrue(
+            all("API application changes run every group" in why for _, _, why in plan)
+        )
 
 
 if __name__ == "__main__":
