@@ -112,4 +112,39 @@ describe("Like on the jobs list", () => {
     await screen.findByText(new RegExp(`^${LIKE_MAX} postings liked\\.`));
     expect(liked).toEqual(rows.slice(0, LIKE_MAX).map((row) => row.id));
   });
+  it.each([
+    [
+      false,
+      "1 posting liked. In Full auto, the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.",
+    ],
+    [
+      true,
+      '1 posting liked. Full auto rehearses first: the app fills the form, submits nothing, and asks you "Does this look right?" in Applications.',
+    ],
+  ])(
+    "says what a Like does in Full auto (rehearsal %s)",
+    async (dryRun, said) => {
+      fakeQueue([]);
+      server.use(
+        http.post("*/api/postings/:id/like", ({ params }) =>
+          HttpResponse.json(
+            {
+              application: fakeApplication("queued", {
+                posting_id: String(params.id),
+                mode: "full_auto",
+                dry_run: dryRun,
+              }),
+              documents: [],
+            },
+            { status: 201 },
+          ),
+        ),
+      );
+      const user = userEvent.setup();
+      const { boxes } = await openJobs(1);
+      await user.click(boxes[0]!);
+      await user.click(within(bar()).getByRole("button", { name: "Like" }));
+      await screen.findByText(said);
+    },
+  );
 });

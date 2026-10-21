@@ -774,3 +774,29 @@ describe("other states", () => {
     },
   );
 });
+
+describe("Full auto's hold on the job page", () => {
+  it("counts the hold down on the server's clock, with one Cancel that stops it", async () => {
+    const api = fakeApply({
+      application: fakeApplication("held", { mode: "full_auto" }),
+    });
+    api.detail = {
+      hold_until: "2001-02-03T10:05:00Z",
+      now: "2001-02-03T10:00:00Z",
+    };
+    const { user, section } = await openSection();
+    const timer = await within(section).findByRole("timer");
+    expect(timer.textContent).toMatch(/^(5:00|4:5\d)$/);
+    expect(section).toHaveTextContent("Full auto: your Like approved it.");
+    const cancels = within(section).getAllByRole("button", {
+      name: "Cancel application",
+    });
+    expect(cancels).toHaveLength(1);
+    await user.click(cancels[0]!);
+    await confirm(user, "Cancel the application");
+    await waitFor(() => {
+      expect(api.decisions).toEqual(["cancel"]);
+    });
+    expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+});
