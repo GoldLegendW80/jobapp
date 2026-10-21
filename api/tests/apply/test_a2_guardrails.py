@@ -476,6 +476,7 @@ STILL_MISSED = [
     "S e c u r i t y Engineer",  # letters spaced out
     "Secu-rity Engineer",  # a visible hyphen inside the term
     "Anticyberfraud Analyst",  # a term inside a word that neither starts nor ends with it
+    "Secu\trity Engineer",  # a tab, drawn as a gap like a space
     "Secսrity Engineer",  # Armenian u, a script outside the lookalike table
     "Ꮪecurity Engineer",  # Cherokee S
     "Secυrity Engineer",  # Greek small upsilon, read as its capital: "y"
@@ -1078,6 +1079,13 @@ def test_an_address_no_browser_opens_shows_no_form(url: str) -> None:
     assert guardrails.ats_of(url) == "other"
 
 
+def test_the_declared_cost_of_idna_2003_merges_two_hosts() -> None:
+    # toward refusing: a second application to the other host is refused as the same form
+    assert canonical_key("https://stra\u00dfe.example/jobs/1") == canonical_key(
+        "https://strasse.example/jobs/1"
+    )
+
+
 def test_a_host_idna_refuses_is_keyed_as_written() -> None:
     url = "https://exa\u200emple.org/careers/42"  # a bidi mark, which IDNA refuses
     assert canonical_key(url) == "url:http://exa\u200emple.org/careers/42"
@@ -1099,6 +1107,12 @@ STORED_UNDER_OLDER_RULES = [
     ("url:http://example\uff0eorg/careers/42", "url:http://example.org/careers/42"),
     ("url:http://example.org./careers/42", "url:http://example.org/careers/42"),
     ("url:http://b\u00fccher.example/jobs/1", "url:http://xn--bcher-kva.example/jobs/1"),
+    ("url:http://www.example.org/careers/42", "url:http://example.org/careers/42"),
+    # keyed as an address before the boards API was read as Greenhouse's
+    (
+        "url:http://boards-api.greenhouse.io/v1/boards/examplerobotics/jobs/4012345",
+        "greenhouse:4012345",
+    ),
 ]
 
 
@@ -1111,6 +1125,7 @@ def test_every_key_made_today_is_its_own_current_key() -> None:
     urls = [url for _, url in SAME_KEY] + [url for url, _ in KEYED_AS_THE_ATS]
     urls += KEYED_AS_AN_ADDRESS + [one for pair in DIFFERENT for one in pair]
     urls += [f"https://{w}{path}" for host, path, _ in HOSTS for w in _writings(host)]
+    urls += ["https://www.www.example.org/careers/42", "https://WWW.example.org:8080/a?b=&c=d+e"]
     for url in urls:
         key = canonical_key(url)
         assert key is not None, ascii(url)

@@ -2,15 +2,19 @@
 
 **Never apply** (`never_apply`, pure). The person's `never_apply` rules (`sweep.never_apply_rules`
 on the search section) match the posting the way the sweep excludes a role: each rule's terms,
-whole word with an optional plural, case-insensitive, on the company and the title. Two
-additions, both toward refusing, since a role the person excluded must never be applied to by
+whole word with an optional plural, case-insensitive, on the company and the title. Three
+additions, all toward refusing, since a role the person excluded must never be applied to by
 the app: the text is folded first (accents, compatibility forms: "Sécurité" is "securite", a full
-width letter is its plain one), and a term also matches at the start or the end of a glued word,
-so the owner's rule "No cybersecurity roles: cyber, security, pentest, threat" refuses
-"Cybersecurity Engineer" and "AppSecurity Lead", which the sweep's whole word match lets through;
-spaces, hyphens, underscores, slashes and dots are one separator ("Cyber-Security", "red_team").
-Stated cost: a short term refuses more ("ai" in a rule refuses "Aide"), and that is the side the
-rule errs on.
+width letter is its plain one; the case fold comes before the marks are dropped, so every letter
+reads as its capitals do, the iota subscript of polytonic Greek included), a term also matches
+at the start or the end of a glued word, so the owner's rule "No cybersecurity roles: cyber,
+security, pentest, threat" refuses "Cybersecurity Engineer" and "AppSecurity Lead", which the
+sweep's whole word match lets through, and a character a reader does not see (a soft hyphen, a
+zero width space, a control such as U+001F, a Hangul filler, the Braille blank) is read both as
+nothing and as a gap, so it neither splits a term ("Secu<U+001F>rity") nor glues one to its
+neighbours ("AI<U+200B>Security<U+200B>Engineer"). Spaces, hyphens, underscores, slashes and dots
+are one separator ("Cyber-Security", "red_team"). Stated cost: a short term refuses more ("ai"
+in a rule refuses "Aide"), and that is the side the rule errs on.
 The sweep's own decision counts too: a posting whose history holds the sweep's `never_apply`
 event (`swept`) is refused whatever the rules say today. In Full auto the first 1,500 characters
 of the posting's text are read as well. A search section that no longer validates cannot be read,
@@ -22,14 +26,19 @@ so it refuses as a match would (`rules_unreadable`).
 - `already_applied`: the posting's status is `applied`, `interview` or `rejected`;
 - `posting_closed`: the posting's status is `closed`;
 - `same_form`: another posting of the person has a live application, or an applied status, on the
-  same canonical form address (`canonical_key`; a second partial unique index holds the first);
+  same canonical form address (`canonical_key`; a second partial unique index holds the first).
+  A key stored on an application is read as these rules key its address today (`current_key`),
+  so a key stored under older rules is the same form as its address's key now;
 - `same_address`: as `same_form`, for an applied posting whose address is an ordinary one (a `url:`
-  key, often one careers page for many roles), so Apply myself can show it as a warning;
+  key, often one careers page for many roles), so Apply myself can show it as a warning, with
+  `same_role` beside it when that holds too (`Refusal.also`);
 - `same_role`: another posting of the person, at the same company and with the same normalised
   title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
   way), or has an applied status with its `applied_on` in the last 180 days, counted from `now`:
   at exactly 180 days it is still refused. An applied status without `applied_on` counts too: its
-  date is unknown, so nothing shows it is older (fail closed).
+  date is unknown, so nothing shows it is older (fail closed). Both keys read the text as the
+  never apply rules do, then glue its letters and digits: a space, a hyphen, an unseen character
+  or nothing between two words make the same key.
 
 **The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
 is the ATS and its id, wherever the form is shown: `ashby:<uuid>` from jobs.ashbyhq.com/<org>/<id>
@@ -37,29 +46,37 @@ or `?ashby_jid=`; `greenhouse:<number>` from (job-)boards(.eu).greenhouse.io/<or
 segment `jobs` in any case), the boards API's boards-api.greenhouse.io/v1/boards/<org>/jobs/<id>,
 the embed's `?token=` or a company page's `?gh_jid=`; `lever:<uuid>` from
 jobs(.eu).lever.co/<org>/<id>. A path is read only on the ATS's own domain or a subdomain of it
-("notashbyhq.com" is an ordinary address).
-Any other address is `url:` and the jobs module's normalised address (`slug.url_key`: http and
-https alike, host lowercase without www, no fragment, no trailing slash, no tracking parameter).
-An address that is not http or https has no form (`None`).
+("notashbyhq.com" is an ordinary address). The host is read as a browser reads it
+(`browser_host`): percent escapes decoded, cut at every dot IDNA knows (the ideographic, full
+width and halfwidth ones too), each label through IDNA to ASCII, no trailing dot and no leading
+"www.", so a Greenhouse address written with full width dots is Greenhouse's.
+Any other address is `url:` and the jobs module's normalised address of it with that host
+(`slug.url_key`: http and https alike, no fragment, no trailing slash, no tracking parameter).
+An address that is not http or https, or that no browser opens (a full width slash or colon in
+its host, an unclosed bracket), has no form (`None`).
 
-Declared open points (what these rules still miss, each toward applying):
+Declared open points (what these rules still miss, each toward applying unless said):
 - a never apply term in another language than the rule's ("sécurité" for "security") or a
   synonym: the person writes those terms in the rule;
 - a term inside a word that neither starts nor ends with it ("cyber" in "anticyberattack");
-- a term split by something drawn as a space or a mark ("S e c u r i t y", "Secu-rity", the
-  Braille blank U+2800), and letters drawn like Latin ones in scripts outside the lookalike table
-  (Armenian U+057D for "u", Cherokee U+13DA for "S"); a small letter is read as its capital is,
-  so a reading of the small letter alone is lost: Greek small eta is "h" (not "n"), small mu "m"
-  and small upsilon "y" (not "u"), small nu "n" (not "v"), the Cyrillic palochka "i" (not "l"),
-  and gamma and the lunate sigma U+03F2 (which NFKC makes a sigma) are not read; the stated cost
-  on the other side: a Cyrillic or Greek title is read with its lookalike letters as Latin ones, so
-  a Latin term could match a word of it;
+- a term split by something drawn as a space or a mark ("S e c u r i t y", "Secu-rity", a tab),
+  and letters drawn like Latin ones in scripts outside the lookalike table (Armenian U+057D for
+  "u", Cherokee U+13DA for "S"); a small letter is read as its capital is, so a reading of the
+  small letter alone is lost: Greek small eta is "h" (not "n"), small mu "m" and small upsilon
+  "y" (not "u"), small nu "n" (not "v"), the Cyrillic palochka "i" (not "l"), and gamma and the
+  lunate sigma U+03F2 (which NFKC makes a sigma) are not read; the stated cost on the other side:
+  a Cyrillic or Greek title is read with its lookalike letters as Latin ones, so a Latin term
+  could match a word of it;
 - the same role under two different titles ("ML Engineer" and "Machine Learning Engineer"), or a
-  title that adds a city in parentheses: only accents, case, punctuation and gender markers
-  ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
+  title that adds a city in parentheses: only accents, case, punctuation, spacing and gender
+  markers ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a
+  company. Toward refusing: a title in another script keeps only its lookalike letters, so two
+  such titles that differ only in their other letters are one role;
 - a form shown under an address the three ATS patterns do not cover (a company page that embeds
-  Ashby without `ashby_jid`): it is compared as an address. A live application started on a boards
-  API address before these were keyed keeps its `url:` key.
+  Ashby without `ashby_jid`): it is compared as an address;
+- a host is read through IDNA 2003 (Python's codec), not the UTS 46 browsers use: "ß" is "ss"
+  there, so "straße.example" and "strasse.example" are one address (toward refusing), and a label
+  IDNA 2003 refuses (one holding a bidi mark) is kept as written.
 """
 
 import re
@@ -305,7 +322,7 @@ def browser_host(hostname: str) -> str:
 
 @dataclass(frozen=True)
 class _Address:
-    host: str  # as a browser reads it (`browser_host`), without "www."
+    host: str  # as a browser reads it (`browser_host`), without any leading "www."
     segments: list[str]
     query: dict[str, str]
     url: str  # the address with that host, for `slug.url_key`; as written when the host was
@@ -320,6 +337,8 @@ def _host(url: str) -> _Address | None:
     if parts.scheme.lower() not in ("http", "https") or not hostname:
         return None
     host = browser_host(hostname)
+    while host.startswith("www."):
+        host = host.removeprefix("www.")
     address = url.strip()
     if host != hostname:
         try:
@@ -330,7 +349,7 @@ def _host(url: str) -> _Address | None:
         address = urlunsplit(parts._replace(netloc=netloc))
     segments = [segment for segment in parts.path.split("/") if segment]
     query = {name.lower(): value for name, value in parse_qsl(parts.query)}
-    return _Address(host.removeprefix("www."), segments, query, address)
+    return _Address(host, segments, query, address)
 
 
 def unstub(url: str, stub_base: str | None) -> str:
@@ -410,14 +429,12 @@ def canonical_key(url: str | None) -> str | None:
 
 
 def current_key(key: str) -> str:
-    """A stored form key as these rules key its address today: a `url:` key stored before hosts
-    were read as a browser reads them (full width dots, "%2E", a trailing dot) answers to the key
-    its address has now, any other key is itself. `duplicates` reads stored keys through it."""
+    """A stored form key as these rules key its address today: a `url:` key stored under older
+    rules (full width dots, "%2E" or a trailing dot in its host, a boards API address) answers to
+    the key its address has now, and a key `canonical_key` gives today is itself. `duplicates`
+    reads every stored key through it."""
     address = key.removeprefix("url:")
-    found = _host(address) if address != key else None
-    if found is None or found.url == address:
-        return key
-    return canonical_key(address) or key
+    return key if address == key else canonical_key(address) or key
 
 
 # --- the same role -------------------------------------------------------------------------------
