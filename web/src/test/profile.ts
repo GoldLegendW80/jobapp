@@ -208,7 +208,7 @@ export function haraldLike(): SectionData {
       ],
     },
     preferences: {
-      onboarding: { completed_at: null, dismissed_at: null },
+      onboarding: { completed_at: null, dismissed_at: null, steps_passed: [] },
       documents_language: "auto",
       documents_tone: "plain",
     },
@@ -599,7 +599,7 @@ const EMPTY_SECTIONS: Record<SectionName, unknown> = {
     salary_ranges: [],
   },
   preferences: {
-    onboarding: { completed_at: null, dismissed_at: null },
+    onboarding: { completed_at: null, dismissed_at: null, steps_passed: [] },
     documents_language: "auto",
     documents_tone: "plain",
   },

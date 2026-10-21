@@ -9,7 +9,9 @@
   so a request cannot skip its switch and its authorisation. A rehearsal (`dry_run`) is Review
   first only.
 - GET /api/applications (`posting_id`, `limit`) lists the person's applications, newest first.
-- GET /api/applications/{id} is one, with its timeline (ids, codes and counts only).
+- GET /api/applications/{id} is one, with its timeline (ids, codes and counts only), the end of
+  the hold of a `held` Full auto item (`hold_until`) and the server's time (`now`), so the
+  page's countdown never reads the page's clock.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
@@ -25,8 +27,8 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.apply import guardrails, service
-from app.apply.models import Application, ApplicationEvent, Mode
+from app.apply import full_auto, guardrails, service
+from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
@@ -105,6 +107,8 @@ class EventOut(BaseModel):
 
 class ApplicationDetail(ApplicationOut):
     events: list[EventOut]
+    hold_until: datetime | None
+    now: datetime
 
 
 class ApplicationList(BaseModel):
@@ -189,12 +193,18 @@ def list_applications(
 
 
 @router.get("/api/applications/{application_id}", response_model=ApplicationDetail, responses=_404)
-def read_application(application_id: str, user: CurrentUser, db: Db) -> ApplicationDetail:
+def read_application(
+    application_id: str, request: Request, user: CurrentUser, db: Db
+) -> ApplicationDetail:
     """One of the caller's applications with its timeline."""
     application = service.get_application(db, user.id, _uuid_or_404(application_id, NO_APPLICATION))
     if application is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION)
     timeline: list[ApplicationEvent] = service.events(db, user.id, application.id)
+    held = application.state is State.held
     return ApplicationDetail(
-        **_out(application), events=[EventOut.model_validate(e) for e in timeline]
+        **_out(application),
+        events=[EventOut.model_validate(e) for e in timeline],
+        hold_until=full_auto.hold_until(db, application) if held else None,
+        now=deps.clock(request),
     )

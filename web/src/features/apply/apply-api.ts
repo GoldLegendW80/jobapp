@@ -42,7 +42,12 @@ const eventSchema = z.object({
 });
 export type ApplicationEvent = z.infer<typeof eventSchema>;
 
-const detailSchema = applicationSchema.extend({ events: z.array(eventSchema) });
+const detailSchema = applicationSchema.extend({
+  events: z.array(eventSchema),
+  // The end of a Full auto hold and the server's time, for the countdown.
+  hold_until: z.string().nullable().optional(),
+  now: z.string().optional(),
+});
 export type ApplicationDetail = z.infer<typeof detailSchema>;
 
 const answerSchema = z.object({

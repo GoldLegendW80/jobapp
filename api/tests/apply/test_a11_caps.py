@@ -461,9 +461,13 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
         "min_fit_chosen": False,
         "safety_ceiling": 30,
         "hold_s": 900,
+        "hold_min_s": 900,
         "company_days": 30,
         "show_postings_from": None,
         "write_documents_from": None,
+        "rehearsals": 3,
+        "rehearsals_done": 0,
+        "full_auto_since": None,
     }
     a11.search(db, person_a.user_id, {"min_fit": 60, "documents": {"min_fit": 65}})
     db.commit()

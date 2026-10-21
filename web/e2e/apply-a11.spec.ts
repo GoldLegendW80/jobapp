@@ -181,7 +181,9 @@ test("the person adds a cap of 1 for the company on the Applications page", asyn
   await expect(
     page.getByRole("heading", { name: "Applications", level: 1 }),
   ).toBeVisible();
-  await expect(page.getByRole("radio", { name: "Full auto" })).toBeDisabled();
+  await expect(
+    page.getByRole("radio", { name: "Full auto" }),
+  ).not.toBeChecked();
 
   await page.getByRole("button", { name: "Add a cap" }).click();
   const form = page.getByRole("form", { name: "New cap" });

@@ -64,6 +64,7 @@ import pypdf
 from pypdf import errors
 
 PAGES_MAX = 200  # pages of one PDF read as text (SPEC-ingestion.md, Limits)
+CLAIMED_MAX = 100_000  # parser_client.MAX_PAGES: a file that claims more is given as this
 TEXT_MAX_CHARS = 500_000  # ingestion_documents.text, form feeds included
 SCAN_MIN_CHARS = 50  # fewer characters that are not whitespace: an image page
 LINKS_MAX = 50  # addresses kept per page
@@ -305,7 +306,7 @@ def open_reader(data: bytes):
     """The reader of a PDF that opens, and how many pages it has. Raises _Refused."""
     try:
         reader = pypdf.PdfReader(io.BytesIO(data), strict=False)
-        total = len(reader.pages)
+        total = min(len(reader.pages), CLAIMED_MAX)  # /Count is whatever the file says
     except errors.DependencyError:  # AES, and no `cryptography` here
         raise _Refused("encryption") from None
     except (errors.FileNotDecryptedError, errors.WrongPasswordError):

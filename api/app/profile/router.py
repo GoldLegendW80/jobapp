@@ -76,7 +76,7 @@ router = APIRouter(prefix="/api/profile", tags=["profile"], dependencies=[Depend
 router.include_router(boards.router)
 
 UNKNOWN_SECTION = "Unknown profile section."
-ONBOARDING_RESERVED = "The onboarding dates are set by the welcome steps, not by a save."
+ONBOARDING_RESERVED = "The onboarding dates and steps are set by the welcome steps, not by a save."
 REVISION_NOT_FOUND = "Revision not found."
 STALE = "The profile changed since you loaded it. Review the current version and save again."
 TOO_LARGE = "The import file is larger than 2 MB."
@@ -235,7 +235,7 @@ def import_profile(
     raw: Annotated[bytes, Depends(_import_body)], user: CurrentUser, request: Request, db: Db
 ) -> Any:
     """Replace the whole profile with an export file: all seven sections in one transaction (an
-    older file without `preferences` reads its defaults; the stored onboarding dates are kept), one
+    older file without `preferences` reads its defaults; the stored onboarding part is kept), one
     revision each; the photo too when the file has one. With `base_revision`, a profile changed
     since then is a 409; without it the import simply applies after any save in progress."""
     try:
