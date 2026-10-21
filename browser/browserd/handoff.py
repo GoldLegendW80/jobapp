@@ -178,7 +178,8 @@ async def _to_agent(svc: Any, lease: Lease, handoff: HandOff) -> bool:
 
 
 async def open_address(browser: Any, address: str) -> Any:
-    """The tab that shows the noted address: a restored one, else the tab Chromium opened."""
+    """The tab that shows the noted address: one already there, else the tab Chromium opened
+    (prep removes the last session's tabs, so none is restored: issue #488), sent there."""
     context = browser.browser.contexts[0]
     for page in context.pages:
         if page.url == address:

@@ -15,11 +15,11 @@ so the call never holds the apply queue) calls `before_decision` first, outside 
    answers only the motivation, the stated years and the highest degree) and the item's posting,
    all of the item's own person. It asks for no call when the item has no free text by the
    agent, or when the decision would refuse it anyway (the Like used or too old, Full auto off,
-   `caps.check`, the documents need a look, `full_auto.checks` answers anything but
-   `model_check_not_run`), which also covers a result already stored for the current hash: one
-   call per item and hash. An item with more than `MAX_ANSWERS` free texts, or one longer than
-   `ANSWER_MAX`, gets no call either: it is stored `failed` (`too_many_answers`, `too_long`),
-   since the prompt holds every text whole or none.
+   `caps.check`, LinkedIn's guard (`caps.linkedin_refusal`), the documents need a look,
+   `full_auto.checks` answers anything but `model_check_not_run`), which also covers a result
+   already stored for the current hash: one call per item and hash. An item with more than
+   `MAX_ANSWERS` free texts, or one longer than `ANSWER_MAX`, gets no call either: it is stored
+   `failed` (`too_many_answers`, `too_long`), since the prompt holds every text whole or none.
 2. The run: `RuntimeCheck`, the agents runtime in this process (the pattern of
    `agents.RuntimeAnswerAgent`): `internal`, `private_io`, `live_text=False`,
    `model_by_credential`, `TOKEN_BUDGET` (twice the estimate of 6,500 tokens), one tool,
@@ -540,6 +540,8 @@ def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[
         return "refused_anyway"
     # Read without the gate's locks: it only spares a call, the decision checks again under them.
     if caps.check(db, application, now) is not None:
+        return "refused_anyway"
+    if caps.linkedin_refusal(db, application, now) is not None:
         return "refused_anyway"
     if gate.documents_need_review(application.document_versions):
         return "refused_anyway"

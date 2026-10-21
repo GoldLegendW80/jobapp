@@ -235,8 +235,9 @@ def _spent(db: Session, application: Application) -> Authorisation | None:
 def recheck(db: Session, application: Application, posting: Job, now: datetime) -> Stop | None:
     """The gate's checks that can change after its decision, again (the caller holds the gate's
     locks): the approval still valid (`full_auto.expired`, else `ready`,
-    `authorisation_expired`), never apply, duplicates (this application excluded), the caps, and
-    in Full auto `full_auto.recheck`. A refusal ends as `decide`'s does, `blocked` with its code
+    `authorisation_expired`), never apply, LinkedIn's guard on a form on LinkedIn (a pause that
+    started since), duplicates (this application excluded), the caps, and in Full auto
+    `full_auto.recheck`. A refusal ends as `decide`'s does, `blocked` with its code
     (`posting_closed` for a closed posting), except that a code `decide` keeps at `ready` goes
     back to `ready`: an approved application never waits on it."""
     spent = _spent(db, application)
@@ -247,7 +248,7 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
         gate._rules(db, application.user_id),
         swept=guardrails.swept_never_apply(db, application.user_id, posting.id),
         mode=full_auto.blocking_mode(application.mode),
-    )
+    ) or caps.linkedin_refusal(db, application, now)
     if code is None:
         duplicate = guardrails.duplicates(
             db, application.user_id, posting, application.canonical_key, now, exclude=application.id

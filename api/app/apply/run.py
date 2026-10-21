@@ -6,7 +6,10 @@ before any decision. One job at a time (the queue's concurrency is 1, the browse
 
 1. Under the posting's row lock, then the application's: the application is still `queued` and
    not Apply myself (A9's); never apply is read again (`guardrails.never_apply`): a match ends it
-   `blocked` before the lease (test_a_never_apply_posting_is_refused_before_the_lease).
+   `blocked` before the lease (test_a_never_apply_posting_is_refused_before_the_lease). A form
+   on LinkedIn passes LinkedIn's guard first (`caps.linkedin_refusal`, browser B10): the switch
+   off, the sentence not accepted or a checkpoint's pause ends it `blocked` with `linkedin_off`
+   or `linkedin_paused`, before the lease too.
 2. The documents through `documents.current` (D14): no CV and none coming is `blocked` with
    `no_documents`; a CV or a letter still being written keeps the application `queued` with
    `needs` = `documents:<reason>`, and the tick asks again. Nothing is refused on content: the
@@ -59,7 +62,7 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, full_auto, guardrails, model_check, shots, states
+from app.apply import agent, caps, full_auto, guardrails, model_check, shots, states
 from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
@@ -297,6 +300,8 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         swept=guardrails.swept_never_apply(db, user_id, posting.id),
         mode=full_auto.blocking_mode(application.mode),
     )
+    if code is None:
+        code = caps.linkedin_refusal(db, application, now)
     if code is not None:
         _end(db, application, State.blocked, code, now)
         return "blocked"

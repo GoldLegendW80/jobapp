@@ -34,11 +34,16 @@ export function LikeButton({
   const like = async () => {
     setBusy(true);
     let liked = 0;
+    let fullAuto = 0;
+    let rehearsals = 0;
     const refused = new Map<string, number>();
     for (const postingId of chosen) {
       try {
-        await likePosting(postingId);
+        const done = await likePosting(postingId);
         liked += 1;
+        if (done.application.mode === "full_auto") fullAuto += 1;
+        if (done.application.mode === "full_auto" && done.application.dry_run)
+          rehearsals += 1;
         void queryClient.invalidateQueries({
           queryKey: applicationsKey(postingId),
         });
@@ -51,7 +56,11 @@ export function LikeButton({
     void queryClient.invalidateQueries({ queryKey: queueKey });
     if (liked > 0) {
       toast.success(
-        `${plural(liked, "posting")} liked. The assistant fills each form, then waits for your approval in Applications.`,
+        rehearsals > 0
+          ? `${plural(liked, "posting")} liked. Full auto rehearses first: the app fills the form, submits nothing, and asks you "Does this look right?" in Applications.`
+          : fullAuto > 0
+            ? `${plural(liked, "posting")} liked. In Full auto, the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.`
+            : `${plural(liked, "posting")} liked. The assistant fills each form, then waits for your approval in Applications.`,
         {
           duration: 10_000,
           action: {

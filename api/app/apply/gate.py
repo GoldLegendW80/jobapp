@@ -14,7 +14,8 @@ person's apply lock and the application's row lock, the checks of the spec in or
 1. the kill switches: `APPLY_SUBMIT_ENABLED` and the administrator's pause (`admin.py`);
 2. the authorisation: its kind for the mode, owner, application, hash, unused, not expired; and
    the application `ready`;
-3. never apply (`guardrails.never_apply`, the sweep's event included);
+3. never apply (`guardrails.never_apply`, the sweep's event included), then LinkedIn's guard
+   on a form on LinkedIn (`caps.linkedin_refusal`: `linkedin_off`, `linkedin_paused`);
 4. duplicates (`guardrails.duplicates`, this application excluded);
 5. `caps.check`: the person's pause, company caps, and Full auto's one per company rule and
    safety ceiling (A11; each refusal leaves the application `ready`);
@@ -96,6 +97,9 @@ SENTENCES = {
     ),
     "documents_review": "Your documents need a look before they are sent.",
     "manual": "You apply yourself to this one: the app does not click Submit.",
+    # LinkedIn's guard on a form on LinkedIn (browser B10, caps.linkedin_refusal).
+    "linkedin_off": "LinkedIn is off for you: turn it on in Find jobs to apply there.",
+    "linkedin_paused": "LinkedIn is paused for a week after a security check. Nothing was sent.",
     "not_cancellable": "This application can no longer be stopped or rejected.",
     "not_unknown": "This application is not waiting for you to confirm it.",
     "not_retryable": "Only an unconfirmed or refused application can be tried again.",
@@ -443,6 +447,8 @@ def decide(
         swept=guardrails.swept_never_apply(db, user_id, posting.id),
         mode=full_auto.blocking_mode(application.mode),
     )
+    if code is None:
+        code = caps.linkedin_refusal(db, application, now)
     if code is not None:
         return refused(code)
     duplicate = guardrails.duplicates(

@@ -4,6 +4,7 @@ import { useCallback } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { FinishSetupCard } from "@/features/onboarding/onboarding-gate";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
@@ -67,6 +68,7 @@ export function JobsPage() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <JobsViewTabs current="list" query={query} />
+      <FinishSetupCard />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>

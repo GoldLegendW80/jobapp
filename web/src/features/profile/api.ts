@@ -238,7 +238,12 @@ export interface PayRange {
 
 export interface Preferences {
   /** written by the first login wizard only (O5); a save sends it back unchanged */
-  onboarding: { completed_at: string | null; dismissed_at: string | null };
+  onboarding: {
+    completed_at: string | null;
+    dismissed_at: string | null;
+    /** the wizard's steps passed (Next or Skip), so another device resumes there */
+    steps_passed: string[];
+  };
   documents_language: (typeof DOCUMENTS_LANGUAGES)[number];
   documents_tone: (typeof DOCUMENTS_TONES)[number];
 }
@@ -364,7 +369,7 @@ export const EMPTY: SectionData = {
     salary_ranges: [],
   },
   preferences: {
-    onboarding: { completed_at: null, dismissed_at: null },
+    onboarding: { completed_at: null, dismissed_at: null, steps_passed: [] },
     documents_language: "auto",
     documents_tone: "plain",
   },

@@ -6,21 +6,28 @@
   `rehearsed` and Full auto in rehearsal. 409 `not_rehearsal` for anything else, 409
   `rehearsal_taken` when another live application took the posting or its form since, 409 `busy`
   past a lock timeout; 404 for an application that is not the person's.
+- GET /api/apply/summary: Full auto's day so far (A13b), from midnight in the person's time zone
+  (`caps.day_start`, as the safety ceiling counts): how many were submitted, how many are held
+  now, and how many were sent to the review queue, by reason with its sentence. Counts and
+  codes only.
 
 The user always comes from the session (CSRF on the write, by the middleware);
 `Cache-Control: no-store`.
 """
 
+from datetime import datetime
 from typing import Annotated, Literal
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.apply import approval_router, full_auto
+from app.apply import approval_router, caps, full_auto, gate
+from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.apply.router import NO_STORE, ApplicationOut
-from app.db import get_session
+from app.db import get_session, read_snapshot
 from app.identity import deps
 from app.identity.models import User
 
@@ -52,3 +59,56 @@ def answer_rehearsal(
     """Does this look right? Yes sends it to the review queue; No keeps Full auto rehearsing."""
     act = full_auto.confirm_rehearsal if body.answer == "yes" else full_auto.decline_rehearsal
     return approval_router._person(request, user, db, application_id, act)
+
+
+class ReviewReasonOut(BaseModel):
+    code: str
+    sentence: str | None
+    count: int
+
+
+class SummaryOut(BaseModel):
+    since: datetime
+    submitted: int
+    held: int
+    sent_to_review: list[ReviewReasonOut]
+
+
+def _count(db: Session, *where: sa.ColumnElement[bool]) -> int:
+    return int(db.execute(sa.select(sa.func.count()).where(*where)).scalar_one())
+
+
+@router.get("/api/apply/summary", response_model=SummaryOut)
+def read_summary(request: Request, user: CurrentUser, db: Db) -> SummaryOut:
+    """Full auto today: submitted, held, sent to review and why."""
+    read_snapshot(db)
+    since = caps.day_start(deps.clock(request), caps.settings_of(db, user.id).timezone)
+    submitted = _count(
+        db,
+        Application.user_id == user.id,
+        Application.mode == Mode.full_auto,
+        Application.state == State.submitted,
+        Application.submitted_at >= since,
+    )
+    held = _count(
+        db,
+        Application.user_id == user.id,
+        Application.mode == Mode.full_auto,
+        Application.state == State.held,
+    )
+    code = sa.func.coalesce(ApplicationEvent.data["code"].astext, "other")
+    rows = db.execute(
+        sa.select(code, sa.func.count())
+        .where(
+            ApplicationEvent.user_id == user.id,
+            ApplicationEvent.kind == "sent_to_review",
+            ApplicationEvent.at >= since,
+        )
+        .group_by(code)
+        .order_by(sa.func.count().desc(), code)
+    ).all()
+    reasons = [
+        ReviewReasonOut(code=name, sentence=gate.SENTENCES.get(name), count=int(n))
+        for name, n in rows
+    ]
+    return SummaryOut(since=since, submitted=submitted, held=held, sent_to_review=reasons)

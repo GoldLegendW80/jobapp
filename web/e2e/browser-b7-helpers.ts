@@ -26,7 +26,13 @@ function compose(...args: string[]): string {
       "browser",
       ...args,
     ],
-    { cwd: root, encoding: "utf8", timeout: 120_000 },
+    // The stack's logs outgrow the default 1 MiB once every journey of the group ran (ENOBUFS).
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 120_000,
+      maxBuffer: 64 * 1024 * 1024,
+    },
   );
 }
 

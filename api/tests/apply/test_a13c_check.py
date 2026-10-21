@@ -746,7 +746,9 @@ def test_a_pass_covers_exactly_the_texts_the_model_read(
     )
 
 
-@pytest.mark.parametrize("refusal", ["full_auto_off", "paused_by_you", "authorisation_expired"])
+@pytest.mark.parametrize(
+    "refusal", ["full_auto_off", "paused_by_you", "authorisation_expired", "linkedin_off"]
+)
 def test_the_cheap_refusals_come_before_the_call(
     db: Session,
     factory: sessionmaker[Session],
@@ -767,6 +769,14 @@ def test_the_cheap_refusals_come_before_the_call(
         db.commit()
     elif refusal == "paused_by_you":
         caps.save_settings(db, person_a.user_id, AT, paused=True, min_fit=None)
+        db.commit()
+    elif refusal == "linkedin_off":
+        # An Ashby item whose form is on LinkedIn: the host decides, the person never allowed it.
+        db.execute(
+            sa.update(Application)
+            .where(Application.id == app_id)
+            .values(form_url="https://www.linkedin.com/jobs/view/4100000001/")
+        )
         db.commit()
     else:
         when = application(db, app_id).created_at + full_auto.LIKE_VALID
