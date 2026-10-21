@@ -44,7 +44,7 @@ die() {
 [[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 USAGE="usage: tests/e2e_jobs_jetson.sh [edit|view] (no argument: edit, the J4 journey)"
 (($# <= 1)) || die "$USAGE"
-JOURNEY="${1:-edit}"
+JOURNEY="${1-edit}"
 case "$JOURNEY" in
 edit)
   EVIDENCE_NAME=jobs-j4-jetson
