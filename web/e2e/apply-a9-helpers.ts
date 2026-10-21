@@ -71,6 +71,8 @@ export function remoteSpot(selector: string): { x: number; y: number } {
 export async function clickInView(page: Page, selector: string): Promise<void> {
   const spot = remoteSpot(selector);
   const canvas = page.getByTestId("live-screen").locator("canvas").first();
+  // A point of the canvas outside the window reaches nothing: the whole canvas is shown first.
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   const size = await canvas.evaluate((c: HTMLCanvasElement) => ({
     width: c.width,
@@ -82,4 +84,10 @@ export async function clickInView(page: Page, selector: string): Promise<void> {
     box.x + (spot.x * box.width) / size.width,
     box.y + (spot.y * box.height) / size.height,
   );
+}
+
+/** The person types `text` into the focused field of the form with the live view's keyboard. */
+export async function typeInView(page: Page, text: string): Promise<void> {
+  await page.getByRole("button", { name: "Keyboard" }).click();
+  await page.getByLabel("Type into your browser").pressSequentially(text);
 }

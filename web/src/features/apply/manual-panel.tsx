@@ -135,7 +135,7 @@ export function ManualPanel({
 
   return (
     <section
-      aria-label="Apply myself"
+      aria-label="Your session to send it yourself"
       data-testid="manual-panel"
       className="flex flex-col gap-3"
     >

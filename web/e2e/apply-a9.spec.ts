@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
-import { clickInView } from "./apply-a9-helpers";
+import { clickInView, typeInView } from "./apply-a9-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import { fieldValue } from "./browser-b4-helpers";
 import {
@@ -125,7 +125,7 @@ test("an invented person has a posting on the fake Ashby form with its CV and le
 
 test("the person applies in the live view, submits on the form and records it", async () => {
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply" });
+  const section = page.getByRole("region", { name: "Apply", exact: true });
   await section.getByRole("button", { name: "Apply myself" }).click();
 
   const panel = page.getByTestId("manual-panel");
@@ -150,8 +150,7 @@ test("the person applies in the live view, submits on the form and records it", 
   // The person, through the live view only: the location from the list, two answers, a typed
   // reason, the consent, then the form's own Submit.
   await clickInView(page, "#_systemfield_location");
-  await page.keyboard.press("Control+a");
-  await page.keyboard.type("Paris");
+  await typeInView(page, "Paris");
   await expect
     .poll(() => fieldValue("#_systemfield_location"), { timeout: 15_000 })
     .toBe("Paris");
@@ -165,10 +164,25 @@ test("the person applies in the live view, submits on the form and records it", 
   await clickInView(page, '[data-field="q_eu_work"] button[data-option="yes"]');
   await clickInView(page, '[data-field="q_sponsor"] button[data-option="no"]');
   await clickInView(page, "#q_why");
-  await page.keyboard.type(WHY);
+  await typeInView(page, WHY);
   await expect.poll(() => fieldValue("#q_why"), { timeout: 15_000 }).toBe(WHY);
   await clickInView(page, "#consent");
-  await clickInView(page, "button[data-submit]");
+  // The fake Ashby flags a submit that comes under 3 s after the last input as spam, as the real
+  // one does: the person clicks Submit again until the site takes it.
+  const accepted = async () =>
+    (await stub.submissions()).filter(
+      (one) => one.ats === "ashby" && one.accepted,
+    );
+  await expect
+    .poll(
+      async () => {
+        if ((await accepted()).length === 0)
+          await clickInView(page, "button[data-submit]");
+        return (await accepted()).length;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(1);
 
   // The watch sees the site's confirmation: one click records it.
   await panel
@@ -177,10 +191,10 @@ test("the person applies in the live view, submits on the form and records it", 
   await expect(section).toContainText("Applied.", { timeout: 30_000 });
   await expect(section).toContainText("You sent this form yourself.");
 
-  const sent = (await stub.submissions()).filter(
-    (one) => one.ats === "ashby" && one.accepted,
-  );
+  const sent = await accepted();
   expect(sent).toHaveLength(1);
+  for (const one of await stub.submissions())
+    expect(one.accepted || one.reason === "invisible_check").toBe(true);
   expect(sent[0]?.fields.q_why).toBe(WHY);
   expect(sent[0]?.files.map((one) => one.field)).toContain(
     "_systemfield_resume",
