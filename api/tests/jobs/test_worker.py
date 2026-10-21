@@ -193,6 +193,50 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
     assert asyncio.run(worker.check(settings)) == 1
 
 
+def test_every_queue_is_healthy_right_at_start_and_unchanged_after_an_interval(
+    settings: Settings, factory: sessionmaker[Session], fake_ats: FakeAts
+) -> None:
+    """No interval has elapsed when the workers are ready, yet `--check` passes; a second record
+    inside the interval changes nothing, one after it refreshes the same key."""
+    seen: dict[str, bytes] = {}
+
+    async def scenario(workers: list[Worker]) -> None:
+        # Straight after on_ready: one check, no wait.
+        assert await worker.check(settings) == 0
+        client = aioredis.from_url(settings.redis_url.get_secret_value())
+        try:
+            first = await client.get(queues.SWEEPS + ":health-check")
+            assert first is not None
+            seen["first"] = first
+            await workers[0].record_health()  # inside the interval: skipped
+            assert await client.get(queues.SWEEPS + ":health-check") == first
+            key = queues.SWEEPS + ":health-check"
+            await client.pexpire(key, 200)  # nearly expired
+            await workers[0].record_health()  # still inside the interval: skipped
+            assert await client.pttl(key) <= 200
+            workers[0]._last_health_check -= worker.HEALTH_INTERVAL_S + 1
+            await workers[0].record_health()  # an interval later: refreshed
+            assert await client.pttl(key) > 5000
+        finally:
+            await client.aclose()
+        assert await worker.check(settings) == 0
+
+    serve_until(settings, context(settings, fake_ats), scenario)
+    assert "first" in seen
+
+
+def test_check_fails_for_a_queue_whose_worker_did_not_start(
+    settings: Settings, factory: sessionmaker[Session], fake_ats: FakeAts
+) -> None:
+    ghost = worker.QueueSpec(name="ghost", functions=())
+
+    async def scenario(workers: list[Worker]) -> None:
+        assert await worker.check(settings) == 0
+        assert await worker.check(settings, [*worker.queues(settings), ghost]) == 1
+
+    serve_until(settings, context(settings, fake_ats), scenario)
+
+
 def test_stop_interrupts_a_running_sweep_cleanly(
     settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:

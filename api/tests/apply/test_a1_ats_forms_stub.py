@@ -168,6 +168,31 @@ def test_greenhouse_needs_the_privacy_box_and_records_the_voluntary_ones_only_wh
 
 
 # --- the variants --------------------------------------------------------------------------------
+@pytest.mark.parametrize("ats", ["ashby", "greenhouse"])
+def test_the_plain_variant_asks_only_what_any_profile_answers(forms: Forms, ats: str) -> None:
+    names = {f.name for f in forms.module.fields_for(ats, "plain")}
+    if ats == "ashby":
+        assert names == {
+            "_systemfield_name",
+            "_systemfield_email",
+            "_systemfield_resume",
+            "cover_letter",
+            "consent",
+        }
+    else:
+        assert names == {"first_name", "last_name", "email", "resume", "cover_letter", "privacy"}
+    page = forms.get(forms.posting_path(ats, "plain")).text
+    for left_out in ("arbitration", "marketing", "q_authorised", "q_eu_work", "q_why", "phone"):
+        assert f'name="{left_out}"' not in page
+
+
+def test_the_plain_greenhouse_form_takes_its_fields_only(forms: Forms) -> None:
+    plain = {k: GH_GOOD[k] for k in ("first_name", "last_name", "email", "privacy")}
+    assert forms.post(gh("plain"), plain, GH_FILES).json()["ok"] is True
+    no_privacy = {k: v for k, v in plain.items() if k != "privacy"}
+    assert set(forms.post(gh("plain"), no_privacy, GH_FILES).json()["errors"]) == {"privacy"}
+
+
 def test_a_closed_posting_answers_not_found_or_a_closed_page_and_takes_no_application(
     forms: Forms,
 ) -> None:

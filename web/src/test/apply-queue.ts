@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 
 import type { Answer } from "@/features/apply/apply-api";
-import type { QueueItem } from "@/features/apply/queue-api";
+import type { QueueItem, Summary } from "@/features/apply/queue-api";
 
 import { fakeApplication } from "./apply";
 import { server } from "./server";
@@ -58,9 +58,24 @@ export function fakeQueue(
     next: null as Refusal | null,
     /** The next approve answers 409 stale with these answers. */
     stale: null as Answer[] | null,
+    /** The server's time the queue answers with (the countdown reads it, not the page's clock). */
+    now: undefined as string | undefined,
+    mode: "review",
+    summary: {
+      since: "2026-10-14T00:00:00Z",
+      submitted: 0,
+      held: 0,
+      sent_to_review: [],
+    } as Summary,
+    rehearsals: [] as { id: string; answer: string }[],
     hash: (id: string) => `hash-${id}-${state.versions[id] ?? 1}`,
     waiting: () =>
-      state.items.filter((item) => WAITING.includes(item.state)).length,
+      state.items.filter(
+        (item) =>
+          (WAITING.includes(item.state) &&
+            !(item.state === "ready" && item.mode === "full_auto")) ||
+          item.rehearsal,
+      ).length,
     view: (id: string) => ({
       state: state.items.find((item) => item.id === id)?.state ?? "cancelled",
       dry_run: false,
@@ -95,7 +110,49 @@ export function fakeQueue(
       HttpResponse.json({
         items: state.items,
         waiting_on_you: state.waiting(),
+        ...(state.now ? { now: state.now } : {}),
       }),
+    ),
+    http.get("*/api/apply/summary", () => HttpResponse.json(state.summary)),
+    http.get("*/api/apply/settings", () =>
+      HttpResponse.json({
+        mode_after_like: state.mode,
+        full_auto_available: true,
+        paused: false,
+        min_fit: 80,
+        min_fit_chosen: true,
+        safety_ceiling: 30,
+        hold_s: 900,
+        hold_min_s: 900,
+        company_days: 30,
+        show_postings_from: null,
+        write_documents_from: null,
+        rehearsals: 3,
+        rehearsals_done: 3,
+        full_auto_since: null,
+      }),
+    ),
+    http.post(
+      "*/api/applications/:id/rehearsal",
+      async ({ params, request }) => {
+        const id = String(params.id);
+        const { answer } = (await request.json()) as { answer: string };
+        state.rehearsals.push({ id, answer });
+        const refusal = refused();
+        if (refusal) return refusal;
+        if (answer === "no") {
+          take(id);
+          return HttpResponse.json(fakeApplication("rehearsed", { id }));
+        }
+        state.items = state.items.map((item) =>
+          item.id === id
+            ? { ...item, state: "ready", mode: "review", rehearsal: false }
+            : item,
+        );
+        return HttpResponse.json(
+          fakeApplication("ready", { id, posting_id: id }),
+        );
+      },
     ),
     http.get("*/api/apply/queue/count", () =>
       HttpResponse.json({ waiting_on_you: state.waiting() }),

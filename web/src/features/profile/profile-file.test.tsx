@@ -234,6 +234,7 @@ describe("import dialog: a valid file", () => {
       "Skills: 4 categories, 1 gateUnchanged",
       "Search: 2 boards, 1 enabledUnchanged",
       "Answers: 2 countriesUnchanged",
+      "Preferences: Documents: language auto, tone plainUnchanged",
       "Photo: none in the fileKept",
     ]);
     expect(summary).toHaveTextContent(

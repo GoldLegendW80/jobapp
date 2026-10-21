@@ -3,6 +3,7 @@ and freezing").
 
     read(kind, raw, employer_keys) -> Reading                  pure
     import_legacy(db, user_id, at) -> Summary                  the caller commits or rolls back
+    log_run(user_id, summary, dry_run=...)                     then logs what it did
 
 The jobs import attached each posting folder's `cv.json`, `letter.json`, `cv.pdf` and
 `letter.pdf` as `job_files` with origin `legacy` (app.jobs.importer). This module turns them into
@@ -19,15 +20,19 @@ the posting's CV and letter, once:
 - **A PDF without its JSON**: nothing is imported, the file is counted. A JSON without its PDF is
   imported, counted, and renders like any draft.
 - **Decision 7**: a `role` of an experience entry (the title the command line printed under the
-  employer) is never content: it moves to `notes`, one line per role, and the template prints
-  the profile's title. An employer key is matched exactly to the profile's keys; one that is not
+  employer) is never content: it moves to `notes`, one line per role after the file's own
+  notes, and the template prints the profile's title. A role whose line would take the notes
+  over their limit is noted on its entry (`experience.N.role`); the notes are never dropped
+  for it. An employer key is matched exactly to the profile's keys; one that is not
   there is kept in the content, which never prints it, with the note `unknown_employer` (the
   rule of `rules.employer_keys`). A key is never guessed.
 - **Content that does not validate** is never dropped: the document is made, its draft holds
   every field and list item that validates on its own (in the order of the file, the hard limits
-  of `content.py` included), each one left out is noted `legacy_invalid` with its path in the
-  file and the content code, and the file stays attached to the posting. Such a draft gets no
-  version, except on a sent posting with its PDF, whose PDF is frozen as above all the same.
+  of `content.py` included), and an experience entry or a skills group whose other fields
+  validate keeps the bullets or skills of it that do; each one left out is noted
+  `legacy_invalid` with its path in the file and the content code, and the file stays
+  attached to the posting. Such a draft gets no version, except on a sent posting with its
+  PDF, whose PDF is frozen as above all the same.
   A file over `content.RAW_MAX_BYTES`, or not a JSON object, is not read: the draft is empty.
 - **Idempotent**: a posting that already has a document of a kind (imported before, written by
   a writer, or by the person) is left as it is and counted. The person's row is locked first,
@@ -35,7 +40,8 @@ the posting's CV and letter, once:
   documents (the lock order of store.py), so a status change waits for the import.
 
 Imported postings are never written again by the automatic generation: `eligibility` refuses a
-posting with legacy files. Logs carry ids and counts, never a document's text.
+posting with legacy files. Logs carry ids and counts, never a document's text: the caller logs
+the run once its transaction ended (`log_run`), so a dry run never logs an import.
 """
 
 from __future__ import annotations
@@ -83,6 +89,9 @@ _LIST_MAX = {
     "skills": c.SKILLS_MAX,
     "paragraphs": c.PARAGRAPHS_MAX,
 }
+# The list inside an entry of a list field, salvaged one level further, and its maximum count.
+_INNER = {"experience": "bullets", "skills": "items"}
+_INNER_MAX = {"experience": c.BULLETS_MAX, "skills": c.SKILL_ITEMS_MAX}
 
 
 # --- reading one file (pure) --------------------------------------------------------------------
@@ -147,11 +156,13 @@ def _decode(raw: bytes) -> tuple[dict[str, Any] | None, str | None]:
 
 def _roles(data: dict[str, Any], left: list[tuple[str, str]]) -> int:
     """Decision 7: each experience entry's `role` leaves the entry and becomes a line of
-    `notes`. A role that is not text is noted, an empty one holds nothing to keep."""
+    `notes`, after the file's own notes. A role that is not text is noted, an empty one holds
+    nothing to keep. The notes stay within their limit: the file's own notes come first, and a
+    role whose line does not fit after them is noted on its entry, never the whole field."""
     entries = data.get("experience")
     if not isinstance(entries, list):
         return 0
-    lines = []
+    lines: list[tuple[int, str]] = []
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict) or "role" not in entry:
             continue
@@ -162,32 +173,85 @@ def _roles(data: dict[str, Any], left: list[tuple[str, str]]) -> int:
             text = " ".join(role.split())
             if text:
                 key = entry.get("employer_key")
-                lines.append(ROLE_LINE.format(key=key if isinstance(key, str) else "?", role=text))
+                lines.append(
+                    (i, ROLE_LINE.format(key=key if isinstance(key, str) else "?", role=text))
+                )
         else:
             left.append((f"experience.{i}.role", "wrong_type"))
-    if lines:
-        notes = data.get("notes")
-        if isinstance(notes, str) or notes is None:
-            data["notes"] = "\n\n".join(p for p in ((notes or "").strip(), "\n".join(lines)) if p)
+    if not lines:
+        return 0
+    notes = data.get("notes")
+    own = notes.strip() if isinstance(notes, str) else ""
+    if notes is not None and not isinstance(notes, str):
+        left.append(("notes", "wrong_type"))
+    elif own and (error := _first_error("cv", {"notes": own})) is not None:
+        left.append(("notes", error.code))
+        own = ""
+    kept: list[str] = []
+    for i, line in lines:
+        text = "\n\n".join(p for p in (own, "\n".join([*kept, line])) if p)
+        error = _first_error("cv", {"notes": text})
+        if error is None:
+            kept.append(line)
         else:
-            left.append(("notes", "wrong_type"))
-            data["notes"] = "\n".join(lines)
-    return len(lines)
+            left.append((f"experience.{i}.role", error.code))
+    data["notes"] = "\n\n".join(p for p in (own, "\n".join(kept)) if p)
+    return len(kept)
+
+
+def _inner(
+    kind: c.Kind, name: str, i: int, item: dict[str, Any], left: list[tuple[str, str]]
+) -> dict[str, Any]:
+    """An entry whose other fields validate, with the elements of its own list (`bullets`, a
+    group's `items`) that validate, each alone and then after the ones kept; the left out
+    paths go to `left`."""
+    inner = _INNER[name]
+    kept: list[Any] = []
+    prefix = f"{name}.0.{inner}.0"
+    for j, element in enumerate(item[inner]):
+        if len(kept) >= _INNER_MAX[name]:
+            left.append((f"{name}.{i}.{inner}.{j}", "too_many"))
+            continue
+        error = _first_error(kind, {name: [{**item, inner: [element]}]}) or _first_error(
+            kind, {name: [{**item, inner: [*kept, element]}]}
+        )
+        if error is None:
+            kept.append(element)
+            continue
+        tail = error.path[len(prefix) :] if error.path.startswith(prefix) else ""
+        left.append((f"{name}.{i}.{inner}.{j}{tail}", error.code))
+    return {**item, inner: kept}
 
 
 def _items(kind: c.Kind, name: str, value: list[Any], left: list[tuple[str, str]]) -> list[Any]:
     """The items of a list field that validate, each alone and then after the ones kept (a
-    duplicate employer, one too many): linear, every check on a list of at most the field's
-    maximum count."""
+    duplicate employer, one too many). An entry whose own list fails and whose other fields
+    validate keeps the elements of that list that do (`_inner`); an entry wrong elsewhere is
+    left out whole, noted with what is wrong elsewhere. Linear: every check is on a list of at
+    most the field's maximum count, of entries holding at most their own list's maximum."""
     kept: list[Any] = []
     prefix = f"{name}.0"
+    inner = _INNER.get(name)
     for i, item in enumerate(value):
         if len(kept) >= _LIST_MAX[name]:
             left.append((f"{name}.{i}", "too_many"))
             continue
-        error = _first_error(kind, {name: [item]}) or _first_error(kind, {name: [*kept, item]})
+        inside: list[tuple[str, str]] = []
+        error = _first_error(kind, {name: [item]})
+        if (
+            error is not None
+            and inner is not None
+            and isinstance(item, dict)
+            and isinstance(item.get(inner), list)
+            and error.path.startswith(f"{prefix}.{inner}")
+        ):
+            error = _first_error(kind, {name: [{**item, inner: []}]})
+            if error is None:
+                item = _inner(kind, name, i, item, inside)
+        error = error or _first_error(kind, {name: [*kept, item]})
         if error is None:
             kept.append(item)
+            left += inside
             continue
         tail = error.path[len(prefix) :] if error.path.startswith(prefix) else ""
         left.append((f"{name}.{i}{tail}", error.code))
@@ -428,5 +492,11 @@ def import_legacy(db: Session, user_id: uuid.UUID, at: datetime) -> Summary:
         summary.postings += 1
         for kind in (Kind.cv, Kind.letter):
             _import_one(db, user_id, posting, kind, found[posting_id], sent, keys, at, summary)
-    logger.info("documents.legacy.imported", extra={"user_id": str(user_id), **summary.as_dict()})
     return summary
+
+
+def log_run(user_id: uuid.UUID, summary: Summary, *, dry_run: bool) -> None:
+    """The one log line of a run, written by the caller once its transaction ended: committed
+    (`documents.legacy.imported`) or rolled back for a dry run (`documents.legacy.dry_run`)."""
+    event = "documents.legacy.dry_run" if dry_run else "documents.legacy.imported"
+    logger.info(event, extra={"user_id": str(user_id), **summary.as_dict()})

@@ -10,8 +10,9 @@
   201 with the lease when the browser was free or already theirs, 202 with the place in the
   queue otherwise. It is idempotent: a waiting page asks again to keep its place and to take the
   turn. Both run Chromium with no debugging port and the person holding the input (B7); a
-  `signin` may open at the address the person typed, an http or https address with a host
-  (app/browser/address.py), else 422 `bad_address` and nothing starts.
+  `signin` may open at the address the person typed, an http or https address with a host of at
+  most ADDRESS_MAX characters (app/browser/address.py), else 422 `bad_address` and nothing
+  starts, a value that is not a string included.
 - DELETE /api/browser/sessions/current ends the person's own session, or takes them out of the
   queue: 204, or 404 when there was neither.
 
@@ -23,12 +24,19 @@ build is `Cache-Control: no-store` (the 401, 403 and 422 built before them hold 
 
 import math
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
 
 from app.browser import profiles
 from app.browser.address import ADDRESS_MAX, check_address
@@ -130,9 +138,16 @@ class SessionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     purpose: Literal["look", "signin"]
-    # Bounded for the body limit only, with room above ADDRESS_MAX: a longer address still gets
-    # check_address's own bad_address answer, not a schema error.
-    address: Annotated[str, Field(max_length=4 * ADDRESS_MAX)] | None = None
+    address: str | None = Field(default=None, max_length=ADDRESS_MAX)
+
+    @field_validator("address", mode="wrap")
+    @classmethod
+    def _any_bad_address(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> str | None:
+        # Not a string, or too long: "" here, so start_session answers 422 `bad_address`.
+        try:
+            return handler(value)
+        except ValidationError:
+            return ""
 
 
 class SessionOut(BaseModel):

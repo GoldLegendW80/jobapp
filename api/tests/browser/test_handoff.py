@@ -8,8 +8,9 @@ answers `waiting_person`, Chromium runs again with no listening port and no debu
 the tab's address, its query string kept; the person signs in with the live view's keyboard
 (the RFB key events of a real viewer, as noVNC sends them); "done" brings Chromium back with CDP
 at the same address and the agent's snapshot reads the cookie the person's sign in set; "done"
-twice restarts once; after "done" the allow list is back (the window the person opened off the
-list is never listed nor read, and a link off it clicked by the agent answers
+twice restarts once; in the person's phase chrome://flags is blocked and a port the uid opens
+ends the lease `debugging_port`; after "done" the allow list is back (the window the person
+opened off the list is never listed nor read, and a link off it clicked by the agent answers
 `host_not_allowed`); Cancel releases the lease `signin_cancelled` with no Chromium left; the
 typed name is in no log of browserd.
 
@@ -28,7 +29,14 @@ from urllib.parse import urlsplit
 import pytest
 
 from tests.browser.test_b5_container import ref
-from tests.browser.test_b7_container import browser_argv, listening, wait_title
+from tests.browser.test_b7_container import (
+    browser_argv,
+    listening,
+    port_listener,
+    type_address,
+    wait_title,
+    window_titles,
+)
 from tests.browser.test_browser_container import PAGES, Stack, processes, stack
 
 __all__ = ["stack"]
@@ -294,3 +302,24 @@ def test_cancel_releases_the_lease_and_leaves_no_chromium(stack: Stack) -> None:
     assert stack.current()["lease"] is None
     assert agent.chromium() == []
     assert agent.handoff("done")["status"] == 404
+
+
+def test_the_persons_phase_blocks_chrome_pages_and_ends_on_a_port(
+    stack: Stack, agent: Agent
+) -> None:
+    """The person's Chromium of a hand off is a person's session like any other (B7, owner's
+    decision of 2026-10-20): every chrome:// page but the image's few is blocked, and a port its
+    uid opens ends the lease `debugging_port`."""
+    assert agent.tool("browser_navigate", url=LOGIN)["ok"]
+    answer = agent.watched_call(site="Example Jobs", reason="The form needs an account.")
+    assert answer["error"] == "waiting_person", answer
+    wait_title(stack, f"Example Jobs: signed out, {WHERE}")
+    type_address(stack, "chrome://flags")
+    wait_title(stack, '"chrome://flags/ - Chromium"')
+    assert '"Experiments - Chromium"' not in window_titles(stack)
+    type_address(stack, "chrome://policy")
+    wait_title(stack, '"Policies - Chromium"')
+    with port_listener(stack, agent.uid):
+        ended = stack.wait_ended()
+        assert ended["last_end"]["reason"] == "debugging_port"
+        assert agent.chromium() == []

@@ -86,6 +86,8 @@ NOT_FOUND = "Document not found."
 VERSION_NOT_FOUND = "Version not found."
 POSTING_NOT_FOUND = "Job not found."
 NO_PDF = "This version has no PDF yet."
+NO_PREVIEW = "This PDF was made by the command line, so it has no preview here. Open the PDF."
+UNDRAWABLE = "The first page of this PDF cannot be drawn. Open the PDF."
 TEMPLATE_NOT_FOUND = "Template not found."
 UNKNOWN_TEMPLATE = "Unknown template."
 STALE = "This document changed since you opened it. Here is the current draft."
@@ -136,6 +138,7 @@ class VersionSummary(BaseModel):
     fit_step: int | None
     pages: int | None
     has_pdf: bool
+    has_preview: bool  # page1.png draws it: a PDF the app's renderer made
     approved_at: datetime | None
     frozen_at: datetime | None
     frozen_reason: FreezeReason | None
@@ -242,6 +245,7 @@ def _summary(version: DocumentVersion) -> dict[str, Any]:
         "fit_step": version.fit_step,
         "pages": version.pages,
         "has_pdf": freeze.rendered(version),
+        "has_preview": freeze.rendered(version) and version.legacy_file_id is None,
         "approved_at": version.approved_at,
         "frozen_at": version.frozen_at,
         "frozen_reason": version.frozen_reason,
@@ -645,14 +649,21 @@ def read_page1(
     db: Db,
     width: Annotated[int, Query(ge=PREVIEW_MIN, le=PREVIEW_MAX)] = PREVIEW_WIDTH,
 ) -> Response:
-    """Page 1 of the version's PDF as a PNG, for phones and cards."""
+    """Page 1 of the version's PDF as a PNG, for phones and cards. Only a PDF the app's renderer
+    made is drawn: the command line's file of an imported version is never handed to PDFium in
+    the api (`has_preview` of the version says which)."""
     version = _version(db, user, document_id, number)
+    if version.legacy_file_id is not None:
+        raise _error(status.HTTP_404_NOT_FOUND, NO_PREVIEW)
     pdf = freeze.pdf(db, user.id, version.id)
     if pdf is None:
         raise _error(status.HTTP_404_NOT_FOUND, NO_PDF)
     db.close()  # the drawing takes a moment: the connection goes back to the pool first
-    with _previews:
-        png = render_client.page1_png(pdf, width)
+    try:
+        with _previews:
+            png = render_client.page1_png(pdf, width)
+    except render_client.RenderError:
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, UNDRAWABLE) from None
     return Response(
         content=png,
         media_type="image/png",
