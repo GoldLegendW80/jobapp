@@ -9,7 +9,9 @@ import { EMPTY } from "@/features/profile/api";
 import { StepLooking, StepPay, StepWork } from "./step-panels";
 import { draftOf, type Draft } from "./steps";
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 describe("simple wizard panels (O10)", () => {
   it("starts with roles and keeps every targeting choice under Advanced", async () => {
@@ -56,7 +58,9 @@ describe("simple wizard panels (O10)", () => {
       return (
         <StepPay
           draft={draft}
-          change={(patch) => setDraft((old) => ({ ...old, ...patch }))}
+          change={(patch) => {
+            setDraft((old) => ({ ...old, ...patch }));
+          }}
         />
       );
     }

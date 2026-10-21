@@ -317,7 +317,9 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
       hint="Cities, regions or countries, separated by commas, for example Lyon, Remote Europe."
       value={draft.locations}
       readOnly={patterns?.places}
-      onChange={(locations) => change({ locations })}
+      onChange={(locations) => {
+        change({ locations });
+      }}
     />
   );
   return (

@@ -42,7 +42,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  await context?.close();
+  await context.close();
   clearAttempts([person.email]);
 });
 
@@ -176,7 +176,7 @@ test("records each other page at 375px for the owning lane's follow-up", async (
     ["base-cv-editor", `/profile/cv/${baseId}`],
   ];
   for (const [name, route] of pages) {
-    await page.goto(route!);
+    await page.goto(route);
     await expect(
       page.locator("main").getByRole("heading").first(),
     ).toBeVisible();
