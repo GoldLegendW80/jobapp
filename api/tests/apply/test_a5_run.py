@@ -75,9 +75,17 @@ def services(
     answer_agent: FakeAgent | None = None,
     **rest: Any,
 ) -> run.Services:
+    clock = Clock()
+
+    async def nobody_comes(seconds: float) -> None:
+        clock.now += timedelta(seconds=seconds)
+
+    # A10a's wait for the person: never a real sleep, and nobody comes unless a test says so.
+    rest.setdefault("sleep", nobody_comes)
+    rest.setdefault("needs_person_wait_s", 10)
     return run.Services(
         sessions=factory,
-        clock=Clock(),
+        clock=clock,
         leases=leases or FakeLeases(),
         tools_for=lambda user, lease, token: form,
         answer_agent=answer_agent,
