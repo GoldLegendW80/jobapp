@@ -643,6 +643,15 @@ class ImportSummary:
     warnings: list[str] = field(default_factory=list)
 
 
+def carried_fields(item: ImportJob) -> tuple[str, ...]:
+    """The pay and work mode columns an import row sets (opportunities O3b): the four pay
+    columns (PAY_FIELDS) when it carries a pay or nulls, the work mode when it carries one or
+    null; a row written before they existed sets none, so the stored values stay."""
+    return (PAY_FIELDS if item.carries_pay else ()) + (
+        ("work_mode",) if item.carries_work_mode else ()
+    )
+
+
 def is_sent(job: Job) -> bool:
     """Whether the job's files went to the company (hard rule 9: they are never replaced nor
     deleted): its status is applied, or it has an applied_on date (interview, rejected...)."""
@@ -718,6 +727,7 @@ def _create_imported(
         user_id=user_id,
         slug=slug,
         **{name: getattr(item, name) for name in IMPORTED_FIELDS if name != "found_on"},
+        **{name: getattr(item, name) for name in carried_fields(item)},
         found_on=item.found_on or now.date(),
         fit_overridden=manual,
         created_at=now,
@@ -744,6 +754,9 @@ def _update_imported(
             continue
         if getattr(job, name) != new:
             changed[name] = new
+    for name in carried_fields(item):
+        if getattr(job, name) != getattr(item, name):
+            changed[name] = getattr(item, name)
     if job.fit_overridden != manual:
         changed["fit_overridden"] = manual
 
