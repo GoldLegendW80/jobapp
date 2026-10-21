@@ -47,6 +47,7 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-10-10 | Explicit consent the first time a run sends documents to Anthropic, recorded with the date and the version of the text. |
 | 2026-10-10 | A run pauses at twice its high estimate; an explicit Continue raises the ceiling by one estimate. Applies to every user. |
 | 2026-10-10 | Parsers run in their own `parser` service (own uid, no credentials, no network beyond what it needs). Backups keep 7 nightly dumps. The profile accepts a year alone as a date. |
+| 2026-10-21 | Exception to "bytes go once the text is stored": the original file of an upload that becomes a base CV is kept until the person deletes it (the document in ingestion, or the last base CV converted from it), so the design capture and the Compare view read it. The CV panel marks the upload at once (`for=base_cv`); every other upload keeps the rule (issue #519, SPEC-ingestion.md, "Text extraction"). |
 
 ## Opportunities and Full auto (intent of 2026-10-10)
 
