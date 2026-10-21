@@ -1226,7 +1226,7 @@ def _reveal(
         if revealed is None:
             db.rollback()
             return NO_CREDENTIAL
-        if len(revealed.secret) < credentials.MIN_LENGTH:
+        if not credentials.has_shape(revealed.secret):
             # Checked when it was saved (credentials.clean_secret), and again here, where the
             # scrub starts to rely on it: a row written any other way never reaches a run.
             db.rollback()

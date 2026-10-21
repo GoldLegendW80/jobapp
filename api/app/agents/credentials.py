@@ -17,6 +17,10 @@ Formats (checked before anything is stored, messages name the field like the acc
   run no model, and are worse to hold than a user key.
 - Surrounding whitespace is trimmed (a pasted line break), inner whitespace is refused, and only
   letters, digits, `-` and `_` are allowed, MIN_LENGTH to MAX_LENGTH characters.
+
+That shape (`shape_error`: the prefix, the characters, the length) is checked again on the
+decrypted value before a run or Verify uses it, so a row written some other way than through the
+save never reaches either, and the log filter's shape always covers the whole secret.
 """
 
 import logging
@@ -47,15 +51,40 @@ class FormatError(ValueError):
     """The pasted value is not a credential of the chosen kind. The message never quotes it."""
 
 
+NOT_ANTHROPIC = f"This is not an Anthropic credential: those start with {PREFIX}"
+
+
+def shape_error(secret: str) -> str | None:
+    """What is wrong with the shape of `secret`, in words for the person, or None when it has
+    the shape of every stored credential: PREFIX, then only letters, digits, `-` and `_`,
+    MIN_LENGTH to MAX_LENGTH characters in all. The one rule of the save, of a run and of
+    Verify (module docstring)."""
+    if not secret.startswith(PREFIX):
+        return NOT_ANTHROPIC
+    if not _ALLOWED.fullmatch(secret):
+        return "Only letters, digits, hyphens and underscores belong in the value."
+    if len(secret) < MIN_LENGTH:
+        return "This is too short: paste the whole value."
+    if len(secret) > MAX_LENGTH:
+        return f"This is too long: a credential has at most {MAX_LENGTH} characters."
+    return None
+
+
+def has_shape(secret: str) -> bool:
+    return shape_error(secret) is None
+
+
 def clean_secret(kind: CredentialKind, raw: str) -> str:
-    """The secret to store, or FormatError with a message for the person."""
+    """The secret to store, or FormatError with a message for the person. What it returns has
+    the shape (`shape_error`, checked last, after the kind)."""
     secret = raw.strip()
     if not secret:
         raise FormatError("Paste the token or key.")
     if any(char.isspace() for char in secret):
         raise FormatError("Remove the spaces or line breaks inside the value.")
+    # Before the kind: its messages below take the prefix for granted.
     if not secret.startswith(PREFIX):
-        raise FormatError(f"This is not an Anthropic credential: those start with {PREFIX}")
+        raise FormatError(NOT_ANTHROPIC)
     if secret.startswith(ADMIN_KEY_PREFIX):
         raise FormatError(
             "This is an Anthropic Admin API key: it manages an organization and must not be "
@@ -73,12 +102,9 @@ def clean_secret(kind: CredentialKind, raw: str) -> str:
             "This is an Anthropic API key. Choose Anthropic API key, or paste the token "
             f"printed by claude setup-token, which starts with {OAUTH_PREFIX}"
         )
-    if not _ALLOWED.fullmatch(secret):
-        raise FormatError("Only letters, digits, hyphens and underscores belong in the value.")
-    if len(secret) < MIN_LENGTH:
-        raise FormatError("This is too short: paste the whole value.")
-    if len(secret) > MAX_LENGTH:
-        raise FormatError(f"This is too long: a credential has at most {MAX_LENGTH} characters.")
+    problem = shape_error(secret)
+    if problem is not None:
+        raise FormatError(problem)
     return secret
 
 
