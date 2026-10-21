@@ -409,21 +409,22 @@ def test_a_send_waits_for_a_held_thread_at_most_its_bound(
     ready: tuple[str, uuid.UUID, str],
     recorded: RecordingQueue,
     factory: sessionmaker[Session],
-    one_connection: sa.Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Issue #161, point 2. Another session holds the thread's row: the send waits
     chat.LOCK_WAIT_S for it, not the statement timeout, then answers 409 with the chat's own
-    sentence and writes nothing. The bound is the transaction's own: the pooled connection the
-    send used has none afterwards, and the same send goes through once the row is free."""
+    sentence and writes nothing; the same send goes through once the row is free. That the
+    bound goes with the transaction is test_chat_locks.py's test_the_bound_is_the_transactions_own.
+    Not on `one_connection`: its engine has no statement timeout, so a send that lost its bound
+    would wait for the holder for ever instead of failing."""
     alice, _, thread = ready
     monkeypatch.setattr(chat, "LOCK_WAIT_S", 0.2)
     before = stored(factory)
-    probes: list[tuple[int, str | None]] = []
+    probes: list[str | None] = []
     real = chat.get_thread
 
     def get_thread(db: Session, *args: Any, **kwargs: Any) -> AgentThread | None:
-        probes.append((backend_pid(db), db.scalar(sa.text("SHOW lock_timeout"))))
+        probes.append(db.scalar(sa.text("SHOW lock_timeout")))
         return real(db, *args, **kwargs)
 
     monkeypatch.setattr(chat, "get_thread", get_thread)
@@ -434,10 +435,7 @@ def test_a_send_waits_for_a_held_thread_at_most_its_bound(
     assert refused.headers["cache-control"] == "no-store"
     assert stored(factory) == before
     assert recorded.jobs == []
-    assert [timeout for _, timeout in probes] == ["200ms"]
-    with one_connection.connect() as conn:
-        assert conn.scalar(sa.text("SELECT pg_backend_pid()")) == probes[0][0]
-        assert conn.scalar(sa.text("SHOW lock_timeout")) == "0"
+    assert probes == ["200ms"]  # the send's own bound, set before it asked for the row
     assert send(api, alice, thread).status_code == 202
     assert len(recorded.jobs) == 1
 

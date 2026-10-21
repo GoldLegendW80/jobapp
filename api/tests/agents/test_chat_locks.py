@@ -368,7 +368,8 @@ def test_an_answer_whose_thread_stays_locked_fails_the_run_at_once(
 
 def test_the_bound_is_the_transactions_own(stage: Stage, factory: sessionmaker[Session]) -> None:
     """`SET LOCAL`: the timeout holds inside the transaction that ends the run and is gone
-    with it, so the next user of the pooled connection waits as it always did."""
+    with it, so the next user of the pooled connection waits as it always did. The same
+    `chat.bounded_lock_waits` bounds a send and a delete."""
     rc, user, thread = stage
     run = say(factory, user, thread, "Does this fit me?")
     assert rc.thread_lock_wait_s == runner.THREAD_LOCK_WAIT_S == 10.0
