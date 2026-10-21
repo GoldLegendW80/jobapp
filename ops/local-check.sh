@@ -871,6 +871,7 @@ journey_play() ( # journey_play <group> <Playwright arguments>
 # A start that fails on "Pool overlaps" (a network left by a check that died) is taken down and
 # started again on another network slot, within the same three starts: the bad slot stays claimed,
 # and `slot`, s_journey's local, names the new one so that s_journey frees that one.
+# Each start migrates the database first, then brings the whole stack up (see below).
 stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or one shard of it
   local part="$1" project="$2" port="" out attempt=1 rc why group="${1%%.*}"
   shift 2
@@ -881,7 +882,15 @@ stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or o
     export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port"
     echo "stack $project on $E2E_CADDY_URL"
     rc=0
-    docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300 >"$out" 2>&1 || rc=$?
+    # The database is migrated before the full `up --wait` (issue #530): `run` starts the api's
+    # dependencies (db, redis, the ATS stub) and waits for them to be healthy, then runs the
+    # migration in a container of its own. Migrated after `up`, the worker started on an empty
+    # database (every start hook and cron failing on a missing table) and, under the gate's load,
+    # missed its healthcheck: `up --wait` then failed the whole group on "worker is unhealthy".
+    {
+      docker compose -p "$project" "$@" run --rm -T api alembic upgrade head &&
+        docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300
+    } >"$out" 2>&1 || rc=$?
     cat "$out"
     ((rc != 0)) || return 0
     ((attempt < 3)) || return "$rc"
@@ -960,7 +969,6 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
   esac
   specs="$(journey_specs "$part")"
   stack_up "$part" "$project" "${files[@]}" &&
-    docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
     journey_play "$run" "$specs" || rc=$?
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$run.log" 2>&1 || true
   # The slot is free again only when its stack is gone: one that could not be taken down keeps
