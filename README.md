@@ -389,7 +389,10 @@ happens when it goes wrong:
   with a non zero exit before anything restarts, and the previous release keeps serving. The log
   shows the step it failed in and the exception's class; alembic's whole output (SQL, Postgres'
   DETAIL) is in `~/jobapp-backups/logs/migrate-<time>.log` on the Jetson (`MIGRATE_LOG_DIR`, the
-  newest 20 kept). Fix the migration and deploy again.
+  newest 20 kept). Fix the migration and deploy again. A lock timeout (SQLSTATE 55P03: a statement
+  waited 5 seconds for a lock the running release holds) is not a fault of the migration:
+  `ops/migrate.sh` runs the upgrade again, three attempts in all (`MIGRATE_ATTEMPTS`,
+  `MIGRATE_RETRY_WAIT_S` apart), then stops with "lock timeout: run the deploy again".
 - The migration hangs (usually waiting for a lock the running release holds): it is stopped after
   `MIGRATE_TIMEOUT_S` (300 seconds by default), its session ended in Postgres so no lock stays
   behind, and the deploy stops the same way.

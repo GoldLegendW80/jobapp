@@ -18,7 +18,10 @@ from app.ingestion import estimate_router
 # and no production row exists yet.
 PINNED: dict[int, str] = {
     1: "9a333e84a46593030cf5934de2058120888ca6b197d6a30b26faa3b5ed65baff",
+    # #115, owner 2026-10-21: version 1 and the sentence on the stored proposals.
+    2: "6878a9f3d26aac4523e732c94ef4317cbe8939678f0423a3d9e17201d073956c",
 }
+STORED = "The proposals it writes are stored in your account until you accept or reject them."
 
 RAISE_THE_VERSION = (
     "The words of consent version {version} changed. A user who accepted them accepted the old "
@@ -60,8 +63,16 @@ def test_the_current_text_is_the_text_of_the_current_version() -> None:
     current = estimate_router.CONSENT_VERSION
     assert estimate_router.CONSENT_TEXTS[current] == estimate_router.CONSENT_TEXT
     assert estimate_router.consent_text(current) == estimate_router.CONSENT_TEXT
-    with pytest.raises(LookupError, match="version 2"):
+    with pytest.raises(LookupError, match=f"version {current + 1}"):
         estimate_router.consent_text(current + 1)
+
+
+def test_version_2_is_version_1_and_the_sentence_on_the_stored_proposals() -> None:
+    first, second = estimate_router.CONSENT_TEXTS[1], estimate_router.CONSENT_TEXTS[2]
+    assert STORED not in first
+    assert second.count(STORED) == 1
+    assert second.replace(STORED + " ", "") == first
+    assert estimate_router.CONSENT_VERSION == 2
 
 
 def test_rewording_a_version_without_raising_it_is_caught() -> None:

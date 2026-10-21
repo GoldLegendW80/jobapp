@@ -189,6 +189,12 @@ class RunOut(BaseModel):
     cancel_requested: bool
     document_ids: list[uuid.UUID]
     unread_document_ids: list[uuid.UUID]
+    secret_document_ids: list[uuid.UUID] = Field(
+        description="Among `unread_document_ids`, the documents whose text holds a possible "
+        "secret the user has not confirmed (found at upload or by a transcription during the "
+        "run): no step reads such a text, and the summary says so. Read as the documents are "
+        "now: once confirmed, a document leaves this list."
+    )
     current_agent_run_id: uuid.UUID | None
     tokens: TokensOut
     counts: CountsOut
@@ -273,6 +279,10 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
         sa.select(
             step,
             IngestionDocument.name,
+            sa.and_(
+                IngestionDocument.secret_warning.is_(True),
+                IngestionDocument.secret_confirmed_at.is_(None),
+            ).label("secret"),
             AgentRun.status,
             AgentRun.error,
             AgentRun.input_tokens,
@@ -297,7 +307,10 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
     read: set[uuid.UUID] = set()
     extracted: set[uuid.UUID] = set()
     cut_short: set[uuid.UUID] = set()  # an extraction that failed or was cancelled
+    secret: set[uuid.UUID] = set()  # a possible secret waits for the user's confirmation
     for row in rows:
+        if row.secret:
+            secret.add(row[0].document_id)
         one = row[0]
         has_agent = row.status is not None
         tokens = int(row.input_tokens or 0) + int(row.output_tokens or 0) if has_agent else None
@@ -362,6 +375,7 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
         cancel_requested=run.cancel_requested_at is not None,
         document_ids=list(run.document_ids),
         unread_document_ids=[one for one in run.document_ids if one not in read],
+        secret_document_ids=[one for one in run.document_ids if one not in read and one in secret],
         current_agent_run_id=current,
         tokens=TokensOut(
             spent=spent,

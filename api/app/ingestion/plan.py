@@ -45,6 +45,9 @@ RUN_MAX_STEPS = 60
 RUN_MINUTES = 60
 STEP_MINUTES = 15
 PART_MAX_CHARS = 100_000
+# A break in the first half of the window is not taken (#115 N4): a text that opens with an empty
+# line would otherwise make a part of two characters, a whole step that reads nothing.
+PART_MIN_BREAK = PART_MAX_CHARS // 2
 GROUP_MAX_IMAGES = 8
 # What one transcribed image is counted as, in characters to extract afterwards (A10).
 IMAGE_TEXT_CHARS = 3_000
@@ -162,14 +165,21 @@ def cut(text: str) -> tuple[tuple[int, int], ...]:
     """The parts of a text, as `(start, end)` offsets in characters: each at most
     PART_MAX_CHARS, in order, touching, covering the whole text. A part ends at the last
     paragraph end (an empty line) that fits; a text with none is cut at the last line end that
-    fits, and one with neither at PART_MAX_CHARS exactly. An empty text has no part."""
+    fits, and one with neither at PART_MAX_CHARS exactly. Only a break that leaves the part more
+    than PART_MIN_BREAK characters counts (the floor), so no part but the last is shorter than
+    that. An empty text has no part.
+
+    The floor changed the cut without raising EXTRACTOR_VERSION (owner, 2026-10-21, #408 and
+    #115: nothing already read is read again). The cut moves only for a text that has a break in
+    the first half of a window and none in the second, and a finished step of such a text stays
+    reused by its part number."""
     parts: list[tuple[int, int]] = []
     start, length = 0, len(text)
     while length - start > PART_MAX_CHARS:
         limit = start + PART_MAX_CHARS
         end = limit
         for mark in (_PARAGRAPH_END, _LINE_END):
-            found = text.rfind(mark, start, limit)
+            found = text.rfind(mark, start + PART_MIN_BREAK, limit)
             if found != -1:
                 end = found + len(mark)
                 break

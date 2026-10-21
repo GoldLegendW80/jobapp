@@ -526,7 +526,7 @@ migrate() {
   timeout_s="$(setting MIGRATE_TIMEOUT_S 300)"
   [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]] || die "MIGRATE_TIMEOUT_S must be a whole number of seconds, got '$timeout_s'"
   if ! remote "cd $RDIR_Q && MIGRATE_TIMEOUT_S=$timeout_s bash ops/migrate.sh"; then
-    die "the migrations did not apply (above), so the deploy stopped before starting the new code: the containers on $HOST were not touched and still run the previous release (./deploy.sh ps). $HOST:$RDIR and the :latest images already hold the new release, so do not run compose up there by hand. Fix the migration and run ./deploy.sh again"
+    die "the migrations did not apply (above), so the deploy stopped before starting the new code: the containers on $HOST were not touched and still run the previous release (./deploy.sh ps). $HOST:$RDIR and the :latest images already hold the new release, so do not run compose up there by hand. After a lock timeout, just run ./deploy.sh again; otherwise fix the migration and run ./deploy.sh again"
   fi
   record migrations "$start"
 }
