@@ -79,6 +79,7 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
 )
+from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
 from app.profile.schemas import (
@@ -502,6 +503,11 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
     )
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
+    contract = ContractType(kind(posting.title, posting.location, posting.url))
+    # Pay and work mode (opportunities O3): what the ATS states, else what the text and the
+    # location state in an accepted shape, else nothing.
+    pay = posting.pay or pays.pay_of(text, freelance=contract is ContractType.Freelance)
+    work_mode = posting.work_mode or pays.work_mode_of(posting.location)
     row = {
         "id": job_id,
         "user_id": plan.user_id,
@@ -510,7 +516,7 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
         "title": posting.title,
         "location": posting.location,
         "url": posting.url,
-        "contract_type": ContractType(kind(posting.title, posting.location, posting.url)),
+        "contract_type": contract,
         "source": source,
         "status": JobStatus.skipped if rule is not None else JobStatus.found,
         "fit": score.fit if score is not None else None,
@@ -520,6 +526,11 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
         "description": text[:DESCRIPTION_CHARS] or None,
         "posting_text": text or None,
         "published_on": ats.published_date(posting.published),
+        "pay_min": pay.min if pay else None,
+        "pay_max": pay.max if pay else None,
+        "pay_currency": pay.currency if pay else None,
+        "pay_period": pay.period if pay else None,
+        "work_mode": work_mode,
         "found_on": now.astimezone(SWEEP_TZ).date(),
         "notes": rule.text if rule is not None else "",
         "legacy": {},
