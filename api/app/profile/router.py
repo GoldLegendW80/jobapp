@@ -76,6 +76,7 @@ router = APIRouter(prefix="/api/profile", tags=["profile"], dependencies=[Depend
 router.include_router(boards.router)
 
 UNKNOWN_SECTION = "Unknown profile section."
+ONBOARDING_RESERVED = "The onboarding dates are set by the welcome steps, not by a save."
 REVISION_NOT_FOUND = "Revision not found."
 STALE = "The profile changed since you loaded it. Review the current version and save again."
 TOO_LARGE = "The import file is larger than 2 MB."
@@ -168,7 +169,7 @@ def _conflict(exc: service.StaleRevisionError, db: Session) -> JSONResponse:
 )
 def export_profile(user: CurrentUser, request: Request, db: Db) -> Response:
     """The whole profile as one JSON file, downloaded as profile-YYYY-MM-DD.json. Sections never
-    saved are exported in their empty form, so the file always holds all six."""
+    saved are exported in their empty form, so the file always holds all seven."""
     now = deps.clock(request)
     profile = service.get_profile(db, user.id, now)
     db.commit()
@@ -233,7 +234,8 @@ async def _photo_body(request: Request) -> bytes:
 def import_profile(
     raw: Annotated[bytes, Depends(_import_body)], user: CurrentUser, request: Request, db: Db
 ) -> Any:
-    """Replace the whole profile with an export file: all six sections in one transaction, one
+    """Replace the whole profile with an export file: all seven sections in one transaction (an
+    older file without `preferences` reads its defaults; the stored onboarding dates are kept), one
     revision each; the photo too when the file has one. With `base_revision`, a profile changed
     since then is a 409; without it the import simply applies after any save in progress."""
     try:
@@ -381,7 +383,7 @@ def save_section(
 ) -> Any:
     """Replace one section. `base_revision` is the revision the client loaded.
 
-    `data` is the section as its model describes it; the six models are the `sections` of the
+    `data` is the section as its model describes it; the seven models are the `sections` of the
     body of POST /api/profile/import. In `experience`, the `start` and `end` of an employer and
     of a school are text, YYYY-MM or YYYY (a year alone when the month is not known), kept as
     sent; an `end` that is certainly before its `start` is refused."""
@@ -397,5 +399,15 @@ def save_section(
         )
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)
+    except service.ReservedFieldError:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body", "data", "onboarding"),
+                    "msg": ONBOARDING_RESERVED,
+                }
+            ]
+        ) from None
     db.commit()
     return _out(profile, db)

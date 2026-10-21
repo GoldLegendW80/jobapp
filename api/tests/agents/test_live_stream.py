@@ -148,7 +148,9 @@ class Stage:
 
     def close(self) -> None:
         self.server.should_exit = True
-        self.thread.join(timeout=10)
+        # A server still running past here leaks its sockets into whichever test runs next.
+        self.thread.join(timeout=120)
+        assert not self.thread.is_alive(), "the api did not stop"
 
     def run(self, script: str = "slowtext") -> uuid.UUID:
         return new_run(self.factory, self.user, {"message": "x", "script": script})
@@ -381,9 +383,22 @@ def test_a_delta_after_the_complete_message_is_not_sent(stage: Stage, redis_url:
     assert resumed.live is None
 
 
+class PatientFeed(live.LiveFeed):
+    """A feed whose back off outlasts any test: how often it logs no longer depends on how long a
+    loaded machine takes to end the run (each 5 s of a slow stream added a line, issue #104)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **{**kwargs, "backoff_s": 3600})
+
+
 def test_redis_down_the_stream_still_delivers_every_step(
-    migrated_url: str, key: str, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    migrated_url: str,
+    key: str,
+    factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(live, "LiveFeed", PatientFeed)
     settings = make_settings(
         migrated_url, redis_url="redis://127.0.0.1:1/0", credentials_key=key
     )  # nothing listens there
@@ -423,7 +438,8 @@ def test_redis_down_the_stream_still_delivers_every_step(
         assert "partial" not in [name for name, _, _ in found]
         logged = capsys.readouterr().out
         assert "live text not read" in logged
-        assert logged.count("live text not read") <= 3  # it backs off, it does not hammer
+        # It backs off, it does not hammer: once per connection that found the run running.
+        assert logged.count("live text not read") <= 2
     finally:
         stage.close()
 

@@ -224,7 +224,7 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 Nothing yet. (The deck query's time on 5,000 postings of one person, and its plan.)
 
 ### O2
-Nothing yet.
+Vitest on 2026-10-20: 27 tests of the deck page (`deck-page.test.tsx`) and 34 of the card words (`card-text.test.ts`), all passing. The journey `opportunities-o2.spec.ts` and its screenshots (`tasks/evidence/opportunities-o2/`) were not run yet: the gate held the machine.
 
 ### O3
 Nothing yet. (The share of the owner's found postings with a pay found, by source.)

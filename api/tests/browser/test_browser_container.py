@@ -511,7 +511,7 @@ def memory_events(stack: Stack) -> list[dict]:
 
 
 def test_page_cache_alone_never_trips_the_memory_guard_and_allocation_does(stack: Stack) -> None:
-    """Page cache past 95% of the limit by memory.current closes no tab over three rounds of the
+    """Page cache past 92% of the limit by memory.current closes no tab over three rounds of the
     guard (every 2 s, Chromium._watch, counted on the container's clock); memory a process
     allocates past 90% of the working set closes one."""
     stack.lease(A, 20001)
@@ -519,7 +519,9 @@ def test_page_cache_alone_never_trips_the_memory_guard_and_allocation_does(stack
     try:
         filled = json.loads(stack.python(FILL_PAGE_CACHE, cache))
         limit = filled["limit"]
-        assert filled["current"] * 100 >= limit * 95
+        # The fill stops at 95%, and the fsync after it lets the kernel take some back (94.9%
+        # was read, issue #104): past the guard's 90% with a margin is what this needs.
+        assert filled["current"] * 100 >= limit * 92
         assert filled["working_set"] * 100 < limit * 60
         for _ in range(400):
             assert memory_events(stack) == []

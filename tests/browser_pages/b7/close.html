@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- Browser B7's fixture of a window that closes: opened as a person's session's first and only
+     page, it closes its window after three seconds (past browserd's SETTLE_S), as the person
+     closing it would. Chromium then quits by itself with status 0. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Example Portal: closing</title>
+</head>
+<body>
+<p>This window closes by itself.</p>
+<script>
+  setTimeout(() => window.close(), 3000);
+</script>
+</body>
+</html>

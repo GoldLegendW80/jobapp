@@ -110,6 +110,9 @@ const STEP_WORDS: Record<string, string> = {
 };
 
 const DELETED = "Deleted document";
+/** What a pause left alone becomes (the engine's PAUSE_MAX). */
+const UNANSWERED =
+  "Left paused for 24 hours, the run ends with what it has read.";
 
 function RunView({ run }: { run: Run }) {
   const client = useQueryClient();
@@ -223,7 +226,7 @@ function RunView({ run }: { run: Run }) {
           <p data-testid="continue-adds">
             Continue raises the ceiling by {tokens(adds)} tokens
             {raised !== null ? `, to ${tokens(raised)} tokens,` : null} and the
-            run goes on. Cancel ends it here.
+            run goes on. Cancel ends it here. {UNANSWERED}
           </p>
         </>
       );
@@ -254,7 +257,7 @@ function RunView({ run }: { run: Run }) {
     body = (
       <>
         <p data-testid="paused-reason">{run.paused_reason}</p>
-        <p>Resume starts again with the step that stopped.</p>
+        <p>Resume starts again with the step that stopped. {UNANSWERED}</p>
       </>
     );
     buttons = (
@@ -384,7 +387,8 @@ function RunView({ run }: { run: Run }) {
       {active ? (
         <p className="text-xs text-muted-foreground">
           {run.tokens.overshoot} While a step is being read the figure is
-          behind: what the step writes is counted when it ends.
+          behind: what the step writes is counted when it ends. If the server
+          restarts during a step, the request it was making is not counted.
         </p>
       ) : null}
       {!active && run.counts.two_digit_year > 0 ? (

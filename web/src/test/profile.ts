@@ -160,6 +160,13 @@ export function haraldLike(): SectionData {
         timezone: "Europe/Paris",
       },
       documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
+      seniority: ["senior"],
+      industries: { advanced_regex: false, terms: ["gaming"] },
+      company_types: ["scaleup"],
+      compensation: {
+        salary: { min: 55000, max: 70000, currency: "EUR" },
+        daily_rate: null,
+      },
     },
     answers: {
       work_authorization: [
@@ -199,6 +206,11 @@ export function haraldLike(): SectionData {
         { currency: "EUR", minimum: 50000, maximum: 60000, period: "year" },
         { currency: "GBP", minimum: 45000, maximum: null, period: "year" },
       ],
+    },
+    preferences: {
+      onboarding: { completed_at: null, dismissed_at: null },
+      documents_language: "auto",
+      documents_tone: "plain",
     },
   };
 }
@@ -251,6 +263,7 @@ const REQUIRED: Record<SectionName, Rules> = {
       "motivation",
     ].map((n) => [n, field(n)]),
   ),
+  preferences: {},
 };
 
 export function completeness(sections: Partial<Record<SectionName, unknown>>) {
@@ -265,12 +278,18 @@ export function completeness(sections: Partial<Record<SectionName, unknown>>) {
       .map(([n]) => n);
     const total = Object.keys(rules).length;
     result[name] = {
-      percent: Math.round((100 * (total - missing.length)) / total),
+      percent:
+        total === 0
+          ? 100
+          : Math.round((100 * (total - missing.length)) / total),
       missing,
     };
   }
+  // Preferences has no required field: always 100, out of the mean (as the api).
   const overall = Math.round(
-    Object.values(result).reduce((sum, s) => sum + s.percent, 0) / 6,
+    Object.entries(result)
+      .filter(([name]) => name !== "preferences")
+      .reduce((sum, [, s]) => sum + s.percent, 0) / 6,
   );
   return { overall, sections: result };
 }
@@ -317,6 +336,7 @@ export function profileBody(state: FakeProfile) {
     "skills",
     "search",
     "answers",
+    "preferences",
   ]) {
     sections[name] = state.sections[name as SectionName] ?? null;
   }
@@ -548,6 +568,10 @@ const EMPTY_SECTIONS: Record<SectionName, unknown> = {
       timezone: "Europe/Paris",
     },
     documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
+    seniority: [],
+    industries: { advanced_regex: false, terms: [] },
+    company_types: [],
+    compensation: { salary: null, daily_rate: null },
   },
   answers: {
     work_authorization: [],
@@ -573,5 +597,10 @@ const EMPTY_SECTIONS: Record<SectionName, unknown> = {
     eeo_answers: [],
     salary_stance: null,
     salary_ranges: [],
+  },
+  preferences: {
+    onboarding: { completed_at: null, dismissed_at: null },
+    documents_language: "auto",
+    documents_tone: "plain",
   },
 };
