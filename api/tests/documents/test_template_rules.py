@@ -18,7 +18,7 @@ import pytest
 from jinja2 import Environment, nodes
 
 from app.documents import content as c
-from app.documents import template_css, template_rules, templates
+from app.documents import design_check, template_css, template_rules, templates
 from app.documents.template_rules import FIELDS, LABELS, MACROS, Problem, check, check_css
 
 CLASSIC = templates.ROOT / "classic"
@@ -56,11 +56,13 @@ _LOOP = {
 _CUT = ("literal", "markup cut by a Jinja construct")
 _OUTSIDE = ("property", "a property outside the allowed list")
 _SELECTOR = ("selector", "a selector outside the allowed forms")
-# A full bleed sheet sets its own page margin, and executive's band a fixed height: a template
-# from an upload may not, the render check lays out the step's page box and one content shape.
+# A full bleed sheet sets its own page margin, executive's band a fixed height and sidebar's
+# column a page high minimum: a template from an upload may not, the render check lays out the
+# step's page box and one content shape.
 _PAGE = ("page", "@page: margin: var(--margin)")
 _HEIGHT = ("property", "height: auto, a length only on the photo (img or .photo)")
-GEOMETRY = {"banner": {_PAGE}, "sidebar": {_PAGE}, "executive": {_HEIGHT}}
+_MIN_HEIGHT = ("property", "min-height: auto, a length only on the photo (img or .photo)")
+GEOMETRY = {"banner": {_PAGE}, "sidebar": {_PAGE, _MIN_HEIGHT}, "executive": {_HEIGHT}}
 
 
 def _box(*properties):
@@ -1093,7 +1095,8 @@ GEOMETRY_ACCEPTED = [
     "img { height: 30mm; }",
     ".header .photo { height: 24mm; }",
     "img.photo, .side .photo { height: 26mm; }",
-    ".summary { height: auto; min-height: 10mm; }",
+    ".summary { height: auto; min-height: auto; }",
+    ".photo { min-height: 25mm; }",
     ".x { grid-template-columns: 30mm 1fr; }",
     ".x { grid-template-columns: 20mm minmax(0, 1fr); }",
     ".x { grid-template-columns: minmax(0, 1fr) 62mm; }",
@@ -1112,3 +1115,79 @@ GEOMETRY_ACCEPTED = [
 @pytest.mark.parametrize("addition", GEOMETRY_ACCEPTED)
 def test_a_page_box_of_the_step_and_boxes_that_grow_with_their_text_pass(addition):
     assert _check(_css(addition)) == []
+
+
+# PR #518 round 3: the app's own rules come after the sheet (template_css.ENFORCED_CSS), so a
+# sheet may not mark the properties they set `!important`; a column flex item keeps its
+# automatic minimum height (min-height only `auto` off the photo), so no flex basis makes it
+# shorter than its text; the class `photo`, which may hold a height, is the portrait's alone.
+ENFORCED_REFUSED = [
+    "li, p { overflow-wrap: normal !important; }",
+    ".contact li { overflow-wrap: normal ! important; }",
+    ".x { overflow-wrap: break-word !IMPORTANT; }",
+    ".x { word-break: keep-all !important; }",
+    ".x { overflow-wrap: inherit !important; }",
+    ".x::before { content: ','; overflow-wrap: normal !important; }",
+    # the reviewer's flex basis as a height, then the family
+    ".body { display: flex; flex-direction: column; } .summary { flex: 0 0 34mm; min-height: 0; }",
+    ".summary { flex-basis: 30mm; min-height: 0; }",
+    ".summary { min-height: 0; }",
+    ".summary { min-height: 5mm; }",
+    ".summary { min-height: 1em; }",
+    ".summary { min-height: var(--section-gap); }",
+    ".photo .summary { min-height: 0; }",
+    "p.photo { min-height: 0; }",
+]
+
+
+@pytest.mark.parametrize("addition", ENFORCED_REFUSED)
+def test_a_sheet_that_would_outrank_the_apps_rules_or_shrink_a_flex_item_is_refused(addition):
+    assert "property" in {p.code for p in _check(_css(addition))}
+
+
+ENFORCED_ACCEPTED = [
+    "li, p { overflow-wrap: break-word; }",
+    ".x { word-break: keep-all; overflow-wrap: normal; }",
+    ".summary { color: #1d232b !important; }",
+    ".body { display: flex; flex-direction: column; } .summary { flex: 0 0 34mm; }",
+    ".summary { min-height: auto; }",
+    "img { min-height: 20mm; }",
+]
+
+
+@pytest.mark.parametrize("addition", ENFORCED_ACCEPTED)
+def test_a_sheet_the_apps_rules_still_end_passes(addition):
+    assert _check(_css(addition)) == []
+
+
+PHOTO_CLASS_REFUSED = [
+    # the class `photo` on a text, through a macro's class or on the markup
+    (_cv("{{ base.header(content.headline) }}", "{{ base.header(content.headline) }}"
+         "{{ base.contact_lines(\"photo\") }}")),
+    _cv(SUMMARY, '<p class="summary photo">{{ content.summary }}</p>'),
+    _cv(SUMMARY, '<div class="photo"><p class="summary">{{ content.summary }}</p></div>'),
+    _cv(SUMMARY, '<p class="photo">{{ content.summary }}</p>'),
+    _cv(ROLES, "{% for role in roles %}\n{{ base.employer(role) }}\n{% endfor %}"
+        "{{ base.bullets(content.highlights, \"photo\") }}"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("files", PHOTO_CLASS_REFUSED)
+def test_the_class_photo_is_the_portraits_alone(files):
+    detail = "the class photo on another element than the portrait"
+    assert Problem("cv.html.j2", 0, "attribute", detail) in _check(files)
+
+
+def test_the_portrait_may_take_the_class_photo_among_others():
+    header = "{{ base.header(content.headline) }}"
+    files = _cv(header, header.replace("header(", 'portrait("photo round") }}{{ base.header('))
+    assert not any(p.detail.startswith("the class photo") for p in _check(files))
+
+
+def test_the_apps_rules_come_last_in_every_built_page():
+    sample = design_check.canary("cv")
+    for template in templates.registry().values():
+        page = templates.build_html(
+            template, "cv", sample.content, sample.view, "en", 0, sample.rendered_on
+        )
+        assert page.split("</style>", 1)[0].endswith(template_css.ENFORCED_CSS)

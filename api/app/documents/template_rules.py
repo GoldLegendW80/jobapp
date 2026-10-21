@@ -27,8 +27,9 @@ text of the template, so it can be logged. On top of the authoring rules every t
 - the render: a file that passed the above is rendered in process on canary content, every
   field filled with a token of its own and every field empty. The HTML printed is parsed: its
   text is only canaries, whitespace and punctuation, its tags those of TAGS (and the macros'
-  `a` and `img`), its attributes those of an allow list, and every field of REQUIRED shows its
-  canary. Its elements follow the content model the browser's tree builder keeps as written
+  `a` and `img`), its attributes those of an allow list, the class `photo` on the portrait's
+  `img` alone (the one box template_css lets hold a height), and every field of REQUIRED shows
+  its canary. Its elements follow the content model the browser's tree builder keeps as written
   (the HTML standard's "in body" and table insertion modes): no element the builder would close,
   move or wrap is accepted, rather than a model of the repair. So no block (_CLOSES_P) while a
   `p` is open below the nearest cell or table, a `li` only as a child of `ul` or `ol`, a heading
@@ -626,6 +627,8 @@ class _Rendered(HTMLParser):
     def _attributes(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         for key, value in attrs:
             text = value or ""
+            if key == "class" and "photo" in text.split() and tag != "img":
+                self.refuse("attribute", "the class photo on another element than the portrait")
             if key == "class" and _CLASS.fullmatch(text.strip()):
                 continue
             if not self._kept(tag, key, text):

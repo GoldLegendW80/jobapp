@@ -25,7 +25,7 @@ The style sheet:
 - Colours as #rrggbb or var(--accent); a text and its background at 4.5 to 1 at least.
 - font-family names only the families read_design gives, then a generic family.
 - Nothing laid over anything else: no position other than static or relative, no offsets, no z-index, no float, no negative margin, no transform, grid items placed with grid-column only; a ::before or ::after holds punctuation only and draws no box; list markers are glyphs of the list types. No url(, no @import, no @font-face, no other at-rule, no calc(), min(), max() or clamp().
-- Every box grows with its text: a height other than auto only on the photo (img or .photo), no max-height; grid rows sized by their content (auto, min-content, max-content, fr); a fixed grid column 20mm wide at least.
+- Every box grows with its text: a height or min-height other than auto only on the photo (img, or .photo, the class base.portrait gives it and no other element may hold), no max-height; no !important on overflow-wrap or word-break (the app breaks a word wider than its box); grid rows sized by their content (auto, min-content, max-content, fr); a fixed grid column 20mm wide at least.
 - The app prints the canary of every field, once with the sample and once with one item per list and every text at its longest, and checks in a browser that each one is shown: inside the page, not covered by another box, a marker or a pseudo element, and contrasted against what is painted under it.
 
 Close is the goal, not pixel exact: a decorative graphic (an icon, a skill bar, a chart) is left out or becomes a rule or a colour; photos keep their place and shape (round or square), not their pixels.

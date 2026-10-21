@@ -109,7 +109,7 @@ HEIGHT_JS = """() => {
       text = Math.max(text, range.getBoundingClientRect().bottom);
     }
   }
-  // The text's height from the top of the root element, whose margin the check may set.
+  // The text's height from the top of the root element, below the sheet's own root margin.
   const top = document.documentElement.getBoundingClientRect().top;
   return [Math.ceil(Math.max(0, text - top)), Math.ceil(Math.max(text, box))];
 }"""

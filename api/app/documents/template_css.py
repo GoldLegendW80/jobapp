@@ -35,19 +35,22 @@ everything is held to allow lists:
   `#rrggbb` (minimal's `--rail`), and read in their place by `var()`; `var()` reads too a
   density property or `--accent`, which the sheet never sets (the step sets them);
 - what a box shorter or narrower than its text would let run over its neighbours: a `height`
-  other than `auto` only on the photo (`on_photo`), no `max-height`; a grid row track only
+  or `min-height` other than `auto` only on the photo (`on_photo`; the class `photo` is the
+  portrait's alone, template_rules), so a flex basis never makes a column item shorter than its
+  text; no `max-height`; a grid row track only
   sized by its content (`auto`, `min-content`, `max-content`, a positive `fr`); a column track
   either that or a length of at least TRACK_MIN, `minmax()` of a floor and such a track;
 - the density: each property of DENSITY but `--margin` read (the page's margin is always the
   step's), `--body-size` by a `font-size`, `--line-height` by a `line-height`;
 - the fonts: a `font-family` starts with a family of the manifest;
 - the contrast: a rule that sets both a text colour and a background holds them at 4.5:1 (WCAG 2
-  AA). A colour on a background another rule sets is the render check's.
+  AA). A colour on a background another rule sets is the render check's;
+- no `!important` on a property of ENFORCED: the app appends ENFORCED_CSS after every sheet
+  (templates.build_html), so no word is wider than its box, whatever box the sheet draws.
 
 Declared open points, left to D25b's render check: a text colour on a background set by another
-rule (the page's white, a band, a column); a box made smaller than its text (`width`, a `flex`
-basis, which is a height in a column flex box, a `minmax(0, 1fr)` track beside wide ones, the
-photo's class put on a text), whose text, a `::before` or `::after` too, then runs over its
+rule (the page's white, a band, a column); a line that may not wrap (`white-space: nowrap`)
+in a box narrower than it, whose text, a `::before` or `::after` too, then runs over its
 neighbours, under the background of a later flex or grid item or of a `position: relative` box;
 the vertical padding or border of an inline box, which paints over the line above; a size made
 small or large by nesting `em` sizes; a box pushed off the page by its margins; the one glyph of
@@ -96,6 +99,8 @@ MAX_COMPOUNDS = 4
 MAX_CLASSES = 4
 CAPS = {"pt": 850.0, "px": 1134.0, "mm": 300.0, "em": 40.0, "%": 100.0}  # about one A4 height
 TRACK_MIN = {"pt": 56.7, "px": 75.6, "mm": 20.0, "em": 5.0, "%": 10.0}  # a column of a word or two
+ENFORCED = (("overflow-wrap", "anywhere"), ("word-break", "normal"))
+ENFORCED_CSS = "*,*::before,*::after{" + "".join(f"{p}:{v}!important;" for p, v in ENFORCED) + "}"
 PSEUDO_CLASSES = frozenset(("root", "first-child", "last-child"))
 PSEUDO_ELEMENTS = frozenset(("before", "after", "marker"))
 _HEX = re.compile(r"[0-9a-f]{3}|[0-9a-f]{6}")
@@ -800,8 +805,8 @@ def _target_problem(prop: str, targets: frozenset[str | None]) -> tuple[str, str
 
 
 def on_photo(selector: Selector) -> bool:
-    """Whether a selector's subject is the photo: an `img`, or the `.photo` class the macro
-    `portrait` gives it."""
+    """Whether a selector's subject is the photo: an `img`, or the `.photo` class, which only
+    the macro `portrait`'s `img` may hold (template_rules)."""
     subject = selector.compounds[-1]
     photo = subject.tag == "img" or (subject.tag is None and "photo" in subject.classes)
     return selector.element is None and photo
@@ -826,6 +831,8 @@ def value_problem(
         return "property", "a property outside the allowed list"
     if not d.prop.startswith("--") and (wrong := _target_problem(d.prop, targets)):
         return wrong
+    if d.important and d.prop in dict(ENFORCED):
+        return "property", f"{d.prop}: no !important, the app's own rule comes after the sheet"
     try:
         found = parts(d.value, customs, accent)
     except _Bad as bad:
@@ -844,8 +851,8 @@ def value_problem(
         return _CODE.get(d.prop, "property"), f"{d.prop}: a function outside the allowed list"
     if d.prop in SPECIAL:
         return _special(d.prop, found, names)
-    if d.prop == "height" and found != [("kw", "auto")] and not photo:
-        return "property", "height: auto, a length only on the photo (img or .photo)"
+    if d.prop in ("height", "min-height") and found != [("kw", "auto")] and not photo:
+        return "property", f"{d.prop}: auto, a length only on the photo (img or .photo)"
     if not VALUES[d.prop](found):
         return "property", f"{d.prop}: a value outside the allowed list"
     return None

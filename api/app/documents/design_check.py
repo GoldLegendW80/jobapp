@@ -8,9 +8,11 @@ renderer's own Chromium lays out (renderer/server.py, POST /check):
 - the canary pages, two content shapes (SHAPES) of `_base/sample.json`'s invented CV and letter
   ("Alex Example"): the sample as it is, every list at two items or more, and `lone`, every
   list at one item (one employer with one bullet, one school, one language, one skill group of
-  one item, one highlight, one competency, one paragraph) and every text at its hard limit (the
-  paragraph at LONE_PARAGRAPH), so
-  a box sized for the sample's texts, or a rule that only a lone item meets, shows. Every text
+  one item, one highlight, one competency, one paragraph), every text at its hard limit (the
+  paragraph at LONE_PARAGRAPH) and led by a word of LONG_WORD's length, the name's two words
+  that long too, an e-mail address (LONG_EMAIL) and a web address (LONG_WEBSITE) as long as
+  real ones, none with a break opportunity, so a box sized for the sample's texts or words, or
+  a rule that only a lone item meets, shows. Every text
   of the content and of the profile is led by a token of its own (`Q`, three letters, `Z`), so
   each needle names one field; the contact lines, the periods and the letter's date as printed.
   A grey photo when the template has a slot, so a photo laid over a text is seen too;
@@ -52,7 +54,7 @@ import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
-from functools import cache
+from functools import cache, partial
 from typing import Any
 
 from PIL import Image, ImageChops
@@ -86,6 +88,10 @@ _FILLER = (
     "runbook", "incident", "teams", "deployment", "engineering",
 )  # fmt: skip
 _TOKENED = 6  # a token and its space
+# The lone shape's unbreakable strings, without a `q` or a `z` too.
+LONG_WORD = "observabilityplatformengineeringservices"
+LONG_EMAIL = "e2e-alexandra.martin.consulting.engineering.lyon@example.org"
+LONG_WEBSITE = "https://example.org/alexandramartinplatformengineeringportfolio"
 # The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter (sidebar's) passes
 # CHECK_MAX_HEIGHT; a text box has no fixed height (template_css), so length beyond is pages.
 LONE_PARAGRAPH = 1_200
@@ -133,10 +139,10 @@ def _sample() -> dict[str, Any]:
     return json.loads((templates.BASE / "sample.json").read_text(encoding="utf-8"))
 
 
-def filler(length: int) -> str:
-    """Words up to `length` characters, the token that leads them left out."""
-    words: list[str] = []
-    size = -1
+def _filler(length: int, lead: str = "") -> str:
+    """Words up to `length` characters, the token that leads them left out, `lead` first."""
+    words: list[str] = [lead] if lead else []
+    size = len(lead) if lead else -1
     for n in range(length):
         word = _FILLER[n % len(_FILLER)]
         if size + 1 + len(word) > length - _TOKENED:
@@ -147,9 +153,12 @@ def filler(length: int) -> str:
 
 
 def _lone(data: dict[str, Any]) -> None:
-    """`data` cut to one item per list, each text at its hard limit (module docstring)."""
+    """`data` cut to one item per list, each text at its hard limit and led by a long word,
+    long addresses (module docstring)."""
+    filler = partial(_filler, lead=LONG_WORD)
     profile = data["profile"]
     identity = profile["identity"]
+    identity.update(email=LONG_EMAIL, website=LONG_WEBSITE)
     identity["languages"] = identity["languages"][:1]
     identity["languages"][0].update(name=filler(c.LINE_MAX), level=filler(c.LINE_MAX))
     for key in ("employers", "education"):
@@ -187,6 +196,8 @@ def canary(kind: str, shape: str = "sample") -> Canary:
     cv = kind == "cv"
     # Two tokens and nothing else: a template may print each word of the name on its own.
     first, last = _token(t.count), _token(t.count + 1)
+    if shape == "lone":
+        first, last = first + LONG_WORD[: 30 - len(first)], last + LONG_WORD[len(last) - 30 :]
     t.count += 2
     identity["full_name"] = f"{first} {last}"
     t.needles += [("name", first), ("name", last)]

@@ -1247,7 +1247,8 @@ def test_resolve_finds_a_bundled_template_then_asks_the_loader() -> None:
         return template("classic") if slug == "upload-1a2b3c4d" else None
 
     assert templates.resolve(None, None, "classic") is template("classic")
-    assert templates.resolve(None, None, "upload-1a2b3c4d") is None  # no loader yet: a no op
+    # no loader, or design_capture's, which finds no row without a session
+    assert templates.resolve(None, None, "upload-1a2b3c4d") is None
     # design_capture registers the real loader at import: put it back for the tests after
     previous = templates._loader
     templates.register_loader(loader)

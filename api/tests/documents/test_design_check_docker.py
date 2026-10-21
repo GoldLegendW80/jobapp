@@ -10,9 +10,11 @@ unless RENDERER_TEST_IMAGE names one.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 
+import pypdfium2 as pdfium
 import pytest
 
 from app.documents import design_capture, design_check, render_client, template_rules, templates
@@ -158,6 +160,13 @@ SHAPE_HIDING = [
         " grid-template-columns: 0px 0px; grid-auto-flow: column; }",
         "schools[0].",
     ),
+    # PR #518 round 3: a line that may not wrap, wider than its box only with a long address
+    (
+        "address_that_may_not_wrap_in_a_fixed_track",
+        ".contact { display: grid; grid-template-columns: 45mm 45mm 45mm; }"
+        " .contact li { white-space: nowrap; }",
+        "contact[].text",
+    ),
 ]
 
 
@@ -229,3 +238,81 @@ def agents_root():
     import app.agents
 
     return Path(app.agents.__file__).parent
+
+
+# PR #518 round 3: the reviewer's sheet, whose 43 character e-mail printed over the phone, and its
+# family: boxes that fit the canary's words. The app's rules after the sheet
+# (template_css.ENFORCED_CSS) break a word wider than its box, so each passes the check with the
+# lone shape's long words and addresses, and the render wraps the address inside its cell.
+REVIEWER_SHEET = (
+    ".contact { display: grid; grid-template-columns: 45mm 45mm 45mm; }"
+    " li, p { overflow-wrap: normal; }"
+)
+NARROW_BOXES = [
+    (
+        "contact_grid_that_fits_the_header",
+        ".contact { display: grid; grid-template-columns: 40mm 40mm 40mm; }"
+        " li, p { overflow-wrap: normal; }",
+    ),
+    (
+        "skill_group_at_track_min",
+        ".skill-group { display: grid; grid-template-columns: 20mm 20mm; }"
+        " .items { overflow-wrap: normal; word-break: keep-all; }",
+    ),
+    (
+        "shrinking_track_beside_a_wide_one",
+        ".schools { grid-template-columns: minmax(0, 1fr) 60mm; }",
+    ),
+    ("fixed_width", ".entry .entry-title { width: 100mm; } .org { overflow-wrap: normal; }"),
+    ("row_flex_basis", ".headtext { flex: 0 0 110mm; } .name { overflow-wrap: break-word; }"),
+]
+
+
+@pytest.mark.parametrize(("name", "css"), NARROW_BOXES)
+def test_a_box_narrower_than_a_long_word_breaks_the_word_and_passes(
+    stack: Stack, name: str, css: str
+) -> None:
+    found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
+    assert found == [], (name, [(p.code, p.detail) for p in found])
+
+
+def test_the_reviewers_sheet_is_refused_only_where_its_grid_is_wider_than_the_header(
+    stack: Stack,
+) -> None:
+    # 135 mm of tracks beside the photo: wider than the letter's header at its loosest margin,
+    # so its name runs past the page's text; the long addresses wrap inside their cells.
+    found = asyncio.run(design_check.check_template(probe(REVIEWER_SHEET), checker(stack)))
+    assert found
+    assert not [p for p in found if p.detail.startswith("contact[].text")], found
+
+
+def _glyphs(pdf: bytes) -> list[tuple[str, tuple[float, float, float, float]]]:
+    """The printed characters of page 1 and their boxes (left, bottom, right, top), in points."""
+    document = pdfium.PdfDocument(pdf)
+    try:
+        page = document[0].get_textpage()
+        found = []
+        for n in range(page.count_chars()):
+            char = page.get_text_range(n, 1).replace("\ufffe", "-")
+            if char.strip():
+                found.append((char, page.get_charbox(n)))
+        return found
+    finally:
+        document.close()
+
+
+def test_the_reviewers_long_email_prints_inside_its_cell_left_of_the_phone(stack: Stack) -> None:
+    email, phone = "e2e-alexandra.martin.consulting@example.org", "+33600000000"
+    sample = design_check.canary("cv")
+    view = dataclasses.replace(
+        sample.view, identity=dataclasses.replace(sample.view.identity, email=email)
+    )
+    html = templates.build_html(
+        probe(REVIEWER_SHEET), "cv", sample.content, view, "en", 0, sample.rendered_on
+    )
+    glyphs = _glyphs(stack.render(html).pdf)
+    text = "".join(char for char, _ in glyphs)
+    at, phone_at = text.index(email), text.index(phone)
+    rightmost = max(box[2] for _, box in glyphs[at : at + len(email)])
+    leftmost = min(box[0] for _, box in glyphs[phone_at : phone_at + len(phone)])
+    assert rightmost < leftmost
