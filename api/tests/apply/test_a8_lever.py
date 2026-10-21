@@ -360,6 +360,36 @@ def test_a_render_after_two_reads_agreed_is_left_to_the_read_back(
     assert form.submit_clicks == 0
 
 
+def cv_after_the_email(**rest: Any) -> LeverForm:
+    """Lever's fields with the CV asked after the name and the e-mail (Lever's own form asks it
+    first)."""
+    model = lever_form()
+    fields = model.fields[1:3] + model.fields[:1] + model.fields[3:]
+    return LeverForm(fields, submit=model.submit, title=model.title, **rest)
+
+
+def test_a_field_typed_before_a_later_cv_is_cleared_while_reported_filled() -> None:
+    # Declared open point of lever.py: the parse's undo clears what the fill typed before it.
+    form = cv_after_the_email(files=("cv.pdf",))
+    report = filled(form)
+    assert report.stopped == ""
+    assert outcome(report, "Full name").filled.status == "filled"
+    assert form.spec("Full name").value == ""
+    assert form.spec("Email").value == ""
+
+
+def test_a_form_asking_for_the_cv_after_other_fields_is_never_submitted(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    form = cv_after_the_email()
+    assert run_submit(submit_services(factory, form, stub), app_id) == "ready"
+    assert application(db, app_id).error_code == "form_changed"
+    assert form.gate_clicks == []
+    assert form.submit_clicks == 0
+
+
 def test_native_selects_take_the_profile_answer() -> None:
     form = lever_form(files=("cv.pdf",))
     report = filled(form)
