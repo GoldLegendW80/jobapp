@@ -245,6 +245,21 @@ export async function setPassword(page: Page, password: string, name?: string) {
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
+  await skipWelcome(page);
+  await expect(page).toHaveURL(/\/jobs$/);
+}
+
+/**
+ * A new member with an empty profile is sent to the first login wizard (opportunities O5): wait
+ * for the app's decision (`data-onboarding` on the root element) and, when it opened /welcome,
+ * press "Skip for now" so the journey goes on from the home page as before.
+ */
+export async function skipWelcome(page: Page) {
+  const root = page.locator("html[data-onboarding]");
+  await expect(root).toHaveCount(1);
+  if ((await root.getAttribute("data-onboarding")) !== "welcome") return;
+  await expect(page).toHaveURL(/\/welcome$/);
+  await page.getByRole("button", { name: "Skip for now" }).click();
   await expect(page).toHaveURL(/\/jobs$/);
 }
 

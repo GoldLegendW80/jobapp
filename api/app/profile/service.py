@@ -11,8 +11,8 @@ increments the revision and appends its profile_revisions row, the second then s
 revision and is refused as stale. The unique (user_id, revision) constraint is a second guard.
 An import takes the same lock and writes all seven sections at once, one revision each.
 `preferences.onboarding` belongs to the first login wizard (opportunities O5): only
-`record_onboarding` writes it; a save that changes it is refused (ReservedFieldError) and an
-import keeps the stored dates.
+`record_onboarding` and `record_onboarding_step` write it; a save that changes it is refused
+(ReservedFieldError) and an import keeps the stored value (the dates and the steps passed).
 The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
 from app.profile.photo import Photo
-from app.profile.schemas import SECTION_MODELS, SECTIONS
+from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS
 
 REVISIONS_PAGE_MAX = 100
 
@@ -157,7 +157,8 @@ def save_section(
 
 
 def _onboarding(profile: Profile) -> dict[str, Any]:
-    """The stored onboarding dates, in their stored form (null each when never written)."""
+    """The stored onboarding part, in its stored form (null dates and no step when never
+    written)."""
     stored = (profile.sections or {}).get("preferences")
     model = SECTION_MODELS["preferences"]
     return model.model_validate(stored or {}).model_dump(mode="json")["onboarding"]
@@ -243,6 +244,23 @@ def record_onboarding(db: Session, user_id: uuid.UUID, field: str, now: datetime
     model = SECTION_MODELS["preferences"]
     data = model.model_validate(stored).model_dump(mode="json")
     data["onboarding"][field] = now.astimezone(UTC).isoformat()
+    data = model.model_validate(data).model_dump(mode="json")
+    return _write(db, profile, "preferences", data, now)
+
+
+def record_onboarding_step(db: Session, user_id: uuid.UUID, step: str, now: datetime) -> Profile:
+    """Add `step` to the wizard's `steps_passed` (opportunities O5), one revision of
+    `preferences`, whatever revision the caller loaded, under the profile row lock. A step
+    already passed adds no revision."""
+    if step not in WIZARD_STEPS:
+        raise ValueError(f"unknown wizard step {step!r}")
+    profile = _locked(db, user_id, now)
+    stored = (profile.sections or {}).get("preferences") or {}
+    model = SECTION_MODELS["preferences"]
+    data = model.model_validate(stored).model_dump(mode="json")
+    if step in data["onboarding"]["steps_passed"]:
+        return profile
+    data["onboarding"]["steps_passed"] = [*data["onboarding"]["steps_passed"], step]
     data = model.model_validate(data).model_dump(mode="json")
     return _write(db, profile, "preferences", data, now)
 
