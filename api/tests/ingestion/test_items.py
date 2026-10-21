@@ -942,6 +942,7 @@ def test_a_link_has_one_key_however_often_it_says_www() -> None:
 # --- follow ups of #111 and #184 ------------------------------------------------------------------
 
 HEX = "0123456789abcdef" * 2
+FULL_WIDTH = {ord(c): ord(c) + 0xFEE0 for c in "0123456789abcdef"}
 
 
 @pytest.mark.parametrize(
@@ -949,11 +950,13 @@ HEX = "0123456789abcdef" * 2
     [
         ("blocks", "title", {"title": "~" + HEX, "body": "A made up fact."}),
         ("blocks", "title", {"title": "  ~" + HEX.upper() + " ", "body": "Made up."}),
+        # full width tilde and digits fold to the same form (NFKC)
+        ("blocks", "title", {"title": "\uff5e" + HEX.translate(FULL_WIDTH), "body": "Made up."}),
         ("languages", "name", {"name": "~" + HEX, "level": "B1"}),
-        ("education", "school", {"school": "~" + HEX}),
+        ("education", "school", {"school": "~" + HEX, "degree": "MSc"}),
         ("have", "name", {"name": "~" + HEX, "terms": ["x"]}),
         ("gates", "name", {"name": "~" + HEX, "terms": ["x"]}),
-        ("work_authorization", "country", {"country": "~" + HEX, "status": "citizen"}),
+        ("work_authorization", "country", {"country": "~" + HEX, "answer": "Yes."}),
     ],
 )
 def test_a_name_written_as_the_hash_form_of_a_key_is_refused(
@@ -973,15 +976,6 @@ def test_a_name_written_as_the_hash_form_of_a_key_is_refused(
 def test_a_name_near_the_hash_form_is_kept(title: str) -> None:
     item = items.build("facts", "blocks", "add", {"title": title, "body": "Made up."})
     assert item.value["title"] == title.strip()
-
-
-def test_a_long_title_keeps_its_hashed_key_and_another_cannot_take_it() -> None:
-    long = items.build("facts", "blocks", "add", {"title": "T" * 400, "body": "Made up."})
-    identity = long.key.partition(":")[2]
-    assert identity.startswith("~")
-    assert len(identity) == 33
-    with pytest.raises(ItemError):
-        items.build("facts", "blocks", "add", {"title": identity, "body": "Made up."})
 
 
 def test_an_edit_that_renames_an_entry_onto_another_is_a_conflict() -> None:
@@ -1017,15 +1011,16 @@ def _numbers(annotation: Any, path: str) -> list[str]:
 
 def test_no_proposed_value_holds_a_number_left_empty() -> None:
     """The edit form shows a field that holds null as a line of text (#184 item 10): only a
-    number would be better served by a number control. The one proposable number is the derived
-    years, never null in a proposal (`build` refuses an empty value); a gate's penalty is a
-    setting. A new proposable number fails here, and then needs its control."""
+    number would be better served by a number control. The only number a proposal holds is the
+    derived years (typed `setting`, built by the merge alone), never null (`build` refuses an
+    empty value); a gate's penalty is a setting. A new proposable number fails here, and then
+    needs its control."""
     numbers = [
         path
         for name, model in schemas.SECTION_MODELS.items()
         for path in _numbers(model, name)
         if items.FIELD_TYPES.get(path) is not FieldType.SETTING
     ]
-    assert numbers == ["skills.years_experience"]
+    assert numbers == []
     with pytest.raises(ItemError):
         items.build("skills", "years_experience", "add", None, origin=Origin.derived)

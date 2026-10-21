@@ -255,7 +255,9 @@ def turned_down(db: Session, user_id: uuid.UUID, *, limit: int) -> list[Decision
             Proposal.payload["section"].astext,
             Proposal.payload["key"].astext,
             Proposal.payload["value_hash"].astext,
-            sa.func.jsonb_path_query_array(Proposal.payload, "$.conflict[*].value_hash"),
+            sa.func.jsonb_path_query_array(
+                Proposal.payload, sa.literal_column("'$.conflict[*].value_hash'::jsonpath")
+            ),
             Proposal.status,
             Proposal.edited_value,
         )
