@@ -40,6 +40,7 @@ import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { LiveViewSlot } from "./live-view-slot";
+import { NeedsPerson } from "./needs-person";
 import { RunReport } from "./run-report";
 import { ShotView } from "./shot-view";
 
@@ -302,6 +303,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
+          <NeedsPerson application={application} job={job} />
           {phase === "waiting" || phase === "filling" ? (
             <LiveViewSlot waiting={phase === "waiting"} />
           ) : null}

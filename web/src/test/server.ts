@@ -131,6 +131,16 @@ export const handlers = [
   http.get("*/api/apply/queue/count", () =>
     HttpResponse.json({ waiting_on_you: 0 }),
   ),
+  // The browser free (the job page's live view slot, apply A10a).
+  http.get("*/api/browser", () =>
+    HttpResponse.json({
+      available: true,
+      profile: { exists: false, size_bytes: 0, last_used_at: null },
+      lease: null,
+      holder: null,
+      queue: [],
+    }),
+  ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),
