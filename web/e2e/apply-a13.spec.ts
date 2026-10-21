@@ -141,7 +141,7 @@ async function like(keys: Key[]) {
     .getByRole("link", { name: /^Applications/ })
     .click();
   await expect(
-    page.getByRole("heading", { level: 1, name: "Applications" }),
+    page.getByRole("heading", { level: 1, name: "Application queue" }),
   ).toBeVisible();
 }
 
