@@ -1,7 +1,7 @@
 """D25b's render check on the real renderer (renderer/server.py, POST /check, Chromium in its
-container): every bundled template passes it untouched, and each way a style sheet can hide a
-field is refused with the field and the code (issue #220: the residues of #427's static filter,
-judged where the browser paints).
+container): every bundled template but elegant (its fixed frame) passes it untouched, and each
+way a style sheet can hide a field is refused with the field and the code (issue #220: the
+residues of #427's static filter, judged where the browser paints).
 
 Marked `docker`: the stack of test_renderer_container.py, an image built under a tag of its own
 unless RENDERER_TEST_IMAGE names one.
