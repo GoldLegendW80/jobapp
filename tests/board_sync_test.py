@@ -353,6 +353,152 @@ class LinkAndPlan(unittest.TestCase):
         # The small tickets keep their own stage in the snapshot.
         self.assertEqual(by[1]["stage"], "Approved")
 
+    def facts(self, rows):
+        return {(r["kind"], r["number"]): (r["stage"], r["module"]) for r in rows}
+
+    def test_a_second_sync_after_archiving_gives_the_same_rows(self):
+        issues = [
+            issue(1, title="apply A9: apply myself"),
+            issue(2, title="apply: the whole spec", labels=["spec-card"]),
+        ]
+        prs = [pr(10, "MERGED", title="apply: an unlinked fix")]  # merged, not deployed
+        first_items = [
+            item("IT1", "Issue", 1, status="Building", module="apply"),
+            item("IT2", "Issue", 2, status="Ready", module="apply"),
+            item("IT10", "PullRequest", 10, status="Merged", module="apply"),
+        ]
+        rows1, archive1 = bs.plan(issues, prs, first_items, set(), set(), set())
+        self.assertEqual(archive1, ["IT1", "IT10"])
+        # The items query leaves archived cards out: only the spec card comes back.
+        rows2, archive2 = bs.plan(issues, prs, first_items[1:2], set(), set(), set())
+        self.assertEqual(archive2, [])
+        self.assertEqual(self.facts(rows1), self.facts(rows2))
+        by = self.facts(rows2)
+        # A stored Building field is not a claim; the undeployed merge keeps the spec Building.
+        self.assertEqual(by[("issue", 1)], ("Ready", "apply"))
+        self.assertEqual(by[("pr", 10)], ("Merged", "apply"))
+        self.assertEqual(by[("issue", 2)], ("Building", "apply"))
+
+    def test_spec_follows_claims_verdicts_and_deploys(self):
+        issues = [
+            issue(1, title="apply A9: apply myself"),
+            issue(2, title="apply: the whole spec", labels=["spec-card"]),
+        ]
+        spec_items = [item("IT2", "Issue", 2)]
+
+        def spec_stage(prs, building=(), live=()):
+            rows, _ = bs.plan(issues, prs, spec_items, set(), set(building), set(live))
+            return next(r["stage"] for r in rows if r["number"] == 2)
+
+        self.assertEqual(spec_stage([], building={1}), "Building")  # claimed
+        self.assertEqual(spec_stage([]), "Ready")  # the claim released
+        self.assertEqual(spec_stage([pr(10, closes=[1])]), "Building")  # in review
+        self.assertEqual(spec_stage([pr(10, closes=[1], reviews=APPROVED)]), "Building")
+        merged = [pr(10, "MERGED", closes=[1])]
+        self.assertEqual(spec_stage(merged), "Building")  # merged, not deployed
+        closed = [
+            issue(1, "CLOSED", title="apply A9: apply myself", closed_by=[10]),
+            issues[1],
+        ]
+        rows, _ = bs.plan(closed, merged, spec_items, set(), set(), {MERGE})
+        self.assertEqual(next(r["stage"] for r in rows if r["number"] == 2), "Live")
+
+    def test_a_closed_spec_card_is_live(self):
+        for spec, prs, live in (
+            (
+                issue(
+                    2,
+                    "CLOSED",
+                    title="apply: the whole spec",
+                    labels=["spec-card"],
+                    reason="NOT_PLANNED",
+                ),
+                [],
+                set(),
+            ),
+            (
+                issue(2, "CLOSED", title="apply: the whole spec", labels=["spec-card"]),
+                [pr(10, "MERGED", closes=[2])],
+                set(),
+            ),
+            (
+                issue(2, "CLOSED", title="apply: the whole spec", labels=["spec-card"]),
+                [pr(10, "MERGED", closes=[2])],
+                {MERGE},
+            ),
+            (
+                issue(2, "CLOSED", title="apply: the whole spec", labels=["spec-card"]),
+                [],
+                set(),
+            ),
+        ):
+            rows, _ = bs.plan(
+                [issue(1, title="apply A9: x"), spec], prs, [], set(), set(), live
+            )
+            row = next(r for r in rows if r["number"] == 2)
+            self.assertEqual(
+                (row["stage"], row["stage_order"]), ("Live", bs.ORDER["Live"])
+            )
+
+    def test_writes_touch_only_spec_cards(self):
+        issues = [
+            issue(1, title="apply A9: apply myself"),
+            issue(2, title="apply: the whole spec", labels=["spec-card"]),
+            issue(3, title="mail M5: sync"),
+        ]
+        rows, to_archive = bs.plan(
+            issues,
+            [],
+            [item("IT1", "Issue", 1, status="Ready", module="apply")],
+            set(),
+            set(),
+            set(),
+        )
+        opts = lambda names: [{"id": f"O-{n}", "name": n} for n in names]
+        fields = {
+            "user": {
+                "projectV2": {
+                    "id": "P",
+                    "fields": {
+                        "nodes": [
+                            {
+                                "id": "F-status",
+                                "name": "Status",
+                                "options": opts(bs.STAGE_NAMES),
+                            },
+                            {
+                                "id": "F-module",
+                                "name": "Module",
+                                "options": opts([m for m, _ in bs.MODULES]),
+                            },
+                        ]
+                    },
+                }
+            }
+        }
+        calls = []
+
+        def gql(query, variables=None):
+            calls.append((query, variables))
+            if "addProjectV2ItemById" in query:
+                return {
+                    "addProjectV2ItemById": {"item": {"id": "NEW-" + variables["c"]}}
+                }
+            return fields if "fields(first" in query else {}
+
+        with (
+            mock.patch.object(bs, "gql", gql),
+            mock.patch.object(bs, "paged", lambda *a: []),
+        ):
+            bs.apply(rows, to_archive, False)
+        added = [v["c"] for q, v in calls if "addProjectV2ItemById" in q]
+        self.assertEqual(added, ["I_2"])  # only the spec card is put on the board
+        updates = " ".join(q for q, _ in calls if "updateProjectV2ItemFieldValue" in q)
+        self.assertIn('itemId:"NEW-I_2"', updates)
+        self.assertNotIn('itemId:"IT1"', updates)  # no field written on a task card
+        archives = " ".join(q for q, _ in calls if "archiveProjectV2Item" in q)
+        self.assertIn('itemId:"IT1"', archives)
+
     def test_no_spec_card_keeps_every_card(self):
         rows, to_archive = bs.plan(
             [issue(1)], [], [item("IT1", "Issue", 1)], set(), set(), set()

@@ -258,12 +258,19 @@ def plan(
         if c.get("__typename") in ("Issue", "PullRequest"):
             card[(c["__typename"], c["number"])] = it
 
+    # With spec cards every other card is archived and the items query no longer returns it, so
+    # no stage or module may come from a card's stored fields: only GitHub facts and --building,
+    # and every sync of the same facts gives the same rows.
+    spec_mode = any(
+        SPEC_LABEL in {label["name"] for label in i["labels"]["nodes"]} for i in issues
+    )
     rows = []
     for i in issues:
         labels = {label["name"] for label in i["labels"]["nodes"]}
         item = card.get(("Issue", i["number"]))
-        prev_status = ((item or {}).get("status") or {}).get("name")
-        prev_module = ((item or {}).get("module") or {}).get("name")
+        stored = item if not spec_mode or SPEC_LABEL in labels else None
+        prev_status = ((stored or {}).get("status") or {}).get("name")
+        prev_module = ((stored or {}).get("module") or {}).get("name")
         stage, pr = issue_stage(
             i,
             prs_of.get(i["number"], []),
@@ -306,9 +313,11 @@ def plan(
             if item and not item["isArchived"]:
                 to_archive.append(item["id"])
             continue
-        if not item and p["state"] != "OPEN":
-            continue  # old pull requests never on the board stay off it
         stage = pr_stage(p, gating, live)
+        if not item and p["state"] != "OPEN" and not (spec_mode and stage == "Merged"):
+            continue  # old pull requests never on the board stay off it
+        if spec_mode:
+            item = None  # its card's fields are not facts (see above)
         rows.append(
             {
                 "kind": "pr",
@@ -350,7 +359,9 @@ def spec_cards(
         return rows, to_archive
     spec_numbers = {r["number"] for r in specs}
     for s in specs:
-        if s["open"]:
+        if not s["open"]:
+            s["stage"] = "Live"  # a closed spec card is finished, whatever closed it
+        else:
             work = [
                 r["stage"]
                 for r in rows
@@ -365,7 +376,7 @@ def spec_cards(
                 if work
                 else "Live"
             )
-            s["stage_order"] = ORDER[s["stage"]]
+        s["stage_order"] = ORDER[s["stage"]]
     for r in rows:
         r["on_board"] = r in specs
     to_archive = list(to_archive)
