@@ -17,9 +17,12 @@ circle:
 
 1. the person's row (`users`, `FOR NO KEY UPDATE`), only when the list of base CVs changes
    (create, make default, delete): it serializes the count, the default and the promotion;
-1b. the ingestion document a base CV was converted from (`ingestion_documents`, `FOR NO KEY
-   UPDATE`), only by `delete_base`, which may drop the file kept for it: ingestion's delete
-   holds that row and then rewrites the base CVs (their `SET NULL`), so it comes before lock 3;
+1b. the ingestion document a base CV was converted from (`ingestion_documents`): `FOR NO KEY
+   UPDATE` by `delete_base`, which may drop the file kept for it, and `FOR KEY SHARE`
+   (`lock_source`) by a write that reads it: a conversion (`writer_base.build_from_upload`,
+   after lock 1) and a chat message on a base CV (`chat.post`, before lock 3). The two modes
+   never wait for each other. Ingestion's delete holds that row `FOR UPDATE` and then rewrites
+   the base CVs (their `SET NULL`), so every path takes it before lock 3;
 2. the posting row (`jobs`), only when a status moves (the jobs service takes it `FOR NO KEY
    UPDATE`; the freeze of D14 runs under it), or shared (`lock_posting`, `FOR SHARE`) by a write
    that inserts a row referencing the posting (a posting document, a writer run) while it holds
@@ -221,6 +224,25 @@ def _lock_person(db: Session, user_id: uuid.UUID) -> None:
 
 
 @_busy
+def lock_person(db: Session, user_id: uuid.UUID) -> None:
+    """Lock 1, for a caller that reads what a new base CV is made from before `create_base`
+    takes it again (`writer_base.build_from_upload`)."""
+    _lock_person(db, user_id)
+
+
+def lock_source(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> None:
+    """Lock 1b, shared: the person's ingestion document `FOR KEY SHARE`, taken by a write that
+    reads it (`writer_base.readable_upload`) after lock 1 and before lock 3. It waits for
+    ingestion's delete of the row, never for `delete_base`."""
+    _wait(db)
+    query = (
+        sa.select(IngestionDocument.id)
+        .where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
+        .with_for_update(key_share=True, read=True)
+    )
+    _execute(db, query)
+
+
 def lock_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> JobStatus | None:
     """Lock 2, shared: the user's posting `FOR SHARE`, taken before lock 3 by a write that
     inserts a row referencing the posting. It waits for a status move, which holds the posting
@@ -599,7 +621,8 @@ def _lock_written_from(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> N
 
 
 def _lock_source(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> uuid.UUID | None:
-    """Lock 1b on the upload the base CV was converted from, its id, or None."""
+    """Lock 1b, `FOR NO KEY UPDATE`, on the upload the base CV was converted from: its id, or
+    None."""
     upload_id = db.execute(
         sa.select(Document.source_document_id).where(
             Document.id == base_id, Document.user_id == user_id, Document.scope == Scope.base
@@ -610,7 +633,7 @@ def _lock_source(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> uuid.UU
     query = (
         sa.select(IngestionDocument.id)
         .where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
-        .with_for_update(key_share=True)
+        .with_for_update(key_share=True)  # FOR NO KEY UPDATE
     )
     _wait(db)
     return _execute(db, query).scalar_one_or_none()

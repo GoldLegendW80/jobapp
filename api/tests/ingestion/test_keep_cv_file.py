@@ -311,16 +311,69 @@ def test_a_base_cv_from_a_file_that_was_not_kept_changes_nothing_when_deleted(
     assert (stored.raw, stored.keep_bytes, stored.text) == (None, False, TEXT)
 
 
-def test_a_file_waiting_for_its_reader_is_never_dropped(
-    api: Api, alex: str, factory: sessionmaker[Session]
+def test_a_file_waiting_for_its_reader_loses_its_mark_and_keeps_its_file_until_read(
+    api: Api, alex: str, factory: sessionmaker[Session], clock: Clock
 ) -> None:
-    """The file of a row read again is what the job reads: a delete never takes it away."""
+    """The file of a row read again is what the job reads: a delete takes the mark at once and
+    leaves the file to the reader, which drops it once the text is stored."""
     data = cv_pdf("pending")
     body = sent_for_cv(api, alex, data)
     with factory() as db:
-        assert not documents.drop_kept_file(db, user_id(factory, ALEX), uuid.UUID(body["id"]))
+        assert documents.drop_kept_file(db, user_id(factory, ALEX), uuid.UUID(body["id"]))
         db.commit()
-    assert row(factory, body["id"]).raw == data
+    stored = row(factory, body["id"])
+    assert (stored.raw, stored.keep_bytes) == (data, False)
+    assert run(factory, clock, Parser(parsed()), body["id"]) == jobs.DONE
+    assert row(factory, body["id"]).raw is None
+
+
+def older_reading(factory: sessionmaker[Session], document_id: str) -> None:
+    """The row was read by an older parser that left a note: the same file uploaded again
+    takes it over (`documents.replaceable`)."""
+    with factory() as db:
+        db.execute(
+            sa.update(IngestionDocument)
+            .where(IngestionDocument.id == uuid.UUID(document_id))
+            .values(note="Example note of an older reader.", parser_version=1)
+        )
+        db.commit()
+
+
+def test_a_kept_file_taken_over_by_a_plain_upload_keeps_its_mark(
+    api: Api, alex: str, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    data = cv_pdf("over")
+    body = sent_for_cv(api, alex, data)
+    assert run(factory, clock, Parser(parsed()), body["id"]) == jobs.DONE
+    base_id = converted(api, alex, body["id"])
+    older_reading(factory, body["id"])
+    response = upload(api, alex, data, "cv.pdf")
+    assert response.status_code == 201, response.text
+    assert response.json()["id"] == body["id"]
+    stored = row(factory, body["id"])
+    assert (stored.text_status, stored.keep_bytes) == (TextStatus.pending, True)
+    assert run(factory, clock, Parser(parsed()), body["id"]) == jobs.DONE
+    stored = row(factory, body["id"])
+    assert (stored.raw, stored.keep_bytes) == (data, True)  # the base CV still reads it
+    delete_base(api, alex, base_id)
+    assert row(factory, body["id"]).raw is None
+
+
+def test_the_last_base_cv_deleted_while_its_file_is_read_again_leaves_no_mark(
+    api: Api, alex: str, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    data = cv_pdf("again-read")
+    body = sent_for_cv(api, alex, data)
+    assert run(factory, clock, Parser(parsed()), body["id"]) == jobs.DONE
+    base_id = converted(api, alex, body["id"])
+    older_reading(factory, body["id"])
+    assert upload(api, alex, data, "cv.pdf").status_code == 201
+    delete_base(api, alex, base_id)
+    stored = row(factory, body["id"])
+    assert (stored.text_status, stored.raw, stored.keep_bytes) == (TextStatus.pending, data, False)
+    assert run(factory, clock, Parser(parsed()), body["id"]) == jobs.DONE
+    stored = row(factory, body["id"])
+    assert (stored.raw, stored.keep_bytes, stored.text) == (None, False, TEXT)
 
 
 def test_a_base_cv_delete_waits_for_an_ingestion_delete_holding_the_file(

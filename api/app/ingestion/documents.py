@@ -584,7 +584,8 @@ def _store(
     document.attempts = 0
     document.secret_warning = content is not None and bool(content.secret_rules)
     document.secret_confirmed_at = None
-    document.keep_bytes = keep
+    # A kept row read again keeps its mark: the base CVs converted from it still need the file.
+    document.keep_bytes = keep or (replaced and body is not None and document.keep_bytes)
     if content is not None:
         document.text = content.text
     db.flush()
@@ -620,17 +621,18 @@ def _keep_file(
 
 def drop_kept_file(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
     """The file kept for a base CV goes: the documents module calls it in the transaction that
-    deletes the last base CV converted from this document, holding the row. A document still
-    waiting for its reader keeps the file it is about to be read from. True when it went."""
+    deletes the last base CV converted from this document, holding the row. The mark goes in
+    every case; a document still waiting for its reader keeps the file it is about to be read
+    from, and the reader drops it once the text is stored. True when the mark went."""
+    waiting = IngestionDocument.text_status == TextStatus.pending
     gone = db.execute(
         sa.update(IngestionDocument)
         .where(
             IngestionDocument.id == document_id,
             IngestionDocument.user_id == user_id,
             IngestionDocument.keep_bytes,
-            IngestionDocument.text_status != TextStatus.pending,
         )
-        .values(raw=None, keep_bytes=False)
+        .values(raw=sa.case((waiting, IngestionDocument.raw), else_=None), keep_bytes=False)
     )
     return bool(gone.rowcount)
 
