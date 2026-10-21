@@ -194,9 +194,10 @@ pnpm_fix() {
 if ! have pnpm; then
   miss "pnpm is not installed" "$(pnpm_fix "${pnpm_want:-9}")"
 else
-  # No project pin in /, no pnpm switching, and no Corepack network or auto-pin writes.
+  # No project pin in /, no pnpm switching, and no Corepack or Node compile-cache writes.
   # https://github.com/nodejs/corepack#environment-variables
-  pnpm_version="$(cd / && COREPACK_ENABLE_NETWORK=0 COREPACK_ENABLE_AUTO_PIN=0 COREPACK_DEFAULT_TO_LATEST=0 npm_config_manage_package_manager_versions=false pnpm_config_pm_on_fail=ignore pnpm --version 2>/dev/null)" || pnpm_version=""
+  # https://nodejs.org/api/module.html#module-compile-cache
+  pnpm_version="$(cd / && COREPACK_ENABLE_NETWORK=0 COREPACK_ENABLE_AUTO_PIN=0 COREPACK_DEFAULT_TO_LATEST=0 NODE_DISABLE_COMPILE_CACHE=1 npm_config_manage_package_manager_versions=false pnpm_config_pm_on_fail=ignore pnpm --version 2>/dev/null)" || pnpm_version=""
   pnpm_have="$(first_version "$pnpm_version")"
   pnpm_have_major="${pnpm_have%%.*}"
   pnpm_want_major="${pnpm_want%%.*}"
@@ -214,32 +215,22 @@ else
     fi
   # pnpm 10 and later run the pinned version themselves by default (pmOnFail=download from 11).
   elif ((10#${pnpm_have_major:-0} >= 10 && 10#${pnpm_have_major:-0} > 10#$pnpm_want_major)); then
-    # Read only one nonsecret setting from user config, outside any project. Running a config
-    # query under web/ could itself download the pin. Project overrides remain unverified.
+    # Even a config query outside the project can provision a user-configured Node runtime.
+    # Keep the version-only probe above and leave user and project switching unverified.
+    # https://github.com/pnpm/pnpm/blob/v10.17.1/pnpm/src/main.ts#L268-L283
     # https://pnpm.io/10.x/settings#managepackagemanagerversions
     # https://pnpm.io/settings/cli#pmonfail
-    pnpm_switch_key=""
+    pnpm_switch_setting=""
     case "$pnpm_have_major" in
-    10) pnpm_switch_key=manage-package-manager-versions; pnpm_switch_setting=managePackageManagerVersions=true ;;
-    11) pnpm_switch_key=pm-on-fail; pnpm_switch_setting=pmOnFail=download ;;
+    10) pnpm_switch_setting=managePackageManagerVersions=true ;;
+    11) pnpm_switch_setting=pmOnFail=download ;;
     esac
-    pnpm_switch=""
-    if [[ -n "$pnpm_switch_key" ]]; then
-      pnpm_switch="$(cd / && COREPACK_ENABLE_NETWORK=0 COREPACK_ENABLE_AUTO_PIN=0 COREPACK_DEFAULT_TO_LATEST=0 pnpm config get "$pnpm_switch_key" 2>/dev/null)" || pnpm_switch=""
-    fi
-    case "$pnpm_have_major:$pnpm_switch" in
-    10:false | 11:ignore | 11:warn | 11:error | 11:false)
-      if [[ "$pnpm_have_major" == 10 ]]; then pnpm_switch_name=managePackageManagerVersions; else pnpm_switch_name=pmOnFail; fi
-      miss "pnpm $pnpm_have, web/package.json pins $pnpm_want; version switching is disabled ($pnpm_switch_name)" "$(pnpm_fix "$pnpm_want")"
-      ;;
-    10:true | 10:undefined | 11:download | 11:undefined)
-      warn "pnpm $pnpm_have can run the pinned $pnpm_want if version switching is enabled in the project" \
-        "check $pnpm_switch_setting in the web project's configuration, or npm install -g pnpm@$pnpm_want"
-      ;;
-    *)
+    if [[ -n "$pnpm_switch_setting" ]]; then
+      warn "pnpm $pnpm_have, version switching could not be checked for the $pnpm_want pin" \
+        "check $pnpm_switch_setting (the default) and any user or web project overrides, or npm install -g pnpm@$pnpm_want"
+    else
       warn "pnpm $pnpm_have, version switching could not be checked for the $pnpm_want pin" "$(pnpm_fix "$pnpm_want")"
-      ;;
-    esac
+    fi
   else
     miss "pnpm $pnpm_have, web/package.json pins $pnpm_want" "$(pnpm_fix "$pnpm_want")"
   fi
