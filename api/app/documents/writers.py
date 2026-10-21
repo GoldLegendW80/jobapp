@@ -15,6 +15,7 @@ from types import ModuleType
 WRITERS: tuple[str, ...] = (
     "writer_cv",  # D7: documents_cv
     "writer_letter",  # D8: documents_letter
+    "writer_proposal",  # issue #485: documents_proposal
     "writer_base",  # D9: documents_base
     "writer_design",  # D25b: documents_design
     "chat",  # D17: the chat of a document

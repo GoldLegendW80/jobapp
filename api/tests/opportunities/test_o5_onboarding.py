@@ -219,9 +219,10 @@ def test_a_step_passed_is_kept_once_in_order_on_every_device(
     other = Who(api.login_token(NEW_A), new_a.user_id)
     assert state(api, other)["passed"] == ["profile", "where"]
     assert stored_onboarding(factory, new_a)["steps_passed"] == ["profile", "where"]
-    # two new steps, two revisions of preferences; the step passed again adds none
+    # a step passed is no revision of the profile: another tab is never sent a 409 by it
+    assert api.get("/api/profile", token=new_a.token).json()["revision"] == 0
     history = api.get("/api/profile/revisions?section=preferences", token=new_a.token).json()
-    assert [item["revision"] for item in history["items"]] == [2, 1]
+    assert history["items"] == []
     # a step does not end the wizard nor stop it opening by itself
     assert state(api, new_a)["open_wizard"] is True
 
@@ -232,7 +233,7 @@ def test_an_unknown_step_is_422(api: Api, new_a: Who, name: Any) -> None:
     assert api.get("/api/profile", token=new_a.token).json()["revision"] == 0
 
 
-def test_the_steps_survive_a_save_and_an_import_and_a_save_cannot_write_them(
+def test_the_steps_survive_a_save_and_an_import_and_a_save_never_writes_them(
     factory: sessionmaker[Session], api: Api, new_a: Who
 ) -> None:
     step(api, new_a, "looking")
@@ -250,17 +251,122 @@ def test_the_steps_survive_a_save_and_an_import_and_a_save_cannot_write_them(
 
     # sent back as loaded: saved, the steps kept
     assert put({**prefs, "documents_tone": "warm"}, loaded["revision"]).status_code == 200
-    # a save that adds or clears a step is refused
-    for steps in (["looking", "pay"], []):
+    # a save that adds or clears a step is saved, and the stored steps stay (a tab loaded
+    # before the last step holds an older list: it must not be refused for it)
+    for offset, steps in enumerate((["looking", "pay"], [])):
         changed = {**prefs, "onboarding": {**prefs["onboarding"], "steps_passed": steps}}
-        refused = put(changed, loaded["revision"] + 1)
-        assert refused.status_code == 422, refused.text
+        saved = put(changed, loaded["revision"] + 1 + offset)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["sections"]["preferences"]["onboarding"]["steps_passed"] == ["looking"]
+    assert stored_onboarding(factory, new_a)["steps_passed"] == ["looking"]
     # an import of a file with other steps keeps the stored ones
     exported = api.get("/api/profile/export", token=new_a.token).json()
     exported["sections"]["preferences"]["onboarding"]["steps_passed"] = ["apply", "summary"]
     imported = api.post("/api/profile/import", token=new_a.token, json=exported)
     assert imported.status_code == 200, imported.text
     assert stored_onboarding(factory, new_a)["steps_passed"] == ["looking"]
+
+
+def test_a_second_tab_saves_after_the_wizard_passed_steps(
+    factory: sessionmaker[Session], api: Api, new_a: Who
+) -> None:
+    """The other tab loaded the profile, then the wizard passed steps: its save goes through on
+    the revision it loaded (no 409), and the steps stay."""
+    loaded = api.get("/api/profile", token=new_a.token).json()
+    for name in ("profile", "looking", "where"):
+        step(api, new_a, name)
+    # the profile was empty when that tab loaded it: it sends the page's defaults
+    assert loaded["sections"]["preferences"] is None
+    prefs: dict[str, Any] = {}
+    saved = api.request(
+        "PUT",
+        "/api/profile/preferences",
+        token=new_a.token,
+        json={"base_revision": loaded["revision"], "data": {**prefs, "documents_tone": "warm"}},
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["revision"] == loaded["revision"] + 1
+    assert body["sections"]["preferences"]["documents_tone"] == "warm"
+    assert body["sections"]["preferences"]["onboarding"]["steps_passed"] == [
+        "profile",
+        "looking",
+        "where",
+    ]
+    # a stale revision is still a 409: the check stays honest for the person's own edits
+    stale = api.request(
+        "PUT",
+        "/api/profile/preferences",
+        token=new_a.token,
+        json={"base_revision": loaded["revision"], "data": prefs},
+    )
+    assert stale.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        {"completed_at": None, "dismissed_at": None},  # a page loaded before steps_passed
+        {"dismissed_at": None},
+        {},
+        None,  # no onboarding at all
+    ],
+)
+def test_a_save_without_an_onboarding_key_keeps_the_stored_value(
+    factory: sessionmaker[Session], api: Api, new_a: Who, sent: dict[str, Any] | None
+) -> None:
+    api.post(f"{BASE}/dismiss", token=new_a.token)
+    step(api, new_a, "where")
+    loaded = api.get("/api/profile", token=new_a.token).json()
+    before = loaded["sections"]["preferences"]["onboarding"]
+    data = {k: v for k, v in loaded["sections"]["preferences"].items() if k != "onboarding"}
+    if sent is not None:
+        data["onboarding"] = {
+            key: before[key] if before[key] is not None else value for key, value in sent.items()
+        }
+    saved = api.request(
+        "PUT",
+        "/api/profile/preferences",
+        token=new_a.token,
+        json={"base_revision": loaded["revision"], "data": {**data, "documents_tone": "formal"}},
+    )
+    assert saved.status_code == 200, saved.text
+    assert stored_onboarding(factory, new_a) == before
+    assert before["steps_passed"] == ["where"]
+    assert before["dismissed_at"] is not None
+
+
+def test_a_save_that_changes_a_date_is_still_refused(api: Api, new_a: Who) -> None:
+    api.post(f"{BASE}/dismiss", token=new_a.token)
+    loaded = api.get("/api/profile", token=new_a.token).json()
+    prefs = loaded["sections"]["preferences"]
+    for dates in ({"dismissed_at": None}, {"completed_at": "2026-10-20T08:00:00+00:00"}):
+        refused = api.request(
+            "PUT",
+            "/api/profile/preferences",
+            token=new_a.token,
+            json={
+                "base_revision": loaded["revision"],
+                "data": {**prefs, "onboarding": dates},
+            },
+        )
+        assert refused.status_code == 422, refused.text
+
+
+def test_a_step_once_the_wizard_is_finished_records_nothing(
+    factory: sessionmaker[Session], api: Api, queue: FakeQueue, new_a: Who
+) -> None:
+    step(api, new_a, "looking")
+    assert api.post(f"{BASE}/complete", token=new_a.token).status_code == 200
+    before = api.get("/api/profile", token=new_a.token).json()
+    response = step(api, new_a, "pay")
+    assert response.status_code == 200, response.text
+    assert response.json()["passed"] == ["looking"]
+    assert response.json()["completed_at"] is not None
+    assert stored_onboarding(factory, new_a)["steps_passed"] == ["looking"]
+    after = api.get("/api/profile", token=new_a.token).json()
+    assert after["revision"] == before["revision"]
+    assert after["updated_at"] == before["updated_at"]
 
 
 def test_the_steps_are_never_shown_to_a_model(

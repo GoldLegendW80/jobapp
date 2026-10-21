@@ -71,7 +71,8 @@ ops/ship.sh --plan --approved                       # what would ship, changes n
 ops/ship.sh <pr> <pr>                               # gate, merge, deploy the checked tree, check the Jetson: SHIP: OK
 ops/deploy-checked.sh                               # deploy the current checked main only
 ops/remote.sh status                                # the Jetson's figures through GitHub Actions (ops.yml), no ssh; --list for the actions
-ops/card.sh <issue or pr url> <todo|doing|done> <module> <now|next|later>   # the board
+ops/card.sh <issue url> doing <module> now           # the card of a task you start (Building)
+ops/board-sync.py                                   # every column from GitHub facts, dry run (ops/ship.sh runs --apply)
 ```
 
 `uv` needs `--native-tls` on a network that intercepts TLS. Deploy from any machine, no ssh
