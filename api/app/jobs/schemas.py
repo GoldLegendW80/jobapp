@@ -391,7 +391,7 @@ class PayIn(BaseModel):
 
     min: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
     max: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
-    currency: str
+    currency: Annotated[str, StringConstraints(max_length=3)]
     period: PayPeriod
 
     @field_validator("currency")
