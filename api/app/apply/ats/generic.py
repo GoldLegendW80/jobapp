@@ -187,7 +187,11 @@ AI_READER = re.compile(
     r"assistants? ia|agents? ia|intelligence artificielle)\b"
 )
 # A model's own name is also a person's (a recruiter named Claude): only an address counts.
-_MODEL = r"(?:chat ?gpt|gpt)(?:-?\d+(?:\.\d+)?o?)?|claude(?: ai)?"
+_VERSION = r"\d+(?:\.\d+)?"
+_MODEL = (
+    rf"(?:chat ?gpt|gpt)(?:-?{_VERSION}o?)?"
+    rf"|claude(?: ai| (?:{_VERSION} )?(?:opus|sonnet|haiku)(?: {_VERSION})?| {_VERSION})?"
+)
 AI_NAMED = re.compile(
     rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:{_MODEL})\b"
     rf"|(?:^|[.!?] |\b(?:note|message|instructions?|consignes?) (?:to|for|pour) )"
