@@ -113,7 +113,7 @@ export function UploadPanel({
   };
 
   const send = useMutation({
-    mutationFn: (file: File) => uploadDocument(file),
+    mutationFn: (file: File) => uploadDocument(file, { forBaseCv: true }),
     onSuccess: (stored) => {
       setUploadId(stored.id);
       void client.invalidateQueries({ queryKey: documentsKey });

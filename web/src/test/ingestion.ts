@@ -57,8 +57,13 @@ export interface FakeDocuments {
     string,
     Array<{ position: number; width: number; height: number }>
   >;
-  /** What each upload sent: the name header as received, and the body. */
-  uploads: Array<{ filename: string | null; body: Uint8Array; type: string }>;
+  /** What each upload sent: the name header as received, the body, and its `for`. */
+  uploads: Array<{
+    filename: string | null;
+    body: Uint8Array;
+    type: string;
+    purpose: string | null;
+  }>;
   pastes: string[];
   deleted: string[];
   /** Characters per page of the text route (the real one serves 20,000). */
@@ -128,6 +133,7 @@ export function fakeDocuments(
         filename,
         body,
         type: request.headers.get("content-type") ?? "",
+        purpose: new URL(request.url).searchParams.get("for"),
       });
       const name = nameOf(filename);
       const key = Array.from(body).join(",");

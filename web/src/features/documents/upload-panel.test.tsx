@@ -91,6 +91,8 @@ describe("the upload panel", () => {
     expect(await screen.findByText("Reading your CV")).toBeVisible();
     expect(files.uploads).toHaveLength(1);
     expect(files.uploads[0]?.filename).toBe("UTF-8''Morgan%20CV.pdf");
+    // The server keeps the file of a CV sent here: the design capture reads it.
+    expect(files.uploads[0]?.purpose).toBe("base_cv");
     expect(conversions(api)).toEqual([]); // the text is not read yet
   });
 
