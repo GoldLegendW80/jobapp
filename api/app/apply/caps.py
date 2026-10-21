@@ -118,6 +118,16 @@ def _setting(name: str) -> Any:
         return Settings.model_fields[name].default
 
 
+def hold_floor_s() -> int:
+    """`Settings.apply_hold_floor_s`; APPLY_HOLD_S's default when the settings cannot be read."""
+    from app.config import ConfigError, Settings, get_settings
+
+    try:
+        return int(get_settings().apply_hold_floor_s)
+    except ConfigError:
+        return int(Settings.model_fields["apply_hold_s"].default)
+
+
 # --- the company ---------------------------------------------------------------------------------
 
 
@@ -214,7 +224,7 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
         min_fit_chosen=bool(row and row.min_fit is not None),
         company_days=stored(row and row.company_days, "apply_full_auto_company_days"),
         safety_ceiling=stored(row and row.safety_ceiling, "apply_full_auto_safety_ceiling"),
-        hold_s=stored(row and row.hold_s, "apply_hold_s"),
+        hold_s=row.hold_s if row and row.hold_s is not None else hold_floor_s(),
         full_auto_since=row.full_auto_since if row else None,
         rehearsals_done=row.rehearsals_done if row else 0,
         timezone=(search.sweep_schedule if search else SweepSchedule()).timezone,
