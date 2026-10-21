@@ -256,6 +256,28 @@ test("a new member lands on the wizard and imports an invented CV in step 1", as
       timeout: 120_000,
     },
   );
+
+  // A LinkedIn export or a pasted text: stored and read from the step itself (#484), up to the
+  // estimate; the run is not started here (it would ask the model).
+  await pageN
+    .getByText("Or add a LinkedIn data export (ZIP), or paste a text")
+    .click();
+  await pageN
+    .getByLabel("Or paste a text")
+    .fill("Robin Sampleton, data engineer at Example Robotics since 2023.");
+  await pageN.getByRole("button", { name: "Add this text" }).click();
+  const read = pageN.getByRole("region", {
+    name: "Read them into your profile",
+  });
+  await press(read.getByRole("button", { name: "Select all" }), "Enter");
+  await press(read.getByRole("button", { name: "See the estimate" }), "Enter");
+  const estimate = pageN.getByRole("dialog", { name: "Before the run starts" });
+  await expect(estimate.getByTestId("estimate")).toBeVisible({
+    timeout: 60_000,
+  });
+  await noDash(pageN);
+  await pageN.keyboard.press("Escape");
+  await expect(estimate).toBeHidden();
   await next(pageN);
 });
 

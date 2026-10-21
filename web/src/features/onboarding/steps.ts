@@ -270,12 +270,31 @@ export function savedDraft(sections: SectionData, typed: Draft): Draft {
   return { ...stored, ratherNotSay: typed.ratherNotSay && nothingStored };
 }
 
+/** Any origin will do: `nextPage` only checks that the address stays on it. */
+const SAME_ORIGIN = "https://app.invalid";
+/** A control character, any white space, or a backslash: never in a path this app links to. */
+const UNSAFE = /[\p{Cc}\s\\]/u;
+
 /**
  * The page asked for when the wizard opened by itself (`?next=`, set by the gate): restored when
- * the wizard ends or is put off. Only a path of this app, never /welcome itself.
+ * the wizard ends or is put off. Only a path of this app, never /welcome itself: it starts with
+ * one slash, holds no control character, white space or backslash (as typed, nor in its path
+ * once percent-decoded, so a tab smuggled in as `/%09/evil.com` is refused), and resolves to the
+ * page's own origin (`new URL`). Anything else is refused.
  */
 export function nextPage(value: string | null): string | null {
   if (!value?.startsWith("/") || value.startsWith("//")) return null;
-  if (value.startsWith("/welcome") || value.includes("\\")) return null;
-  return value;
+  if (UNSAFE.test(value)) return null;
+  let url: URL;
+  let path: string;
+  try {
+    url = new URL(value, SAME_ORIGIN);
+    path = decodeURIComponent(url.pathname);
+  } catch {
+    return null;
+  }
+  if (url.origin !== SAME_ORIGIN) return null;
+  if (UNSAFE.test(path) || path.startsWith("//")) return null;
+  if (path.startsWith("/welcome")) return null;
+  return `${url.pathname}${url.search}${url.hash}`;
 }
