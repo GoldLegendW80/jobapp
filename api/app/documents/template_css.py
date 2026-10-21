@@ -10,8 +10,8 @@ input it does not know: `url(`, an escape outside a string, a comment or a strin
 character outside the ASCII set of the rules below, functions nested deeper than
 FUNCTION_DEPTH, a sheet over SHEET_MAX characters. A sheet it stops on is refused whole. Then
 everything is held to allow lists:
-- the structure: rules and an exact `@page` (or `@page :first`, page 1's), no other at-rule,
-  no block inside a block;
+- the structure: rules and an exact `@page`, no other at-rule, no block inside a block;
+  `@page :first` (page 1's) is read, for the repository's templates, and refused as `page`;
 - the selectors: type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
   `:last-child`, the combinators space, `>`, `+`, `~`, a final `::before`, `::after` or
   `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
@@ -263,6 +263,7 @@ class Rule:
     selectors: tuple[Selector, ...] | None  # None: @page
     declarations: tuple[Declaration, ...]
     line: int
+    first: bool = False  # @page :first
 
 
 def _selector(parts: Sequence[Token]) -> Selector | str:
@@ -384,7 +385,9 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
             if prelude[0].text.lower() != "page" or not first:
                 return [], [Problem(file, line, "structure", "an at-rule other than @page")]
             selectors: tuple[Selector, ...] | None = None
+            page_first = bool(pseudo)
         else:
+            page_first = False
             groups: list[list[Token]] = [[]]
             for token in prelude:
                 if token.kind == "delim" and token.text == ",":
@@ -417,7 +420,7 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
                     break
                 continue
             part.append(token)
-        rules.append(Rule(selectors, tuple(declarations), line))
+        rules.append(Rule(selectors, tuple(declarations), line, page_first))
     return rules, problems
 
 
@@ -908,6 +911,9 @@ def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
             if _custom(found):
                 customs[d.prop] = found[0]
     for rule in rules:
+        if rule.first:
+            detail = "@page :first: the repository's templates only"
+            problems.append(Problem(file, rule.line, "page", detail))
         for d in rule.declarations:
             if rule.selectors is None:
                 wrong = _page_problem(d, customs, accent)

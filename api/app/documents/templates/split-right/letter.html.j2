@@ -3,12 +3,13 @@
     closing and the name) and the contact lines in the narrow column on the right. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{% import "_base/layout.html.j2" as layout with context %}
 {% block body %}
 <header class="head">
 <div class="headtext">
 <h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
-{{ base.contact_across() }}
+{{ layout.contact_across() }}
 </div>
 {{ base.portrait() }}
 </header>
@@ -23,7 +24,7 @@
 <p class="signature">{{ base.words(name) }}</p>
 </main>
 <aside class="side">
-{{ base.contact_column("side-label") }}
+{{ layout.contact_column("side-label") }}
 </aside>
 </div>
 {% endblock %}

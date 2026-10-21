@@ -2,8 +2,9 @@
 separator, set each word of the name as a box of its own (a no break space joins two words into
 one), and say "ats friendly" in the same words in both languages. Marked `docker`: through the
 real renderer, CV and letter, English and French, at the loosest step, the fitted one and the
-tightest, no name, address or link is broken inside a word; and on a document of two pages every
-glyph of every page stands inside the page's frame.
+tightest, no name, address or link is broken inside a word; and on a document of two pages, at the
+loosest step and the tightest that takes two, every glyph of every page stands inside the
+page's frame.
 """
 
 import ctypes
@@ -272,21 +273,27 @@ def two_page_letter(language: str) -> c.LetterContent:
 
 
 @docker
+@pytest.mark.parametrize("tight", [False, True], ids=["loosest", "tightest-of-two-pages"])
 @pytest.mark.parametrize("language", templates.LANGUAGES)
 @pytest.mark.parametrize("kind", templates.KINDS)
 @pytest.mark.parametrize("slug", SLUGS)
 def test_every_glyph_of_every_page_stands_inside_the_page_frame(
-    renderer: Any, slug: str, kind: str, language: str
+    renderer: Any, slug: str, kind: str, language: str, tight: bool
 ) -> None:
     """The reviews of D21 and D22: with a page margin of 0, a padding applied once printed page
-    2's first line on the paper's edge. A document of two pages or more at the loosest step (D1's
-    long CV, a letter of five long paragraphs): every glyph of every page lies inside the step's
-    margin, give or take 0.5 mm for the ink of a glyph that overhangs its advance."""
+    2's first line on the paper's edge. A document of two pages or more (D1's long CV, a letter
+    of five long paragraphs) at the loosest step, and at the tightest step that still takes two
+    pages (the one before the fitted step, or the last): every glyph of every page lies inside
+    the step's margin, give or take 0.5 mm for the ink of a glyph that overhangs its advance."""
     found = template(slug)
     content: Any = d1("cv-long")[2] if kind == "cv" else two_page_letter(language)
-    margin = found.steps(kind)[0].margin * MM
+    step = 0
+    if tight:
+        result = fitted(renderer, found, kind, content, d1_view(), language)
+        step = result.step - 1 if result.fit else len(found.steps(kind)) - 1
+    margin = found.steps(kind)[step].margin * MM
     rendered = renderer.render(
-        templates.build_html(found, kind, content, d1_view(), language, 0, ON)
+        templates.build_html(found, kind, content, d1_view(), language, step, ON)
     )
     assert rendered.pages >= 2, rendered.pages
     slack = 0.5 * MM

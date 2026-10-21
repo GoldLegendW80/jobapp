@@ -20,27 +20,6 @@
 {% endif %}
 {% endmacro %}
 
-{#- The contact lines of a narrow column (`sidebar`, `split-right`), each kept whole: under a
-    heading of class `heading`, set smaller past 25 characters (a letter's larger body: 23), and
-    not printed past 31 (28), where `contact_across` prints them in a row under the headline. -#}
-{% macro contact_column(heading="label") %}
-{% set small, wide = (25, 31) if kind == "cv" else (23, 28) %}
-{% set longest = contact | map(attribute="text") | map("length") | max if contact else 0 %}
-{% if contact and longest <= wide %}
-<section class="block">
-<h2 class="{{ heading }}">{{ label("contact") }}</h2>
-{{ contact_lines("contact small" if longest > small else "contact") }}
-</section>
-{% endif %}
-{% endmacro %}
-
-{% macro contact_across(class="contact across") %}
-{% set wide = 31 if kind == "cv" else 28 %}
-{% if contact and contact | map(attribute="text") | map("length") | max > wide %}
-{{ contact_lines(class) }}
-{% endif %}
-{% endmacro %}
-
 {% macro portrait(class="photo") %}
 {% if photo %}<img class="{{ class }}" src="{{ photo }}" alt="{{ name }}">{% endif %}
 {% endmacro %}
