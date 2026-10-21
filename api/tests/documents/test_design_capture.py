@@ -475,10 +475,10 @@ def test_the_persons_photo_never_reaches_a_render_the_model_sees(
 def test_the_docx_names_and_fonts_go_through_the_secret_rules() -> None:
     key = "AKIA" + "QZ" * 8
     style = dict.fromkeys(parser_client._STYLE_KEYS) | {
-        "id": f"Id{key}",
+        "id": key,
         "name": "Heading 1",
         "type": "paragraph",
-        "based_on": f"Base{key}",
+        "based_on": key,
         "font": f"Font {key}",
     }
     docx = DesignDocx(
@@ -492,13 +492,13 @@ def test_the_docx_names_and_fonts_go_through_the_secret_rules() -> None:
         table_columns=0,
         drawings=0,
         paragraphs=1,
-        paragraph_styles=((f"Id{key}", 1),),
-        formats=({"style": f"Id{key}", "font": f"Run {key}", "chars": 4},),
+        paragraph_styles=((key, 1),),
+        formats=({"style": key, "font": f"Run {key}", "chars": 4},),
     )
     layout = design_capture._docx_layout(docx)
     assert key not in str(layout)
     assert layout["styles"][0]["name"] == "Heading 1"
-    assert layout["theme"]["minor"] == "Arial"
+    assert layout["theme"]["minor"] == "Arimo"  # mapped by code, never the file's string
 
 
 def test_decide_allows_one_repair_and_one_fidelity_pass() -> None:
