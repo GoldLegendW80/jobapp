@@ -51,7 +51,7 @@ LONG_CONTACT = Identity(
 )
 # By the longest contact line: a 43 character address beside a 56 character link, then the
 # lengths where a narrow contact column changes its setting (sidebar, split-right): 25 and 26
-# characters, 31 and 32 (in sidebar's letter 23 and 24, 28 and 29); wide letters (m, w) and a
+# characters, 31 and 32 (in a letter 23 and 24, 28 and 29); wide letters (m, w) and a
 # place with a space and hyphens.
 CONTACTS = {
     "56": LONG_CONTACT,
