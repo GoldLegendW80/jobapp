@@ -7,8 +7,10 @@ is stored `pending` with its bytes. Then:
 (An archive, G7, is asked twice at most: the parser's `docx` reader first, and when that one
 answers `not_docx`, its `linkedin_zip` reader. A Word document is stored as a text below, its
 row then carrying DOCX_MIME. An export is stored by `_store_export`: one transaction makes a
-document of each CSV, found again by its own hash, and deletes the row of the archive. A ZIP
-that is neither is failed with its reason and keeps its row, as any file that cannot be read.)
+document of each CSV, found again by its own hash, and deletes the row of the archive. A CSV
+that would replace a document a run has read is not stored, and the archive's row then stays,
+failed with a sentence naming those files. A ZIP that is neither is failed with its reason and
+keeps its row, as any file that cannot be read.)
 
 1. The upload route queues `parse_document(document_id)` once its transaction has committed
    (`enqueue`). When Redis cannot take the job the document is failed at once, as a failure of
@@ -639,6 +641,9 @@ def _store_export(
             _log("document parse failed", document, failure="file", code=refused.rule)
             db.commit()
             return FAILED
+        refused = [one.document.name for one in stored if one.refused]
+        if refused:
+            _fail(db, document, FailedKind.file, documents.export_refused(refused))
         logger.info(
             "export unpacked",
             extra={
@@ -647,6 +652,7 @@ def _store_export(
                 "size": claim.size,
                 "files": len(entries),
                 "new_files": sum(1 for one in stored if one.created),
+                "refused_files": len(refused),
                 "characters": sum(len(entry.content.text) for entry in entries),
                 "secret_rules": sorted(secret_rules),
                 "attempts": claim.attempts,
@@ -655,7 +661,7 @@ def _store_export(
             },
         )
         db.commit()
-    return DONE
+    return FAILED if refused else DONE
 
 
 def _store_failure(
