@@ -18,11 +18,13 @@ import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -1363,6 +1365,250 @@ jobs:
         self.assertTrue(chain_follows("after", "api", by_id))
         self.assertFalse(chain_follows("after", "web", by_id))
         self.assertFalse(chain_follows("plan", "api", by_id))
+
+
+class JourneysTest(unittest.TestCase):
+    """`ci_plan.py journeys`: the journey groups of the batch check that a set of changed files
+    touches (issue #552), on made-up trees and on this repository."""
+
+    GROUPS = (
+        ("apps", "jobs.spec.ts jobs-map.spec.ts --workers=1"),
+        ("mail", "-c e2e/mail-all.config.ts"),
+        ("documents", "-c e2e/documents-all.config.ts"),
+        ("apply", "-c e2e/apply-all.config.ts"),
+        ("sweep", "jobs-sweep.spec.ts --workers=1"),
+    )
+
+    def tree(self, files: dict[str, str]) -> Path:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text, encoding="utf-8")
+        return root
+
+    BASE: ClassVar[dict[str, str]] = {
+        "web/e2e/mail-all.config.ts": 'const SPEC_PREFIX = "mail-";\n',
+        "web/e2e/mail-m1.spec.ts": "",
+        "web/e2e/documents-all.config.ts": 'const SPEC_PREFIX = "documents-";\n',
+        "web/e2e/documents-d1.spec.ts": "",
+        "web/e2e/apply-all.config.ts": 'const SPECS = ["apply-a1"] as const;\n',
+        "web/e2e/apply-a1.spec.ts": "",
+        "web/e2e/apply-helpers.ts": "",
+        "web/e2e/jobs.spec.ts": "",
+        "api/app/__init__.py": "",
+        "api/app/db.py": "",
+        "api/app/main.py": "from app.mail import router\nfrom app.documents import store\n",
+        "api/app/mail/__init__.py": "",
+        "api/app/mail/router.py": "from app import db\n",
+        "api/app/mail/rules.py": "",
+        "api/app/mail/sync.py": "",
+        "api/app/documents/__init__.py": "",
+        "api/app/documents/store.py": "from app.mail.rules import Sources\n",
+        "web/src/routes.tsx": 'import { Mail } from "@/features/mail/Mail";\n',
+        "web/src/lib/api.ts": "",
+        "web/src/features/mail/Mail.tsx": 'import { api } from "@/lib/api";\nimport { Row } from "./Row";\n',
+        "web/src/features/mail/Row.tsx": "",
+        "web/src/features/mail/Badge.tsx": "",
+        "web/src/features/mail/Mail.test.tsx": 'import { Badge } from "./Badge";\n',
+        "web/src/features/account/Account.tsx": 'import { Badge } from "@/features/mail/Badge";\n',
+    }
+
+    def plan(
+        self, paths: list[str], files: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        root = self.tree({**self.BASE, **(files or {})})
+        return {
+            group: f"{verdict}: {why}"
+            for verdict, group, why in ci_plan.journey_plan(root, paths, self.GROUPS)
+        }
+
+    def ran(self, paths: list[str], files: dict[str, str] | None = None) -> list[str]:
+        return [g for g, v in self.plan(paths, files).items() if v.startswith("run")]
+
+    def test_documentation_and_operations_run_no_group(self) -> None:
+        paths = [
+            "CONTRIBUTING.md",
+            "SPEC-mail.md",
+            ".claude/agents/x.md",
+            "ops/card.sh",
+        ]
+        paths += [
+            "tests/deploy_test.sh",
+            "api/tests/mail/test_sync.py",
+            ".github/workflows/ci.yml",
+        ]
+        self.assertEqual(self.ran(paths), [])
+        self.assertTrue(
+            all(
+                v == "skip: no changed file touches it"
+                for v in self.plan(paths).values()
+            )
+        )
+
+    def test_one_module_runs_its_groups_only(self) -> None:
+        self.assertEqual(self.ran(["api/app/mail/sync.py"]), ["mail"])
+        self.assertEqual(
+            self.plan(["api/app/mail/sync.py"])["mail"],
+            "run: api/app/mail/sync.py: the module mail",
+        )
+        self.assertEqual(self.ran(["web/src/features/mail/Row.tsx"]), ["mail"])
+        self.assertEqual(self.ran(["web/e2e/mail-m1.spec.ts"]), ["mail"])
+        self.assertEqual(self.ran(["web/e2e/apply-all.config.ts"]), ["apply"])
+        self.assertEqual(self.ran(["web/e2e/jobs.spec.ts"]), ["apps"])
+        self.assertEqual(self.ran(["tests/gmail-stub.compose.yml"]), ["mail"])
+
+    def test_a_file_imported_by_another_module_runs_that_module_s_groups_too(
+        self,
+    ) -> None:
+        # documents/store.py imports mail/rules.py: rules touches mail and the groups of documents;
+        # the wiring of main.py carries nothing on.
+        self.assertEqual(
+            self.ran(["api/app/mail/rules.py"]), ["mail", "documents", "apply"]
+        )
+        self.assertEqual(self.ran(["api/app/mail/router.py"]), ["mail"])
+        # Badge is imported by the account feature, which every journey goes through; a Vitest
+        # file that imports it does not count.
+        plan = self.plan(["web/src/features/mail/Badge.tsx"])
+        self.assertEqual(
+            set(plan.values()),
+            {
+                "run: every group, web/src/features/mail/Badge.tsx: every journey goes through the module account"
+            },
+        )
+        self.assertEqual(self.ran(["web/src/features/mail/Mail.test.tsx"]), [])
+
+    def test_shared_or_unknown_paths_run_every_group(self) -> None:
+        every = [g for g, _ in self.GROUPS]
+        for path in [
+            "api/app/db.py",
+            "api/app/main.py",
+            "api/alembic/versions/0022_x.py",
+            "api/uv.lock",
+            "web/pnpm-lock.yaml",
+            "web/src/lib/api.ts",
+            "web/src/routes.tsx",
+            "web/e2e/apply-helpers.ts",
+            "web/e2e/stack.ts",
+            "web/playwright.config.ts",
+            "compose.yml",
+            "api/Dockerfile",
+            "ops/local-check.sh",
+            "ops/ship.sh",
+            ".github/scripts/ci_plan.py",
+            "api/app/newmodule/thing.py",
+            "somewhere/new.txt",
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(self.ran([path]), every)
+                self.assertTrue(
+                    all(
+                        v.startswith(f"run: every group, {path}: ")
+                        for v in self.plan([path]).values()
+                    )
+                )
+        # One shared file among module files: every group.
+        self.assertEqual(self.ran(["api/app/mail/sync.py", "compose.yml"]), every)
+
+    def test_the_command_prints_the_change_set_and_one_line_per_group(self) -> None:
+        root = self.tree(
+            {
+                **self.BASE,
+                ".github/scripts/ci_plan.py": SCRIPT.read_text(),
+                ".github/scripts/e2e_groups.py": (
+                    SCRIPT.parent / "e2e_groups.py"
+                ).read_text(),
+            }
+        )
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "base")
+        base = git(root, "rev-parse", "HEAD")
+        (root / "api/app/mail/sync.py").write_text("x = 1\n")
+        (root / "README.md").write_text("read me\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "change")
+        done = subprocess.run(
+            [
+                sys.executable,
+                str(root / ".github/scripts/ci_plan.py"),
+                "journeys",
+                base,
+                "HEAD",
+            ],
+            input="".join(f"{g}\t{a}\n" for g, a in self.GROUPS),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=CLEAN_ENV,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        lines = done.stdout.splitlines()
+        self.assertEqual(
+            lines[0],
+            f"changed\t2\t{ci_plan.changes_digest(['api/app/mail/sync.py', 'README.md'])}",
+        )
+        self.assertEqual(
+            lines[1:],
+            [
+                "skip\tapps\tno changed file touches it",
+                "run\tmail\tapi/app/mail/sync.py: the module mail",
+                "skip\tdocuments\tno changed file touches it",
+                "skip\tapply\tno changed file touches it",
+                "skip\tsweep\tno changed file touches it",
+            ],
+        )
+        bad = subprocess.run(
+            [
+                sys.executable,
+                str(root / ".github/scripts/ci_plan.py"),
+                "journeys",
+                "nope",
+                "HEAD",
+            ],
+            input="",
+            capture_output=True,
+            text=True,
+            check=False,
+            env=CLEAN_ENV,
+        )
+        self.assertEqual(bad.returncode, 1)
+
+    def test_this_repository_decides_every_module_and_names_real_groups(self) -> None:
+        modules = {
+            p.name
+            for p in (ROOT / "api/app").iterdir()
+            if p.is_dir() and not p.name.startswith("_")
+        }
+        modules |= {p.name for p in (ROOT / "web/src/features").iterdir() if p.is_dir()}
+        self.assertEqual(
+            sorted(modules - set(ci_plan.AREA_GROUPS)),
+            [],
+            "a module with no journey groups decided",
+        )
+        groups = {"apps", "sweep"} | {
+            p.name.removesuffix("-all.config.ts")
+            for p in (ROOT / "web/e2e").glob("*-all.config.ts")
+        }
+        named = set()
+        for decided in list(ci_plan.AREA_GROUPS.values()) + [
+            g for _, g, _ in ci_plan.JOURNEY_RULES
+        ]:
+            if decided != ci_plan.EVERY:
+                named |= decided
+        self.assertEqual(
+            sorted(named - groups), [], "a rule names a group that does not exist"
+        )
+        # The local check's own groups, as it would pass them: a file of one module runs a part.
+        plan = ci_plan.journey_plan(
+            ROOT,
+            ["api/app/mail/parse.py"],
+            [
+                (g, f"-c e2e/{g}-all.config.ts")
+                for g in sorted(groups - {"apps", "sweep"})
+            ],
+        )
+        self.assertEqual([g for v, g, _ in plan if v == "run"], ["mail"])
 
 
 if __name__ == "__main__":

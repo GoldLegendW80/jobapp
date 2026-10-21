@@ -23,8 +23,9 @@ in the job folder that holds this repository (it is not part of the repository).
    requests meant an hour of waiting). The checks are the ones CI ran, and they run once per
    batch, natively on the Mac, by `ops/local-check.sh` (step 6). The author runs what the change
    touches before pushing (Locally before pushing, below) and says in the pull request what was
-   run. The batch check always runs the full set, whatever the batch touches, which is the steps
-   of the three jobs of `.github/workflows/ci.yml`:
+   run. The batch check runs the steps of the three jobs of `.github/workflows/ci.yml`, all of
+   them on every batch except the e2e groups, which run only when the batch touches them
+   (below, "Only the journey groups a batch touches"):
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
    percent, the docker marked tests, the scoring timing test), `checks` (pre-commit, the secret
    scan of every commit the batch brings, shellcheck, the `tests/*_test.sh` scripts and the
@@ -47,7 +48,34 @@ in the job folder that holds this repository (it is not part of the repository).
    stacks in `JOURNEY_SHARDS` of that script (`apply:2` today): its Playwright shards are the
    steps `journeys-<group>.1`, `journeys-<group>.2`. A journey step that fails runs once more on
    a fresh stack (`journeys-<group>-again`, `journeys-<group>.1-again`); passing then, it counts as passed and is listed under
-   `flaky` (issue #433). Every step of `ci.yml`
+   `flaky` (issue #433).
+
+   Only the journey groups a batch touches (the owner's decision of 2026-10-21, issue #552). The
+   journey groups were most of a gate's time (about 6000 s of stacks for every batch), so a batch
+   runs only the groups its changed files touch, the files of the merged tree against the main it
+   starts from. `python3 .github/scripts/ci_plan.py journeys` decides, from the tree it checks:
+   documentation, task notes, Claude Code configuration, operations scripts and shell tests run
+   no group; a file of one module (`api/app/<module>/`, `web/src/features/<feature>/`) runs the
+   groups of that module (`AREA_GROUPS`) and of every module that imports that file, read from
+   the imports file by file; a spec or a group config runs its own group; anything shared or
+   unknown runs every group: the api core (`db.py`, `config.py`, `main.py`, ...), identity, auth,
+   jobs, profile, agents and the shell pages that every journey goes through, `web/src/lib/` and
+   the components, migrations, lockfiles, Dockerfiles, compose files, the e2e helpers and
+   configs, `ops/local-check.sh`, `ops/ship.sh`, the mapping itself, and any path no rule names.
+   Every group also runs when `LOCAL_CHECK_FULL=1` is set (`LOCAL_CHECK_FULL=1 ops/ship.sh ...`
+   passes it to the gate) and when the base has no PASS record: a batch skips a group only on
+   the strength of a check of the main under it, so after a merge by hand that skipped the gate,
+   the next batch runs in full. Ruff, pytest, the coverage floor, the docker marked tests,
+   pre-commit, the secret scan, shellcheck, the shell tests, eslint, tsc, the build and Vitest
+   run in full every time. The check prints `journeys: scoped, ran <groups>; skipped <groups>`
+   (or `journeys: full (<why>), ran <groups>`) and one line per group with its reason, before the
+   steps and again above its last line; the record holds the same under `journeys`, with the
+   number of changed files and the sha256 of their list, and `ops/ship.sh` prints it in its
+   summary (`journeys:`) and refuses to merge on a scoped record whose list is not the one of
+   its base and head. A new module gets its line in `AREA_GROUPS` (`ci_plan_test.py` fails
+   without one); until then its files run every group.
+
+   Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in
    `LANES`, with a condition on that unit's plan output, anything else in `SUPPORT`.
    `ci_plan_test.py` fails on a step that is in no list, on a check that does not follow its
