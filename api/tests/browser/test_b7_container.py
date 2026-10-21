@@ -446,9 +446,9 @@ def press(c, *mods):
         t.XTestFakeKeyEvent(d, m, 0, 0)
     x.XSync(d, 0)
 
-if sys.argv[1] == "focus":
+if sys.argv[1] in ("focus", "save"):
     t.XTestFakeMotionEvent(d, 0, 720, 500, 0)
-    press(code("l")[0], code("Control_L")[0])
+    press(code("l" if sys.argv[1] == "focus" else "s")[0], code("Control_L")[0])
     sys.exit()
 def write(text):
     for ch in text:
@@ -509,6 +509,35 @@ def test_chrome_pages_are_blocked_in_a_persons_session(stack: Stack, purpose: st
             assert f'"{opened} - Chromium"' not in window_titles(stack)
     assert stack.current()["lease"]["purpose"] == purpose
     end(stack)
+
+
+SAVED = """
+import json, os, sys
+folder = f"/leases/{sys.argv[1]}/downloads"
+print(json.dumps(sorted(os.listdir(folder)) if os.path.isdir(folder) else None))
+"""
+
+
+def test_save_page_as_opens_no_dialog_and_saves_outside_the_profile(stack: Stack) -> None:
+    """Ctrl+S in a person's session: with no file dialog (AllowFileSelectionDialogs) the page goes
+    to the lease's download folder, which the end removes, never to a folder the person picks,
+    the profile among them."""
+    lease = session(stack, "signin", F, UID_F, SITE)["lease_id"]
+    try:
+        wait_title(stack, "Example Portal")
+        assert json.loads(stack.python(SAVED, lease, user=str(UID_F))) == []
+        stack.execute("browser", "python", "-c", TYPE, "save", user="1000")
+        for _ in range(300):
+            saved = json.loads(stack.python(SAVED, lease, user=str(UID_F)))
+            if saved and not [n for n in saved if n.endswith(".crdownload")]:
+                break
+        else:
+            raise AssertionError(f"nothing saved: {window_titles(stack)[-1500:]}")
+        assert [n for n in saved if n.endswith((".html", ".mhtml"))], saved
+        assert "Save File" not in window_titles(stack)
+    finally:
+        if stack.current()["lease"] is not None:
+            end(stack)
 
 
 FLAG_ON = """
@@ -627,18 +656,23 @@ def test_a_saved_test_policy_does_not_survive_a_restart(stack: Stack, purpose: s
     end(stack)
     stack.python(TEST_POLICIES_ON, F, NO_BLOCK, user=str(UID_F))
     assert json.loads(stack.python(TEST_POLICIES_SAVED, F, user=str(UID_F))) is True
-    if purpose == "signin":
-        session(stack, purpose, F, UID_F, SITE)
-        wait_title(stack, "signed in as e2e-browser-f")
-        type_address(stack, "chrome://flags")
-        wait_title(stack, '"chrome://flags/ - Chromium"')
-        assert '"Experiments - Chromium"' not in window_titles(stack)
-    else:
-        stack.lease(F, UID_F, purpose)
-        seen = stack.probe("navigate", "chrome://flags", "20")
-        assert seen["ok"] is False
-        assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
-    end(stack)
+    # The end in a finally: a failed signin case would leave its lease, and the browser busy (409)
+    # for the apply_fill case.
+    try:
+        if purpose == "signin":
+            session(stack, purpose, F, UID_F, SITE)
+            wait_title(stack, "signed in as e2e-browser-f")
+            type_address(stack, "chrome://flags")
+            wait_title(stack, '"chrome://flags/ - Chromium"')
+            assert '"Experiments - Chromium"' not in window_titles(stack)
+        else:
+            stack.lease(F, UID_F, purpose)
+            seen = stack.probe("navigate", "chrome://flags", "20")
+            assert seen["ok"] is False
+            assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
+    finally:
+        if stack.current()["lease"] is not None:
+            end(stack)
     assert json.loads(stack.python(TEST_POLICIES_SAVED, F, user=str(UID_F))) is False
 
 

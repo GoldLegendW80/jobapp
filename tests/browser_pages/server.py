@@ -7,7 +7,9 @@ Python, read only, as an unprivileged user, on the `egress` network: the public 
 
 It answers HTTP on 8000 and on 8080 (a port the egress proxy allows: by its private address the
 proxy must refuse it for the address alone), and counts the UDP datagrams that reach it on 3478
-(STUN and TURN): GET /udp answers the count, which the WebRTC test expects to stay 0.
+(STUN and TURN): GET /udp answers the count, which the WebRTC test expects to stay 0. GET
+/count/<key> counts the requests of each key, which GET /counts answers: the off list host of the
+allow list tests (a navigation browserd stops never reaches it).
 """
 
 import http.server
@@ -23,6 +25,7 @@ import urllib.parse
 ROOT = sys.argv[1]
 SEARCH_WORD = re.compile(r"[a-z0-9]{1,40}")
 DATAGRAMS = {"count": 0}
+COUNTS = {}
 
 
 def count_datagrams() -> None:
@@ -59,6 +62,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "text/javascript",
                 )
             return self.send(json.dumps({"ok": True}))
+        if url.path.startswith("/count/"):
+            key = url.path[len("/count/") :][:40]
+            COUNTS[key] = COUNTS.get(key, 0) + 1
+            return self.send("<title>Elsewhere</title><p>Elsewhere</p>", "text/html")
+        if url.path == "/counts":
+            return self.send(json.dumps(COUNTS))
         if url.path == "/udp":
             return self.send(json.dumps(DATAGRAMS))
         if url.path == "/redirect":  # a server side 302 (browser B5's allow list test)
