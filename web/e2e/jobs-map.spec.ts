@@ -15,7 +15,7 @@ import {
   watchErrors,
 } from "./stack";
 
-const shots = makeShots("jobs-j6");
+const shots = makeShots("jobs-j6", "map");
 
 /**
  * Jobs J6, the map, against the real stack through Caddy, no mocks: a fresh account receives
@@ -30,6 +30,7 @@ const shots = makeShots("jobs-j6");
  *   E2E_CADDY_URL=http://127.0.0.1:8116 E2E_COMPOSE_PROJECT=jobapp-j6 \
  *     pnpm --dir web exec playwright test jobs-map.spec.ts
  *   docker compose -p jobapp-j6 -f compose.yml down -v
+ * On the Jetson: `tests/e2e_jobs_jetson.sh view`, beside jobs.spec.ts.
  */
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");

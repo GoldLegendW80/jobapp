@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# The jobs J4 journey (web/e2e/jobs-edit.spec.ts) on the Jetson through the public URL, with an e2e
-# account and synthetic data only (E2E_SYNTHETIC=1: synthetic skills and a dozen synthetic
-# postings over HTTP), framed by the proof that Harald's jobs are untouched.
+# The jobs journeys on the Jetson through the public URL (./deploy.sh url), with e2e accounts and
+# synthetic data loaded over HTTP only (E2E_SYNTHETIC=1), framed by the proof that Harald's jobs
+# are untouched.
 #
-#   tests/e2e_jobs_jetson.sh       against $(./deploy.sh url), evidence in tasks/evidence/jobs-j4-jetson/
+#   tests/e2e_jobs_jetson.sh        J4, web/e2e/jobs-edit.spec.ts: synthetic skills and a dozen
+#                                   synthetic postings; evidence in tasks/evidence/jobs-j4-jetson/
+#   tests/e2e_jobs_jetson.sh view   J7, web/e2e/jobs.spec.ts and jobs-map.spec.ts: 433 synthetic
+#                                   postings with files, then the map's synthetic places; evidence
+#                                   in tasks/evidence/jobs-j7-jetson/
 #
 # 1. Removes jobapp-test-pg-* containers stuck in "Created" on the Mac; refuses to start while
 #    e2e rows are left on the Jetson unless E2E_CLEAN_FIRST=1.
 # 2. Snapshots Harald's jobs: rows per status, sum of fit, fits set by hand, max updated_at,
 #    events, files, and an md5 over every row's id, status, fit, notes and updated_at.
-# 3. Runs the spec with e2e-admin@example.org (created with ./deploy.sh admin create).
+# 3. Runs the specs, one worker: jobs-edit with e2e-admin@example.org, the view specs with an
+#    e2e-jobs-<run> and an e2e-jobs-map-<run> account each (all made with ./deploy.sh admin create).
 # 4. Whatever happened, deletes the e2e accounts (their jobs, events, files and profile go with
 #    them) and their sign in attempts, then proves the snapshot identical, no e2e row left, and no
 #    failed sign in left for Harald's email in the 15 minute window.
@@ -26,8 +31,6 @@ RDIR="${RDIR#\~/}"
 HARALD="${OWNER:-}"
 ADMIN="e2e-admin@example.org"
 E2E_LIKE="e2e-%@example.org"
-EVIDENCE="$ROOT/tasks/evidence/jobs-j4-jetson"
-LOG="$EVIDENCE/run.log"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -39,6 +42,25 @@ die() {
 }
 [[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
+USAGE="usage: tests/e2e_jobs_jetson.sh [edit|view] (no argument: edit, the J4 journey)"
+(($# <= 1)) || die "$USAGE"
+JOURNEY="${1:-edit}"
+case "$JOURNEY" in
+edit)
+  EVIDENCE_NAME=jobs-j4-jetson
+  SPECS=(jobs-edit.spec.ts)
+  RUN_ENV=(E2E_ADMIN_EMAIL="$ADMIN")
+  ;;
+view)
+  EVIDENCE_NAME=jobs-j7-jetson
+  SPECS=(jobs.spec.ts jobs-map.spec.ts)
+  # Both specs name a shot "filtered": the prefix keeps them apart in one folder.
+  RUN_ENV=(E2E_SHOT_PREFIX='{spec}-')
+  ;;
+*) die "$USAGE" ;;
+esac
+EVIDENCE="$ROOT/tasks/evidence/$EVIDENCE_NAME"
+LOG="$EVIDENCE/run.log"
 
 # Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
 masked() {
@@ -118,7 +140,7 @@ stuck_containers() {
 CLEAN="users=0|jobs=0|events=0|profiles=0|invites=0|login_attempts=0"
 mkdir -p "$EVIDENCE"
 exec > >(masked | tee "$LOG") 2>&1
-printf 'tests/e2e_jobs_jetson.sh, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf 'tests/e2e_jobs_jetson.sh %s, %s\n' "$JOURNEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 step "before"
 stuck_containers
@@ -135,10 +157,10 @@ grep -q '^jobs=[1-9]' "$WORK/before" || die "no jobs in the owner's account on $
 sed 's/^/   /' "$WORK/before"
 rm -f "$EVIDENCE"/*.png
 
-step "Playwright: web/e2e/jobs-edit.spec.ts through $URL (synthetic data)"
+step "Playwright: ${SPECS[*]} through $URL (synthetic data)"
 status=0
-E2E_CADDY_URL="$URL" E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL="$ADMIN" E2E_SYNTHETIC=1 \
-  E2E_EVIDENCE=jobs-j4-jetson pnpm --dir web exec playwright test jobs-edit.spec.ts || status=$?
+env E2E_CADDY_URL="$URL" E2E_ADMIN_VIA_DEPLOY=1 E2E_SYNTHETIC=1 E2E_EVIDENCE="$EVIDENCE_NAME" "${RUN_ENV[@]}" \
+  pnpm --dir web exec playwright test "${SPECS[@]}" --workers 1 || status=$?
 
 step "after: e2e rows removed, Harald's jobs unchanged"
 info "e2e rows before the cleanup: $(residue)"

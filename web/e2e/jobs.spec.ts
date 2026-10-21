@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,33 +17,40 @@ import {
   watchErrors,
 } from "./stack";
 
-const shots = makeShots("jobs-j3");
+const shots = makeShots("jobs-j3", "jobs");
 
 /**
- * The jobs dashboard and detail pages against the real stack through Caddy, no mocks, with
- * Harald's real data: a fresh account receives the 433 rows of ../data (converted on the Mac,
- * imported with the CLI in the api container, as `./deploy.sh jobs import` does), then the
- * journey checks the counts against the CSV, filters, a shared URL, infinite scroll, a detail
- * with its PDF preview, the way back, the keyboard and the phone layout.
+ * The jobs dashboard and detail pages against the real stack through Caddy, no mocks: a fresh
+ * account receives 433 rows with the CSV counts, then the journey checks the counts, filters, a
+ * shared URL, infinite scroll, a detail with its PDF preview, the way back, the keyboard and the
+ * phone layout.
  *
- * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
- *   HTTP_PORT=8113 docker compose -p jobapp-j3 -f compose.yml -f compose.mac.yml up -d --build --wait
- *   docker compose -p jobapp-j3 -f compose.yml exec -T api alembic upgrade head
- *   E2E_CADDY_URL=http://127.0.0.1:8113 E2E_COMPOSE_PROJECT=jobapp-j3 \
- *     E2E_JOBS_DATA=/path/to/job/data pnpm --dir web exec playwright test jobs.spec.ts
- *   docker compose -p jobapp-j3 -f compose.yml down -v
- * E2E_JOBS_DATA defaults to ../data next to the app folder; E2E_JOBS_FILE skips the conversion
- * and imports an already converted document.
+ * Two data modes:
+ * - default: the job folder of E2E_JOBS_DATA (default ../data next to the app folder, Harald's;
+ *   the gate gives .github/scripts/synthetic_jobs.py) is converted on the Mac and imported with
+ *   the CLI in the api container, as `./deploy.sh jobs import` does. E2E_JOBS_FILE skips the
+ *   conversion and imports an already converted document. On a scratch Compose project:
+ *     HTTP_PORT=8113 docker compose -p jobapp-j3 -f compose.yml -f compose.mac.yml up -d --build --wait
+ *     docker compose -p jobapp-j3 -f compose.yml exec -T api alembic upgrade head
+ *     E2E_CADDY_URL=http://127.0.0.1:8113 E2E_COMPOSE_PROJECT=jobapp-j3 \
+ *       E2E_JOBS_DATA=/path/to/job/data pnpm --dir web exec playwright test jobs.spec.ts
+ *     docker compose -p jobapp-j3 -f compose.yml down -v
+ * - E2E_SYNTHETIC=1 (the Jetson, `tests/e2e_jobs_jetson.sh view`): 433 made-up rows with the
+ *   same counts, posting texts and files are posted over HTTP (POST /api/jobs/import). Nothing
+ *   of Harald's is read; past the account link (stack.ts cliLink, E2E_ADMIN_VIA_DEPLOY on the
+ *   Jetson), everything goes through E2E_CADDY_URL.
  *
  * Screenshots never show the PDF preview: Harald's CV carries his contact details.
  */
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
+const synthetic = Boolean(process.env.E2E_SYNTHETIC);
 const run = Date.now().toString(36);
 const EMAIL = `e2e-jobs-${run}@example.org`;
 const NAME = "Jobs Journey";
 const PASSWORD = `jobs journey ${run} passphrase`;
+const CSRF = { "X-Requested-With": "jobapp" };
 
 /** data/jobs.csv, 2026-10-09: 433 rows. */
 const CSV_COUNTS = {
@@ -57,6 +65,129 @@ const CSV_COUNTS = {
   Skipped: 60,
 } as const;
 const TOTAL = 433;
+
+const STATUS_OF: Record<keyof typeof CSV_COUNTS, string> = {
+  Found: "found",
+  Shortlisted: "shortlisted",
+  "CV ready": "cv_ready",
+  Staged: "staged",
+  Applied: "applied",
+  Interview: "interview",
+  Rejected: "rejected",
+  Closed: "closed",
+  Skipped: "skipped",
+};
+const TITLES = [
+  "AI Engineer",
+  "Product Manager, Agents",
+  "Forward Deployed Engineer",
+  "Solutions Architect",
+  "Applied Scientist",
+  "Developer Advocate",
+];
+const CITIES = [
+  "Paris, France",
+  "Bordeaux, France",
+  "London, UK",
+  "Remote, Europe",
+  "Berlin, Germany",
+];
+
+/** A valid one page PDF with one line of ASCII text, its cross-reference offsets computed. */
+function tinyPdf(text: string): Buffer {
+  const stream = `BT /F1 18 Tf 72 720 Td (${text}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets = objects.map((body, i) => {
+    const offset = out.length;
+    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    return offset;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets)
+    out += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "ascii");
+}
+
+function importFile(name: string, mime: string, data: Buffer) {
+  return {
+    name,
+    mime,
+    size: data.length,
+    sha256: createHash("sha256").update(data).digest("hex"),
+    base64: data.toString("base64"),
+  };
+}
+
+/**
+ * The synthetic mode's import document, shaped like .github/scripts/synthetic_jobs.py: 433 rows
+ * with the CSV counts, every 17th unscored, the staged, applied and interview rows with a posting
+ * text, a cv.pdf and a cv.json, and one applied title in three without "engineer".
+ */
+function syntheticDocument() {
+  const jobs: object[] = [];
+  let n = 0;
+  for (const [label, count] of Object.entries(CSV_COUNTS)) {
+    const status = STATUS_OF[label as keyof typeof CSV_COUNTS];
+    for (let i = 0; i < count; i += 1) {
+      n += 1;
+      const company = `Example Company ${String(n).padStart(3, "0")}`;
+      const title =
+        status === "applied"
+          ? i % 3
+            ? "Applied AI Engineer"
+            : "Product Manager, Agents"
+          : TITLES[n % TITLES.length];
+      const files = ["staged", "applied", "interview"].includes(status);
+      jobs.push({
+        slug: `e2e-jobs-${n}`,
+        company,
+        title,
+        location: CITIES[n % CITIES.length],
+        url: `https://jobs.example.org/e2e-jobs/${run}/${n}`,
+        status,
+        fit: n % 17 ? (n * 7) % 101 : null,
+        found_on: `2026-09-${String(1 + (n % 28)).padStart(2, "0")}`,
+        applied_on: ["applied", "interview"].includes(status)
+          ? "2026-10-01"
+          : null,
+        description: `Synthetic posting ${n} for the jobs journey.`,
+        ...(files && {
+          posting_text: `${company} is a made-up company.\n\nThe role: ${title}, also made up.`,
+          files: [
+            importFile(
+              "cv.pdf",
+              "application/pdf",
+              tinyPdf(`Synthetic CV ${n}`),
+            ),
+            importFile(
+              "cv.json",
+              "application/json",
+              Buffer.from(
+                JSON.stringify({ target: title, headline: "Synthetic" }),
+              ),
+            ),
+          ],
+        }),
+      });
+    }
+  }
+  return {
+    format: "jobapp-jobs",
+    version: 1,
+    exported_at: new Date().toISOString(),
+    jobs,
+    warnings: [],
+  };
+}
 
 function compose(...args: string[]): string[] {
   return [
@@ -149,7 +280,7 @@ test.afterAll(async () => {
   await context.close();
 });
 
-test("a new account starts empty, then holds Harald's 433 rows with the CSV counts", async () => {
+test("a new account starts empty, then holds the 433 rows with the CSV counts", async () => {
   test.setTimeout(180_000);
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
@@ -165,8 +296,19 @@ test("a new account starts empty, then holds Harald's 433 rows with the CSV coun
   );
   await shots(page, "empty");
 
-  const output = importJobs(EMAIL);
-  expect(output).toContain(`Imported ${TOTAL} rows`);
+  if (synthetic) {
+    const imported = await page.request.post("/api/jobs/import", {
+      headers: CSRF,
+      data: syntheticDocument(),
+      timeout: 120_000,
+    });
+    expect(imported.ok(), await imported.text()).toBe(true);
+    expect(((await imported.json()) as { created: number }).created).toBe(
+      TOTAL,
+    );
+  } else {
+    expect(importJobs(EMAIL)).toContain(`Imported ${TOTAL} rows`);
+  }
 
   await page.reload();
   await expect(summary(page)).toHaveText(`${TOTAL} postings`);
@@ -353,8 +495,9 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
   await page.getByRole("button", { name: "Hide preview of cv.pdf" }).click();
   await expect(frame).toHaveCount(0);
 
-  // A JSON file, pretty-printed on demand.
+  // A JSON file, pretty-printed on demand; every synthetic row with files has one.
   const json = files.getByText(/^Show \w+\.json$/).first();
+  if (synthetic) await expect(json).toBeVisible();
   if (await json.count()) {
     await json.click();
     await expect(
@@ -425,7 +568,7 @@ test("on a phone the rows are cards and nothing overflows", async () => {
       root,
       "tasks/evidence",
       process.env.E2E_EVIDENCE ?? "jobs-j3",
-      `${process.env.E2E_SHOT_PREFIX ?? ""}cards-mobile.png`,
+      `${(process.env.E2E_SHOT_PREFIX ?? "").replace("{spec}", "jobs")}cards-mobile.png`,
     ),
     animations: "disabled",
   });
