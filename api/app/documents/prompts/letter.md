@@ -26,4 +26,4 @@ The shape of submit_letter:
 - subject: a claim, not a title.
 - salutation: one line; paragraphs: four or five; closing: one line. More than five paragraphs is refused.
 - Keep each field under the soft lengths given in the message: they are what fits one page of the template. The hard limits are higher and refused.
-- Write in the language the message names. Plain, concrete, vivid sentences, big picture first.
+- Write in the language and the tone the message names, in concrete, vivid sentences, big picture first. A tone changes the wording, never the facts.
