@@ -290,6 +290,46 @@ def test_a_parse_later_than_the_waits_is_left_to_the_read_back() -> None:
     assert sum(1 for c in form.calls if c[0] == "wait_for") >= 5
 
 
+# The labels each render of the parse writes, one snapshot apart.
+RENDERS = {
+    "company_last": (("Full name", "Email", "Phone"), ("Current company",)),
+    "three_renders": (("Full name",), ("Email",), ("Phone", "Current company")),
+    "one_field_each": tuple((label,) for label in PARSED),
+    "company_first": (("Current company",), ("Full name", "Email", "Phone")),
+    "company_in_the_first": (("Full name", "Current company"), ("Email",), ("Phone",)),
+}
+
+
+@pytest.mark.parametrize("parse_after", [0, 1, 3])
+@pytest.mark.parametrize("renders", RENDERS.values(), ids=RENDERS.keys())
+def test_a_parse_written_over_several_renders_is_undone_whole(
+    renders: tuple[tuple[str, ...], ...], parse_after: int
+) -> None:
+    form = lever_form(files=("cv.pdf",), parse_after=parse_after, renders=renders)
+    report = filled(form)
+    assert report.stopped == ""
+    assert form.parses == 1
+    assert sorted(form.cleared) == sorted(PARSED)
+    assert form.spec("Current company").value == ""
+    assert outcome(report, "Current company").filled.status == "left"
+    assert form.spec("Full name").value == full("identity")["full_name"]
+    assert not {s.value for s in form.fields} & set(PARSED.values())
+
+
+def test_a_render_after_two_reads_agreed_is_left_to_the_read_back(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    # The second render lands after two reads agreed, past what the undo waits for.
+    form = lever_form(renders=RENDERS["company_last"], gap=3)
+    assert run_submit(submit_services(factory, form, stub), app_id) == "ready"
+    assert application(db, app_id).error_code == "form_changed"
+    assert form.spec("Current company").value == PARSED["Current company"]
+    assert form.gate_clicks == []
+    assert form.submit_clicks == 0
+
+
 def test_native_selects_take_the_profile_answer() -> None:
     form = lever_form(files=("cv.pdf",))
     report = filled(form)
