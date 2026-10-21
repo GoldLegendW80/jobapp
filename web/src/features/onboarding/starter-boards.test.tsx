@@ -16,7 +16,9 @@ import {
 } from "./starter-api";
 import { StarterBoards } from "./starter-boards";
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 const DASH = /[‒–—―]| - /;
 
@@ -310,6 +312,7 @@ describe("the starter list", () => {
     });
     expect(alert).toHaveTextContent("The list of boards could not load.");
     await user.click(within(alert).getByRole("button", { name: "Try again" }));
+    await panel();
     expect(await screen.findByText("Example Robotics")).toBeVisible();
   });
 

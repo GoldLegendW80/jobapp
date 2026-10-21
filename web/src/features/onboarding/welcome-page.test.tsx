@@ -503,6 +503,7 @@ describe("the wizard", () => {
     await screen.findByText(/Step 4 of 7/);
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
     await screen.findByText(/Step 5 of 7/);
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     const [from] = screen.getAllByLabelText("From");
     const [to] = screen.getAllByLabelText("To");
     if (!from || !to) throw new Error("no salary fields");
