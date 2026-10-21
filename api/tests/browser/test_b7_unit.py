@@ -857,6 +857,58 @@ def test_prepare_drops_the_saved_test_policies(tmp_path: Path, umask: None, save
     }
 
 
+# What holds the logins and the site data, never removed; Preferences last (prep rewrites it).
+KEPT = ("Cookies", "Local Storage/leveldb/000003.log", "Session Storage/000003.log",
+        "IndexedDB/x/data", "Preferences")  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [("Sessions/Session_13400000000000000", "Sessions/Tabs_13400000000000000"),
+     ("Current Session", "Current Tabs", "Last Session", "Last Tabs"),
+     ("Sessions/Session_1", "Last Tabs"), ()],
+)  # fmt: skip
+def test_prepare_drops_the_tabs_of_the_last_session(
+    tmp_path: Path, umask: None, saved: tuple[str, ...]
+) -> None:
+    """Issue #488: with "continue where you left off" Chromium reopened the last session's tabs
+    beside the address of the new one, a tab more at every lease (18 after 16 leases of one
+    profile), so a page's second tab went past TABS_MAX and was closed. prep removes the saved
+    tabs before every start, and nothing that holds a login."""
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    default = profile / "data" / "Default"
+    for name in (*saved, *KEPT):
+        (default / name).parent.mkdir(parents=True, exist_ok=True)
+        (default / name).write_text("x")
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    for name in ("Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs"):
+        assert not (default / name).exists()
+    for name in KEPT[:-1]:
+        assert (default / name).read_text() == "x", name
+    assert json.loads((default / "Preferences").read_text())["session"] == {
+        "restore_on_startup": 1
+    }  # the setting that keeps session cookies stays
+
+
+def test_prepare_never_follows_a_link_in_place_of_the_saved_tabs(
+    tmp_path: Path, umask: None
+) -> None:
+    """A Sessions entry that is a link (to a directory or a file) is unlinked, never followed:
+    what it pointed at stays."""
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    default = profile / "data" / "Default"
+    default.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep").write_text("x")
+    (default / "Sessions").symlink_to(elsewhere, target_is_directory=True)
+    (default / "Last Tabs").symlink_to(elsewhere / "keep")
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    assert not os.path.lexists(default / "Sessions")
+    assert not os.path.lexists(default / "Last Tabs")
+    assert (elsewhere / "keep").read_text() == "x"
+
+
 @pytest.mark.parametrize("browser", [None, "a string", ["enabled_labs_experiments"]])
 def test_a_browser_entry_that_is_not_an_object_is_left_as_it_is(
     tmp_path: Path, umask: None, browser: object

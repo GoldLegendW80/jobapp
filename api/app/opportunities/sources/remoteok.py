@@ -28,6 +28,7 @@ from app.opportunities.sources import (
     FeedClient,
     FeedError,
     Found,
+    Parsed,
     day_of,
     from_epoch,
     line,
@@ -79,31 +80,37 @@ def parse(data: object) -> Found:
     if not isinstance(data, list):
         raise FeedError("invalid_response")
     too_many(sum(1 for item in data if isinstance(item, dict) and "id" in item))
-    found: Found = []
+    found = Parsed()
     for item in data:
         if not isinstance(item, dict) or "id" not in item:
             continue  # the legal notice, or not a posting
-        title = line(item.get("position"), TITLE_MAX)
-        company = line(item.get("company"), NAME_MAX)
-        url = on_host(item.get("url"), HOSTS)
-        if not title or not company or url is None:
+        try:
+            posting = _posting(item)
+        except Exception:  # one bad item is skipped and counted, never the feed
+            found.skipped += 1
             continue
-        found.append(
-            (
-                company,
-                ats.Posting(
-                    title=title,
-                    location=remote_location(line(item.get("location"), NAME_MAX)),
-                    url=url,
-                    published=_published(item),
-                    text=plain_text(item.get("description")),
-                    remote=True,
-                    pay=pays.stated_pay(
-                        item.get("salary_min"), item.get("salary_max"), "USD", "year"
-                    ),
-                    work_mode="remote",
-                    contract_type=FREELANCE if freelance(item.get("tags")) else None,
-                ),
-            )
-        )
+        if posting is not None:
+            found.append(posting)
     return found
+
+
+def _posting(item: dict[str, Any]) -> tuple[str, ats.Posting] | None:
+    title = line(item.get("position"), TITLE_MAX)
+    company = line(item.get("company"), NAME_MAX)
+    url = on_host(item.get("url"), HOSTS)
+    if not title or not company or url is None:
+        return None
+    return (
+        company,
+        ats.Posting(
+            title=title,
+            location=remote_location(line(item.get("location"), NAME_MAX)),
+            url=url,
+            published=_published(item),
+            text=plain_text(item.get("description")),
+            remote=True,
+            pay=pays.stated_pay(item.get("salary_min"), item.get("salary_max"), "USD", "year"),
+            work_mode="remote",
+            contract_type=FREELANCE if freelance(item.get("tags")) else None,
+        ),
+    )

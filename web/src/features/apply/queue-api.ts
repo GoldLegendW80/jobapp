@@ -29,16 +29,34 @@ const queueItemSchema = applicationSchema.extend({
   reason: z
     .object({ code: z.string(), sentence: z.string().nullable() })
     .nullable(),
+  // A Full auto rehearsal waiting for "Does this look right?".
+  rehearsal: z.boolean().optional(),
+  hold_until: z.string().nullable().optional(),
 });
 export type QueueItem = z.infer<typeof queueItemSchema>;
 
 const queueSchema = z.object({
   items: z.array(queueItemSchema),
   waiting_on_you: z.number().int(),
+  now: z.string().optional(),
 });
 export type Queue = z.infer<typeof queueSchema>;
 
 const countSchema = z.object({ waiting_on_you: z.number().int() });
+
+const summarySchema = z.object({
+  since: z.string(),
+  submitted: z.number().int(),
+  held: z.number().int(),
+  sent_to_review: z.array(
+    z.object({
+      code: z.string(),
+      sentence: z.string().nullable(),
+      count: z.number().int(),
+    }),
+  ),
+});
+export type Summary = z.infer<typeof summarySchema>;
 
 const rejectedSchema = z.object({
   application: applicationSchema,
@@ -55,6 +73,7 @@ export type Liked = z.infer<typeof likedSchema>;
 export const queueKey = ["apply", "queue"] as const;
 export const queueListKey = [...queueKey, "list"] as const;
 export const queueCountKey = [...queueKey, "count"] as const;
+export const summaryKey = [...queueKey, "summary"] as const;
 
 const id = encodeURIComponent;
 
@@ -89,4 +108,21 @@ export const likePosting = (postingId: string): Promise<Liked> =>
     method: "POST",
     timeoutMs: TIMEOUT_MS,
     validate: (body) => likedSchema.parse(body),
+  });
+
+/** Full auto today: submitted, held, sent to review and why. */
+export const getSummary = (signal?: AbortSignal): Promise<Summary> =>
+  request("/apply/summary", {
+    signal,
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => summarySchema.parse(body),
+  });
+
+/** The answer to a rehearsal's "Does this look right?": Yes sends it to the queue, ready. */
+export const answerRehearsal = (applicationId: string, answer: "yes" | "no") =>
+  request(`/applications/${id(applicationId)}/rehearsal`, {
+    method: "POST",
+    body: { answer },
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => applicationSchema.parse(body),
   });

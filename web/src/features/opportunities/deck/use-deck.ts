@@ -54,6 +54,9 @@ export const CANCELLABLE: ReadonlySet<string> = new Set([
   "refused_by_site",
 ]);
 
+/** The code of apply's 409 for a Like on a posting the person passed (api/app/apply/likes.py). */
+export const PASSED = "passed";
+
 export type Swipe = "like" | "pass";
 export type LastSwipe =
   | { kind: "pass"; card: Card }
@@ -234,6 +237,12 @@ export function useDeck(filters: DeckFilters) {
           remove(card);
           setRefusal(null);
           toast(SWIPE_TEXT.gone);
+        } else if (kind === "like" && refused?.code === PASSED) {
+          // A Pass reached the server while its answer was lost: the posting is skipped, so the
+          // card goes and the person is told; only the undo of that Pass brings it back.
+          remove(card);
+          setRefusal(null);
+          toast.message(refused.detail);
         } else if (refused) {
           setRefusal({
             cardId: card.id,

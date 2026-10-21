@@ -186,7 +186,8 @@ class IngestionRun(Base):
     # of a pause and the move of `deadline_at` at a Resume or a Continue are counted from it.
     paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     # How many times in a row `advance` raised for this run at the cron; back to zero when it
-    # moves. At `engine.ADVANCE_FAILURES` the run is closed `failed` with `closed_reason`.
+    # moves. At `engine.ADVANCE_FAILURES` (`engine.DATABASE_ADVANCE_FAILURES` for a failure of
+    # the database) the run is closed `failed` with `closed_reason`.
     advance_failures: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
     # When the last counted failure happened, null when the run moves: failures closer than
     # `engine.ADVANCE_FAILURE_GAP` count once, so ticks that pile up cannot close a run.

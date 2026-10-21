@@ -1273,7 +1273,8 @@
     "preferences": {
       "onboarding": {
         "completed_at": null,
-        "dismissed_at": null
+        "dismissed_at": null,
+        "steps_passed": []
       },
       "documents_language": "auto",
       "documents_tone": "plain"

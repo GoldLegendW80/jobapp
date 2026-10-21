@@ -41,6 +41,17 @@ export const emptySweeps = {
   },
 };
 
+export const onboardingDone = {
+  completed_at: "2026-10-08T10:00:00+00:00",
+  dismissed_at: null,
+  profile_empty: false,
+  done: ["profile", "looking", "where", "work"],
+  passed: [],
+  steps_left: [],
+  open_wizard: false,
+  show_card: false,
+};
+
 export const handlers = [
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
@@ -136,6 +147,10 @@ export const handlers = [
   // The catalogue of freelance and project sources (the Search tab's sources card, O8).
   http.get("*/api/opportunities/feeds", () =>
     HttpResponse.json(FEED_CATALOGUE),
+  ),
+  // The first login wizard is done (opportunities O5): no redirect, no "Finish setting up".
+  http.get("*/api/opportunities/onboarding", () =>
+    HttpResponse.json(onboardingDone),
   ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),

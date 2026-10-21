@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueryClient } from "@/lib/query";
 
 import { NO_FILTERS } from "../opportunities-api";
-import { fakeDeck, makeCard } from "./deck-test-api";
+import { fakeDeck, makeCard, refused } from "./deck-test-api";
 import { CANCELLABLE, useDeck } from "./use-deck";
 
 function renderDeck() {
@@ -86,6 +86,30 @@ describe("a handler kept from an earlier render", () => {
       deck.calls.filter((c) => c === `DELETE pass ${one.id}`),
     ).toHaveLength(1);
     expect(result.current.top?.id).toBe(one.id);
+  });
+});
+
+describe("a Like refused because the posting was passed", () => {
+  it("shows the sentence and drops the card, with no refusal kept on it", async () => {
+    const sentence =
+      "You passed this posting. Undo the Pass first if you want to apply.";
+    const info = vi.spyOn(toast, "message").mockReturnValue("t");
+    const deck = fakeDeck([one, two, three]);
+    deck.likeAnswers.set(one.id, refused("passed", sentence));
+    const { result } = renderDeck();
+    await waitFor(() => {
+      expect(result.current.top?.id).toBe(one.id);
+    });
+    act(() => {
+      result.current.swipe("like");
+    });
+    await waitFor(() => {
+      expect(result.current.top?.id).toBe(two.id);
+    });
+    expect(info).toHaveBeenCalledWith(sentence);
+    expect(result.current.refusal).toBeNull();
+    expect(result.current.last).toBeNull();
+    expect(deck.calls).not.toContain(`DELETE pass ${one.id}`);
   });
 });
 
