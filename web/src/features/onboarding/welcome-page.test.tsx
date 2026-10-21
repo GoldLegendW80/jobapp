@@ -216,6 +216,43 @@ describe("the first login redirect", () => {
 });
 
 describe("the wizard", () => {
+  it("opens folded pay on an error, focuses it, and saves every figure after correction", async () => {
+    window.localStorage.clear();
+    fakeSession(member);
+    const profile = fakeProfile(null);
+    fakeOnboarding(withRoles);
+    const user = userEvent.setup();
+    renderApp("/welcome?step=pay");
+    await screen.findByText(/Step 5 of 7/);
+    const advanced = screen.getByRole("button", { name: "Advanced" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    await user.click(advanced);
+    const salary = screen.getByRole("group", { name: "Yearly salary" });
+    await user.type(within(salary).getByLabelText("From"), "90000");
+    await user.type(within(salary).getByLabelText("To"), "10000");
+    const daily = screen.getByRole("group", { name: "Daily rate (freelance)" });
+    await user.type(within(daily).getByLabelText("From"), "600");
+    await user.type(within(daily).getByLabelText("To"), "800");
+    await user.click(advanced);
+    await user.click(next());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The first figure is the lower one.",
+    );
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    const reopened = screen.getByRole("group", { name: "Yearly salary" });
+    expect(within(reopened).getByLabelText("From")).toHaveFocus();
+    await user.clear(within(reopened).getByLabelText("To"));
+    await user.type(within(reopened).getByLabelText("To"), "100000");
+    await user.click(next());
+    await screen.findByText(/Step 6 of 7/);
+    expect(profile.saves.at(-1)?.body.data).toMatchObject({
+      compensation: {
+        salary: { min: 90000, max: 100000, currency: "EUR" },
+        daily_rate: { min: 600, max: 800, currency: "EUR" },
+      },
+    });
+  });
+
   it("saves each step on Next, keeps the answers on Back, and resumes after a reload", async () => {
     fakeSession(member);
     const profile = fakeProfile(null);
@@ -243,6 +280,7 @@ describe("the wizard", () => {
       screen.getByLabelText("Roles"),
       "Data engineer, ML engineer",
     );
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     await user.click(screen.getByRole("checkbox", { name: "Senior" }));
     await user.click(next());
     await screen.findByText(/Step 3 of 7/);
@@ -420,6 +458,7 @@ describe("the wizard", () => {
     const list = await screen.findByRole("region", {
       name: "Boards and sites to search",
     });
+    await user.click(within(list).getByRole("button", { name: "Advanced" }));
     expect(await within(list).findByText("Example Robotics")).toBeVisible();
     expect(screen.getByText(/covers 0 boards/)).toBeInTheDocument();
     await user.click(within(list).getByRole("button", { name: "Add all" }));
@@ -591,9 +630,7 @@ describe("the wizard", () => {
     await screen.findByText(/Step 1 of 7/);
     // nothing of the run is asked for while the disclosure is closed
     expect(runs.calls).toEqual([]);
-    await user.click(
-      screen.getByText("Or add a LinkedIn data export (ZIP), or paste a text"),
-    );
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     const read = await screen.findByRole("region", {
       name: "Read them into your profile",
     });

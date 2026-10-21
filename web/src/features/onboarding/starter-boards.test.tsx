@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { profileKey } from "@/features/profile/api";
 import { createQueryClient } from "@/lib/query";
@@ -15,6 +15,8 @@ import {
   type StarterList,
 } from "./starter-api";
 import { StarterBoards } from "./starter-boards";
+
+beforeEach(() => window.localStorage.clear());
 
 const DASH = /[‒–—―]| - /;
 
@@ -106,10 +108,39 @@ function renderPanel() {
   return { client, router, ...utils };
 }
 
-const panel = () =>
-  screen.findByRole("region", { name: "Boards and sites to search" });
+async function panel() {
+  const region = await screen.findByRole("region", {
+    name: "Boards and sites to search",
+  });
+  const advanced = within(region).queryByRole("button", { name: "Advanced" });
+  if (advanced?.getAttribute("aria-expanded") === "false")
+    await userEvent.click(advanced);
+  return region;
+}
 
 describe("the starter list", () => {
+  it("keeps individual wizard choices folded and restores the open preference", async () => {
+    fakeStarter();
+    const first = renderPanel();
+    const region = await screen.findByRole("region", {
+      name: "Boards and sites to search",
+    });
+    expect(within(region).queryByRole("checkbox")).toBeNull();
+    const advanced = within(region).getByRole("button", { name: "Advanced" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    expect(within(region).getAllByRole("button")).toHaveLength(3);
+    await userEvent.click(advanced);
+    expect(within(region).getAllByRole("checkbox")).toHaveLength(3);
+    first.unmount();
+    renderPanel();
+    const again = await screen.findByRole("region", {
+      name: "Boards and sites to search",
+    });
+    expect(
+      within(again).getByRole("button", { name: "Advanced" }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("proposes the boards and sites with nothing ticked, and Add all adds every one", async () => {
     const posts = fakeStarter();
     const user = userEvent.setup();

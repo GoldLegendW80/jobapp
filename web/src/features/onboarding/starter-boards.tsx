@@ -3,6 +3,7 @@ import { CircleAlert, LoaderCircle } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 
+import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -112,7 +113,7 @@ export function StarterBoards({
               void list.refetch();
             }}
           >
-            Try again
+            {WORDING.tryAgain}
           </Button>
         </AlertDescription>
       </Alert>
@@ -139,6 +140,59 @@ export function StarterBoards({
     </p>
   );
 
+  const choices = (
+    <ul className="flex flex-col divide-y">
+      {entries.map((entry) => (
+        <li
+          key={entry.key}
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2"
+        >
+          {entry.added ? (
+            <Badge variant="secondary">{WORDING.added}</Badge>
+          ) : (
+            <input
+              id={`${id}-${entry.key}`}
+              type="checkbox"
+              className="size-4 accent-primary"
+              disabled={busy}
+              checked={ticked.includes(entry.key)}
+              onChange={(event) => {
+                const on = event.target.checked;
+                setTicked((old) =>
+                  on
+                    ? [...old.filter((k) => k !== entry.key), entry.key]
+                    : old.filter((k) => k !== entry.key),
+                );
+              }}
+            />
+          )}
+          <label
+            htmlFor={entry.added ? undefined : `${id}-${entry.key}`}
+            className="flex min-w-0 flex-1 flex-col text-sm"
+          >
+            <span className="font-medium break-words">{entry.company}</span>
+            <span className="break-words text-muted-foreground">
+              {entrySource(entry)}. {entry.why}
+            </span>
+          </label>
+          {entry.added ? null : (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              aria-label={`${WORDING.remove} ${entry.company} from the list`}
+              onClick={() => {
+                choose.mutate({ remove: [entry.key] });
+              }}
+            >
+              {WORDING.remove}
+            </Button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+
   return (
     <section
       aria-labelledby={`${id}-title`}
@@ -153,7 +207,7 @@ export function StarterBoards({
         id={`${id}-title`}
         className={inSearch ? "sr-only" : "text-base font-semibold"}
       >
-        Boards and sites to search
+        {WORDING.boardsAndSites}
       </h3>
       {held ? (
         <p className="text-sm font-medium" role="note">
@@ -194,58 +248,13 @@ export function StarterBoards({
                 : ""}
             </p>
           )}
-          <ul className="flex flex-col divide-y">
-            {entries.map((entry) => (
-              <li
-                key={entry.key}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2"
-              >
-                {entry.added ? (
-                  <Badge variant="secondary">Added</Badge>
-                ) : (
-                  <input
-                    id={`${id}-${entry.key}`}
-                    type="checkbox"
-                    className="size-4 accent-primary"
-                    disabled={busy}
-                    checked={ticked.includes(entry.key)}
-                    onChange={(event) => {
-                      const on = event.target.checked;
-                      setTicked((old) =>
-                        on
-                          ? [...old.filter((k) => k !== entry.key), entry.key]
-                          : old.filter((k) => k !== entry.key),
-                      );
-                    }}
-                  />
-                )}
-                <label
-                  htmlFor={entry.added ? undefined : `${id}-${entry.key}`}
-                  className="flex min-w-0 flex-1 flex-col text-sm"
-                >
-                  <span className="font-medium break-words">
-                    {entry.company}
-                  </span>
-                  <span className="break-words text-muted-foreground">
-                    {entrySource(entry)}. {entry.why}
-                  </span>
-                </label>
-                {entry.added ? null : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy}
-                    aria-label={`Remove ${entry.company} from the list`}
-                    onClick={() => {
-                      choose.mutate({ remove: [entry.key] });
-                    }}
-                  >
-                    Remove
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+          {inSearch ? (
+            choices
+          ) : (
+            <AdvancedSection pageKey="welcome-starter">
+              {choices}
+            </AdvancedSection>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={busy || open.length === 0}
@@ -256,7 +265,7 @@ export function StarterBoards({
               {busy ? (
                 <LoaderCircle aria-hidden="true" className="animate-spin" />
               ) : null}
-              Add all
+              {WORDING.addAll}
             </Button>
             <Button
               variant="outline"
@@ -265,7 +274,7 @@ export function StarterBoards({
                 choose.mutate({ add: [...ticked] });
               }}
             >
-              Add the ticked ones
+              {WORDING.addTicked}
             </Button>
           </div>
           {byAddress}
