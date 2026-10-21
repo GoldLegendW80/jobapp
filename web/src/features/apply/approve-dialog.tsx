@@ -37,7 +37,7 @@ export function ApproveDialog({
   approval: Approval;
   pending: boolean;
   onConfirm: () => void;
-  onCloseAutoFocus: NonNullable<
+  onCloseAutoFocus?: NonNullable<
     ComponentProps<typeof AlertDialogContent>["onCloseAutoFocus"]
   >;
 }) {
@@ -45,7 +45,7 @@ export function ApproveDialog({
   const left = leftFields(approval.answers);
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
+      <AlertDialogContent {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
         <AlertDialogHeader>
           <AlertDialogTitle>
             Submit this application to {company} for {role}?
