@@ -116,6 +116,9 @@ LANE_MODULE = {
     "lane:captain": "platform",
 }
 IN_FLIGHT = ("Building", "In review", "Fix & re-check", "Approved", "Gating")
+SPEC_LABEL = (
+    "spec-card"  # an issue that holds a whole spec: the only cards the board shows
+)
 CALL_SECONDS = 60  # one gh api graphql, gh run list or git call
 LOG_SECONDS = 60  # gh run view --log
 DEADLINE_SECONDS = (
@@ -330,6 +333,47 @@ def plan(
                 "blocked_by": "",
             }
         )
+    return spec_cards(rows, items, to_archive)
+
+
+def spec_cards(
+    rows: list[dict], items: list[dict], to_archive: list[str]
+) -> tuple[list[dict], list[str]]:
+    """One card per spec (owner, 2026-10-21): once an issue carries SPEC_LABEL, the board shows
+    only those issues. Each takes the stage of its module's work: Building while any task of it
+    is in flight, Ready while any is open, Live when all are. Every other row stays in the
+    snapshot with on_board False, and every other card is archived."""
+    specs = [
+        r for r in rows if r["kind"] == "issue" and SPEC_LABEL in r["labels"].split()
+    ]
+    if not specs:
+        return rows, to_archive
+    spec_numbers = {r["number"] for r in specs}
+    for s in specs:
+        if s["open"]:
+            work = [
+                r["stage"]
+                for r in rows
+                if r["module"] == s["module"]
+                and r["number"] not in spec_numbers
+                and r["stage"] not in ("Epic", "Live", "Dropped")
+            ]
+            s["stage"] = (
+                "Building"
+                if any(st in IN_FLIGHT or st == "Merged" for st in work)
+                else "Ready"
+                if work
+                else "Live"
+            )
+            s["stage_order"] = ORDER[s["stage"]]
+    for r in rows:
+        r["on_board"] = r in specs
+    to_archive = list(to_archive)
+    for it in items:
+        c = it.get("content") or {}
+        is_spec = c.get("__typename") == "Issue" and c.get("number") in spec_numbers
+        if not it["isArchived"] and not is_spec and it["id"] not in to_archive:
+            to_archive.append(it["id"])
     return rows, to_archive
 
 
@@ -678,7 +722,8 @@ def apply(rows: list[dict], to_archive: list[str], setup: bool) -> None:
     if missing:
         sys.exit(f"the Status field lacks {missing}: run once with --setup")
 
-    # Add the issues that are not on the board yet.
+    # Add the issues that are not on the board yet (with spec cards, only those).
+    rows = [r for r in rows if r.get("on_board", True)]
     for r in rows:
         if not r["item"] and r["kind"] == "issue":
             got = gql(

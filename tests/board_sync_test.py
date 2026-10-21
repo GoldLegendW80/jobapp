@@ -320,6 +320,46 @@ class LinkAndPlan(unittest.TestCase):
         )
         self.assertEqual(one["stage_order"], bs.ORDER["Ready"])
 
+    def test_spec_cards_are_the_only_cards(self):
+        issues = [
+            issue(1, title="apply A9: apply myself"),
+            issue(2, title="apply: the whole spec", labels=["spec-card"]),
+            issue(3, title="mail M5: sync", labels=["lane:mail"]),
+            issue(4, title="mail: the whole spec", labels=["spec-card"]),
+            issue(5, "CLOSED", title="jobs J7: real data"),
+            issue(6, title="jobs: the whole spec", labels=["spec-card"]),
+        ]
+        prs = [pr(10, closes=[1], reviews=APPROVED)]
+        items = [
+            item("IT1", "Issue", 1, status="Ready", module="apply"),
+            item("IT2", "Issue", 2),
+            item("IT10", "PullRequest", 10),
+            {
+                "id": "DRAFT",
+                "isArchived": False,
+                "content": {"__typename": "DraftIssue"},
+            },
+            item("OLD", "Issue", 3, archived=True),
+        ]
+        rows, to_archive = bs.plan(issues, prs, items, set(), set(), set())
+        by = {r["number"]: r for r in rows if r["kind"] == "issue"}
+        self.assertEqual(
+            {n: by[n]["stage"] for n in (2, 4, 6)},
+            {2: "Building", 4: "Ready", 6: "Live"},
+        )
+        self.assertEqual({n for n, r in by.items() if r["on_board"]}, {2, 4, 6})
+        self.assertEqual(to_archive, ["IT10", "IT1", "DRAFT"])
+        self.assertEqual(by[2]["stage_order"], bs.ORDER["Building"])
+        # The small tickets keep their own stage in the snapshot.
+        self.assertEqual(by[1]["stage"], "Approved")
+
+    def test_no_spec_card_keeps_every_card(self):
+        rows, to_archive = bs.plan(
+            [issue(1)], [], [item("IT1", "Issue", 1)], set(), set(), set()
+        )
+        self.assertEqual(to_archive, [])
+        self.assertNotIn("on_board", rows[0])
+
     def test_archived_linked_card_is_not_archived_again(self):
         rows, to_archive = bs.plan(
             [issue(1)],
