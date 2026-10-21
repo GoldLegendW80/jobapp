@@ -1065,6 +1065,20 @@ def _steps(value: list[str]) -> list[str]:
     return [step for step in WIZARD_STEPS if step in value]
 
 
+# A starter list entry (opportunities O5b): an ATS board `<ats>:<org in lower case>` or a browser
+# source `source:<kind>`.
+STARTER_KEY_PATTERN = (
+    r"^(?:(?:ashby|greenhouse|lever):[a-z0-9][a-z0-9._-]{0,99}|source:(?:google_careers|vie))$"
+)
+StarterKey = Text(120, pattern=STARTER_KEY_PATTERN)
+STARTER_HANDLED_MAX = 400
+
+
+def _once(value: list[str]) -> list[str]:
+    """Each key once, in the order first given."""
+    return list(dict.fromkeys(value))
+
+
 class Onboarding(_Section):
     """When the first login wizard was finished or put off, and the steps passed in it (Next or
     "Skip this step"), so another device resumes at the same step (opportunities O5). Only the
@@ -1075,6 +1089,11 @@ class Onboarding(_Section):
     dismissed_at: OptInstant = None
     steps_passed: Annotated[
         list[WizardStep], Field(max_length=2 * len(WIZARD_STEPS)), AfterValidator(_steps)
+    ] = Field(default_factory=list)
+    # The starter list's entries the person added or removed (opportunities O5b,
+    # app/opportunities/starter.py): never proposed again once gone from the search section.
+    starter_handled: Annotated[
+        list[StarterKey], Field(max_length=STARTER_HANDLED_MAX), AfterValidator(_once)
     ] = Field(default_factory=list)
 
 

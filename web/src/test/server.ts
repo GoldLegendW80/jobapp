@@ -52,6 +52,16 @@ export const onboardingDone = {
   show_card: false,
 };
 
+/** An empty starter list: what GET /api/opportunities/starter answers when nothing matches. */
+export const emptyStarter = {
+  targets: false,
+  entries: [],
+  unmatched: [],
+  blocked: 0,
+  version: 1,
+  checked_on: "2026-10-20",
+};
+
 export const handlers = [
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
@@ -151,6 +161,10 @@ export const handlers = [
   // The first login wizard is done (opportunities O5): no redirect, no "Finish setting up".
   http.get("*/api/opportunities/onboarding", () =>
     HttpResponse.json(onboardingDone),
+  ),
+  // No starter board for the answers given (opportunities O5b): the wizard's summary shows none.
+  http.get("*/api/opportunities/starter", () =>
+    HttpResponse.json(emptyStarter),
   ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),

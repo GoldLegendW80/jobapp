@@ -113,7 +113,12 @@ def test_invalid_values_are_refused(fields: dict[str, Any], message: str) -> Non
 
 def test_preferences_defaults_and_values() -> None:
     assert PreferencesSection().model_dump(mode="json") == {
-        "onboarding": {"completed_at": None, "dismissed_at": None, "steps_passed": []},
+        "onboarding": {
+            "completed_at": None,
+            "dismissed_at": None,
+            "steps_passed": [],
+            "starter_handled": [],
+        },
         "documents_language": "auto",
         "documents_tone": "plain",
     }
@@ -223,7 +228,12 @@ def test_the_dates_the_wizard_recorded_survive_a_save_and_an_import(
     # Clearing them is a change too, and refused.
     cleared = {
         **data,
-        "onboarding": {"completed_at": None, "dismissed_at": None, "steps_passed": []},
+        "onboarding": {
+            "completed_at": None,
+            "dismissed_at": None,
+            "steps_passed": [],
+            "starter_handled": [],
+        },
     }
     assert save(api, ana, "preferences", cleared, loaded["revision"] + 1).status_code == 422
     # An import (here a file with no dates) keeps the stored ones.
