@@ -1240,7 +1240,7 @@ def _reveal(
         if revealed is None:
             db.rollback()
             return NO_CREDENTIAL
-        if len(revealed.secret) < credentials.MIN_LENGTH:
+        if not credentials.has_shape(revealed.secret):
             # Checked when it was saved (credentials.clean_secret), and again here, where the
             # scrub starts to rely on it: a row written any other way never reaches a run.
             db.rollback()
@@ -1554,6 +1554,7 @@ async def _execute(
             pump.cancel()
             stopped, _ = await asyncio.wait({pump}, timeout=context.pump_stop_s)
             if not stopped:
+                # Left running: once closed below, it starts no write and clears behind its call.
                 logger.warning("live text pump did not stop", extra=log)
             elif not pump.cancelled():
                 pump.exception()  # looked at, so that asyncio does not report it at exit
