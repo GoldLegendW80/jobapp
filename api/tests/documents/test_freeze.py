@@ -766,6 +766,27 @@ def test_pdf_on_demand_stored_or_the_command_lines_file(
         db.rollback()
 
 
+def test_pdf_never_serves_a_file_of_another_persons_posting(
+    both: dict[str, Any], factory: sessionmaker[Session], clock: Any
+) -> None:
+    # The store and the 0015 trigger refuse such a version: here the file moves to Blake's
+    # posting afterwards, and the join on the posting's owner still refuses it.
+    with factory() as db:
+        file_id = add_job_file(db, both["posting"])
+        legacy, made = store.snapshot(
+            db, both["alex_id"], both["cv"], Origin.legacy, at=clock(), legacy_file_id=file_id
+        )
+        assert made
+        assert freeze.pdf(db, both["alex_id"], legacy.id) == PDF
+        theirs = add_posting(db, both["blake_id"])
+        db.execute(
+            sa.text("UPDATE job_files SET job_id = :j WHERE id = :f"), {"j": theirs, "f": file_id}
+        )
+        assert freeze.pdf(db, both["alex_id"], legacy.id) is None
+        assert freeze.pdf(db, both["blake_id"], legacy.id) is None
+        db.rollback()
+
+
 # --- a frozen version through the routes of D6 ---------------------------------------------------
 
 

@@ -314,15 +314,22 @@ function Preview({
       ) : null}
       {version.has_pdf ? (
         <>
-          <img
-            // The address names the version, so a new version is a new image.
-            src={versionPage1Url(documentId, version.number, PREVIEW_WIDTH)}
-            alt={`Page 1 of version ${String(version.number)}`}
-            className={cn(
-              "w-full max-w-xl rounded-md border bg-white shadow-sm",
-              overflow && "border-destructive",
-            )}
-          />
+          {version.has_preview ? (
+            <img
+              // The address names the version, so a new version is a new image.
+              src={versionPage1Url(documentId, version.number, PREVIEW_WIDTH)}
+              alt={`Page 1 of version ${String(version.number)}`}
+              className={cn(
+                "w-full max-w-xl rounded-md border bg-white shadow-sm",
+                overflow && "border-destructive",
+              )}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              This is the PDF your command line made, kept as it was sent. It
+              has no preview here: open it to see it.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline">
               <a

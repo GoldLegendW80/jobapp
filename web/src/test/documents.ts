@@ -52,6 +52,7 @@ export function fakeVersion(
     fit_step: 0,
     pages: 1,
     has_pdf: true,
+    has_preview: true,
     approved_at: null,
     frozen_at: null,
     frozen_reason: null,

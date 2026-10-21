@@ -15,7 +15,7 @@ to api/.)
 
 import loads an export document (from convert, or downloaded from GET /api/profile/export) into
 the profile of the account with that email, exactly as POST /api/profile/import does: every
-section validated, all six replaced in one transaction with one revision each, the photo too when
+section validated, all seven replaced in one transaction with one revision each, the photo too when
 the file has one (re-encoded without metadata, see photo.py). It runs inside the api container,
 reading the file from stdin:
 

@@ -1195,8 +1195,9 @@ the other addresses of the /64 yet (issue #152).
 ## Profile export and import
 
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;
-`POST /api/profile/import` takes that file back (2 MB at most) and replaces all six sections in
-one transaction, one revision each. Harald's engine files convert into the same format on the
+`POST /api/profile/import` takes that file back (2 MB at most) and replaces all seven sections in
+one transaction, one revision each (a file written before `preferences` existed reads its
+defaults, and the onboarding dates stored for the account are kept). Harald's engine files convert into the same format on the
 Mac, then load into one account inside the api container:
 
 ```bash

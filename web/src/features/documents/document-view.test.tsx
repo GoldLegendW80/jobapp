@@ -30,6 +30,31 @@ const open = (
 describe("the document view", () => {
   const version = fakeVersion({ number: 2, corrections_count: 1 });
 
+  it("draws no page of the command line's PDF and links to it", async () => {
+    const api = fakeDocuments();
+    const cv = fakeCv({ id: "a", name: "Imported CV" });
+    const legacy = fakeVersion({
+      origin: "legacy",
+      frozen_at: "2026-10-14T09:00:00Z",
+      frozen_reason: "legacy_applied",
+      has_preview: false,
+    });
+    api.documents.set("a", fakeDocumentOf(cv, { latest: legacy }));
+    api.versions.set("a", [legacy]);
+    renderWithQuery(<DocumentView documentId="a" />);
+
+    expect(
+      await screen.findByText(/This is the PDF your command line made/),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: /^Page 1 of version/ }),
+    ).toBeNull();
+    expect(screen.getByRole("link", { name: "Open the PDF" })).toHaveAttribute(
+      "href",
+      "/api/documents/a/versions/1/pdf",
+    );
+  });
+
   it("shows the page, one page, the PDF links, the corrections and the history", async () => {
     const api = fakeDocuments();
     const cv = fakeCv({ id: "a", name: "Main CV" });

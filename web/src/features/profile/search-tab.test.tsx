@@ -250,7 +250,8 @@ describe("search tab: terms and preferences", () => {
     const { user, state } = await openSearch(null);
     expect(screen.getByText("No board yet.")).toBeVisible();
     expect(screen.getByText("No rule yet.")).toBeVisible();
-    expect(screen.getAllByText("No term yet.")).toHaveLength(3);
+    // Titles to include and exclude, locations, and the industries kept mounted under Advanced.
+    expect(screen.getAllByText("No term yet.")).toHaveLength(4);
     expect(screen.getByLabelText("Minimum fit")).toHaveValue("70");
     await user.type(
       screen.getByLabelText("New term for Titles to include"),
@@ -283,6 +284,10 @@ describe("search tab: terms and preferences", () => {
         timezone: "Europe/Paris",
       },
       documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
+      seniority: [],
+      industries: { advanced_regex: false, terms: [] },
+      company_types: [],
+      compensation: { salary: null, daily_rate: null },
     });
   });
 });

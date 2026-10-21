@@ -270,6 +270,69 @@ const NOTES: Record<string, string> = {
   unknown_employer: "An employer of neither your profile nor the base CV",
 };
 
+const legacySchema = z.object({ legacy_path: z.string(), reason: z.string() });
+
+/** The singular of a list field of a legacy file's path, said before its 1 based position. */
+const ITEM_WORDS: Record<string, string> = {
+  experience: "employer",
+  bullets: "bullet",
+  highlights: "highlight",
+  competencies: "competency",
+  skills: "skill group",
+  items: "skill",
+  paragraphs: "paragraph",
+};
+
+const LEGACY_REASONS: Record<string, string> = {
+  too_long: "too long",
+  too_many: "one too many",
+  too_few: "too few",
+  empty: "empty",
+  required: "missing",
+  wrong_type: "of the wrong type",
+  unknown_field: "not a field of this form",
+  unknown_value: "an unknown value",
+  bad_format: "not in the expected form",
+  duplicate_employer: "the same employer twice",
+  control_character: "holds a control character",
+  lone_surrogate: "holds a broken character",
+  content_too_large: "too large to read",
+  not_json: "not a JSON file",
+  not_object: "not a JSON object",
+};
+
+/** "experience.2.bullets.0" as "employer 3, bullet 1"; a name alone as its words. */
+export function legacyPlace(path: string): string {
+  const parts = path.split(".").filter((one) => one !== "");
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const name = parts[i] ?? "";
+    const next = parts[i + 1];
+    if (next !== undefined && /^\d+$/.test(next)) {
+      out.push(
+        `${ITEM_WORDS[name] ?? name.replaceAll("_", " ")} ${String(Number(next) + 1)}`,
+      );
+      i += 1;
+    } else {
+      out.push(name.replaceAll("_", " "));
+    }
+  }
+  return out.join(", ");
+}
+
+/** What a `legacy_invalid` note of an imported draft says (legacy.py, `Reading.notes`). */
+export function legacySentence(path: string, reason: string): string {
+  const more = /^(\d+) more$/.exec(reason);
+  if (path === "" && more !== null) {
+    return `${more[1] ?? ""} more parts of the imported file were left out.`;
+  }
+  const why = LEGACY_REASONS[reason] ?? "not valid";
+  if (path === "") {
+    return `The imported file could not be read (${why}), so this draft started empty.`;
+  }
+  return `Left out of the imported file: ${legacyPlace(path)}, ${why}.`;
+}
+
 /**
  * The api's notes on the saved draft, by the form's path: what each says, and the words it is
  * about. They are shown, never acted on: what the person typed stays as typed.
@@ -283,6 +346,15 @@ export function notesByField(
     const parsed = noteSchema.safeParse(raw);
     if (!parsed.success) continue;
     const { field, start, end, code } = parsed.data;
+    if (code === "legacy_invalid") {
+      // What the import left out has no field to sit under: the whole draft's notes.
+      const legacy = legacySchema.safeParse(raw);
+      const sentence = legacy.success
+        ? legacySentence(legacy.data.legacy_path, legacy.data.reason)
+        : "Something of the imported file was left out.";
+      out.set("", [...(out.get("") ?? []), { sentence, excerpt: "" }]);
+      continue;
+    }
     const sentAt = field
       .split(".")
       .filter((one) => one !== "")
