@@ -14,8 +14,9 @@
 - POST /api/applications/{id}/manual/record `{seen}`: "Record as applied" (`seen` true, offered
   once the page showed a confirmation) and "I submitted it": `submitted`, the posting `applied`,
   the placed versions frozen. 409 `not_manual`, `already_recorded`, `not_open`.
-- POST /api/applications/{id}/manual/close: `cancelled` before it is recorded; an open session
-  sees it and ends its lease within a second.
+- POST /api/applications/{id}/manual/close: `cancelled` before it is recorded (recorded instead
+  once the page showed a confirmation); an open session sees it and ends its lease within a
+  second.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 application answers 404, as a missing one. Every answer is `Cache-Control: no-store`; no answer

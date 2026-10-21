@@ -705,7 +705,9 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
 
 async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
     """No fill runs when the apply queue starts: an application left `filling` by a killed
-    worker ends `failed` with `interrupted`."""
+    worker ends `failed` with `interrupted`; an Apply myself session ends as `manual.close`
+    ends it."""
+    from app.apply import manual as apply_manual
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
 
@@ -713,8 +715,10 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
 
     def step(db: Session) -> int:
         # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
-        return apply_run.reset_interrupted(db, clock()) + apply_submit_run.reset_interrupted(
-            db, clock()
+        return (
+            apply_run.reset_interrupted(db, clock())
+            + apply_submit_run.reset_interrupted(db, clock())
+            + apply_manual.reset_interrupted(db, clock())
         )
 
     count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)

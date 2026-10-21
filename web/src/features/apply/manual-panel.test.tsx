@@ -404,3 +404,69 @@ describe("outcomeLine", () => {
     expect(outcomeLine(null)).toBeNull();
   });
 });
+
+describe("a session that ended before the page confirmed", () => {
+  const ended = () =>
+    fakeApplication("queued", { mode: "manual", needs: "session_ended" });
+
+  it("opens nothing by itself and offers I submitted it", async () => {
+    const api = fakeApply({ application: ended() });
+    const manual = fakeManual(api, status({ state: "queued", phase: "ended" }));
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByText(
+        "Your browser closed before the app saw the site's confirmation. Nothing is recorded as sent yet.",
+      ),
+    ).toBeInTheDocument();
+    const box = await panel();
+    expect(
+      within(box).getByText(/If you sent the form, click I submitted it/),
+    ).toBeInTheDocument();
+    expect(manual.opens).toBe(0);
+    await user.click(
+      within(box).getByRole("button", { name: "I submitted it" }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Record as sent" }),
+    );
+    await waitFor(() => {
+      expect(manual.records).toEqual([{ seen: false }]);
+    });
+    expect(manual.opens).toBe(0);
+    expect(manual.other).toEqual([]);
+  });
+
+  it("asks for the browser again once the person opens it again", async () => {
+    const api = fakeApply({ application: ended() });
+    const manual = fakeManual(api, status({ state: "queued", phase: "ended" }));
+    const { user } = await openSection();
+    const box = await panel();
+    expect(manual.opens).toBe(0);
+    await user.click(
+      within(box).getByRole("button", { name: "Open my browser again" }),
+    );
+    await waitFor(() => {
+      expect(manual.opens).toBe(1);
+    });
+    expect(
+      within(box).queryByRole("button", { name: "Open my browser again" }),
+    ).toBeNull();
+  });
+});
+
+describe("a page that showed the site's confirmation", () => {
+  it("offers to record it and no Close without submitting", async () => {
+    fakeScreens();
+    const api = fakeApply({ application: manualApp("filling") });
+    fakeManual(api, status({ confirmation_seen: true }));
+    await openSection();
+    const box = await panel();
+    expect(
+      await within(box).findByRole("button", { name: "Record as applied" }),
+    ).toBeInTheDocument();
+    expect(
+      within(box).queryByRole("button", { name: "Close without submitting" }),
+    ).toBeNull();
+  });
+});

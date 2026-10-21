@@ -153,3 +153,26 @@ def test_the_app_types_only_during_its_turn_and_a_take_over_ends_it(stack: Stack
         assert "Not submitted" in after
     finally:
         lease.end()
+
+
+def test_the_chooser_the_apps_attach_click_opens_is_not_kept_for_the_next_document(
+    stack: Stack,
+) -> None:
+    lease = ManualLease(stack)
+    letter = "%PDF-1.7\n" + "1" * 999
+    try:
+        assert lease.put("cv.pdf")["status"] == 200
+        assert lease.put("letter.pdf", letter)["status"] == 200
+        assert lease.tool("browser_navigate", url=FORM)["ok"]
+        attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        done = lease.tool("browser_file_upload", ref=attach, paths=["letter.pdf"])
+        assert done["ok"], done
+        assert "chooser" not in done
+        assert lease.watch().get("chooser") is None
+        stale = lease.tool("browser_file_upload", paths=["cv.pdf"])
+        assert stale["error"] == "no_chooser"
+        page = lease.snapshot()
+        assert f"letter.pdf:{len(letter)}" in page
+        assert "cv.pdf" not in page
+    finally:
+        lease.end()

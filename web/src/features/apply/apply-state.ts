@@ -121,6 +121,12 @@ const MANUAL_LINES: Record<string, string> = {
 export function statusLine(application: Application | null | undefined) {
   if (!application)
     return "No application yet. Nothing is sent without your approval.";
+  if (
+    application.mode === "manual" &&
+    application.state === "queued" &&
+    application.needs === "session_ended"
+  )
+    return "Your browser closed before the app saw the site's confirmation. Nothing is recorded as sent yet.";
   if (application.mode === "manual" && application.state in MANUAL_LINES)
     return MANUAL_LINES[application.state];
   switch (application.state) {

@@ -62,6 +62,17 @@ async function postingDocuments(): Promise<PostingDocument[]> {
     .documents;
 }
 
+async function applicationOf(): Promise<{ id: string; mode: string }> {
+  const listed = await page.request.get(
+    `/api/applications?posting_id=${job}&limit=1`,
+  );
+  const [found] = (
+    (await listed.json()) as { items: { id: string; mode: string }[] }
+  ).items;
+  if (!found) throw new Error("no application for the posting");
+  return found;
+}
+
 test.beforeAll(async ({ browser }) => {
   person = invented("a9");
   context = await newContext(browser);
@@ -146,6 +157,21 @@ test("the person applies in the live view, submits on the form and records it", 
   await expect(panel.getByText("Your CV is attached to the form.")).toBeVisible(
     { timeout: 60_000 },
   );
+  // A watch after the attach (its idle seconds changed) reports no file chooser waiting.
+  const manualOf = async () => {
+    const id = (await applicationOf()).id;
+    const read = await page.request.get(`/api/applications/${id}/manual`);
+    return (await read.json()) as {
+      chooser: boolean;
+      idle_left_s: number | null;
+    };
+  };
+  const before = (await manualOf()).idle_left_s;
+  await expect
+    .poll(async () => (await manualOf()).idle_left_s, { timeout: 30_000 })
+    .not.toBe(before);
+  expect((await manualOf()).chooser).toBe(false);
+  await expect(panel.getByText("The form asks for a file")).toHaveCount(0);
 
   // The person, through the live view only: the location from the list, two answers, a typed
   // reason, the consent, then the form's own Submit.
@@ -211,14 +237,9 @@ test("the person applies in the live view, submits on the form and records it", 
   expect(latest?.frozen_at).not.toBeNull();
 
   // The app never clicked Submit: no click event, the person's record with the confirmation seen.
-  const listed = await page.request.get(
-    `/api/applications?posting_id=${job}&limit=1`,
-  );
-  const [application] = (
-    (await listed.json()) as { items: { id: string; mode: string }[] }
-  ).items;
-  expect(application?.mode).toBe("manual");
-  const detail = await page.request.get(`/api/applications/${application?.id}`);
+  const application = await applicationOf();
+  expect(application.mode).toBe("manual");
+  const detail = await page.request.get(`/api/applications/${application.id}`);
   const events = (
     (await detail.json()) as {
       events: { kind: string; data: Record<string, unknown> }[];

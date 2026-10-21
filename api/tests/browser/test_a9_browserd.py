@@ -216,3 +216,53 @@ def test_a_take_over_during_the_apps_turn_stops_the_apps_next_key(
         assert w.live.person(lease_id) is True
 
     run(go)
+
+
+class _Waiting:
+    """Playwright's `expect_file_chooser`: the page's click opens a chooser, which the page's
+    listeners receive too (the same object, as Playwright emits one event to both)."""
+
+    def __init__(self, page: Page, chooser: Chooser) -> None:
+        self.page, self.chooser = page, chooser
+        self.value = asyncio.get_running_loop().create_future()
+
+    async def __aenter__(self) -> "_Waiting":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        self.page.chooser_handler(self.chooser)  # type: ignore[attr-defined]
+        self.value.set_result(self.chooser)
+
+
+def test_the_chooser_the_apps_own_attach_click_opens_is_never_kept_for_the_person() -> None:
+    page = Page()
+    page.on = lambda event, handler: setattr(page, "chooser_handler", handler)  # type: ignore[attr-defined]
+    tab = _manual_tab(page)
+    tab.state.files["letter.pdf"] = b"%PDF-1.4 e2e letter"
+    opened = Chooser()
+    page.expect_file_chooser = lambda **kw: _Waiting(page, opened)  # type: ignore[attr-defined]
+    button = page.add("e9", {"tag": "button", "type": "button", "name": "Attach cover letter"})
+
+    async def element(args: Any) -> tuple[Any, None]:
+        return button, None
+
+    async def facts(locator: Any, point: bool = False) -> dict[str, Any]:
+        return {"tag": "button", "type": "button"}
+
+    async def approach(locator: Any) -> None:
+        return None
+
+    async def go() -> dict[str, Any]:
+        await tab.guard()
+        tab.element, tab.facts, tab.approach = element, facts, approach  # type: ignore[method-assign]
+        tab.judge = lambda facts, action, tool: None  # type: ignore[method-assign]
+        return await actions.run(tab, "browser_file_upload", {"ref": "e9", "paths": ["letter.pdf"]})
+
+    done = asyncio.run(go())
+    assert done["ok"] is True, done
+    assert opened.files[0][0]["name"] == "letter.pdf"
+    assert tab.state.chooser is None
+    assert "chooser" not in done
+    stale = asyncio.run(actions.run(tab, "browser_file_upload", {"paths": ["cv.pdf"]}))
+    assert stale["error"] == "no_chooser"
+    assert len(opened.files) == 1  # the letter's chooser never receives the CV

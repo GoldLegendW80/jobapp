@@ -19,7 +19,12 @@ import {
   recordManual,
   type ManualAction,
 } from "./manual-api";
-import { busyLine, outcomeLine, REOPEN_MS } from "./manual-state";
+import {
+  busyLine,
+  outcomeLine,
+  REOPEN_MS,
+  SESSION_ENDED,
+} from "./manual-state";
 
 const OPEN_STATES = new Set(["queued", "filling", "needs_person"]);
 
@@ -59,6 +64,8 @@ export function ManualPanel({
   const open = OPEN_STATES.has(application.state);
   const [asking, setAsking] = useState<Ask | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The attempt whose ended session the person asked to open again.
+  const [reopenFor, setReopenFor] = useState<number | null>(null);
 
   const status = useQuery({
     queryKey: manualKey(id),
@@ -69,7 +76,11 @@ export function ManualPanel({
   const manual = status.data;
 
   // A queued application asks for its session, and asks again while it waits for the browser.
-  const queued = application.state === "queued";
+  // After a session ended before a confirmation, only once the person asks to open it again.
+  const ended =
+    application.state === "queued" && application.needs === SESSION_ENDED;
+  const reopened = ended && reopenFor === application.attempt;
+  const queued = application.state === "queued" && (!ended || reopened);
   useEffect(() => {
     if (!queued) return;
     const ask = () => {
@@ -154,6 +165,12 @@ export function ManualPanel({
 
       {live ? (
         <LiveBrowser person />
+      ) : ended && !reopened ? (
+        <p role="status" className="text-sm">
+          Your browser closed before the app saw the site&apos;s confirmation.
+          If you sent the form, click I submitted it. If not, open your browser
+          again.
+        </p>
       ) : (
         <p
           role="status"
@@ -232,9 +249,21 @@ export function ManualPanel({
             Record as applied
           </Button>
         ) : null}
-        {live ? (
+        {ended && !reopened ? (
           <Button
-            variant={manual.confirmation_seen ? "outline" : "default"}
+            className="w-full sm:w-fit"
+            disabled={finish.isPending}
+            onClick={() => {
+              setNotice(null);
+              setReopenFor(application.attempt);
+            }}
+          >
+            Open my browser again
+          </Button>
+        ) : null}
+        {live || (ended && !reopened) ? (
+          <Button
+            variant={live && manual.confirmation_seen ? "outline" : "default"}
             className="w-full sm:w-fit"
             disabled={finish.isPending}
             onClick={() => {
@@ -244,16 +273,19 @@ export function ManualPanel({
             I submitted it
           </Button>
         ) : null}
-        <Button
-          variant="outline"
-          className="w-full sm:w-fit"
-          disabled={finish.isPending}
-          onClick={() => {
-            setAsking("close");
-          }}
-        >
-          Close without submitting
-        </Button>
+        {/* Once the page confirmed, Close records it too (SPEC-apply, modes). */}
+        {live && manual.confirmation_seen ? null : (
+          <Button
+            variant="outline"
+            className="w-full sm:w-fit"
+            disabled={finish.isPending}
+            onClick={() => {
+              setAsking("close");
+            }}
+          >
+            Close without submitting
+          </Button>
+        )}
       </div>
       {live && manual.confirmation_seen ? (
         <p className="text-sm text-muted-foreground">

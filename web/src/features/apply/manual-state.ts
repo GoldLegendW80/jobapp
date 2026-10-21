@@ -7,6 +7,9 @@ import type { ManualStatus } from "./manual-api";
 /** While the session waits for the browser, the panel asks for it again this often. */
 export const REOPEN_MS = 10_000;
 
+/** `needs` of an application whose session ended before the page confirmed (manual.ENDED). */
+export const SESSION_ENDED = "session_ended";
+
 const DOCUMENT: Record<string, string> = {
   attach_cv: "CV",
   attach_letter: "letter",

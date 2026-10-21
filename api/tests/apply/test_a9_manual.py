@@ -17,10 +17,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import gate, manual, manual_router, service, states
+from app.apply import gate, manual, manual_router, run, service, states
 from app.apply.models import Application, ApplicationEvent, Mode, State
+from app.browser.client import BrowserError
 from app.documents.models import DocumentVersion
 from app.identity import security
+from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobStatus
 from app.main import create_app
 from tests.apply.a5_support import FakeLeases, RunForm, run_ashby
@@ -75,11 +77,13 @@ def manual_ashby(**rest: Any) -> ManualForm:
 @dataclass
 class FakeChannel:
     """The panel: each pop takes the next step, a command or the person's action (a callable,
-    run then answered as no command). Past the script, the panel closes the session."""
+    run then answered as no command). Past the script, the person clicks Close (the route's
+    `manual.cancel`)."""
 
     script: list[Step] = field(default_factory=list)
     statuses: list[dict[str, Any]] = field(default_factory=list)
     pushed: list[str] = field(default_factory=list)
+    factory: sessionmaker[Session] | None = None
 
     async def push(self, application_id: uuid.UUID, command: str) -> bool:
         self.pushed.append(command)
@@ -87,7 +91,13 @@ class FakeChannel:
 
     async def pop(self, application_id: uuid.UUID, timeout_s: float) -> str | None:
         if not self.script:
-            return "close"
+            assert self.factory is not None
+            with self.factory() as s:
+                found = s.get(Application, application_id)
+                assert found is not None
+                manual.cancel(s, found.user_id, application_id, AT)
+                s.commit()
+            return None
         step = self.script.pop(0)
         if callable(step):
             step()
@@ -137,8 +147,6 @@ def manual_services(
     leases: FakeLeases | None = None,
     stub: str | None = None,
 ) -> manual.Services:
-    from app.apply import run
-
     fill = run.Services(
         sessions=factory,
         clock=Clock(),
@@ -146,6 +154,7 @@ def manual_services(
         tools_for=lambda user, lease, token: form,
         stub_base=stub,
     )
+    channel.factory = factory
     return manual.Services(fill, channel, browser or FakeBrowser())
 
 
@@ -222,7 +231,7 @@ def test_closing_without_submitting_cancels_and_freezes_nothing(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
     app_id = start_manual(db, person_a)
-    channel = FakeChannel([None, "close"])
+    channel = FakeChannel([None])
     assert session(manual_services(factory, manual_ashby(), channel, stub=stub), app_id) == (
         "cancelled"
     )
@@ -249,7 +258,7 @@ def test_the_person_closing_from_the_page_ends_the_session(
     assert channel.script == [None, None, None]  # the loop saw the state, and stopped
 
 
-def test_a_lease_that_ends_under_the_session_cancels_it(
+def test_a_lease_that_ends_before_a_confirmation_leaves_it_open_to_the_person(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
     app_id = start_manual(db, person_a)
@@ -257,8 +266,239 @@ def test_a_lease_that_ends_under_the_session_cancels_it(
     channel = FakeChannel([None, None])
     assert session(
         manual_services(factory, manual_ashby(), channel, browser, stub=stub), app_id
-    ) == ("cancelled")
-    assert application(db, app_id).error_code == "lease_ended"
+    ) == ("queued")
+    found = application(db, app_id)
+    assert (found.state, found.needs, found.error_code) == (State.queued, manual.ENDED, None)
+    ended = next(e for e in events(db, app_id) if e.kind == "ended")
+    assert ended.data == {"code": "lease_ended"}
+    assert channel.statuses[-1]["state"] == "queued"
+    # The posting stays held: no second application starts on it (in Full auto either).
+    for mode in (Mode.full_auto, Mode.review):
+        with pytest.raises(service.RefusedError) as held:
+            service.start(db, person_a.user_id, person_a.posting_id, mode, False, now=AT)
+        assert held.value.refusal.code == "in_progress"
+    db.rollback()
+    # "I submitted it" still records it.
+    record(factory, person_a, app_id, False)
+    assert application(db, app_id).state is State.submitted
+    assert status(db, person_a) is JobStatus.applied
+
+
+# --- a confirmation seen, then the session ends: recorded on every path (SPEC-apply, modes) -----
+
+
+class EndedForm(ManualForm):
+    """browserd ended the lease (its idle timer, its maximum, the window closed) once the page
+    confirmed: the next tool call answers the end, as the lease's client raises it."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.ended = False
+
+    async def call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self.ended:
+            raise BrowserError("ended")
+        return await super().call(name, args)
+
+
+def ended_ashby() -> EndedForm:
+    form = run_ashby()
+    return EndedForm(form.fields, submit=form.submit, title=form.title)
+
+
+def assert_recorded_by_the_confirmation(db: Session, person: Person, app_id: uuid.UUID) -> None:
+    found = application(db, app_id)
+    assert (found.state, found.needs, found.error_code) == (State.submitted, None, None)
+    assert status(db, person) is JobStatus.applied
+    assert frozen(db, person.cv_version_id, person.letter_version_id) == ["apply", "apply"]
+    kinds = [e.kind for e in events(db, app_id)]
+    assert kinds.count("confirmation") == 1
+    recorded = [e.data for e in events(db, app_id) if e.kind == "recorded"]
+    assert recorded == [{"by": "confirmation", "frozen": 2}]
+
+
+def test_a_confirmation_seen_then_the_lease_gone_is_recorded(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    form, browser = manual_ashby(), FakeBrowser()
+
+    def sent() -> None:
+        form.sent = True
+
+    def gone() -> None:
+        browser.gone = True
+
+    channel = FakeChannel([sent, None, gone, None])
+    svc = manual_services(factory, form, channel, browser, stub=stub)
+    assert session(svc, app_id) == "submitted"
+    assert_recorded_by_the_confirmation(db, person_a, app_id)
+    assert channel.statuses[-1]["state"] == "submitted"
+    assert channel.script == [None]  # ended by the lease, not by the person's Close
+
+
+def test_a_confirmation_seen_then_the_idle_timer_is_recorded(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    form = ended_ashby()
+
+    def sent() -> None:
+        form.sent = True
+
+    def idle() -> None:
+        form.ended = True
+
+    channel = FakeChannel([sent, None, idle, None])
+    assert session(manual_services(factory, form, channel, stub=stub), app_id) == "submitted"
+    assert_recorded_by_the_confirmation(db, person_a, app_id)
+    ended = next(e for e in events(db, app_id) if e.kind == "ended")
+    assert ended.data == {"code": "lease_ended"}
+
+
+def test_a_confirmation_seen_then_the_job_cancelled_is_recorded(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    form, leases = manual_ashby(), FakeLeases()
+
+    def sent() -> None:
+        form.sent = True
+
+    def stopped() -> None:
+        raise asyncio.CancelledError
+
+    channel = FakeChannel([sent, None, stopped])
+    with pytest.raises(asyncio.CancelledError):
+        session(manual_services(factory, form, channel, leases=leases, stub=stub), app_id)
+    assert_recorded_by_the_confirmation(db, person_a, app_id)
+    assert leases.released[-1][2] == "apply_manual_done"
+
+
+def test_the_job_cancelled_before_a_confirmation_leaves_it_open_to_the_person(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+
+    def stopped() -> None:
+        raise asyncio.CancelledError
+
+    channel = FakeChannel([None, stopped])
+    with pytest.raises(asyncio.CancelledError):
+        session(manual_services(factory, manual_ashby(), channel, stub=stub), app_id)
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.queued, manual.ENDED)
+
+
+def left_filling(factory: sessionmaker[Session], app_id: uuid.UUID, seen: bool) -> None:
+    """A session a killed worker left `filling`, with or without the confirmation's event."""
+    with factory() as s:
+        assert isinstance(run.prepare(s, app_id, AT, manual=True), run.Plan)
+        s.commit()
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        if seen:
+            manual.saw(s, app_id, AT)
+        s.commit()
+    with factory() as s:
+        # The fills' own reset leaves Apply myself to manual.reset_interrupted.
+        assert run.reset_interrupted(s, AT) == 0
+        assert manual.reset_interrupted(s, AT) == 1
+        s.commit()
+
+
+def test_a_worker_restart_records_a_seen_confirmation(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = start_manual(db, person_a)
+    left_filling(factory, app_id, seen=True)
+    assert_recorded_by_the_confirmation(db, person_a, app_id)
+
+
+def test_a_worker_restart_without_a_confirmation_leaves_it_open_to_the_person(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = start_manual(db, person_a)
+    left_filling(factory, app_id, seen=False)
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.queued, manual.ENDED)
+    assert status(db, person_a) is not JobStatus.applied
+
+
+def test_closing_after_a_confirmation_records_it(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    form = manual_ashby()
+
+    def sent() -> None:
+        form.sent = True
+
+    channel = FakeChannel([sent, None])  # then the person clicks Close
+    assert session(manual_services(factory, form, channel, stub=stub), app_id) == "submitted"
+    assert_recorded_by_the_confirmation(db, person_a, app_id)
+
+
+def test_the_watch_reads_the_state_while_the_posting_is_locked(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = start_manual(db, person_a)
+    db.commit()
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        s.commit()
+    with factory() as holder:
+        assert jobs_service.lock_job(holder, person_a.user_id, person_a.posting_id) is not None
+        with factory() as s:
+            s.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
+            assert manual.is_open(s, app_id) is True
+        holder.rollback()
+
+
+class FlakyBrowser(FakeBrowser):
+    """browserd does not answer the give back `fails` times."""
+
+    def __init__(self, fails: int) -> None:
+        super().__init__()
+        self.fails = fails
+
+    async def live_input(self, lease_id: str, viewer: str | None, giver: str | None = None) -> str:
+        if viewer is not None and self.fails:
+            self.fails -= 1
+            self.inputs.append("refused")
+            raise BrowserError("unavailable")
+        return await super().live_input(lease_id, viewer, giver)
+
+
+def test_a_give_back_that_fails_once_is_asked_again(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    browser = FlakyBrowser(fails=1)
+    channel = FakeChannel(["fill_details", None])
+    session(manual_services(factory, manual_ashby(), channel, browser, stub=stub), app_id)
+    assert browser.inputs == ["app", "refused", "person"]
+    assert channel.script == []  # the session went on to the person's Close
+    assert application(db, app_id).state is State.cancelled
+
+
+def test_a_give_back_that_keeps_failing_ends_the_session_for_the_person(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = start_manual(db, person_a)
+    browser, leases = FlakyBrowser(fails=5), FakeLeases()
+    channel = FakeChannel(["fill_details", None])
+    svc = manual_services(factory, manual_ashby(), channel, browser, leases=leases, stub=stub)
+    assert session(svc, app_id) == "queued"
+    assert browser.inputs == ["app", "refused", "refused"]
+    assert leases.released[-1][2] == "apply_manual_done"  # the app's turn ends with the lease
+    assert application(db, app_id).needs == manual.ENDED
+
+
+def test_the_panel_has_no_close_command() -> None:
+    assert "close" not in manual.COMMANDS
+    with pytest.raises(ValueError, match="close"):
+        asyncio.run(manual.RedisChannel(None).push(uuid.uuid4(), "close"))
 
 
 def test_the_idle_warning_shows_a_minute_before_the_timeout(
@@ -402,7 +642,7 @@ def test_a_never_apply_posting_opens_with_its_warning(
         ("never_apply_role", "Your rules exclude this role.")
     ]
     form = manual_ashby()
-    channel = FakeChannel([None, "close"])
+    channel = FakeChannel([None])
     assert session(manual_services(factory, form, channel, stub=stub), app_id) == "cancelled"
     assert ("navigate", {"url": form.url}) in form.calls  # the form opened for the person
 

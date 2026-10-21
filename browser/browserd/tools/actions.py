@@ -88,6 +88,8 @@ class State:
     blocked: list[str] = field(default_factory=list)
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
+    # The app's own click on an Attach button is waiting for its chooser: that one is not kept.
+    opening: bool = False
 
     def end(self) -> None:
         """The lease ended: its documents and its tab are dropped at once, not when the old
@@ -168,7 +170,8 @@ class Tab:
         return context
 
     def _chosen(self, chooser: Any) -> None:
-        self.state.chooser = chooser
+        if not self.state.opening:
+            self.state.chooser = chooser
 
     async def page(self) -> Any:
         context = await self.guard()
@@ -448,9 +451,16 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if no:
         return no
     page = await tab.page()
-    async with page.expect_file_chooser(timeout=ACTION_S * 1000) as chooser:
-        await locator.click(timeout=ACTION_S * 1000)
-    await (await chooser.value).set_files(payloads, timeout=ACTION_S * 1000)
+    tab.state.opening = True
+    try:
+        async with page.expect_file_chooser(timeout=ACTION_S * 1000) as chooser:
+            await locator.click(timeout=ACTION_S * 1000)
+        opened = await chooser.value
+    finally:
+        tab.state.opening = False
+    if tab.state.chooser is opened:
+        tab.state.chooser = None
+    await opened.set_files(payloads, timeout=ACTION_S * 1000)
     return await tab.settle({**await _here(tab), "uploaded": names})
 
 

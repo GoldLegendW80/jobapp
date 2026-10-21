@@ -579,9 +579,14 @@ def interrupt(db: Session, application_id: uuid.UUID, now: datetime) -> str:
 
 def reset_interrupted(db: Session, now: datetime) -> int:
     """At the worker's start no fill runs: every application left `filling` by a dead process
-    ends `failed` with `interrupted`. Answers a count."""
+    ends `failed` with `interrupted` (Apply myself's sessions: `manual.reset_interrupted`).
+    Answers a count."""
     ids = (
-        db.execute(sa.select(Application.id).where(Application.state == State.filling))
+        db.execute(
+            sa.select(Application.id).where(
+                Application.state == State.filling, Application.mode != Mode.manual
+            )
+        )
         .scalars()
         .all()
     )

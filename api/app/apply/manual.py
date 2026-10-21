@@ -16,8 +16,9 @@ the lease's token for the session's whole length (one session at a time, like a 
    the form opened. From then on the person holds the input (browserd's live view, A9).
 4. The loop: the panel's commands (a Redis list, at most COMMANDS_MAX waiting) and a watch of the
    page every WATCH_S that is not activity for the idle timer (`passive`): the adapter's
-   confirmation (or the generic sentences of `ats.base.confirmed`), a file chooser the person
-   opened, and the seconds left before the idle timeout (the panel warns at IDLE_WARN_S).
+   confirmation (or the generic sentences of `ats.base.confirmed`), written as a `confirmation`
+   event the first time it shows, a file chooser the person opened, and the seconds left before
+   the idle timeout (the panel warns at IDLE_WARN_S).
    - "Attach my CV", "Attach my letter": a file chooser the person opened is answered with that
      document; else the file input whose label the resolver reads as that document receives it;
      none or two of them: nothing is set and the panel asks the person to click the right one
@@ -27,9 +28,13 @@ the lease's token for the session's whole length (one session at a time, like a 
      still empty, then the input goes back to the person, whatever happened. A Take over during
      the fill gives the person the input at once: browserd refuses the app's next key
      (`person_input`) and the fill stops (`taken`): no further field is typed by the app.
-5. The end: the lease ended (idle, its maximum, the person closed the window) or the person
-   closed the session: an application still `filling` is `cancelled` (`closed` or the lease's
-   reason). An application the person recorded meanwhile is left as it is.
+5. The end, on every path (the lease ended: idle, its maximum, the window closed; the job
+   cancelled; a worker restart, `reset_interrupted`): an application still `filling` whose page
+   showed the site's confirmation is recorded `submitted` by `confirmation` (SPEC-apply's modes
+   table: the app records it when it sees the confirmation). Without one it goes back to `queued`
+   with `needs` = `session_ended`, still holding the posting: the person opens the form again,
+   says "I submitted it" or closes it. An application the person recorded or closed meanwhile is
+   left as it is.
 
 `record` is the person's "Record as applied" (offered when the watch saw a confirmation) and "I
 submitted it": the one move to `submitted` that skips `submitting` and the gate, for `manual`
@@ -37,12 +42,14 @@ applications only (`states.MANUAL_SENT_FROM`); the posting to `applied` through 
 and the placed versions frozen (documents D14), in one transaction under the gate's locks. The
 app cannot know whether the person uploaded the placed versions or nothing at all: the event
 says `by` (confirmation or person) and how many versions were frozen; the run report says so.
+`cancel` (the person's Close) records it too once a confirmation was seen.
 
 Nothing of a value, a page or a token goes into a log, an event, the job's arguments or the
 status key: codes, counts and booleans only.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -52,13 +59,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import gate, guardrails, run, states
 from app.apply.answers import Answer, resolve
 from app.apply.ats import adapter_for
 from app.apply.ats import base as ats_base
-from app.apply.models import Application, Mode, State
+from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.jobs import service as jobs_service
@@ -68,16 +76,18 @@ logger = logging.getLogger(__name__)
 
 PURPOSE = "apply_manual"
 KEY = "jobapp:apply:manual:"
-COMMANDS = ("attach_cv", "attach_letter", "fill_details", "close")
+COMMANDS = ("attach_cv", "attach_letter", "fill_details")
 COMMANDS_MAX = 8
 STATUS_TTL_S = 120
 POLL_S = 1.0  # how long one wait for a command lasts
 WATCH_S = 3.0  # the page is read this often
 IDLE_WARN_S = 60  # the panel warns this long before the idle timeout (at 4 of 5 minutes)
+CLOSE_TRIES = 3  # each try waits the posting's lock timeout at most
 END_GRACE_S = 60  # past the lease's maximum, the session ends whatever browserd answers
 DOCUMENT_OF = {"attach_cv": ("cv", run.CV_NAME), "attach_letter": ("letter", run.LETTER_NAME)}
 OPEN = frozenset({State.queued, State.filling, State.needs_person})
 TAKEN = "person_input"  # browserd's refusal once the person took the input back (Take over)
+ENDED = "session_ended"  # `needs` of an application whose session ended before a confirmation
 
 
 def job_id(application_id: object) -> str:
@@ -226,23 +236,92 @@ def note(db: Session, application_id: uuid.UUID, action: str, outcome: str, now:
         run._event(db, application, "manual", now, action=action, outcome=code, **extra)
 
 
+def saw(db: Session, application_id: uuid.UUID, now: datetime) -> None:
+    """The watch saw the site's confirmation: kept, so every end of the session records it."""
+    application = db.get(Application, application_id)
+    if application is not None and application.state is State.filling:
+        run._event(db, application, "confirmation", now, seen=True)
+
+
+def _confirmed(db: Session, application: Application) -> bool:
+    return (
+        db.execute(
+            sa.select(ApplicationEvent.id)
+            .where(
+                ApplicationEvent.application_id == application.id,
+                ApplicationEvent.user_id == application.user_id,
+                ApplicationEvent.kind == "confirmation",
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
 def is_open(db: Session, application_id: uuid.UUID) -> bool:
-    found = run._locked(db, application_id)
-    return found is not None and found[0].state is State.filling
+    """A plain read, no lock: the loop asks every second, beside the gate's writes."""
+    state = db.execute(
+        sa.select(Application.state).where(Application.id == application_id)
+    ).scalar_one_or_none()
+    return state is State.filling
 
 
-def close(db: Session, application_id: uuid.UUID, code: str, now: datetime) -> str:
-    """The session's end: an application still `filling` is `cancelled` with the code."""
-    found = run._locked(db, application_id)
-    if found is None:
+def _sent(db: Session, application: Application, posting: Any, now: datetime, by: str) -> None:
+    frozen = gate.freeze_sent(db, application, now)
+    if JobStatus(posting.status) not in guardrails.APPLIED_STATUSES:
+        jobs_service.set_status(
+            db,
+            posting,
+            JobStatus.applied,
+            now,
+            via="apply",
+            extra={"application_id": str(application.id)},
+        )
+    states.move(application, State.submitted, now)
+    application.error_code = None
+    application.needs = None
+    run._event(db, application, "recorded", now, by=by, frozen=frozen)
+
+
+def close(
+    db: Session, application_id: uuid.UUID, code: str, now: datetime, *, seen: bool = False
+) -> str:
+    """The session's end (module docstring, step 5): an application still `filling` is
+    `submitted` when a confirmation was seen (`seen`, or its event), else `queued` with `needs`
+    ENDED. Answers the state written."""
+    user_id = db.execute(
+        sa.select(Application.user_id).where(Application.id == application_id)
+    ).scalar_one_or_none()
+    if user_id is None:
         return "gone"
-    application = found[0]
+    application, posting = gate.lock(db, user_id, application_id)
     if application.state is not State.filling:
         return application.state.value
-    states.move(application, State.cancelled, now)
-    application.error_code = code
     run._event(db, application, "ended", now, code=code)
-    return State.cancelled.value
+    if seen or _confirmed(db, application):
+        _sent(db, application, posting, now, "confirmation")
+        return State.submitted.value
+    states.move(application, State.queued, now)
+    application.needs = ENDED
+    return State.queued.value
+
+
+def reset_interrupted(db: Session, now: datetime) -> int:
+    """At the worker's start no session runs: every Apply myself left `filling` by a dead process
+    ends as `close` ends it (`interrupted`). Answers a count."""
+    ids = (
+        db.execute(
+            sa.select(Application.id).where(
+                Application.state == State.filling, Application.mode == Mode.manual
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return sum(
+        close(db, application_id, "interrupted", now) != State.filling.value
+        for application_id in ids
+    )
 
 
 def record(
@@ -258,21 +337,7 @@ def record(
         raise gate.RefusedError("already_recorded")
     if application.state not in OPEN:
         raise gate.RefusedError("not_open")
-    frozen = gate.freeze_sent(db, application, now)
-    if JobStatus(posting.status) not in guardrails.APPLIED_STATUSES:
-        jobs_service.set_status(
-            db,
-            posting,
-            JobStatus.applied,
-            now,
-            via="apply",
-            extra={"application_id": str(application.id)},
-        )
-    states.move(application, State.submitted, now)
-    application.error_code = None
-    application.needs = None
-    by = "confirmation" if seen else "person"
-    run._event(db, application, "recorded", now, by=by, frozen=frozen)
+    _sent(db, application, posting, now, "confirmation" if seen else "person")
     return application
 
 
@@ -280,13 +345,17 @@ def cancel(
     db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime
 ) -> Application:
     """The person closes the session without recording it: `cancelled` (the session sees it
-    and ends its lease). An application that already ended is answered as it is."""
-    application, _ = gate.lock(db, user_id, application_id)
+    and ends its lease), or `submitted` by `confirmation` once the page showed the site's
+    confirmation. An application that already ended is answered as it is."""
+    application, posting = gate.lock(db, user_id, application_id)
     if application.mode is not Mode.manual:
         raise gate.RefusedError("not_manual")
-    if application.state in OPEN:
+    if application.state in OPEN and _confirmed(db, application):
+        _sent(db, application, posting, now, "confirmation")
+    elif application.state in OPEN:
         states.move(application, State.cancelled, now)
         application.error_code = "closed"
+        application.needs = None
         run._event(db, application, "ended", now, code="closed")
     return application
 
@@ -348,7 +417,19 @@ async def _fill_details(
             filled += result.status in run.FILLED
         return f"filled:{filled}"
     finally:
-        await services.browser.live_input(s.lease_id, str(uuid.uuid4()))
+        await _give_back(services, s)
+
+
+async def _give_back(services: Services, s: Live) -> None:
+    """The input goes back to the person; if browserd cannot be told twice, the session ends
+    (its lease released) rather than leave the person without the keyboard."""
+    for _ in range(2):
+        try:
+            await services.browser.live_input(s.lease_id, str(uuid.uuid4()))
+            return
+        except Exception as exc:
+            logger.warning("apply.manual_give_back_failed", extra={"error": type(exc).__name__})
+    raise BrowserError("unavailable")
 
 
 async def _watch(
@@ -357,7 +438,12 @@ async def _watch(
     shot = await tools.call("browser_snapshot", {"passive": True})  # type: ignore[attr-defined]
     if shot.get("ok"):
         text = ats_base.page_text(str(shot.get("snapshot") or ""))
-        s.seen = s.seen or reader.confirmation(text, str(shot.get("url") or ""))
+        if not s.seen and reader.confirmation(text, str(shot.get("url") or "")):
+            s.seen = True
+            fill = services.fill
+            await asyncio.to_thread(
+                run._in_db, fill.sessions, lambda db: saw(db, s.application_id, fill.clock())
+            )
         s.chooser = bool(shot.get("chooser"))
     lease = (await services.browser.current()).get("lease") or {}
     if lease.get("lease_id") != s.lease_id:
@@ -376,13 +462,11 @@ async def _loop(
     monotonic: Callable[[], float],
 ) -> str:
     """The session's commands and watch until the person closes it, records it, or the lease
-    ends. Answers the code an application still `filling` ends `cancelled` with."""
+    ends. Answers the code of the end for `close`."""
     fill = services.fill
     watched = -math.inf
     while monotonic() < deadline:
         command = await services.channel.pop(plan.application_id, POLL_S)
-        if command == "close":
-            return "closed"
         if command is not None:
             s.busy = command
             await services.channel.put_status(plan.application_id, s.status("open"))
@@ -408,6 +492,18 @@ async def _loop(
             await _watch(services, tools, reader, s)
         await services.channel.put_status(plan.application_id, s.status("open"))
     return "lease_max"
+
+
+async def _close(fill: run.Services, application_id: uuid.UUID, code: str, seen: bool) -> str:
+    """`close`, asked again past a busy posting: an application never stays `filling`."""
+
+    def step(db: Session) -> str:
+        return close(db, application_id, code, fill.clock(), seen=seen)
+
+    for _ in range(CLOSE_TRIES - 1):
+        with contextlib.suppress(jobs_service.JobBusyError):
+            return await asyncio.to_thread(run._in_db, fill.sessions, step)
+    return await asyncio.to_thread(run._in_db, fill.sessions, step)
 
 
 async def session(
@@ -463,7 +559,7 @@ async def session(
         await fill.leases.release(user, lease_id, "apply_restart")
         return "lease_restarted"
     s = Live(application_id, lease_id)
-    code = "closed"
+    code = "ended"
     try:
         began = await asyncio.to_thread(
             run._in_db, fill.sessions, lambda db: begin(db, application_id, fill.clock())
@@ -497,7 +593,7 @@ async def session(
             asyncio.to_thread(
                 run._in_db,
                 fill.sessions,
-                lambda db: close(db, application_id, "interrupted", fill.clock()),
+                lambda db: close(db, application_id, "interrupted", fill.clock(), seen=s.seen),
             )
         )
         raise
@@ -506,9 +602,7 @@ async def session(
             await fill.leases.release(user, lease_id, "apply_manual_done")
         except (BrowserError, StoreUnavailableError):
             logger.warning("apply.release_failed", extra={"application_id": str(application_id)})
-    written = await asyncio.to_thread(
-        run._in_db, fill.sessions, lambda db: close(db, application_id, code, fill.clock())
-    )
+    written = await _close(fill, application_id, code, s.seen)
     await services.channel.put_status(application_id, {**s.status("ended"), "state": written})
     logger.info("apply.manual_ended", extra={"application_id": str(application_id)})
     return written
