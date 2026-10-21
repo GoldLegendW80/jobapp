@@ -275,7 +275,9 @@ def test_a_second_tab_saves_after_the_wizard_passed_steps(
     loaded = api.get("/api/profile", token=new_a.token).json()
     for name in ("profile", "looking", "where"):
         step(api, new_a, name)
-    prefs = loaded["sections"]["preferences"]
+    # the profile was empty when that tab loaded it: it sends the page's defaults
+    assert loaded["sections"]["preferences"] is None
+    prefs: dict[str, Any] = {}
     saved = api.request(
         "PUT",
         "/api/profile/preferences",
