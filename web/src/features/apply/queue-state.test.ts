@@ -109,5 +109,20 @@ describe("how often the queue is read again", () => {
         waiting_on_you: 1,
       }),
     ).toBe(QUEUE_POLL_MS);
+    expect(
+      queuePoll({
+        items: [
+          queueItem(1, "held"),
+          queueItem(2, "approved", { needs: "host_pace" }),
+        ],
+        waiting_on_you: 0,
+      }),
+    ).toBe(false);
+    expect(
+      queuePoll({
+        items: [queueItem(1, "held"), queueItem(2, "submitting")],
+        waiting_on_you: 0,
+      }),
+    ).toBe(QUEUE_POLL_MS);
   });
 });

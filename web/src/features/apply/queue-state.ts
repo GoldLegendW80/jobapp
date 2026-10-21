@@ -10,9 +10,6 @@ import type { DocumentCheck, Queue, QueueItem } from "./queue-api";
 export const QUEUE_POLL_MS = 3000;
 /** The shell's count follows the queue page at once; elsewhere it is read again this often. */
 export const COUNT_POLL_MS = 60_000;
-/** The most postings one click on Like takes (each Like writes documents with the person's model). */
-export const LIKE_MAX = 10;
-
 const WAITING = new Set([
   "ready",
   "needs_person",
@@ -34,7 +31,13 @@ export const isHeld = (item: QueueItem) =>
 
 /** The api reads every other state of the queue as under way: the app works on it. */
 export function queuePoll(queue: Queue | undefined): number | false {
-  return queue?.items.some((item) => !isWaiting(item)) ? QUEUE_POLL_MS : false;
+  const workNeedsRefresh = queue?.items.some(
+    (item) =>
+      !isWaiting(item) &&
+      item.state !== "held" &&
+      !(item.state === "approved" && item.needs === "host_pace"),
+  );
+  return workNeedsRefresh ? QUEUE_POLL_MS : false;
 }
 
 /** The form is filled and its answers can be read and corrected. */

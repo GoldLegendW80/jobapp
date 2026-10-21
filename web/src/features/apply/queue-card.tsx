@@ -79,6 +79,7 @@ export function QueueCard({
   const queryClient = useQueryClient();
   const titleId = useId();
   const panelId = useId();
+  const article = useRef<HTMLElement>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Until the person toggles it, the answers are open once a required one was seen left, and
   // stay open after it is answered: the person may still be on the optional ones.
@@ -156,6 +157,17 @@ export function QueueCard({
     onSuccess: () => {
       setConfirming(false);
       refresh();
+      const cards = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-queue-card-title]"),
+      );
+      const currentTitle = article.current?.querySelector<HTMLElement>(
+        "[data-queue-card-title]",
+      );
+      const next = currentTitle
+        ? cards[cards.indexOf(currentTitle) + 1]
+        : undefined;
+      if (next) next.focus();
+      else onLeave();
     },
     onError: (error) => {
       setConfirming(false);
@@ -232,11 +244,17 @@ export function QueueCard({
 
   return (
     <article
+      ref={article}
       aria-labelledby={titleId}
       className="flex flex-col gap-3 rounded-lg border bg-card p-4 text-card-foreground"
     >
       <header className="flex flex-col gap-0.5">
-        <h3 id={titleId} className="leading-snug font-semibold">
+        <h3
+          id={titleId}
+          tabIndex={-1}
+          data-queue-card-title
+          className="leading-snug font-semibold outline-none"
+        >
           <Link
             to={`/jobs/${item.posting_id}`}
             className="rounded-sm underline-offset-4 hover:underline"
@@ -266,6 +284,11 @@ export function QueueCard({
 
       <section aria-label="Documents" className="flex flex-col gap-1">
         <h4 className="text-sm font-semibold">Documents</h4>
+        {item.documents_review ? (
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+            Review these documents before approval.
+          </p>
+        ) : null}
         {documents.length > 0 ? (
           <ul className="flex flex-col gap-0.5 text-sm">
             {documents.map(([kind, check]) => (
