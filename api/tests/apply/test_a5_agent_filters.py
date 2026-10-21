@@ -333,6 +333,25 @@ def test_an_employer_word_alone_puts_no_label_on_topic(label: str) -> None:
     assert agent.refusal("Why do you want to join the team?", "text") is None
 
 
+@pytest.mark.parametrize(
+    ("label", "code"),
+    [
+        ("Why do you want to join our Berlin team?", "practical"),
+        ("What excites you about our New York team?", "practical"),
+        ("Why do you want to join Example Robotics in London?", "practical"),
+        # only a capitalised word is read as a place: "nice" and "us" in a sentence are none
+        ("Why would it be nice to join us?", None),
+        ("Why Do You Want To Join Us?", None),
+        ("Tell us about a project you led in Paris", None),  # experience, not a motivation
+    ],
+)
+def test_a_capitalised_place_in_a_question_of_motivation_is_practical(
+    label: str, code: str | None
+) -> None:
+    for reason in agent.AGENT_REASONS:
+        assert agent.refusal(label, "text", (), reason) == code
+
+
 # --- "why <name>": the posting's company, checked at the judge --------------------------------
 
 

@@ -559,7 +559,8 @@ def _outcome(label: str, kind: str, reason: str, options: tuple[str, ...] = ()) 
         ("Do you enjoy puzzles?", "yes_no", "not_a_known_question", (), False),  # a yes or no
         # a bare noun phrase the resolver does not know stays the person's, options or not
         ("Team preference", "combobox", "not_a_known_question", ("Ops", "Research"), False),
-        ("Team preference", "combobox", "free_text_for_the_agent", ("Ops", "Research"), True),
+        # an employer word alone is no topic, even in A3's free text (issue #317)
+        ("Team preference", "combobox", "free_text_for_the_agent", ("Ops", "Research"), False),
         ("Team preference", "combobox", "not_a_known_question", (), False),  # options unknown
         ("Gender", "select", "not_a_known_question", ("Male", "Female"), False),  # EEO
         ("What is your race or ethnicity?", "text", "not_a_known_question", (), False),

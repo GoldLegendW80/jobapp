@@ -10,7 +10,9 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   combobox with its options), each key once. Then `refusal` fails closed: what the owner keeps
   for the person stays left whatever a model would say (test_what_the_agent_is_never_asked).
   The resolver's default for a label it does not know is `not_a_known_question`, so three lines
-  close the door, in any widget:
+  close the door, in any widget, each reading the label through `_plain` (compatibility forms
+  folded, invisible characters and marks dropped, a Cyrillic, Greek or small capital letter drawn
+  like a Latin one read as that letter, as the never apply rules read a title):
   1. the shape (`not_open`): a question the resolver does not know is asked only when its label
      reads as an open question or a prompt to write: it opens on why, what, which, how,
      describe, tell us, explain, share, walk us through, give an example (pourquoi, quel,
@@ -21,12 +23,16 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
      "Team preference") or a statement stays the person's, whatever its options. A3's free
      text questions (`free_text_for_the_agent`) were already read as prompts and skip this line;
   2. the topic (`off_topic`): every question, A3's free text included (issue #317), is asked
-     only when it is about the job, the company, the team, or the person's motivation,
-     interests, field and experience (`_ABOUT_THE_JOB`, an allowlist of topics, so a closed
-     question needs no row per wording; "Why <Company>?" and "Why do you want to work in
-     robotics?" are among them). A textarea "Describe your status" and "What is your legal
-     status?" fall out; "Why do you want to work here?", "Tell us about a project" and "Share
-     your portfolio" stay;
+     only when the allowlist of topics reads it (`_on_topic`): a subject of the person's
+     (`_SUBJECT`: a project, experience, skills, motivation, the field, a time they led or
+     disagreed), or an employer word (the company, the role, the team, joining, working here)
+     inside a question of motivation (`_MOTIVATION`: why, what attracts you, what you would
+     bring, what you look for), or a short "Why <name>?". An employer word alone is no topic:
+     "How soon could you join?", "Which office would you join?" and "Team preference" stay the
+     person's; "Why do you want to join us?", "Tell us about a project" and "Share your
+     portfolio" are asked. The name of "Why <name>?" is checked twice: here it must not be a
+     place of the gazetteer or a time ("Why Berlin?", "Why now?": `practical`), and at the judge
+     it must be the posting's company (`off_topic` otherwise: "Why Lisbon?");
   3. the vocabularies, in any wording, open or not:
   - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
     accuracy statement (arbitration, background checks, marketing, data retention, a
@@ -48,9 +54,15 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   - sensitive personal data and where the person lives (`personal`: religion, marital status,
     a divorce, children, health, medication, accommodation, caste, politics, pronouns, age,
     family, where the person lives or moved to);
-  - the person's practicalities (`practical`: a start date, availability, relocation, remote,
-    hybrid or on site work, a commute, travel, other applications or offers, and working in a
-    place the jobs gazetteer knows: "Why do you want to work in the US?");
+  - the person's practicalities (`practical`: when they could start or join in any verb, a
+    notice, availability, relocation, remote, hybrid or on site work, an arrangement, hours,
+    weekends, a commute, travel, other applications or offers, a place word (an office, a
+    location, a city, a time zone), working in a place the jobs gazetteer knows ("Why do you
+    want to work in the US?"), and in a question of motivation a capitalised name of the
+    gazetteer anywhere ("Why do you want to join our Berlin team?"));
+  - leaving a job in any verb (exit, move on, step away), looking for a new role, a return to
+    work or a career break, and in a question of motivation the person's own current or last
+    job ("Why do you want to exit your last role?": `history`);
   - the person's identity or a credential (a password, a social security, tax or ID number, an
     address, a phone, an e-mail, a name, a signature, a birth date): the agent never receives
     the identity section, so any value would be invented;
@@ -80,7 +92,10 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   A typed value that states sensitive personal data (gender, sexuality, pronouns, disability,
   health, pregnancy, religion, ethnicity, age, family) is dropped too (`personal_statement`),
   whatever the question: the model never reads an EEO answer, so such a value is invented or
-  steered by the page. A dash used
+  steered by the page. So is a typed practicality (`practical_statement`: "I can start
+  immediately", "I am based in Berlin", "I prefer to work remotely", a notice, travel, a time
+  zone, other offers): the model never reads the profile's answers on these. Each typed value is
+  read through `_plain`, so a Cyrillic letter inside "permit" changes nothing. A dash used
   as a separator in a typed value is replaced by code first (`undashed`: the owner's rule, no
   dashes as separators). A typed value then goes through mail M9's `factcheck_rules.check`
   against the profile: a number, a duration, a link, an employer or a title that the profile
@@ -96,6 +111,19 @@ The call itself is an `AnswerAgent`: in the worker, `app.apply.agents.RuntimeAns
 `apply_answer` agent of the agents runtime (internal, private_io, model_by_credential, the
 `TOKEN_BUDGET` below, one submit tool). A run without one, or a person without a credential,
 skips the agent: every question it would have asked stays left.
+
+Declared open points (test_a5_agent_filters.py holds the families these rules are tested over):
+- a place the gazetteer does not know reaches the model in "Why Lisbon?" (its answer is dropped
+  unless Lisbon is the posting's company) and in "Why do you want to join us in Lisbon?" (its
+  answer is kept unless it states a practicality); "US" inside a question ("our US team") is read
+  as the pronoun, only "the US", "USA" and "United States" as the country;
+- a practicality typed without a first person or a time to come ("Berlin suits me", "Remote,
+  please") is typed;
+- what is refused though it is about the job: an employer word outside a question of motivation
+  ("Team preference" written by A3), "Why now?", a technical word that is also a place or an
+  arrangement word ("Microsoft Office", "a location service", "an exit strategy", "full-time"),
+  a project named like a city ("Phoenix") in a question of motivation, and a label written
+  wholly in Cyrillic or Greek letters.
 """
 
 import functools
@@ -185,10 +213,10 @@ class Verdict:
 
 
 # --- what stays the person's (fail closed) -------------------------------------------------------
-# Each vocabulary is read on the folded label (`answers.fold`: lower case, no accents), English and
-# French, some German and Spanish. They are the second line behind `_OPEN`: a label they miss is
-# asked only if it reads as an open question, and the judge then drops a bare negation and any
-# typed statement on these topics. They lean wide on purpose.
+# Each vocabulary is read on the label as `_plain` reads it (lower case, no accents, lookalike
+# letters as Latin ones), English and French, some German and Spanish. They are the second line
+# behind `_OPEN`: a label they miss is asked only if it reads as an open question, and the judge
+# then drops a bare negation and any typed statement on these topics. They lean wide on purpose.
 
 # Pay wanted or received: A3's pay words (`answers._PAY`, `answers._SALARY_WORDS`), the forms a
 # package takes, and German and Spanish stems (read anywhere in a word: "Gehaltsvorstellung").
