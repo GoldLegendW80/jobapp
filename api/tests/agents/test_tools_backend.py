@@ -105,9 +105,13 @@ def test_every_recorded_stream_parses(name: str) -> None:
         if "message" in step:
             message = fake_backend.parse_message(fake_backend._fill(step["message"], variables))
             seen.append(type(message))
-    if name != "missing_cli":
+    # These recordings fail on purpose before Claude Code prints anything.
+    no_message = ("apply_check_down", "missing_cli")
+    if name in no_message:
+        assert seen == []
+    else:
         assert seen[0] is SystemMessage
-    if name not in ("crash", "missing_cli"):
+    if name not in ("crash", *no_message):
         assert seen[-1] is ResultMessage
         complete = (SystemMessage, AssistantMessage, UserMessage, ResultMessage)
         # Only the recording of the CLI's partial messages holds stream events itself (issue #33).

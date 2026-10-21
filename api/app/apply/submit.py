@@ -804,13 +804,14 @@ async def decision(services: Services, application_id: uuid.UUID) -> str:
 
 
 async def submit(services: Services, application_id: uuid.UUID) -> str:
-    """The job: one approved or held application to its outcome, or the decision of a `ready`
-    Full auto one. Returns a code for the log (no value of the person's)."""
+    """The job: one approved or held application to its outcome. A `ready` Full auto one is left
+    to `decision`, which the tick queues: a submit job queued for it before that job existed makes
+    no second model call. Returns a code for the log (no value of the person's)."""
     undecided = await asyncio.to_thread(
         _in_db, services.sessions, lambda db: full_auto.undecided(db, application_id)
     )
     if undecided:
-        return await _decide(services, application_id)
+        return "undecided"
     plan = await asyncio.to_thread(
         _in_db, services.sessions, lambda db: prepare(db, application_id, services.clock())
     )

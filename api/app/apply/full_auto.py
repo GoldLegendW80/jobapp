@@ -8,7 +8,8 @@ that) are rehearsals (`dry_run`).
 
 The order, after the documents and the fill (A5), every step through the gate:
 
-1. `decide`, which the submit job runs for a `ready` Full auto item (`submit.due` lists them):
+1. `decide`, which the decision job (`submit.decision`, on the agents queue) runs for a `ready`
+   Full auto item (`submit.due` lists them):
    under the gate's locks, the Like never decided before (a `full_auto_like` row of this
    application already written sends it to the review queue with `authorisation_used`: one Like
    gives at most one click), still valid (`LIKE_VALID` after it, and Full auto on since
@@ -255,7 +256,8 @@ def gate_kind(mode: Mode) -> AuthorisationKind | None:
 
 
 def undecided(db: Session, application_id: uuid.UUID) -> bool:
-    """A `ready` Full auto item: the submit job runs its decision first."""
+    """A `ready` Full auto item: its decision job (`submit.decision`) decides it, the submit job
+    leaves it."""
     found = db.execute(
         sa.select(Application.state, Application.mode).where(Application.id == application_id)
     ).one_or_none()

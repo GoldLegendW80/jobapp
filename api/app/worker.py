@@ -31,7 +31,8 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - apply_decide(application_id): the decision of one `ready` Full auto item, its check by model
   (`apply_check`, one agent run in this process) first (apply A13c, app/apply/submit.py
   `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s
-  never holds the fills and submits, and it takes one of the MAX_AGENT_RUNS slots.
+  never holds the fills and submits, and it takes one of the MAX_AGENT_RUNS slots. Tried once:
+  after a worker stop the next tick queues it again (it clears arq's failed result first).
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
@@ -107,6 +108,7 @@ from typing import Any
 
 from arq import cron, func
 from arq.connections import ArqRedis, create_pool
+from arq.constants import result_key_prefix
 from arq.cron import CronJob
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
@@ -702,11 +704,12 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
         queued += job is not None
     for application_id in approved:
         if application_id in deciding:
+            job_id = queue.apply_decide_job_id(application_id)
+            # A try cut by a worker stop keeps arq's failed result for the worker's keep_result
+            # (3600 s), not the job's 0, and the same id is refused until then.
+            await redis.delete(result_key_prefix + job_id)
             job = await redis.enqueue_job(
-                "apply_decide",
-                str(application_id),
-                _job_id=queue.apply_decide_job_id(application_id),
-                _queue_name=queue.AGENTS,
+                "apply_decide", str(application_id), _job_id=job_id, _queue_name=queue.AGENTS
             )
         else:
             job = await redis.enqueue_job(

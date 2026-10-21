@@ -2,7 +2,7 @@
 its one tool, and the decision of a Full auto item whose free text the answer agent wrote, on the
 real runner and the fake backend (the recorded streams `apply_check*` of app/agents/fake_streams/).
 No model is called and no key is read: the credential is a made up value of the right shape. Real
-Postgres; the submit form is A6's fake."""
+Postgres, real Redis for the tick; the submit form is A6's fake."""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from arq.connections import create_pool
+from arq.constants import job_key_prefix, result_key_prefix
+from arq.worker import Worker
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
@@ -36,18 +39,19 @@ from app.apply.models import (
     State,
 )
 from app.profile import service as profile_service
-from tests.apply.a6_support import submit_ashby
+from tests.apply.a6_support import GateLeases, submit_ashby
 from tests.apply.conftest import AT, Person
 from tests.apply.test_a5_answer_agent import Runtime, posting_text, runs_of
 from tests.apply.test_a5_run import WHY, application, events
 from tests.apply.test_a6_gate import _password, api_app, run_submit, stub, submit_services
 from tests.apply.test_a6_recheck import at
-from tests.apply.test_a13_full_auto import HOLD, HOUR, filled, reviewed, turn_on
+from tests.apply.test_a13_full_auto import HOLD, HOUR, filled, reviewed, run_job, turn_on
 from tests.conftest import make_settings
 from tests.identity.api_helpers import Api
+from tests.jobs.test_worker import flush_redis, redis_url
 from tests.profile.conftest import full
 
-__all__ = ["api_app", "stub"]
+__all__ = ["api_app", "redis_url", "stub"]
 
 TRUE_TEXT = "I want to build agents for warehouse operations, as I do in my current role."
 PHD_TEXT = "Thanks to my PhD in robotics, I would bring research depth to the team."
@@ -102,7 +106,7 @@ def decide(
     svc = submit_services(factory, submit_ashby(), stub)
     svc.clock = at(when)
     svc.check = check
-    return run_submit(svc, app_id)
+    return run_job(svc, app_id)
 
 
 def checks_of(db: Session, app_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -779,6 +783,9 @@ def test_the_cheap_refusals_come_before_the_call(
 class Enqueued:
     jobs: list[tuple[str, tuple[Any, ...], str, str]] = field(default_factory=list)
 
+    async def delete(self, *keys: str) -> int:
+        return 0
+
     async def enqueue_job(self, function: str, *args: Any, _job_id: str, _queue_name: str) -> Any:
         self.jobs.append((function, args, _queue_name, _job_id))
         return object()
@@ -806,7 +813,8 @@ def test_the_decision_job_checks_and_decides_and_never_leases(
     app_id = item(db, factory, person_a, stub, TRUE_TEXT)
     runtime.give_key(person_a)
     form = submit_ashby()
-    svc = submit_services(factory, form, stub)
+    leases = GateLeases()
+    svc = submit_services(factory, form, stub, leases=leases)
     svc.clock = at(AT + HOUR)
     svc.check = runtime.check()
     ctx: dict[str, Any] = {"apply_submit_services": svc}
@@ -818,7 +826,76 @@ def test_the_decision_job_checks_and_decides_and_never_leases(
     assert asyncio.run(submit.decision(svc, app_id)) == "not_undecided"
     assert application(db, app_id).state is State.held
     assert form.gate_clicks == []
+    assert (leases.acquired, leases.released) == ([], [])
     assert len(runs_of(db, person_a.user_id)) == 1
+
+
+def test_a_submit_job_leaves_a_ready_item_to_its_decision_job(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: CheckRuntime
+) -> None:
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    runtime.give_key(person_a)
+    form = submit_ashby()
+    leases = GateLeases()
+    svc = submit_services(factory, form, stub, leases=leases)
+    svc.clock = at(AT + HOUR)
+    svc.check = runtime.check()
+    # an apply_submit job queued for it by the tick of the release before A13c
+    assert run_submit(svc, app_id) == "undecided"
+    assert application(db, app_id).state is State.ready
+    assert checks_of(db, app_id) == []
+    assert runs_of(db, person_a.user_id) == []
+    assert runtime.backends.made == []
+    assert (leases.acquired, form.gate_clicks) == ([], [])
+
+
+def test_a_decision_cut_by_a_worker_stop_is_queued_again_at_the_next_tick(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, redis_url: str
+) -> None:
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    job_id = queues.apply_decide_job_id(app_id)
+    flush_redis(redis_url)
+    codec: dict[str, Any] = {
+        "job_serializer": queues.serialize,
+        "job_deserializer": queues.deserialize,
+    }
+
+    async def scenario() -> tuple[int, bool, int]:
+        pool = await create_pool(queues.redis_settings(redis_url), **codec)
+        try:
+            # The try a stopped worker had started: the next worker finds it past max_tries.
+            await pool.enqueue_job(
+                "apply_decide", str(app_id), _job_id=job_id, _queue_name=queues.AGENTS, _job_try=2
+            )
+            decide_job = next(
+                f for f in worker.agents_queue().functions if f.name == "apply_decide"
+            )
+            next_worker = Worker(
+                functions=[decide_job],
+                queue_name=queues.AGENTS,
+                redis_settings=queues.redis_settings(redis_url),
+                burst=True,
+                poll_delay=0,
+                handle_signals=False,
+                keep_result=3600,
+                **codec,
+            )
+            await next_worker.main()
+            await next_worker.close()
+            kept = await pool.ttl(result_key_prefix + job_id)
+            again = await pool.enqueue_job(
+                "apply_decide", str(app_id), _job_id=job_id, _queue_name=queues.AGENTS
+            )
+            await worker.apply_tick({"sessions": factory, "redis": pool})
+            return kept, again is None, await pool.exists(job_key_prefix + job_id)
+        finally:
+            await pool.aclose()
+
+    kept, refused, queued = asyncio.run(scenario())
+    assert kept > 3000
+    assert refused
+    assert queued == 1
+    flush_redis(redis_url)
 
 
 def test_b_s_check_never_reads_a_s_profile_or_posting(
