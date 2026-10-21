@@ -121,7 +121,8 @@ def test_the_floor_falls_back_to_fifteen_minutes_when_the_settings_are_refused(
     assert caps.hold_floor_s() == FLOOR
 
 
-# Any assignment of APPLY_HOLD_S (not TEST_APPLY_HOLD_S) in a file that configures a stack.
+# Any assignment of APPLY_HOLD_S (not TEST_APPLY_HOLD_S) in a file that configures a stack; a
+# journey cannot set the env of the api it drives.
 ASSIGNED = re.compile(r"(?<![A-Z_])APPLY_HOLD_S[\"']?\s*[:=]\s*[\"']?(-?\d+)")
 STACK_FILES = (
     "compose*.yml",
@@ -130,7 +131,6 @@ STACK_FILES = (
     "ops/*.sh",
     "deploy.sh",
     ".github/workflows/*.yml",
-    "web/e2e/*.ts",
 )
 
 
