@@ -9,10 +9,10 @@ renderer's own Chromium lays out (renderer/server.py, POST /check):
   ("Alex Example"): the sample as it is, every list at two items or more, and `lone`, every
   list at one item (one employer with one bullet, one school, one language, one skill group of
   one item, one highlight, one competency, one paragraph), every text at its hard limit (the
-  paragraph at LONE_PARAGRAPH) and led by a word of LONG_WORD's length, the name's two words
-  that long too, an e-mail address (LONG_EMAIL) and a web address (LONG_WEBSITE) as long as
-  real ones, none with a break opportunity, so a box sized for the sample's texts or words, or
-  a rule that only a lone item meets, shows. Every text
+  paragraph at LONE_PARAGRAPH) and led by a word of LONG_WORD's length, the name's two words 30
+  letters long, these words without a break opportunity, an e-mail address (LONG_EMAIL) and a
+  web address (LONG_WEBSITE) as long as real ones, so a box sized for the sample's texts or
+  words, or a rule that only a lone item meets, shows. Every text
   of the content and of the profile is led by a token of its own (`Q`, three letters, `Z`), so
   each needle names one field; the contact lines, the periods and the letter's date as printed.
   A grey photo when the template has a slot, so a photo laid over a text is seen too;
