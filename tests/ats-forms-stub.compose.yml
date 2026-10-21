@@ -56,11 +56,17 @@ services:
     environment:
       BROWSER_PROXY_ALLOW_PRIVATE: atsforms
 
+  # Full auto's journey (apply A13b) waits through a hold and its rehearsals: on this stack the
+  # floor of the hold is the setting's own minimum, 60 s, and one rehearsal comes first.
   api:
     environment:
+      APPLY_HOLD_S: "60"
+      APPLY_REHEARSALS: "1"
       APPLY_STUB_BASE_URL: http://atsforms:8080
 
   worker:
     environment:
+      APPLY_HOLD_S: "60"
       APPLY_HOST_MIN_INTERVAL_S: "10"
+      APPLY_REHEARSALS: "1"
       APPLY_STUB_BASE_URL: http://atsforms:8080
