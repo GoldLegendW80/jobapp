@@ -470,12 +470,12 @@ TRUE_TITLES = [
     "​​",
 ]
 
-# Declared open points (PR body): still matched by nothing, each toward applying. A fix flips a row.
+# Declared open points (PR body): still matched by nothing, each toward applying. A fix flips a row
+# (the Braille blank and zero width spaces around a term moved to UNSEEN_SHAPES).
 STILL_MISSED = [
     "S e c u r i t y Engineer",  # letters spaced out
     "Secu-rity Engineer",  # a visible hyphen inside the term
-    "Secu⠀rity Engineer",  # Braille blank, drawn as a space
-    "Anti​cyber​fraud Analyst",  # a term inside a word, as "Anticyberfraud"
+    "Anticyberfraud Analyst",  # a term inside a word that neither starts nor ends with it
     "Secսrity Engineer",  # Armenian u, a script outside the lookalike table
     "Ꮪecurity Engineer",  # Cherokee S
     "Secυrity Engineer",  # Greek small upsilon, read as its capital: "y"

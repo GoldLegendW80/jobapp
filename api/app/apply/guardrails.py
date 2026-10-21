@@ -68,7 +68,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -77,7 +77,7 @@ from app.apply.models import ENDED, Application, Mode, State
 from app.jobs import slug
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 from app.jobs.sweep import NeverApplyRule
-from app.profile.matching import PLURAL, escape
+from app.profile.matching import escape
 
 SAME_ROLE_DAYS = 180
 FULL_AUTO_TEXT_CHARS = 1500
@@ -121,6 +121,8 @@ WARNINGS = {
 class Refusal:
     code: str
     application_id: uuid.UUID | None = None
+    # The warnings found after this one (`same_role` after `same_address`): Apply myself shows all.
+    also: tuple[str, ...] = ()
 
     @property
     def sentence(self) -> str:
@@ -130,58 +132,94 @@ class Refusal:
 # --- never apply ---------------------------------------------------------------------------------
 
 
-_JOINERS = re.compile(r"[\s\-\u2010-\u2015_/.]+")
-# What a reader does not see: format characters (soft hyphen, zero width space and joiners, word
-# joiner, BOM, bidi marks), controls, surrogates, private use and unassigned code points, and the
-# nonspacing and enclosing marks (accents, variation selectors, the grapheme joiner).
-_UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
-_HANGUL_FILLERS = frozenset("\u115f\u1160")  # letters drawn as nothing (NFKC maps U+3164 here)
-# Keys are small letters as NFKC, NFKD and the case fold leave them: any other key is never reached.
+# Stands, in a reading, for one character a reader does not see: it may be read as nothing or as
+# a gap between two words, and the never apply match tries both.
+UNSEEN = "\x00"
+_U = r"\x00"
+_JOINERS = re.compile(r"[ \-\u2010-\u2015_/.\x00]+")
+_GAPS = frozenset({"Zs", "Zl", "Zp"})
+_GAP_CONTROLS = frozenset("\t\n\r")
+# Format characters (soft hyphen, zero width space and joiners, word joiner, BOM, bidi marks), the
+# other controls (U+001C to U+001F, U+0085, \x0b and \x0c too), surrogates, private use, unassigned.
+_UNSEEN_CATEGORIES = frozenset({"Cf", "Cc", "Cs", "Co", "Cn"})
+# Drawn blank: the Hangul fillers (NFKC maps U+3164 and U+FFA0 here) and the Braille blank.
+_BLANKS = frozenset("\u115f\u1160\u2800")
+# Keys are small letters as NFKC, the case fold and NFKD leave them: any other key is never reached.
 _LOOKALIKES = str.maketrans(
     "авекмнорстхуѕіјһԁԛԝүӏαβεζηικμνορτυχϳᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢıȷɑɡɩ",
     "abekmhopctxysijhdqwyiabezhikmnoptyxjabcdefghijklmnoprstuvwyzijagi",
 )
 
 
-def _seen(c: str) -> bool:
-    if c.isspace():
-        return True  # a tab or a line break separates words, as a space does
-    if unicodedata.combining(c) or c in _HANGUL_FILLERS:
-        return False
-    return unicodedata.category(c) not in _UNSEEN
+def _read(c: str) -> str:
+    """One character of a case folded NFKD text as the fold keeps it: a gap is a space, a mark
+    (an accent, a variation selector) is nothing, what a reader does not see is UNSEEN."""
+    category = unicodedata.category(c)
+    if category in _GAPS or c in _GAP_CONTROLS:
+        return " "
+    if category in _UNSEEN_CATEGORIES or c in _BLANKS:
+        return UNSEEN
+    if category in ("Mn", "Me") or unicodedata.combining(c):
+        return ""
+    return c
+
+
+def _reading(text: str) -> str:
+    """NFKC, the case fold, then NFKD, each character read (`_read`), lookalike letters read as
+    Latin. The case fold comes before the marks are dropped, as the iota subscript of polytonic
+    Greek folds to a letter: "\u1fb3" is read as its capitals "\u0391\u0399" are, "ai"."""
+    folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text).casefold())
+    return "".join(map(_read, folded)).translate(_LOOKALIKES)
+
+
+def _joined(run: re.Match[str]) -> str:
+    return " " if run.group().strip(UNSEEN) else UNSEEN
+
+
+def _marked(text: str) -> str:
+    """`_reading` with every run of gaps, hyphens, underscores, slashes, dots and UNSEEN one
+    space, or one UNSEEN when the run holds nothing else."""
+    return _JOINERS.sub(_joined, _reading(text))
 
 
 def fold(text: str) -> str:
-    """NFKC then NFKD with what a reader does not see dropped (`_UNSEEN`: accents, soft hyphens,
-    zero width characters), case folded, lookalike letters then read as Latin, and every run of
-    spaces, hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full
-    width letter is its plain one, "Secu\u00adrity" (a soft hyphen) and "Security" written with
-    Cyrillic letters are "security", "Red-Team" and "red_team" are "red team". The lookalikes are
-    read after the case fold, so a capital and its small letter read as one letter (Greek capital
-    and small eta are both "h"), and a rule matches a title whatever the case of either."""
-    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
-    plain = "".join(c for c in decomposed if _seen(c)).casefold().translate(_LOOKALIKES)
-    return _JOINERS.sub(" ", plain)
+    """The text as the never apply rules read it, what a reader does not see dropped: accents,
+    case, compatibility forms, soft hyphens, zero width characters and controls, and every run of
+    spaces, hyphens, underscores, slashes and dots one space. "Sécurité" is "securite", a full
+    width letter is its plain one, "Secu\u00adrity" (a soft hyphen), "Secu\x1frity" (a control) and
+    "Security" written with Cyrillic letters are "security", "Red-Team" and "red_team" are
+    "red team". A capital and its small letter read alike (Greek capital and small eta are both
+    "h"), so a rule matches a title whatever the case of either."""
+    return _marked(text).replace(UNSEEN, "")
+
+
+def _spelled(term: str) -> str:
+    """A folded term as a pattern that also matches it with an unseen character between two of
+    its letters, or in place of one of its spaces."""
+    return f"{_U}?".join(f"[ {_U}]" if c == " " else escape(c) for c in term)
 
 
 def _term_pattern(terms: Sequence[str]) -> re.Pattern[str] | None:
     """The sweep's whole word match of the folded terms, widened to a term that starts or ends
-    a glued word. Linear: one alternation, searched once."""
-    folded = [escape(fold(term)) for term in terms if fold(term).strip()]
-    if not folded:
+    a glued word, searched in a marked reading (`_marked`): an unseen character inside a term is
+    read as nothing, one beside it as a gap (`\\w` does not match it). Linear: one alternation,
+    searched once, with no nested repetition."""
+    folded = [fold(term).strip() for term in terms]
+    alternation = "|".join(_spelled(term) for term in folded if term)
+    if not alternation:
         return None
-    alternation = "|".join(folded)
+    plural = rf"(?:(?:{_U}?e)?{_U}?s)?"  # the sweep's PLURAL, s or es
     starts = rf"(?<!\w)(?:{alternation})"  # "cyber" in "cybersecurity"
-    ends = rf"(?:{alternation}){PLURAL}(?!\w)"  # "security" in "cybersecurity"
+    ends = rf"(?:{alternation}){plural}(?!\w)"  # "security" in "cybersecurity"
     return re.compile(f"{starts}|{ends}")
 
 
 def matching_rule(rules: Iterable[NeverApplyRule], *texts: str) -> NeverApplyRule | None:
     """The first rule whose terms match one of `texts`, or None."""
-    folded = " \n ".join(fold(text) for text in texts if text)
+    marked = " \n ".join(_marked(text) for text in texts if text)
     for rule in rules:
         pattern = _term_pattern(rule.terms)
-        if pattern is not None and pattern.search(folded) is not None:
+        if pattern is not None and pattern.search(marked) is not None:
             return rule
     return None
 
@@ -234,14 +272,55 @@ def _number(text: str) -> str | None:
     return str(int(text)) if text.isascii() and text.isdigit() and len(text) <= 20 else None
 
 
-def _host(url: str) -> tuple[str, list[str], dict[str, str]] | None:
-    parts = urlsplit(url.strip())
-    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+# What IDNA reads as a dot between labels: the full stop, the ideographic, full width and halfwidth.
+_DOTS = re.compile("[.\u3002\uff0e\uff61]")
+
+
+def _label(label: str) -> str:
+    """One label of a host through IDNA 2003 (NFKC, the case fold, and what it maps to nothing,
+    such as a soft hyphen) to ASCII; a label IDNA refuses is kept, NFKC and case folded."""
+    try:
+        return label.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return unicodedata.normalize("NFKC", label).casefold()
+
+
+def browser_host(hostname: str) -> str:
+    """A host (lowercase, as `urlsplit` gives it) as a browser reads it: percent escapes decoded,
+    cut at every dot IDNA knows, each label through IDNA, no trailing dot. Written with full
+    width dots ("boards\uff0egreenhouse\uff0eio"), with "%2E" or with a trailing dot, the
+    host is "boards.greenhouse.io"; an ASCII host without escapes or a trailing dot is as is."""
+    return ".".join(_label(label) for label in _DOTS.split(unquote(hostname))).rstrip(".")
+
+
+@dataclass(frozen=True)
+class _Address:
+    host: str  # as a browser reads it (`browser_host`), without "www."
+    segments: list[str]
+    query: dict[str, str]
+    url: str  # the address with that host, for `slug.url_key`; as written when the host was
+
+
+def _host(url: str) -> _Address | None:
+    try:
+        parts = urlsplit(url.strip())
+        hostname = parts.hostname
+    except ValueError:
+        return None  # a browser opens no page there: an unclosed IPv6 bracket, a full width slash
+    if parts.scheme.lower() not in ("http", "https") or not hostname:
         return None
-    host = parts.hostname.lower().rstrip(".").removeprefix("www.")
+    host = browser_host(hostname)
+    address = url.strip()
+    if host != hostname:
+        try:
+            port = parts.port
+        except ValueError:
+            port = None  # as `slug.url_key` reads it
+        netloc = host if port is None else f"{host}:{port}"
+        address = urlunsplit(parts._replace(netloc=netloc))
     segments = [segment for segment in parts.path.split("/") if segment]
     query = {name.lower(): value for name, value in parse_qsl(parts.query)}
-    return host, segments, query
+    return _Address(host.removeprefix("www."), segments, query, address)
 
 
 def unstub(url: str, stub_base: str | None) -> str:
@@ -275,35 +354,34 @@ def _greenhouse_job(segments: list[str], query: dict[str, str]) -> str | None:
     return None
 
 
-def ats_of(url: str) -> str:
-    """`ashby`, `greenhouse`, `lever` by the form's host, else `other`."""
-    found = _host(url)
-    if found is None:
-        return "other"
-    host, _, query = found
-    if _on(host, "linkedin.com"):
+def _ats(found: _Address) -> str:
+    if _on(found.host, "linkedin.com"):
         return "other"  # the host decides first: a LinkedIn address with ?gh_jid= is not Greenhouse
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
-        if _on(host, domain):
+        if _on(found.host, domain):
             return ats
-    if _on(host, "lever.co"):
+    if _on(found.host, "lever.co"):
         return "lever"
-    if _uuid(query.get("ashby_jid", "")):
+    if _uuid(found.query.get("ashby_jid", "")):
         return "ashby"
-    if _number(query.get("gh_jid", "")):
+    if _number(found.query.get("gh_jid", "")):
         return "greenhouse"
     return "other"
 
 
+def ats_of(url: str) -> str:
+    """`ashby`, `greenhouse`, `lever` by the form's host, else `other`."""
+    found = _host(url)
+    return "other" if found is None else _ats(found)
+
+
 def canonical_key(url: str | None) -> str | None:
     """The key of the form an address shows (module docstring), None when it shows none."""
-    if url is None:
-        return None
-    found = _host(url)
+    found = None if url is None else _host(url)
     if found is None:
         return None
-    host, segments, query = found
-    ats = ats_of(url)
+    host, segments, query = found.host, found.segments, found.query
+    ats = _ats(found)
     if ats == "ashby":
         job = _uuid(segments[1]) if _on(host, "ashbyhq.com") and len(segments) >= 2 else None
         job = job or _uuid(query.get("ashby_jid", ""))
@@ -318,7 +396,18 @@ def canonical_key(url: str | None) -> str | None:
         job = _uuid(segments[1])
         if job:
             return f"lever:{job}"
-    return f"url:{slug.url_key(url)}"
+    return f"url:{slug.url_key(found.url)}"
+
+
+def current_key(key: str) -> str:
+    """A stored form key as these rules key its address today: a `url:` key stored before hosts
+    were read as a browser reads them (full width dots, "%2E", a trailing dot) answers to the key
+    its address has now, any other key is itself. `duplicates` reads stored keys through it."""
+    address = key.removeprefix("url:")
+    found = _host(address) if address != key else None
+    if found is None or found.url == address:
+        return key
+    return canonical_key(address) or key
 
 
 # --- the same role -------------------------------------------------------------------------------
@@ -334,20 +423,32 @@ _LEGAL_FORMS = frozenset(
         "eurl", "gmbh", "ag", "bv", "nv", "corp", "corporation", "co", "company",
     }
 )  # fmt: skip
+_NOT_KEY = re.compile(r"[^a-z0-9]+")
+
+
+def _key_text(text: str) -> str:
+    """`text` read as `fold` reads it, but with what a reader does not see read as a space, and
+    the slashes and parentheses of a gender marker still there."""
+    return _reading(text).replace(UNSEEN, " ")
 
 
 def title_key(title: str) -> str:
-    """The title compared for the same role: folded, gender markers dropped, words of a-z and
-    0-9 separated by one space."""
-    return slug.text_key(_GENDER.sub(" ", slug.fold(unicodedata.normalize("NFKC", title))))
+    """The title compared for the same role: read as the never apply rules read it (`fold`),
+    gender markers dropped, then its letters a to z and digits glued, so a space, a hyphen, a
+    character a reader does not see or nothing between two words make the same key: "Applied
+    AI-Engineer (H/F)", "Applied AI Engi\u00adneer" and "applied ai engineer" are all
+    "appliedaiengineer"."""
+    return _NOT_KEY.sub("", _GENDER.sub(" ", _key_text(title)))
 
 
 def company_key(company: str) -> str:
-    """The company compared for the same role: its words without trailing legal forms."""
-    words = slug.text_key(fold(company)).split()
+    """The company compared for the same role: read as `title_key` reads a title, its words of a
+    to z and digits without trailing legal forms, glued: "Example Robotics, Inc." and
+    "ExampleRobotics" are "examplerobotics"."""
+    words = _NOT_KEY.sub(" ", _key_text(company)).split()
     while len(words) > 1 and words[-1] in _LEGAL_FORMS:
         words.pop()
-    return " ".join(words)
+    return "".join(words)
 
 
 # --- duplicates ----------------------------------------------------------------------------------
@@ -386,16 +487,17 @@ def duplicates(
     if status is JobStatus.closed:
         return Refusal("posting_closed")
 
-    other = db.execute(
-        sa.select(Application.id)
-        .where(
+    key = current_key(key)
+    stored = db.execute(
+        sa.select(Application.id, Application.canonical_key).where(
             Application.user_id == user_id,
             Application.posting_id != posting.id,
-            Application.canonical_key == key,
             Application.state.not_in(ENDED),
+            # A `url:` key may be stored under older rules: `current_key` reads it again.
+            sa.or_(Application.canonical_key == key, Application.canonical_key.startswith("url:")),
         )
-        .limit(1)
-    ).scalar_one_or_none()
+    ).all()
+    other = next((found for found, stored_key in stored if current_key(stored_key) == key), None)
     if other is not None:
         return Refusal("same_form", other)
 
@@ -407,9 +509,9 @@ def duplicates(
             Job.status.in_(APPLIED_STATUSES),
         )
     ).all()
-    for _, _, url, _ in applied:
-        if url is not None and canonical_key(url) == key:
-            return Refusal("same_address" if key.startswith("url:") else "same_form")
+    same_address = any(url is not None and canonical_key(url) == key for _, _, url, _ in applied)
+    if same_address and not key.startswith("url:"):
+        return Refusal("same_form")
     clicked = db.execute(
         sa.select(Job.company, Job.title)
         .join(Application, Application.posting_id == Job.id)
@@ -427,6 +529,7 @@ def duplicates(
         if applied_on is None or applied_on >= since.date()
     ]
     role = (company_key(posting.company), title_key(posting.title))
-    if any((company_key(c), title_key(t)) == role for c, t in recent):
-        return Refusal("same_role")
-    return None
+    same_role = any((company_key(c), title_key(t)) == role for c, t in recent)
+    if same_address:
+        return Refusal("same_address", also=("same_role",) if same_role else ())
+    return Refusal("same_role") if same_role else None
