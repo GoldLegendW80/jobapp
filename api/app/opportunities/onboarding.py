@@ -8,8 +8,10 @@ login wizard").
 - `finish` and `dismiss`: the only callers of `profile.service.record_onboarding`. A date once
   recorded is kept: finishing twice, or putting off a finished wizard, changes nothing.
 - `pass_step`: the only caller of `profile.service.record_onboarding_step`: a step passed (Next
-  or "Skip this step") is kept in the profile, so another device resumes at the same step.
-- `start_first_sweep`: the sweep "Start" begins, through the jobs module's own `sweep.start`.
+  or "Skip this step") is kept in the profile, so another device resumes at the same step; once
+  the wizard is finished it records nothing.
+- `start_first_sweep`: the sweep "Start" begins, through the jobs module's own start
+  (`sweep.begin`, shared with POST /api/jobs/sweeps).
 
 The rules, each tested in tests/opportunities/test_o5_onboarding.py:
 - the wizard opens by itself only for a member (never an admin: the owner's account) whose
@@ -21,15 +23,14 @@ The rules, each tested in tests/opportunities/test_o5_onboarding.py:
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import queue as queues
 from app.identity.models import Role, User
-from app.jobs import service as jobs_service
 from app.jobs import sweep
-from app.jobs.models import SweepTrigger
 from app.profile import service as profile_service
 from app.profile.models import Profile
 from app.profile.schemas import WIZARD_STEPS
@@ -38,8 +39,6 @@ from app.profile.schemas import WIZARD_STEPS
 STEPS = WIZARD_STEPS
 # The steps whose answer the card waits for: without them a sweep has nothing to look for.
 STEPS_LEFT = ("profile", "looking", "where", "work")
-
-SweepOutcome = Literal["started", "running", "no_boards", "search_invalid"]
 
 
 @dataclass(frozen=True)
@@ -131,32 +130,15 @@ def dismiss(db: Session, user: User, now: datetime) -> State:
 
 
 def pass_step(db: Session, user: User, step: str, now: datetime) -> State:
-    """Keep `step` among the steps passed (once); the caller commits."""
+    """Keep `step` among the steps passed (once); nothing once the wizard is finished. The
+    caller commits."""
     profile_service.record_onboarding_step(db, user.id, step, now)
     return state(db, user, now)
 
 
-def start_first_sweep(
-    sessions: sessionmaker[Session], user_id: uuid.UUID, now: datetime
-) -> tuple[SweepOutcome, uuid.UUID | None]:
-    """The first sweep, as POST /api/jobs/sweeps starts one: ("started", its id), ("running",
-    the running one's id), or why none can start ("no_boards", "search_invalid", None). The
-    caller enqueues a started sweep."""
-    with sessions() as db:
-        try:
-            search = sweep.load_search(db, user_id)
-        except sweep.InvalidSearchError:
-            return "search_invalid", None
-        if not (sweep.enabled_boards(search) or sweep.enabled_sources(search)):
-            return "no_boards", None
-        try:
-            row = sweep.start(db, user_id, SweepTrigger.manual, now)
-            started = row.id
-            db.commit()
-        except jobs_service.SweepRunningError:
-            db.rollback()
-            running = jobs_service.running_sweep(db, user_id)
-            if running is None:  # finished between the insert and this read
-                return start_first_sweep(sessions, user_id, now)
-            return "running", running.id
-    return "started", started
+async def start_first_sweep(
+    sessions: sessionmaker[Session], queue: queues.Queue, user_id: uuid.UUID, now: datetime
+) -> sweep.Begun[uuid.UUID]:
+    """The first sweep, through the jobs module's own start (`sweep.begin`, the start of
+    POST /api/jobs/sweeps): started and queued, the one already running, or why none started."""
+    return await sweep.begin(sessions, queue, user_id, now, lambda row: row.id)
