@@ -28,7 +28,9 @@ figure that continues a run of digits (a phone number, a postcode, a date: "06 1
 plain four digit figure from 1900 to 2100 written right before its currency in a yearly
 statement with no other sign of a pay (no currency before it, no "brut", "net", "gross" or "HT"
 after it, no "TJM" or "annual salary" before it, no "salaire", "salary", "rémunération" or
-"gratification" earlier in its clause: "2026 € a year" is a year, "2000 € par mois" is a pay),
+"gratification" earlier in its clause unless a date word such as "in", "en" or "since" comes
+right before the figure: "2026 € a year" and "Salary review in 2026 € a year" are years, "2000 €
+par mois" is a pay),
 and one figure after an open bound ("up to",
 "from", "starting at", "jusqu'à", "à partir de", "dès", "minimum", "maximum", "at least", "au
 moins", "more than", "over", "plus de").
@@ -42,11 +44,15 @@ bonus ("bonus", "prime", "equity", "stock", "RSU", "BSPCE", "commission", "varia
 jour", "Learning budget of €1,000 a year". A comma, a parenthesis, a semicolon, a bar, a bullet
 or a plus right after such a word does not end the clause ("Bonus, €5,000 per year", "Bonus |
 €5,000 per year"), nor does a line break the figure follows at once ("Bonus\\n€5,000 per year").
-After the statement, the word refuses it when it comes at once ("45 K€ brut annuel variable")
-or after a linking word ("$120,000 a year in equity", "€3,000 per year for conferences", "de
-prime"); after "with", "avec", "hors", "excluding" it is an addition, the pay is kept ("€70,000
-per year with great benefits", "40 000 € brut par an hors variable"), and a capitalised word
-after "for a" is a role ("€50,000 per year for a Training Manager").
+After the statement, such a word anywhere in its clause refuses it ("45 K€ brut annuel
+variable", "$5,000 a year annual bonus", "€1,000 a year to spend on conferences", "€60,000 a
+year on target earnings"), with two exceptions: a clause that opens with "with", "avec",
+"hors", "excluding", "without" or "plus" names an addition, and a full pay (at least SALARY_MIN
+for its period: 10,000 a year, 500 a month, 50 a day, 5 an hour) is kept ("€70,000 per year
+with great benefits", "40 000 € brut par an hors variable"; "€5,000 a year with stock options"
+is refused); and "for a" or "as a" followed by a capitalised run whose last word is not a bonus
+or perk word is a role ("€50,000 per year for a Training Manager"; "as a Performance Bonus" is
+refused).
 "Competitive" and "selon profil" hold no figure, so nothing is found.
 
 A text may state several pays (a salary and a daily rate, or one pay in two currencies): `pays`
@@ -202,23 +208,35 @@ _REFUSED_END = re.compile(
     rf"(?<![^\W\d_])(?:{_BONUS_WORDS}|{_PERK_WORDS})[\s.,(;|•+:]*$",
     re.IGNORECASE,
 )
-# What may open the clause after a statement before a refused word that makes it a bonus or a
-# perk: a linking word ("in", "for", "de", "d'"), then an article or a determiner.
-_AFTER_LEAD = re.compile(
-    r"\s{0,3}(?P<link>(?:in|of|for|as|on|towards?|including|de|du|des|en|pour|au|aux|"
-    r"sur|dont|y\s+compris)\s{1,3}|d['\u2019]\s{0,2})?"
-    r"(?:(?P<article>a|an|un|une)\s{1,3}|(?P<det>the|your|our|their|its|le|la|les|votre|vos|"
-    r"notre|nos|leur|leurs)\s{1,3}|(?P<elided>l['\u2019])\s{0,2})?",
+# The clause after a statement (review of #513): any refused word in it refuses the figure,
+# except after an opening addition word, or in a role ("for a" or "as a", then a capitalised run
+# of at most four words whose last word is not refused).
+_ADDITION = re.compile(
+    r"\s{0,3}(?:with|avec|hors|excluding|without|plus)(?![^\W\d_])", re.IGNORECASE
+)
+_ROLE_LEAD = re.compile(r"\s{0,3}(?:for|as)\s{1,3}(?:a|an)\s{1,3}", re.IGNORECASE)
+_CAPITALISED_RUN = re.compile(r"[A-Z][\w-]{0,40}(?:\s{1,3}[A-Z][\w-]{0,40}){0,3}")
+_REFUSED_LAST = re.compile(
+    rf"(?<![^\W\d_])(?:{_BONUS_WORDS}|{_PERK_WORDS})$",
     re.IGNORECASE,
 )
-_ONE_WORD = re.compile(r"[^\W\d_][\w'\u2019-]{0,40}\s{1,3}")
 # The floor of a plausible pay per period: anything under it is a perk or a typo, never a pay.
 FLOOR = {"year": 1000, "month": 100, "day": 20, "hour": 1}
+# The least a full pay per period, for a figure followed by an addition that names a bonus or a
+# perk ("with stock options"): under it, the figure is the addition's, not a pay.
+SALARY_MIN = {"year": 10000, "month": 500, "day": 50, "hour": 5}
 _YEAR_FIGURE = re.compile(r"(?:19|20)\d\d|2100")
 # A word that names a pay, before a figure: then a figure from 1900 to 2100 is a pay, not a year.
 _PAY_WORD = re.compile(
     r"(?<![^\W\d_])(?:salaire|salaires|salary|salaries|rémunération|remuneration|"
     r"gratification|gratifications|pay|wage|wages)(?![^\W\d_])",
+    re.IGNORECASE,
+)
+# A word that dates what follows: a figure from 1900 to 2100 right after it is a year, whatever
+# pay word comes earlier ("Salary review in 2026 € a year").
+_DATE_LEAD = re.compile(
+    r"(?<![^\W\d_])(?:in|en|since|depuis|until|till|by|after|before|during|avant|après|apres|"
+    r"pendant|jusqu['\u2019]\s?en)\s{0,3}$",
     re.IGNORECASE,
 )
 _OPEN_BOUND = re.compile(
@@ -298,33 +316,36 @@ def _clause_after(text: str, end: int) -> str:
     return window[: mark.start()] if mark else window
 
 
-def _refused_after(after: str) -> bool:
-    """Whether the clause right after a statement makes it a bonus or a perk: a refused word at
-    once ("45 K€ brut annuel variable"), or after a linking word ("in equity", "for
-    conferences", "de prime", "in cloud credits", "for the gym"). A refused word further on, or
-    after "with", "avec", "hors", "excluding" or "plus", is an addition to the pay, not its
-    subject ("€70,000 per year with great benefits", "40 000 € brut par an hors variable"). A
-    capitalised word after "for a" or "as a" is a role ("for a Training Manager")."""
-    lead = _AFTER_LEAD.match(after)
-    if lead is None:  # never: every part of the pattern is optional
-        return False
-    position = lead.end()
-    if lead.group("article") and after[position : position + 1].isupper():
-        return False  # "for a Training Manager", "as a Senior Equity Analyst": a role
-    if _REFUSED.match(after, position):
-        return True
-    if not (lead.group("link") or lead.group("det") or lead.group("elided")):
-        return False
-    word = _ONE_WORD.match(after, position)
-    return word is not None and _REFUSED.match(after, word.end()) is not None
+def _refused_after(after: str, low: Decimal, period: str) -> bool:
+    """Whether the clause right after a statement makes it a bonus or a perk: a refused word
+    anywhere in it refuses the figure ("45 K€ brut annuel variable", "$5,000 a year annual
+    bonus", "€1,000 a year to spend on conferences", "€60,000 a year on target earnings").
+    Two shapes are carved out:
+    - the clause opens with "with", "avec", "hors", "excluding", "without" or "plus": the word is
+      an addition to the pay ("€70,000 per year with great benefits", "40 000 € brut par an hors
+      variable"), kept when the figure is a full salary (SALARY_MIN), refused under it ("€5,000
+      a year with stock options");
+    - "for a" or "as a" then a capitalised run whose last word is not refused: a role ("for a
+      Training Manager", "as a Senior Equity Analyst"); "as a Performance Bonus" is refused."""
+    if _ADDITION.match(after):
+        return _REFUSED.search(after) is not None and low < SALARY_MIN[period]
+    role = _ROLE_LEAD.match(after)
+    if role:
+        run = _CAPITALISED_RUN.match(after, role.end())
+        if run and not _REFUSED_LAST.search(run.group()):
+            return False
+    return _REFUSED.search(after) is not None
 
 
 def _a_year(match: re.Match[str], period: str, before: str) -> bool:
     """A plain four digit figure from 1900 to 2100 written right before its currency, with no
     other sign of a pay, in a yearly statement: a year next to a sign ("2026 € a year"), not a
     pay. A monthly, daily or hourly figure is never read as a year ("2000 € par mois"), and a
-    pay word earlier in the clause ("Salaire 2000 € par an") is a sign of a pay."""
-    if period != "year" or _PAY_WORD.search(before):
+    pay word earlier in the clause ("Salaire 2000 € par an") is a sign of a pay,
+    unless a date word comes right before the figure ("Salary review in 2026 € a year")."""
+    if period != "year":
+        return False
+    if _PAY_WORD.search(before) and not _DATE_LEAD.search(before):
         return False
     if match.group("before") or match.group("cur1") or match.group("cur3"):
         return False
@@ -352,14 +373,7 @@ def _statement(text: str, match: re.Match[str]) -> Pay | None:
     period = _period(match)
     if period is None:
         return None
-    before = _clause_before(text, match.start(), labelled=bool(match.group("before")))
-    if _REFUSED.search(before) or _refused_after(_clause_after(text, match.end())):
-        return None
     ranged = match.group("n2") is not None
-    if not ranged and _OPEN_BOUND.search(before):
-        return None
-    if _a_year(match, period, before):
-        return None
     k1, k2 = bool(match.group("k1")), bool(match.group("k2"))
     low = _amount(match.group("n1"), k1)
     high = _amount(match.group("n2"), k2) if ranged else low
@@ -370,6 +384,13 @@ def _statement(text: str, match: re.Match[str]) -> Pay | None:
     if low != low.to_integral_value() or high != high.to_integral_value():
         return None
     if low < max(1, FLOOR[period]) or high > PAY_MAX or low > high:
+        return None
+    before = _clause_before(text, match.start(), labelled=bool(match.group("before")))
+    if _REFUSED.search(before) or _refused_after(_clause_after(text, match.end()), low, period):
+        return None
+    if not ranged and _OPEN_BOUND.search(before):
+        return None
+    if _a_year(match, period, before):
         return None
     return Pay(min=int(low), max=int(high), currency=currencies.pop(), period=period)
 

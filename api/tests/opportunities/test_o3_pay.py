@@ -406,6 +406,12 @@ YEAR_GUARD = [
     ("Depuis 2019 € par an", None),
     ("Paid 2026 € a year", None),  # "paid" names no pay
     ("Salaire. 2026 € par an", None),  # the pay word ends with its clause
+    # Review of #513, follow-up 5: a date word right before the figure makes it a year, whatever
+    # pay word comes earlier.
+    ("Salary review in 2026 € a year", None),
+    ("Révision salariale en 2026 € par an", None),
+    ("Salary since 2019 € a year", None),
+    ("Salary of 2026 € a year", one(2026, period="year")),
     ("2025-2026 € per year", None),
     ("2000 € par mois de prime", None),
     ("Prime 2000 € par mois", None),
@@ -447,9 +453,9 @@ LABEL_MARKS = [
     ("Salaire :\n45 000 € par an", one(45000, period="year")),
 ]
 
-# Follow-up 4: after the statement, a bonus or perk word is its subject only at once or after a
-# linking word; after "with", "avec", "hors", "excluding" it is an addition, and a capitalised
-# word after "for a" or "as a" is a role.
+# Follow-up 4: after the statement, a bonus or perk word anywhere in its clause refuses it,
+# except after an opening "with", "avec", "hors", "excluding", "without" or "plus" (an addition
+# to a full pay), or in a role after "for a" or "as a".
 AFTER_CLAUSE = [
     ("Salary: €70,000 per year with great benefits", one(70000, period="year")),
     ("$150,000 a year with equity", one(150000, "USD", "year")),
@@ -487,6 +493,55 @@ AFTER_CLAUSE = [
     ("€5,000 a year bonus", None),
     ("$10,000 a year signing bonus", None),
     ("€2,000 per year as a bonus", None),
+    # Review of #513, blocker 1: a refused word anywhere in the clause after the figure refuses
+    # it (#498's rule); only an opening addition word or a role keeps the figure.
+    ("$5,000 a year annual bonus", None),
+    ("€5,000 per year performance bonus", None),
+    ("€5,000 per year target bonus", None),
+    ("€5,000 a year paid as bonus", None),
+    ("€1,000 per year learning budget", None),
+    ("€2,000 per year personal development budget", None),
+    ("€1,000 a year education stipend", None),
+    ("€300 per month remote work allowance", None),
+    ("€1,000 a year to spend on conferences", None),
+    ("€2,000 per year to spend on training", None),
+    ("€500 per month to cover your gym membership", None),
+    ("€100 per month per employee for lunch", None),
+    ("€1,500 par an à utiliser en formation", None),
+    ("€5,000 a year: bonus", None),
+    ("€5,000 a year - bonus", None),
+    ("1 000 € par an de budget formation", None),
+    ("200 € par mois d'indemnité télétravail", None),
+    ("1 500 € par an pour vos frais de formation", None),
+    ("3 000 € par an versés en prime", None),
+    ("€60,000 a year paid monthly", one(60000, period="year")),
+    ("€60,000 a year based in Paris", one(60000, period="year")),
+    ("60 000 € par an en télétravail", one(60000, period="year")),  # no perk word: a pay
+    ("€60,000 a year plus bonus", one(60000, period="year")),
+    ("45 000 € par an plus prime", one(45000, period="year")),
+    # Follow-up 2: "on target earnings" is refused, "on" is no linking word there.
+    ("€60,000 a year on target earnings", None),
+    ("€60,000 a year OTE", None),
+    ("€60,000 a year on site", one(60000, period="year")),
+    # Blocker 2: a capitalised run after "for a" or "as a" is a role only when its last word
+    # is not a bonus or perk word.
+    ("€60,000 a year for a Senior Equity Analyst", one(60000, period="year")),
+    ("€45,000 per year as a Training Manager", one(45000, period="year")),
+    ("€60,000 a year for a Sales Manager with commission", one(60000, period="year")),
+    ("€5,000 per year as a Performance Bonus", None),
+    ("€1,000 per year for a Learning Budget", None),
+    ("€3,000 per year for a Gym Membership", None),
+    ("€2,000 a year as a Signing Bonus", None),
+    ("€1,000 a year for a Training budget", None),  # the run ends on "Training"
+    # Follow-up 3: an addition that names a bonus or a perk keeps a full pay only (SALARY_MIN:
+    # 10,000 a year, 500 a month, 50 a day, 5 an hour); under it the figure is the addition's.
+    ("€5,000 a year with stock options", None),
+    ("€9,999 a year with stock options", None),
+    ("€10,000 a year with stock options", one(10000, period="year")),
+    ("€300 per month with meal vouchers", None),
+    ("€2,500 per month with meal vouchers", one(2500, period="month")),
+    ("40 € par jour avec tickets restaurant", None),
+    ("€5,000 a year with a nice team", one(5000, period="year")),  # no refused word
 ]
 
 # Texts with no figure the list accepts.

@@ -117,6 +117,11 @@ def test_the_table_holds_both_outcomes() -> None:
         {"pay_min": 45000, "pay_max": 55000, "pay_currency": "EUR"},
         {"pay_currency": "EUR", "pay_period": "year"},
         {**PAY, "pay_period": None},
+        # Keys, not values (review of #513, follow-up 4): some keys carried, even all null, is
+        # refused; only all four keys or none.
+        {"pay_min": None},
+        {"pay_min": None, "pay_max": None},
+        {"pay_min": None, "pay_max": None, "pay_currency": None},
     ],
 )
 def test_a_partial_pay_is_refused(fields: dict[str, Any]) -> None:

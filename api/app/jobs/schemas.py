@@ -185,6 +185,11 @@ class ImportJob(BaseModel):
         most max, a currency of the list, a period)."""
         if not isinstance(data, dict):
             return data
+        # Keys first (review of #513, follow-up 4): a row carries all four pay keys or none, so
+        # a lone "pay_min": null never clears the four stored columns.
+        carried = PAY_KEYS & data.keys()
+        if carried and carried != PAY_KEYS:
+            raise ValueError("pay_min, pay_max, pay_currency and pay_period go together")
         values = {name: data.get(f"pay_{name}") for name in ("min", "max", "currency", "period")}
         if all(value is None for value in values.values()):
             return data
