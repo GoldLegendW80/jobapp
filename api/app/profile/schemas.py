@@ -1055,13 +1055,27 @@ DocumentsLanguage = Literal["auto", "en", "fr"]
 DocumentsTone = Literal["plain", "formal", "warm"]
 
 
+# The steps of the first login wizard (web/src/features/onboarding/steps.ts), in order.
+WizardStep = Literal["profile", "looking", "where", "work", "pay", "apply", "summary"]
+WIZARD_STEPS: tuple[str, ...] = get_args(WizardStep)
+
+
+def _steps(value: list[str]) -> list[str]:
+    """Each step once, in the wizard's order."""
+    return [step for step in WIZARD_STEPS if step in value]
+
+
 class Onboarding(_Section):
-    """When the first login wizard was finished or put off (opportunities O5). Only the wizard's
-    routes write it (service.record_onboarding): a save of the section or an import keeps the
-    stored dates."""
+    """When the first login wizard was finished or put off, and the steps passed in it (Next or
+    "Skip this step"), so another device resumes at the same step (opportunities O5). Only the
+    wizard's routes write it (service.record_onboarding, service.record_onboarding_step): a save
+    of the section or an import keeps the stored value. Never shown to a model."""
 
     completed_at: OptInstant = None
     dismissed_at: OptInstant = None
+    steps_passed: Annotated[
+        list[WizardStep], Field(max_length=2 * len(WIZARD_STEPS)), AfterValidator(_steps)
+    ] = Field(default_factory=list)
 
 
 class PreferencesSection(_Section):
