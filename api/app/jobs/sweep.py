@@ -1112,7 +1112,7 @@ def _insert[T](
             search = load_search(db, user_id)
         except InvalidSearchError:
             return Begun("search_invalid")
-        if not (enabled_boards(search) or enabled_sources(search)):
+        if not (enabled_boards(search) or enabled_sources(search) or enabled_feeds(search)):
             return Begun("no_boards")
         try:
             row = start(db, user_id, SweepTrigger.manual, now)
