@@ -81,7 +81,7 @@ NEXT_NAMES = frozenset(
         "continuer",
     }
 )  # fmt: skip
-# Roles of a part with controls of its own: a submit inside one sends only what that part holds.
+# Roles of a part with controls of its own: a submit inside one is read as that part's.
 PARTS = frozenset(
     {
         "alertdialog", "banner", "complementary", "contentinfo", "dialog", "form", "navigation",
