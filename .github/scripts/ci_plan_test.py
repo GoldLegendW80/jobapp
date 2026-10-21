@@ -1437,7 +1437,7 @@ class JourneysTest(unittest.TestCase):
         ]
         paths += [
             "tests/deploy_test.sh",
-            "api/tests/mail/test_sync.py",
+            "api/tests/profile/test_profile.py",
             ".github/workflows/ci.yml",
         ]
         self.assertEqual(self.ran(paths), [])
@@ -1569,6 +1569,278 @@ class JourneysTest(unittest.TestCase):
                     "web/src/features/account/Account.tsx",
                     ci_plan.Imports(root).web()["web/src/features/mail/Badge.tsx"],
                 )
+
+    def test_python_fromlist_arguments_retain_transitive_consumers(self) -> None:
+        forms = [
+            "__import__('app.mail', fromlist=['rules'])",
+            "__import__('app.mail', None, None, ['rules'])",
+            "__import__(name='app.mail', fromlist=('rules',))",
+            "__import__('app.mail', fromlist=['rules'], level=0)",
+            "import builtins; builtins.__import__('app.mail', fromlist=['rules'])",
+            "import builtins as b; b.__import__('app.mail', fromlist=['rules'])",
+            "from builtins import __import__ as load; load('app.mail', fromlist=['rules'])",
+            "from importlib import import_module as load; load(name='app.mail.rules')",
+            "import importlib as il; il.import_module(name='..mail.rules', package='app.documents')",
+            "__import__('app.mail.rules', fromlist=[])",
+        ]
+        for form in forms:
+            for source in (form, form.replace("'", '"'), form.replace("; ", "\n")):
+                with self.subTest(source=source):
+                    root = self.tree(
+                        {
+                            **self.BASE,
+                            "api/app/documents/store.py": source,
+                            "api/app/opportunities/use.py": "from app.documents.store import value",
+                        }
+                    )
+                    graph = ci_plan.Imports(root).api()
+                    self.assertIn("app.documents.store", graph["app.mail.rules"])
+                    self.assertIn(
+                        "app.opportunities.use",
+                        ci_plan.importers("app.mail.rules", graph, lambda _: False),
+                    )
+                    self.assertEqual(
+                        [
+                            g
+                            for v, g, _ in ci_plan.journey_plan(
+                                root, ["api/app/mail/rules.py"], self.GROUPS
+                            )
+                            if v == "run"
+                        ],
+                        ["mail", "documents", "apply"],
+                    )
+
+    def test_python_unsupported_loader_families_force_every_group(self) -> None:
+        forms = [
+            "names = ['rules']; __import__('app.mail', fromlist=names)",
+            "__import__('app.mail', fromlist=['*'])",
+            "__import__('app.mail', fromlist=[target])",
+            "__import__('app.mail', fromlist={'rules'})",
+            "__import__('app.mail', fromlist=('rules', target))",
+            "__import__('app.mail', globals(), locals(), ['rules'])",
+            "__import__('mail.rules', level=1)",
+            "__import__('app.mail', **options)",
+            "__import__(*args)",
+            "__import__('app.mail', extra=['rules'])",
+            "import importlib; getattr(importlib, 'import_module')('app.mail.rules')",
+            "import importlib; target = 'app.mail.rules'; getattr(importlib, 'import_module')(target)",
+            "import importlib as il; getattr(il, attribute)('app.mail.rules')",
+            "import importlib; importlib.__dict__['import_module']('app.mail.rules')",
+            "import importlib; vars(importlib)['import_module']('app.mail.rules')",
+            "import importlib; alias = importlib; alias.import_module('app.mail.rules')",
+            "import importlib; invoke(importlib, 'app.mail.rules')",
+            "from importlib import *; import_module('app.mail.rules')",
+            "from builtins import *; __import__('app.mail.rules')",
+            "import builtins as b; getattr(b, '__import__')('app.mail.rules')",
+            "__builtins__['__import__']('app.mail.rules')",
+            "__import__('importlib').__dict__['import_module']('app.mail.rules')",
+            "import importlib; load = importlib.import_module; load('app.mail.rules')",
+            "from importlib import import_module as load; invoke(load, 'app.mail.rules')",
+            "import importlib; importlib.import_module(name=target)",
+            "import importlib; importlib.import_module('app.mail.rules', **options)",
+            "import importlib; importlib.import_module('app.mail.rules', package=package)",
+            "import importlib; importlib.import_module('app.mail.rules', extra=target)",
+            "import importlib; importlib.import_module('app.mail.missing')",
+            "__import__('app.mail.missing', fromlist=['rules'])",
+            "import importlib; globals()['importlib'].import_module('app.mail.rules')",
+            "from importlib import import_module; locals()['import_module']('app.mail.rules')",
+            "from builtins import globals as namespace; namespace()['__builtins__']",
+            "eval(\"__import__('app.mail.rules')\")",
+            "from builtins import exec as execute; execute(source)",
+        ]
+        for source in forms:
+            with self.subTest(source=source):
+                root = self.tree({**self.BASE, "api/app/documents/store.py": source})
+                with self.assertRaises(ci_plan.MappingError):
+                    ci_plan.Imports(root).api()
+                self.assertEqual(
+                    [
+                        g
+                        for v, g, _ in ci_plan.journey_plan(
+                            root, ["api/app/mail/rules.py"], self.GROUPS
+                        )
+                        if v == "run"
+                    ],
+                    [g for g, _ in self.GROUPS],
+                )
+
+    def test_typescript_line_terminator_declaration_matrix_retains_edges(self) -> None:
+        declarations = [
+            "import '@/features/mail/Badge';",
+            "import { value } from '@/features/mail/Badge';",
+            "import type { Value } from '@/features/mail/Badge';",
+            "export * from '@/features/mail/Badge';",
+            "export { value } from '@/features/mail/Badge';",
+            "const value = import('@/features/mail/Badge');",
+            "const value = import(`@/features/mail/Badge`);",
+            "const value = require('@/features/mail/Badge');",
+        ]
+        # ECMAScript 12.3: exactly LF, CR, LS and PS; CRLF is one sequence.
+        for terminator in ("\n", "\r", "\r\n", "\u2028", "\u2029"):
+            for declaration in declarations:
+                for prefix in ("// comment", "export {}; // 'quoted' comment"):
+                    source = prefix + terminator + declaration
+                    with self.subTest(terminator=repr(terminator), source=source):
+                        self.assertEqual(
+                            set(ci_plan.ts_imports(source)), {"@/features/mail/Badge"}
+                        )
+                        root = self.tree(
+                            {
+                                **self.BASE,
+                                "web/src/features/account/Account.tsx": source,
+                            }
+                        )
+                        self.assertIn(
+                            "web/src/features/account/Account.tsx",
+                            ci_plan.Imports(root).web()[
+                                "web/src/features/mail/Badge.tsx"
+                            ],
+                        )
+                        self.assertEqual(
+                            [
+                                g
+                                for v, g, _ in ci_plan.journey_plan(
+                                    root,
+                                    ["web/src/features/mail/Badge.tsx"],
+                                    self.GROUPS,
+                                )
+                                if v == "run"
+                            ],
+                            [g for g, _ in self.GROUPS],
+                        )
+        for whitespace in ("\v", "\f", "\u0085", "\u00a0", "\u2003"):
+            for declaration in declarations:
+                with self.subTest(whitespace=repr(whitespace), declaration=declaration):
+                    self.assertEqual(
+                        ci_plan.ts_imports("// comment" + whitespace + declaration), []
+                    )
+
+    def test_runtime_fixture_paths_and_neighbors_run_journeys(self) -> None:
+        cases = {
+            "api/tests/jobs/fake_ats.py": [g for g, _ in self.GROUPS],
+            "api/tests/mail/fake_gmail.py": ["mail"],
+            "api/tests/mail/fixtures/mailboxes/new.json": ["mail"],
+            "api/tests/mail/test_sync.py": ["mail"],
+            "api/tests/ingestion/journey_streams.py": [g for g, _ in self.GROUPS],
+            "api/tests/ingestion/fixtures/new.txt": [g for g, _ in self.GROUPS],
+            "api/tests/documents/fixtures/upload_morgan.txt": [
+                g for g, _ in self.GROUPS
+            ],
+            "api/tests/documents/fixtures/new/nested.txt": [g for g, _ in self.GROUPS],
+            "api/tests/jobs/fake_ats_test.py": [],
+            "api/tests/mailbox/test_sync.py": [],
+            "api/tests/ingestion_extra/fixture.txt": [],
+            "api/tests/documents/test_store.py": [],
+            "api/tests/documents/fixtures_extra/input.txt": [],
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.ran([path]), expected)
+
+    def test_journey_runtime_test_data_has_nonempty_scope(self) -> None:
+        # Read paths, never import API code or open the data. Include directory contents
+        # because a mounted fake can read a new sibling without changing its compose file.
+        paths = set()
+        gate = (ROOT / "ops/local-check.sh").read_text()
+        compose = {
+            ROOT / p for p in re.findall(r"(?:tests/)?[\w.-]*compose[\w.-]*\.yml", gate)
+        }
+        for source in compose:
+            paths.update(
+                re.findall(
+                    r"^\s*-\s+['\"]?\./(api/tests(?:/[\w./*-]+)?):",
+                    source.read_text(),
+                    re.MULTILINE,
+                )
+            )
+        for source in (ROOT / "web/e2e").glob("*.ts"):
+            for relative in re.findall(r"api/tests/[\w./*-]+", source.read_text()):
+                paths.add(relative.rstrip("/."))
+        self.assertTrue(compose)
+        self.assertIn("api/tests/jobs/fake_ats.py", paths)
+        self.assertIn("api/tests/mail", paths)
+        self.assertIn("api/tests/ingestion/fixtures", paths)
+        self.assertIn("api/tests/documents/fixtures/upload_morgan.txt", paths)
+        for relative in sorted(paths):
+            target = ROOT / relative
+            expanded = (
+                list(target.rglob("*"))
+                if target.is_dir()
+                else list(ROOT.glob(relative))
+            )
+            self.assertTrue(expanded, relative)
+            for path in expanded:
+                if path.is_file():
+                    relative_path = path.relative_to(ROOT).as_posix()
+                    groups, _ = ci_plan.journey_groups_for(
+                        relative_path, {}, {}, ci_plan.Imports(ROOT)
+                    )
+                    self.assertNotEqual(
+                        groups, ci_plan.NO_GROUP, f"runtime data: {relative_path}"
+                    )
+
+    def test_registration_providers_and_their_dependencies_run_every_group(
+        self,
+    ) -> None:
+        for stem in ("agents", "engine", "freeze", "jobs", "writers"):
+            for suffix in (".py", "/__init__.py", "/nested.py"):
+                path = f"api/app/documents/{stem}{suffix}"
+                with self.subTest(path=path):
+                    files = {path: "from app.mail.rules import value"}
+                    self.assertEqual(
+                        self.ran([path], files), [g for g, _ in self.GROUPS]
+                    )
+                    self.assertEqual(
+                        self.ran(["api/app/mail/rules.py"], files),
+                        [g for g, _ in self.GROUPS],
+                    )
+        for path in ("api/app/documents/freeze_extra.py", "api/app/documents/store.py"):
+            with self.subTest(path=path):
+                self.assertEqual(self.ran([path], {path: ""}), ["documents", "apply"])
+
+    def test_worker_registration_registry_and_status_callbacks_have_full_scope(
+        self,
+    ) -> None:
+        tree = ast.parse((ROOT / "api/app/worker.py").read_text())
+        registries = [
+            n.value
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "REGISTRATION_MODULES"
+                for t in n.targets
+            )
+        ]
+        self.assertEqual(len(registries), 1)
+        self.assertEqual(
+            frozenset(ast.literal_eval(registries[0])), ci_plan.API_REGISTRATIONS
+        )
+        callbacks = []
+        for path in (ROOT / "api/app").rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            if any(
+                isinstance(n, ast.Call)
+                and (
+                    isinstance(n.func, ast.Name)
+                    and n.func.id == "register_status_callback"
+                    or isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "register_status_callback"
+                )
+                for n in ast.walk(tree)
+            ):
+                callbacks.append(path.relative_to(ROOT).as_posix())
+        self.assertIn("api/app/documents/freeze.py", callbacks)
+        for path in callbacks:
+            # No graph read: another computed loader must not conceal missing registration rules.
+            with mock.patch.object(
+                ci_plan.Imports,
+                "api",
+                side_effect=AssertionError("unexpected graph read"),
+            ):
+                groups, _ = ci_plan.journey_groups_for(
+                    path, {}, {}, ci_plan.Imports(ROOT)
+                )
+            self.assertEqual(groups, ci_plan.EVERY, path)
 
     def test_typescript_unknown_targets_and_broken_imports_force_every_group(
         self,

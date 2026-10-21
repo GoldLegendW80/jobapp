@@ -85,13 +85,17 @@ in the job folder that holds this repository (it is not part of the repository).
    without one); until then its files run every group.
 
    Dependencies include relative Python imports, literal `importlib.import_module` and
-   `__import__` calls, TypeScript side-effect, multiline, type-only, re-export and literal dynamic
+   `__import__` calls with literal fromlists, TypeScript side-effect, multiline, type-only, re-export and literal dynamic
    imports, including literal template targets and JSON assets. Deleted source paths and renames
    run every group: the base can hold consumers the head no longer contains. Unreadable sources,
    decode, parse or traversal errors, unresolved local modules and computed or unsupported
    imports also run every group. The reader is deliberately conservative, with no full
-   TypeScript parser: template interpolation and ambiguous syntax force full. The current API
-   registries use computed dynamic imports, so API source changes currently run every group.
+   TypeScript parser: template interpolation and ambiguous syntax force full. Reflective Python
+   loader access and unsupported arguments force full. Runtime test data mounted by the gate's
+   compose files or read by journeys has explicit group rules. Worker registration providers and
+   their dependencies run every group because callbacks can affect modules that do not import them.
+   Current computed or unsupported API loaders and conservative JSX slash handling cause full
+   fallback on this tree. The synthetic fixtures demonstrate narrower supported cases.
    The first real gate of this change must use `LOCAL_CHECK_FULL=1`; fixture results are not a
    genuine scoped PASS, and no real scoped PASS has been established yet.
 

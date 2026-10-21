@@ -454,10 +454,14 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     ),
     ("tests/*_test.sh", NO_GROUP, "a shell test, the gate runs them all"),
     ("tests/*jetson*", NO_GROUP, "a run on the Jetson, never in the gate"),
+    ("api/tests/jobs/fake_ats.py", EVERY, "the fake ATS of every journey stack"),
+    ("api/tests/mail/*", frozenset({"mail"}), "the fake Google and its mailbox data"),
+    ("api/tests/ingestion/*", EVERY, "input data and streams read by journeys"),
+    ("api/tests/documents/fixtures/*", EVERY, "document input data read by journeys"),
     (
         "api/tests/*",
         NO_GROUP,
-        "a pytest file, the gate runs the suite in full, no image holds it",
+        "other pytest files, the gate runs the suite in full",
     ),
     ("browser/*", frozenset({"browser", "apply"}), "the browser service"),
     ("renderer/*", frozenset({"documents", "apply"}), "the PDF renderer"),
@@ -492,15 +496,140 @@ AREA_GROUPS: dict[str, frozenset[str] | str] = {
 }
 
 API_WIRING = frozenset({"app.main", "app.worker", "app.models"})
+# Kept in step with worker.REGISTRATION_MODULES by a drift test. These files install
+# callbacks/jobs in other modules, whose callers need not import the provider.
+API_REGISTRATIONS = frozenset({"agents", "engine", "freeze", "jobs", "writers"})
 WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
 SHARED = "<shared>"
 TS_TOKEN = re.compile(
-    r"\s+|//[^\n]*|/\*[\s\S]*?\*/|'(?:\\[\s\S]|[^'\\])*'|\"(?:\\[\s\S]|[^\"\\])*\"|`(?:\\[\s\S]|[^`\\])*`|[\w$]+|[^\s]"
+    # ECMAScript 12.3: LF, CR, LS and PS terminate a single-line comment.
+    # https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html#sec-line-terminators
+    r"\s+|//[^\n\r\u2028\u2029]*|/\*[\s\S]*?\*/|'(?:\\[\s\S]|[^'\\])*'|\"(?:\\[\s\S]|[^\"\\])*\"|`(?:\\[\s\S]|[^`\\])*`|[\w$]+|[^\s]"
 )
 
 
 class MappingError(ValueError):
     """Uncertain dependencies require every journey group."""
+
+
+def python_loader_calls(tree: ast.AST) -> dict[ast.Call, str]:
+    """Allow direct calls only. Escaped loader/module references can hide dependencies."""
+    module_loaders = {"importlib": "import_module", "builtins": "__import__"}
+    modules = {}
+    loaders = {"__import__": "__import__"}
+    reflective = {"__builtins__", "globals", "locals", "vars", "eval", "exec"}
+    nodes = list(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name.split(".")[0]
+                if module in module_loaders:
+                    if alias.name != module:
+                        raise MappingError("unsupported Python loader module")
+                    modules[alias.asname or module] = module_loaders[module]
+        elif isinstance(node, ast.ImportFrom) and node.module in module_loaders:
+            for alias in node.names:
+                if node.module == "builtins" and alias.name in reflective:
+                    reflective.add(alias.asname or alias.name)
+                if (
+                    alias.name == "*"
+                    or node.module == "importlib"
+                    and alias.name != "import_module"
+                ):
+                    raise MappingError("unsupported Python loader import")
+                if alias.name == module_loaders[node.module]:
+                    loaders[alias.asname or alias.name] = alias.name
+    calls = {}
+    for node in nodes:
+        loader = None
+        reference = node
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in reflective:
+                raise MappingError("reflective Python namespace or code access")
+            if node.id in modules:
+                reference = parents.get(node)
+                if (
+                    not isinstance(reference, ast.Attribute)
+                    or reference.attr != modules[node.id]
+                ):
+                    raise MappingError("indirect Python loader module")
+                loader = modules[node.id]
+            elif node.id in loaders:
+                loader = loaders[node.id]
+        elif isinstance(node, ast.Attribute) and node.attr in module_loaders.values():
+            if (
+                not isinstance(node.value, ast.Name)
+                or modules.get(node.value.id) != node.attr
+            ):
+                raise MappingError("unknown Python loader receiver")
+        if loader:
+            call = parents.get(reference)
+            if not isinstance(call, ast.Call) or call.func is not reference:
+                raise MappingError("indirect Python import loader")
+            calls[call] = loader
+    return calls
+
+
+def python_dynamic_targets(call: ast.Call, loader: str) -> list[str]:
+    # The two loaders have different signatures. Bind arguments before interpreting them;
+    # unknown keywords, unpacking and computed values cannot justify a narrower scope.
+    names = (
+        ("name", "package")
+        if loader == "import_module"
+        else ("name", "globals", "locals", "fromlist", "level")
+    )
+    if len(call.args) > len(names) or any(
+        isinstance(a, ast.Starred) for a in call.args
+    ):
+        raise MappingError("unsupported Python loader arguments")
+    args = dict(zip(names, call.args, strict=False))
+    for keyword in call.keywords:
+        if keyword.arg not in names or keyword.arg in args:
+            raise MappingError("unsupported Python loader arguments")
+        args[keyword.arg] = keyword.value
+
+    def literal(key, default):
+        value = args.get(key, ast.Constant(value=default))
+        if not isinstance(value, ast.Constant):
+            raise MappingError(f"computed Python import {key}")
+        return value.value
+
+    target = literal("name", None)
+    if not isinstance(target, str):
+        raise MappingError("computed Python import target")
+    if loader == "import_module":
+        package = literal("package", None)
+        if package is not None and not isinstance(package, str):
+            raise MappingError("unsupported Python import package")
+        if target.startswith("."):
+            target = importlib.util.resolve_name(target, package)
+        targets = [target]
+    else:
+        if (
+            literal("globals", None) is not None
+            or literal("locals", None) is not None
+            or literal("level", 0) != 0
+            or target.startswith(".")
+        ):
+            raise MappingError("unsupported __import__ context")
+        targets = [target]
+        fromlist = args.get("fromlist", ast.Tuple(elts=[]))
+        if not isinstance(fromlist, (ast.List, ast.Tuple)):
+            raise MappingError("computed Python import fromlist")
+        for item in fromlist.elts:
+            if (
+                not isinstance(item, ast.Constant)
+                or not isinstance(item.value, str)
+                or not item.value.isidentifier()
+            ):
+                raise MappingError("unsupported Python import fromlist")
+            # May be a submodule, or an attribute supplied by the package. Keeping both
+            # targets lets the graph reader resolve the known submodule when it exists.
+            targets.append(f"{target}.{item.value}")
+    if target.split(".")[0] in ("importlib", "builtins"):
+        raise MappingError("dynamically imported Python loader module")
+    return targets
 
 
 def source_files(root: Path, suffixes: tuple[str, ...]):
@@ -608,31 +737,7 @@ class Imports:
                 package = (
                     name if path.name == "__init__.py" else name.rpartition(".")[0]
                 )
-                loaders = {"__import__"}
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.ImportFrom) and node.module in (
-                        "importlib",
-                        "builtins",
-                    ):
-                        loaders |= {
-                            a.asname or a.name
-                            for a in node.names
-                            if a.name in ("import_module", "__import__")
-                        }
-                called = {
-                    id(node.func)
-                    for node in ast.walk(tree)
-                    if isinstance(node, ast.Call)
-                }
-                for node in ast.walk(tree):
-                    if id(node) not in called and (
-                        isinstance(node, ast.Name)
-                        and isinstance(node.ctx, ast.Load)
-                        and node.id in loaders
-                        or isinstance(node, ast.Attribute)
-                        and node.attr in ("import_module", "__import__")
-                    ):
-                        raise MappingError("indirect Python import loader")
+                loader_calls = python_loader_calls(tree)
                 for node in ast.walk(tree):
                     targets: list[str] = []
                     if isinstance(node, ast.Import):
@@ -655,45 +760,19 @@ class Imports:
                             else module
                             for a in node.names
                         ]
-                    elif isinstance(node, ast.Call) and (
-                        isinstance(node.func, ast.Name)
-                        and node.func.id in loaders
-                        or isinstance(node.func, ast.Attribute)
-                        and node.func.attr in ("import_module", "__import__")
-                    ):
-                        if (
-                            not node.args
-                            or not isinstance(node.args[0], ast.Constant)
-                            or not isinstance(node.args[0].value, str)
-                        ):
-                            raise MappingError("computed Python import target")
-                        target = node.args[0].value
-                        if target.startswith("."):
-                            package_arg = (
-                                node.args[1]
-                                if len(node.args) > 1
-                                else next(
-                                    (
-                                        k.value
-                                        for k in node.keywords
-                                        if k.arg == "package"
-                                    ),
-                                    None,
-                                )
-                            )
-                            if not isinstance(
-                                package_arg, ast.Constant
-                            ) or not isinstance(package_arg.value, str):
-                                raise MappingError("computed Python import package")
-                            target = importlib.util.resolve_name(
-                                target, package_arg.value
-                            )
-                        if (
-                            any(k.arg == "level" for k in node.keywords)
-                            or len(node.args) > 2
-                        ):
-                            raise MappingError("unsupported __import__ arguments")
-                        targets = [target]
+                    elif isinstance(node, ast.Call) and node in loader_calls:
+                        targets = python_dynamic_targets(node, loader_calls[node])
+                        # __import__ fromlist items can be attributes rather than modules.
+                        targets = (
+                            [
+                                target
+                                if target in modules or target in packages
+                                else targets[0]
+                                for target in targets
+                            ]
+                            if loader_calls[node] == "__import__"
+                            else targets
+                        )
                     for target in targets:
                         if not local(target):
                             continue
@@ -803,7 +882,14 @@ def journey_groups_for(
         module = ".".join(Path(path).with_suffix("").parts[1:]).removesuffix(
             ".__init__"
         )
+        if parts[3].removesuffix(".py") in API_REGISTRATIONS:
+            return EVERY, "a module that registers callbacks or jobs in other modules"
         users = importers(module, imports.api(), lambda name: name in API_WIRING)
+        if any(
+            len(user.split(".")) > 2 and user.split(".")[2] in API_REGISTRATIONS
+            for user in users
+        ):
+            return EVERY, "a consumer registers callbacks or jobs in other modules"
         return areas_groups({api_area(name, imports.root) for name in users} | {area})
     if path.startswith("web/src/"):
         if web_test_file(path):
