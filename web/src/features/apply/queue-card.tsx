@@ -103,6 +103,8 @@ export function QueueCard({
 
   // Set by a Reject or a Cancel that succeeded: the page takes the focus once the card is gone.
   const leaving = useRef(false);
+  const focusAfterApproval = useRef(false);
+  const approvalNextFocus = useRef<HTMLElement | null>(null);
   useEffect(
     () => () => {
       if (leaving.current) onLeave();
@@ -155,21 +157,18 @@ export function QueueCard({
       setNotice(null);
     },
     onSuccess: () => {
-      setConfirming(false);
-      refresh();
       const cards = Array.from(
         document.querySelectorAll<HTMLElement>("[data-queue-card-title]"),
       );
       const currentTitle = article.current?.querySelector<HTMLElement>(
         "[data-queue-card-title]",
       );
-      const next = currentTitle
-        ? cards[cards.indexOf(currentTitle) + 1]
-        : undefined;
-      window.setTimeout(() => {
-        if (next?.isConnected) next.focus();
-        else onLeave();
-      });
+      approvalNextFocus.current = currentTitle
+        ? (cards[cards.indexOf(currentTitle) + 1] ?? null)
+        : null;
+      setConfirming(false);
+      refresh();
+      focusAfterApproval.current = true;
     },
     onError: (error) => {
       setConfirming(false);
@@ -471,6 +470,15 @@ export function QueueCard({
           role={item.title}
           approval={approval}
           pending={approve.isPending}
+          onCloseAutoFocus={(event) => {
+            if (!focusAfterApproval.current) return;
+            focusAfterApproval.current = false;
+            event.preventDefault();
+            const next = approvalNextFocus.current;
+            approvalNextFocus.current = null;
+            if (next?.isConnected) next.focus();
+            else onLeave();
+          }}
           onConfirm={() => {
             approve.mutate(approval);
           }}
