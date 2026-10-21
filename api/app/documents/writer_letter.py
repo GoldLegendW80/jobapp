@@ -11,8 +11,9 @@ yet is answered, not an error) and `submit_letter`, which goes through D7's `sub
 letter, the one correction pass, then the removal by code).
 
 A letter is never shortened by a second pass: the render fits the font (D3) and a letter that
-still overflows is kept and shown. The input holds ids, the document's language, the template's
-soft limits (numbers) and the fake backend's `script`: never a text of the person or the posting.
+still overflows is kept and shown. The input holds ids, the document's language, the person's
+tone (a code), the template's soft limits (numbers) and the fake backend's `script`: never a text
+of the person or the posting.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ class LetterInput(BaseModel):
     generation_id: uuid.UUID = Field(strict=False)
     mode: Literal["posting"] = "posting"
     language: Literal["en", "fr"] = "en"
+    tone: Literal["plain", "formal", "warm"] = "plain"
     # The template's soft limits, in characters (rules.SoftLimits); null: no counter.
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
     token_budget: int = Field(ge=0)
@@ -71,7 +73,7 @@ class LetterWriter(definitions.AgentDefinition):
         text = (
             "Write the cover letter for this posting, from the person's profile and base CV, "
             "and from the CV already written for it when there is one. "
-            f"Language: {language}. {limits}"
+            f"Language: {language}. {writer_cv.tone_line(data)} {limits}"
         )
         if job_id is not None:
             text += f"\n\nJob id: {job_id}"

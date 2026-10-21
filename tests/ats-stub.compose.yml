@@ -15,7 +15,9 @@
 # for the api, the worker and caddy in compose.yml), service after service down the depends_on
 # chain. start_interval probes every second during start_period instead, so a scratch stack is
 # up as soon as it really is; after start_period the production intervals apply again. Here
-# only: compose.yml and the Jetson keep their values.
+# only: compose.yml and the Jetson keep their values. The worker gets 90 s (issue #476): under
+# gate load it took about 60 s before its first health record, and a failing probe inside
+# start_period does not count against its retries.
 x-fast-start: &fast-start
   start_period: 30s
   start_interval: 1s
@@ -38,7 +40,9 @@ services:
     depends_on:
       fakeats:
         condition: service_healthy
-    healthcheck: *fast-start
+    healthcheck:
+      <<: *fast-start
+      start_period: 90s
 
   caddy:
     healthcheck: *fast-start

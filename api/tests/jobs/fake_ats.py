@@ -21,6 +21,11 @@ Paths: /ashby/posting-api/job-board/{org}, /greenhouse/v1/boards/{org}/jobs,
   a utm parameter): the same posting by the app's duplicate rules
 - fake-security: one matching title that also matches a never_apply rule ("security")
 - fake-redirect: 302 to fake-ok on the same server; fake-redirect-away: 302 to another host
+- fake-pay (opportunities O3): a posting whose ATS states its pay and work mode (Ashby's
+  compensation and workplaceType, Lever's salaryRange and workplaceType; Greenhouse states
+  none), a freelance mission whose text states a daily rate, one that states no pay
+- fake-pay-bad (opportunities O3, review of PR #498): a posting whose ATS states a pay of NaN and
+  Infinity (json.dumps writes both), one permanent role whose only figure is a meal voucher
 - fake-b10: the posting that browser B10's journey also finds on its LinkedIn fixture
   (tests/browser_pages/b10/), the same Apply address: one row naming both sources
 - anything else: 404
@@ -49,8 +54,20 @@ def _day(offset: int = 0) -> str:
     return (date.today() - timedelta(days=offset)).isoformat()
 
 
-def postings(org: str) -> list[dict[str, str]]:
-    """Neutral postings: title, location, url, published (YYYY-MM-DD), text."""
+PAY_COMPENSATION = {
+    "compensationTierSummary": "€60K to €70K",
+    "summaryComponents": [
+        {"compensationType": "Salary", "interval": "1 YEAR", "currencyCode": "EUR",
+         "minValue": 60000, "maxValue": 70000},
+        {"compensationType": "EquityPercentage", "interval": "NONE", "currencyCode": None,
+         "minValue": 0.1, "maxValue": 0.2},
+    ],
+}  # fmt: skip
+
+
+def postings(org: str) -> list[dict[str, Any]]:
+    """Neutral postings: title, location, url, published (YYYY-MM-DD), text, and the fields one
+    ATS adds to its own shape (`ashby`, `lever`)."""
     base = f"https://jobs.example.org/{org}"
     if org in ("fake-ok", "fake-dup", "fake-429", "fake-503-once", "fake-redirect"):
         org_key = "fake-ok"
@@ -88,6 +105,37 @@ def postings(org: str) -> list[dict[str, str]]:
             {"title": "AI Engineer, Security Agents", "location": "Paris", "url": f"{base}/1",
              "published": _day(1), "text": "Agents."},
         ]  # fmt: skip
+    if org == "fake-pay":
+        return [
+            {"title": "AI Engineer, Pay Stated", "location": "Paris, France", "url": f"{base}/1",
+             "published": _day(1), "text": "Build agents with Python and LLM evaluation.",
+             "ashby": {"compensation": PAY_COMPENSATION, "workplaceType": "Hybrid"},
+             "lever": {"salaryRange": {"min": 50000, "max": 60000, "currency": "GBP",
+                                       "interval": "per-year-salary"},
+                       "workplaceType": "hybrid"}},
+            {"title": "GenAI Engineer, Freelance", "location": "Paris, Télétravail",
+             "url": f"{base}/2", "published": _day(1),
+             "text": "Mission freelance de 6 mois. TJM 600 € HT. Agents et Python.",
+             "lever": {"workplaceType": "unspecified"}},
+            {"title": "AI Engineer, Pay Not Stated", "location": "Paris", "url": f"{base}/3",
+             "published": _day(2), "text": "Competitive salary, selon profil. Agents."},
+        ]  # fmt: skip
+    if org == "fake-pay-bad":
+        nan, inf = float("nan"), float("inf")
+        return [
+            {"title": "AI Engineer, Pay Broken", "location": "Paris, France", "url": f"{base}/1",
+             "published": _day(1), "text": "Build agents with Python and LLM evaluation.",
+             "ashby": {"compensation": {"summaryComponents": [
+                 {"compensationType": "Salary", "interval": "1 YEAR", "currencyCode": "EUR",
+                  "minValue": nan, "maxValue": inf}]}, "workplaceType": "Hybrid"},
+             "lever": {"salaryRange": {"min": nan, "max": -inf, "currency": "EUR",
+                                       "interval": "per-year-salary"},
+                       "workplaceType": "on-site"}},
+            {"title": "AI Engineer, Meal Vouchers", "location": "Paris", "url": f"{base}/2",
+             "published": _day(1),
+             "text": "CDI. Tickets restaurant 9 € par jour. Agents et Python.",
+             "lever": {"workplaceType": "unspecified"}},
+        ]  # fmt: skip
     if org == "fake-b10":
         return [
             {"title": "AI Engineer, Agents", "location": "Paris, France", "url": f"{base}/1",
@@ -111,7 +159,7 @@ def body(ats: str, org: str) -> Any:
                 {"title": p["title"], "location": p["location"], "secondaryLocations": [],
                  "isRemote": "remote" in p["location"].lower(), "isListed": True,
                  "jobUrl": p["url"], "publishedAt": f"{p['published']}T08:00:00.000+00:00",
-                 "descriptionPlain": p["text"]}
+                 "descriptionPlain": p["text"], **p.get("ashby", {})}
                 for p in items
             ],
         }  # fmt: skip
@@ -130,7 +178,7 @@ def body(ats: str, org: str) -> Any:
         {"text": p["title"], "categories": {"location": p["location"]}, "hostedUrl": p["url"],
          "createdAt": int(datetime.fromisoformat(p["published"]).replace(hour=12, tzinfo=UTC)
                           .timestamp() * 1000),
-         "descriptionPlain": p["text"], "workplaceType": "onsite"}
+         "descriptionPlain": p["text"], "workplaceType": "onsite", **p.get("lever", {})}
         for p in items
     ]  # fmt: skip
 

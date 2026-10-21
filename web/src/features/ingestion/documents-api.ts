@@ -54,8 +54,14 @@ export const documentSchema = z.object({
 });
 export type IngestionDocument = z.infer<typeof documentSchema>;
 
-/** What adding a file or a text answers: the document, and whether it was already there. */
-export const storedSchema = documentSchema.extend({ duplicate: z.boolean() });
+/**
+ * What adding a file or a text answers: the document, whether it was already there, and the
+ * sentence saying why it was not replaced when the upload was meant to replace it.
+ */
+export const storedSchema = documentSchema.extend({
+  duplicate: z.boolean(),
+  refused: z.string().nullable().default(null),
+});
 export type StoredDocument = z.infer<typeof storedSchema>;
 
 export const limitsSchema = z.object({

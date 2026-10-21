@@ -99,6 +99,11 @@ let cvId: string;
 
 test.beforeAll(async ({ browser }) => {
   person = invented("d17");
+  // Else the worker's tick may open a generation on the posting's CV (fit 88), and the chat waits on it.
+  const { sections } = person.profile as {
+    sections: { search: Record<string, unknown> };
+  };
+  sections.search.documents = { auto: false };
   context = await newContext(browser);
   page = await context.newPage();
   errors = watchErrors(page);

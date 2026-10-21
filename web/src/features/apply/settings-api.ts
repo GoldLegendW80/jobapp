@@ -25,9 +25,13 @@ const settingsSchema = z.object({
   min_fit_chosen: z.boolean(),
   safety_ceiling: z.number().int(),
   hold_s: z.number().int(),
+  hold_min_s: z.number().int(),
   company_days: z.number().int(),
   show_postings_from: z.number().int().nullable(),
   write_documents_from: z.number().int().nullable(),
+  rehearsals: z.number().int(),
+  rehearsals_done: z.number().int(),
+  full_auto_since: z.string().nullable(),
 });
 export type ApplySettings = z.infer<typeof settingsSchema>;
 
@@ -81,10 +85,12 @@ export const getApplySettings = (
     validate: (body) => settingsSchema.parse(body),
   });
 
-/** The pause switch and "Apply automatically from"; a field left out is not changed. */
+/** The mode, the pause switch, "Apply automatically from" and the hold; a field left out is not changed. */
 export const saveApplySettings = (change: {
+  mode_after_like?: "review" | "full_auto";
   paused?: boolean;
   min_fit?: number;
+  hold_s?: number;
 }): Promise<ApplySettings> =>
   request("/apply/settings", {
     method: "PUT",

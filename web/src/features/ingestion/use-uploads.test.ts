@@ -45,11 +45,14 @@ beforeEach(() => {
   );
 });
 
+const NOT_REPLACED =
+  "This file is already among your documents and a run has read it, so this upload did not replace it. Delete that document first, then upload the file again.";
 const file = (name: string, size = 10) =>
   new File([new Uint8Array(size)], name);
 const stored = (overrides: Partial<StoredDocument> = {}): StoredDocument => ({
   ...fakeDocument(),
   duplicate: false,
+  refused: null,
   ...overrides,
 });
 /** Let the promise chain of a settled upload run. */
@@ -123,6 +126,25 @@ describe("UploadQueue", () => {
     expect(last().announcement).toBe(
       "copy.md is already in your documents, as original.md.",
     );
+    expect(kept).toHaveLength(1);
+  });
+
+  it("says why a file a run has read was not replaced", async () => {
+    const { created, last, kept } = queue();
+    created.add([file("cv.pdf")], LIMIT);
+    calls[0]?.resolve(
+      stored({ name: "cv.pdf", duplicate: true, refused: NOT_REPLACED }),
+    );
+    await settle();
+    expect(last().items).toEqual([
+      expect.objectContaining({
+        name: "cv.pdf",
+        state: "duplicate",
+        message: NOT_REPLACED,
+      }),
+    ]);
+    expect(last().announcement).toBe(`cv.pdf: ${NOT_REPLACED}`);
+    expect(last().announcement).not.toContain("already in your documents.");
     expect(kept).toHaveLength(1);
   });
 
@@ -281,6 +303,12 @@ describe("storedSentence", () => {
     expect(
       storedSentence("a.md", stored({ name: "b.md", duplicate: true })),
     ).toBe("a.md is already in your documents, as b.md.");
+    expect(
+      storedSentence(
+        "a.md",
+        stored({ name: "b.md", duplicate: true, refused: NOT_REPLACED }),
+      ),
+    ).toBe(`a.md: ${NOT_REPLACED}`);
     expect(storedSentence("a.md", stored({ secret_warning: true }))).toBe(
       "a.md added. It looks like it holds a password or a key: check it in the list below.",
     );
