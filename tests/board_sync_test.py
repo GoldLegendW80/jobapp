@@ -392,6 +392,35 @@ class LinkAndPlan(unittest.TestCase):
 
         self.assertEqual(spec_stage([], building={1}), "Building")  # claimed
         self.assertEqual(spec_stage([]), "Ready")  # the claim released
+
+    def test_a_claim_label_survives_repeated_syncs(self):
+        spec = issue(2, title="apply: the whole spec", labels=["spec-card"])
+        claimed = [issue(1, title="apply A9: apply myself", labels=["building"]), spec]
+        released = [issue(1, title="apply A9: apply myself"), spec]
+        task_card = [item("IT1", "Issue", 1, status="Ready", module="apply")]
+
+        def stages(issues, items):
+            rows, _ = bs.plan(issues, [], items, set(), set(), set())
+            return {r["number"]: r["stage"] for r in rows}
+
+        # Claimed: the first sync still sees the task card, the next one does not.
+        self.assertEqual(stages(claimed, task_card), {1: "Building", 2: "Building"})
+        self.assertEqual(stages(claimed, []), {1: "Building", 2: "Building"})
+        # Released (card.sh todo or done removes the label): Ready on every sync.
+        self.assertEqual(stages(released, []), {1: "Ready", 2: "Ready"})
+        self.assertEqual(stages(released, []), {1: "Ready", 2: "Ready"})
+
+    def test_spec_follows_verdicts_and_deploys(self):
+        issues = [
+            issue(1, title="apply A9: apply myself"),
+            issue(2, title="apply: the whole spec", labels=["spec-card"]),
+        ]
+        spec_items = [item("IT2", "Issue", 2)]
+
+        def spec_stage(prs, building=(), live=()):
+            rows, _ = bs.plan(issues, prs, spec_items, set(), set(building), set(live))
+            return next(r["stage"] for r in rows if r["number"] == 2)
+
         self.assertEqual(spec_stage([pr(10, closes=[1])]), "Building")  # in review
         self.assertEqual(spec_stage([pr(10, closes=[1], reviews=APPROVED)]), "Building")
         merged = [pr(10, "MERGED", closes=[1])]

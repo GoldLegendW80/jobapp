@@ -116,9 +116,10 @@ LANE_MODULE = {
     "lane:captain": "platform",
 }
 IN_FLIGHT = ("Building", "In review", "Fix & re-check", "Approved", "Gating")
-SPEC_LABEL = (
-    "spec-card"  # an issue that holds a whole spec: the only cards the board shows
-)
+# An issue that holds a whole spec: once one exists, the only cards the board shows.
+SPEC_LABEL = "spec-card"
+# A claim: `ops/card.sh <url> doing` sets it, todo and done remove it.
+CLAIM_LABEL = "building"
 CALL_SECONDS = 60  # one gh api graphql, gh run list or git call
 LOG_SECONDS = 60  # gh run view --log
 DEADLINE_SECONDS = (
@@ -210,7 +211,11 @@ def issue_stage(
         return "Needs you", None
     if "spec" in labels:
         return "Spec", None
-    if issue["number"] in building or prev_status in ("In Progress", "Building"):
+    if (
+        issue["number"] in building
+        or CLAIM_LABEL in labels
+        or prev_status in ("In Progress", "Building")
+    ):
         return "Building", None
     return "Ready", None
 
@@ -259,8 +264,8 @@ def plan(
             card[(c["__typename"], c["number"])] = it
 
     # With spec cards every other card is archived and the items query no longer returns it, so
-    # no stage or module may come from a card's stored fields: only GitHub facts and --building,
-    # and every sync of the same facts gives the same rows.
+    # no stage or module may come from a card's stored fields: only GitHub facts (the claim is
+    # the CLAIM_LABEL label) and --building, and every sync of the same facts gives the same rows.
     spec_mode = any(
         SPEC_LABEL in {label["name"] for label in i["labels"]["nodes"]} for i in issues
     )
