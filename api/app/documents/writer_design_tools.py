@@ -7,7 +7,8 @@ id: each reads the run's binding (`writer_design.bind_generation`).
   values code took from it, the families the template may name, whether a photo slot is
   allowed, and the counts of the base CV's sections. Never a text of the base CV.
 - `view_page(page)`: page 0 or 1 of the upload, one image block, its photos grey.
-- `view_render()`: page 1 of the base CV printed with the template accepted so far, one image.
+- `view_render()`: page 1 of the base CV printed with the template accepted so far, one image,
+  a grey box in place of the person's photo.
 - `submit_template(cv_html, letter_html, css)`: `design_capture.validate`, then
   `design_capture.decide`: accepted, refused with its problems (once), or the end.
 
@@ -145,8 +146,12 @@ async def view_render(scope: app_tools.Scope) -> bytes | tuple[str, bool]:
             document = store.get(db, scope.user_id, ids[0])
             if document is None:
                 return None
+            # The person's own photo never reaches the model: a grey one holds its place.
+            photo = design_check.grey_photo() if template.photo != "none" else None
             context = replace(
-                render_job.read_context(db, document, scope.clock()), template=template
+                render_job.read_context(db, document, scope.clock()),
+                template=template,
+                photo=photo,
             )
             language = document.language.value
         return render_job._builder(context, language, scope.clock().date())

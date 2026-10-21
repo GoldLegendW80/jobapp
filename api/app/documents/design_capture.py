@@ -12,8 +12,9 @@ a waiting one once its reason is gone (D10's tick). Its estimate and ceiling are
 never stored: for a PDF the sandbox's layout extraction (`design_pdf`) and its page render of the
 first DESIGN_PAGES pages (`pdf_render`), each image box the extraction found painted grey by the
 worker before any model sees the page; for a DOCX the styles (`design_docx`) and no page. The
-fonts are mapped by code (`font_map`, through `template_rules.from_pdf` or `from_docx`); the
-texts of the extraction (its runs, a DOCX's style names) go through ingestion's secret rules
+fonts are mapped by code (`font_map`, through `template_rules.from_pdf` or `from_docx`, and a
+DOCX's style, default and theme fonts to their bundled face); the texts of the extraction (its
+runs, a DOCX's style names, ids and `based_on`) go through ingestion's secret rules
 (`ingestion.secrets.scan`) one by one and two by two, and a text that matches is replaced by
 REDACTED before the model reads it.
 
@@ -163,13 +164,27 @@ def _pdf_layout(design: parser_client.DesignPdf) -> dict[str, Any]:
     return {"pages": design.pages, "scanned": design.scanned, "read": pages}
 
 
+def _face(name: object) -> str | None:
+    """A font named by the file, as the bundled face it maps to: never the file's own string."""
+    return font_map.face(name).css_name if isinstance(name, str) and name else None
+
+
 def _docx_layout(design: parser_client.DesignDocx) -> dict[str, Any]:
-    names = scrub([str(style.get("name") or "") for style in design.styles])
-    styles = [{**dict(s), "name": n} for s, n in zip(design.styles, names, strict=True)]
+    texts = {
+        key: scrub([str(style.get(key) or "") for style in design.styles])
+        for key in ("name", "id", "based_on")
+    }
+    styles = [
+        {**dict(s), **{key: texts[key][n] for key in texts}, "font": _face(s.get("font"))}
+        for n, s in enumerate(design.styles)
+    ]
     used = scrub([name for name, _ in design.paragraph_styles])
+    theme = dict(design.theme) if design.theme else None
+    if theme is not None:
+        theme.update({key: _face(theme.get(key)) for key in ("major", "minor")})
     return {
-        "defaults": dict(design.defaults),
-        "theme": dict(design.theme) if design.theme else None,
+        "defaults": {**dict(design.defaults), "font": _face(design.defaults.get("font"))},
+        "theme": theme,
         "styles": styles,
         "sections": [dict(s) for s in design.sections],
         "tables": design.tables,

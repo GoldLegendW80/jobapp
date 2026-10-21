@@ -30,7 +30,9 @@ from app.documents import (
     render_job,
     store,
     writer_base,
+    writer_design_tools,
 )
+from app.documents import photo as photos
 from app.documents import templates as template_system
 from app.documents.models import (
     BaseSource,
@@ -52,6 +54,8 @@ from app.ingestion.parser_client import (
     Shape,
     TextRun,
 )
+from app.profile import photo as profile_photo
+from app.profile import service as profile_service
 from tests.agents.conftest import API_KEY
 from tests.agents.g6_helpers import everything_stored
 from tests.documents.canary import find, marker
@@ -121,7 +125,8 @@ class Services:
         monkeypatch.setattr(parser_client, "read_design", read_design)
         monkeypatch.setattr(parser_client, "parse", parse)
         monkeypatch.setattr(design_check, "check_template", check_template)
-        monkeypatch.setattr(render_client, "render", FakeRenderer())
+        self.renderer = FakeRenderer()
+        monkeypatch.setattr(render_client, "render", self.renderer)
 
 
 def uploaded_base(who: Person, raw: bytes | None = PDF, mime: str = "application/pdf") -> uuid.UUID:
@@ -421,10 +426,21 @@ def test_the_canary_of_the_file_reaches_no_log_no_stored_event_and_no_template(
 ) -> None:
     planted = marker()
     Services(monkeypatch, design("Morgan Exampleton", f"Planted {planted}"))
+    answers: list[str] = []
+    read_design = writer_design_tools.read_design
+
+    async def recorded(scope: Any) -> tuple[str, bool]:
+        answer = await read_design(scope)
+        answers.append(answer[0])
+        return answer
+
+    monkeypatch.setattr(writer_design_tools, "read_design", recorded)
     caplog.set_level(logging.DEBUG)
     base = uploaded_base(who)
     generation = generation_row(who.factory, capture(who, base, "documents_design_valid"))
     assert generation.run_id is not None
+    assert answers
+    assert all(planted in answer for answer in answers)  # the model did read it
     (row,) = own_templates(who.factory, who.user)
     stored = everything_stored(who.factory, generation.run_id)
     assert planted not in stored
@@ -433,6 +449,56 @@ def test_the_canary_of_the_file_reaches_no_log_no_stored_event_and_no_template(
         logs=caplog.records,
         values=[row.css, row.manifest, [job["args"] for job in who.queue.jobs]],
     )
+
+
+def test_the_persons_photo_never_reaches_a_render_the_model_sees(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = Services(monkeypatch, design("Morgan Exampleton"))
+    out = io.BytesIO()
+    Image.new("RGB", (240, 240), (190, 30, 60)).save(out, format="PNG")
+    stored = profile_photo.normalize(out.getvalue())
+    with who.factory() as db:
+        profile_service.set_photo(db, who.user, stored, AT)
+        db.commit()
+    own = photos.embed(stored.data)
+    base = uploaded_base(who)
+    # the fidelity stream calls view_render on the accepted template, which prints the photo
+    generation = generation_row(who.factory, capture(who, base, "documents_design_fidelity"))
+    assert generation.status is GenerationStatus.done, generation.error
+    renders = services.renderer.calls
+    assert renders
+    assert all(own not in html for html in renders)
+    assert all(design_check.grey_photo() in html for html in renders)
+
+
+def test_the_docx_names_and_fonts_go_through_the_secret_rules() -> None:
+    key = "AKIA" + "QZ" * 8
+    style = dict.fromkeys(parser_client._STYLE_KEYS) | {
+        "id": f"Id{key}",
+        "name": "Heading 1",
+        "type": "paragraph",
+        "based_on": f"Base{key}",
+        "font": f"Font {key}",
+    }
+    docx = DesignDocx(
+        truncated=False,
+        notes=(),
+        theme={"major": f"Major {key}", "minor": "Arial", "colours": {}},
+        defaults={"font": f"Default {key}", "size": 22},
+        styles=(style,),
+        sections=(),
+        tables=0,
+        table_columns=0,
+        drawings=0,
+        paragraphs=1,
+        paragraph_styles=((f"Id{key}", 1),),
+        formats=({"style": f"Id{key}", "font": f"Run {key}", "chars": 4},),
+    )
+    layout = design_capture._docx_layout(docx)
+    assert key not in str(layout)
+    assert layout["styles"][0]["name"] == "Heading 1"
+    assert layout["theme"]["minor"] == "Arial"
 
 
 def test_decide_allows_one_repair_and_one_fidelity_pass() -> None:

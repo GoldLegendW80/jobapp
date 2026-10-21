@@ -5,12 +5,17 @@ of an upload", step 4; issue #220).
 what the browser paints. Whether every field is truly shown is judged here, on the page the
 renderer's own Chromium lays out (renderer/server.py, POST /check):
 
-- the canary page: `_base/sample.json`'s invented CV and letter ("Alex Example"), every text of
-  the content and of the profile led by a token of its own (`Q`, three letters, `Z`), so each
-  needle names one field; the contact lines, the periods and the letter's date as printed. A
-  grey photo when the template has a slot, so a photo laid over a text is seen too;
-- each kind at its loosest and its tightest step, laid out for print on an A4 wide page whose
-  root element the step's margin holds off the sides (`on_a4`), as `@page` does in print;
+- the canary pages, two content shapes (SHAPES) of `_base/sample.json`'s invented CV and letter
+  ("Alex Example"): the sample as it is, every list at two items or more, and `lone`, every
+  list at one item (one employer with one bullet, one school, one language, one skill group of
+  one item, one highlight, one competency, one paragraph) and every text at its hard limit, so
+  a box sized for the sample's texts, or a rule that only a lone item meets, shows. Every text
+  of the content and of the profile is led by a token of its own (`Q`, three letters, `Z`), so
+  each needle names one field; the contact lines, the periods and the letter's date as printed.
+  A grey photo when the template has a slot, so a photo laid over a text is seen too;
+- each kind and shape at its loosest and its tightest step, laid out for print on a page as wide
+  as an A4 page's text at the step's margin (`text_width`): `template_css` holds the template's
+  `@page` to `size: A4` and `margin: var(--margin)`, so this is the page box print uses;
 - for every glyph of every needle: it has a box (`hidden` otherwise), inside the A4 width and
   the measured height (`outside`), in a font of at least MIN_SIZE_PX (`small`), the element
   at its centre is the one that holds the text (`covered`: a box, a photo or a pseudo element
@@ -18,8 +23,13 @@ renderer's own Chromium lays out (renderer/server.py, POST /check):
   transparent by at least CONTRAST to one, on MIN_PIXELS device pixels at least (`contrast`: a
   colour too close to the painted background, a pseudo element of its own element over it,
   something half transparent above it). A needle with no occurrence is `unprinted`;
-- the tightest step must lay the CV and the letter out shorter than the loosest
+- the tightest step must lay the sample CV and letter out shorter than the loosest
   (`density_unread`), so the fit loop can tighten the template.
+
+Each page is its own call to the renderer, one page high or a little more: the renderer's memory
+cap (compose.yml, 256 MiB) bounds what one check can lay out (renderer/server.py,
+CHECK_MAX_HEIGHT). A renderer that cannot be reached, is busy or times out raises
+CheckUnavailableError: nothing is known of the template, and no repair is spent.
 
 Any problem refuses the template as a refusal of `template_rules` does: back to the model once,
 then `classic` is kept. A Problem names a file, a field path and a step, never a text.
@@ -66,8 +76,19 @@ _OFFSET = round(0.05 * 255)  # WCAG's 0.05, in the 8 bit scale of the luminance 
 Check = Callable[[str, tuple[str, ...], int, str], Awaitable[Checked]]
 
 
+SHAPES = ("sample", "lone")
+UNAVAILABLE = frozenset(("renderer_unavailable", "timeout"))
+# Words without a `q` or a `z`, so no filler holds a token.
+_FILLER = (
+    "reliable", "platform", "services", "operations", "release", "pipeline", "observable",
+    "runbook", "incident", "teams", "deployment", "engineering",
+)  # fmt: skip
+_TOKENED = 6  # a token and its space
+
+
 class CheckUnavailableError(Exception):
-    """The renderer could not be reached: nothing is known of the template."""
+    """The renderer could not be reached, was busy or timed out: nothing is known of the
+    template."""
 
 
 @dataclass(frozen=True)
@@ -107,10 +128,54 @@ def _sample() -> dict[str, Any]:
     return json.loads((templates.BASE / "sample.json").read_text(encoding="utf-8"))
 
 
+def filler(length: int) -> str:
+    """Words up to `length` characters, the token that leads them left out."""
+    words: list[str] = []
+    size = -1
+    for n in range(length):
+        word = _FILLER[n % len(_FILLER)]
+        if size + 1 + len(word) > length - _TOKENED:
+            break
+        words.append(word)
+        size += 1 + len(word)
+    return " ".join(words)
+
+
+def _lone(data: dict[str, Any]) -> None:
+    """`data` cut to one item per list, each text at its hard limit (module docstring)."""
+    profile = data["profile"]
+    identity = profile["identity"]
+    identity["languages"] = identity["languages"][:1]
+    identity["languages"][0].update(name=filler(c.LINE_MAX), level=filler(c.LINE_MAX))
+    for key in ("employers", "education"):
+        profile["experience"][key] = profile["experience"][key][:1]
+    employer = profile["experience"]["employers"][0]
+    school = profile["experience"]["education"][0]
+    employer.update({key: filler(c.LINE_MAX) for key in ("organisation", "title", "location")})
+    school.update({key: filler(c.LINE_MAX) for key in ("school", "degree", "location")})
+    cv, letter = data["cv"], data["letter"]
+    cv.update(
+        headline=filler(c.HEADLINE_MAX),
+        summary=filler(c.SUMMARY_MAX),
+        highlights=[filler(c.BULLET_MAX)],
+        competencies=[filler(c.TERM_MAX)],
+        skills=[{"label": filler(c.TERM_MAX), "items": [filler(c.TERM_MAX)]}],
+        experience=[{**cv["experience"][0], "bullets": [filler(c.BULLET_MAX)]}],
+    )
+    letter.update({key: filler(c.LINE_MAX) for key in ("recipient", "subject", "salutation")})
+    letter.update(
+        headline=filler(c.HEADLINE_MAX),
+        closing=filler(c.LINE_MAX),
+        paragraphs=[filler(c.PARAGRAPH_MAX)],
+    )
+
+
 @cache
-def canary(kind: str) -> Canary:
-    """The canary page of `kind` (module docstring)."""
+def canary(kind: str, shape: str = "sample") -> Canary:
+    """The canary page of `kind` in a content shape of SHAPES (module docstring)."""
     data = _sample()
+    if shape == "lone":
+        _lone(data)
     t = _Tokens()
     profile = data["profile"]
     identity = profile["identity"]
@@ -167,21 +232,17 @@ def canary(kind: str) -> Canary:
 
 
 @cache
-def _grey_photo() -> str:
+def grey_photo() -> str:
     image = Image.new("RGB", (300, 300), (128, 128, 128))
     out = io.BytesIO()
     image.save(out, format="PNG")
     return photos.embed(out.getvalue())
 
 
-A4_PX = round(A4_WIDTH_MM * CSS_PX_PER_MM)
-
-
-def on_a4(html: str, step: templates.Step) -> str:
-    """The page as the check lays it out: A4 wide, the root element held off the edges by the
-    step's margin, as `@page` holds it in print, so what reaches into the margin shows."""
-    margin = f"<style>html{{margin:{step.margin:g}mm!important}}</style>"
-    return html.replace("<head>", "<head>" + margin, 1)
+def text_width(step: templates.Step) -> int:
+    """The width of an A4 page's text at the step's margin, in CSS pixels: the page box print
+    lays the root element out in, so what reaches into the margin shows."""
+    return round((A4_WIDTH_MM - 2 * step.margin) * CSS_PX_PER_MM)
 
 
 def _linear(value: float) -> float:
@@ -209,7 +270,7 @@ def _open(png: bytes, size: tuple[int, int]) -> Image.Image:
 
 
 def problems_of(
-    checked: Checked, needles: tuple[tuple[str, str], ...], file: str, step: str
+    checked: Checked, needles: tuple[tuple[str, str], ...], file: str, where: str
 ) -> list[Problem]:
     """The fields of one check that the page does not truly show (module docstring)."""
     size = (checked.width * checked.scale, checked.shown * checked.scale)
@@ -226,7 +287,7 @@ def problems_of(
             if code:
                 found[(path, code)] = None
     return [
-        Problem("style.css" if code != "unprinted" else file, 0, code, f"{path} at the {step} step")
+        Problem("style.css" if code != "unprinted" else file, 0, code, f"{path} at {where}")
         for path, code in found
     ]
 
@@ -252,25 +313,31 @@ def _glyph(
 
 
 async def _one(
-    template: templates.Template, kind: str, step: templates.Step, label: str, check: Check
+    template: templates.Template,
+    kind: str,
+    shape: str,
+    step: templates.Step,
+    label: str,
+    check: Check,
 ) -> tuple[list[Problem], int]:
-    sample = canary(kind)
-    photo = _grey_photo() if template.photo != "none" else None
+    sample = canary(kind, shape)
+    photo = grey_photo() if template.photo != "none" else None
     html = templates.build_html(
         template, kind, sample.content, sample.view, "en", step, sample.rendered_on, photo=photo
     )
     texts = tuple(text for _, text in sample.needles)
     file = f"{kind}.html.j2"
+    where = f"the {label} step" + (", one item per list and long texts" if shape == "lone" else "")
     try:
-        checked = await check(on_a4(html, step), texts, A4_PX, "jc" + secrets.token_hex(8))
+        checked = await check(html, texts, text_width(step), "jc" + secrets.token_hex(8))
     except RenderError as error:
-        if error.code == "renderer_unavailable":
+        if error.code in UNAVAILABLE:
             raise CheckUnavailableError from None
-        return [Problem(file, 0, "render", f"the {label} step does not lay out")], 0
+        return [Problem(file, 0, "render", f"{where}: it does not lay out")], 0
     try:
-        found = await asyncio.to_thread(problems_of, checked, sample.needles, file, label)
+        found = await asyncio.to_thread(problems_of, checked, sample.needles, file, where)
     except (RenderError, OSError, Image.DecompressionBombError):
-        return [Problem(file, 0, "render", f"the {label} step does not lay out")], 0
+        return [Problem(file, 0, "render", f"{where}: it does not lay out")], 0
     return found, checked.height
 
 
@@ -281,9 +348,14 @@ async def check_template(template: templates.Template, check: Check | None = Non
     problems: list[Problem] = []
     for kind in templates.KINDS:
         steps = template.steps(kind)
-        loose, loose_height = await _one(template, kind, steps[0], "loosest", check)
-        tight, tight_height = await _one(template, kind, steps[-1], "tightest", check)
-        problems += loose + tight
+        heights: dict[str, int] = {}
+        for shape in SHAPES:
+            for step, label in ((steps[0], "loosest"), (steps[-1], "tightest")):
+                found, height = await _one(template, kind, shape, step, label, check)
+                problems += found
+                if shape == "sample":
+                    heights[label] = height
+        loose_height, tight_height = heights["loosest"], heights["tightest"]
         if loose_height and tight_height and tight_height >= loose_height:
             detail = f"{kind}: the tightest step is not shorter than the loosest"
             problems.append(Problem("style.css", 0, "density_unread", detail))

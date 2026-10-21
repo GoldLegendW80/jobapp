@@ -80,10 +80,15 @@ _PAGE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
 
 CHECK_SCALE = 2  # device pixels per CSS pixel of the screenshots
 CHECK_PAGE_HEIGHT = 1123  # an A4 page at 96 CSS pixels an inch
-CHECK_MAX_HEIGHT = 4 * CHECK_PAGE_HEIGHT  # what is laid out lower is outside the check
+# What is laid out lower is outside the check. Measured under the 256 MiB mem_limit (PR #518):
+# the screenshots of a page 1.3 A4 pages high peak at 226 MiB, of 1.75 pages at the limit.
+CHECK_MAX_HEIGHT = 3 * CHECK_PAGE_HEIGHT // 2
 CHECK_WIDTHS = (200, 1200)
 CHECK_NEEDLES = 400
 CHECK_NEEDLE = 2000
+CHECK_TEXT = (
+    16_000  # characters of all the needles together: the glyphs measured, and hidden
+)
 CHECK_FOUND = 8  # occurrences of one needle measured
 _NAME = re.compile(r"[a-z][a-z0-9]{7,39}")
 
@@ -155,13 +160,15 @@ HIDE_JS = """([name, needles]) => {
   style.textContent = `::highlight(${name}){color:transparent;-webkit-text-fill-color:transparent;text-shadow:none}`;
   document.head.append(style);
   const marked = new Highlight();
+  const counts = needles.map(() => 0);
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode;
     const data = node.data.toLowerCase();
     if (data.length !== node.data.length) continue;
-    for (const needle of needles.map((one) => one.toLowerCase())) {
-      for (let at = data.indexOf(needle); at >= 0; at = data.indexOf(needle, at + 1)) {
+    for (const [n, needle] of needles.map((one) => one.toLowerCase()).entries()) {
+      for (let at = data.indexOf(needle); at >= 0 && counts[n] < FOUND_MAX; at = data.indexOf(needle, at + 1)) {
+        counts[n] += 1;
         const range = document.createRange();
         range.setStart(node, at);
         range.setEnd(node, at + needle.length);
@@ -170,7 +177,7 @@ HIDE_JS = """([name, needles]) => {
     }
   }
   CSS.highlights.set(name, marked);
-}"""
+}""".replace("FOUND_MAX", str(CHECK_FOUND))
 
 
 class RenderTimeout(Exception):
@@ -365,6 +372,8 @@ def check_asked(body: bytes) -> CheckAsked:
     if not isinstance(needles, list) or not 1 <= len(needles) <= CHECK_NEEDLES:
         raise HttpError(400)
     if not all(isinstance(n, str) and 1 <= len(n) <= CHECK_NEEDLE for n in needles):
+        raise HttpError(400)
+    if sum(map(len, needles)) > CHECK_TEXT:
         raise HttpError(400)
     return CheckAsked(html, tuple(needles), width, name)
 
