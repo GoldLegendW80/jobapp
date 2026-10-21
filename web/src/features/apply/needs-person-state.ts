@@ -31,7 +31,7 @@ export function needOf(application: Application): Need {
     case "captcha":
       return {
         title: "A captcha needs you",
-        what: "Take over in the live view, solve the captcha, then give back. The assistant goes on by itself. If you do not come within 30 minutes, the application waits here.",
+        what: "Take over in the live view, solve the captcha, then give back. The assistant goes on by itself. If you do not come in time, the application waits here.",
       };
     case "email_code":
       return {
