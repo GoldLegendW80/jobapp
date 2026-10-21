@@ -270,9 +270,7 @@ _HISTORY = re.compile(
     r"|\b(?:returning|return|back|going back|went back) to (?:work|the workforce)\b"
     r"|\bcareer (?:break|change|switch|pause)\b|\bsabbatical\b|\btime off\b|\breconversion\b"
 )
-# The person's own current or previous job, in a question of motivation ("Why do you want to exit
-# your last role?", "What attracts you away from your current company?"): the reason to leave it
-# is not in the profile. Outside such a question it is experience ("Describe your current role").
+# The person's own current or last job: history inside a question of motivation only.
 _OWN_JOB = re.compile(
     r"\b(?:your|votre|ihre?[mnrs]?|deine?[mnrs]?|su|tu) (?:\w+ )?(?:last|current|previous|former"
     r"|present|old|prior|existing|today'?s|actuel\w*|ancien\w*|dernier|derniere|precedent\w*"
@@ -405,11 +403,7 @@ _OPEN = re.compile(
     """,
     re.VERBOSE,
 )
-# The topic allowlist (`_on_topic`), read in two parts. A subject: what the person did, knows or
-# wants (a project, experience, skills, motivation, the field). An employer word (the company,
-# the role, the team, joining, working here) puts a question on topic only inside a question of
-# motivation (`_MOTIVATION`: why, what attracts you, what you would bring): "Why do you want to
-# join us?" is asked, "How soon could you join?" and "Which office would you join?" are not.
+# The topic allowlist (`_on_topic`): a subject, or an employer word in a question of motivation.
 _SUBJECT = re.compile(
     r"\b(?:motiv\w*|interest\w*|excit\w*|passion\w*|attract\w*|projects?|experience|skill\w*"
     r"|strength\w*|achiev\w*|proud|challenge\w*|example|leadership|yourself|contribut\w*|goals?"
@@ -437,9 +431,7 @@ _MOTIVATION = re.compile(
     r"|\bqu'est-ce qui\b|\ben quoi\b|\bwas (?:reizt|motiviert|begeistert|interessiert)\b"
     r"|\bque (?:te|le) (?:atrae|motiva|interesa)\b"
 )
-# "Why <Company>?": a short "why" that is not a verb ("Why Example Robotics?"), the name in group
-# 1. The run knows the company only at the judge (`_names_the_company`); here a place or a time
-# is refused ("Why Berlin?", "Why now?").
+# "Why <Company>?": a short why that is not a verb, the name in group 1 (`_named_only`).
 _WHY_NAME = re.compile(
     r"^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
     r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)(\w+(?:\s+\w+){0,2})\W*$"
@@ -521,11 +513,7 @@ _PERSONAL_STATEMENT = re.compile(
 )
 
 
-# A typed statement of the person's practical situation: when they can start or join, a notice,
-# where they live or are based, a move, remote, hybrid or on site work, travel, a time zone, other
-# offers or interviews. The model never reads the profile's answers on these (`ANSWER_FIELDS`), so
-# such a value is invented. A step of a career ("I joined Example Labs in 2019", "I led a remote
-# monitoring project") is not one: a start needs a time to come, a place needs a first person.
+# A typed practicality (module docstring): a start needs a time to come, a place a first person.
 _RELATIVE_TIME = (
     r"(?:immediately|right away|straight away|at once|asap|as soon as|tomorrow"
     r"|next (?:week|month)|(?:in|within) (?:\d+|a|an|one|two|three|four|six|a few|several)"
@@ -581,8 +569,7 @@ def fold(text: str) -> str:
     return answers.fold(text)
 
 
-# What a reader does not see, dropped before reading: format characters (a zero width space, a
-# soft hyphen), controls, and the marks drawn on a letter (accents, a combining overlay).
+# What a reader does not see: format characters, controls, and the marks drawn on a letter.
 _UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
 
 

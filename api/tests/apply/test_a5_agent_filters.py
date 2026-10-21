@@ -343,6 +343,7 @@ def test_an_employer_word_alone_puts_no_label_on_topic(label: str) -> None:
         ("Why would it be nice to join us?", None),
         ("Why Do You Want To Join Us?", None),
         ("Tell us about a project you led in Paris", None),  # experience, not a motivation
+        ("Why do you want to join our US team?", None),  # declared: "US" read as the pronoun
     ],
 )
 def test_a_capitalised_place_in_a_question_of_motivation_is_practical(

@@ -616,7 +616,8 @@ def _judge(question: agent.Question, value: str | None, source: str = "facts") -
 
 
 TEXT = agent.Question("q", "Tell us about a project", "text")
-CHOICE = agent.Question("c", "Which team?", "select", ("Ops", "Research"))
+# "Which team?" alone is the person's since issue #317 (an employer word outside a motivation)
+CHOICE = agent.Question("c", "Which team interests you?", "select", ("Ops", "Research"))
 YES_NO = agent.Question("y", "Do you enjoy puzzles?", "yes_no")
 YES_NO_SELECT = agent.Question("s", "Kubernetes in production", "select", ("Yes", "No"))
 CLEARANCE = agent.Question("k", "Security clearance level", "text")
