@@ -1,4 +1,10 @@
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import {
   CSRF,
@@ -35,8 +41,14 @@ const PASSWORD = "Starter-search-2026!";
 const HELD =
   "Save or undo your changes to the search first: the list adds to your saved search.";
 const shotsAt = makeShots("opportunities-o5c", "o5c");
-async function shots(page: Page, name: string) {
-  await shotsAt(page, name, false);
+/** Viewport shots (the tab is long), each with `at` scrolled to the top under the navigation. */
+async function shots(page: Page, name: string, at: Locator = card(page)) {
+  await shotsAt(page, name, false, async () => {
+    await at.evaluate((el) => {
+      el.scrollIntoView({ block: "start" });
+      window.scrollBy(0, -72);
+    });
+  });
   await page.setViewportSize({ width: 375, height: 740 });
   await page.emulateMedia({ colorScheme: "light" });
 }
@@ -217,6 +229,11 @@ test("S removes Google, adds one board, and a save right after keeps it", async 
   ]);
   await noDash(pageS);
   await shots(pageS, "search-starter-added");
+  await shots(
+    pageS,
+    "search-starter-added-boards",
+    pageS.getByRole("heading", { name: "Company boards" }),
+  );
 });
 
 test("after a reload the list is closed, the board added, Google never back; Add all adds the rest", async () => {
