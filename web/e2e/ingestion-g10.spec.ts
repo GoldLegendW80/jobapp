@@ -240,16 +240,16 @@ async function until(
 }
 
 // Continue carries the figure the page showed (`tokens.continue_adds`) as `adds`: the engine
-// applies that figure or nothing. The other actions take no body and ignore one.
+// applies that figure or nothing. Cancel and Resume are sent with no body, as the page does.
 const act = (
   id: string,
   action: string,
   as: BrowserContext = context,
-  adds = 1,
+  adds?: number,
 ) =>
   as.request.post(`${RUNS}/${id}/${action}`, {
     headers: CSRF,
-    data: { adds },
+    ...(adds === undefined ? {} : { data: { adds } }),
   });
 
 test("the fixtures are the ones the recorded streams are named after", () => {
@@ -549,7 +549,11 @@ test("another user sees none of these runs and can act on none", async ({
     for (const id of runs) {
       expect((await other.request.get(`${RUNS}/${id}`)).status()).toBe(404);
       for (const action of ["cancel", "resume", "continue"])
-        expect((await act(id, action, other)).status()).toBe(404);
+        expect(
+          (
+            await act(id, action, other, action === "continue" ? 1 : undefined)
+          ).status(),
+        ).toBe(404);
     }
   } finally {
     await other.close();

@@ -366,6 +366,20 @@ done < <(grep '^up ' "$STUB_CALLS")
 grep -q 'tests/ats-forms-stub.compose.yml' "$STUB_CALLS" || fail "the apply stack did not include the fake forms server"
 ok "the retry of the apply stack takes a new port for the fake forms server too"
 
+# The opportunities group publishes the same fake forms server, so its retry renews that port too.
+sed -e 's/journeys-apply/journeys-opportunities/' -e 's/pick_journey_ports apply/pick_journey_ports opportunities/' \
+  -e 's/s_journey apply/s_journey opportunities/' "$WORK/ports-apply.sh" >"$WORK/ports-opportunities.sh"
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports-opportunities.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+out_has "journeys-opportunities     PASS"
+[[ "$(ups)" == 2 ]] || fail "opportunities, one failed start: $(ups) starts, expected 2"
+[[ "$(grep '^up ' "$STUB_CALLS" | awk '{print $3}' | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the retry of the opportunities stack kept the port of the fake forms server"
+while read -r _ _ stub url; do
+  [[ "$url" == "http://127.0.0.1:$stub" ]] || fail "the address of the fake forms server ($url) does not follow its port ($stub)"
+done < <(grep '^up ' "$STUB_CALLS")
+grep -q 'tests/ats-forms-stub.compose.yml' "$STUB_CALLS" || fail "the opportunities stack did not include the fake forms server"
+ok "the retry of the opportunities stack takes a new port for the fake forms server too"
+
 # The browser group starts the stack's browser (profile browser) and the pages it opens.
 cat >"$WORK/ports-browser.sh" <<'EOF'
 docker() {

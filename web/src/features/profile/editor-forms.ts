@@ -11,10 +11,16 @@ import { z } from "zod";
 
 import {
   ATS,
+  COMPANY_TYPES,
   CONTRACT_TYPES,
+  CURRENCIES,
+  INDUSTRIES_MAX,
+  PAY_MAX,
   REMOTE_STANCES,
+  SENIORITIES,
   type Board,
   BROWSER_KINDS,
+  type PayRange,
   type BrowserSource,
   type Category,
   type Facts,
@@ -305,6 +311,51 @@ const CEILING = /^\d{1,3}$/;
 export const DAILY_CEILING_MAX = 500;
 export const DAILY_CEILING_PROBLEM = `The safety ceiling is a whole number of postings a day, from 1 to ${DAILY_CEILING_MAX}.`;
 
+// --- the pay sought (O4) ----------------------------------------------------------------------
+
+const WHOLE = /^\d{1,8}$/;
+const PAY_PROBLEM = `Enter a whole number from 0 to ${PAY_MAX.toLocaleString("en")}.`;
+
+/** A pay as typed: both figures empty means none; else whole numbers, min at most max. */
+const payFormSchema = z
+  .object({ min: z.string(), max: z.string(), currency: z.string() })
+  .superRefine((pay, ctx) => {
+    const min = pay.min.trim();
+    const max = pay.max.trim();
+    if (min === "" && max === "") return;
+    const ok = (v: string) => WHOLE.test(v) && Number(v) <= PAY_MAX;
+    if (!ok(min))
+      ctx.addIssue({ code: "custom", message: PAY_PROBLEM, path: ["min"] });
+    if (!ok(max))
+      ctx.addIssue({ code: "custom", message: PAY_PROBLEM, path: ["max"] });
+    if (ok(min) && ok(max) && Number(min) > Number(max))
+      ctx.addIssue({
+        code: "custom",
+        message: "The maximum is below the minimum.",
+        path: ["max"],
+      });
+    if (!(CURRENCIES as readonly string[]).includes(pay.currency))
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a currency.",
+        path: ["currency"],
+      });
+  });
+export type PayForm = z.infer<typeof payFormSchema>;
+
+const toPayForm = (pay: PayRange | null): PayForm =>
+  pay === null
+    ? { min: "", max: "", currency: "EUR" }
+    : { min: String(pay.min), max: String(pay.max), currency: pay.currency };
+const fromPayForm = (pay: PayForm): PayRange | null =>
+  pay.min.trim() === "" && pay.max.trim() === ""
+    ? null
+    : {
+        min: Number(pay.min.trim()),
+        max: Number(pay.max.trim()),
+        currency: pay.currency,
+      };
+
 export const searchSchema = z
   .object({
     title_include: termListSchema,
@@ -354,6 +405,20 @@ export const searchSchema = z
           DAILY_CEILING_PROBLEM,
         ),
     }),
+    // O4: what the person aims for. A bonus to the fit, never a filter; the pay changes no score.
+    seniority: z.array(z.enum(SENIORITIES)),
+    industries: z
+      .object(termListShape)
+      .superRefine(checkTerms)
+      .refine((list) => list.terms.length <= INDUSTRIES_MAX, {
+        message: `Keep at most ${INDUSTRIES_MAX} industries.`,
+        path: ["terms"],
+      }),
+    company_types: z.array(z.enum(COMPANY_TYPES)),
+    compensation: z.object({
+      salary: payFormSchema,
+      daily_rate: payFormSchema,
+    }),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -402,6 +467,13 @@ export const toSearchForm = (search: Search): SearchForm => ({
     ...search.documents,
     daily_ceiling: String(search.documents.daily_ceiling),
   },
+  seniority: SENIORITIES.filter((s) => search.seniority.includes(s)),
+  industries: toTermList(search.industries),
+  company_types: COMPANY_TYPES.filter((c) => search.company_types.includes(c)),
+  compensation: {
+    salary: toPayForm(search.compensation.salary),
+    daily_rate: toPayForm(search.compensation.daily_rate),
+  },
 });
 
 export const fromSearchForm = (values: SearchForm): Search => ({
@@ -441,5 +513,12 @@ export const fromSearchForm = (values: SearchForm): Search => ({
   documents: {
     ...values.documents,
     daily_ceiling: Number(values.documents.daily_ceiling.trim()),
+  },
+  seniority: SENIORITIES.filter((s) => values.seniority.includes(s)),
+  industries: fromTermList(values.industries),
+  company_types: COMPANY_TYPES.filter((c) => values.company_types.includes(c)),
+  compensation: {
+    salary: fromPayForm(values.compensation.salary),
+    daily_rate: fromPayForm(values.compensation.daily_rate),
   },
 });

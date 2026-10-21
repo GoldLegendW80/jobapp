@@ -849,7 +849,8 @@ journey_play() ( # journey_play <group> <Playwright arguments>
 # Starts a stack on the port picked for its group. The port is bound once more just before the
 # start; when the start still fails on a port (another program took it in between), this stack,
 # and only this one, is taken down and started again on another port (the mail stack also on
-# another one for its fake Google, the apply stack also on another one for its fake forms server), three starts at most.
+# another one for its fake Google, the apply stack and the opportunities stack also on another one for its fake forms
+# server), three starts at most.
 # A start that fails on "Pool overlaps" (a network left by a check that died) is taken down and
 # started again on another network slot, within the same three starts: the bad slot stays claimed,
 # and `slot`, s_journey's local, names the new one so that s_journey frees that one.
@@ -888,7 +889,7 @@ stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or o
       GMAIL_STUB_PORT="$(claim_port)" || return 1
       export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
     fi
-    if [[ "$group" == apply ]]; then # so has the fake ATS forms server
+    if [[ "$group" == apply || "$group" == opportunities ]]; then # so has the fake ATS forms server
       ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
       export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     fi
@@ -931,6 +932,13 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
     # The stack's own browser, and the static pages it opens (never a real site).
     files+=(-f tests/browser-pages.compose.yml)
     export COMPOSE_PROFILES=browser
+    ;;
+  opportunities)
+    # The fake ATS forms server the deck's postings point at (never a real job site), published
+    # on a claimed loopback port as for apply; no browser: a Like only queues its application.
+    ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
+    export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
+    files+=(-f tests/ats-forms-stub.compose.yml)
     ;;
   esac
   specs="$(journey_specs "$part")"

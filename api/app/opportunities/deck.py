@@ -26,7 +26,9 @@ and the source (`ashby` matches every `ashby:<org>` board, `ashby:mistral` that 
 
 **The card.** Id, title, company, location, contract type, source and address, fit, found_on,
 the match reason (`match_reason`: up to three competencies the posting asks that are not gaps,
-and the first gap), and `pay` and `work_mode`, None until O3 lands them.
+the first gap, and what of the person's seniority, industries and company types the posting
+matches, the words of the score's bonus, scoring.bonus, read against the profile as it is
+now), and `pay` and `work_mode`, None until O3 lands them.
 
 The never apply decision runs in Python over the light columns of every candidate (id, company,
 title, fit, found_on, whether the sweep skipped it for a rule, and in Full auto the first
@@ -45,11 +47,11 @@ from datetime import date
 from typing import Literal
 
 import sqlalchemy as sa
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from app.apply import caps, guardrails
 from app.apply.models import Application, Mode, State
-from app.jobs import sweep
+from app.jobs import scoring, sweep
 from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus
 from app.jobs.sweep import NeverApplyRule
 from app.profile.schemas import SearchSection
@@ -84,6 +86,7 @@ class Reason:
     matches: tuple[str, ...]
     gap: str | None
     text: str | None
+    also: tuple[str, ...] = ()  # what earned the score's bonus
 
 
 @dataclass(frozen=True)
@@ -129,10 +132,13 @@ def decode_cursor(text: str) -> SortKey:
         raise InvalidCursorError("damaged cursor") from exc
 
 
-def match_reason(competencies: Sequence[str], gaps: Sequence[str]) -> Reason:
+def match_reason(
+    competencies: Sequence[str], gaps: Sequence[str], also: Sequence[str] = ()
+) -> Reason:
     """Up to MATCHES_SHOWN competencies the posting asks that are not gaps, in the stored order,
-    and the first gap: "Matches: Python, LLM evaluation, FastAPI. Gap: Kubernetes.". A part with
-    nothing to say is left out; with neither, no text."""
+    the first gap, and what earned the bonus: "Matches: Python, LLM evaluation, FastAPI. Gap:
+    Kubernetes. Also fits: senior, fintech, startup.". A part with nothing to say is left out;
+    with none, no text."""
     gap_set = set(gaps)
     matches = tuple(dict.fromkeys(c for c in competencies if c and c not in gap_set))
     shown = matches[:MATCHES_SHOWN]
@@ -142,7 +148,10 @@ def match_reason(competencies: Sequence[str], gaps: Sequence[str]) -> Reason:
         parts.append(f"Matches: {', '.join(shown)}.")
     if gap is not None:
         parts.append(f"Gap: {gap}.")
-    return Reason(matches=shown, gap=gap, text=" ".join(parts) or None)
+    extra = tuple(dict.fromkeys(a for a in also if a))
+    if extra:
+        parts.append(f"Also fits: {', '.join(extra)}.")
+    return Reason(matches=shown, gap=gap, text=" ".join(parts) or None, also=extra)
 
 
 def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) -> sa.Select:
@@ -191,15 +200,25 @@ def _excluded(row: sa.Row, rules: Sequence[NeverApplyRule], mode: Mode) -> bool:
     return guardrails.never_apply(row, rules, swept=row.swept, mode=mode) is not None
 
 
-def _search(db: Session, user_id: uuid.UUID) -> tuple[int, list[NeverApplyRule] | None]:
-    """The threshold and the never apply rules; rules None when the section cannot be read."""
+def _search(
+    db: Session, user_id: uuid.UUID
+) -> tuple[int, list[NeverApplyRule] | None, SearchSection | None]:
+    """The threshold, the never apply rules and the section; rules None when the section cannot
+    be read."""
     try:
         search = sweep.load_search(db, user_id)
     except sweep.InvalidSearchError:
-        return DEFAULT_MIN_FIT, None
+        return DEFAULT_MIN_FIT, None, None
     if search is None:
-        return DEFAULT_MIN_FIT, []
-    return search.min_fit, sweep.never_apply_rules(search)
+        return DEFAULT_MIN_FIT, [], None
+    return search.min_fit, sweep.never_apply_rules(search), search
+
+
+def _also(posting: Job, search: SearchSection | None) -> tuple[str, ...]:
+    """The words of the score's bonus this posting earns from the person's search section."""
+    if search is None:
+        return ()
+    return scoring.bonus(posting.posting_text or "", posting.title, search).matched
 
 
 def deck(
@@ -213,7 +232,7 @@ def deck(
     """One page of the person's deck. Raises InvalidCursorError for a cursor it did not write."""
     after = decode_cursor(cursor) if cursor else None
     limit = max(1, min(limit, LIMIT_MAX))
-    min_fit, rules = _search(db, user_id)
+    min_fit, rules, search = _search(db, user_id)
     mode = Mode(caps.settings_of(db, user_id).mode_after_like.value)
     if rules is None:
         return Deck([], None, 0, mode.value, min_fit, rules_unreadable=True)
@@ -231,11 +250,16 @@ def deck(
     postings = {
         job.id: job
         for job in db.execute(
-            sa.select(Job).where(Job.user_id == user_id, Job.id.in_(ids))
+            sa.select(Job)
+            .where(Job.user_id == user_id, Job.id.in_(ids))
+            .options(undefer(Job.posting_text))
         ).scalars()
     }
     cards = [
-        Card(postings[i], match_reason(postings[i].competencies, postings[i].gaps))
+        Card(
+            postings[i],
+            match_reason(postings[i].competencies, postings[i].gaps, _also(postings[i], search)),
+        )
         for i in ids
         if i in postings
     ]
