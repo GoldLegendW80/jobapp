@@ -8,6 +8,11 @@ in the job folder that holds this repository (it is not part of the repository).
 
 1. A task of `tasks/todo.md` or of a module's `tasks/<module>/todo.md` gets its own branch from `main`, named `<module>/<task-id>-<slug>`,
    for example `jobs/j4-rescore`, `platform/7-ci` or `profile/p5-import-preview`.
+   The agent that starts the task puts its card in Building with
+   `ops/card.sh <issue url> doing <module> now`. Every other move on the board (one column per
+   step: Needs you, Paused, Blocked (kept in the field, no card is put there), Spec, Ready, Building, In review, Fix & re-check, Approved,
+   Gating, Merged, Live, Dropped, Epic) is made by `ops/board-sync.py` from GitHub facts, never
+   by hand (docs/agents/orchestration.md, The board).
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat(jobs): ...`,
    `fix(identity): ...`, `ci: ...`, `docs: ...`) and end with the agent's attribution line:
 
@@ -154,8 +159,11 @@ in the job folder that holds this repository (it is not part of the repository).
    of the batch during the ship stops the run before anything is merged (`SHIP: FAIL the head of
    #n moved while shipping`), so the next run selects it again once it is approved again.
    It merges only when main and every head are still what the PASS record lists (`gh pr merge
-   --repo <owner/repo> --match-head-commit`), and moves the issues the merged pull requests
-   close to Done on the board right after the merges. Then it pulls the main checkout (which
+   --repo <owner/repo> --match-head-commit`), and keeps the board current with
+   `ops/board-sync.py --apply` at the start of the gate (the batch shows as Gating), right after
+   the merges and after the deploy, plus once on the way out of a run that stopped before the
+   merges, so its batch leaves Gating (each sync is killed after `SHIP_SYNC_SECONDS`, 300 by
+   default; a failed or killed sync prints one line, never fails the ship). Then it pulls the main checkout (which
    must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
    Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
    `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,
