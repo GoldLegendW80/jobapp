@@ -8,14 +8,21 @@ pnpm --dir web run typecheck && pnpm --dir web run lint                  clean
 python3 .github/scripts/ci_plan_test.py                                  passed
 python3 .github/scripts/e2e_groups.py                                    29 specs in CI, 6 excluded, 13 by a local check group
 
-A whole Lever fill on the modelled form (a8_support.lever_form, the fields of tests/ats_forms/a8/lever.js):
+A whole Lever fill on the modelled form (a8_support.lever_form, the fields of tests/ats_forms/a8/lever.js),
+as measured on 2026-10-15 (49 and 53 tool calls since issue #338, below):
   parse shown at once:      47 tool calls (33 snapshots, 1 upload, 12 typings, 1 select)
   parse after 3 reads:      51 tool calls (35 snapshots, 2 waits of 0.5 s)
   filled 10, left 3 (current company, how they heard of the job, gender)
 
-Without the one line change of base.py (a value read back up to 10,000 characters instead of 500),
-test_the_letter_goes_into_additional_information and
-test_lever_is_filled_approved_and_submitted_once_through_the_gate fail: the letter never reads back.
+The change of base.py, as it stands since round 2 of the pull request: the text of a value role
+(textbox, searchbox, spinbutton, combobox: VALUE_ROLES) is kept up to TEXT_MAX (10,000 characters,
+what the tool layer types at most), every other node's text and a group's label are cut at
+NAME_MAX (500). Rechecked on 2026-10-21 (issue #338) by reverting each half:
+- every text cut at 500: 8 tests of test_a8_lever.py fail, among them
+  test_the_letter_goes_into_additional_information and
+  test_lever_is_filled_approved_and_submitted_once_through_the_gate (the letter never reads back);
+- every text kept to 10,000 and the label not cut: 9 fail, among them both rows of
+  test_a_label_read_from_long_paragraphs_is_cut_stored_and_approved (the fill ends failed).
 
 The journey apply-a8.spec.ts was not run from this machine: it cannot build the stack's images (TLS
 interception breaks the package downloads inside the image builds). No screenshot yet.
