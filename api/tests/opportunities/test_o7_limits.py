@@ -19,6 +19,7 @@ from xml.sax.saxutils import escape
 
 import httpx
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
@@ -500,3 +501,210 @@ def test_a_test_stack_without_the_fake_server_reads_no_feed(
     for env, stub_url in (("development", None), ("test", "http://feedsstub:8098/ok")):
         other = Settings(database_url=migrated_url, app_env=env, feeds_stub_base_url=stub_url)  # type: ignore[call-arg]
         assert sources.runner_for(other).client_factory().refuse_reads is False
+
+
+# --- a hostile character reference, round 3 of PR #505 --------------------------------------------
+
+LONG_DECIMAL = "&#" + "1" * 5_000
+LONG_HEX = "&#x" + "a" * 5_000
+
+
+@pytest.mark.parametrize(
+    "hostile", [LONG_DECIMAL, LONG_DECIMAL + ";", LONG_HEX, "&#" + "1" * 4_301]
+)
+def test_a_long_character_reference_is_made_plain(hostile: str) -> None:
+    text = plain_text(f"before {hostile} after &amp; &#65;")
+    assert text.startswith("before")
+    assert text.endswith("after & A")
+
+
+def test_a_decoder_error_keeps_the_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(_: str) -> str:
+        raise ValueError("Exceeds the limit")
+
+    monkeypatch.setattr(sources.html, "unescape", boom)
+    assert plain_text("a &amp; b") == "a &amp; b"
+
+
+def _run_feed(kind: str, parse: Any) -> dict[str, Any]:
+    """One feed through the runner, its reader the parse of a recorded answer: the feed's entry."""
+    from types import SimpleNamespace
+
+    async def reader(client: Any, feed_: Feed) -> Any:
+        return parse()
+
+    async def store(source: str, kept: Any) -> None:
+        stats.new += len(kept)
+
+    async def progress() -> None:
+        return None
+
+    class Client:
+        deadline = 0.0
+        timeout_s = 1.0
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+    stats = SimpleNamespace(sources=[], new=0, skipped_by_rule=0, current_board="")
+    hook = sources.FeedRunner(lambda: Client(), {kind: reader})  # type: ignore[arg-type,return-value]
+    plan = SimpleNamespace(feeds=[Feed(**feed(kind))])
+    asyncio.run(hook(plan, stats, store, progress, time.monotonic() + 600))
+    return {**stats.sources[0], "stored": stats.new}
+
+
+def _remote_ok() -> Any:
+    def item(n: int, description: str) -> dict[str, Any]:
+        return {"id": str(n), "position": f"AI engineer {n}", "company": f"Example {n}",
+                "url": f"https://remoteok.com/remote-jobs/{n}", "description": description,
+                "tags": ["freelance"]}  # fmt: skip
+
+    return [{"legal": "notice"}, item(1, LONG_DECIMAL + " " + LONG_HEX), item(2, "Good.")]
+
+
+def test_remote_ok_keeps_the_good_posting_beside_a_hostile_one() -> None:
+    entry = _run_feed("remoteok", lambda: remoteok.parse(_remote_ok()))
+    assert entry["error"] is None
+    assert entry["stored"] == 2
+    assert entry["items_skipped"] == 0
+
+
+def _skipping(monkeypatch: pytest.MonkeyPatch, module: Any, name: str) -> None:
+    """Make the hostile one fail its parse, as a future parser bug would."""
+    real = getattr(module, name)
+
+    def fail_on_hostile(*args: Any) -> Any:
+        if "1" * 4_000 in json.dumps(args[-1] if name == "_posting" else args, default=str):
+            raise ValueError("boom")
+        return real(*args)
+
+    monkeypatch.setattr(module, name, fail_on_hostile)
+
+
+def test_remote_ok_skips_and_counts_an_item_that_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    _skipping(monkeypatch, remoteok, "_posting")
+    entry = _run_feed("remoteok", lambda: remoteok.parse(_remote_ok()))
+    assert entry["error"] is None
+    assert entry["stored"] == 1
+    assert entry["items_skipped"] == 1
+
+
+def test_we_work_remotely_skips_and_counts_an_item_that_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def rss() -> bytes:
+        def item(n: int, text: str) -> str:
+            return (f"<item><title>Example {n}: AI engineer</title>"
+                    f"<link>https://weworkremotely.com/remote-jobs/{n}</link>"
+                    f"<description>{escape(text)}</description></item>")  # fmt: skip
+
+        return (f"<rss><channel>{item(1, LONG_DECIMAL)}{item(2, 'Good.')}</channel></rss>").encode()
+
+    ok = _run_feed("weworkremotely", lambda: weworkremotely.parse(rss()))
+    assert ok["error"] is None
+    assert ok["stored"] == 2
+    assert ok["items_skipped"] == 0
+
+    real = weworkremotely._posting
+
+    def fail(item: Any) -> Any:
+        if "1" * 4_000 in (item.findtext("description") or ""):
+            raise ValueError("boom")
+        return real(item)
+
+    monkeypatch.setattr(weworkremotely, "_posting", fail)
+    bad = _run_feed("weworkremotely", lambda: weworkremotely.parse(rss()))
+    assert bad["error"] is None
+    assert bad["stored"] == 1
+    assert bad["items_skipped"] == 1
+
+
+def _comments() -> list[Any]:
+    def comment(n: int, text: str) -> dict[str, Any]:
+        return stub.hn_comment(n, 3002, f"SEEKING FREELANCER | Example {n} | AI engineer") | {
+            "text": f"SEEKING FREELANCER | Example {n} | AI engineer<p>{text}"
+        }
+
+    return [comment(1, LONG_DECIMAL + " " + LONG_HEX), comment(2, "Good.")]
+
+
+def test_hacker_news_keeps_the_good_comment_beside_a_hostile_one() -> None:
+    entry = _run_feed(
+        "hackernews_freelance", lambda: hackernews.parse("freelance", 3002, _comments())
+    )
+    assert entry["error"] is None
+    assert entry["stored"] == 2
+    assert entry["items_skipped"] == 0
+
+
+def test_hacker_news_skips_and_counts_a_comment_that_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real = hackernews.parse_comment
+
+    def fail(thread: str, story_id: object, comment: Any) -> Any:
+        if "1" * 4_000 in comment["text"]:
+            raise ValueError("boom")
+        return real(thread, story_id, comment)
+
+    monkeypatch.setattr(hackernews, "parse_comment", fail)
+    entry = _run_feed(
+        "hackernews_freelance", lambda: hackernews.parse("freelance", 3002, _comments())
+    )
+    assert entry["error"] is None
+    assert entry["stored"] == 1
+    assert entry["items_skipped"] == 1
+
+
+# --- the comment cap, the 429 wait ---------------------------------------------------------------
+
+
+def test_the_comment_setting_is_capped_at_the_item_limit(migrated_url: str) -> None:
+    ok = Settings(database_url=migrated_url, feeds_hn_max_comments=sources.ITEMS_MAX)  # type: ignore[call-arg]
+    assert ok.feeds_hn_max_comments == sources.ITEMS_MAX
+    with pytest.raises(ValidationError):
+        Settings(database_url=migrated_url, feeds_hn_max_comments=sources.ITEMS_MAX + 1)  # type: ignore[call-arg]
+
+
+def test_a_thread_larger_than_the_limit_reads_no_comment() -> None:
+    reads: list[int] = []
+
+    async def comment(item_id: int, options: dict[str, Any]) -> bytes:
+        reads.append(item_id)
+        return b"{}"
+
+    client = _thread_client(comment)
+    real_get = client.get
+
+    async def get(url: str, hosts: frozenset[str], **options: Any) -> bytes:
+        if url.endswith("/3002.json"):
+            return json.dumps(
+                {"by": "whoishiring", "type": "story", "id": 3002,
+                 "kids": list(range(1, sources.ITEMS_MAX + 50)),
+                 "title": "Ask HN: Freelancer? Seeking freelancer? (May)"}
+            ).encode()  # fmt: skip
+        return await real_get(url, hosts, **options)
+
+    client.get = get  # type: ignore[method-assign]
+    with pytest.raises(FeedError) as caught:
+        asyncio.run(hackernews.read(client, "freelance", sources.ITEMS_MAX + 50))
+    assert caught.value.code == "too_many"
+    assert reads == []
+
+
+def test_the_wait_asked_by_a_429_is_kept_when_a_comment_stops_the_feed() -> None:
+    async def go() -> FeedError:
+        async def get(url: str, max_body: int) -> Any:
+            raise FeedError("rate_limited", retryable=True, retry_after=7.0)
+
+        client = FeedClient(stub_base_url="http://feeds.invalid")
+        client._get = get  # type: ignore[method-assign]
+        with pytest.raises(FeedError) as caught:
+            await client.get("http://feeds.invalid/x", frozenset({"feeds.invalid"}),
+                             retry_rate_limited=False)  # fmt: skip
+        return caught.value
+
+    assert asyncio.run(go()).retry_after == 7.0

@@ -183,7 +183,7 @@ class Settings(BaseSettings):
     # (one request each). Tests only: the fake feeds server (tests/feeds_stub.py) answers every
     # feed under this address. Refused in production.
     feeds_timeout_s: float = Field(default=20.0, ge=1.0, le=120.0)
-    feeds_hn_max_comments: int = Field(default=500, ge=1, le=2000)
+    feeds_hn_max_comments: int = Field(default=500, ge=1, le=1_000)  # ITEMS_MAX of the feeds
     feeds_stub_base_url: str | None = None
 
     @field_validator("app_env", "log_level", mode="before")

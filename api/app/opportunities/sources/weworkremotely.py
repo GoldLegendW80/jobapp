@@ -21,6 +21,7 @@ import asyncio
 import email.utils
 import itertools
 import re
+from typing import Any
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
@@ -34,6 +35,7 @@ from app.opportunities.sources import (
     FeedClient,
     FeedError,
     Found,
+    Parsed,
     day_of,
     line,
     on_host,
@@ -85,30 +87,38 @@ def parse(body: bytes) -> Found:
     if channel is None:
         raise FeedError("invalid_response")
     too_many(sum(1 for _ in itertools.islice(channel.iter("item"), ITEMS_MAX + 1)))
-    found: Found = []
+    found = Parsed()
     for item in channel.iter("item"):
-        heading = line(item.findtext("title"), TITLE_MAX + NAME_MAX)
-        company, colon, role = heading.partition(":")
-        company, role = company.strip()[:NAME_MAX], role.strip()[:TITLE_MAX]
-        url = on_host(item.findtext("link") or item.findtext("guid"), HOSTS)
-        if not colon or not company or not role or url is None:
+        try:
+            posting = _posting(item)
+        except Exception:  # one bad item is skipped and counted, never the feed
+            found.skipped += 1
             continue
-        text = plain_text(item.findtext("description"))
-        kind = line(item.findtext("type"), NAME_MAX)
-        category = line(item.findtext("category"), NAME_MAX)
-        found.append(
-            (
-                company,
-                ats.Posting(
-                    title=role,
-                    location=remote_location(line(item.findtext("region"), NAME_MAX)),
-                    url=url,
-                    published=_published(item.findtext("pubDate")),
-                    text=text,
-                    remote=True,
-                    work_mode="remote",
-                    contract_type=FREELANCE if freelance(kind, category, text) else None,
-                ),
-            )
-        )
+        if posting is not None:
+            found.append(posting)
     return found
+
+
+def _posting(item: Any) -> tuple[str, ats.Posting] | None:
+    heading = line(item.findtext("title"), TITLE_MAX + NAME_MAX)
+    company, colon, role = heading.partition(":")
+    company, role = company.strip()[:NAME_MAX], role.strip()[:TITLE_MAX]
+    url = on_host(item.findtext("link") or item.findtext("guid"), HOSTS)
+    if not colon or not company or not role or url is None:
+        return None
+    text = plain_text(item.findtext("description"))
+    kind = line(item.findtext("type"), NAME_MAX)
+    category = line(item.findtext("category"), NAME_MAX)
+    return (
+        company,
+        ats.Posting(
+            title=role,
+            location=remote_location(line(item.findtext("region"), NAME_MAX)),
+            url=url,
+            published=_published(item.findtext("pubDate")),
+            text=text,
+            remote=True,
+            work_mode="remote",
+            contract_type=FREELANCE if freelance(kind, category, text) else None,
+        ),
+    )

@@ -18,7 +18,8 @@ enabled feed of the person's `search.feeds` in turn:
    read up to MAX_BODY (HN_ITEM_MAX_BODY for one Hacker News item), redirects only to the
    source's own hosts over https. No request starts and no retry waits past the feed's
    deadline (the sweep's, less one request timeout and STORE_MARGIN_S): `time_budget`. A
-   Hacker News comment answered 429 stops its feed at once (`rate_limited`).
+   Hacker News comment answered 429 stops its feed without a retry (`rate_limited`; the
+reads already in flight finish).
 2. Parse. The source module turns the answer into (company, posting) pairs, pure, in a worker
    thread (`asyncio.to_thread`), so the sweep's event loop and its heartbeats never wait on it:
    title, company or client, location, the posting's own address on the source (an address off
@@ -43,7 +44,8 @@ What a feed reports in the sweep's `stats.sources` (one entry each, `kind` the f
 `error` None when it was read): the codes of ats.py (`not_found`, `blocked`, `rate_limited`,
 `upstream_error`, `timeout`, `network`, `too_large`, `invalid_response`), `too_many`,
 `store_failed`, `time_budget` (the sweep's time limit is near: not read, or not read to the
-end) and `stub_missing`. A failed feed never stops the sweep or the next feed.
+end) and `stub_missing`. A failed feed never stops the sweep or the next feed. An item whose
+parsing fails is left out and counted in the entry's `items_skipped`; the feed still ends ok.
 
 FEEDS_STUB_BASE_URL (tests only, refused in production) sends every feed to the fake feeds
 server (tests/feeds_stub.py) at {base}/{source}/{the source's own path}. With APP_ENV test and no
@@ -171,6 +173,21 @@ def _drop_blocks(text: str) -> str:
     return "".join(kept)
 
 
+# A character reference no code point needs: eight digits or more. html.unescape raises
+# ValueError on a decimal one of 4,301 digits (Python's limit on int conversion).
+_LONG_REFERENCE = re.compile(r"&#(?:[xX][0-9a-fA-F]{8,}|[0-9]{8,});?")
+
+
+def _unescape(text: str) -> str:
+    """Entities decoded. Over long numeric references are dropped first, and a ValueError of the
+    decoder keeps the text as it is: a hostile reference never fails the posting or the feed."""
+    text = _LONG_REFERENCE.sub(" ", text)
+    try:
+        return html.unescape(text)
+    except ValueError:
+        return text
+
+
 def plain_text(value: object, limit: int = TEXT_MAX) -> str:
     """HTML or text made plain: scripts and styles dropped, paragraphs and line breaks kept as new
     lines, other tags removed, entities decoded, spaces collapsed, made storable, cut at
@@ -179,7 +196,7 @@ def plain_text(value: object, limit: int = TEXT_MAX) -> str:
         return ""
     text = _drop_blocks(value[: limit * 4])
     text = _BREAKS.sub("\n", text)
-    text = html.unescape(_TAG.sub(" ", text))
+    text = _unescape(_TAG.sub(" ", text))
     lines = (_SPACES.sub(" ", line).strip() for line in text.split("\n"))
     text = _BLANKS.sub("\n\n", "\n".join(lines)).strip()
     return ats.storable(text)[:limit]
@@ -301,7 +318,8 @@ class FeedClient:
     ) -> bytes:
         """The body of one GET, with the retries of the module docstring. Raises FeedError.
         `max_body` lowers the body cap for this read; `retry_rate_limited` False answers the
-        first 429 with `rate_limited` at once (a Hacker News comment: the feed stops there)."""
+        first 429 with `rate_limited` without a retry (a Hacker News comment: the feed stops there;
+        the other reads already in flight still finish)."""
         if self.refuse_reads:
             raise FeedError("stub_missing")
         last: FeedError | None = None
@@ -317,7 +335,7 @@ class FeedClient:
                 return await self._follow(url, hosts, max_body or self.max_body)
             except FeedError as exc:
                 if not exc.retryable or (exc.code == "rate_limited" and not retry_rate_limited):
-                    raise FeedError(exc.code) from None
+                    raise FeedError(exc.code, retry_after=exc.retry_after) from None
                 last = exc
         raise FeedError(last.code if last is not None else "network")
 
@@ -384,6 +402,15 @@ class FeedClient:
 # --- the run ------------------------------------------------------------------------------------
 
 Found = list[tuple[str, ats.Posting]]
+
+
+class Parsed(list[tuple[str, ats.Posting]]):
+    """The postings of one answer, with `skipped`: the items whose parsing failed and were left
+    out (one bad item never fails the feed). Reported as `items_skipped` in the feed's stats."""
+
+    skipped: int = 0
+
+
 Reader = Callable[[FeedClient, Feed], Awaitable[Found]]
 StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
 
@@ -453,6 +480,7 @@ class FeedRunner:
                     "found": 0,
                     "postings": 0,
                     "skipped_by_rule": 0,
+                    "items_skipped": 0,
                     "error": None,
                 }
                 stats.sources.append(entry)
@@ -488,6 +516,7 @@ class FeedRunner:
         if len(found) > ITEMS_MAX:
             logger.warning("feed not read: kind=%s error=too_many", feed.kind)
             return "too_many"
+        entry["items_skipped"] = getattr(found, "skipped", 0)
         kept = keep(feed, found)
         entry["found"] = len(kept)
         before, ruled = stats.new, stats.skipped_by_rule

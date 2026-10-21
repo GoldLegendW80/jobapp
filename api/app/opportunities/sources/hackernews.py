@@ -49,10 +49,12 @@ from app.opportunities.sources import (
     FeedClient,
     FeedError,
     Found,
+    Parsed,
     from_epoch,
     line,
     parse_json,
     plain_text,
+    too_many,
 )
 
 API = "https://hacker-news.firebaseio.com/v0"
@@ -133,6 +135,7 @@ async def read(client: FeedClient, thread: str, max_comments: int = HN_MAX_COMME
         return []
     kids = [k for k in story.get("kids") or [] if isinstance(k, int) and not isinstance(k, bool)]
     kids = kids[:max_comments]
+    too_many(len(kids))  # before a single comment is read
     gate = asyncio.Semaphore(HN_CONCURRENCY)
     errors: list[FeedError] = []
     stopped: list[FeedError] = []
@@ -157,9 +160,13 @@ async def read(client: FeedClient, thread: str, max_comments: int = HN_MAX_COMME
 
 def parse(thread: str, story_id: object, comments: list[Any]) -> Found:
     """The postings of a thread's top level comments (module docstring), pure."""
-    found: Found = []
+    found = Parsed()
     for comment in comments:
-        posting = parse_comment(thread, story_id, comment)
+        try:
+            posting = parse_comment(thread, story_id, comment)
+        except Exception:  # one bad comment is skipped and counted, never the feed
+            found.skipped += 1
+            continue
         if posting is not None:
             found.append(posting)
     return found
