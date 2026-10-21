@@ -36,7 +36,12 @@ export function QueuePage() {
   const query = useQuery({
     queryKey: queueListKey,
     queryFn: ({ signal }) => getQueue(signal),
-    refetchInterval: (current) => queuePoll(current.state.data),
+    refetchInterval: (current) =>
+      queuePoll(
+        current.state.data,
+        Date.now(),
+        serverOffset(current.state.data?.now, current.state.dataUpdatedAt),
+      ),
   });
   const settings = useQuery({
     queryKey: applySettingsKey,

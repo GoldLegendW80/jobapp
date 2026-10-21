@@ -8,6 +8,8 @@ import { documentLine } from "./apply-state";
 import type { DocumentCheck, Queue, QueueItem } from "./queue-api";
 
 export const QUEUE_POLL_MS = 3000;
+/** Pace expiry is not exposed by the api; keep following it without rapid polling. */
+export const QUEUE_WAIT_POLL_MS = 30_000;
 /** The shell's count follows the queue page at once; elsewhere it is read again this often. */
 export const COUNT_POLL_MS = 60_000;
 const WAITING = new Set([
@@ -29,15 +31,30 @@ export const isDeciding = (item: QueueItem) =>
 export const isHeld = (item: QueueItem) =>
   item.state === "held" && Boolean(item.hold_until);
 
-/** The api reads every other state of the queue as under way: the app works on it. */
-export function queuePoll(queue: Queue | undefined): number | false {
-  const workNeedsRefresh = queue?.items.some(
-    (item) =>
-      !isWaiting(item) &&
-      item.state !== "held" &&
-      !(item.state === "approved" && item.needs === "host_pace"),
-  );
-  return workNeedsRefresh ? QUEUE_POLL_MS : false;
+/** Wait for known holds on the server's clock, then follow the worker's next transition. */
+export function queuePoll(
+  queue: Queue | undefined,
+  pageNow: number,
+  offset = 0,
+): number | false {
+  let next = Number.POSITIVE_INFINITY;
+  for (const item of queue?.items ?? []) {
+    if (isWaiting(item)) continue;
+    let interval = QUEUE_POLL_MS;
+    if (item.state === "held") {
+      const end = Date.parse(item.hold_until ?? "");
+      const left = end - (pageNow + offset);
+      interval = !Number.isFinite(end)
+        ? QUEUE_WAIT_POLL_MS
+        : left > 0
+          ? left
+          : QUEUE_POLL_MS;
+    } else if (item.state === "approved" && item.needs === "host_pace") {
+      interval = QUEUE_WAIT_POLL_MS;
+    }
+    next = Math.min(next, interval);
+  }
+  return Number.isFinite(next) ? next : false;
 }
 
 /** The form is filled and its answers can be read and corrected. */
