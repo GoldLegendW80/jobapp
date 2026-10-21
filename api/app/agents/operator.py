@@ -13,9 +13,10 @@ worker reads the credential again when the run starts. The routes pass none: the
 user.
 """
 
+import contextlib
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -54,6 +55,8 @@ CHAT_AGENT = "agent: a chat agent answers in a thread; send a message to the thr
 # Recorded streams are for the fake backend: refused in production, never stored there.
 NO_SCRIPT = "input.script: recorded streams exist only outside production."
 BUSY = "The previous message is still being answered. Wait for the answer, then send again."
+# A send or a delete that could not have the thread within chat.LOCK_WAIT_S (409, nothing written).
+THREAD_LOCKED = "This conversation is being updated. Try again in a moment."
 EMPTY = "text: write a message."
 NOT_ALLOWED = "This account may not start a run here: wrong role or credential kind."
 
@@ -66,7 +69,8 @@ class Refused(HTTPException):
 
 
 class Busy(Refused):
-    """409 on a send: the thread's previous answer is pending (`run_id`), or no credential."""
+    """409 on a send: the thread's previous answer is pending (`run_id`), no credential, or the
+    thread held by another transaction past chat.LOCK_WAIT_S."""
 
     def __init__(self, run_id: uuid.UUID | None, detail: str) -> None:
         super().__init__(status.HTTP_409_CONFLICT, detail)
@@ -197,8 +201,10 @@ def send_message(
     now: datetime,
     only: Only | None = None,
 ) -> SentOut:
-    """The stored message and the queued run that answers it, committed. The caller enqueues."""
-    with sessions() as db:
+    """The stored message and the queued run that answers it, committed. The caller enqueues.
+    Each lock wait of the transaction, the thread's row first, ends after chat.LOCK_WAIT_S:
+    `Busy` THREAD_LOCKED then, with nothing written."""
+    with sessions() as db, _thread_bounded(db):
         thread = chat.get_thread(db, user_id, thread_id, lock=True)
         if thread is None:
             raise Refused(status.HTTP_404_NOT_FOUND, THREAD_NOT_FOUND)
@@ -218,6 +224,15 @@ def send_message(
         out = SentOut(message=message_out(message, run), run=run_out(run))
         db.commit()
     return out
+
+
+@contextlib.contextmanager
+def _thread_bounded(db: Session) -> Iterator[None]:
+    try:
+        with chat.bounded_lock_waits(db, chat.LOCK_WAIT_S):
+            yield
+    except chat.ThreadLockedError:
+        raise Busy(None, THREAD_LOCKED) from None
 
 
 def fail_queued(sessions: sessionmaker[Session], run_id: uuid.UUID, now: datetime) -> None:
