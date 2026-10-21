@@ -1056,12 +1056,12 @@ async def serve(
             if getattr(w, "_pool", None) is not None:
                 try:
                     await w.record_health()
-                except Exception:
+                except Exception as exc:
                     # A transient Redis error here must not abort the start: arq's periodic
-                    # record retries. Queue name only, no key and no URL.
+                    # record retries. Queue name and exception class, no key, URL or error text.
                     logger.warning(
                         "startup health record failed, the periodic record retries",
-                        extra={"queue": w.queue_name},
+                        extra={"queue": w.queue_name, "error_type": type(exc).__name__},
                     )
         logger.info("worker started", extra={"queues": [w.queue_name for w in workers]})
         if on_ready is not None:
