@@ -495,7 +495,7 @@ async def _loop(
 
 
 async def _close(fill: run.Services, application_id: uuid.UUID, code: str, seen: bool) -> str:
-    """`close`, asked again past a busy posting: an application never stays `filling`."""
+    """`close`, asked again past a busy posting (a worker restart ends what is left)."""
 
     def step(db: Session) -> str:
         return close(db, application_id, code, fill.clock(), seen=seen)
