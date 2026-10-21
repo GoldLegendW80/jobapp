@@ -602,7 +602,7 @@ def test_a_decided_item_of_another_run_reads_as_not_found(
     api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
 ) -> None:
     run_id = run_of(factory, me, settings)
-    other_run = run_of(factory, me, settings)
+    other_run, _ = mh.merged(factory, me, settings, [mh.LETTER], [[]])
     decided = made(factory, me, "answers", "travel", "Sometimes", run=other_run)
     assert api.post(f"/api/proposals/{decided}/reject", token=first).status_code == 200
     pending = made(factory, me, "answers", "relocation", "Anywhere", run=other_run)

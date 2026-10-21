@@ -829,7 +829,12 @@ def test_accept_all_takes_what_is_neither_locked_nor_flagged(
         factory,
         alice,
         "answers",
-        {**full("answers"), "notice_period": "Typed since.", "heard_about": "A friend."},
+        {
+            **full("answers"),
+            "notice_period": "Typed since.",
+            "heard_about": "A friend.",
+            "relocation": None,
+        },
     )
     result = bulk(factory, alice, ingestion_run_id=RUN)
     assert set(result.done) == {headline, block, second, noop}
@@ -861,7 +866,8 @@ def test_accept_all_takes_what_is_neither_locked_nor_flagged(
     # by section, and by ids that must be of that section
     by_ids = bulk(factory, alice, section="answers", proposal_ids=[other_run, locked, block])
     assert by_ids.done == [other_run]
-    assert by_ids.skipped == {locked: ip.OTHER_SECTION, block: ip.NOT_PENDING}
+    # the run, then the section, then the status: a decided row of another section is that
+    assert by_ids.skipped == {locked: ip.OTHER_SECTION, block: ip.OTHER_SECTION}
     wrong_run = bulk(factory, alice, ingestion_run_id=OTHER_RUN, proposal_ids=[stale])
     assert wrong_run.skipped == {stale: ip.OTHER_RUN}
     with factory() as db:
