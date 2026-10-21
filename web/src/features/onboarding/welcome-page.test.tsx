@@ -31,9 +31,13 @@ const SETTINGS = {
   min_fit_chosen: false,
   safety_ceiling: 20,
   hold_s: 900,
+  hold_min_s: 900,
   company_days: 30,
   show_postings_from: null,
   write_documents_from: null,
+  rehearsals: 3,
+  rehearsals_done: 0,
+  full_auto_since: null,
 };
 
 interface StoredSearch {
