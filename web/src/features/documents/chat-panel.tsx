@@ -8,7 +8,9 @@
  *
  * Nothing is sent before the consent of the current text and a model credential: the panel says
  * which is missing and the composer waits. One message at a time: while one is answered, or while
- * the document itself is being written, Send is disabled (the api would answer 409).
+ * the document itself is being written, Send is disabled (the api would answer 409). Stop ends the
+ * answer being written (`cancelGeneration`): the document stays as it was. A message with no
+ * character drawn (only blanks or zero width characters) is not sent, as the api refuses it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, SendHorizontal } from "lucide-react";
@@ -29,10 +31,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { useStickToBottom } from "@/features/agents/use-stick-to-bottom";
 import { cn } from "@/lib/utils";
 
+import { drawn } from "./chat-text";
 import { ConsentDialog } from "./consent-dialog";
 import type { PanelProps } from "./document-view";
 import {
   acceptConsent,
+  cancelGeneration,
   consentKey,
   documentKey,
   failureSentence,
@@ -191,6 +195,20 @@ export function ChatPanel({ document, generation }: PanelProps) {
     },
   });
 
+  const stop = useMutation({
+    mutationFn: (generationId: string) => cancelGeneration(generationId),
+    onMutate: () => {
+      setError(null);
+    },
+    onSuccess: (_, generationId) => {
+      void client.invalidateQueries({ queryKey: generationKey(generationId) });
+      void client.invalidateQueries({ queryKey: messagesKey(document.id) });
+    },
+    onError: (failure) => {
+      setError(failureSentence(failure));
+    },
+  });
+
   const noConsent = consent.data !== undefined && !consent.data.accepted;
   const noCredential =
     consent.data !== undefined && consent.data.model === null;
@@ -204,7 +222,7 @@ export function ChatPanel({ document, generation }: PanelProps) {
     !noCredential &&
     !writing &&
     !busy &&
-    text.length > 0;
+    drawn(text);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -294,6 +312,18 @@ export function ChatPanel({ document, generation }: PanelProps) {
                 {followed.data?.status === "queued"
                   ? "Waiting for a free assistant"
                   : "Changing your document"}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto"
+                  disabled={stop.isPending}
+                  onClick={() => {
+                    stop.mutate(pending);
+                  }}
+                >
+                  Stop
+                </Button>
               </li>
             ) : null}
           </ol>

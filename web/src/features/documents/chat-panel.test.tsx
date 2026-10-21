@@ -14,6 +14,7 @@ import {
 } from "@/test/documents";
 import { server } from "@/test/server";
 
+import { drawn } from "./chat-text";
 import { DocumentView } from "./document-view";
 import type {
   Consent,
@@ -70,11 +71,12 @@ function detail(status: GenerationDetail["status"]): GenerationDetail {
 }
 
 /** The chat api of one document: its messages, the generation a message starts, its polls. */
-function fakeChat(options: { refuse?: string } = {}) {
+function fakeChat(options: { refuse?: string; stoppable?: boolean } = {}) {
   const state = {
     messages: [] as Message[],
     polls: 0,
     sent: [] as unknown[],
+    stopped: 0,
   };
   server.use(
     http.get("*/api/documents/p/messages", () =>
@@ -100,8 +102,20 @@ function fakeChat(options: { refuse?: string } = {}) {
         { status: 202 },
       );
     }),
+    http.post("*/api/document-generations/g-chat/cancel", () => {
+      state.stopped += 1;
+      state.messages.push(
+        message({
+          id: state.messages.length + 1,
+          role: "assistant",
+          text: "Stopped before any change.",
+        }),
+      );
+      return HttpResponse.json(detail("cancelled"), { status: 202 });
+    }),
     http.get("*/api/document-generations/g-chat", () => {
       state.polls += 1;
+      if (options.stoppable) return HttpResponse.json(detail("running"));
       if (state.polls < 2) return HttpResponse.json(detail("running"));
       if (!state.messages.some((one) => one.role === "assistant")) {
         state.messages.push(
@@ -233,5 +247,58 @@ describe("the Chat view", () => {
     expect(box).toHaveAttribute("maxLength", "2000");
     await user.type(box, "abc");
     expect(within(chat).getByText("3 of 2000")).toBeVisible();
+  });
+
+  it("stops the answer being written, and the document stays as it was", async () => {
+    const state = fakeChat({ stoppable: true });
+    const { user, chat } = await openChat({
+      accepted: true,
+      model: "claude-opus-5-5",
+    });
+    await user.type(
+      within(chat).getByRole("textbox", { name: "Message" }),
+      "shorter summary{Enter}",
+    );
+    const writing = await within(chat).findByTestId("document-chat-writing");
+    await user.click(within(writing).getByRole("button", { name: "Stop" }));
+    await waitFor(() => {
+      expect(
+        within(chat).getAllByTestId("document-chat-message").at(-1),
+      ).toHaveTextContent("Stopped before any change.");
+    });
+    expect(state.stopped).toBe(1);
+    expect(within(chat).queryByTestId("document-chat-writing")).toBeNull();
+  });
+
+  it("does not send a message made only of blanks or zero width characters", async () => {
+    const state = fakeChat();
+    const { user, chat } = await openChat({
+      accepted: true,
+      model: "claude-opus-5-5",
+    });
+    const box = within(chat).getByRole("textbox", { name: "Message" });
+    await user.type(box, "\u200b\u200d \ufeff{Enter}");
+    expect(within(chat).getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(state.sent).toEqual([]);
+  });
+});
+
+describe("drawn", () => {
+  it.each([
+    ["", false],
+    ["   ", false],
+    ["\u200b", false],
+    ["\u200b\u200c\u200d\u2060\ufeff", false],
+    ["\u00ad\u034f\u200e\u202e\u2066", false],
+    ["\ufe0f\u{e0001}\u{e0020}", false],
+    ["\u3164\u00a0\u3000", false],
+    ["a", true],
+    ["\u200ba", true],
+    ["Résumé", true],
+    ["👨\u200d👩\u200d👧", true],
+    ["❤️", true],
+    ["\u0600", true],
+  ])("%j is drawn: %s", (text, expected) => {
+    expect(drawn(text)).toBe(expected);
   });
 });

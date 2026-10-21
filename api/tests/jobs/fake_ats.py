@@ -21,6 +21,8 @@ Paths: /ashby/posting-api/job-board/{org}, /greenhouse/v1/boards/{org}/jobs,
   a utm parameter): the same posting by the app's duplicate rules
 - fake-security: one matching title that also matches a never_apply rule ("security")
 - fake-redirect: 302 to fake-ok on the same server; fake-redirect-away: 302 to another host
+- fake-b10: the posting that browser B10's journey also finds on its LinkedIn fixture
+  (tests/browser_pages/b10/), the same Apply address: one row naming both sources
 - anything else: 404
 Published dates are relative to today, so the days window keeps them. Every request is counted
 (GET /_stats answers {path: count}); POST /_reset clears the counters.
@@ -85,6 +87,11 @@ def postings(org: str) -> list[dict[str, str]]:
         return [
             {"title": "AI Engineer, Security Agents", "location": "Paris", "url": f"{base}/1",
              "published": _day(1), "text": "Agents."},
+        ]  # fmt: skip
+    if org == "fake-b10":
+        return [
+            {"title": "AI Engineer, Agents", "location": "Paris, France", "url": f"{base}/1",
+             "published": _day(1), "text": "Build agents with Python and LLM evaluation."},
         ]  # fmt: skip
     if org == "fake-big":
         return [

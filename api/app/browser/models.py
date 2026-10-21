@@ -14,8 +14,13 @@ in `browser_profile_removals`, by a trigger, so no deletion path can forget it. 
 directories and then the queue rows. The api never reads a profile file: these rows hold names,
 numbers and dates only.
 
-Migration: alembic/versions/0016_browser.py, which must stay in step with this file (`alembic
-check` in the tests compares them).
+`linkedin_checkpoints` (browser B10) holds each LinkedIn security check or unusual activity page
+met for a person: the 7 day pause of every LinkedIn path is read from it
+(app/browser/linkedin_guard.py). Only `linkedin_guard.record_checkpoint` writes it; no route
+writes or deletes a row, so no request of the person lifts a pause.
+
+Migrations: alembic/versions/0016_browser.py and 0020_linkedin_checkpoints.py, which must stay in
+step with this file (`alembic check` in the tests compares them).
 """
 
 import uuid
@@ -70,3 +75,26 @@ class BrowserProfileRemoval(Base):
     queued_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
+
+
+CHECKPOINT_ORIGINS = ("sweep", "easy_apply", "profile")
+
+
+class LinkedInCheckpoint(Base):
+    """A LinkedIn checkpoint met for a person, when (`at`) and by which path (`origin`: the
+    sweep, apply's Easy Apply of A16, apply's profile work of A18a)."""
+
+    __tablename__ = "linkedin_checkpoints"
+    __table_args__ = (
+        sa.CheckConstraint("origin IN ('sweep', 'easy_apply', 'profile')", name="origin_known"),
+        sa.Index("ix_linkedin_checkpoints_user_id_at", "user_id", "at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    origin: Mapped[str] = mapped_column(sa.Text, nullable=False)
