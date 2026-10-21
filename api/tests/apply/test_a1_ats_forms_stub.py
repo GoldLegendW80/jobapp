@@ -6,17 +6,25 @@ drives the pages)."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
+import shlex
+import socket
 import urllib.request
+from typing import Any
 
 import pytest
+import yaml
 
 from tests.apply import a1_support as s
 from tests.apply.a1_support import ASHBY_FILES, ASHBY_GOOD, GH_FILES, GH_GOOD, Forms
 
 ASHBY = "/ashby/example-robotics/applied-ai-engineer"
 GH = "/greenhouse/northwind-labs/jobs/4012345"
+ROOT = s.STUB_PATH.parents[1]
+STUB = s.load_stub()
+MAX_BODY = STUB.MAX_BODY
 
 
 def ashby(variant: str = "") -> str:
@@ -25,6 +33,16 @@ def ashby(variant: str = "") -> str:
 
 def gh(variant: str = "") -> str:
     return f"{GH}{'--' + variant if variant else ''}"
+
+
+def post_part(forms: Forms, path: str, headers: str, payload: bytes) -> int:
+    """Post a multipart body of one part whose headers are written by hand."""
+    body = b"--a1\r\n" + headers.encode() + b"\r\n\r\n" + payload + b"\r\n--a1--\r\n"
+    request = urllib.request.Request(  # noqa: S310
+        forms.url(path), data=body, headers={"Content-Type": "multipart/form-data; boundary=a1"}
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+        return response.status
 
 
 # --- the invisible check of Ashby -----------------------------------------------------------------
@@ -94,6 +112,26 @@ def test_files_are_stored_by_hash_once_and_can_be_read_back(forms: Forms) -> Non
     assert len(forms.stub.files) == 2
     assert forms.get(f"/_stub/files/{sha}").body == s.PDF
     assert forms.get("/_stub/files/" + "0" * 64).status == 404
+
+
+def test_a_stored_file_is_served_as_a_download_whatever_type_its_upload_declared(
+    forms: Forms,
+) -> None:
+    page = b"<script>fetch('/_stub/reset', {method: 'POST'})</script>"
+    headers = (
+        'Content-Disposition: form-data; name="resume"; filename="cv.html"\r\n'
+        "Content-Type: text/html"
+    )
+    assert post_part(forms, "/_stub/submit/download", headers, page) == 200
+    (stored,) = forms.submissions()[0]["files"]
+    assert (stored["filename"], stored["content_type"]) == ("cv.html", "text/html")
+    with urllib.request.urlopen(  # noqa: S310
+        forms.url(f"/_stub/files/{stored['sha256']}"), timeout=10
+    ) as response:
+        assert response.headers["Content-Type"] == "application/octet-stream"
+        assert response.headers["Content-Disposition"] == "attachment"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.read() == page
 
 
 def test_reset_forgets_submissions_files_and_mail(forms: Forms) -> None:
@@ -384,6 +422,172 @@ def test_pages_of_another_folder_are_served_and_their_posts_recorded(forms: Form
     assert (sub["ats"], sub["org"], sub["fields"]["name"]) == ("custom", "lever-like", "Alex")
 
 
+# --- the bounds of a request ---------------------------------------------------------------------
+def raw(forms: Forms, head: str, body: bytes = b"") -> int | None:
+    """Send a request exactly as written (urllib would correct it) and return the status of the
+    answer, or None when the server closed the connection without one."""
+    port = int(forms.base.rsplit(":", 1)[1])
+    answer = b""
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+        sock.sendall(head.encode("latin-1") + b"\r\n\r\n" + body)
+        sock.shutdown(socket.SHUT_WR)
+        with contextlib.suppress(ConnectionResetError):
+            while chunk := sock.recv(65536):
+                answer += chunk
+    status_line = answer.partition(b"\r\n")[0].split()
+    return int(status_line[1]) if len(status_line) > 1 else None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/forms/a1/%00",
+        "/forms/a1/forms.js%00",
+        "/forms/%00/forms.js",
+        pytest.param("/forms/" + "a" * 300, id="a-name-of-300-characters"),
+        pytest.param("/forms/" + "a/" * 2500, id="a-path-of-5000-characters"),
+        "/forms/a1/%2e%2e/%2e%2e/ats_forms_stub.py",
+    ],
+)
+def test_a_file_name_the_file_system_refuses_is_answered_not_found(forms: Forms, path: str) -> None:
+    assert forms.get(path).status == 404
+    assert forms.get("/forms/a1/forms.js").status == 200
+
+
+@pytest.mark.parametrize(
+    ("head", "status"),
+    [
+        ("GET http://[x/ HTTP/1.0", 400),
+        ("GET http://[::1/forms/a1/forms.js HTTP/1.0", 400),
+        ("POST http://[x/_stub/submit/target HTTP/1.0\r\nContent-Length: 0", 400),
+        ("GET http://127.0.0.1/forms/a1/forms.js HTTP/1.0", 200),
+    ],
+)
+def test_a_request_target_that_is_no_address_is_a_bad_request(
+    forms: Forms, head: str, status: int
+) -> None:
+    assert raw(forms, head) == status
+    assert forms.submissions() == []
+
+
+# One Content-Length header of ASCII digits (RFC 9110, 8.6) is read; anything else is refused.
+@pytest.mark.parametrize(
+    ("headers", "length"),
+    [
+        (None, 0),
+        (["0"], 0),
+        (["9"], 9),
+        (["0009"], 9),
+        (["9 "], 9),
+        (["9\t"], 9),
+        ([" 9"], 9),
+        pytest.param(["0" * 5000 + "9"], 9, id="5000-zeros-then-9"),
+        ([str(MAX_BODY)], MAX_BODY),
+    ],
+)
+def test_a_content_length_of_ascii_digits_is_the_length_read(
+    headers: list[str] | None, length: int
+) -> None:
+    assert STUB.body_length(headers) == length
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [[str(MAX_BODY + 1)], ["9" * 20], pytest.param(["9" * 5000], id="5000-nines")],
+)
+def test_a_content_length_over_the_bound_is_too_large_whatever_its_digits(
+    headers: list[str],
+) -> None:
+    assert STUB.body_length(headers) > MAX_BODY
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [""],
+        [" "],
+        ["-1"],
+        ["-0"],
+        ["+9"],
+        ["9 9"],
+        ["9,9"],
+        ["9, 9"],
+        ["1_000"],
+        ["1e3"],
+        ["0x10"],
+        ["9.0"],
+        ["9\n"],
+        ["\x0b9"],
+        ["abc"],
+        ["٩"],
+        ["９"],
+        ["¹"],
+        ["9", "9"],
+        ["9", "4"],
+    ],
+)
+def test_a_content_length_that_is_not_one_run_of_ascii_digits_is_refused(
+    headers: list[str],
+) -> None:
+    assert STUB.body_length(headers) is None
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        (["-1"], 400),
+        (["abc"], 400),
+        (["+9"], 400),
+        (["¹"], 400),
+        (["9, 9"], 400),
+        (["9", "9"], 400),
+        ([""], 400),
+        ([str(MAX_BODY + 1)], 413),
+        pytest.param(["9" * 5000], 413, id="5000-nines-413"),
+    ],
+)
+def test_a_post_whose_length_cannot_be_trusted_is_answered_before_any_body_is_read(
+    forms: Forms, headers: list[str], status: int
+) -> None:
+    head = "\r\n".join(
+        ["POST /_stub/submit/bounds HTTP/1.0", *(f"Content-Length: {one}" for one in headers)]
+    )
+    assert raw(forms, head) == status
+    assert forms.submissions() == []
+
+
+@pytest.mark.parametrize(
+    ("charset", "payload"),
+    [
+        ("foo", "Zoé".encode()),
+        ("base64", "Zoé".encode()),
+        ("idna", "Zoé".encode()),
+        ("iso-8859-1", "Zoé".encode("latin-1")),
+        ("utf-8", "Zoé".encode()),
+    ],
+)
+def test_a_text_part_is_read_in_its_charset_or_in_utf8_when_python_has_no_such_text_codec(
+    forms: Forms, charset: str, payload: bytes
+) -> None:
+    headers = (
+        'Content-Disposition: form-data; name="name"\r\n'
+        f"Content-Type: text/plain; charset={charset}"
+    )
+    assert post_part(forms, "/_stub/submit/charset", headers, payload) == 200
+    assert forms.submissions()[0]["fields"] == {"name": "Zoé"}
+
+
+def test_a_post_with_a_true_length_is_read_and_recorded(forms: Forms) -> None:
+    for length in ("9", "0009", "9 "):
+        head = (
+            "POST /_stub/submit/bounds HTTP/1.0\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            f"Content-Length: {length}"
+        )
+        assert raw(forms, head, b"name=Alex") == 200
+    assert [sub["fields"] for sub in forms.submissions()] == [{"name": "Alex"}] * 3
+
+
 # --- production -----------------------------------------------------------------------------------
 def test_the_server_refuses_to_start_in_production(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -394,3 +598,55 @@ def test_the_server_refuses_to_start_in_production(
     monkeypatch.setenv("APP_ENV", "production")
     assert module.main(["--host", "127.0.0.1", "--port", "0"]) == 2
     assert "production" in capsys.readouterr().err
+
+
+# --- where it listens -----------------------------------------------------------------------------
+def test_the_server_listens_on_the_loopback_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = s.load_stub()
+    hosts: list[str] = []
+
+    class Server:
+        server_address = ("127.0.0.1", 8100)
+
+        def serve_forever(self) -> None:
+            return None
+
+    def make_server(host: str, port: int, **_: Any) -> tuple[Server, None]:
+        hosts.append(host)
+        return Server(), None
+
+    monkeypatch.setattr(module, "make_server", make_server)
+    assert module.main([]) == 0
+    assert module.main(["--host", "0.0.0.0"]) == 0  # noqa: S104
+    assert hosts == ["127.0.0.1", "0.0.0.0"]  # noqa: S104
+
+
+def stub_services() -> list[dict[str, Any]]:
+    """Every Compose service, in any compose file of the repository, that runs the stub."""
+    found = []
+    for path in sorted({*ROOT.glob("compose*.yml"), *ROOT.glob("tests/*.compose.yml")}):
+        services = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("services") or {}
+        for service in services.values():
+            command = (service or {}).get("command") or []
+            if isinstance(command, str):
+                command = shlex.split(command)
+            command = [str(part) for part in command]
+            if any(part.endswith("ats_forms_stub.py") for part in command):
+                found.append({**service, "command": command})
+    return found
+
+
+def test_every_container_of_the_stub_listens_on_its_own_address_at_the_port_it_publishes() -> None:
+    found = stub_services()
+    assert found
+    for service in found:
+        command = service["command"]
+        assert command[command.index("--host") + 1] == "0.0.0.0"  # noqa: S104
+        port = command[command.index("--port") + 1]
+        assert service["expose"] == [port]
+        assert all(str(one).endswith(f":{port}") for one in service["ports"])
+        probe = " ".join(service["healthcheck"]["test"])
+        assert f":{port}/healthz" in probe
+        assert not re.search(r"127\.0\.0\.1|localhost", probe)

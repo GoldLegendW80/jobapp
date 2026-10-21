@@ -28,6 +28,9 @@ services:
       - python
       - -I
       - /fake/ats_forms_stub.py
+      # The published port and the egress network reach the container's address, not its loopback.
+      - --host
+      - "0.0.0.0"
       - --port
       - "8080"
     volumes:
@@ -38,11 +41,12 @@ services:
     ports:
       - "127.0.0.1:${ATS_FORMS_STUB_PORT:-8100}:8080"
     healthcheck:
+      # On the container's own address: a stub that listens on its loopback only is unhealthy.
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+        - "import socket, urllib.request; urllib.request.urlopen(f'http://{socket.gethostname()}:8080/healthz', timeout=2)"
       interval: 5s
       timeout: 3s
       retries: 10
