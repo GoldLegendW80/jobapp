@@ -150,13 +150,18 @@ def test_no_stack_file_sets_a_hold_under_fifteen_minutes() -> None:
     assert [one for one in values if one[1] < FLOOR] == []
 
 
+TEST_HOLD = re.compile(r"TEST_APPLY_HOLD_S[\"']?\s*[:=]")
+
+
 def test_the_test_hold_is_set_only_by_the_test_stacks() -> None:
     setting = [
         path.relative_to(ROOT).as_posix()
         for path in stack_files()
-        if "TEST_APPLY_HOLD_S" in path.read_text(encoding="utf-8")
+        if TEST_HOLD.search(path.read_text(encoding="utf-8"))
     ]
     assert setting == ["tests/ats-forms-stub.compose.yml"]
+    assert TEST_HOLD.search("TEST_APPLY_HOLD_S=60")
+    assert not TEST_HOLD.search("(TEST_APPLY_HOLD_S 60)")
 
 
 def test_assignments_are_found_in_every_form_a_stack_file_writes() -> None:

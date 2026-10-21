@@ -185,7 +185,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented person has the consent, a base CV, a company cap and three postings", async () => {
+test("an invented person has the consent, a base CV, a company cap and five postings", async () => {
   await stub.reset();
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
