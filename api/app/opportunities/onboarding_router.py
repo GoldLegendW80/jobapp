@@ -11,8 +11,9 @@
   state.
 - POST /api/opportunities/onboarding/steps `{step}`: a step passed (Next or "Skip this step"), kept
   in the profile (`passed` in the state), so the wizard resumes at the same step on any device.
-  200 with the state; 422 for an unknown step. Each new step is one revision of the profile's
-  `preferences`: the web reads the profile again before its next save.
+  200 with the state; 422 for an unknown step. Once the wizard is finished it records nothing
+  (200 with the state). A step passed is no revision of the profile (profile.service
+  `record_onboarding_step`), so another tab editing the profile is not sent a 409 by it.
 
 Every route needs a session and acts on the caller's profile only; the step answers themselves are
 saved through the profile's and apply's own routes. Never cached.
@@ -27,12 +28,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import queue as queues
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import sweep
 from app.opportunities import onboarding
 from app.profile.schemas import WizardStep
 
@@ -125,27 +124,13 @@ async def complete(user: CurrentUser, request: Request) -> Any:
     """Start: the wizard is finished, then the first sweep starts (in the worker)."""
     sessions: sessionmaker[Session] = request.app.state.sessionmaker
     finished = await run_in_threadpool(_finish, sessions, user, request)
-    now = deps.clock(request)
-    outcome, sweep_id = await run_in_threadpool(
-        onboarding.start_first_sweep, sessions, user.id, now
+    begun = await onboarding.start_first_sweep(
+        sessions, request.app.state.queue, user.id, deps.clock(request)
     )
-    if outcome == "running" and sweep_id is not None:
-        body = RunningOut(detail=RUNNING, code="sweep_running", sweep_id=sweep_id, state=finished)
+    if begun.outcome == "running" and begun.sweep_id is not None:
+        body = RunningOut(
+            detail=RUNNING, code="sweep_running", sweep_id=begun.sweep_id, state=finished
+        )
         return JSONResponse(status_code=409, content=body.model_dump(mode="json"), headers=NO_STORE)
-    if outcome == "started" and sweep_id is not None:
-        queue: queues.Queue = request.app.state.queue
-        try:
-            await queue.enqueue(
-                "run_sweep",
-                str(sweep_id),
-                queue=queues.SWEEPS,
-                job_id=queues.sweep_job_id(sweep_id),
-            )
-        except queues.QueueUnavailableError:
-            await run_in_threadpool(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, now)
-            return CompleteOut(state=finished, sweep="queue_down", sweep_id=None)
-        return CompleteOut(state=finished, sweep="started", sweep_id=sweep_id)
-    reason: Literal["no_boards", "search_invalid"] = (
-        "search_invalid" if outcome == "search_invalid" else "no_boards"
-    )
-    return CompleteOut(state=finished, sweep=reason, sweep_id=None)
+    # started (with its id), or why no sweep started: no_boards, search_invalid, queue_down
+    return CompleteOut(state=finished, sweep=begun.outcome, sweep_id=begun.sweep_id)

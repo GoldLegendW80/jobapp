@@ -50,10 +50,16 @@
 #    and printed in the summary (`journeys:`); a scoped record whose list of changed files is not
 #    the one of its base and head is refused before any merge. LOCAL_CHECK_FULL=1 in the
 #    environment of ops/ship.sh reaches the gate and runs every group.
-# 5. The issues the merged pull requests close (GitHub's closingIssuesReferences, the "Closes #N"
-#    of their bodies) move to Done on the project board (project 1 of GoldLegendW80) right after
-#    the merges, since GitHub closes them then; also after a stop between two merges. A card that
-#    does not move is named and makes the exit status 1, but stops nothing.
+# 5. The board (issue #500). The batch the gate checks is written to .local-check/ship.lock/batch
+#    of the main checkout, one pull request number per line (again after a drop), and
+#    ops/board-sync.py --apply puts every card in its stage from GitHub facts: once at the start
+#    of the gate (the batch shows as Gating), once right after the merges (also after a stop
+#    between two merges) and once after the deploy. The batch file goes when the merges end (the
+#    gate is over); a run that stops before that (a failed gate, INT or TERM) removes it and syncs
+#    once more on its way out, so its batch leaves Gating. Best effort and bounded: each sync runs
+#    in its own process group with INT and TERM at their defaults, and is killed (KILL to the
+#    group) after SHIP_SYNC_SECONDS (default 300; board-sync.py stops itself at 240); a sync that
+#    fails or is killed prints one line and the ship goes on; it never changes the exit status.
 # 6. The main checkout (checked clean and on main before the gate, and again here) gets
 #    git pull --ff-only; its tree must equal the gate's tree, then ops/deploy-checked.sh <commit>.
 # 7. The Jetson, as the deploy run saw it, without ssh (owner decision of 2026-10-15): the last
@@ -73,7 +79,7 @@
 # arguments.
 #
 # For tests/ship_test.sh: SHIP_POLL_SECONDS (default 5, the wait between two reads of a pull
-# request whose mergeable state GitHub has not computed yet).
+# request whose mergeable state GitHub has not computed yet) and SHIP_SYNC_SECONDS (above).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -81,12 +87,8 @@ PROG="ops/ship.sh"
 GATE_SCRIPT="ops/local-check.sh"
 POLL_SECONDS="${SHIP_POLL_SECONDS:-5}"
 KEEP_LOGS=10
-# The project board: project 1 of GoldLegendW80, its Status field and the option Done.
-BOARD_OWNER="GoldLegendW80"
-BOARD_NUMBER=1
-BOARD_ID="PVT_kwHOA9eVYc4BmeB8"
-STATUS_FIELD="PVTSSF_lAHOA9eVYc4BmeB8zhlG8_A"
-STATUS_DONE="98236657"
+BOARD_SYNC="ops/board-sync.py" # the board, from GitHub facts (step 5)
+SYNC_SECONDS="${SHIP_SYNC_SECONDS:-300}"
 
 say() { printf '%s\n' "$*"; }
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -263,33 +265,57 @@ changes_gate() { # changes_gate <n>: true when the pull request changes ops/loca
     die "gh cannot list the files of #$1"
   grep -qxF "$GATE_SCRIPT" <<<"$files"
 }
-issues_of() { # issues_of <n>: "<number> <url>" of each issue the pull request closes
-  gh pr view "$1" --json closingIssuesReferences --jq '.closingIssuesReferences[] | "\(.number) \(.url)"'
-}
 
-# --- 5. the board: move_cards runs right after the merges (GitHub closes the issues then) ---------
-STUCK=()
-move_cards() { # move_cards <n ...>: the issues these merged pull requests close, to Done
-  local n number url item moved=() seen=" " issues
-  for n in "$@"; do
-    issues="$(issues_of "$n")" || {
-      STUCK+=("the issues of #$n")
-      continue
-    }
-    while read -r number url; do
-      [[ -n "$number" && "$seen" != *" $number "* ]] || continue
-      seen="$seen$number "
-      if item="$(gh project item-add "$BOARD_NUMBER" --owner "$BOARD_OWNER" --url "$url" --format json --jq .id 2>/dev/null)" &&
-        [[ -n "$item" ]] &&
-        gh project item-edit --project-id "$BOARD_ID" --id "$item" --field-id "$STATUS_FIELD" \
-          --single-select-option-id "$STATUS_DONE" >/dev/null 2>&1; then
-        moved+=("#$number")
-      else
-        STUCK+=("#$number")
-      fi
-    done <<<"$issues"
+# --- 5. the board: the batch file and board-sync, best effort ------------------------------------
+SYNCS=0
+SYNC_FAILED=()
+write_batch() { # the batch the gate checks, for ops/board-sync.py (Gating)
+  printf '%s\n' ${BATCH[@]+"${BATCH[@]}"} >"$LOCK/batch" 2>/dev/null || say "board  cannot write $LOCK/batch"
+}
+end_batch() { # the gate is over: the batch leaves Gating at the next sync
+  rm -f "$LOCK/batch"
+}
+# group <command ...>: exec it in a process group of its own, INT and TERM at their defaults (a
+# background job of bash ignores INT, and on_signal ignores both before it syncs).
+group() { # run as a background job: the job's own process execs python, so $! is the group
+  exec python3 -c 'import os, signal, sys
+os.setpgrp()
+for s in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(s, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+}
+SYNC_PID=""
+kill_sync() { # KILL the process group of the running sync, if any
+  if [[ -n "$SYNC_PID" ]]; then kill -KILL -- "-$SYNC_PID" 2>/dev/null || true; fi
+}
+board_sync() { # board_sync <when>: ops/board-sync.py --apply, bounded; a failure is one line, never a stop
+  local log="$LOGS/board-$((SYNCS + 1)).log" code=0 start="$SECONDS" killed=0
+  SYNCS=$((SYNCS + 1))
+  # A signal landing between this line and SYNC_PID=$! leaves that one sync to its own 240 s deadline.
+  group "$ROOT/$BOARD_SYNC" --apply >"$log" 2>&1 </dev/null &
+  SYNC_PID=$!
+  # The watchdog: no signal needs to reach the sync, KILL to its group ends it.
+  while kill -0 "$SYNC_PID" 2>/dev/null; do
+    if ((SECONDS - start > SYNC_SECONDS)); then # strict: SECONDS ticks in whole seconds, so the sync gets its full budget
+      kill_sync
+      killed=1
+      break
+    fi
+    sleep 0.2
   done
-  note cards "Done: $(joined ${moved[@]+"${moved[@]}"})$( ((${#STUCK[@]} == 0)) || printf '; not moved: %s' "$(joined "${STUCK[@]}")")"
+  wait "$SYNC_PID" 2>/dev/null || code=$?
+  kill_sync # whatever it started and left behind
+  SYNC_PID=""
+  if ((killed)); then
+    say "board  sync $1 failed (killed after ${SYNC_SECONDS} s, $log)"
+    SYNC_FAILED+=("$1")
+  elif ((code)); then
+    say "board  sync $1 failed (exit $code, $log): $(tail -n 1 "$log" | redact)"
+    SYNC_FAILED+=("$1")
+  fi
+}
+board_note() {
+  note board "$SYNCS sync(s)$( ((${#SYNC_FAILED[@]} == 0)) || printf ', failed %s' "$(joined "${SYNC_FAILED[@]}")")"
 }
 
 # --- 1. selection -----------------------------------------------------------------------------------
@@ -494,14 +520,7 @@ if ((PLAN)); then
   [[ ! -d "$RECORDS/lock" ]] ||
     say "plan   a batch check holds $RECORDS/lock now ($(cat "$RECORDS/lock/holder" 2>/dev/null || echo "holder unknown")): the gate of a real run would refuse to start"
   say "plan   ops/deploy-checked.sh <that commit>, then the figures its run printed (JOBAPP-VERIFY): compose health, alembic head, memory, error lines of 10 minutes, browser"
-  cards=()
-  for n in "${ORDER[@]}"; do
-    issues="$(issues_of "$n")" || die "gh cannot read the issues #$n closes"
-    while read -r number _; do
-      [[ -n "$number" ]] && cards+=("#$number")
-    done <<<"$issues"
-  done
-  say "plan   move to Done on the board right after the merges: $(joined ${cards[@]+"${cards[@]}"})"
+  say "plan   $BOARD_SYNC --apply at the start of the gate (the batch in $RECORDS/ship.lock/batch), after the merges and after the deploy"
   summary
   say "SHIP: PLAN, nothing was done"
   exit 0
@@ -516,8 +535,16 @@ HAVE_LOCK=0
 WORK=""
 GATE_TREE=""
 cleanup() {
+  kill_sync
   if [[ -n "$GATE_TREE" ]]; then git -C "$MAIN" worktree remove --force "$GATE_TREE" >/dev/null 2>&1 || true; fi
   if [[ -n "$WORK" ]]; then rm -rf "$WORK"; fi
+  # A run that stopped while its batch showed as Gating (a failed gate, INT, TERM): one more
+  # bounded sync without the batch file. INT or TERM now only cut that sync short.
+  if ((HAVE_LOCK && SYNCS)) && [[ -e "$LOCK/batch" ]]; then
+    end_batch
+    trap 'kill_sync' INT TERM
+    board_sync "after the stop" >&2 # stderr: the last line of stdout stays SHIP: ...
+  fi
   if ((HAVE_LOCK)); then rm -rf "$LOCK"; fi
 }
 trap cleanup EXIT
@@ -539,6 +566,9 @@ ls -1t "$RECORDS/ship" | tail -n "+$((KEEP_LOGS + 1))" | while IFS= read -r old;
   rm -rf "${RECORDS:?}/ship/$old"
 done
 say "ship   $(labels "${ORDER[@]}") (logs $LOGS)"
+BATCH=("${ORDER[@]}")
+write_batch
+board_sync "at the start of the gate"
 
 if [[ -n "$GATE_PR" ]]; then
   git -C "$MAIN" fetch -q origin "pull/$GATE_PR/head" 2>/dev/null || die "cannot fetch the head of #$GATE_PR"
@@ -643,6 +673,7 @@ drop() { # drop <n> <failing steps> <gate log>: out of the batch, with a comment
     keep+=("$m")
   done
   BATCH=(${keep[@]+"${keep[@]}"})
+  write_batch
   DROPPED+=("#$n ($2)")
   say "drop   #$n: $2"
   for m in "${out[@]:1}"; do
@@ -847,12 +878,16 @@ stop_merging() { # stop_merging <index in the batch of the first one not merged>
   note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
   note "not merged" "$(joined "${rest[@]/#/#}")"
   ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-  ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
+  if ((${#MERGED[@]})); then
+    end_batch
+    board_sync "after the merges"
+  fi
+  board_note
   die "$2: main is not the checked tree, nothing deployed"
 }
 # INT or TERM during the merges: say what merged and what did not (the one in flight is asked
-# of GitHub, since gh may have merged it just before the signal), move the cards of the merged
-# ones, exit 130.
+# of GitHub, since gh may have merged it just before the signal), sync the board when one merged,
+# exit 130.
 MERGING=0
 MERGE_AT=0
 on_signal() {
@@ -872,12 +907,16 @@ on_signal() {
     note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
     note "not merged" "$(joined "${rest[@]/#/#}")"
     if [[ -z "$at" ]]; then
-      note interrupted "after the last merge, before the cards and the deploy"
+      note interrupted "after the last merge, before the board sync and the deploy"
     else
       note interrupted "while merging #$at, which is ${state:-unknown} on GitHub"
     fi
     ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-    ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
+    if ((${#MERGED[@]})); then
+      end_batch
+      board_sync "after the merges"
+    fi
+    board_note
     summary
     say "SHIP: FAIL interrupted during the merges: nothing deployed"
     printf '%s: interrupted during the merges\n' "$PROG" >&2
@@ -920,7 +959,8 @@ MERGING=0
 trap 'exit 130' INT TERM
 note merged "$(joined "${MERGED[@]/#/#}")"
 ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-move_cards "${MERGED[@]}"
+end_batch
+board_sync "after the merges"
 
 # figure <key> <JOBAPP-VERIFY line>: the value of one key, `-` when the line lacks it.
 figure() {
@@ -972,6 +1012,8 @@ note main "$(short "$commit") tree $tree"
 say "deploy ops/deploy-checked.sh $commit"
 deploy_status=0
 "$MAIN/ops/deploy-checked.sh" "$commit" >"$LOGS/deploy.log" 2>&1 </dev/null || deploy_status=$?
+board_sync "after the deploy"
+board_note
 deploy_last="$(tail -n 1 "$LOGS/deploy.log" | redact)"
 # The figures of the run (step 7), whatever its result: a run whose verify step failed is red.
 verify="$(grep -E '^JOBAPP-VERIFY services=[0-9]+( [a-z_]+=[A-Za-z0-9_.:,-]+)*$' "$LOGS/deploy.log" | tail -n 1 || true)"
@@ -987,6 +1029,5 @@ say "check  the figures of the deploy run (JOBAPP-VERIFY)"
 [[ -n "$verify" ]] ||
   die "the deploy run printed no JOBAPP-VERIFY line ($LOGS/deploy.log): deployed, the Jetson is not checked (ops/remote.sh status)"
 check_jetson "$verify"
-((${#STUCK[@]} == 0)) || die "deployed and checked, but these cards did not move to Done: $(joined "${STUCK[@]}")"
 summary
 say "SHIP: OK"
