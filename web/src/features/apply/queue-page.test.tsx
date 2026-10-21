@@ -224,6 +224,9 @@ describe("the review queue page", () => {
       }),
     );
     await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "Robotics Engineer 2" }),
       ).toHaveFocus();

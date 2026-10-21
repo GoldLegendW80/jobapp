@@ -166,8 +166,10 @@ export function QueueCard({
       const next = currentTitle
         ? cards[cards.indexOf(currentTitle) + 1]
         : undefined;
-      if (next) next.focus();
-      else onLeave();
+      window.setTimeout(() => {
+        if (next?.isConnected) next.focus();
+        else onLeave();
+      });
     },
     onError: (error) => {
       setConfirming(false);
