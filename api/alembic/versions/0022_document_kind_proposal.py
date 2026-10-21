@@ -14,7 +14,7 @@ the type again without the value: Postgres cannot drop an enum value. The two ch
 compare `kind` with a literal are dropped first and made again on the new type.
 
 Revision ID: 0022
-Revises: 0019
+Revises: 0021
 Create Date: 2026-10-20
 """
 
@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "0022"
-down_revision: str | None = "0019"
+down_revision: str | None = "0021"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

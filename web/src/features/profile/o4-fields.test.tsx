@@ -129,18 +129,19 @@ describe("preferences card", () => {
     await user.click(card.getByRole("button", { name: "Save preferences" }));
     await screen.findByText("Preferences saved.");
     expect(lastSave(state, "preferences")).toEqual({
-      onboarding: { completed_at: null, dismissed_at: null },
+      onboarding: { completed_at: null, dismissed_at: null, steps_passed: [] },
       documents_language: "fr",
       documents_tone: "warm",
     } satisfies Preferences);
     expect(lastSave(state, "search")).toBeUndefined();
   });
 
-  it("sends the wizard's dates back unchanged", async () => {
+  it("sends the wizard's dates and steps back unchanged", async () => {
     const sections = haraldLike();
     const dates = {
       completed_at: "2026-10-20T08:00:00+00:00",
       dismissed_at: null,
+      steps_passed: ["profile", "where"],
     };
     const { user, state } = await open({
       ...sections,

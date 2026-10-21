@@ -19,8 +19,8 @@ The input holds ids, the document's language, the person's tone (a code) and the
 `script`: never a text of the person or the posting, and never the address.
 
 Preferences (issue #473): the language is the document's, which `store.get_or_create` sets, and
-the tone is the input's `tone`, which `generate.start` fills for every writer once #473 lands.
-`tone_line` is the one hook: once #473 has merged, it becomes `writer_cv.tone_line`.
+the tone is the input's `tone`, which `generate.start` fills for every writer and
+`writer_cv.tone_line` reads.
 """
 
 from __future__ import annotations
@@ -55,12 +55,6 @@ TOOLS = (
     "get_draft",
     "submit_proposal",
 )
-# The tones of `preferences.documents_tone` (opportunities O4), until #473's `writer_cv.TONES`.
-TONES = {
-    "plain": "plain: simple, direct sentences",
-    "formal": "formal: courteous and measured, no familiar turns",
-    "warm": "warm: personal and enthusiastic, still concrete",
-}
 
 
 class ProposalInput(BaseModel):
@@ -85,12 +79,6 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     return writer_cv.bind_for(db, run, Kind.proposal)
 
 
-def tone_line(data: Mapping[str, Any]) -> str:
-    """The hook of #473: the tone sentence of the first message, `plain` when the input names
-    none. Once #473 has merged, this is `writer_cv.tone_line`."""
-    return f"Tone: {TONES.get(str(data.get('tone')), TONES['plain'])}."
-
-
 @dataclass(frozen=True)
 class ProposalWriter(definitions.AgentDefinition):
     """The definition, with a first message built from the run's input."""
@@ -101,7 +89,7 @@ class ProposalWriter(definitions.AgentDefinition):
             "Write a short outreach proposal for this posting, from the person's profile and "
             "base CV, and from the CV already written for it when there is one: a subject and "
             f"a body of at most {c.PROPOSAL_WORDS} words. "
-            f"Language: {language}. {tone_line(data)}"
+            f"Language: {language}. {writer_cv.tone_line(data)}"
         )
         if job_id is not None:
             text += f"\n\nJob id: {job_id}"

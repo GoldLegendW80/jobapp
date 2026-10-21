@@ -40,7 +40,17 @@ from pydantic import (
 )
 
 from app.jobs import slug as slugs
-from app.jobs.models import SLUG_PATTERN, ContractType, FileOrigin, JobEventKind, JobStatus
+from app.jobs.models import (
+    PAY_MAX,
+    SLUG_PATTERN,
+    ContractType,
+    FileOrigin,
+    JobEventKind,
+    JobStatus,
+    PayPeriod,
+    WorkMode,
+)
+from app.profile.schemas import CURRENCIES
 
 IMPORT_FORMAT = "jobapp-jobs"
 IMPORT_VERSION = 1
@@ -271,6 +281,13 @@ class JobListItem(BaseModel):
     gaps: list[str]
     description: str | None
     published_on: date | None
+    # The pay and the work mode the posting states, or the person's edit (opportunities O3); the
+    # four pay fields are all set or all null.
+    pay_min: int | None = None
+    pay_max: int | None = None
+    pay_currency: str | None = None
+    pay_period: PayPeriod | None = None
+    work_mode: WorkMode | None = None
     found_on: date
     applied_on: date | None
     notes: str
@@ -339,7 +356,7 @@ class JobDetail(JobListItem):
 BULK_MAX = 500
 RESCORE_IDS_MAX = 5_000
 URL_SCHEMES = ("http", "https")
-PATCH_NULLABLE = frozenset({"updated_at", "fit", "url"})
+PATCH_NULLABLE = frozenset({"updated_at", "fit", "url", "pay", "work_mode"})
 
 
 def _clean_line(value: str) -> str:
@@ -366,10 +383,37 @@ Notes = Annotated[str, StringConstraints(max_length=TEXT_MAX)]
 Posting = Annotated[str, StringConstraints(max_length=POSTING_MAX)]
 
 
+class PayIn(BaseModel):
+    """A pay as the person sets it on a posting: whole numbers from 1 to PAY_MAX, `min` at most
+    `max` (the same figure twice for one figure), a currency of the profile's list, a period."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    min: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
+    max: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
+    currency: str
+    period: PayPeriod
+
+    @field_validator("currency")
+    @classmethod
+    def _known(cls, value: str) -> str:
+        if value not in CURRENCIES:
+            raise ValueError(f"unknown currency; one of {', '.join(CURRENCIES)}")
+        return value
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "PayIn":
+        if self.min > self.max:
+            raise ValueError("min must be at most max")
+        return self
+
+
 class JobPatchIn(BaseModel):
     """PATCH /api/jobs/{id}: only the fields sent change. `fit`: a number sets it by hand, null
-    goes back to the computed fit. `url`: null or "" removes it. `updated_at`: the version the
-    edit is based on (as last read); a different stored value is a 409."""
+    goes back to the computed fit. `url`: null or "" removes it. `pay` and `work_mode`
+    (opportunities O3): a value replaces what the posting stated, null removes it; the sweep and
+    a rescore never change them afterwards. `updated_at`: the version the edit is based on (as
+    last read); a different stored value is a 409."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -382,6 +426,8 @@ class JobPatchIn(BaseModel):
     location: Line1k | None = None
     contract_type: ContractType | None = None
     url: Url1k | None = None
+    pay: PayIn | None = None
+    work_mode: WorkMode | None = None
 
     @field_validator("company", "title")
     @classmethod

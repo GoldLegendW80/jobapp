@@ -641,6 +641,36 @@ def test_a_continue_from_a_stale_page_is_refused_and_adds_nothing(
     assert (again.status_code, again.json()) == (409, {"detail": runs_router.NOT_CONTINUABLE})
 
 
+def test_the_409_of_a_changed_figure_holds_one_reading_of_it(
+    app: FastAPI,
+    factory: sessionmaker[Session],
+    api: Api,
+    alice: str,
+    ready: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Note 6 of the third review of PR #148: the figure the refusal measured under the lock
+    and the one of the run read after it could differ; the answer gives the run's."""
+    run = started(api, alice, ready)
+    url = f"{RUNS}/{run['id']}"
+    end_step(app, factory, run, tokens=run["tokens"]["ceiling"])
+    shown = api.get(url, token=alice).json()["tokens"]["continue_adds"]
+    real = engine.continue_adds
+    calls: list[int] = []
+
+    def moving(*args: Any, **kwargs: Any) -> int:
+        calls.append(1)
+        figure = real(*args, **kwargs)
+        return figure + 7 if len(calls) == 1 else figure
+
+    monkeypatch.setattr(engine, "continue_adds", moving)
+    refused = api.post(f"{url}/continue", token=alice, json={"adds": shown})
+    assert refused.status_code == 409
+    body = refused.json()
+    assert len(calls) >= 2
+    assert body["continue_adds"] == body["run"]["tokens"]["continue_adds"] == shown
+
+
 @pytest.mark.parametrize(
     "body",
     [

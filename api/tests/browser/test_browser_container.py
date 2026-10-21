@@ -20,6 +20,7 @@ never leaves it. Marked `docker`; the image is built under a tag of its own unle
 BROWSER_TEST_IMAGE names one (a first build downloads Chromium, a few minutes).
 """
 
+import contextlib
 import json
 import os
 import secrets
@@ -146,6 +147,13 @@ class Stack:
             # 200 with the end and the profile's size since browser B7.
             assert self.call("DELETE", f"/leases/{lease['lease_id']}")["status"] == 200
 
+    def release_left(self) -> None:
+        """Ends whatever lease a test left, whatever its outcome (no_lease_left): a test that
+        fails while it holds one would fail every later test with 409 `busy` (issue #488). A
+        browser that is down holds no lease, so a failing call here is not a second failure."""
+        with contextlib.suppress(AssertionError, subprocess.SubprocessError, ValueError):
+            self.end()
+
     def wait_ended(self, attempts: int = 120) -> dict:
         """Polls GET /leases/current (each call is a round trip through docker exec, no sleep)
         until the lease is gone."""
@@ -199,8 +207,31 @@ def stack() -> Iterator[Stack]:
             subprocess.run(["docker", "rmi", "-f", image], capture_output=True, check=False)
 
 
+@pytest.fixture(autouse=True)
+def no_lease_left(request: pytest.FixtureRequest, stack: Stack) -> Iterator[None]:
+    """After every test, passed or failed, its lease is ended: one failure stays one failure
+    (issue #488). The container test files that borrow this stack import it too. Only the
+    tests of one shared lease (`sweep_of_a`) keep theirs for the next."""
+    yield
+    if "sweep_of_a" not in request.fixturenames:
+        stack.release_left()
+
+
 A = str(uuid.uuid4())
 B = str(uuid.uuid4())
+
+
+@pytest.fixture
+def sweep_of_a(stack: Stack) -> dict:
+    """The sweep lease of A that the tests from test_a_lease_for_a_new_profile_and_a_second_lease
+    _refused to test_the_client_reaches_the_control_api_but_chromium_reaches_only_pages share:
+    the first takes it, the next ones find it, and one run after a failure ended it takes it
+    again, so a failure there does not fail the rest of the chain."""
+    lease = stack.current()["lease"]
+    if lease is not None and (lease["profile_id"], lease["purpose"]) == (A, "sweep"):
+        return lease
+    stack.release_left()
+    return stack.lease(A, 20001, "sweep")
 
 
 def test_the_container_as_compose_starts_it(stack: Stack) -> None:
@@ -253,8 +284,10 @@ def test_the_secret_missing_or_wrong_starts_nothing(stack: Stack) -> None:
     assert stack.call("GET", "/healthz")["body"]["ok"] is True
 
 
-def test_a_lease_for_a_new_profile_and_a_second_lease_refused(stack: Stack) -> None:
-    lease = stack.lease(A, 20001, "sweep")
+def test_a_lease_for_a_new_profile_and_a_second_lease_refused(
+    stack: Stack, sweep_of_a: dict
+) -> None:
+    lease = sweep_of_a
     assert lease["lease_token"]
     assert lease["purpose"] == "sweep"
     assert lease["max_s"] == 900
@@ -272,11 +305,13 @@ def test_a_lease_for_a_new_profile_and_a_second_lease_refused(stack: Stack) -> N
     assert "lease_token" not in current
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_chromium_sandbox_is_on(stack: Stack) -> None:
     text = stack.probe("sandbox")["text"]
     assert "You are adequately sandboxed." in text, text[:800]
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_the_ai_snapshot_with_refs_of_the_pinned_playwright(stack: Stack) -> None:
     """Item 2: fails loudly when Playwright drops snapshotForAI or its refs."""
     version = stack.python("import importlib.metadata as m; print(m.version('playwright'))")
@@ -286,6 +321,7 @@ def test_the_ai_snapshot_with_refs_of_the_pinned_playwright(stack: Stack) -> Non
     assert 'textbox "First name *" [ref=e' in snapshot, snapshot[:600]
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_languages_zone_user_agent_and_webgl(stack: Stack) -> None:
     """Items 3, 4 and 7: the languages from the preferences, Chromium's own user agent, no
     WebGL under Xvfb."""
@@ -299,6 +335,7 @@ def test_languages_zone_user_agent_and_webgl(stack: Stack) -> None:
     assert env["accept_language"].startswith("fr-FR,fr;q=0.9")
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_the_tab_acted_on_comes_to_the_front(stack: Stack) -> None:
     """Item 8. Under Xvfb with no window manager Chromium computes no occlusion, so the tab in
     the background still reads "visible"; what is proved is that the tab acted on holds the
@@ -306,6 +343,7 @@ def test_the_tab_acted_on_comes_to_the_front(stack: Stack) -> None:
     assert stack.probe("front", f"{PAGES}/form.html") == {"visibility": "visible", "focus": True}
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_a_navigation_timeout_is_a_failure_result(stack: Stack) -> None:
     result = stack.probe("navigate", f"{PAGES}/slow.html", "1")
     assert result["ok"] is False
@@ -335,6 +373,7 @@ def test_a_navigation_timeout_is_a_failure_result(stack: Stack) -> None:
         "https://pages-ip:8443/",
     ],
 )
+@pytest.mark.usefixtures("sweep_of_a")
 def test_the_egress_proxy_refuses_what_is_not_public(stack: Stack, url: str) -> None:
     url = url.replace("pages-ip", pages_ip(stack))
     result = stack.probe("navigate", url, "20")
@@ -347,11 +386,13 @@ def test_the_egress_proxy_refuses_what_is_not_public(stack: Stack, url: str) -> 
     assert "First name" not in result.get("text", "")
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_the_pages_server_answers_on_8080_by_its_allowed_name(stack: Stack) -> None:
     """The control of the address cases above: the same port answers by the allowed name."""
     assert stack.probe("navigate", "http://pages:8080/form.html", "20")["status"] == 200
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_the_upstream_reads_the_host_the_proxy_checked(stack: Stack) -> None:
     """Issue #281 item 6: the Host header the pages server reads is the checked authority, and
     no proxy header reaches it."""
@@ -373,6 +414,7 @@ def datagrams(stack: Stack) -> int:
     return json.loads(stack.execute("pages", "python", "-I", "-c", code))["count"]
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_webrtc_sends_no_udp_outside_the_proxy(stack: Stack) -> None:
     """Review of PR #267, blocking 1: a page's RTCPeerConnection with STUN and TURN servers over
     UDP, by the pages server's private address and by its name. Not one datagram reaches the
@@ -406,6 +448,7 @@ def test_webrtc_sends_no_udp_outside_the_proxy(stack: Stack) -> None:
     assert datagrams(stack) == 1
 
 
+@pytest.mark.usefixtures("sweep_of_a")
 def test_the_client_reaches_the_control_api_but_chromium_reaches_only_pages(stack: Stack) -> None:
     assert stack.probe("navigate", f"{PAGES}/form.html", "20")["status"] == 200
     reach = stack.execute(

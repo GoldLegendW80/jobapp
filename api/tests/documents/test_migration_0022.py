@@ -72,8 +72,8 @@ def test_0022_up_down_up(at_head: sa.Engine) -> None:
                 sa.text("UPDATE documents SET base_document_id = :b WHERE id = :d"),
                 {"b": cv, "d": offer},
             )
-    command.downgrade(alembic_config(), "0019")
-    assert current_revision(url(at_head)) == "0019"
+    command.downgrade(alembic_config(), "0021")
+    assert current_revision(url(at_head)) == "0021"
     assert _labels(at_head) == ["cv", "letter"]
     with at_head.begin() as conn:
         kinds = conn.execute(sa.text("SELECT kind::text FROM documents")).scalars().all()
@@ -96,6 +96,6 @@ def test_0022_offline_sql(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@nowhere.invalid:5432/x")
-    command.upgrade(alembic_config(), "0019:0022", sql=True)
+    command.upgrade(alembic_config(), "0021:0022", sql=True)
     out = capsys.readouterr().out
     assert "ALTER TYPE document_kind ADD VALUE IF NOT EXISTS 'proposal'" in out

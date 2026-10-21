@@ -57,7 +57,6 @@ from app.documents.corrections import Correction
 from app.documents.models import Document, DocumentGeneration, Kind
 from app.documents.settings import DocumentSettings
 from app.documents.sources import DocumentSources, PostingView, sources_for
-from app.ingestion.models import IngestionDocument
 from app.jobs.models import Job
 from app.profile import service as profile_service
 
@@ -100,6 +99,8 @@ class Accepted:
 
     content: c.Content
     corrections: tuple[Correction, ...]
+    # As the writer first sent it, before the fact check and the correction pass changed it.
+    written: c.CvContent | c.LetterContent | None = None
 
 
 @dataclass
@@ -154,14 +155,13 @@ def max_submits() -> int:
 
 
 def _upload_text(db: Session, user_id: uuid.UUID, base: Document | None) -> str | None:
+    """The file a base CV was converted from, as its own chat reads it: the clipped head of a
+    file still readable (`writer_base.upload_text`), else None."""
+    from app.documents import writer_base  # writer_base imports this module
+
     if base is None or base.source_document_id is None:
         return None
-    return db.execute(
-        sa.select(IngestionDocument.text).where(
-            IngestionDocument.id == base.source_document_id,
-            IngestionDocument.user_id == user_id,
-        )
-    ).scalar_one_or_none()
+    return writer_base.upload_text(db, user_id, base.source_document_id)
 
 
 # A proposal has no template, so no counter: the hard limits of its content are its limits.
@@ -374,10 +374,11 @@ def handle(context: WriterContext | None, run_id: uuid.UUID, raw: object) -> tup
         state.first, state.first_claims = content, found.claims
         return _correction_answer(content, found), True
     records: list[Correction] = list(separators)
+    written = state.first or content
     if state.first is not None:
         records += corrections.diff_corrections(state.first, content, state.first_claims)
     if found.claims:
         content, removed = corrections.remove_remaining(content, found, context.fallbacks)
         records += removed
-    state.accepted = Accepted(content, tuple(records))
+    state.accepted = Accepted(content, tuple(records), written)
     return STORED, False

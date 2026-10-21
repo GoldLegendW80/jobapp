@@ -158,9 +158,18 @@ test("A adds three job sites in the Search tab, on a phone", async () => {
     sections: { search: { browser_sources: unknown[] } };
   };
   expect(body.sections.search.browser_sources).toEqual([
-    { kind: "google_careers", query: "three", location: null, enabled: true },
-    { kind: "google_careers", query: "changed", location: null, enabled: true },
-    { kind: "vie", query: "one", location: null, enabled: true },
+    // Browser B10: every entry carries LinkedIn's acceptance fields, null for other sites.
+    ...[
+      { kind: "google_careers", query: "three" },
+      { kind: "google_careers", query: "changed" },
+      { kind: "vie", query: "one" },
+    ].map((site) => ({
+      ...site,
+      location: null,
+      enabled: true,
+      accepted_at: null,
+      text_version: null,
+    })),
   ]);
 });
 

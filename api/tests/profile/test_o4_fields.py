@@ -113,7 +113,7 @@ def test_invalid_values_are_refused(fields: dict[str, Any], message: str) -> Non
 
 def test_preferences_defaults_and_values() -> None:
     assert PreferencesSection().model_dump(mode="json") == {
-        "onboarding": {"completed_at": None, "dismissed_at": None},
+        "onboarding": {"completed_at": None, "dismissed_at": None, "steps_passed": []},
         "documents_language": "auto",
         "documents_tone": "plain",
     }
@@ -123,6 +123,12 @@ def test_preferences_defaults_and_values() -> None:
     assert validate_section("preferences", instant)["onboarding"]["completed_at"] == (
         "2026-10-20T08:30:00+00:00"
     )
+    # the wizard's steps passed: each once, in the wizard's order
+    steps = {"onboarding": {"steps_passed": ["pay", "profile", "pay"]}}
+    assert validate_section("preferences", steps)["onboarding"]["steps_passed"] == [
+        "profile",
+        "pay",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -136,6 +142,9 @@ def test_preferences_defaults_and_values() -> None:
         {"onboarding": {"completed_at": "yesterday"}},
         {"onboarding": {"completed_at": 1760000000}},
         {"onboarding": {"started_at": None}},
+        {"onboarding": {"steps_passed": ["nowhere"]}},
+        {"onboarding": {"steps_passed": "where"}},
+        {"onboarding": {"steps_passed": ["where"] * 15}},
         {"theme": "dark"},
     ],
 )
@@ -212,7 +221,10 @@ def test_the_dates_the_wizard_recorded_survive_a_save_and_an_import(
     data["documents_tone"] = "formal"
     save_ok(api, ana, "preferences", data, loaded["revision"])
     # Clearing them is a change too, and refused.
-    cleared = {**data, "onboarding": {"completed_at": None, "dismissed_at": None}}
+    cleared = {
+        **data,
+        "onboarding": {"completed_at": None, "dismissed_at": None, "steps_passed": []},
+    }
     assert save(api, ana, "preferences", cleared, loaded["revision"] + 1).status_code == 422
     # An import (here a file with no dates) keeps the stored ones.
     exported = api.get("/api/profile/export", token=ana).json()

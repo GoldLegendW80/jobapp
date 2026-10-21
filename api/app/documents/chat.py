@@ -27,8 +27,11 @@ every model call of the module, `writer_base.wait_reason`), else nothing is stor
 route answers 409 with what to settle: a waiting chat would hold the document's one open
 generation, and nothing would start it. One open generation per document (409 while one runs);
 the person's most active runs (429). The message is at most DOCUMENTS_CHAT_MAX_CHARS characters
-once its control characters are dropped (`clean`); the document keeps its latest
-DOCUMENTS_MESSAGES_KEPT messages (`store.add_message` prunes the oldest).
+once its control characters are dropped (`clean`), and one with no character drawn (only blanks,
+zero width or other ignorable characters, `visible`) is empty; the document keeps its latest
+DOCUMENTS_MESSAGES_KEPT messages (`store.add_message` prunes the oldest). A posting's document is
+locked after its posting (`store.lock_posting`, the lock order of store.py), since the run the
+message starts references the posting: the order of the Like, the freeze and the render.
 
 **The result** (`settle`, from the final hook, in one transaction under the document's lock):
 the submit goes through D7's pipeline (`submit.handle`: the schema, the dash fix, the fact
@@ -146,6 +149,13 @@ FAILED = {
 }
 CANCELLED = "Stopped before any change."
 NOTHING = "Nothing in the document changed."
+TEMPLATE_GONE = (
+    "The template {name} was deleted before the change was made: the document keeps its template."
+)
+UNPRINTABLE = (
+    "The new template cannot print some characters of this document: they are replaced in the "
+    "PDF, and listed with the version."
+)
 
 
 class ChatInput(BaseModel):
@@ -227,6 +237,7 @@ def _bind(kind: ChatKind) -> definitions.Bind:
 @dataclass
 class Asked:
     template: str | None = None  # a slug the gallery serves
+    name: str | None = None  # its name when it was asked, for a template deleted meanwhile
     unknown: bool = False  # a slug asked that it does not
 
 
@@ -285,7 +296,7 @@ def ask_template(
             f"{listed}. Call set_template with one of these, or tell the person.",
             True,
         )
-    state.template = found.slug
+    state.template, state.name = found.slug, found.name.get("en") or found.slug
     return (
         f"The document will use {found.name.get('en') or found.slug} when this run ends; its "
         "text stays as it is. Submit only if the person also asked for a change of the text.",
@@ -435,6 +446,20 @@ def clean(text: str) -> str:
     return _DROPPED.sub("", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
 
 
+# Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties.txt): drawn as nothing.
+_IGNORABLE = re.compile(
+    "[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f"
+    "\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8"
+    "\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]"
+)
+
+
+def visible(text: str) -> bool:
+    """Whether a cleaned message holds a character that is drawn: one neither blank nor ignorable
+    (a zero width space, a joiner, a direction mark, a variation selector). Pure and linear."""
+    return any(not ch.isspace() for ch in _IGNORABLE.sub("", text))
+
+
 class ChatRefusedError(Exception):
     """The chat cannot start a run now: `reason` is `consent` or `credential`, or `kind` for a
     document that has no chat (an outreach proposal)."""
@@ -566,8 +591,13 @@ def post(
     store.DocumentBusyError; the caller rolls back and nothing is kept."""
     settings = settings or get_settings()
     stored = clean(text)
-    if not stored or len(stored) > settings.documents_chat_max_chars:
+    if not visible(stored) or len(stored) > settings.documents_chat_max_chars:
         raise store.MessageInvalidError("text")
+    found = store.get(db, user_id, document_id)
+    if found is None:
+        raise store.NotFoundError(document_id)
+    if found.posting_id is not None:
+        store.lock_posting(db, user_id, found.posting_id)
     document = store.lock_document(db, user_id, document_id)
     if kind_of(document) not in KINDS:
         raise ChatRefusedError("kind")  # an outreach proposal: edited by hand, no chat
@@ -637,8 +667,11 @@ class Outcome:
     outcome: GenerationOutcome | None = None
     before: Any = None  # the content the writer changed, None when it changed none
     after: Any = None
+    written: Any = None  # what the writer sent, before the fact check's corrections
     records: tuple[Correction, ...] = ()
+    unprintable: int = 0  # the fields a template switched to cannot print in full
     template: str | None = None  # the name of a template switched to
+    gone: str | None = None  # the name of a template asked, then deleted before the end
     render: int | None = None  # the draft revision whose render was marked
     unknown: bool = False
     orgs: Mapping[str, str] = field(default_factory=dict)
@@ -651,6 +684,19 @@ def _profile_revision(db: Session, user_id: uuid.UUID) -> int | None:
 def _orgs(db: Session, document: Document, at: datetime) -> dict[str, str]:
     view = render_job.read_context(db, document, at).view
     return {employer.key: employer.organisation for employer in view.employers}
+
+
+def _cannot_print(
+    db: Session, document: Document, template: Any, content: Any, at: datetime
+) -> tuple[Correction, ...]:
+    """What `template` cannot print of `content` and of the profile, as `render_job.switch`
+    records it on a version of a switch by hand."""
+    kind = "letter" if document.kind == Kind.letter else "cv"
+    _, own = templates.printable(template, kind, content)
+    _, profile = templates.printable_profile(
+        template, render_job.read_context(db, document, at).view
+    )
+    return (*own, *profile)
 
 
 def apply(
@@ -671,6 +717,9 @@ def apply(
         if asked.template is not None and asked.template != document.template_slug
         else None
     )
+    gone = None
+    if switch_to is not None and templates.resolve(db, user_id, switch_to) is None:
+        gone, switch_to = asked.name or switch_to, None
     template = render_job.template_of(db, user_id, switch_to or document.template_slug)
     name = (template.name.get("en") or template.slug) if switch_to is not None else None
     if switch_to is not None:
@@ -678,21 +727,24 @@ def apply(
     orgs = _orgs(db, document, at)
     if accepted is None:
         if switch_to is None:
-            return Outcome(unknown=asked.unknown, orgs=orgs)
+            return Outcome(gone=gone, unknown=asked.unknown, orgs=orgs)
         made = render_job.switch(db, user_id, document.id, at=at, template_slug=switch_to)
         document, fresh = render_job.mark_edited(db, user_id, document.id)
         return Outcome(
             version=made.number if made is not None else None,
+            unprintable=len(made.corrections or []) if made is not None else 0,
             template=name,
             render=document.draft_revision if fresh else None,
             unknown=asked.unknown,
             orgs=orgs,
         )
     content = accepted.content
+    written = accepted.written or content
     if isinstance(content, c.BaseCvContent):
         own = c.parse("base", document.draft)
         content = content.model_copy(update={"fixed": own.fixed})  # type: ignore[union-attr]
     records = tuple(accepted.corrections)
+    unprintable = _cannot_print(db, document, template, content, at) if switch_to else ()
     before = c.parse(kind, document.draft)
     render: int | None = None
     if moved:
@@ -707,7 +759,7 @@ def apply(
             Origin.chat,
             at=at,
             generation_id=generation.id,
-            corrections=records,
+            corrections=(*records, *unprintable),
             template_slug=template.slug,
             template_version=template.version,
             profile_revision=_profile_revision(db, user_id),
@@ -729,7 +781,7 @@ def apply(
             Origin.chat,
             at=at,
             generation_id=generation.id,
-            corrections=records,
+            corrections=(*records, *unprintable),
             template_slug=template.slug,
             template_version=template.version,
             profile_revision=_profile_revision(db, user_id),
@@ -744,8 +796,11 @@ def apply(
         outcome=outcome,
         before=before,
         after=content,
+        written=written,
         records=records,
+        unprintable=len(unprintable),
         template=name,
+        gone=gone,
         render=render,
         unknown=asked.unknown,
         orgs=orgs,
@@ -891,6 +946,43 @@ def recover(db: Session, document: Document, at: datetime) -> bool:
     return True
 
 
+def cancel(
+    db: Session, user_id: uuid.UUID, generation_id: uuid.UUID, *, at: datetime
+) -> tuple[DocumentGeneration, bool]:
+    """Stop the person's chat generation, under its document's lock, in the caller's
+    transaction. A run still queued is cancelled here with its answer; a running one is asked to
+    stop, and its final hook settles it `cancelled` (`settle`); an ended one is left as it is.
+    Returns the generation and whether a run was stopped or asked to stop. Raises
+    store.NotFoundError (not the person's chat generation) and store.DocumentBusyError."""
+    found = db.execute(
+        sa.select(DocumentGeneration.document_id).where(
+            DocumentGeneration.id == generation_id,
+            DocumentGeneration.user_id == user_id,
+            DocumentGeneration.mode == GenerationMode.chat,
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        raise store.NotFoundError(generation_id)
+    document = store.lock_document(db, user_id, found)
+    generation = db.execute(
+        sa.select(DocumentGeneration)
+        .where(DocumentGeneration.id == generation_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    if generation.status is not GenerationStatus.running or generation.run_id is None:
+        return generation, False
+    stopped = agent_runs.request_cancel(db, user_id, generation.run_id, at)
+    if stopped is agent_runs.CancelOutcome.cancelled:
+        run = db.get(AgentRun, generation.run_id, populate_existing=True)
+        conclude(db, document, generation, RunStatus.cancelled, run, None, False, Asked(), at)
+    logger.info(
+        "documents.chat.cancel",
+        extra={"generation_id": str(generation.id), "outcome": stopped.value},
+    )
+    return generation, stopped is not agent_runs.CancelOutcome.final
+
+
 # --- the answer ---------------------------------------------------------------------------------
 
 LABELS = {
@@ -952,11 +1044,29 @@ def _field_label(path: str, content: Any, orgs: Mapping[str, str]) -> str:
     return LABELS.get(parts[0], "the document")
 
 
-def changed(before: Any, after: Any, orgs: Mapping[str, str]) -> list[str]:
-    """The labels of the parts that differ, in the order of the new content."""
+def _differ(before: Any, after: Any) -> list[str]:
     old, new = _groups(before), _groups(after)
     order = list(new) + [part for part in old if part not in new]
-    return [_label(part, orgs) for part in order if old.get(part) != new.get(part)]
+    return [part for part in order if old.get(part) != new.get(part)]
+
+
+def changed(before: Any, after: Any, orgs: Mapping[str, str]) -> list[str]:
+    """The labels of the parts that differ, in the order of the new content."""
+    return [_label(part, orgs) for part in _differ(before, after)]
+
+
+def split_changes(
+    before: Any, written: Any, after: Any, orgs: Mapping[str, str]
+) -> tuple[list[str], list[str]]:
+    """The labels of the parts that differ between `before` and `after`: those the writer
+    changed (they differ in `written` too), then those only the fact check's corrections
+    changed (a claim already in the draft, cut)."""
+    by_writer = set(_differ(before, written))
+    parts = _differ(before, after)
+    return (
+        [_label(part, orgs) for part in parts if part in by_writer],
+        [_label(part, orgs) for part in parts if part not in by_writer],
+    )
 
 
 def _join(items: list[str]) -> str:
@@ -1006,6 +1116,8 @@ def answer(done: Outcome, offered: Iterable[tuple[str, str]] = ()) -> str:
     lines: list[str] = []
     if done.unknown:
         lines.append(_gallery_line(offered))
+    if done.gone is not None:
+        lines.append(TEMPLATE_GONE.format(name=done.gone))
     if done.template is not None:
         lines.append(f"Switched the template to {done.template}.")
     if done.outcome is GenerationOutcome.kept_as_version:
@@ -1014,8 +1126,14 @@ def answer(done: Outcome, offered: Iterable[tuple[str, str]] = ()) -> str:
             f"kept as version {done.version}: open it in See to restore it."
         )
     elif done.after is not None:
-        parts = changed(done.before, done.after, done.orgs)
-        lines.append(f"Changed {_join(parts)}." if parts else "The text is the same as before.")
+        written = done.written if done.written is not None else done.after
+        parts, cuts = split_changes(done.before, written, done.after, done.orgs)
+        if parts:
+            lines.append(f"Changed {_join(parts)}.")
+        if cuts:
+            lines.append(f"The fact check alone changed {_join(cuts)}.")
+        if not parts and not cuts:
+            lines.append("The text is the same as before.")
     if done.records:
         count = len(done.records)
         lines.append(f"The fact check corrected {count} claim{'s' if count > 1 else ''}:")
@@ -1025,6 +1143,8 @@ def answer(done: Outcome, offered: Iterable[tuple[str, str]] = ()) -> str:
             lines.append(f"And {count - len(shown)} more, listed with the version.")
         if any(record.reason in SUGGESTED for record in done.records):
             lines.append(SUGGEST_PROFILE)
+    if done.unprintable:
+        lines.append(UNPRINTABLE)
     if done.version is not None and done.outcome is not GenerationOutcome.kept_as_version:
         lines.append(f"This is version {done.version}.")
     if done.template is None and done.after is None:

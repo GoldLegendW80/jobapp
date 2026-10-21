@@ -11,6 +11,11 @@ Included by `routers.py` before D6's `/api/documents/{document_id}`.
   ignored on the real model.
 - `GET /api/document-generations/{id}`: one generation of the person's, as the page polls it.
   A chat generation whose run ended without its final hook is settled first (`chat.recover`).
+- `POST /api/document-generations/{id}/cancel`: stop a chat generation of the person's
+  (`chat.cancel`). 202 with the generation when a run was stopped or asked to stop (a running
+  one ends `cancelled` within a second or so, its answer saying nothing changed); 200 with it,
+  unchanged, when it had already ended, so a second click is harmless. 404 for another
+  person's generation or one that is not a chat's; 409 while the document's row is locked.
 
 Every answer is `Cache-Control: private, no-store`. Logs carry ids and sizes, never a text.
 """
@@ -133,6 +138,24 @@ def _generation(row: DocumentGeneration) -> GenerationOut:
     return GenerationOut(id=row.id, status=row.status, wait_reason=row.wait_reason, error=row.error)
 
 
+def _detail(row: DocumentGeneration) -> GenerationDetailOut:
+    return GenerationDetailOut(
+        id=row.id,
+        status=row.status,
+        wait_reason=row.wait_reason,
+        error=row.error,
+        document_id=row.document_id,
+        mode=row.mode.value,
+        trigger=row.trigger,
+        outcome=row.outcome,
+        version_number=row.version_number,
+        corrections=row.corrections,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+    )
+
+
 def _settle_stale(db: Session, user: User, document_id: uuid.UUID, at: datetime) -> None:
     """`chat.recover` under the document's lock, committed; a locked row is left for later."""
     try:
@@ -232,18 +255,32 @@ def read_generation(
         found = db.get(DocumentGeneration, generation_id, populate_existing=True)
         if found is None:
             raise _error(status.HTTP_404_NOT_FOUND, GENERATION_NOT_FOUND)
-    return GenerationDetailOut(
-        id=found.id,
-        status=found.status,
-        wait_reason=found.wait_reason,
-        error=found.error,
-        document_id=found.document_id,
-        mode=found.mode.value,
-        trigger=found.trigger,
-        outcome=found.outcome,
-        version_number=found.version_number,
-        corrections=found.corrections,
-        created_at=found.created_at,
-        started_at=found.started_at,
-        finished_at=found.finished_at,
-    )
+    return _detail(found)
+
+
+@router.post(
+    "/api/document-generations/{generation_id}/cancel",
+    response_model=GenerationDetailOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        200: {"description": "Already ended: nothing to stop"},
+        404: {"description": "Not a chat generation of the person's"},
+        409: {"description": "The document is being changed"},
+    },
+)
+def cancel_generation(
+    generation_id: uuid.UUID, user: CurrentUser, request: Request, response: Response, db: Db
+) -> GenerationDetailOut:
+    try:
+        found, stopped = chat.cancel(db, user.id, generation_id, at=deps.clock(request))
+        out = _detail(found)
+        store.commit(db)
+    except store.NotFoundError:
+        db.rollback()
+        raise _error(status.HTTP_404_NOT_FOUND, GENERATION_NOT_FOUND) from None
+    except store.DocumentBusyError:
+        db.rollback()
+        raise _error(status.HTTP_409_CONFLICT, store.BUSY) from None
+    if not stopped:
+        response.status_code = status.HTTP_200_OK
+    return out

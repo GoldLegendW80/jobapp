@@ -216,7 +216,10 @@ class ContinueChangedOut(BaseModel):
 
     detail: str
     code: str = "continue_changed"
-    continue_adds: int = Field(description="What one Continue adds now: show it, ask again.")
+    continue_adds: int = Field(
+        description="What one Continue adds now: show it, ask again. The figure of `run` while "
+        "that run is still paused on its ceiling, so the two never differ."
+    )
     run: RunOut
 
 
@@ -652,10 +655,13 @@ async def continue_run(run_id: str, body: ContinueIn, user: CurrentUser, request
             "ingestion_continue_refused",
             extra={"user_id": str(user.id), "rule": "continue_changed"},
         )
+        shown = await _answer(request, user.id, _id(run_id))
+        # One reading of the figure: the run's, read after the refusal, while it asks for one.
+        adds = shown.tokens.continue_adds
         answer = ContinueChangedOut(
             detail=CONTINUE_CHANGED,
-            continue_adds=changed.adds,
-            run=await _answer(request, user.id, _id(run_id)),
+            continue_adds=changed.adds if adds is None else adds,
+            run=shown,
         )
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
