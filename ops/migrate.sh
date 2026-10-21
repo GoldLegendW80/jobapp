@@ -207,7 +207,8 @@ fi
 
 revision="$(grep -E '^[A-Za-z0-9_]+ \(head\)$' "$LOG" | tail -n 1 || true)"
 info "revision: ${revision:--}"
-applied="$(grep -c 'Running upgrade ' "$LOG" || true)"
+# The steps of the attempt that succeeded: an earlier one rolled back after a lock timeout.
+applied="$(tail -n "+$from" "$LOG" | grep -c 'Running upgrade ' || true)"
 if ((applied > 0)); then
   info "migrations applied: $applied, in $((SECONDS - start))s; the schema is at head and the previous release still serves"
 else
