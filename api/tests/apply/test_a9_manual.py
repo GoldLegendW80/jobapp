@@ -536,3 +536,12 @@ def full(section: str) -> dict[str, Any]:
     from tests.profile.conftest import full as made
 
     return made(section)
+
+
+def test_the_session_job_outlives_the_leases_maximum() -> None:
+    from app import worker
+
+    functions = {f.name: f for f in worker.apply_queue().functions}
+    assert functions["apply_manual"].timeout_s == 1800 + worker.APPLY_JOB_MARGIN_S
+    assert functions["apply_manual"].keep_result_s == 0
+    assert manual.job_id("x") == "apply-manual:x"
