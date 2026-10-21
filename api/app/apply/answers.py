@@ -539,10 +539,10 @@ CONSENT_OPTIONS = _by_answer(CONSENT_OPTION_TEXTS)
 NEED_OPTIONS = _by_answer(NEED_OPTION_TEXTS)
 
 # A degree, read as (level, rank, name). Rank 0 is one degree (an MSc, a licence), rank 1 the
-# name of its level (Master's degree), rank 2 the French scale of years after the
-# baccalaureate (Bac+5), each wider than the one before: a stored degree picks an option of its
-# own rank and name, else the narrowest wider one, never a narrower one ("Master's degree"
-# never picks "MSc", it may be an MA; "Bac+5" never picks "Master's degree").
+# name of its level (Master's degree): a stored degree picks an option of its own rank and name,
+# else one naming its level, never a narrower one ("Master's degree" never picks "MSc", it may
+# be an MA). Rank 2, the French count of years after the baccalaureate, only confirms a name
+# beside it ("Master (Bac+5)"): a bare "Bac+3" is never picked, a 4 year bachelor may be Bac+4.
 DEGREE_TEXTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "Baccalauréat": ("secondary", ("Baccalauréat", "Bac")),
     "Licence": ("bachelor", ("Licence",)),
@@ -1727,14 +1727,14 @@ def degree_of(text: str | None) -> tuple[str, int, str] | None:
 
 def _degree_option(stored: str, options: tuple[str, ...]) -> str | None:
     """The option for a stored degree: the one that reads the same, else the one of its own
-    rank and name, else the one of the narrowest wider rank of its level (`DEGREE_TEXTS`)."""
+    rank and name, else the one naming its level (`DEGREE_TEXTS`); one of each, or none."""
     picked = match_option(stored, options)
     have = degree_of(stored)
     if picked is not None or have is None:
         return picked
     level, rank, name = have
     read = [(option, degree_of(option)) for option in options]
-    for wanted in range(rank, 3):
+    for wanted in range(rank, 2):
         hits = [
             o
             for o, r in read

@@ -197,7 +197,7 @@ def test_only_a_full_template_match_answers() -> None:
         ("Are you authorized to work in France or do you require sponsorship?", "two_questions"),
         ("Do you require sponsorship now? Will you later?", "two_questions"),
         ("Are you authorized to work in France as a contractor?", "not_a_known_question"),
-        ("Do you need a work permit to work in France?", "not_a_known_question"),
+        ("Do you need a work visa to work in France?", "not_a_known_question"),
         ("Have you previously worked for this company?", "not_a_known_question"),
         ("Are you unwilling to work on-site?", "not_a_known_question"),
     ]:
