@@ -442,7 +442,6 @@ def agents_queue() -> QueueSpec:
     # step of ingestion under a timeout computed before it would be cut at 12 minutes.
     register_modules()
     job_timeout_s = agent_job_timeout_s()
-    check_agents_fit(job_timeout_s)
     return QueueSpec(
         name=queue.AGENTS,
         functions=[

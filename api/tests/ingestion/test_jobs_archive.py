@@ -18,14 +18,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.ingestion import documents, jobs
+from app.ingestion import deletion, documents, jobs
 from app.ingestion import parser_client as pc
 from app.ingestion.models import FailedKind, IngestionDocument, TextSource, TextStatus
 from tests.identity.api_helpers import Api, Clock
 from tests.ingestion import archive_fixtures as fx
 from tests.ingestion import image_fixtures as pictures
 from tests.ingestion.conftest import ALICE, BOB, RecordingQueue
-from tests.ingestion.helpers import delete, row, rows, upload, uploaded, user_id
+from tests.ingestion.helpers import delete, row, rows, set_columns, upload, uploaded, user_id
 from tests.ingestion.parser.helpers import (
     Plenty,
     as_in_the_child,
@@ -191,6 +191,110 @@ def test_the_same_export_uploaded_twice_makes_no_duplicate(
     again = upload(api, alice, fx.POSITIONS.encode(), "Positions.csv")
     assert again.json()["id"] == str(before["export.zip: Positions.csv"][0])
     assert len(of_user(factory, ALICE)) == 3
+
+
+def test_an_export_that_would_replace_a_file_a_run_has_read_says_so_and_keeps_the_rest(
+    api: Api, alice: str, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    first = uploaded(api, alice, fx.export(), "export.zip")
+    assert run(factory, clock, RealParser(), first["id"]) == jobs.DONE
+    by_name = {document.name: document for document in of_user(factory, ALICE)}
+    read = by_name["export.zip: Positions.csv"]
+    replaced = by_name["export.zip: Profile.csv"]
+    # Both replaceable; a run has read only the first.
+    for document in (read, replaced):
+        set_columns(factory, str(document.id), text_status=TextStatus.failed, failed_reason="why")
+    assert delete(api, alice, str(by_name["export.zip: Skills.csv"].id)).status_code == 204
+
+    def check(db: Session, document: IngestionDocument) -> str | None:
+        return deletion.REPLACEMENT_REFUSED if document.id == read.id else None
+
+    documents.register_replacement_check(check)
+    clock.advance(minutes=5)
+    second = uploaded(api, alice, fx.export(), "again.zip")
+    assert run(factory, clock, RealParser(), second["id"]) == jobs.FAILED
+    archive = row(factory, second["id"])
+    assert (archive.text_status, archive.failed_kind) == (TextStatus.failed, FailedKind.file)
+    assert archive.failed_reason == documents.export_refused(["export.zip: Positions.csv"])
+    assert archive.raw is None
+    kept = row(factory, str(read.id))
+    assert (kept.text_status, kept.failed_reason) == (TextStatus.failed, "why")
+    assert row(factory, str(replaced.id)).text_status is TextStatus.done
+    names = sorted(document.name for document in of_user(factory, ALICE))
+    # A replaced row takes the name of the file that replaced it.
+    assert names == [
+        "again.zip",
+        "again.zip: Profile.csv",
+        "again.zip: Skills.csv",
+        "export.zip: Positions.csv",
+    ]
+    # Deleting what was read and adding the export again replaces its failed row.
+    assert delete(api, alice, str(read.id)).status_code == 204
+    clock.advance(minutes=1)
+    third = uploaded(api, alice, fx.export(), "again.zip")
+    assert third["id"] == second["id"]
+    assert run(factory, clock, RealParser(), third["id"]) == jobs.DONE
+    assert len(of_user(factory, ALICE)) == 3
+
+
+def test_a_run_that_starts_reading_a_file_while_the_export_is_stored_keeps_the_names(
+    api: Api,
+    alice: str,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Follow up of the second review of PR #467: the archive's row was deleted on the first
+    look of the checks, and a file refused by the second look lost its name."""
+    first = uploaded(api, alice, fx.export(), "export.zip")
+    assert run(factory, clock, RealParser(), first["id"]) == jobs.DONE
+    by_name = {document.name: document for document in of_user(factory, ALICE)}
+    read = by_name["export.zip: Positions.csv"]
+    set_columns(factory, str(read.id), text_status=TextStatus.failed, failed_reason="why")
+    looks: list[uuid.UUID] = []
+
+    def check(db: Session, document: IngestionDocument) -> str | None:
+        looks.append(document.id)
+        # A run starts reading it after the first look.
+        return deletion.REPLACEMENT_REFUSED if looks.count(read.id) > 1 else None
+
+    monkeypatch.setattr(documents, "_checks", [check])
+    clock.advance(minutes=5)
+    second = uploaded(api, alice, fx.export(), "again.zip")
+    assert run(factory, clock, RealParser(), second["id"]) == jobs.FAILED
+    assert looks.count(read.id) == 2
+    archive = row(factory, second["id"])
+    assert (archive.text_status, archive.failed_kind) == (TextStatus.failed, FailedKind.file)
+    assert archive.failed_reason == documents.export_refused(["export.zip: Positions.csv"])
+    assert archive.raw is None
+    kept = row(factory, str(read.id))
+    assert (kept.text_status, kept.failed_reason) == (TextStatus.failed, "why")
+
+
+@pytest.mark.parametrize(
+    ("names", "sentence"),
+    [
+        (
+            ["a.zip: Positions.csv"],
+            "The other files of this export are in your documents. A run has read "
+            "a.zip: Positions.csv, already among your documents, so the export did not replace "
+            "it. Delete it first, then add the export again.",
+        ),
+        (
+            ["a.zip: Positions.csv", "a.zip: Skills.csv"],
+            "The other files of this export are in your documents. A run has read "
+            "a.zip: Positions.csv, a.zip: Skills.csv, already among your documents, so the "
+            "export did not replace them. Delete them first, then add the export again.",
+        ),
+    ],
+)
+def test_the_sentence_of_an_export_that_did_not_replace_a_file(
+    names: list[str], sentence: str
+) -> None:
+    assert documents.export_refused(names) == sentence
+    assert " - " not in sentence
+    assert "\u2013" not in sentence
+    assert "\u2014" not in sentence
 
 
 def test_the_same_export_of_two_users_gives_each_their_own_rows(
