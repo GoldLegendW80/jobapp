@@ -40,9 +40,14 @@ services:
     depends_on:
       fakeats:
         condition: service_healthy
+    # The probe is a new Python process that imports app.worker: under gate load (load average
+    # about 35, four journey stacks and pytest -n 10) it took more than compose.yml's 8 s on
+    # every try (issue #530, "Health check exceeded timeout (8s)" on each probe of a worker that
+    # recorded its health all along), so here it gets 30 s.
     healthcheck:
       <<: *fast-start
       start_period: 90s
+      timeout: 30s
 
   caddy:
     healthcheck: *fast-start

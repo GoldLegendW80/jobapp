@@ -550,7 +550,7 @@ jobs:
       # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
       # CI_COMPOSE_OVERLAY comes from the runner's own environment, never from this file: the
       # Mac runners set it to compose.mac.yml (ops/ci-runner/Dockerfile), GitHub's machines and
-      # the Jetson do not have it. Only `up` needs the overlay (compose.mac.yml).
+      # the Jetson do not have it. Only `run` and `up` need the overlay (compose.mac.yml).
       - name: Start the stack and migrate (apps)
         id: apps_stack
         if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' }}
@@ -561,9 +561,12 @@ jobs:
             overlay=(-f "$CI_COMPOSE_OVERLAY")
             echo "compose overlay of this runner: $CI_COMPOSE_OVERLAY"
           fi
+          # Migrated before the full `up --wait` (issue #530): `run` starts db, redis and the
+          # stub the api needs, healthy, so the worker never starts on an empty database.
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            run --rm -T api alembic upgrade head
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
             up -d --no-build --wait --wait-timeout 300
-          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       - name: Synthetic job folder (made-up rows, never Harald's data)
         id: apps_data
         if: ${{ !cancelled() && steps.apps_stack.outcome == 'success' }}
@@ -616,9 +619,12 @@ jobs:
             [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
             overlay=(-f "$CI_COMPOSE_OVERLAY")
           fi
+          # Migrated before the full `up --wait` (issue #530): `run` starts db, redis and the
+          # stub the api needs, healthy, so the worker never starts on an empty database.
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            run --rm -T api alembic upgrade head
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
             up -d --no-build --wait --wait-timeout 300
-          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       # Ingestion: documents (task G1: the page, uploads through Caddy up to 20 MiB, an upload
       # stopped on its way, the api's memory with two uploads at once, logs free of content),
       # then what later tasks add as web/e2e/ingestion-<task>.spec.ts. This step names a config,
@@ -822,9 +828,12 @@ jobs:
             overlay=(-f "$CI_COMPOSE_OVERLAY")
             echo "compose overlay of this runner: $CI_COMPOSE_OVERLAY"
           fi
+          # Migrated before the full `up --wait` (issue #530): `run` starts db, redis and the
+          # stub the api needs, healthy, so the worker never starts on an empty database.
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            run --rm -T api alembic upgrade head
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
             up -d --no-build --wait --wait-timeout 300
-          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       - name: Identity, invites, users, account, profile and throttle journeys
         id: e2e_identity
         if: ${{ !cancelled() && steps.identity_stack.outcome == 'success' }}
@@ -867,9 +876,12 @@ jobs:
             [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
             overlay=(-f "$CI_COMPOSE_OVERLAY")
           fi
+          # Migrated before the full `up --wait` (issue #530): `run` starts db, redis and the
+          # stub the api needs, healthy, so the worker never starts on an empty database.
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            run --rm -T api alembic upgrade head
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
             up -d --no-build --wait --wait-timeout 300
-          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       # Issue #11: Find jobs with live progress, the summary and failed boards, the history, the
       # schedule firing on the worker's tick, a 5,000 posting sweep under the worker's memory
       # limit; the spec's one real sweep is skipped here.

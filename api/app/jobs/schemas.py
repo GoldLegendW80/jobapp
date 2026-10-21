@@ -391,7 +391,8 @@ class PayIn(BaseModel):
 
     min: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
     max: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
-    currency: str
+    # Capped so the schema bounds its own size (the body limit's route classes rely on it).
+    currency: Annotated[str, Field(max_length=3)]
     period: PayPeriod
 
     @field_validator("currency")
