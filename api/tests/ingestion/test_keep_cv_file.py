@@ -311,7 +311,7 @@ def test_a_base_cv_from_a_file_that_was_not_kept_changes_nothing_when_deleted(
     assert (stored.raw, stored.keep_bytes, stored.text) == (None, False, TEXT)
 
 
-def test_a_file_replaced_and_waiting_for_its_reader_keeps_it_when_its_base_cv_goes(
+def test_a_file_waiting_for_its_reader_is_never_dropped(
     api: Api, alex: str, factory: sessionmaker[Session]
 ) -> None:
     """The file of a row read again is what the job reads: a delete never takes it away."""
