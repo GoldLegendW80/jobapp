@@ -8,9 +8,12 @@ import itertools
 import json
 import logging
 import random
+import types
+import typing
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from app.ingestion import citations, items
 from app.ingestion.citations import FieldType
@@ -934,3 +937,95 @@ def test_a_link_has_one_key_however_often_it_says_www() -> None:
     assert build("identity", "links", {"label": "Site", "url": "https://example.com/"}).key == (
         link.key
     )
+
+
+# --- follow ups of #111 and #184 ------------------------------------------------------------------
+
+HEX = "0123456789abcdef" * 2
+
+
+@pytest.mark.parametrize(
+    ("key", "field", "value"),
+    [
+        ("blocks", "title", {"title": "~" + HEX, "body": "A made up fact."}),
+        ("blocks", "title", {"title": "  ~" + HEX.upper() + " ", "body": "Made up."}),
+        ("languages", "name", {"name": "~" + HEX, "level": "B1"}),
+        ("education", "school", {"school": "~" + HEX}),
+        ("have", "name", {"name": "~" + HEX, "terms": ["x"]}),
+        ("gates", "name", {"name": "~" + HEX, "terms": ["x"]}),
+        ("work_authorization", "country", {"country": "~" + HEX, "status": "citizen"}),
+    ],
+)
+def test_a_name_written_as_the_hash_form_of_a_key_is_refused(
+    key: str, field: str, value: dict[str, Any]
+) -> None:
+    section = next(name for name, slots in items.SLOTS.items() if key in slots)
+    for origin in (Origin.agent, Origin.user):
+        with pytest.raises(ItemError) as refused:
+            items.build(section, key, "add", value, origin=origin)
+        assert (refused.value.index, refused.value.reason) == (f"value.{field}", items.HASH_FORM)
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["~" + HEX[:31], "~" + HEX + "0", "~" + HEX[:31] + "g", "x~" + HEX, "~ " + HEX, "~"],
+)
+def test_a_name_near_the_hash_form_is_kept(title: str) -> None:
+    item = items.build("facts", "blocks", "add", {"title": title, "body": "Made up."})
+    assert item.value["title"] == title.strip()
+
+
+def test_a_long_title_keeps_its_hashed_key_and_another_cannot_take_it() -> None:
+    long = items.build("facts", "blocks", "add", {"title": "T" * 400, "body": "Made up."})
+    identity = long.key.partition(":")[2]
+    assert identity.startswith("~")
+    assert len(identity) == 33
+    with pytest.raises(ItemError):
+        items.build("facts", "blocks", "add", {"title": identity, "body": "Made up."})
+
+
+def test_an_edit_that_renames_an_entry_onto_another_is_a_conflict() -> None:
+    facts = {"blocks": [{"title": "First", "body": "One."}, {"title": "Second", "body": "Two."}]}
+    onto = items.build(
+        "facts", "blocks", "add", {"title": "second", "body": "Mine."}, origin=Origin.user
+    )
+    for at in ("blocks:first", "blocks:not stored"):  # a stored entry, and one inserted
+        with pytest.raises(ProfileConflict) as taken:
+            items.apply("facts", facts, onto, at=at)
+        assert taken.value.message == items.TAKEN_KEY
+    fresh = items.build(
+        "facts", "blocks", "add", {"title": "Third", "body": "Mine."}, origin=Origin.user
+    )
+    after = items.apply("facts", facts, fresh, at="blocks:first")
+    assert [one["title"] for one in after["blocks"]] == ["Third", "Second"]
+
+
+def _numbers(annotation: Any, path: str) -> list[str]:
+    """The paths of a model whose type is a number."""
+    origin = typing.get_origin(annotation)
+    if origin is typing.Annotated:
+        return _numbers(typing.get_args(annotation)[0], path)
+    if origin in (typing.Union, types.UnionType):
+        return sorted({p for one in typing.get_args(annotation) for p in _numbers(one, path)})
+    if origin is list:
+        return _numbers(typing.get_args(annotation)[0], f"{path}[]")
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        fields = annotation.model_fields.items()
+        return [p for name, f in fields for p in _numbers(f.annotation, f"{path}.{name}")]
+    return [path] if annotation in (int, float) else []
+
+
+def test_no_proposed_value_holds_a_number_left_empty() -> None:
+    """The edit form shows a field that holds null as a line of text (#184 item 10): only a
+    number would be better served by a number control. The one proposable number is the derived
+    years, never null in a proposal (`build` refuses an empty value); a gate's penalty is a
+    setting. A new proposable number fails here, and then needs its control."""
+    numbers = [
+        path
+        for name, model in schemas.SECTION_MODELS.items()
+        for path in _numbers(model, name)
+        if items.FIELD_TYPES.get(path) is not FieldType.SETTING
+    ]
+    assert numbers == ["skills.years_experience"]
+    with pytest.raises(ItemError):
+        items.build("skills", "years_experience", "add", None, origin=Origin.derived)

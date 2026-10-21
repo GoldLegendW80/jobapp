@@ -7,6 +7,7 @@ users; two sessions at once; and a walk over every kind of proposal. Synthetic d
 import inspect
 import logging
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -24,6 +25,7 @@ from app.profile import schemas
 from app.profile import service as profile_service
 from app.profile.models import Profile, ProfileRevision
 from tests.agents.run_helpers import add_job, add_user, now
+from tests.ingestion.test_ingestion_locks import WAITING
 from tests.ingestion.test_items import MARKER, SAMPLES, holds
 from tests.profile.conftest import FULL, full
 
@@ -757,17 +759,29 @@ def test_what_cannot_be_undone(factory: sessionmaker[Session], alice: uuid.UUID)
         ).id
     with pytest.raises(proposals.InvalidValueError, match="cannot be applied"):
         undo(factory, alice, note)
-    # the user renames the entry onto the key of another block: two blocks share that key
-    # afterwards, and what the item did there has no exact way back
+    # the user renames the entry onto the key of another block: refused as a conflict, so an
+    # accept never makes two entries share a key (#111)
     save(factory, alice, "facts", {"blocks": [{"title": "Other block", "body": BLOCK["body"]}]})
-    accept(
-        factory,
-        alice,
-        pending,
-        edited_value={"title": "other  BLOCK", "body": "Two."},
-        profile_revision=revision(factory, alice),
+    before = revision(factory, alice)
+    with pytest.raises(proposals.ProfileConflictError) as renamed:
+        accept(
+            factory,
+            alice,
+            pending,
+            edited_value={"title": "other  BLOCK", "body": "Two."},
+            profile_revision=before,
+        )
+    assert renamed.value.message == items.TAKEN_KEY
+    assert (revision(factory, alice), row(factory, pending).status) == (
+        before,
+        ProposalStatus.pending,
     )
-    assert row(factory, pending).payload["undo"] is None
+    # an accept recorded with no exact way back answers so
+    accept(factory, alice, pending, edited_value={"title": "Mine", "body": "Two."})
+    with factory() as db, db.begin():
+        found = db.get(Proposal, pending)
+        assert found is not None
+        found.payload = {**found.payload, "undo": None}
     with pytest.raises(ip.UndoError) as exact:
         undo(factory, alice, pending)
     assert exact.value.reason == ip.NOT_UNDOABLE
@@ -789,7 +803,10 @@ def test_what_cannot_be_undone(factory: sessionmaker[Session], alice: uuid.UUID)
 def test_accept_all_takes_what_is_neither_locked_nor_flagged(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    base = save_all(factory, alice)
+    save_all(factory, alice)
+    # accept all fills what is empty: the two values this test takes are empty before it
+    save(factory, alice, "identity", {**full("identity"), "headline": None})
+    base = save(factory, alice, "answers", {**full("answers"), "relocation": None})
     locked = made(factory, alice, "identity", "languages", GERMAN)
     headline = made(factory, alice, "identity", "headline", "Applied AI Engineer")
     block = made(factory, alice, "facts", "blocks", BLOCK)
@@ -873,6 +890,8 @@ def test_accept_all_is_all_or_nothing_per_section(
         "skills": ip.SectionFailure(advanced, ip.PROFILE_CONFLICT, items.ADVANCED_LIST)
     }
     assert result.skipped == {rag: ip.SECTION_FAILED, gate: ip.SECTION_FAILED}
+    # the item that stopped its section is counted with the others (#111)
+    assert result.counts == {ip.SECTION_FAILED: 2, ip.PROFILE_CONFLICT: 1}
     assert result.revisions == {"facts": base + 1}
     assert stored(factory, alice, "skills") == items.canonical("skills", full("skills"))
     assert {row(factory, pid).status for pid in (rag, advanced, gate)} == {ProposalStatus.pending}
@@ -1344,10 +1363,17 @@ def test_accept_all_leaves_out_what_takes_away_and_counts_it(
     added = made(factory, alice, "search", "never_apply", "No relocation.")
     scalar = made(factory, alice, "answers", "notice_period", "Two weeks.", action="replace")
     assert ip.review(row(factory, removal).payload, search).bulk == ip.REMOVAL
+    assert ip.review(row(factory, scalar).payload, answers).bulk == ip.REPLACE
     result = bulk(factory, alice)
-    assert set(result.done) == {added, scalar}
-    assert result.skipped == {removal: ip.REMOVAL, emptied: ip.REMOVAL, narrowed: ip.REMOVAL}
-    assert result.counts == {ip.REMOVAL: 3}
+    # accept all takes additions only: every replace needs its own click (owner, #111)
+    assert set(result.done) == {added}
+    assert result.skipped == {
+        removal: ip.REMOVAL,
+        emptied: ip.REMOVAL,
+        narrowed: ip.REMOVAL,
+        scalar: ip.REPLACE,
+    }
+    assert result.counts == {ip.REMOVAL: 3, ip.REPLACE: 1}
     assert result.failed == {}
     after = stored(factory, alice, "search")
     assert after["never_apply"] == ["No sales roles.", "No relocation."]
@@ -1359,3 +1385,176 @@ def test_accept_all_leaves_out_what_takes_away_and_counts_it(
     assert bulk(factory, alice, proposal_ids=[removal]).skipped == {removal: ip.REMOVAL}
     accept(factory, alice, removal)
     assert stored(factory, alice, "search")["never_apply"] == ["No relocation."]
+
+
+# --- follow ups of #184 and #111 ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "lost"),
+    [
+        (None, "Typed.", False),  # nothing held: an addition
+        ("", "Typed.", False),
+        ([], ["one"], False),
+        ("Same.", "Same.", False),
+        ("Typed.", "Other.", True),
+        (4.5, 5, True),
+        ({"title": "T", "body": None}, {"title": "T", "body": "Filled."}, False),
+        ({"title": "T", "body": "Mine."}, {"title": "T", "body": "Theirs."}, True),
+        ({"title": "T", "body": "Mine."}, {"title": "T"}, True),
+        ({"name": "rag", "terms": ["rag"]}, {"name": "rag", "terms": ["RAG", "vector"]}, False),
+        ({"name": "rag", "terms": ["rag", "kg"]}, {"name": "rag", "terms": ["rag"]}, True),
+        (["CDI", "Stage"], ["stage", "cdi", "CDD"], False),
+        ([{"a": 1}], [{"a": 1}, {"a": 2}], False),
+        ([{"a": 1}], [{"a": 2}], True),
+        ({"a": 1}, "flat", True),
+        (["one"], "flat", True),
+    ],
+)
+def test_what_counts_as_changing_a_held_value(before: Any, after: Any, lost: bool) -> None:
+    assert ip._lost(before, after) is lost
+
+
+def test_accept_all_leaves_a_change_of_the_users_own_value(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    base = save_all(factory, alice)
+    typed = made(factory, alice, "identity", "headline", "Applied AI Engineer")
+    joined = made(factory, alice, "skills", "adjacent", {"name": "rag", "terms": ["vector search"]})
+    new = made(factory, alice, "skills", "none", {"name": "rust", "terms": ["rust"]})
+    identity = stored(factory, alice, "identity")
+    assert ip.review(row(factory, typed).payload, identity).bulk == ip.TYPED_BY_YOU
+    assert ip.review(row(factory, joined).payload, stored(factory, alice, "skills")).bulk is None
+    result = bulk(factory, alice)
+    assert sorted(result.done) == sorted([joined, new])
+    assert result.skipped == {typed: ip.TYPED_BY_YOU}
+    assert result.counts == {ip.TYPED_BY_YOU: 1}
+    assert result.revisions == {"skills": base + 1}
+    assert stored(factory, alice, "identity")["headline"] == identity["headline"]
+    # on its own, it is the user's click
+    assert accept(factory, alice, typed) == base + 2
+    assert stored(factory, alice, "identity")["headline"] == "Applied AI Engineer"
+
+
+def test_an_edit_of_a_broken_item_marks_it_invalid(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    pid = raw(factory, alice, {"section": "facts", "key": "blocks:x", "action": "explode"})
+    with factory() as db, db.begin():
+        proposal = db.get(Proposal, pid)
+        assert proposal is not None
+        with pytest.raises(proposals.ItemInvalidError):
+            ip._edited(db, proposal, tick(), BLOCK)
+    assert row(factory, pid).status is ProposalStatus.invalid
+    # through the accept, the stored item is read first and marks it the same way
+    other = raw(factory, alice, {"section": "facts", "key": "blocks:x", "action": "explode"})
+    with pytest.raises(proposals.ItemInvalidError):
+        accept(factory, alice, other, edited_value=BLOCK)
+    assert row(factory, other).status is ProposalStatus.invalid
+
+
+def test_turned_down_reads_the_newest_decisions_and_their_hashes(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    def reject(pid: uuid.UUID) -> None:
+        with factory() as db, db.begin():
+            proposals.reject(db, alice, pid, tick())
+
+    travel = made(factory, alice, "answers", "travel", "Weekly.")
+    other = items.build("answers", "relocation", "add", "Paris.")
+    conflict = made(
+        factory, alice, "answers", "relocation", "Anywhere.", conflict=[(other, [cite()])]
+    )
+    notice = made(factory, alice, "answers", "notice_period", "Three months.")
+    plain = made(factory, alice, "answers", "heard_about", "A friend.")
+    reject(travel)
+    reject(conflict)
+    accept(factory, alice, notice, edited_value="One month.")
+    accept(factory, alice, plain)
+    with factory() as db:
+        found = ip.turned_down(db, alice, limit=10)
+        newest = ip.turned_down(db, alice, limit=2)
+    hashes = {pid: row(factory, pid).payload["value_hash"] for pid in (travel, conflict, notice)}
+    assert found == [
+        ip.Decision("answers", "notice_period", (hashes[notice],), items.value_hash("One month.")),
+        ip.Decision("answers", "relocation", (hashes[conflict], other.value_hash), None),
+        ip.Decision("answers", "travel", (hashes[travel],), None),
+    ]
+    assert newest == found[:2]
+
+
+def test_an_accept_with_the_users_value_rolls_back_whole(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    pid = made(factory, alice, "facts", "blocks", BLOCK)
+    with factory() as db:
+        done = proposals.accept(db, alice, pid, tick(), edited_value={**BLOCK, "body": "Mine."})
+        assert done is not None
+        assert (done[0].edited_value, done[1].revision) == ({**BLOCK, "body": "Mine."}, 1)
+        db.rollback()
+    found = row(factory, pid)
+    assert (found.status, found.edited_value, found.decided_at) == (
+        ProposalStatus.pending,
+        None,
+        None,
+    )
+    assert "applied_revision" not in found.payload
+    assert (revision(factory, alice), revisions(factory, alice)) == (0, [])
+    assert stored(factory, alice, "facts")["blocks"] == []
+
+
+def test_accept_all_over_two_sections_rolls_back_whole(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    block = made(factory, alice, "facts", "blocks", BLOCK)
+    travel = made(factory, alice, "answers", "travel", "Weekly.")
+    with factory() as db:
+        result = ip.accept_many(db, alice, tick())
+        assert (sorted(result.done), result.revisions) == (
+            sorted([block, travel]),
+            {"answers": 1, "facts": 2},
+        )
+        db.rollback()
+    assert {row(factory, pid).status for pid in (block, travel)} == {ProposalStatus.pending}
+    assert (revision(factory, alice), revisions(factory, alice)) == (0, [])
+    assert stored(factory, alice, "facts")["blocks"] == []
+    assert stored(factory, alice, "answers")["travel"] is None
+
+
+def blocked(factory: sessionmaker[Session], thread: threading.Thread) -> None:
+    """Wait until Postgres lists a lock of this database not granted (the thread waits)."""
+    deadline = time.monotonic() + 15
+    engine = factory.kw["bind"]
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as probe:
+        while not probe.execute(WAITING).scalar():
+            assert thread.is_alive(), "the thread ended: it did not wait for the lock"
+            assert time.monotonic() < deadline, "the thread never waited for a lock"
+            thread.join(0.02)
+
+
+def test_accept_all_racing_a_save_of_the_profile_in_another_tab(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    notice = made(factory, alice, "answers", "notice_period", "Three months.")
+    start = made(factory, alice, "answers", "earliest_start", "In January.")
+    with factory() as tab:
+        profile = profile_service.get_profile(tab, alice, now())
+        typed = schemas.validate_section("answers", {"notice_period": "Typed in the other tab."})
+        profile_service.save_section(tab, alice, "answers", typed, profile.revision, now())
+        thread, box = in_thread(lambda: bulk(factory, alice))
+        blocked(factory, thread)  # accept all waits for the profile row
+        tab.commit()
+    thread.join(20)
+    assert not thread.is_alive()
+    result = box["value"]
+    # it reads the profile the other tab left: the item at the key typed there is stale
+    assert (result.done, result.skipped, result.revisions) == (
+        [start],
+        {notice: ip.STALE},
+        {"answers": 2},
+    )
+    after = stored(factory, alice, "answers")
+    assert (after["notice_period"], after["earliest_start"]) == (
+        "Typed in the other tab.",
+        "In January.",
+    )

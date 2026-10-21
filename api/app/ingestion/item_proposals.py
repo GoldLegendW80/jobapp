@@ -89,7 +89,9 @@ OTHER_SECTION = "other_section"
 LOCKED = "locked"
 FLAGGED = "flagged"
 REMOVAL = "removal"  # it takes away what it does not name, with no citation behind that
+REPLACE = "replace"  # it replaces one entry or value exactly: accepted on its own (owner, #111)
 STALE = "stale"
+TYPED_BY_YOU = "typed_by_you"  # it would change a value the profile holds (owner, #184)
 INVALID = "invalid"
 PROFILE_CONFLICT = "profile_conflict"
 SECTION_FAILED = "section_failed"  # another item of its section failed: nothing of it applied
@@ -133,9 +135,9 @@ class Review:
     `before` and `after` are what the profile holds at the item's key now and what it would
     hold once the item is accepted (None for nothing). `noop`: the profile already holds it.
     `stale`: see the module. `locked`: a locked fact, accepted on its own. `bulk`: why "accept
-    all" leaves it out (locked, flagged, removal, stale, invalid, profile_conflict), or None
-    when it takes it. `problem`: the sentence when the item is invalid or does not fit the
-    section."""
+    all" leaves it out (locked, flagged, removal, replace, stale, typed_by_you, invalid,
+    profile_conflict), or None when it takes it. `problem`: the sentence when the item is
+    invalid or does not fit the section."""
 
     before: Any
     after: Any
@@ -168,8 +170,9 @@ class BulkResult:
 
     @property
     def counts(self) -> dict[str, int]:
-        """How many were left out, by reason."""
-        return dict(Counter(self.skipped.values()))
+        """How many were left out, by reason, the item that stopped a section included (under
+        `invalid` or `profile_conflict`): with `done`, they add up to every id asked."""
+        return dict(Counter([*self.skipped.values(), *(f.reason for f in self.failed.values())]))
 
 
 # --- reading --------------------------------------------------------------------------------------
@@ -228,6 +231,53 @@ def list_items(
     return db.scalars(query.order_by(Proposal.created_at, Proposal.id).limit(limit)).all()
 
 
+@dataclass(frozen=True)
+class Decision:
+    """A value the user turned down at a key, for the merge: `hashes` are the value hashes the
+    item showed (its value and the other values of a conflict), `kept` the hash of the user's
+    own value when they accepted with one (an edit, or the pick of a conflict), else None."""
+
+    section: Any
+    key: Any
+    hashes: tuple[Any, ...]
+    kept: str | None
+
+
+def turned_down(db: Session, user_id: uuid.UUID, *, limit: int) -> list[Decision]:
+    """The user's rejected profile items and those accepted with their own value, newest first,
+    at most `limit`. Reads the section, the key and the hashes of each, never a whole payload
+    (excerpts and values stay in the database)."""
+    accepted_own = sa.and_(
+        Proposal.status == ProposalStatus.accepted, Proposal.edited_value.is_not(None)
+    )
+    rows = db.execute(
+        sa.select(
+            Proposal.payload["section"].astext,
+            Proposal.payload["key"].astext,
+            Proposal.payload["value_hash"].astext,
+            sa.func.jsonb_path_query_array(Proposal.payload, "$.conflict[*].value_hash"),
+            Proposal.status,
+            Proposal.edited_value,
+        )
+        .where(
+            Proposal.user_id == user_id,
+            Proposal.target == items.TARGET,
+            Proposal.kind == items.KIND,
+            sa.or_(Proposal.status == ProposalStatus.rejected, accepted_own),
+        )
+        .order_by(Proposal.created_at.desc(), Proposal.id.desc())
+        .limit(limit)
+    ).all()
+    found = []
+    for section, key, value_hash, others, status, edited in rows:
+        if status is ProposalStatus.accepted and edited is None:
+            continue  # a JSON null: accepted as proposed
+        kept = items.value_hash(edited) if status is ProposalStatus.accepted else None
+        hashes = (value_hash, *(one for one in others or () if isinstance(one, str)))
+        found.append(Decision(section, key, hashes, kept))
+    return found
+
+
 def _flags(payload: Mapping[str, Any]) -> list[str]:
     flags = payload.get("flags")
     return [flag for flag in flags if isinstance(flag, str)] if isinstance(flags, list) else []
@@ -236,30 +286,66 @@ def _flags(payload: Mapping[str, Any]) -> list[str]:
 _WHOLE_LISTS = (items.SlotKind.words, items.SlotKind.terms)
 
 
-def _takes_away(section: str, key: str, action: Any) -> bool:
-    """Whether the item erases something it does not name: a `remove` (it carries no value, so
-    the citation checker has nothing to check), or a `replace` of a whole list of words or of
-    terms (`title_exclude`, `leave_blank`: every stored word it leaves out goes)."""
+def _takes_away(section: str, key: str, action: Any) -> str | None:
+    """Whether the item erases something it does not name: `removal` for a `remove` (it carries
+    no value, so the citation checker has nothing to check) or a `replace` of a whole list of
+    words or of terms (`title_exclude`, `leave_blank`: every stored word it leaves out goes),
+    `replace` for any other `replace` (it clears the fields its value leaves null and replaces a
+    skill category's terms exactly). None for an `add`."""
     if action == items.Action.remove.value:
-        return True
+        return REMOVAL
+    if action != items.Action.replace.value:
+        return None
     slot = items.SLOTS.get(section, {}).get(key.partition(":")[0])
-    return action == items.Action.replace.value and slot is not None and slot.kind in _WHOLE_LISTS
+    return REMOVAL if slot is not None and slot.kind in _WHOLE_LISTS else REPLACE
 
 
 def bulk_exclusion(payload: Mapping[str, Any]) -> str | None:
     """Why "accept all" never takes this item, whatever the profile holds: `locked` (a locked
     fact), `flagged` (it reads like an instruction, is derived, cites a transcription, or holds
-    a conflict) or `removal` (it takes away what it does not name: a document must not empty the
-    user's exclusions or their never apply list through one click, so these are accepted one by
-    one). None when nothing of the kind applies."""
+    a conflict), `removal` (it takes away what it does not name: a document must not empty the
+    user's exclusions or their never apply list through one click) or `replace` (accept all
+    takes additions only, the owner's decision of 2026-10-21 on #111): these are accepted one by
+    one. None when nothing of the kind applies. What the profile holds adds two more reasons,
+    `stale` and `typed_by_you` (`review`, `accept_many`)."""
     section, key = payload.get("section"), payload.get("key")
     if not isinstance(section, str) or not isinstance(key, str) or items.is_locked(section, key):
         return LOCKED
     if _flags(payload) or payload.get("conflict"):
         return FLAGGED
-    if _takes_away(section, key, payload.get("action")):
-        return REMOVAL
-    return None
+    return _takes_away(section, key, payload.get("action"))
+
+
+def _folded(word: Any) -> Any:
+    return word.casefold() if isinstance(word, str) else items.value_hash(word)
+
+
+def _lost(before: Any, after: Any) -> bool:
+    """Whether something `before` holds is gone or different in `after`: a field that held a
+    value, a word of a list, an entry of a list. What `before` leaves empty may be filled."""
+    if before is None or before == "" or before == []:
+        return False
+    if isinstance(before, Mapping):
+        if not isinstance(after, Mapping):
+            return True
+        return any(_lost(held, after.get(name)) for name, held in before.items())
+    if isinstance(before, list):
+        if not isinstance(after, list):
+            return True
+        kept = {_folded(one) for one in after}
+        return any(_folded(one) not in kept for one in before)
+    return bool(before != after)
+
+
+def overwrites(section: str, current: Mapping[str, Any], item: items.Item) -> bool:
+    """Whether accepting the item would change a value the profile holds at its key: a field
+    the user typed (or kept from an earlier accept) that the document says otherwise. Such an
+    item is accepted on its own (`typed_by_you`, the owner's decision of 2026-10-21 on #184):
+    accept all only fills what is empty and adds what is new. Raises items.ProfileConflict."""
+    before = items.read(section, current, item.key)
+    if before is None:
+        return False
+    return _lost(before, items.read(section, items.apply(section, current, item), item.key))
 
 
 def _hash_at(section: str, data: Mapping[str, Any], key: str) -> str:
@@ -287,13 +373,15 @@ def review(payload: Mapping[str, Any], section_data: Mapping[str, Any] | None) -
         return Review(before, None, False, stale, locked, PROFILE_CONFLICT, exc.message)
     noop = applied == current
     stale = stale and not noop
+    after = items.read(item.section, applied, item.key)
+    typed = not noop and before is not None and _lost(before, after)
     return Review(
         before,
-        items.read(item.section, applied, item.key),
+        after,
         noop,
         stale,
         locked,
-        excluded or (STALE if stale else None),
+        excluded or (STALE if stale else None) or (TYPED_BY_YOU if typed else None),
     )
 
 
@@ -616,10 +704,12 @@ def _accepted(
     }
 
 
-def _edited(payload: Mapping[str, Any], value: Any) -> items.Item | None:
-    """The user's own value for a proposed item: validated by the section model alone. None
-    when the stored item itself is broken (its section, key or action): the accept then marks
-    the proposal invalid."""
+def _edited(db: Session, proposal: Proposal, now: datetime, value: Any) -> items.Item:
+    """The user's own value for a proposed item: validated by the section model alone. Raises
+    EditedValueError, with the field, when the value does not fit, and ItemInvalidError after
+    marking the proposal invalid when the stored item itself is broken (its section, key or
+    action). The caller holds the proposal's row lock."""
+    payload = proposal.payload
     try:
         return items.build(
             payload.get("section"),
@@ -630,7 +720,8 @@ def _edited(payload: Mapping[str, Any], value: Any) -> items.Item | None:
         )
     except items.ItemError as exc:
         if not exc.index.startswith("value"):
-            return None
+            _invalid(db, proposal, now, exc.reason)
+            raise proposals.ItemInvalidError(proposal) from None
         loc = tuple(
             int(part) if part.isdigit() else part
             for part in exc.index.replace("]", "").replace("[", ".").split(".")[1:]
@@ -671,7 +762,6 @@ def accept(
         raise proposals.NotPendingError(proposal)
     if proposal.kind != items.KIND or proposal.target != items.TARGET:
         raise proposals.InvalidValueError(proposals.UNKNOWN_KIND)
-    edited = None if edited_value is _MISSING else _edited(proposal.payload, edited_value)
 
     profile = _lock_profile(db, user_id, now)
     proposal = proposals.get(db, user_id, proposal_id, lock=True)
@@ -685,6 +775,7 @@ def accept(
     except items.ItemError as exc:
         _invalid(db, proposal, now, exc.reason)
         raise proposals.ItemInvalidError(proposal) from None
+    edited = None if edited_value is _MISSING else _edited(db, proposal, now, edited_value)
     if edited is None and payload.get("conflict"):
         raise proposals.InvalidValueError(CHOOSE)
 
@@ -795,12 +886,13 @@ def _selected(
     run = None if ingestion_run_id is None else str(ingestion_run_id)
     selected = []
     for row in rows:
-        if row.status is not ProposalStatus.pending:
-            result.skipped[row.id] = NOT_PENDING
-        elif run is not None and row.payload.get("ingestion_run_id") != run:
+        # another run's row first, decided or not: the caller's run never showed it
+        if run is not None and row.payload.get("ingestion_run_id") != run:
             result.skipped[row.id] = OTHER_RUN
         elif section is not None and row.payload.get("section") != section:
             result.skipped[row.id] = OTHER_SECTION
+        elif row.status is not ProposalStatus.pending:
+            result.skipped[row.id] = NOT_PENDING
         else:
             selected.append(row)
     return selected
@@ -822,8 +914,9 @@ def accept_many(
     Left out, each with its reason in `result.skipped`: an id that is not the user's pending
     profile item (`not_found`, `not_pending`), one of another run or section, a locked fact, a
     flagged item (instruction, derived, transcribed, conflict), a removal (`removal`: a `remove`,
-    or a `replace` of a whole list of words or terms), a stale one. `result.counts` counts them
-    by reason. What remains is
+    or a `replace` of a whole list of words or terms), any other `replace` (`replace`), a stale
+    one, and one that would change a value the profile holds (`typed_by_you`). `result.counts`
+    counts them by reason. What remains is
     applied section by section, in the order the items were proposed, all or nothing: when one
     item no longer fits its model (it is marked invalid) or the section cannot take it, nothing
     of that section is applied, `result.failed[section]` names the item, and its other items
@@ -864,6 +957,12 @@ def accept_many(
                         continue
                 except items.ProfileConflict:
                     pass  # reported below, by the apply onto the batch
+            try:
+                if overwrites(name, current, item):
+                    result.skipped[row.id] = TYPED_BY_YOU
+                    continue
+            except items.ProfileConflict:
+                pass  # reported below, by the apply onto the batch
             try:
                 step = items.apply(name, after, item)
             except items.ProfileConflict as exc:

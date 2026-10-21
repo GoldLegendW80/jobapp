@@ -520,7 +520,7 @@ def test_neither_losing_value_of_a_three_value_conflict_comes_back(
     assert stored(factory, me, "answers")["notice_period"] == "Two months"
 
 
-def test_a_new_value_for_a_key_the_user_decided_is_proposed_and_taken_in_bulk(
+def test_a_new_value_for_a_key_the_user_decided_is_proposed_and_accepted_on_its_own(
     api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
 ) -> None:
     run_id, _ = read(factory, me, settings, "Three months")
@@ -530,8 +530,14 @@ def test_a_new_value_for_a_key_the_user_decided_is_proposed_and_taken_in_bulk(
     second, _ = read(factory, me, settings, "Two months")
     (fresh,) = mh.proposals_of(factory, me, second)
     assert fresh.payload["value"] == "Two months"
+    # It would change the user's own value: accept all leaves it (owner, #184).
+    listed = api.get(f"/api/ingestion/runs/{second}/proposals", token=first).json()
+    (shown,) = [one for section in listed["sections"] for one in section["items"]]
+    assert (shown["bulk"], shown["before"]) == ("typed_by_you", "One month")
     answer = bulk(api, first, second, "accept", "answers", [fresh.id])
-    assert answer.json()["decided"] == [str(fresh.id)]
+    assert (answer.json()["decided"], answer.json()["left_out"]) == ([], {"typed_by_you": 1})
+    assert stored(factory, me, "answers")["notice_period"] == "One month"
+    assert accept(api, first, fresh.id).status_code == 200
     assert stored(factory, me, "answers")["notice_period"] == "Two months"
 
 
@@ -547,3 +553,135 @@ def test_a_rejected_value_and_a_rejected_conflict_still_do_not_come_back(
     assert api.post(f"/api/proposals/{conflict.id}/reject", token=first).status_code == 200
     assert mh.proposals_of(factory, me, again(factory, settings, me, documents), status=None) == []
     assert stored(factory, me, "answers")["notice_period"] is None
+
+
+# --- follow ups of #184, #174 and #111 ---------------------------------------------------------
+
+
+def busy(*_: Any, **__: Any) -> Any:
+    raise review.ReviewBusyError
+
+
+@pytest.mark.parametrize("what", ["accept", "reject"])
+def test_a_busy_profile_answers_409_busy_through_the_route(
+    api: Api,
+    first: str,
+    me: uuid.UUID,
+    factory: Factory,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    what: str,
+) -> None:
+    run_id = run_of(factory, me, settings)
+    notice = made(factory, me, "answers", "notice_period", "Three months", run=run_id)
+    monkeypatch.setattr(review, f"{what}_section", busy)
+    answer = bulk(api, first, run_id, what, "answers", [notice])
+    assert answer.status_code == 409
+    assert answer.headers["cache-control"] == "no-store"
+    assert answer.json() == {
+        "detail": "Your profile is being changed from somewhere else. Try again in a moment.",
+        "reason": "busy",
+        "proposal_id": None,
+    }
+    assert row(factory, notice).status is ProposalStatus.pending
+    assert revisions(factory, me) == []
+
+
+def test_the_same_id_sent_twice_is_decided_once(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id = run_of(factory, me, settings)
+    notice = made(factory, me, "answers", "notice_period", "Three months", run=run_id)
+    answer = bulk(api, first, run_id, "accept", "answers", [notice, notice, notice])
+    assert answer.status_code == 200
+    assert (answer.json()["decided"], answer.json()["skipped"]) == ([str(notice)], [])
+    assert revisions(factory, me) == [(1, "answers")]
+
+
+def test_a_decided_item_of_another_run_reads_as_not_found(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id = run_of(factory, me, settings)
+    other_run = run_of(factory, me, settings)
+    decided = made(factory, me, "answers", "travel", "Sometimes", run=other_run)
+    assert api.post(f"/api/proposals/{decided}/reject", token=first).status_code == 200
+    pending = made(factory, me, "answers", "relocation", "Anywhere", run=other_run)
+    for what in ("accept", "reject"):
+        answer = bulk(api, first, run_id, what, "answers", [decided, pending])
+        # decided or not, the row of another run is one this page never showed
+        assert answer.json()["left_out"] == {"not_found": 2}
+
+
+def test_a_replace_is_accepted_on_its_own(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id = run_of(factory, me, settings)
+    replace = made(factory, me, "answers", "travel", "Weekly", "replace", run=run_id)
+    answer = bulk(api, first, run_id, "accept", "answers", [replace])
+    assert (answer.json()["decided"], answer.json()["left_out"]) == ([], {"replace": 1})
+    assert accept(api, first, replace).status_code == 200
+    assert stored(factory, me, "answers")["travel"] == "Weekly"
+
+
+def test_the_derived_years_are_stale_after_a_hand_edit_of_an_employer(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    fact = ("experience", "employers", mh.employer("2021-03", "2023-06"), "March 2021")
+    run_id, _ = mh.merged(factory, me, settings, [mh.CV], [[fact]])
+    found = mh.proposals_of(factory, me, run_id)
+    employer = mh.at(found, ACME_2021)
+
+    def years() -> dict[str, Any]:
+        listed = api.get(f"/api/ingestion/runs/{run_id}/proposals", token=first).json()
+        return next(
+            one
+            for section in listed["sections"]
+            for one in section["items"]
+            if one["key"] == merge.YEARS_KEY
+        )
+
+    assert years()["stale"] is False
+    assert accept(api, first, employer.id).status_code == 200
+    assert years()["stale"] is False  # accepted as proposed: the count holds
+    (held,) = stored(factory, me, "experience")["employers"]
+    # a hand edit that does not change the count leaves the years as they are
+    mh.save(factory, me, "experience", {"employers": [{**held, "title": "Lead"}]})
+    assert years()["stale"] is False
+    # one that does shows them stale, to check again
+    mh.save(factory, me, "experience", {"employers": [{**held, "end": "2025-06"}]})
+    shown = years()
+    assert (shown["stale"], shown["stale_reason"]) == (True, "depends_on_changed")
+
+
+def test_the_review_says_when_a_newer_run_is_in_progress(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id = run_of(factory, me, settings)
+    url = f"/api/ingestion/runs/{run_id}/proposals"
+    assert api.get(url, token=first).json()["newer_run"] is False
+    newer = eh.start(factory, me, [mh.add_document(factory, me, mh.LETTER)])
+    assert eh.run_of(factory, newer).status.value == "running"
+    assert api.get(url, token=first).json()["newer_run"] is True
+
+
+def test_a_full_run_of_2000_items_is_reviewed_through_the_route(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    """The cost of #174 item 9 and #184 item 9: the whole list, each item reviewed against its
+    section, in one request (its duration is in the pull request, never asserted here)."""
+    text = "\n".join(f"Skill number {number:04d} is tool{number:04d}." for number in range(2000))
+    run_id, documents = mh.begin(factory, me, settings, [text])
+    step = eh.running(factory, run_id)
+    for number in range(2000):
+        excerpt = f"tool{number:04d}"
+        mh.store(factory, me, step, "skills", "have", {"name": excerpt}, excerpt)
+    assert mh.finish(factory, me, settings, run_id, documents, []).status.value == "done"
+    listed = api.get(f"/api/ingestion/runs/{run_id}/proposals", token=first)
+    assert listed.status_code == 200
+    body = listed.json()
+    assert (body["counts"]["total"], body["counts"]["pending"]) == (2000, 2000)
+    (section,) = body["sections"]
+    assert {one["bulk"] for one in section["items"]} == {None}
+    shown = [one["id"] for one in section["items"][:50]]
+    answer = bulk(api, first, run_id, "accept", "skills", shown)
+    assert (len(answer.json()["decided"]), answer.json()["revision"]) == (50, 1)

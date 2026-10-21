@@ -14,10 +14,12 @@ What the narrowing gives:
   marked `invalid` on the way, as a single accept marks it: the caller commits that and nothing
   else.
 - **Left out, never refused.** A locked fact, a flagged item (instruction, derived, transcribed,
-  conflict), a removal and a stale item are accepted one by one, so the call leaves them pending
-  and says so with the reason. An id that is not one of the user's pending items of this run
-  (another user's, another run's, unknown) is left out as `not_found`, with nothing that tells
-  them apart; one decided meanwhile is `not_pending`.
+  conflict), a removal, a replace, a stale item and one that would change a value the profile
+  holds (`typed_by_you`) are accepted one by one, so the call leaves them pending and says so
+  with the reason: "accept all" takes additions only (owner, 2026-10-21). An id that is not
+  one of the user's pending items of this run (another user's, another run's, decided or not,
+  unknown) is left out as `not_found`, with nothing that tells them apart; one of this run
+  decided meanwhile is `not_pending`.
 
 Locks, in the plan's order: `accept_section` takes the `profiles` row (2) then the proposals
 rows in id order (8); `reject_section` takes the proposals rows only. The run row is read and

@@ -16,8 +16,9 @@ breaking a deadlock. The pairs of the merge, of the review and of the deletion c
 G13 and G15, each in a file of its own."""
 
 import threading
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -50,8 +51,12 @@ from tests.ingestion.extract_helpers import (
 _FIXTURES = (key, keyring, settings)
 CLEAN = fixture("extract_clean")
 EMAIL_LINE = "Email: camille.durand@example.org"
-WAIT_S = 0.6  # long enough to tell a path that waits from one that is merely slow to start
 END_S = 15
+POLL_S = 0.02
+WAITING = sa.text(
+    "SELECT count(*) FROM pg_locks AS l JOIN pg_stat_activity AS a ON a.pid = l.pid"
+    " WHERE NOT l.granted AND a.datname = current_database() AND l.pid <> pg_backend_pid()"
+)
 
 
 @pytest.fixture
@@ -61,8 +66,19 @@ def alice(factory: sessionmaker[Session], keyring: Keyring) -> uuid.UUID:
     return user
 
 
+@pytest.fixture(autouse=True)
+def lock_probe(factory: sessionmaker[Session]) -> Iterator[None]:
+    """The engine `Path.waits` asks `pg_locks` through (the modules that import Path import
+    this fixture too)."""
+    Path.engine = factory.kw["bind"]
+    yield
+    Path.engine = None
+
+
 class Path:
     """One path run in a thread: whether it has ended, and what it answered or raised."""
+
+    engine: sa.Engine | None = None
 
     def __init__(self, work: Callable[[], Any]) -> None:
         self.done = threading.Event()
@@ -81,7 +97,16 @@ class Path:
         self.thread.start()
 
     def waits(self) -> None:
-        assert not self.done.wait(WAIT_S), "the path did not wait for the lock"
+        """The path is blocked on a lock: Postgres lists a lock of this database not granted
+        (a poll of `pg_locks`, exact, where a timed wait could only tell slow from blocked)."""
+        assert Path.engine is not None, "the lock_probe fixture is not in use"
+        deadline = time.monotonic() + END_S
+        with Path.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as probe:
+            while not probe.execute(WAITING).scalar():
+                assert not self.done.is_set(), "the path ended: it did not wait for the lock"
+                assert time.monotonic() < deadline, "the path never waited for a lock"
+                self.done.wait(POLL_S)
+        assert not self.done.is_set(), "the path ended: it did not wait for the lock"
 
     def ends(self) -> Any:
         assert self.done.wait(END_S), "the path never ended"
