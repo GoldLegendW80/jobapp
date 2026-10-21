@@ -111,7 +111,7 @@ class InputsGoneError(Exception):
 class Inputs:
     source: str  # "pdf" or "docx"
     tokens: template_rules.Tokens
-    photo: str  # the manifest's: "optional" when the first page holds an image box
+    photo: str  # the manifest's: "optional" when the first page holds an image box (a drawing)
     layout: Mapping[str, Any]  # what read_design answers, texts scrubbed
     pages: tuple[bytes, ...]  # JPEG, image boxes grey; () for a DOCX
     notes: tuple[str, ...]  # codes of CAPTURE_NOTES
@@ -119,11 +119,10 @@ class Inputs:
 
 def scrub(texts: list[str]) -> list[str]:
     """Each text, or REDACTED where it, or it with a neighbour, matches a secret rule."""
-    out = list(texts)
-    for i, text in enumerate(texts):
-        if secret_rules.scan(text):
-            out[i] = REDACTED
-        if i and secret_rules.scan(f"{texts[i - 1]} {text}"):
+    alone = [bool(secret_rules.scan(text)) for text in texts]
+    out = [REDACTED if hit else text for text, hit in zip(texts, alone, strict=True)]
+    for i in range(1, len(texts)):
+        if not (alone[i - 1] or alone[i]) and secret_rules.scan(f"{texts[i - 1]} {texts[i]}"):
             out[i - 1] = out[i] = REDACTED
     return out
 
@@ -206,7 +205,8 @@ async def read_inputs(raw: bytes, mime: str) -> Inputs:
                 raise InputsGoneError("not_docx")
             tokens = template_rules.from_docx(docx)
             notes = ("docx", *(n.code for n in tokens.notes))
-            return Inputs("docx", tokens, "none", _docx_layout(docx), (), _notes(notes, tokens))
+            photo = "optional" if docx.drawings else "none"  # a drawing may be the photo
+            return Inputs("docx", tokens, photo, _docx_layout(docx), (), _notes(notes))
         design = await parser_client.read_design("design_pdf", raw)
         if not isinstance(design, parser_client.DesignPdf):
             raise InputsGoneError("not_pdf")
@@ -227,14 +227,15 @@ async def read_inputs(raw: bytes, mime: str) -> Inputs:
     )
     photo = "optional" if design.read and design.read[0].images else "none"
     notes = [n.code for n in tokens.notes]
+    faces = [font_map.face(f.name, f.weight, f.italic, f.serif, f.monospace) for f in design.fonts]
+    notes += ["fonts_replaced"] if any(face.notes for face in faces) else []
     notes += ["scanned"] if design.scanned else []
     notes += ["two_pages"] if design.pages > 1 else []
-    return Inputs("pdf", tokens, photo, _pdf_layout(design), pages, _notes(notes, tokens))
+    return Inputs("pdf", tokens, photo, _pdf_layout(design), pages, _notes(notes))
 
 
-def _notes(codes: Any, tokens: template_rules.Tokens) -> tuple[str, ...]:
-    found = list(codes) + (["fonts_replaced"] if tokens.fonts else [])
-    return tuple(code for code in dict.fromkeys(found) if code in CAPTURE_NOTES)
+def _notes(codes: Any) -> tuple[str, ...]:
+    return tuple(code for code in dict.fromkeys(codes) if code in CAPTURE_NOTES)
 
 
 def upload_bytes(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> tuple[bytes, str]:
