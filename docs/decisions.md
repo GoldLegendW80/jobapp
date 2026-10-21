@@ -120,6 +120,11 @@ choice made by the build that stands until the owner says otherwise.
 - 2026-10-15: the filter of form questions the answer agent may answer is a positive topic
   anchor (the job, the company, the team, motivation, experience); the person answers everything
   else in the approval screen.
+- 2026-10-20 (on #429): "block chrome://flags, and every chrome:// settings page, in ALL sessions
+  of the app's browser, the person's own sign-in sessions included, not only agent sessions."
+  Built as the image's managed policy: every chrome:// page blocked but chrome://policy,
+  chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
+  dropped before every start.
 
 ## The short path to Full auto (2026-10-19)
 

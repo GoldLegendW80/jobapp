@@ -1209,6 +1209,16 @@
         "auto": true,
         "min_fit": 70,
         "daily_ceiling": 100
+      },
+      "seniority": [],
+      "industries": {
+        "advanced_regex": false,
+        "terms": []
+      },
+      "company_types": [],
+      "compensation": {
+        "salary": null,
+        "daily_rate": null
       }
     },
     "answers": {
@@ -1258,6 +1268,14 @@
       "leave_blank": [
         "Demographic and voluntary self-identification questions: left empty; Lucien decides on each one."
       ]
+    },
+    "preferences": {
+      "onboarding": {
+        "completed_at": null,
+        "dismissed_at": null
+      },
+      "documents_language": "auto",
+      "documents_tone": "plain"
     }
   },
   "photo": {

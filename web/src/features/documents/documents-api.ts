@@ -83,6 +83,8 @@ export const versionSummarySchema = z.object({
   fit_step: z.number().nullable(),
   pages: z.number().nullable(),
   has_pdf: z.boolean(),
+  /** page1.png draws it: false for the command line's own PDF of an imported version. */
+  has_preview: z.boolean(),
   approved_at: z.string().nullable(),
   frozen_at: z.string().nullable(),
   frozen_reason: z

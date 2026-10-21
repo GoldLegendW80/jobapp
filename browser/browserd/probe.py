@@ -113,7 +113,9 @@ async def run(action: str, args: list[str]) -> dict:
             # The page is built of shadow roots, which inner_text does not enter and
             # get_by_text does: how many times each policy name and value is shown.
             await page.get_by_text("WebRtcIPHandling").first.wait_for(timeout=10000)
-            shown = ["WebRtcIPHandling", "disable_non_proxied_udp", "QuicAllowed"]
+            shown = ["WebRtcIPHandling", "disable_non_proxied_udp", "QuicAllowed", "URLBlocklist",
+                     "URLAllowlist", "PolicyTestPageEnabled", "ExtensionInstallBlocklist",
+                     "PasswordManagerEnabled"]  # fmt: skip
             return {t: await page.get_by_text(t, exact=True).count() for t in shown}
         raise SystemExit(f"unknown action {action}")
 
