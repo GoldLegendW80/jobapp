@@ -42,6 +42,20 @@ const BANNER = { name: `Sign in to ${new URL(PAGES).hostname}` };
 const CSRF = { "X-Requested-With": "jobapp" };
 const shots = makeShots("browser-b12", "handoff");
 
+/** Whether the live view's canvas holds a frame: more than one colour on it. */
+async function drawn(page: Page): Promise<boolean> {
+  return page.getByTestId("live-screen").evaluate((screen) => {
+    const canvas = screen.querySelector("canvas");
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || canvas.width === 0) return false;
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 4; i < data.length; i += 4 * 97) {
+      for (let c = 0; c < 3; c += 1) if (data[i + c] !== data[c]) return true;
+    }
+    return false;
+  });
+}
+
 let contexts: BrowserContext[] = [];
 let pageA: Page;
 let pageB: Page;
@@ -107,6 +121,10 @@ test("A watches, signs in through the banner's live view, and the run goes on", 
       ),
     ).toBeVisible({ timeout: 45_000 });
     await expect(takeOver).toHaveCount(0);
+    await expect
+      .poll(windowTitles, { timeout: 30_000 })
+      .toContain("Example Jobs: signed out");
+    await expect.poll(() => drawn(pageA), { timeout: 30_000 }).toBe(true);
     await shots(pageA, "banner-phone");
     await expect(takeOver).toHaveCount(0);
 
@@ -118,9 +136,6 @@ test("A watches, signs in through the banner's live view, and the run goes on", 
     await expect(pageB.getByRole("region", BANNER)).toHaveCount(0);
 
     // The live view's keyboard: Tab to the name field, the name, Enter.
-    await expect
-      .poll(windowTitles, { timeout: 30_000 })
-      .toContain("Example Jobs: signed out");
     await pageA.getByRole("button", { name: "Keyboard" }).click();
     const keys = pageA.getByLabel("Type into your browser");
     await keys.press("Tab");

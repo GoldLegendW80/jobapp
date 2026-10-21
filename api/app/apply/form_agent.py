@@ -24,8 +24,9 @@ profile, moves through its steps and names its submit element. It asks of the ru
   * `designate_submit(ref)`: the designation, accepted only when `generic.check_designation` and
     the detector (`generic.marked`) agree.
   * `browser_request_signin(site, reason)`: only after a read saw a sign in wall; the person
-    signs in in the live view and the run reads the form again, or, nobody watching, a Cancel
-    or the deadline, the fill stops there as `needs_person: signin` without reading the page.
+    signs in in the live view and the run reads the form again; any other end (nobody
+    watching, a Cancel, the deadline, browserd refusing the ask) stops the fill there as
+    `needs_person: signin` without reading the page.
     The run's wall time holds that wait (`SIGNIN_WAIT_S`).
   There is no click on anything else, no typing of the model's text, no navigation and no mail:
   a page that asks the assistant to do something else gets nothing done, and a page that names
@@ -139,7 +140,8 @@ class FormSession:
     pending: str = ""
     addressed: bool = False
     signin_over: bool = False  # a hand off that ended without the person signed in
-    deadline: float | None = None  # monotonic: the end of the run's wall time
+    deadline: float | None = None  # on `clock`: the end of the run's wall time
+    clock: Callable[[], float] = time.monotonic
 
     async def _read(self) -> tuple[ats_base.Discovery | None, str]:
         if self.signin_over:
@@ -286,14 +288,15 @@ class FormSession:
     def signin_budget(self) -> float | None:
         if self.deadline is None:
             return None
-        return max(0.0, self.deadline - time.monotonic() - SIGNIN_MARGIN_S)
+        return max(0.0, self.deadline - self.clock() - SIGNIN_MARGIN_S)
 
     def signin_ended(self, outcome: Any) -> None:
         """The end of a hand off (app.browser.handoff.Outcome): signed in, the form is read
-        again; else the lease is gone or still waits for the person, and nothing reads it."""
+        again; any other end (the lease gone or still waiting, or browserd refusing the ask)
+        leaves the work for the person, and nothing reads the page again."""
         if outcome.code == "signed_in":
             self.pending = ""
-        elif outcome.needs_person or outcome.code in ("ended", "lease_ended"):
+        else:
             self.signin_over = True
 
     async def finish(self) -> FormReport:
@@ -439,7 +442,7 @@ class RuntimeFormAgent:
             raise
         if isinstance(created, str):
             return Ran(stopped=created)
-        session.deadline = time.monotonic() + APPLY_FORM.wall_time_s
+        session.deadline = session.clock() + APPLY_FORM.wall_time_s
         with _LOCK:
             _KEYS.add(key)
             _SESSIONS[created] = session

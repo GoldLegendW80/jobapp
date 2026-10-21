@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import time
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
@@ -319,18 +318,52 @@ async def test_the_wait_is_bounded_by_what_the_run_has_left(
         return Outcome("turn_ended")
 
     monkeypatch.setattr(signin_tool, "request_signin", capture)
+    now = [1_000.0]
     session = _session(FakeTools())
-    session.deadline = time.monotonic() + 500
+    session.clock = lambda: now[0]
+    session.deadline = now[0] + 500
     made = run(session)
     await session.read_form()
 
     await _call(made)
 
-    [budget] = budgets
-    assert budget is not None
-    assert 500 - form_agent.SIGNIN_MARGIN_S - 5 < budget <= 500 - form_agent.SIGNIN_MARGIN_S
-    session.deadline = time.monotonic() + 10  # within the margin: no wait, never a negative one
+    margin = form_agent.SIGNIN_MARGIN_S
+    assert budgets == [500 - margin]
+    now[0] = session.deadline - margin - 1
+    assert session.signin_budget() == 1.0
+    now[0] = session.deadline - margin  # at the margin: no wait
     assert session.signin_budget() == 0.0
+    now[0] = session.deadline + 1  # past the deadline: never a negative wait
+    assert session.signin_budget() == 0.0
+    session.deadline = None
+    assert session.signin_budget() is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["bad_address", "host_not_allowed", "refused", "bad_args", "unknown_code", None],
+)
+@sync
+async def test_a_refusal_of_browserd_stops_the_fill_and_asks_no_more(
+    run: Any, code: str | None
+) -> None:
+    tools = FakeTools(answer={"ok": False, "error": code, "message": "Refused by browserd."})
+    session = _session(tools)
+    made = run(session)
+    await session.read_form()
+
+    text, error = await _call(made)
+
+    assert error
+    assert text.startswith("The sign in could not be asked: ")
+    assert session.signin_over
+    assert await _call(made) == (signin_tool.NO_WALL, True)
+    assert len(tools.asked) == 1
+    reads = session.adapter.reads
+    assert await session.read_form() == (form_agent.SIGNIN_OVER, True)
+    report = await session.finish()
+    assert session.adapter.reads == reads
+    assert (report.stopped, report.needs_person) == ("needs_person", "signin")
 
 
 @sync
