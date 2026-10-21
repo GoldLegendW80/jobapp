@@ -599,7 +599,7 @@ def test_a_consent_to_version_1_is_asked_again_once_for_version_2(
     state = api.get(CONSENT, token=alice).json()
     assert (state["version"], state["accepted"]) == (2, False)
     assert "stored in your account until you accept or reject them" in state["text"]
-    assert api.post(CONSENT, token=alice, json={"version": V}).status_code == 422
+    assert api.post(CONSENT, token=alice, json={"version": 1}).status_code == 422
     assert api.post(CONSENT, token=alice, json={"version": 2}).json()["accepted"] is True
     assert api.post(CONSENT, token=alice, json={"version": 2}).json()["accepted"] is True
     with factory() as db:

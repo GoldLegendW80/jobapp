@@ -21,6 +21,7 @@ PINNED: dict[int, str] = {
     # #115, owner 2026-10-21: version 1 and the sentence on the stored proposals.
     2: "6878a9f3d26aac4523e732c94ef4317cbe8939678f0423a3d9e17201d073956c",
 }
+V1 = {1: PINNED[1]}  # the pinned digests of a world with version 1 only
 STORED = "The proposals it writes are stored in your account until you accept or reject them."
 
 RAISE_THE_VERSION = (
@@ -78,23 +79,23 @@ def test_version_2_is_version_1_and_the_sentence_on_the_stored_proposals() -> No
 def test_rewording_a_version_without_raising_it_is_caught() -> None:
     """The scenario of the review: a later task adds a sentence and leaves the version at 1."""
     reworded = {1: estimate_router.CONSENT_TEXTS[1] + " Run transcripts are kept."}
-    assert problems(reworded, PINNED, 1) == [RAISE_THE_VERSION.format(version=1, next=2)]
+    assert problems(reworded, V1, 1) == [RAISE_THE_VERSION.format(version=1, next=2)]
 
 
 def test_a_new_version_needs_its_own_digest_and_becomes_the_current_one() -> None:
     old = estimate_router.CONSENT_TEXTS[1]
     new = old + " Run transcripts are kept."
     # Added without a digest, or with the version constant left behind: caught.
-    assert problems({1: old, 2: new}, PINNED, 2) == [
+    assert problems({1: old, 2: new}, V1, 2) == [
         "every version has a pinned digest, and every digest a version"
     ]
-    assert problems({1: old, 2: new}, {**PINNED, 2: digest(new)}, 1) == [
+    assert problems({1: old, 2: new}, {**V1, 2: digest(new)}, 1) == [
         "the current version is the highest"
     ]
     # Added properly: the old words stay readable under their version.
-    assert problems({1: old, 2: new}, {**PINNED, 2: digest(new)}, 2) == []
+    assert problems({1: old, 2: new}, {**V1, 2: digest(new)}, 2) == []
     # An old version dropped, or replaced by the new words under the old number: caught.
     assert problems({2: new}, {2: digest(new)}, 2) == [
         "versions are 1, 2, 3 and so on, none removed"
     ]
-    assert problems({1: new}, PINNED, 1) == [RAISE_THE_VERSION.format(version=1, next=2)]
+    assert problems({1: new}, V1, 1) == [RAISE_THE_VERSION.format(version=1, next=2)]

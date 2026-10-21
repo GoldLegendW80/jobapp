@@ -152,7 +152,8 @@ def test_a_list_removal_stored_before_the_tool_refused_it_is_dropped_by_the_merg
 ) -> None:
     # #408: a step finished before PR #398 may hold the removal of an entry, which the write tool
     # now refuses. Such a step is reused (EXTRACTOR_VERSION stays 1), so the merge drops the row.
-    mh.save(factory, alice, "experience", {"employers": [mh.employer("2021-03", "2023-06")]})
+    saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
+    mh.save(factory, alice, "experience", {"employers": [saved]})
     mh.save(factory, alice, "identity", {"headline": "Engineer"})
     run_id, _ = mh.begin(factory, alice, settings, [mh.CV, mh.LETTER])
     first = eh.running(factory, run_id)
@@ -177,7 +178,8 @@ def test_a_list_removal_stored_before_the_tool_refused_it_is_dropped_by_the_merg
 def test_a_reused_step_with_a_list_removal_proposes_no_removal(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
-    mh.save(factory, alice, "experience", {"employers": [mh.employer("2021-03", "2023-06")]})
+    saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
+    mh.save(factory, alice, "experience", {"employers": [saved]})
     first, documents = mh.merged(
         factory,
         alice,
