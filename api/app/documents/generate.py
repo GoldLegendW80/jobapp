@@ -371,6 +371,7 @@ def start(
         "generation_id": str(generation.id),
         "mode": generation.mode.value,
         "language": document.language.value,
+        "tone": store.preferences(db, generation.user_id).documents_tone,
         "limits": asdict(template.kinds[document.kind.value].soft_limits),
         "token_budget": generation.token_ceiling,
     }

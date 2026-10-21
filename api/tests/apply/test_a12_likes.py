@@ -813,3 +813,80 @@ def test_a_ready_item_carries_why_it_came_back(
         sa.select(ApplicationEvent.kind).where(ApplicationEvent.application_id == first)
     ).scalars()
     assert "decision" in list(events)
+
+
+# --- a passed posting ----------------------------------------------------------------------------
+
+
+def test_a_like_on_a_passed_posting_is_refused_at_once(
+    db: Session, person_a: Person, stub: str
+) -> None:
+    job = posting(db, person_a.user_id, form(stub), status="skipped", kinds=())
+    error = refused(db, person_a, job)
+    assert error.refusal.code == "passed"
+    assert likes.sentence("passed").startswith("You passed this posting")
+    assert applications(db, person_a.user_id) == []
+    assert generations(db, job) == []  # nothing asked, nothing spent
+
+
+def test_a_like_on_a_passed_posting_is_refused_in_full_auto_too(
+    db: Session, person_a: Person, stub: str
+) -> None:
+    db.add(
+        ApplySettings(
+            user_id=person_a.user_id,
+            mode_after_like=LikeMode.full_auto,
+            full_auto_since=AT,
+            rehearsals_done=3,
+            updated_at=AT,
+        )
+    )
+    db.commit()
+    job = posting(db, person_a.user_id, form(stub), status="skipped")
+    assert refused(db, person_a, job).refusal.code == "passed"
+    assert applications(db, person_a.user_id) == []
+
+
+def test_a_pass_then_its_undo_then_a_like_and_a_concurrent_pass_then_like(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    api_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(jobs_service, "LOCK_TIMEOUT_MS", 50)
+    _password(factory, person_a)
+    first, second = (posting(db, person_a.user_id, form(stub), title=t) for t in ("A", "B"))
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        token = api.login_token(person_a.email)
+
+        # a Pass whose answer was lost, then a Like: 409 `passed`, no application
+        assert api.post(f"/api/postings/{first}/pass", token=token).status_code == 200
+        answer = api.post(f"/api/postings/{first}/like", token=token)
+        assert answer.status_code == 409
+        assert answer.json()["code"] == "passed"
+        assert answer.json()["detail"] == likes.sentence("passed")
+        assert applications(db, person_a.user_id) == []
+
+        # the undo puts it back first: the Like is accepted
+        assert api.request("DELETE", f"/api/postings/{first}/pass", token=token).status_code == 200
+        assert api.post(f"/api/postings/{first}/like", token=token).status_code == 201
+
+        # a Pass in flight (row lock held, not committed) makes the Like busy; once it commits the
+        # Like sees the posting skipped
+        with factory() as passer:
+            assert jobs_service.lock_job(passer, person_a.user_id, second) is not None
+            busy = api.post(f"/api/postings/{second}/like", token=token)
+            assert (busy.status_code, busy.json()["code"]) == (409, "busy")
+            jobs_service.set_status(
+                passer,
+                jobs_service.lock_job(passer, person_a.user_id, second),
+                JobStatus.skipped,
+                AT,
+            )
+            passer.commit()
+        late = api.post(f"/api/postings/{second}/like", token=token)
+        assert (late.status_code, late.json()["code"]) == (409, "passed")
+        assert len(applications(db, person_a.user_id)) == 1
