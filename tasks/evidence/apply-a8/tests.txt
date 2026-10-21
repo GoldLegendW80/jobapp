@@ -32,3 +32,20 @@ Second slice (generic strategy, issue #332), 2026-10-15, on this machine:
 - tests/apply/test_a8_generic.py: designation tables 24 accepted and 32 refused, 7 and 7 page text rows,
   the whole path on the modelled Workable like, two step, iframe and e-mail asking forms
 - the apply journeys were not run from this machine (it cannot build the stack's images)
+
+Follow ups of issue #338 (the reviews of the Lever pull request), 2026-10-21, on this machine:
+- ops/agent-test.sh --name b338 tests/apply -m "not docker", one process, the folder's 21 files in two
+  halves: 1824 passed and 1972 passed, nothing failed; tests/apply/test_a8_lever.py alone after the
+  last two tests were added: 171 passed
+- the parse undo reads until two consecutive reads agree: test_a_parse_written_over_several_renders_is_undone_whole,
+  15 rows (5 splits of the parse over renders, the parse after 0, 1 and 3 reads); with lever.py of
+  main 13 of the 15 fail (the 2 that pass: both renders seen by the first read)
+- isolation and markers, each test made to fail by one change put back after: the owner filter of
+  service.get_application dropped (A reads B's application and approval: [200, 200, 404, 404]); the
+  owner filter of run._bank dropped (A's form takes B's banked answer); apply_fill keeping a result
+  of what it typed (the marker found in Redis under arq:result:apply-fill:<id>)
+- a whole Lever fill on the modelled form now: 49 tool calls (34 snapshots, 1 wait of 0.5 s, 1 upload,
+  12 typings, 1 select) with the parse shown at once, 53 (36 snapshots, 3 waits) after 3 reads;
+  filled 10, left 3, 4 typings clear the parse
+- ruff check and format (626 files) clean; ci_plan_test.py and e2e_groups.py pass; pre-commit passes
+- the journey apply-a8.spec.ts was not run in this pass: no screenshot yet
