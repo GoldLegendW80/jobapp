@@ -7,6 +7,7 @@ export const SECTION_LABELS: Record<SectionName, string> = {
   skills: "Skills",
   search: "Search",
   answers: "Answers",
+  preferences: "Preferences",
 };
 
 /** Names of the required fields the api lists as missing (schemas.py, REQUIRED). */

@@ -349,10 +349,10 @@ class Manager:
             async with self._swap:
                 browser, self.browser = self.browser, None
                 if browser is not None:
-                    if reason == "browser_crashed":
-                        await browser.kill()
-                    else:
-                        await browser.stop()
+                    try:
+                        await (browser.kill() if reason == "browser_crashed" else browser.stop())
+                    except Exception as exc:  # the browser finished its end anyway (chromium.py)
+                        log.warning("lease %s: end failed: %s", lease.lease_id, type(exc).__name__)
             if self._measure is not None and reason != "shutdown":
                 try:
                     end["size_bytes"] = await self._measure(lease.request)

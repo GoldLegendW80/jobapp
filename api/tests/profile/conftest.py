@@ -137,6 +137,13 @@ FULL: dict[str, dict[str, Any]] = {
             "timezone": "Europe/Paris",
         },
         "documents": {"auto": True, "min_fit": 70, "daily_ceiling": 100},
+        "seniority": ["mid", "senior"],
+        "industries": {"terms": ["gaming", "fintech"], "advanced_regex": False},
+        "company_types": ["scaleup", "large_company"],
+        "compensation": {
+            "salary": {"min": 55000, "max": 70000, "currency": "EUR"},
+            "daily_rate": {"min": 500, "max": 650, "currency": "EUR"},
+        },
     },
     "answers": {
         "work_authorization": [
@@ -176,6 +183,12 @@ FULL: dict[str, dict[str, Any]] = {
             {"currency": "EUR", "minimum": 50000, "maximum": 60000, "period": "year"},
             {"currency": "GBP", "minimum": 45000, "maximum": None, "period": "year"},
         ],
+    },
+    # The onboarding dates stay null: only the wizard's routes write them, a save refuses them.
+    "preferences": {
+        "onboarding": {"completed_at": None, "dismissed_at": None},
+        "documents_language": "fr",
+        "documents_tone": "warm",
     },
 }
 

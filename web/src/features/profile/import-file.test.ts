@@ -8,6 +8,7 @@ import {
   describeSection,
   exportFileName,
   formatBytes,
+  OLDER_FILE_PREFERENCES,
 } from "./import-file";
 
 function profileOf(sections: FakeProfile["sections"], photo = false) {
@@ -185,6 +186,7 @@ describe("checkImportFile accepts an export", () => {
       false,
       false,
       false,
+      false,
     ]);
     expect(result.summary.sections.map((s) => s.detail)).toEqual([
       "Harald Example, 3 languages",
@@ -193,6 +195,7 @@ describe("checkImportFile accepts an export", () => {
       "4 categories, 1 gate",
       "2 boards, 1 enabled",
       "2 countries",
+      "Documents: language auto, tone plain",
     ]);
     expect(result.summary.photo).toBe(false);
     expect(result.summary.completeness.overall).toBe(100);
@@ -201,7 +204,58 @@ describe("checkImportFile accepts an export", () => {
   it("says which sections an import replaces on an empty profile", () => {
     const result = check(exported(), profileOf({}));
     if (!result.ok) throw new Error(result.error);
-    expect(result.summary.sections.every((s) => s.changed)).toBe(true);
+    // Preferences at their defaults are what an empty profile reads: no change there.
+    expect(
+      result.summary.sections
+        .filter((s) => s.name !== "preferences")
+        .every((s) => s.changed),
+    ).toBe(true);
+  });
+
+  it("reads a file without preferences (written before O4) as their defaults", () => {
+    const sections: Record<string, unknown> = { ...haraldLike() };
+    delete sections.preferences;
+    const result = check(exported({ sections }));
+    if (!result.ok) throw new Error(result.error);
+    expect(result.summary.sections.at(-1)).toMatchObject({
+      name: "preferences",
+      changed: false,
+      detail: OLDER_FILE_PREFERENCES,
+    });
+  });
+
+  it("says an older file resets a tone the person had set", () => {
+    const current = haraldLike();
+    const profile = profileOf({
+      ...current,
+      preferences: { ...current.preferences, documents_tone: "warm" },
+    });
+    const sections: Record<string, unknown> = { ...current };
+    delete sections.preferences;
+    const result = check(exported({ sections }), profile);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.summary.sections.at(-1)).toMatchObject({
+      name: "preferences",
+      changed: true,
+      detail: OLDER_FILE_PREFERENCES,
+    });
+  });
+
+  it("never counts the onboarding dates as a change: an import keeps them", () => {
+    const sections = haraldLike();
+    const profile = profileOf({
+      ...sections,
+      preferences: {
+        ...sections.preferences,
+        onboarding: {
+          completed_at: "2026-10-20T08:00:00+00:00",
+          dismissed_at: null,
+        },
+      },
+    });
+    const result = check(exported(), profile);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.summary.sections.at(-1)?.changed).toBe(false);
   });
 
   it("compares sections over their empty form (omitted fields are defaults)", () => {
@@ -247,6 +301,7 @@ describe("checkImportFile accepts an export", () => {
       "0 categories, 0 gates",
       "0 boards, 0 enabled",
       "0 countries",
+      OLDER_FILE_PREFERENCES, // no preferences in this file
     ]);
   });
 

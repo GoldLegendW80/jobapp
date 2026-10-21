@@ -110,9 +110,9 @@ def test_import_from_a_file(
     assert result.returncode == 0, result.stderr
     stdout = result.stdout.decode()
     assert stdout == (
-        f"Imported the profile of {ALICE}: revision 6, 100% complete, photo replaced.\n"
+        f"Imported the profile of {ALICE}: revision 7, 100% complete, photo replaced.\n"
     )
-    assert history(factory) == ([6], list(SECTIONS))
+    assert history(factory) == ([len(SECTIONS)], list(SECTIONS))
     # Nothing of the profile itself is printed.
     assert "Ada" not in stdout
     for dash in (" - ", "—", "–"):
@@ -127,7 +127,7 @@ def test_import_from_stdin_and_twice(
     for _ in range(2):
         result = run_cli(migrated_url, "import", "--email", ALICE, "--file", "-", stdin=raw)
         assert result.returncode == 0, result.stderr
-    assert history(factory) == ([12], list(SECTIONS) * 2)
+    assert history(factory) == ([2 * len(SECTIONS)], list(SECTIONS) * 2)
 
 
 def test_import_lists_what_is_missing(
