@@ -880,10 +880,34 @@ journey_parts() { # journey_parts <group ...>: each group, or its shards <group>
 # run|skip<TAB>group<TAB>why; $WORK/journey-meta the scope (scoped or full), why it is full, the
 # number of changed files and the digest of their list. Both go into the record.
 journey_scope() {
-  local groups=() group full="" out rc=0 changed digest=""
+  local groups=() group full="" out rc=0 changed=0 digest="" metadata
   while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks && journey_groups journeys)
-  changed="$(git -C "$TREE" diff --name-only --no-renames "$base_sha" "$head_sha" | wc -l | tr -d ' ')"
-  if [[ "${LOCAL_CHECK_FULL:-}" == 1 ]]; then
+  # This evidence belongs to every run, including a missing/broken mapper and forced full.
+  # Git -z gives raw pathname bytes: newlines, quoting and invalid UTF8 stay unambiguous.
+  if metadata="$(python3 - "$TREE" "$base_sha" "$head_sha" 2>"$LOGS/journey-changes.log" <<'PY'
+import hashlib
+import os
+import subprocess
+import sys
+
+env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+done = subprocess.run(
+    ["git", "-C", sys.argv[1], "diff", "--name-only", "--no-renames", "-z", *sys.argv[2:]],
+    capture_output=True, check=True, env=env,
+)
+paths = sorted(p for p in done.stdout.split(b"\0") if p)
+print(len(paths), hashlib.sha256(b"".join(p + b"\0" for p in paths)).hexdigest(), sep="\t")
+PY
+)"; then
+    changed="${metadata%%$'\t'*}"
+    digest="${metadata#*$'\t'}"
+  else
+    full="cannot establish the changed-file list"
+    not_run journey-changes "cannot attest the changed-file list ($LOGS/journey-changes.log)"
+  fi
+  if [[ -n "$full" ]]; then
+    : # Uncertain evidence fails the check, and still runs all journey groups.
+  elif [[ "${LOCAL_CHECK_FULL:-}" == 1 ]]; then
     full="LOCAL_CHECK_FULL=1"
   elif ! has_pass_record "$(git -C "$TREE" rev-parse "$base_sha^{tree}")"; then
     full="the base ${base_sha:0:12} has no PASS record"
@@ -892,11 +916,10 @@ journey_scope() {
   else
     out="$(for group in "${groups[@]}"; do printf '%s\t%s\n' "$group" "$(journey_specs "$group")"; done |
       (cd "$TREE" && python3 .github/scripts/ci_plan.py journeys "$base_sha" "$head_sha") 2>"$LOGS/journey-scope.log")" || rc=$?
-    if ((rc != 0)) || [[ "$(head -n 1 <<<"$out" | cut -f 1)" != changed ]] ||
+    if ((rc != 0)) || [[ "$(head -n 1 <<<"$out")" != $'changed\t'"$changed"$'\t'"$digest" ]] ||
       [[ "$(grep -cE $'^(run|skip)\t' <<<"$out")" != "${#groups[@]}" ]]; then
       full="ci_plan.py journeys failed (exit $rc, $LOGS/journey-scope.log)"
     else
-      digest="$(head -n 1 <<<"$out" | cut -f 3)"
       grep -E $'^(run|skip)\t' <<<"$out" >"$WORK/journey-scope"
       if ! grep -q $'^skip\t' "$WORK/journey-scope" && grep -q $'\tevery group, ' "$WORK/journey-scope"; then
         full="$(awk -F '\t' 'NR == 1 { sub(/^every group, /, "", $3); print $3 }' "$WORK/journey-scope")"

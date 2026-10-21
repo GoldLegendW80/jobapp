@@ -15,6 +15,7 @@ Three kinds of checks:
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import ClassVar
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -1478,6 +1480,288 @@ class JourneysTest(unittest.TestCase):
         )
         self.assertEqual(self.ran(["web/src/features/mail/Mail.test.tsx"]), [])
 
+    def test_python_relative_and_dynamic_consumers_are_transitive(self) -> None:
+        forms = [
+            "from ..mail.rules import Sources",
+            "from ..mail import rules",
+            "import importlib; importlib.import_module('app.mail.rules')",
+            "import importlib as il; il.import_module('app.mail.rules')",
+            "from importlib import import_module as load; load('app.mail.rules')",
+            "__import__('app.mail.rules')",
+            "from builtins import __import__ as load; load('app.mail.rules')",
+            "import importlib; importlib.import_module('..mail.rules', 'app.documents')",
+        ]
+        forms += [source.replace("; ", "\n") for source in forms if "; " in source]
+        forms += [source.replace("'", '"') for source in forms if "'" in source]
+        for source in forms:
+            with self.subTest(source=source):
+                files = {
+                    "api/app/documents/store.py": source,
+                    "api/app/opportunities/use.py": "from app.documents.store import value",
+                }
+                self.assertEqual(
+                    self.ran(["api/app/mail/rules.py"], files),
+                    ["mail", "documents", "apply"],
+                )
+                root = self.tree({**self.BASE, **files})
+                graph = ci_plan.Imports(root).api()
+                self.assertIn(
+                    "app.opportunities.use",
+                    ci_plan.importers("app.mail.rules", graph, lambda _: False),
+                )
+
+    def test_unknown_python_import_targets_force_every_group(self) -> None:
+        for source in [
+            "import importlib; importlib.import_module(target)",
+            "__import__('app.' + target)",
+            "from importlib import import_module as load; load(target)",
+            "import importlib; importlib.import_module('.rules', package)",
+            "import app.mail.missing",
+            "from ..missing import value",
+            "import importlib; loader = importlib.import_module; loader(target)",
+            "from builtins import __import__ as load; load(target)",
+        ]:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    self.ran(
+                        ["api/app/mail/rules.py"],
+                        {"api/app/documents/store.py": source},
+                    ),
+                    [g for g, _ in self.GROUPS],
+                )
+
+    def test_typescript_import_forms_retain_consumers(self) -> None:
+        forms = [
+            'export {}; import "@/features/mail/Badge";',
+            "export const value = import(`@/features/mail/Badge`);",
+            'export const value = import("@/features/mail/Badge");',
+            "export const value = import('@/features/mail/Badge');",
+            "import { value } /* 'comment' */ from \"@/features/mail/Badge\"; export { value };",
+            'import type {\n Value\n} from "@/features/mail/Badge";',
+            'export { value } from "@/features/mail/Badge";',
+            'export * from "@/features/mail/Badge";',
+            'import /* comment */ "@/features/mail/Badge";',
+        ]
+        forms = [
+            variant
+            for source in forms
+            for variant in (
+                source,
+                "/* before */ " + source + " // after",
+                source.replace("import(", "import /* call */ ("),
+            )
+        ]
+        for source in forms:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    self.ran(
+                        ["web/src/features/mail/Badge.tsx"],
+                        {"web/src/features/account/Account.tsx": source},
+                    ),
+                    [g for g, _ in self.GROUPS],
+                )
+                # The graph itself must retain the edge: an unrelated full fallback cannot
+                # mask a missing dynamic import, as it did in the original six tests.
+                root = self.tree(
+                    {**self.BASE, "web/src/features/account/Account.tsx": source}
+                )
+                self.assertIn(
+                    "web/src/features/account/Account.tsx",
+                    ci_plan.Imports(root).web()["web/src/features/mail/Badge.tsx"],
+                )
+
+    def test_typescript_unknown_targets_and_broken_imports_force_every_group(
+        self,
+    ) -> None:
+        for source in [
+            "import(target)",
+            "import(`@/features/${target}`)",
+            'import("@/features/" + target)',
+            'import { value } from "@/features/missing/Value"',
+            "import { value } from target",
+            "import { value",
+            'import "unterminated',
+            "/* unterminated",
+            "const value = require(target)",
+            'const value = import.meta.glob("@/features/mail/*")',
+            'const value = require.resolve("@/features/mail/Badge")',
+            'const value = `${import("@/features/mail/Badge")}`',
+        ]:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    self.ran(
+                        ["web/src/features/mail/Row.tsx"],
+                        {"web/src/features/account/Account.tsx": source},
+                    ),
+                    [g for g, _ in self.GROUPS],
+                )
+
+    def test_graph_read_decode_parse_and_traversal_errors_force_full(self) -> None:
+        root = self.tree(self.BASE)
+        for target, changed in [
+            ("api/app/documents/store.py", "api/app/mail/rules.py"),
+            ("web/src/features/account/Account.tsx", "web/src/features/mail/Row.tsx"),
+        ]:
+            original = Path.read_text
+            for error in [
+                OSError("unreadable"),
+                UnicodeDecodeError("utf8", b"\xff", 0, 1, "invalid"),
+            ]:
+
+                def read(
+                    path, *args, _target=target, _error=error, _read=original, **kwargs
+                ):
+                    if path == root / _target:
+                        raise _error
+                    return _read(path, *args, **kwargs)
+
+                with (
+                    self.subTest(target=target, error=error),
+                    mock.patch.object(Path, "read_text", read),
+                ):
+                    self.assertTrue(
+                        all(
+                            v == "run"
+                            for v, _, _ in ci_plan.journey_plan(
+                                root, [changed], self.GROUPS
+                            )
+                        )
+                    )
+        self.assertEqual(
+            self.ran(
+                ["api/app/mail/rules.py"],
+                {"api/app/documents/store.py": "from broken syntax"},
+            ),
+            [g for g, _ in self.GROUPS],
+        )
+        for changed in ["api/app/mail/rules.py", "web/src/features/mail/Row.tsx"]:
+            with (
+                self.subTest(changed=changed),
+                mock.patch.object(
+                    os, "scandir", side_effect=OSError("cannot traverse")
+                ),
+            ):
+                self.assertTrue(
+                    all(
+                        v == "run"
+                        for v, _, _ in ci_plan.journey_plan(
+                            root, [changed], self.GROUPS
+                        )
+                    )
+                )
+
+    def test_change_digest_distinguishes_path_boundaries(self) -> None:
+        self.assertNotEqual(
+            ci_plan.changes_digest(["a\nb"]), ci_plan.changes_digest(["a", "b"])
+        )
+        self.assertEqual(
+            ci_plan.changes_digest(["b", "a"]), ci_plan.changes_digest(["a", "b"])
+        )
+        self.assertEqual(
+            ci_plan.changes_digest([os.fsdecode(b"raw-\xff")]),
+            hashlib.sha256(b"raw-\xff\0").hexdigest(),
+        )
+
+    def test_typescript_literal_json_and_transitive_controls(self) -> None:
+        files = {
+            "web/src/features/mail/value.json": "{}",
+            "web/src/features/documents/Use.tsx": 'import value from "@/features/mail/value.json";',
+            "web/src/features/apply/Use.tsx": 'import "@/features/documents/Use";',
+        }
+        self.assertEqual(
+            self.ran(["web/src/features/mail/value.json"], files),
+            ["mail", "documents", "apply"],
+        )
+
+    def test_cli_tracks_actual_additions_deletions_and_renames(self) -> None:
+        for path in ["api/app/mail/rules.py", "web/src/features/mail/Badge.tsx"]:
+            for operation in ["add", "delete", "rename"]:
+                with self.subTest(path=path, operation=operation):
+                    root = self.tree(
+                        {
+                            **self.BASE,
+                            ".github/scripts/ci_plan.py": SCRIPT.read_text(),
+                            ".github/scripts/e2e_groups.py": (
+                                SCRIPT.parent / "e2e_groups.py"
+                            ).read_text(),
+                        }
+                    )
+                    git(root, "init", "-q", "-b", "main")
+                    git(root, "add", "-A")
+                    git(root, "commit", "-q", "-m", "base")
+                    base = git(root, "rev-parse", "HEAD")
+                    source = root / path
+                    if operation == "delete":
+                        source.unlink()
+                    elif operation == "rename":
+                        source.rename(source.with_name("renamed" + source.suffix))
+                    else:
+                        source.with_name("added" + source.suffix).write_text("")
+                    git(root, "add", "-A")
+                    git(root, "commit", "-q", "-m", operation)
+                    done = subprocess.run(
+                        [
+                            sys.executable,
+                            str(root / ".github/scripts/ci_plan.py"),
+                            "journeys",
+                            base,
+                            "HEAD",
+                        ],
+                        input="".join(f"{g}\t{a}\n" for g, a in self.GROUPS),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        env=CLEAN_ENV,
+                    )
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    rows = [row.split("\t") for row in done.stdout.splitlines()]
+                    self.assertEqual(int(rows[0][1]), 2 if operation == "rename" else 1)
+                    expected = (
+                        ["mail"] if operation == "add" else [g for g, _ in self.GROUPS]
+                    )
+                    self.assertEqual(
+                        [row[1] for row in rows[1:] if row[0] == "run"], expected
+                    )
+
+    def test_cli_preserves_raw_git_pathnames(self) -> None:
+        root = self.tree(
+            {
+                **self.BASE,
+                ".github/scripts/ci_plan.py": SCRIPT.read_text(),
+                ".github/scripts/e2e_groups.py": (
+                    SCRIPT.parent / "e2e_groups.py"
+                ).read_text(),
+            }
+        )
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "base")
+        base = git(root, "rev-parse", "HEAD")
+        paths = ['docs/new\nline\t"quoted".md', "docs/unicode-é.md"]
+        for path in paths:
+            (root / path).parent.mkdir(exist_ok=True)
+            (root / path).write_text("fixture")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "unusual paths")
+        done = subprocess.run(
+            [
+                sys.executable,
+                str(root / ".github/scripts/ci_plan.py"),
+                "journeys",
+                base,
+                "HEAD",
+            ],
+            input="",
+            capture_output=True,
+            text=True,
+            check=False,
+            env=CLEAN_ENV,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(
+            done.stdout.strip(), f"changed\t2\t{ci_plan.changes_digest(paths)}"
+        )
+
     def test_shared_or_unknown_paths_run_every_group(self) -> None:
         every = [g for g, _ in self.GROUPS]
         for path in [
@@ -1608,7 +1892,12 @@ class JourneysTest(unittest.TestCase):
                 for g in sorted(groups - {"apps", "sweep"})
             ],
         )
-        self.assertEqual([g for v, g, _ in plan if v == "run"], ["mail"])
+        # Production registries contain computed importlib targets. Those need every group
+        # until dependency evidence can establish them; the precise fixtures above still scope.
+        self.assertEqual(
+            [g for v, g, _ in plan if v == "run"], sorted(groups - {"apps", "sweep"})
+        )
+        self.assertTrue(all("dependency mapping failed" in why for _, _, why in plan))
 
 
 if __name__ == "__main__":

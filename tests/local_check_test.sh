@@ -1304,6 +1304,12 @@ scoped_branch scope-docs .claude/notes.md "more notes"
 scoped_branch scope-mail api/app/mail/sync.py "from app.mail import db"
 scoped_branch scope-shared api/app/db.py 'URL = "y"'
 scoped_branch scope-unknown somewhere/new.txt "new"
+scoped_branch scope-failed-mapper .github/scripts/ci_plan.py 'raise RuntimeError("fixture mapper failure")'
+scoped_branch scope-newline $'.claude/new\nline\t"quoted".md' "notes"
+git -C "$REPO" checkout -q -b scope-no-mapper mapped
+git -C "$REPO" rm -q .github/scripts/ci_plan.py
+git -C "$REPO" commit -q -m "missing mapper"
+git -C "$REPO" push -q origin scope-no-mapper
 git -C "$REPO" checkout -q main
 cat >"$WORK/scope.sh" <<'EOF'
 stub_plan() {
@@ -1324,6 +1330,21 @@ tree_of() { sed -n 's/.* \([0-9a-f]\{40\}\) [0-9]*s.*/\1/p' <<<"$(last_line)"; }
 scoped() { # scoped <expected exit> <args ...>: a stub check on mapped with the scope stub
   run "$1" env LOCAL_CHECK_JOURNEY_SHARDS="" LOCAL_CHECK_STUB="$WORK/scope.sh" "$CHECK" --base origin/mapped "${@:2}"
 }
+changes_match() { # changes_match <record tree>: compare against raw Git evidence, never a line list
+  python3 - "$RECORDS/$1.json" "$REPO" <<'PY' || fail "record lost exact changed-file evidence"
+import hashlib, json, subprocess, sys
+r = json.load(open(sys.argv[1]))
+j = r["journeys"]
+raw = subprocess.run(["git", "-C", sys.argv[2], "diff", "--name-only", "--no-renames", "-z", r["base"]["commit"], r["head"]], capture_output=True, check=True).stdout
+paths = sorted(p for p in raw.split(b"\0") if p)
+assert len(paths) > 0 and j["changed_files"] == len(paths), j
+assert j["changes"] == hashlib.sha256(b"".join(p + b"\0" for p in paths)).hexdigest(), j
+PY
+}
+scoped 0 --merge origin/scope-docs
+out_has "has no PASS record), ran apps, apply, mail, sweep"
+changes_match "$(tree_of)"
+ok "an unchecked base with nonempty changes runs full and retains exact change metadata"
 scoped 0
 out_has "has no PASS record), ran apps, apply, mail, sweep"
 [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "first check of mapped: $(journeys_of "$(tree_of)")"
@@ -1340,7 +1361,7 @@ python3 - "$RECORDS/$docs_tree.json" "$(git -C "$REPO" diff --name-only origin/m
 import hashlib, json, sys
 j = json.load(open(sys.argv[1]))["journeys"]
 assert j["changed_files"] == 1 and j["full_because"] is None, j
-assert j["changes"] == hashlib.sha256((sys.argv[2] + "\n").encode()).hexdigest(), j
+assert j["changes"] == hashlib.sha256((sys.argv[2] + "\0").encode()).hexdigest(), j
 assert all(e["why"] == "no changed file touches it" for e in j["skipped"]), j
 PY
 ok "a documentation only batch on a checked base skips every journey group; its record lists them skipped with the reason and holds the digest of its change set"
@@ -1364,7 +1385,39 @@ LOCAL_CHECK_FULL=1 scoped 0 --merge origin/scope-docs
 out_has "journeys: full (LOCAL_CHECK_FULL=1), ran apps, apply, mail, sweep"
 out_has "journeys-sweep"
 [[ "$(journeys_of "$docs_tree")" == "ran apps apply mail sweep | skipped | full" ]] || fail "LOCAL_CHECK_FULL: $(journeys_of "$docs_tree")"
+python3 - "$RECORDS/$docs_tree.json" <<'PY' || fail "forced full record lost its exact changes"
+import hashlib, json, sys
+j = json.load(open(sys.argv[1]))["journeys"]
+assert j["changed_files"] == 1, j
+assert j["changes"] == hashlib.sha256(b".claude/notes.md\0").hexdigest(), j
+PY
+ok "forced full records retain the exact changed-file digest independently of mapping"
 ok "LOCAL_CHECK_FULL=1 runs every group, and the record says why"
+
+for ref in scope-failed-mapper scope-no-mapper; do
+  scoped 0 --merge "origin/$ref"
+  [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "$ref narrowed journeys"
+  changes_match "$(tree_of)"
+done
+ok "missing and failed mappers run full and retain independently computed change metadata"
+scoped 0 --merge origin/scope-newline
+out_has "journeys: scoped, ran none; skipped apps, apply, mail, sweep"
+changes_match "$(tree_of)"
+ok "the gate attests one newline and quoted pathname without splitting or Git quoting"
+
+cp "$WORK/scope.sh" "$WORK/scope-evidence-fails.sh"
+cat >>"$WORK/scope-evidence-fails.sh" <<'EOF'
+python3() {
+  if [[ "$*" == "- $TREE $base_sha $head_sha" ]]; then return 1; fi
+  command python3 "$@"
+}
+EOF
+rm "$RECORDS/$docs_tree.json"
+run 1 env LOCAL_CHECK_JOURNEY_SHARDS="" LOCAL_CHECK_STUB="$WORK/scope-evidence-fails.sh" "$CHECK" --base origin/mapped --merge origin/scope-docs
+out_has "journeys: full (cannot establish the changed-file list)"
+out_has "journey-changes"
+[[ ! -f "$RECORDS/$docs_tree.json" ]] || fail "unknown change evidence wrote a successful attestation"
+ok "unknown changed-file evidence runs full and fails without writing a PASS record"
 
 listed="$(awk '/koalaman\/shellcheck:/ { on = 1; next } on && /^ *(#|- )/ { exit } on { print }' .github/workflows/ci.yml | tr '\n' ' ')"
 for script in ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh; do

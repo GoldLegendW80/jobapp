@@ -36,6 +36,7 @@ from __future__ import annotations
 import ast
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -493,12 +494,80 @@ AREA_GROUPS: dict[str, frozenset[str] | str] = {
 API_WIRING = frozenset({"app.main", "app.worker", "app.models"})
 WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
 SHARED = "<shared>"
-TS_IMPORT = re.compile(
-    r"""(?:^|[\s;])(?:import|export)\s[^'"`;]*?\bfrom\s*["']([^"']+)["']"""
-    r"""|\bimport\(\s*["']([^"']+)["']\s*\)"""
-    r"""|^\s*import\s*["']([^"']+)["']""",
-    re.MULTILINE,
+TS_TOKEN = re.compile(
+    r"\s+|//[^\n]*|/\*[\s\S]*?\*/|'(?:\\[\s\S]|[^'\\])*'|\"(?:\\[\s\S]|[^\"\\])*\"|`(?:\\[\s\S]|[^`\\])*`|[\w$]+|[^\s]"
 )
+
+
+class MappingError(ValueError):
+    """Uncertain dependencies require every journey group."""
+
+
+def source_files(root: Path, suffixes: tuple[str, ...]):
+    # Path.rglob can suppress traversal errors, losing every consumer in a directory.
+    def failed(error):
+        raise error
+
+    for directory, _, names in os.walk(root, onerror=failed):
+        for name in sorted(names):
+            if name.endswith(suffixes):
+                yield Path(directory) / name
+
+
+def ts_imports(text: str) -> list[str]:
+    """Read import declarations/calls as tokens, without pretending to parse TypeScript.
+    Unsupported targets fail closed. Comments and strings cannot hide declarations.
+    https://www.typescriptlang.org/docs/handbook/modules/reference.html
+    """
+    tokens = []
+    for match in TS_TOKEN.finditer(text):
+        token = match.group()
+        if not token.isspace() and not token.startswith(("//", "/*")):
+            tokens.append(token)
+    if any(t in ("'", '"', "`") for t in tokens) or text.count("/*") > text.count("*/"):
+        raise MappingError("unterminated TypeScript string or comment")
+    for token in tokens:
+        if token == "/" or token.startswith("`") and "${" in token:
+            raise MappingError("unsupported TypeScript expression can contain imports")
+        if token.startswith(("'", '"')) and "\n" in token:
+            raise MappingError("unsupported multiline TypeScript string")
+
+    def literal(index):
+        token = tokens[index] if index < len(tokens) else ""
+        if len(token) < 2 or token[0] not in "'\"`" or "\\" in token or "${" in token:
+            raise MappingError("unsupported TypeScript import target")
+        return token[1:-1]
+
+    specs = []
+    seen_export = False
+    for i, token in enumerate(tokens):
+        if token == "export":
+            seen_export = True
+        tail = tokens[i + 1 : i + 2]
+        if token in ("import", "require"):
+            if tail == ["."]:
+                raise MappingError("unsupported module loader property")
+            if tail == ["("]:
+                specs.append(literal(i + 2))
+                if tokens[i + 3 : i + 4] != [")"]:
+                    raise MappingError("unsupported TypeScript dynamic import")
+                continue
+            if token == "require":
+                raise MappingError("unsupported require reference")
+            if tail and tail[0].startswith(("'", '"')):
+                specs.append(literal(i + 1))
+                continue
+            for j in range(i + 1, len(tokens)):
+                if tokens[j] == "from":
+                    specs.append(literal(j + 1))
+                    break
+                if tokens[j] in (";", "import", "export"):
+                    raise MappingError("unsupported TypeScript import declaration")
+            else:
+                raise MappingError("incomplete TypeScript import declaration")
+        elif token == "from" and seen_export:
+            specs.append(literal(i + 1))
+    return specs
 
 
 def matches(pattern: str, path: str) -> bool:
@@ -523,67 +592,136 @@ class Imports:
 
     def api(self) -> dict[str, set[str]]:
         if self._api is None:
-            self._api = {}
+            graph: dict[str, set[str]] = {}
             base = self.root / "api"
             modules: dict[str, Path] = {}
-            for path in sorted((base / "app").rglob("*.py")):
+            for path in source_files(base / "app", (".py",)):
                 name = ".".join(path.relative_to(base).with_suffix("").parts)
                 modules[name.removesuffix(".__init__")] = path
+            packages = {name.rpartition(".")[0] for name in modules}
 
-            def resolve(name: str) -> str | None:
-                while name and name not in modules:
-                    name = name.rpartition(".")[0]
-                return name or None
+            def local(name: str) -> bool:
+                return name == "app" or name.startswith("app.")
 
             for name, path in modules.items():
-                try:
-                    tree = ast.parse(path.read_text(encoding="utf-8"))
-                except (SyntaxError, UnicodeDecodeError, OSError):
-                    continue  # pytest and ruff fail on it; here it carries nothing on
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                package = (
+                    name if path.name == "__init__.py" else name.rpartition(".")[0]
+                )
+                loaders = {"__import__"}
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom) and node.module in (
+                        "importlib",
+                        "builtins",
+                    ):
+                        loaders |= {
+                            a.asname or a.name
+                            for a in node.names
+                            if a.name in ("import_module", "__import__")
+                        }
+                called = {
+                    id(node.func)
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                }
+                for node in ast.walk(tree):
+                    if id(node) not in called and (
+                        isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Load)
+                        and node.id in loaders
+                        or isinstance(node, ast.Attribute)
+                        and node.attr in ("import_module", "__import__")
+                    ):
+                        raise MappingError("indirect Python import loader")
                 for node in ast.walk(tree):
                     targets: list[str] = []
                     if isinstance(node, ast.Import):
                         targets = [alias.name for alias in node.names]
-                    elif (
-                        isinstance(node, ast.ImportFrom)
-                        and node.module
-                        and not node.level
-                    ):
+                    elif isinstance(node, ast.ImportFrom):
+                        # Python's documented package-relative name resolution.
+                        # https://docs.python.org/3/library/importlib.html#importlib.util.resolve_name
+                        module = importlib.util.resolve_name(
+                            "." * node.level + (node.module or ""), package
+                        )
+                        if (
+                            local(module)
+                            and module not in modules
+                            and module not in packages
+                        ):
+                            raise MappingError(f"unresolved Python import {module}")
                         targets = [
-                            f"{node.module}.{alias.name}" for alias in node.names
+                            f"{module}.{a.name}"
+                            if f"{module}.{a.name}" in modules
+                            else module
+                            for a in node.names
                         ]
+                    elif isinstance(node, ast.Call) and (
+                        isinstance(node.func, ast.Name)
+                        and node.func.id in loaders
+                        or isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("import_module", "__import__")
+                    ):
+                        if (
+                            not node.args
+                            or not isinstance(node.args[0], ast.Constant)
+                            or not isinstance(node.args[0].value, str)
+                        ):
+                            raise MappingError("computed Python import target")
+                        target = node.args[0].value
+                        if target.startswith("."):
+                            package_arg = (
+                                node.args[1]
+                                if len(node.args) > 1
+                                else next(
+                                    (
+                                        k.value
+                                        for k in node.keywords
+                                        if k.arg == "package"
+                                    ),
+                                    None,
+                                )
+                            )
+                            if not isinstance(
+                                package_arg, ast.Constant
+                            ) or not isinstance(package_arg.value, str):
+                                raise MappingError("computed Python import package")
+                            target = importlib.util.resolve_name(
+                                target, package_arg.value
+                            )
+                        if (
+                            any(k.arg == "level" for k in node.keywords)
+                            or len(node.args) > 2
+                        ):
+                            raise MappingError("unsupported __import__ arguments")
+                        targets = [target]
                     for target in targets:
-                        if not target.startswith("app."):
+                        if not local(target):
                             continue
-                        found = resolve(target)
-                        # Importing app.mail.accounts runs app/mail/__init__.py first: the
-                        # packages above a module are imported with it.
+                        if target not in modules and target not in packages:
+                            raise MappingError(f"unresolved Python import {target}")
+                        found = target
+                        # Importing a module executes its packages' __init__.py too.
                         while found and found != "app":
                             if found != name:
-                                self._api.setdefault(found, set()).add(name)
+                                graph.setdefault(found, set()).add(name)
                             found = found.rpartition(".")[0]
+            self._api = graph
         return self._api
 
     def web(self) -> dict[str, set[str]]:
         if self._web is None:
-            self._web = {}
+            graph: dict[str, set[str]] = {}
             src = self.root / "web/src"
-            for path in sorted(src.rglob("*")):
-                if path.suffix not in (".ts", ".tsx") or not path.is_file():
-                    continue
+            for path in source_files(src, (".ts", ".tsx")):
                 me = path.relative_to(self.root).as_posix()
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except (UnicodeDecodeError, OSError):
-                    continue
-                for found in TS_IMPORT.finditer(text):
-                    spec = next(group for group in found.groups() if group)
+                text = path.read_text(encoding="utf-8")
+                for spec in ts_imports(text):
                     if spec.startswith("@/"):
                         target = src / spec[2:]
                     elif spec.startswith("."):
                         target = path.parent / spec
                     else:
-                        continue  # a package
+                        continue
                     for candidate in (
                         target,
                         target.with_name(target.name + ".ts"),
@@ -595,8 +733,11 @@ class Imports:
                             name = Path(os.path.normpath(candidate)).relative_to(
                                 self.root
                             )
-                            self._web.setdefault(name.as_posix(), set()).add(me)
+                            graph.setdefault(name.as_posix(), set()).add(me)
                             break
+                    else:
+                        raise MappingError(f"unresolved TypeScript import {spec}")
+            self._web = graph
         return self._web
 
 
@@ -702,7 +843,17 @@ def journey_plan(
     pulled: dict[str, str] = {}
     every = ""
     for path in paths:
-        groups, why = journey_groups_for(path, specs, configs, imports)
+        try:
+            # --no-renames exposes old and new paths. A deletion can have consumers only
+            # in the base, so the head graph cannot justify skipping any group.
+            if (
+                path.startswith(("api/app/", "web/src/"))
+                and not (root / path).is_file()
+            ):
+                raise MappingError("deleted or missing source path")
+            groups, why = journey_groups_for(path, specs, configs, imports)
+        except (OSError, UnicodeError, SyntaxError, ValueError, ImportError) as error:
+            groups, why = EVERY, f"dependency mapping failed ({type(error).__name__})"
         if groups == EVERY:
             every = every or f"{shown(path)}: {why}"
             continue
@@ -720,10 +871,10 @@ def journey_plan(
 
 
 def changes_digest(paths: list[str]) -> str:
-    """The sha256 of a change set: its paths sorted, one per line. ops/ship.sh computes the same
+    """The sha256 of a change set: raw pathname bytes sorted, each terminated by NUL. ops/ship.sh computes the same
     from a PASS record's base and head, so a record is never taken for another change set."""
     return hashlib.sha256(
-        "".join(f"{path}\n" for path in sorted(paths)).encode()
+        b"".join(path + b"\0" for path in sorted(os.fsencode(p) for p in paths))
     ).hexdigest()
 
 
@@ -741,7 +892,6 @@ def journeys_main(root: Path, base: str, head: str) -> int:
             head,
         ],
         capture_output=True,
-        text=True,
         check=False,
         env=git_env(),
     )
@@ -750,7 +900,7 @@ def journeys_main(root: Path, base: str, head: str) -> int:
             f"ci_plan: cannot read the files of {head} against {base}", file=sys.stderr
         )
         return 1
-    paths = [name for name in done.stdout.split("\0") if name]
+    paths = [os.fsdecode(name) for name in done.stdout.split(b"\0") if name]
     group_args = []
     for line in sys.stdin.read().splitlines():
         if line.strip():

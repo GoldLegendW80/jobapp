@@ -75,10 +75,25 @@ in the job folder that holds this repository (it is not part of the repository).
    run in full every time. The check prints `journeys: scoped, ran <groups>; skipped <groups>`
    (or `journeys: full (<why>), ran <groups>`) and one line per group with its reason, before the
    steps and again above its last line; the record holds the same under `journeys`, with the
-   number of changed files and the sha256 of their list, and `ops/ship.sh` prints it in its
-   summary (`journeys:`) and refuses to merge on a scoped record whose list is not the one of
-   its base and head. A new module gets its line in `AREA_GROUPS` (`ci_plan_test.py` fails
+   number of changed files and the sha256 of their raw pathname bytes, sorted with a NUL after
+   each path. Git's `-z` output preserves newlines and quoting throughout that calculation.
+   The metadata is computed independently of mapping, including forced full, unchecked bases
+   and missing or failed mappers. If the change list itself cannot be established, every group
+   runs and the check fails without a PASS record. `ops/ship.sh` prints the scope in its summary
+   (`journeys:`) and checks both count and digest against base and head before any merge, for
+   full and scoped records. A new module gets its line in `AREA_GROUPS` (`ci_plan_test.py` fails
    without one); until then its files run every group.
+
+   Dependencies include relative Python imports, literal `importlib.import_module` and
+   `__import__` calls, TypeScript side-effect, multiline, type-only, re-export and literal dynamic
+   imports, including literal template targets and JSON assets. Deleted source paths and renames
+   run every group: the base can hold consumers the head no longer contains. Unreadable sources,
+   decode, parse or traversal errors, unresolved local modules and computed or unsupported
+   imports also run every group. The reader is deliberately conservative, with no full
+   TypeScript parser: template interpolation and ambiguous syntax force full. The current API
+   registries use computed dynamic imports, so API source changes currently run every group.
+   The first real gate of this change must use `LOCAL_CHECK_FULL=1`; fixture results are not a
+   genuine scoped PASS, and no real scoped PASS has been established yet.
 
    Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in

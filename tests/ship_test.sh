@@ -273,14 +273,16 @@ record = {"result": "PASS", "tree": tree, "head": head, "base": {"ref": "origin/
           "merged": [{"ref": ref, "commit": sha} for ref, sha in rows], "stub": False}
 if journeys:
     names = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", base, head],
-                           capture_output=True, text=True, check=True).stdout
-    paths = sorted(name for name in names.split("\0") if name)
-    listed = paths + (["another.txt"] if journeys == "scoped-other" else [])
+                           capture_output=True, check=True).stdout
+    paths = sorted(name for name in names.split(b"\0") if name)
+    listed = paths + ([b"another.txt"] if journeys == "scoped-other" else [])
+    if journeys == "scoped-collision":
+        listed = [b"\n".join(paths)]
     record["journeys"] = {
         "scope": "full" if journeys == "full" else "scoped",
         "full_because": "LOCAL_CHECK_FULL=1" if journeys == "full" else None,
-        "changed_files": len(paths),
-        "changes": hashlib.sha256("".join(f"{p}\n" for p in sorted(listed)).encode()).hexdigest(),
+        "changed_files": len(listed) + (1 if journeys == "scoped-count" else 0),
+        "changes": hashlib.sha256(b"".join(p + b"\0" for p in sorted(listed))).hexdigest(),
         "ran": [{"group": "apps", "why": "web/src/features/jobs/x.tsx: the module jobs"}]
         + ([{"group": "mail", "why": "full: LOCAL_CHECK_FULL=1"}] if journeys == "full" else []),
         "skipped": [] if journeys == "full" else [{"group": "mail", "why": "no changed file touches it"}],
@@ -803,6 +805,25 @@ out_has "its journey scope was computed for another change set: nothing merged"
 log_lacks gh.log "pr merge"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed on a record of another change set"
 ok "the summary names the journey groups the gate ran and skipped (scoped, full, a record without them); a scoped record of another change set is refused before any merge"
+
+for mode in scoped-collision scoped-count; do
+  fresh
+  mkpr 95 a
+  mkpr 96 b
+  echo "$mode" >"$STATE/journeys"
+  run 1 ship --approved
+  out_has "its journey scope was computed for another change set: nothing merged"
+  log_lacks gh.log "pr merge"
+  [[ ! -e "$STATE/deploy.log" ]] || fail "deployed on $mode metadata"
+done
+ok "pathname-boundary collisions and incorrect recorded counts stop before any merge"
+
+fresh
+mkpr 97 $'line\nbreak\t"quoted".txt'
+echo scoped >"$STATE/journeys"
+run 0 ship --approved
+out_has "journeys: scoped on 1 changed files"
+ok "a real newline, tab and quote in a Git pathname remain one attested change"
 
 fresh
 mkpr 66

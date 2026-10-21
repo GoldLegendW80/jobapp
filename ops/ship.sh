@@ -833,19 +833,21 @@ if scope is None:
     sys.exit(0)
 ran = [entry["group"] for entry in scope.get("ran", [])]
 skipped = [entry["group"] for entry in scope.get("skipped", [])]
-if scope.get("scope") == "full":
-    print(f"ok full ({scope.get('full_because')}), ran {', '.join(ran) or 'none'}")
-    sys.exit(0)
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 done = subprocess.run(
     ["git", "-C", sys.argv[2], "diff", "--name-only", "--no-renames", "-z",
      record["base"]["commit"], record["head"]],
-    capture_output=True, text=True, check=False, env=env,
+    capture_output=True, check=False, env=env,
 )
-paths = sorted(name for name in done.stdout.split("\0") if name)
-digest = hashlib.sha256("".join(f"{path}\n" for path in paths).encode()).hexdigest()
-if done.returncode != 0 or scope.get("scope") != "scoped" or digest != scope.get("changes"):
+paths = sorted(name for name in done.stdout.split(b"\0") if name)
+digest = hashlib.sha256(b"".join(path + b"\0" for path in paths)).hexdigest()
+if (done.returncode != 0 or scope.get("scope") not in ("scoped", "full")
+        or digest != scope.get("changes") or type(scope.get("changed_files")) is not int
+        or len(paths) != scope["changed_files"]):
     print("bad its journey scope was computed for another change set")
+    sys.exit(0)
+if scope.get("scope") == "full":
+    print(f"ok full ({scope.get('full_because')}), ran {', '.join(ran) or 'none'}")
     sys.exit(0)
 why = {entry["group"]: entry["why"] for entry in scope.get("skipped", [])}
 reasons = sorted(set(why.values()))
