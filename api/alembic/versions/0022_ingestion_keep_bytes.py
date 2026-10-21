@@ -9,8 +9,8 @@ Expand only: one column with a server default, so the release before this one in
 without it and keeps nulling the bytes as it always did (CONTRIBUTING.md, Migrations). The number
 is the expected one: the orchestrator renumbers it on the head of `main` when it merges.
 
-Revision ID: 0020
-Revises: 0019
+Revision ID: 0022
+Revises: 0021
 Create Date: 2026-10-21
 """
 
@@ -19,8 +19,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0020"
-down_revision: str | None = "0019"
+revision: str = "0022"
+down_revision: str | None = "0021"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

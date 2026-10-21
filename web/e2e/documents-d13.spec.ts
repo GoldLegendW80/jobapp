@@ -80,8 +80,14 @@ async function setFit(job: string, fit: number) {
 }
 
 const card = () => page.getByTestId("documents-generation");
+/** The Search tab has two Advanced buttons since O4: scope to the documents card by its heading. */
 const advanced = () =>
-  page.getByRole("button", { name: "Advanced", exact: true });
+  page
+    .locator("section")
+    .filter({
+      has: page.getByRole("heading", { name: "Documents for new postings" }),
+    })
+    .getByRole("button", { name: "Advanced", exact: true });
 const slider = () => page.getByRole("slider", { name: "Fit score threshold" });
 const figures = () => page.getByTestId("documents-threshold");
 

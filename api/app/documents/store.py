@@ -59,7 +59,7 @@ from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, undefer
@@ -99,6 +99,8 @@ from app.ingestion.models import IngestionDocument
 from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobFile, JobStatus
 from app.mail.factcheck_rules import Sources
+from app.profile.models import Profile
+from app.profile.schemas import PreferencesSection
 
 logger = logging.getLogger("app.documents")
 
@@ -423,6 +425,25 @@ def language_of(text: str) -> Language:
     return Language.fr if french > english else Language.en
 
 
+def preferences(db: Session, user_id: uuid.UUID) -> PreferencesSection:
+    """The person's `preferences` section (opportunities O4): the language and the tone of the
+    documents. Its defaults (`auto`, `plain`) when the section is empty or no longer
+    validates, so a stored section the code refuses never stops a document."""
+    stored = db.scalar(sa.select(Profile.sections["preferences"]).where(Profile.user_id == user_id))
+    try:
+        return PreferencesSection.model_validate(stored or {})
+    except ValidationError:
+        return PreferencesSection()
+
+
+def language_for(text: str, chosen: PreferencesSection) -> Language:
+    """The language of a new posting document: the person's `documents_language`, or the
+    posting text's (`language_of`) when it is `auto`."""
+    if chosen.documents_language == "auto":
+        return language_of(text)
+    return Language(chosen.documents_language)
+
+
 # --- base CVs -----------------------------------------------------------------------------------
 
 
@@ -658,8 +679,9 @@ def get_or_create(
     at: datetime,
     base_document_id: uuid.UUID | None = None,
 ) -> Document:
-    """The posting's CV or letter, made empty the first time. Its language is the posting text's
-    (`language_of`). A CV takes the template of the base CV it is written from (the one named,
+    """The posting's CV or letter, made empty the first time. Its language is the person's
+    `preferences.documents_language`, the posting text's (`language_of`) when it is `auto`
+    (`language_for`). A CV takes the template of the base CV it is written from (the one named,
     else the default), a letter the template of the posting's CV; else `classic`. Two calls at
     once make one row: the second insert waits for the first and does nothing."""
     existing = _posting_document(db, user_id, posting_id, kind)
@@ -695,7 +717,7 @@ def get_or_create(
             posting_id=posting_id,
             base_document_id=base_id,
             kind=kind,
-            language=language_of(posting.posting_text or ""),
+            language=language_for(posting.posting_text or "", preferences(db, user_id)),
             template_slug=template,
             draft=c.dump(model),
             draft_schema=c.SCHEMA,

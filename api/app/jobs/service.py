@@ -926,7 +926,9 @@ class NothingToComputeError(Exception):
         self.reason = reason
 
 
-EDITABLE_FIELDS = ("company", "title", "location", "contract_type", "url")
+EDITABLE_FIELDS = ("company", "title", "location", "contract_type", "url", "work_mode")
+# The columns PATCH's `pay` sets together (opportunities O3), null all four to remove it.
+PAY_FIELDS = ("pay_min", "pay_max", "pay_currency", "pay_period")
 NOTE_COALESCE = timedelta(minutes=2)
 
 

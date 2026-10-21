@@ -20,7 +20,7 @@ agent's lease and in a person's session (owner, 2026-10-20); chrome://policy/tes
 chrome://policy, and its "Apply policies" message reopens no page; a remote debugging switch kept
 on in the profile's Local State opens no port in a person's session, a flag or a test policy set
 saved there does not survive a restart, and a port opened in a person's session ends it
-`debugging_port`.
+`debugging_port`. A lease opens its address alone, never the tabs the last one left (#488).
 
 The fixture site is tests/browser_pages/b7/site.html: its title says who is signed in, which the
 test reads from the display's window list (xwininfo), since nothing may attach to a session
@@ -35,9 +35,9 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.browser.test_browser_container import PAGES, Stack, processes, stack
+from tests.browser.test_browser_container import PAGES, Stack, no_lease_left, processes, stack
 
-__all__ = ["stack"]
+__all__ = ["no_lease_left", "stack"]
 
 pytestmark = [pytest.mark.docker]
 
@@ -417,6 +417,35 @@ def test_the_chrome_pages_the_image_needs_stay_open(stack: Stack) -> None:
     assert "You are adequately sandboxed." in sandbox, sandbox[:800]
     assert all(policy.values()), policy
     assert seen["ok"] is True, seen
+
+
+SAVED_TABS = """
+import os, sys
+print(len(os.listdir(f"/profiles/{sys.argv[1]}/data/Default/Sessions")))
+"""
+
+
+def test_a_lease_opens_its_address_alone_whatever_the_last_one_left(stack: Stack) -> None:
+    """Issue #488: "continue where you left off" reopened the last session's tabs beside the new
+    one's address, a tab more at every lease of the profile, until a tab a page opened went past
+    TABS_MAX and was closed (the probe's second tab above, in the gate). Chromium saves the tabs
+    at every end; prep removes them before every start, and the cookies stay."""
+    profile, uid = str(uuid.uuid4()), 20026
+    for _ in range(3):
+        stack.lease(profile, uid)
+        assert stack.probe("navigate", f"{SITE}?login=e2e-browser-h", "20")["ok"] is True
+        end(stack)
+        assert int(stack.python(SAVED_TABS, profile, user=str(uid))) > 0
+    stack.lease(profile, uid)
+    opened = [t["url"] for t in json.loads(stack.python(TARGETS)) if t["type"] == "page"]
+    front = stack.probe("front", f"{PAGES}/form.html")
+    events = stack.current()["lease"]["events"]
+    seen = stack.probe("navigate", SITE, "20")
+    end(stack)
+    assert opened == ["about:blank"], opened
+    assert front == {"visibility": "visible", "focus": True}, front
+    assert not [e for e in events if e.get("event") == "tab_closed"], events
+    assert "Signed in as e2e-browser-h" in seen["text"], seen
 
 
 TYPE = """

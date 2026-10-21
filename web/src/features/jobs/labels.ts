@@ -154,6 +154,16 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   page_failed: "A page did not load. What was read before is kept.",
   browser_unavailable: "The browser could not be reached.",
   not_started: "not read this time, it comes at the next search.",
+  // LinkedIn (browser B10, app/browser/linkedin_guard.py).
+  linkedin_off: "LinkedIn is off for you, so it was not searched.",
+  linkedin_paused:
+    "LinkedIn showed a security check, so all LinkedIn work is paused for a week. It was not searched.",
+  linkedin_daily:
+    "LinkedIn was already searched today. It is searched again tomorrow.",
+  linkedin_signin:
+    "LinkedIn needs you to sign in. Nothing else was opened on LinkedIn.",
+  linkedin_checkpoint:
+    "LinkedIn showed a security check, so all LinkedIn work is paused for a week.",
 };
 
 export function sourceName(source: {
@@ -167,8 +177,17 @@ export function sourceName(source: {
 }
 
 /** A browser source as the sweep names it ("<kind>:<query>[/<location>]": its `current_board`
- * while it runs, and the `source` of the postings it found), in words; any other name as it is. */
+ * while it runs, and the `source` of the postings it found), in words; any other name as it is.
+ * A posting found by several sources names each, joined by ", " (browser B10, sweep.SOURCES_SEP):
+ * each is read on its own and the names are joined by "; ". */
 export function sourceLabel(current: string): string {
+  const names = current.split(/, (?=(?:[a-z_]+):)/);
+  return names.length > 1
+    ? names.map(oneSource).join("; ")
+    : oneSource(current);
+}
+
+function oneSource(current: string): string {
   const match = /^(google_careers|vie|site|linkedin):(.*)$/s.exec(current);
   if (!match) return current;
   const [, kind = "", rest = ""] = match;

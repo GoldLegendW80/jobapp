@@ -194,7 +194,7 @@ def test_lever_error_object_and_wrong_shape() -> None:
 
 
 def test_api_path_encodes_org_and_refuses_unknown_ats() -> None:
-    assert ats.api_path("ashby", "a/b") == "/posting-api/job-board/a%2Fb"
+    assert ats.api_path("ashby", "a/b") == "/posting-api/job-board/a%2Fb?includeCompensation=true"
     assert ats.api_path("greenhouse", "x") == "/v1/boards/x/jobs?content=true"
     assert ats.api_path("lever", "x") == "/v0/postings/x?mode=json"
     with pytest.raises(ValueError, match="unknown ATS"):
@@ -359,11 +359,11 @@ def test_stub_for_every_org_or_only_a_prefix() -> None:
     )
     client = ats.AtsClient(tz=PARIS, stub_base_url="http://fakeats:8099/", stub_org_prefix="fake-")
     assert client.board_url("ashby", "fake-ok") == (
-        "http://fakeats:8099/ashby/posting-api/job-board/fake-ok",
+        "http://fakeats:8099/ashby/posting-api/job-board/fake-ok?includeCompensation=true",
         "fakeats",
     )
     assert client.board_url("ashby", "mistral.ai") == (
-        "https://api.ashbyhq.com/posting-api/job-board/mistral.ai",
+        "https://api.ashbyhq.com/posting-api/job-board/mistral.ai?includeCompensation=true",
         "api.ashbyhq.com",
     )
     plain_client = ats.AtsClient(tz=PARIS)

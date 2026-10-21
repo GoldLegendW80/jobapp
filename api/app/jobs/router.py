@@ -457,8 +457,13 @@ def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request,
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
     sent = body.model_fields_set
+    fields = {name: getattr(body, name) for name in service.EDITABLE_FIELDS if name in sent}
+    if "pay" in sent:
+        pay = body.pay
+        values = (pay.min, pay.max, pay.currency, pay.period) if pay else (None,) * 4
+        fields.update(zip(service.PAY_FIELDS, values, strict=True))
     changes = service.JobChanges(
-        fields={name: getattr(body, name) for name in service.EDITABLE_FIELDS if name in sent},
+        fields=fields,
         status=body.status,
         notes=body.notes,
         set_fit="fit" in sent,

@@ -7,6 +7,7 @@ import asyncio
 import gc
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -223,6 +224,44 @@ def test_every_queue_is_healthy_right_at_start_and_unchanged_after_an_interval(
 
     serve_until(settings, context(settings, fake_ats), scenario)
     assert "first" in seen
+
+
+def test_a_redis_error_in_the_startup_record_does_not_abort_the_start(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    fake_ats: FakeAts,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The first record, the one serve() makes at start, raises: the worker still starts, logs one
+    warning without the error text, and the periodic record writes the health key later."""
+    real = Worker.record_health
+    failures: list[str] = []
+
+    async def flaky(self: Worker) -> None:
+        # Only the call of serve() fails, once; arq's own loop must not.
+        if sys._getframe(1).f_code.co_name == "serve" and not failures:
+            failures.append(self.queue_name)
+            raise ConnectionError("redis://user:secret@redis:6379 went away")
+        await real(self)
+
+    monkeypatch.setattr(Worker, "record_health", flaky)
+    caplog.set_level(logging.WARNING, logger="app.worker")
+
+    async def scenario(workers: list[Worker]) -> None:
+        assert failures == [workers[0].queue_name]
+        workers[0]._last_health_check -= worker.HEALTH_INTERVAL_S + 1
+        await workers[0].record_health()  # the periodic record, an interval later
+        client = aioredis.from_url(settings.redis_url.get_secret_value())
+        try:
+            assert await client.get(workers[0].queue_name + ":health-check") is not None
+        finally:
+            await client.aclose()
+
+    serve_until(settings, context(settings, fake_ats), scenario)
+    warnings = [r for r in caplog.records if "startup health record failed" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "secret" not in caplog.text
 
 
 def test_check_fails_for_a_queue_whose_worker_did_not_start(
