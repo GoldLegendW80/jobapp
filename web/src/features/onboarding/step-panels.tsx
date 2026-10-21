@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { holdText, type ApplySettings } from "@/features/apply/settings-api";
 import { UploadPanel } from "@/features/documents/upload-panel";
+import { RunProgress } from "@/features/ingestion/run-progress";
+import { RunStart } from "@/features/ingestion/run-start";
 import { StepDocuments } from "@/features/ingestion/step-documents";
 import {
   COMPANY_TYPES,
@@ -164,6 +166,8 @@ function Radios<T extends string>({
 // --- 1. Your profile ----------------------------------------------------------------------------
 
 export function StepProfile() {
+  // The run part asks the api only once the person opens the disclosure.
+  const [more, setMore] = useState(false);
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">
@@ -172,13 +176,39 @@ export function StepProfile() {
         reading goes on while you answer the next steps.
       </p>
       <UploadPanel openHref={(id) => `/profile/cv/${id}`} />
-      <details className="rounded-md border px-3 py-2">
+      <details
+        className="rounded-md border px-3 py-2"
+        onToggle={(event) => {
+          setMore(event.currentTarget.open);
+        }}
+      >
         <summary className="min-h-11 cursor-pointer content-center text-sm font-medium">
           Or add a LinkedIn data export (ZIP), or paste a text
         </summary>
-        <div className="pt-4">
-          <StepDocuments />
-        </div>
+        {more ? (
+          <div className="flex flex-col gap-6 pt-4">
+            <StepDocuments />
+            <section
+              aria-labelledby="welcome-read"
+              className="flex flex-col gap-4"
+            >
+              <div className="flex flex-col gap-1">
+                <h3
+                  id="welcome-read"
+                  className="text-base font-semibold tracking-tight"
+                >
+                  Read them into your profile
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  Choose the documents, see the estimate, and start. The reading
+                  goes on while you answer the next steps.
+                </p>
+              </div>
+              <RunStart />
+              <RunProgress />
+            </section>
+          </div>
+        ) : null}
       </details>
       <p className="text-sm">
         <Link
@@ -188,7 +218,8 @@ export function StepProfile() {
           Review the proposals
         </Link>{" "}
         <span className="text-muted-foreground">
-          (opens Fill my profile; come back to this page after)
+          (opens Fill my profile once the reading is done; come back to this
+          page after)
         </span>
       </p>
     </div>

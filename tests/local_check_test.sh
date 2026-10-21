@@ -318,6 +318,48 @@ out_has "journeys-sweep             FAIL"
 [[ "$(ups)" == 3 ]] || fail "a port that is always taken: $(ups) starts, expected 3"
 ok "a stack that cannot bind its port is taken down and started on another, three starts at most, and four stacks hold four different ports"
 
+# Issue #530: the database is migrated before the full `up --wait`, so the worker never starts on
+# an empty database; each start of a retry migrates its fresh stack again, with the same compose
+# files as its `up`, and nothing migrates after `up` any more.
+stack_order() {
+  awk '$1 == "docker" {
+    if (/ run --rm -T api alembic upgrade head/) printf "migrate "
+    else if (/ up -d /) printf "up "
+    else if (/ down /) printf "down "
+    else if (/ exec .*alembic/) printf "exec-migrate "
+  }' "$STUB_CALLS"
+}
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=0 "$CHECK" --only journeys
+[[ "$(stack_order)" == "migrate up down " ]] || fail "one start: $(stack_order)(expected migrate up down)"
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+[[ "$(stack_order)" == "migrate up down migrate up down " ]] || fail "one failed start: $(stack_order)(expected migrate up down migrate up down)"
+migrate_files="$(grep ' run --rm -T api alembic upgrade head' "$STUB_CALLS" | head -n 1 | sed 's/ run --rm.*//')"
+up_files="$(grep ' up -d ' "$STUB_CALLS" | head -n 1 | sed 's/ up -d.*//')"
+[[ -n "$migrate_files" && "$migrate_files" == "$up_files" ]] || fail "the migration and the up do not use the same compose files: '$migrate_files' and '$up_files'"
+grep -q 'networks-' <<<"$migrate_files" || fail "the migration does not use the stack's networks: $migrate_files"
+cat >"$WORK/migrate-fails.sh" <<'EOF'
+docker() {
+  echo "docker $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" alembic upgrade head "*) echo "sqlalchemy.exc.ProgrammingError: a broken migration" >&2; return 1 ;;
+  esac
+  return 0
+}
+journey_play() { echo "journey_play" >>"$STUB_CALLS"; }
+stub_plan() {
+  pick_journey_ports sweep
+  run_step journeys-sweep s_journey sweep || true
+}
+EOF
+: >"$STUB_CALLS"
+run 1 env LOCAL_CHECK_STUB="$WORK/migrate-fails.sh" "$CHECK" --only journeys
+out_has "journeys-sweep             FAIL"
+[[ "$(stack_order)" == "migrate down " ]] || fail "a failed migration: $(stack_order)(expected migrate down, no up and no retry)"
+! grep -q '^journey_play' "$STUB_CALLS" || fail "the journeys ran on a stack whose migration failed"
+ok "the database is migrated before the full up, on every start with the same files, and a failed migration fails the group without a retry"
+
 # The mail group also publishes the fake Google on a port of its own: when that one is taken, the
 # retry changes it too, instead of failing the three starts on the same stub port.
 cat >"$WORK/ports-mail.sh" <<'EOF'
