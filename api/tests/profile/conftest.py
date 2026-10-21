@@ -128,7 +128,14 @@ FULL: dict[str, dict[str, Any]] = {
         ],
         "never_apply": ["No cybersecurity roles."],
         "browser_sources": [
-            {"kind": "vie", "query": "data engineer", "location": "Germany", "enabled": False}
+            {
+                "kind": "vie",
+                "query": "data engineer",
+                "location": "Germany",
+                "enabled": False,
+                "accepted_at": None,
+                "text_version": None,
+            }
         ],
         "sweep_schedule": {
             "enabled": False,
@@ -186,7 +193,7 @@ FULL: dict[str, dict[str, Any]] = {
     },
     # The onboarding dates stay null: only the wizard's routes write them, a save refuses them.
     "preferences": {
-        "onboarding": {"completed_at": None, "dismissed_at": None},
+        "onboarding": {"completed_at": None, "dismissed_at": None, "steps_passed": []},
         "documents_language": "fr",
         "documents_tone": "warm",
     },

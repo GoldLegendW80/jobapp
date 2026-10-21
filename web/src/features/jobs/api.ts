@@ -29,6 +29,12 @@ export const jobListItemSchema = z.object({
   gaps: z.array(z.string()),
   description: z.string().nullable(),
   published_on: z.string().nullable(),
+  // The pay and work mode the posting states (opportunities O3): all four pay fields or none.
+  pay_min: z.number().int().nullable().optional(),
+  pay_max: z.number().int().nullable().optional(),
+  pay_currency: z.string().nullable().optional(),
+  pay_period: z.string().nullable().optional(),
+  work_mode: z.string().nullable().optional(),
   found_on: z.string(),
   applied_on: z.string().nullable(),
   notes: z.string(),
@@ -145,6 +151,14 @@ export function statusCounts(
 
 /* --- editing, bulk, add by hand, rescore (J4) --------------------------------------------- */
 
+/** A pay as PATCH takes it: whole numbers, `min` at most `max`, a currency code, a period. */
+export interface PayPatch {
+  min: number;
+  max: number;
+  currency: string;
+  period: string;
+}
+
 /** What PATCH /api/jobs/{id} takes: only the fields sent change. */
 export interface JobPatch {
   status?: string;
@@ -156,6 +170,9 @@ export interface JobPatch {
   location?: string;
   contract_type?: string;
   url?: string | null;
+  /** A pay replaces the stated one; null removes it (opportunities O3). */
+  pay?: PayPatch | null;
+  work_mode?: string | null;
   /** The version the change is based on: a newer one on the server answers 409. */
   updated_at?: string;
 }

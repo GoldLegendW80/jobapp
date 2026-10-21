@@ -11,7 +11,11 @@
   the count of fields left (and of those required), the documents filled with their check
   (`documents_review`: Full auto's rule, a page overflow or a correction), and the reason a
   `ready` item came back (`error_code`, else the code of its last refused decision), with its
-  sentence.
+  sentence. Full auto (A13b): a Full auto item `ready` for the app's decision is under way; a
+  rehearsal waiting for its answer to "Does this look right?"
+  (`rehearsed`, `mode` full_auto, no No recorded) waits for the person too (`rehearsal`
+  true); a `held` item carries the end of its hold (`hold_until`); `now` is the server's
+  time, so a countdown never reads the page's clock.
 - GET /api/apply/queue/count: how many wait for the person, for the app shell, and how many of
   them need the person before the form can go on (`needs_you`: `needs_person`, apply A10a's dot).
 - POST /api/apply/queue/{application_id}/reject `{skip_posting}`: Reject (A6's `gate.cancel`,
@@ -34,7 +38,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.apply import failures, gate, likes, service
+from app.apply import failures, full_auto, gate, likes, service
 from app.apply.models import (
     AnswerSource,
     Application,
@@ -106,11 +110,14 @@ class QueueItem(ApplicationOut):
     documents: dict[str, DocumentCheckOut]
     documents_review: bool
     reason: ReasonOut | None
+    rehearsal: bool
+    hold_until: datetime | None
 
 
 class QueueOut(BaseModel):
     items: list[QueueItem]
     waiting_on_you: int
+    now: datetime
 
 
 class CountOut(BaseModel):
@@ -180,14 +187,39 @@ def like(posting_id: str, request: Request, user: CurrentUser, db: Db) -> LikedO
     )
 
 
-def _queued(user_id: uuid.UUID, wanted: tuple[State, ...]) -> sa.Select[Any]:
+def _rehearsal_waiting() -> sa.ColumnElement[bool]:
+    """A Full auto rehearsal the person has not answered No to (a Yes moves it to `ready`)."""
+    answered = (
+        sa.select(ApplicationEvent.id)
+        .where(
+            ApplicationEvent.application_id == Application.id,
+            ApplicationEvent.user_id == Application.user_id,
+            ApplicationEvent.kind == "rehearsal_no",
+        )
+        .exists()
+    )
+    return sa.and_(Application.state == S.rehearsed, Application.mode == Mode.full_auto, ~answered)
+
+
+def _deciding() -> sa.ColumnElement[bool]:
+    """A Full auto item filled and `ready` for the app's decision: under way, not the person's."""
+    return sa.and_(Application.state == S.ready, Application.mode == Mode.full_auto)
+
+
+def _waiting() -> sa.ColumnElement[bool]:
+    return sa.or_(
+        sa.and_(Application.state.in_(WAITING_ON_YOU), ~_deciding()), _rehearsal_waiting()
+    )
+
+
+def _queued(user_id: uuid.UUID) -> sa.Select[Any]:
     return (
         sa.select(Application, Job.company, Job.title)
         .join(Job, sa.and_(Job.id == Application.posting_id, Job.user_id == Application.user_id))
         .where(
             Application.user_id == user_id,
             Application.mode != Mode.manual,
-            Application.state.in_(wanted),
+            sa.or_(Application.state.in_(UNDER_WAY), _deciding(), _waiting()),
         )
     )
 
@@ -198,7 +230,7 @@ def _waiting_count(db: Session, user_id: uuid.UUID) -> int:
             sa.select(sa.func.count()).where(
                 Application.user_id == user_id,
                 Application.mode != Mode.manual,
-                Application.state.in_(WAITING_ON_YOU),
+                _waiting(),
             )
         ).scalar_one()
     )
@@ -280,14 +312,12 @@ def _reason(application: Application, refused: dict[uuid.UUID, str]) -> ReasonOu
 
 
 @router.get("/api/apply/queue", response_model=QueueOut)
-def read_queue(user: CurrentUser, db: Db) -> QueueOut:
+def read_queue(request: Request, user: CurrentUser, db: Db) -> QueueOut:
     """The review queue: what waits for the person, then what is under way."""
     read_snapshot(db)  # the items, their details and the count are one moment of the tables
-    group = sa.case((Application.state.in_(WAITING_ON_YOU), 0), else_=1)
+    group = sa.case((_waiting(), 0), else_=1)
     rows = db.execute(
-        _queued(user.id, WAITING_ON_YOU + UNDER_WAY)
-        .order_by(group, Application.created_at, Application.id)
-        .limit(QUEUE_MAX)
+        _queued(user.id).order_by(group, Application.created_at, Application.id).limit(QUEUE_MAX)
     ).all()
     ids = [application.id for application, _, _ in rows]
     shots = _shots(db, user.id, ids)
@@ -308,9 +338,15 @@ def read_queue(user: CurrentUser, db: Db) -> QueueOut:
                 documents=_documents(versions),
                 documents_review=bool(versions) and gate.documents_need_review(versions),
                 reason=_reason(application, refused),
+                rehearsal=application.state is S.rehearsed,
+                hold_until=(
+                    full_auto.hold_until(db, application) if application.state is S.held else None
+                ),
             )
         )
-    return QueueOut(items=items, waiting_on_you=_waiting_count(db, user.id))
+    return QueueOut(
+        items=items, waiting_on_you=_waiting_count(db, user.id), now=deps.clock(request)
+    )
 
 
 @router.get("/api/apply/queue/count", response_model=CountOut)

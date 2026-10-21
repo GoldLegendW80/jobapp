@@ -7,7 +7,11 @@ Parsing (pure functions, `parse(ats, payload, tz)`), field for field the engine'
   with `isListed: false` are left out. location = the primary location, then every secondary
   location, then "Remote" when `isRemote`, empty ones dropped, duplicates removed in order,
   joined with ", ". url = `jobUrl`; published = the first 10 characters of `publishedAt`;
-  text = `descriptionPlain`. remote = `isRemote` is true.
+  text = `descriptionPlain`. remote = `isRemote` is true. The board is asked with
+  `includeCompensation=true` (opportunities O3): pay = the one "Salary" component of the
+  `compensation` summary (else of its tiers, when they all state the same one), its `interval`
+  "1 YEAR", "1 MONTH", "1 DAY" or "1 HOUR"; work_mode = `workplaceType` ("Remote", "Hybrid",
+  "OnSite").
 - greenhouse: GET https://boards-api.greenhouse.io/v1/boards/{org}/jobs?content=true ->
   {"jobs": [...]}. location = `location.name`; url = `absolute_url`; published = the first 10
   characters of `first_published`, else of `updated_at`; text = `content` (HTML escaped twice)
@@ -17,6 +21,13 @@ Parsing (pure functions, `parse(ats, payload, tz)`), field for field the engine'
   location = `categories.location`; url = `hostedUrl`; published = the date of `createdAt`
   (milliseconds) in the sweep's time zone (the engine used the Mac's, Europe/Paris); text =
   `descriptionPlain`. remote = `workplaceType` is "remote" or the location names "remote".
+  pay = `salaryRange` {min, max, currency, interval}, the interval naming a year, a month, a day
+  or an hour ("per-year-salary", "per-hour-wage"); work_mode = `workplaceType` ("remote",
+  "hybrid", "onsite" or "on-site").
+Greenhouse states neither: the sweep reads them from the text and the location
+(app/opportunities/pay.py), as for any posting whose ATS states none. A value the ATS states in
+another shape is dropped (None), never guessed, and never raises: NaN, an infinity or a figure too
+large for an int (json reads all three) is no pay, the posting is stored without it.
 
 Where the engine would stop the whole board on one odd posting (a KeyError), this module skips
 that posting and counts it (`BoardResult.invalid`): a posting without a title or a URL, or that
@@ -54,6 +65,7 @@ from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
+from app.opportunities import pay as pays
 from app.profile.boards import HOSTS
 
 USER_AGENT = "jobapp-sweep/1.0 (personal job search app; public posting APIs only)"
@@ -90,6 +102,9 @@ class Posting:
     published: str  # YYYY-MM-DD as the engine kept it, "" when unknown
     text: str
     remote: bool
+    # What the ATS API states (opportunities O3); None when it states nothing usable.
+    pay: pays.Pay | None = None
+    work_mode: str | None = None
 
     def engine_tuple(self) -> tuple[str, str, str, str, str]:
         return (self.title, self.location, self.url, self.published, self.text)
@@ -126,6 +141,65 @@ def _jobs(payload: Any) -> list[Any]:
     return jobs
 
 
+# The work mode an ATS's `workplaceType` names (Ashby: "OnSite", "Remote", "Hybrid"; Lever:
+# "onsite", "remote", "hybrid", "unspecified"), lowercased; anything else is none.
+WORKPLACE = {"remote": "remote", "hybrid": "hybrid", "onsite": "office", "on-site": "office"}
+
+
+def _stated(read: Callable[[Any], Any], value: Any) -> Any:
+    """What `read` makes of a value the ATS states, None when it cannot read it: a malformed pay
+    or work mode costs the posting that field, never the posting, the board or the sweep."""
+    try:
+        return read(value)
+    except Exception:  # any malformed value is no value
+        return None
+
+
+def _period(interval: Any) -> str | None:
+    """The period an interval names ("1 YEAR", "per-year-salary"), None for any other."""
+    words = re.findall(r"[a-z]+", _text(interval).lower())
+    periods = [w for w in words if w in pays.PERIODS]
+    return periods[0] if len(periods) == 1 else None
+
+
+def _ashby_salary(components: Any) -> list[pays.Pay | None]:
+    if not isinstance(components, list):
+        return []
+    return [
+        pays.stated_pay(
+            c.get("minValue"),
+            c.get("maxValue"),
+            c.get("currencyCode"),
+            _period(c.get("interval")),
+        )
+        for c in components
+        if isinstance(c, dict) and c.get("compensationType") == "Salary"
+    ]
+
+
+def _ashby_pay(compensation: Any) -> pays.Pay | None:
+    """The one salary Ashby states: in the summary, else the same one in every tier."""
+    if not isinstance(compensation, dict):
+        return None
+    found = _ashby_salary(compensation.get("summaryComponents"))
+    if not found:
+        tiers = compensation.get("compensationTiers")
+        for tier in tiers if isinstance(tiers, list) else []:
+            found += _ashby_salary(tier.get("components") if isinstance(tier, dict) else None)
+    return found[0] if found and None not in found and len(set(found)) == 1 else None
+
+
+def _lever_pay(salary: Any) -> pays.Pay | None:
+    if not isinstance(salary, dict):
+        return None
+    return pays.stated_pay(
+        salary.get("min"),
+        salary.get("max"),
+        salary.get("currency"),
+        _period(salary.get("interval")),
+    )
+
+
 def _ashby(payload: Any, _: tzinfo) -> BoardResult:
     result = BoardResult()
     for job in _jobs(payload):
@@ -151,6 +225,8 @@ def _ashby(payload: Any, _: tzinfo) -> BoardResult:
                 published=_text(job.get("publishedAt"))[:10],
                 text=storable(_text(job.get("descriptionPlain"))),
                 remote=remote,
+                pay=_stated(_ashby_pay, job.get("compensation")),
+                work_mode=WORKPLACE.get(_text(job.get("workplaceType")).lower()),
             )
         )
     return result
@@ -211,6 +287,8 @@ def _lever(payload: Any, tz: tzinfo) -> BoardResult:
                 published=_lever_date(job.get("createdAt", 0), tz),
                 text=storable(_text(job.get("descriptionPlain"))),
                 remote=workplace == "remote" or "remote" in location.lower(),
+                pay=_stated(_lever_pay, job.get("salaryRange")),
+                work_mode=WORKPLACE.get(workplace),
             )
         )
     return result
@@ -241,7 +319,7 @@ def api_path(ats: str, org: str) -> str:
     """The path (and query) of a board's posting API on its ATS host."""
     segment = quote(org, safe="")
     if ats == "ashby":
-        return f"/posting-api/job-board/{segment}"
+        return f"/posting-api/job-board/{segment}?includeCompensation=true"
     if ats == "greenhouse":
         return f"/v1/boards/{segment}/jobs?content=true"
     if ats == "lever":

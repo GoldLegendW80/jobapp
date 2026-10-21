@@ -58,13 +58,14 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import queue as queues
 from app.identity.models import User
 from app.jobs import ats, schedule, scoring, service
 from app.jobs import slug as slugs
@@ -79,6 +80,7 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
 )
+from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
 from app.profile.schemas import (
@@ -262,10 +264,16 @@ def enabled_boards(search: SearchSection | None) -> list[Board]:
 
 
 def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
-    """The browser sources a sweep runs (browser B8, B9): enabled, of a kind read, each once."""
+    """The browser sources a sweep runs (browser B8, B9, B10): enabled, of a kind read, once."""
     found: dict[tuple[str, str, str], BrowserSource] = {}
     for source in search.browser_sources if search else []:
-        if source.enabled and source.kind in ("google_careers", "vie", "site"):
+        # LinkedIn (browser B10) only once its sentence was accepted; its guard decides the rest.
+        accepted = source.kind != "linkedin" or source.accepted_at is not None
+        if (
+            source.enabled
+            and accepted
+            and source.kind in ("google_careers", "vie", "site", "linkedin")
+        ):
             found.setdefault((source.kind, source.query, source.location or ""), source)
     return list(found.values())
 
@@ -310,23 +318,65 @@ class Known:
         self.urls: set[str] = set()
         self.identities: set[tuple[str, str, str]] = set()
         self.slugs: set[str] = set()
+        # Which job a key is and the sources it names (browser B10: one posting found by two
+        # sources is one row naming both). Filled by the constructor and `add`.
+        self.jobs: dict[str | tuple[str, str, str], uuid.UUID] = {}
+        self.sources: dict[uuid.UUID, str] = {}
         rows = db.execute(
-            sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug).where(
-                Job.user_id == user_id
-            )
+            sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source)
+            .where(Job.user_id == user_id)
+            .order_by(Job.created_at)
         )
-        for company, title, location, url, slug in rows:
-            self.add(slugs.PostingKey.of(company, title, location, url), slug)
+        for company, title, location, url, slug, job_id, source in rows:
+            self.add(slugs.PostingKey.of(company, title, location, url), slug, job_id, source)
 
-    def add(self, key: slugs.PostingKey, slug: str | None) -> None:
+    def add(
+        self,
+        key: slugs.PostingKey,
+        slug: str | None,
+        job_id: uuid.UUID | None = None,
+        source: str | None = None,
+    ) -> None:
         if key.url is not None:
             self.urls.add(key.url)
         self.identities.add(key.identity)
         if slug:
             self.slugs.add(slug)
+        if job_id is not None:
+            if key.url is not None:
+                self.jobs.setdefault(key.url, job_id)
+            self.jobs.setdefault(key.identity, job_id)
+            self.sources[job_id] = source or ""
+
+    def job_of(self, key: slugs.PostingKey) -> uuid.UUID | None:
+        """The job a duplicate is: by URL first, else by identity."""
+        found = self.jobs.get(key.url) if key.url is not None else None
+        return found if found is not None else self.jobs.get(key.identity)
+
+    def note(self, job_id: uuid.UUID, source: str) -> str | None:
+        """The job's sources with `source` added, None when it names it already or is full."""
+        names = noted_sources(self.sources.get(job_id, ""))
+        if not source or source in names or len(names) >= SOURCES_MAX:
+            return None
+        joined = SOURCES_SEP.join([*names, source])
+        if len(joined) > SOURCES_CHARS:
+            return None
+        self.sources[job_id] = joined
+        return joined
 
     def has(self, key: slugs.PostingKey) -> bool:
         return (key.url is not None and key.url in self.urls) or key.identity in self.identities
+
+
+# A job's `source` names every source that found it, the first one first, joined by SOURCES_SEP
+# (browser B10), at most SOURCES_MAX names and SOURCES_CHARS characters.
+SOURCES_SEP = ", "
+SOURCES_MAX = 4
+SOURCES_CHARS = 600
+
+
+def noted_sources(source: str | None) -> list[str]:
+    return [name for name in (source or "").split(SOURCES_SEP) if name]
 
 
 # --- one board ----------------------------------------------------------------------------------
@@ -389,6 +439,7 @@ def store_postings(
     source (browser B8), whose postings each name their company."""
     since = plan.filter.since(now.astimezone(SWEEP_TZ).date())
     pending: list[_NewJob] = []
+    noted: dict[uuid.UUID, str] = {}
     for company, posting in postings:
         stats.seen += 1
         if plan.filter.reason(posting, board_exclude, since) is not None:
@@ -397,10 +448,22 @@ def store_postings(
         key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
         if plan.known.has(key):
             stats.duplicates += 1
+            job_id = plan.known.job_of(key)
+            joined = plan.known.note(job_id, source) if job_id is not None else None
+            if joined is not None:
+                noted[job_id] = joined
             continue
         new = _new_job(plan, company, posting, source, now)
-        plan.known.add(key, new.row["slug"])
+        plan.known.add(key, new.row["slug"], new.row["id"], source)
         pending.append(new)
+    for job_id, joined in noted.items():
+        db.execute(
+            sa.update(Job)
+            .where(Job.id == job_id, Job.user_id == plan.user_id)
+            # Noting a source is not an edit: `updated_at` (PATCH's version) stays, so an edit the
+            # person has in flight is not refused as stale.
+            .values(source=joined, updated_at=Job.updated_at)
+        )
     for first in range(0, len(pending), INSERT_CHUNK):
         chunk = pending[first : first + INSERT_CHUNK]
         inserted = set(
@@ -441,6 +504,11 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
     )
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
+    contract = ContractType(kind(posting.title, posting.location, posting.url))
+    # Pay and work mode (opportunities O3): what the ATS states, else what the text and the
+    # location state in an accepted shape, else nothing.
+    pay = posting.pay or pays.pay_of(text, freelance=contract is ContractType.Freelance)
+    work_mode = posting.work_mode or pays.work_mode_of(posting.location)
     row = {
         "id": job_id,
         "user_id": plan.user_id,
@@ -449,7 +517,7 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
         "title": posting.title,
         "location": posting.location,
         "url": posting.url,
-        "contract_type": ContractType(kind(posting.title, posting.location, posting.url)),
+        "contract_type": contract,
         "source": source,
         "status": JobStatus.skipped if rule is not None else JobStatus.found,
         "fit": score.fit if score is not None else None,
@@ -459,6 +527,11 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
         "description": text[:DESCRIPTION_CHARS] or None,
         "posting_text": text or None,
         "published_on": ats.published_date(posting.published),
+        "pay_min": pay.min if pay else None,
+        "pay_max": pay.max if pay else None,
+        "pay_currency": pay.currency if pay else None,
+        "pay_period": pay.period if pay else None,
+        "work_mode": work_mode,
         "found_on": now.astimezone(SWEEP_TZ).date(),
         "notes": rule.text if rule is not None else "",
         "legacy": {},
@@ -751,6 +824,7 @@ def _store(
     counters and the duplicate keys are put back, so the stats count only what was stored."""
     counters = {name: getattr(stats, name) for name in COUNTERS}
     known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
+    noted = (dict(plan.known.jobs), dict(plan.known.sources))
     try:
         with sessions() as db:
             store_board(db, plan, board, result, stats, now)
@@ -759,6 +833,7 @@ def _store(
         for name, value in counters.items():
             setattr(stats, name, value)
         plan.known.urls, plan.known.identities, plan.known.slugs = known
+        plan.known.jobs, plan.known.sources = noted
         raise
 
 
@@ -776,6 +851,7 @@ def _store_found(
     found = [(company, replace(p, published=p.published or today)) for company, p in found]
     counters = {name: getattr(stats, name) for name in COUNTERS}
     known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
+    noted = (dict(plan.known.jobs), dict(plan.known.sources))
     try:
         with sessions() as db:
             store_postings(db, plan, source, found, None, stats, now)
@@ -784,6 +860,7 @@ def _store_found(
         for name, value in counters.items():
             setattr(stats, name, value)
         plan.known.urls, plan.known.identities, plan.known.slugs = known
+        plan.known.jobs, plan.known.sources = noted
         raise
 
 
@@ -925,6 +1002,70 @@ def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime)
     service.SweepRunningError when one is running; the caller commits."""
     reap_stale(db, now, user_id)
     return service.start_sweep(db, user_id, trigger, now)
+
+
+BeginOutcome = Literal["started", "running", "no_boards", "search_invalid", "queue_down"]
+
+
+@dataclass(frozen=True)
+class Begun[T]:
+    """What `begin` did. `sweep_id` is the new sweep (started) or the one already running
+    (running), None otherwise; `view` is the caller's view of the new sweep, read before its
+    commit."""
+
+    outcome: BeginOutcome
+    sweep_id: uuid.UUID | None = None
+    view: T | None = None
+
+
+def _insert[T](
+    sessions: sessionmaker[Session], user_id: uuid.UUID, now: datetime, view: Callable[[Sweep], T]
+) -> Begun[T]:
+    with sessions() as db:
+        try:
+            search = load_search(db, user_id)
+        except InvalidSearchError:
+            return Begun("search_invalid")
+        if not (enabled_boards(search) or enabled_sources(search)):
+            return Begun("no_boards")
+        try:
+            row = start(db, user_id, SweepTrigger.manual, now)
+            begun = Begun("started", row.id, view(row))
+            db.commit()
+        except service.SweepRunningError:
+            db.rollback()
+            running = service.running_sweep(db, user_id)
+            if running is None:  # finished between the insert and this read
+                return _insert(sessions, user_id, now, view)
+            return Begun("running", running.id)
+    return begun
+
+
+async def begin[T](
+    sessions: sessionmaker[Session],
+    queue: queues.Queue,
+    user_id: uuid.UUID,
+    now: datetime,
+    view: Callable[[Sweep], T],
+) -> Begun[T]:
+    """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
+    and of the first login wizard's Start (opportunities O5). No sweep without an enabled board
+    or source, or with a search section that no longer validates; the running one when the user
+    has one; a queue that is down fails the new sweep at once, so it never blocks the next try."""
+    begun = await asyncio.to_thread(_insert, sessions, user_id, now, view)
+    if begun.outcome != "started" or begun.sweep_id is None:
+        return begun
+    try:
+        await queue.enqueue(
+            "run_sweep",
+            str(begun.sweep_id),
+            queue=queues.SWEEPS,
+            job_id=queues.sweep_job_id(begun.sweep_id),
+        )
+    except queues.QueueUnavailableError:
+        await asyncio.to_thread(fail_sweep, sessions, begun.sweep_id, QUEUE_DOWN, now)
+        return Begun("queue_down")
+    return begun
 
 
 def sweeps_of(db: Session, user_id: uuid.UUID, limit: int) -> Sequence[Sweep]:

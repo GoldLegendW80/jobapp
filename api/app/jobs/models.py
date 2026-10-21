@@ -41,6 +41,18 @@ SEARCH_EXPRESSION = (
 )
 
 
+# The pay of a posting (opportunities O3, migration 0021): all four columns or none, the figures
+# whole numbers from 1 to PAY_MAX with the minimum at most the maximum, the currency three capital
+# letters. A pay without its currency or its period is never stored.
+PAY_MAX = 10_000_000
+PAY_CHECK = (
+    "(pay_min IS NULL AND pay_max IS NULL AND pay_currency IS NULL AND pay_period IS NULL) OR "
+    "(pay_min IS NOT NULL AND pay_max IS NOT NULL AND pay_currency IS NOT NULL AND "
+    f"pay_period IS NOT NULL AND pay_min >= 1 AND pay_min <= pay_max AND pay_max <= {PAY_MAX} "
+    "AND pay_currency ~ '^[A-Z]{3}$')"
+)
+
+
 class ContractType(enum.StrEnum):
     CDI = "CDI"
     CDD = "CDD"
@@ -80,6 +92,23 @@ class FileOrigin(enum.StrEnum):
     upload = "upload"
 
 
+class PayPeriod(enum.StrEnum):
+    """What a posting's pay is counted per (opportunities O3)."""
+
+    year = "year"
+    month = "month"
+    day = "day"
+    hour = "hour"
+
+
+class WorkMode(enum.StrEnum):
+    """Where a posting's work is done, as the ATS or the location states it (opportunities O3)."""
+
+    remote = "remote"
+    hybrid = "hybrid"
+    office = "office"
+
+
 class SweepTrigger(enum.StrEnum):
     manual = "manual"
     schedule = "schedule"
@@ -100,6 +129,8 @@ CONTRACT_TYPE_ENUM = _enum(ContractType, "contract_type")
 JOB_STATUS_ENUM = _enum(JobStatus, "job_status")
 JOB_EVENT_KIND_ENUM = _enum(JobEventKind, "job_event_kind")
 FILE_ORIGIN_ENUM = _enum(FileOrigin, "file_origin")
+PAY_PERIOD_ENUM = _enum(PayPeriod, "pay_period")
+WORK_MODE_ENUM = _enum(WorkMode, "work_mode")
 SWEEP_TRIGGER_ENUM = _enum(SweepTrigger, "sweep_trigger")
 SWEEP_STATUS_ENUM = _enum(SweepStatus, "sweep_status")
 
@@ -138,6 +169,7 @@ class Job(Base):
         sa.CheckConstraint("fit IS NULL OR (fit >= 0 AND fit <= 100)", name="fit_range"),
         sa.CheckConstraint("url IS NULL OR url <> ''", name="url_not_empty"),
         sa.CheckConstraint("jsonb_typeof(legacy) = 'object'", name="legacy_is_object"),
+        sa.CheckConstraint(PAY_CHECK, name="pay_complete"),
         sa.Index(
             "ix_jobs_user_id_url", "user_id", "url", unique=True, postgresql_where="url IS NOT NULL"
         ),
@@ -178,6 +210,13 @@ class Job(Base):
     description: Mapped[str | None] = mapped_column(sa.Text)
     posting_text: Mapped[str | None] = mapped_column(sa.Text, deferred=True)
     published_on: Mapped[date | None] = mapped_column(sa.Date)
+    # Pay and work mode (opportunities O3): what the ATS or the posting's text states, or the
+    # person's own edit; null when nothing was stated. Never a guess (app/opportunities/pay.py).
+    pay_min: Mapped[int | None] = mapped_column(sa.Integer)
+    pay_max: Mapped[int | None] = mapped_column(sa.Integer)
+    pay_currency: Mapped[str | None] = mapped_column(sa.CHAR(3))
+    pay_period: Mapped[PayPeriod | None] = mapped_column(PAY_PERIOD_ENUM)
+    work_mode: Mapped[WorkMode | None] = mapped_column(WORK_MODE_ENUM)
     found_on: Mapped[date] = mapped_column(
         sa.Date, nullable=False, server_default=sa.text("CURRENT_DATE")
     )

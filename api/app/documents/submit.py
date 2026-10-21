@@ -23,6 +23,12 @@ memory (`_RUNS`, by run id), for the run's final hook (`generate.on_final`) to `
    `needs_rewrite` class is cut only where the sentence stays whole, else kept and recorded for
    the person to see).
 
+An outreach proposal (issue #485) goes through the same steps. It has no template: its context
+is read here (`read_proposal`), with the posting's title and company as sources as for a letter,
+no soft limits, and the fallbacks of `corrections.proposal_fallbacks`. Its `to`, the address it
+goes to, is the app's (set when the proposal is created) and is put back on every submit:
+the writer never chooses it.
+
 A letter submitted with no recipient takes the default of the spec ("Hiring team, " and the
 posting's company, in the document's language), before the checks: the company is a source of a
 letter. The base CV a letter is written from is the generation's (`base_document_id`): the
@@ -39,7 +45,7 @@ import threading
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -48,10 +54,10 @@ from sqlalchemy.orm import Session
 from app.documents import checks, corrections, profile_view, render_job, rules, store
 from app.documents import content as c
 from app.documents.corrections import Correction
-from app.documents.models import Document, DocumentGeneration
+from app.documents.models import Document, DocumentGeneration, Kind
 from app.documents.settings import DocumentSettings
-from app.documents.sources import DocumentSources, sources_for
-from app.ingestion.models import IngestionDocument
+from app.documents.sources import DocumentSources, PostingView, sources_for
+from app.jobs.models import Job
 from app.profile import service as profile_service
 
 STORED = "Stored. Your work is done: answer with one short line."
@@ -84,20 +90,23 @@ class WriterContext:
     fallbacks: corrections.Fallbacks
     today: date
     recipient: str = ""  # a letter's default recipient; empty for a CV or a posting with no company
+    contact: str = ""  # a proposal's `to`, the address the app set; never the writer's
 
 
 @dataclass(frozen=True)
 class Accepted:
     """What a run submitted for good: the content and every correction made to it."""
 
-    content: c.CvContent | c.LetterContent
+    content: c.Content
     corrections: tuple[Correction, ...]
+    # As the writer first sent it, before the fact check and the correction pass changed it.
+    written: c.CvContent | c.LetterContent | None = None
 
 
 @dataclass
 class _Run:
     submits: int = 0
-    first: c.CvContent | c.LetterContent | None = None  # before the correction pass
+    first: c.Content | None = None  # before the correction pass
     first_claims: tuple[rules.Issue, ...] = ()
     accepted: Accepted | None = None
     exhausted: bool = False
@@ -146,14 +155,99 @@ def max_submits() -> int:
 
 
 def _upload_text(db: Session, user_id: uuid.UUID, base: Document | None) -> str | None:
+    """The file a base CV was converted from, as its own chat reads it: the clipped head of a
+    file still readable (`writer_base.upload_text`), else None."""
+    from app.documents import writer_base  # writer_base imports this module
+
     if base is None or base.source_document_id is None:
         return None
-    return db.execute(
-        sa.select(IngestionDocument.text).where(
-            IngestionDocument.id == base.source_document_id,
-            IngestionDocument.user_id == user_id,
+    return writer_base.upload_text(db, user_id, base.source_document_id)
+
+
+# A proposal has no template, so no counter: the hard limits of its content are its limits.
+NO_SOFT_LIMITS = rules.SoftLimits(
+    headline=None, summary=None, highlight=None, main_bullet=None, bullet=None, paragraph=None
+)
+
+
+@dataclass(frozen=True)
+class ProposalReading:
+    """What a proposal is written and checked from: the profile seen with a base CV, that base
+    CV and the posting's title and company (never its text)."""
+
+    view: profile_view.ProfileView
+    base: c.BaseCvContent | None
+    posting: PostingView | None
+    upload_text: str | None
+
+
+def read_proposal(
+    db: Session, document: Document, base_document_id: uuid.UUID | None, at: datetime
+) -> ProposalReading:
+    """The reading of a proposal, with the base CV named (a generation's), else none."""
+    user_id = document.user_id
+    base = store.get(db, user_id, base_document_id) if base_document_id is not None else None
+    base_content = c.parse("base", base.draft) if base is not None else None
+    if not isinstance(base_content, c.BaseCvContent):
+        base_content = None
+    profile = profile_service.get_profile(db, user_id, at)
+    sections = profile_service.sections_view(profile)
+    view = profile_view.build(sections, profile.revision, base_content)
+    posting = None
+    if document.posting_id is not None:
+        row = db.execute(
+            sa.select(Job.company, Job.title).where(
+                Job.user_id == user_id, Job.id == document.posting_id
+            )
+        ).one_or_none()
+        posting = PostingView(company=row[0] or "", title=row[1] or "") if row else None
+    return ProposalReading(view, base_content, posting, _upload_text(db, user_id, base))
+
+
+def proposal_sources(reading: ProposalReading) -> DocumentSources:
+    return sources_for(
+        reading.view, reading.base, reading.upload_text, reading.posting, kind="proposal"
+    )
+
+
+def proposal_edit_sources(db: Session, document: Document, at: datetime) -> DocumentSources:
+    """The sources of a hand edit of a proposal (its notes): those of its last writing, read
+    with the base CV that writing named (the default base CV before any writing)."""
+    last = db.execute(
+        sa.select(DocumentGeneration.base_document_id)
+        .where(
+            DocumentGeneration.user_id == document.user_id,
+            DocumentGeneration.document_id == document.id,
         )
-    ).scalar_one_or_none()
+        .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
+        .limit(1)
+    ).one_or_none()
+    if last is not None:
+        base_id = last[0]
+    else:
+        default = store.default_base(db, document.user_id)
+        base_id = default.id if default is not None else None
+    return proposal_sources(read_proposal(db, document, base_id, at))
+
+
+def _proposal_context(
+    db: Session, document: Document, generation: DocumentGeneration
+) -> WriterContext:
+    started = generation.started_at or generation.created_at
+    reading = read_proposal(db, document, generation.base_document_id, started)
+    language = document.language.value
+    return WriterContext(
+        kind="proposal",
+        sources=proposal_sources(reading),
+        settings=store.settings(db, document.user_id),
+        employer_keys=tuple(employer.key for employer in reading.view.employers),
+        soft_limits=NO_SOFT_LIMITS,
+        fallbacks=corrections.proposal_fallbacks(
+            reading.view, reading.base, reading.posting, language
+        ),
+        today=started.date(),
+        contact=str((document.draft or {}).get("to") or ""),
+    )
 
 
 def context_for(
@@ -169,6 +263,10 @@ def context_for(
     document = store.get(db, user_id, uuid.UUID(str(binding["document_id"])))
     if generation is None or document is None or generation.document_id != document.id:
         return None
+    if kind == "proposal" or document.kind == Kind.proposal:
+        if kind != "proposal" or document.kind != Kind.proposal:
+            return None
+        return _proposal_context(db, document, generation)
     started = generation.started_at or generation.created_at
     context = render_job.read_context(db, document, started)
     view, base_content = context.view, context.base
@@ -217,7 +315,7 @@ def _invalid_answer(found: checks.Checks, left: int) -> str:
     return "Not stored: the content breaks these rules.\n" + "\n".join(lines) + "\n" + tail
 
 
-def _correction_answer(content: c.CvContent | c.LetterContent, found: checks.Checks) -> str:
+def _correction_answer(content: c.Content, found: checks.Checks) -> str:
     lines = []
     for issue in found.claims:
         how = (
@@ -261,6 +359,8 @@ def handle(context: WriterContext | None, run_id: uuid.UUID, raw: object) -> tup
     content, separators = corrections.fix_separators(kind, found.content, context.settings)
     if isinstance(content, c.LetterContent) and not content.recipient.strip() and context.recipient:
         content = content.model_copy(update={"recipient": context.recipient})
+    if isinstance(content, c.ProposalContent) and content.to != context.contact:
+        content = content.model_copy(update={"to": context.contact})
     found = checks.run(
         kind,
         content,
@@ -274,10 +374,11 @@ def handle(context: WriterContext | None, run_id: uuid.UUID, raw: object) -> tup
         state.first, state.first_claims = content, found.claims
         return _correction_answer(content, found), True
     records: list[Correction] = list(separators)
+    written = state.first or content
     if state.first is not None:
         records += corrections.diff_corrections(state.first, content, state.first_claims)
     if found.claims:
         content, removed = corrections.remove_remaining(content, found, context.fallbacks)
         records += removed
-    state.accepted = Accepted(content, tuple(records))
+    state.accepted = Accepted(content, tuple(records), written)
     return STORED, False

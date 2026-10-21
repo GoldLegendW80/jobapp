@@ -39,6 +39,8 @@ import {
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
+import { serverOffset } from "./full-auto-state";
+import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot } from "./live-view-slot";
 import { NeedsPerson } from "./needs-person";
 import { RunReport } from "./run-report";
@@ -127,8 +129,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const detail = useQuery({
     queryKey: applicationKey(id ?? ""),
     queryFn: ({ signal }) => getApplication(id as string, signal),
-    enabled: id !== undefined && hasReport(application),
+    enabled:
+      id !== undefined &&
+      (hasReport(application) || application?.state === "held"),
   });
+
+  const holdUntil =
+    application?.state === "held" ? detail.data?.hold_until : undefined;
 
   // The state moved: read the form, the report and the posting (it may have become `applied`).
   const state = application?.state;
@@ -291,6 +298,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <p role="status" className="text-sm text-muted-foreground">
             {statusLine(application)}
           </p>
+          {holdUntil && id ? (
+            <HeldCountdown
+              applicationId={id}
+              until={holdUntil}
+              offset={serverOffset(detail.data?.now, detail.dataUpdatedAt)}
+            />
+          ) : null}
           {latest.isError || approvalQuery.isError ? (
             <p role="status" className="text-sm text-muted-foreground">
               Could not refresh just now: this may be out of date. Reload the
@@ -423,7 +437,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 Try again
               </Button>
             ) : null}
-            {canCancel(application) ? (
+            {canCancel(application) && !holdUntil ? (
               <Button
                 variant="outline"
                 className="w-full sm:w-fit"

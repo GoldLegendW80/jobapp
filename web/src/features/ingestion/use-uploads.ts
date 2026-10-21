@@ -52,8 +52,9 @@ export interface UploadEvents {
 const SECRET_HINT =
   " It looks like it holds a password or a key: check it in the list below.";
 
-/** What to say once a file is in: added, added with a warning, or already there. */
+/** What to say once a file is in: added, added with a warning, already there, or not replaced. */
 export function storedSentence(name: string, stored: StoredDocument): string {
+  if (stored.refused) return `${name}: ${stored.refused}`;
   if (stored.duplicate) {
     return stored.name === name
       ? `${name} is already in your documents.`
@@ -180,9 +181,10 @@ export class UploadQueue {
               progress: 1,
               // The row already shows the file's name: only what it is called there.
               message:
-                document.name === file.name
+                document.refused ??
+                (document.name === file.name
                   ? "The same file is already in your documents."
-                  : `The same file is already in your documents, as ${document.name}.`,
+                  : `The same file is already in your documents, as ${document.name}.`),
             });
           else this.#drop(id);
           this.#announcement = sentence;

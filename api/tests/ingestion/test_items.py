@@ -130,6 +130,8 @@ def test_settings_are_typed_setting() -> None:
         "search.days",
         "search.boards[].enabled",
         *[path for path in types if path.startswith("search.browser_sources")],
+        "search.browser_sources[].accepted_at",
+        "search.browser_sources[].text_version",
         "experience.employers[].key",
     ]
     assert all(types[path] is FieldType.SETTING for path in settings)
@@ -175,6 +177,12 @@ BOARD = {"company": "Acme", "ats": "ashby", "org": "acme"}
     [
         ("search", "sweep_schedule", {"enabled": True}),
         ("search", "browser_sources", {"kind": "vie", "query": "data", "enabled": True}),
+        (
+            "search",
+            "browser_sources",
+            {"kind": "linkedin", "accepted_at": "2026-10-20T09:00:00+02:00", "text_version": 1},
+        ),
+        ("search", "browser_sources", {"kind": "linkedin", "accepted_at": None}),
         ("search", "min_fit", 80),
         ("search", "days", 3),
         ("skills", "years_experience", 4),

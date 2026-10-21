@@ -358,7 +358,18 @@ def test_the_model_calls_a_tool_the_agent_does_not_have(
             assistant(f"m{index}", raw_call(f"t{index}", name, text="x")),
         ]
     streams.add("g6_budget", [*steps, assistant("end", text("Finished."))], gate=gate)
-    run_id, status, backend = run_loop(settings, factory, keyring, alice_id, {"token_budget": 2000})
+    # The budget's stop and the gate's answer to the third call race: the run is interrupted
+    # and its consumer given the grace to store what is already on the stream. The helpers'
+    # one second grace was too short under the gate's load (the third result was cut off), so
+    # this test gives the consumer the product's own grace.
+    run_id, status, backend = run_loop(
+        settings,
+        factory,
+        keyring,
+        alice_id,
+        {"token_budget": 2000},
+        interrupt_grace_s=runner.INTERRUPT_GRACE_S,
+    )
     assert status is RunStatus.failed
     assert run_row(factory, run_id).error == runner.TOKEN_LIMIT
     assert backend.seen_requests == ["m1", "m2", "m3"]
