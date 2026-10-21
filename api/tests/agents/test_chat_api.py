@@ -2,8 +2,8 @@
 default deny and CSRF on every route, one thread per job, validation, the run each message
 starts, 409 while an answer is pending (also for two sends at once), isolation between users,
 deletion (cascading to the messages, cancelling a pending answer), the bound of a send's and a
-delete's wait for the thread, reads of one snapshot, and chat agents refused by
-POST /api/agents/runs."""
+delete's wait for each lock they take (the thread's row, then the user's run lock or the run's
+row), reads of one snapshot, and chat agents refused by POST /api/agents/runs."""
 
 import contextlib
 import threading
@@ -391,6 +391,15 @@ def held(factory: sessionmaker[Session], thread: str) -> Iterator[None]:
         holder.rollback()
 
 
+@contextlib.contextmanager
+def held_by_another(factory: sessionmaker[Session], lock: sa.Select[Any]) -> Iterator[Any]:
+    """`lock` run by another session (a stuck request), its lock held until the block ends;
+    yields what the statement returned."""
+    with factory() as holder:
+        yield holder.scalar(lock)
+        holder.rollback()
+
+
 def stored(factory: sessionmaker[Session]) -> dict[str, Any]:
     """What the chat tables hold, enough to tell that a refused request wrote nothing."""
     with factory() as db:
@@ -459,6 +468,79 @@ def test_a_delete_waits_for_a_held_thread_at_most_its_bound(
     assert refused.json() == {"detail": operator.THREAD_LOCKED}
     assert refused.headers["cache-control"] == "no-store"
     assert stored(factory) == before
+    assert api.request("DELETE", f"{THREADS}/{thread}", token=alice).status_code == 204
+    with factory() as db:
+        row = db.get(AgentRun, uuid.UUID(run))
+        assert row is not None
+        assert row.status is RunStatus.cancelled
+
+
+def test_a_send_refused_the_users_run_lock_answers_as_for_a_held_thread(
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    recorded: RecordingQueue,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #161, point 2, for a lock the send takes after the thread's row: another session
+    holds the user's run lock (the advisory lock of `runs.create_run`). The send, granted the
+    thread's row, waits chat.LOCK_WAIT_S for the run lock, then answers the 409 of a held thread
+    and writes and queues nothing; once the lock is free, the same send goes through."""
+    alice, _, thread = ready
+    monkeypatch.setattr(chat, "LOCK_WAIT_S", 0.2)
+    run_lock = sa.select(sa.func.pg_advisory_xact_lock(runs._lock_key(user_id(api, alice))))
+    before = stored(factory)
+    probes: list[str | None] = []
+    real = runs.create_run
+
+    def create_run(db: Session, *args: Any, **kwargs: Any) -> AgentRun:
+        probes.append(db.scalar(sa.text("SHOW lock_timeout")))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(runs, "create_run", create_run)
+    with held_by_another(factory, run_lock):
+        refused = send(api, alice, thread)
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": operator.THREAD_LOCKED, "active_run_id": None}
+    assert refused.headers["cache-control"] == "no-store"
+    assert stored(factory) == before
+    assert recorded.jobs == []
+    assert probes == ["200ms"]  # past the thread's row, the send's bound still holds
+    assert send(api, alice, thread).status_code == 202
+    assert len(recorded.jobs) == 1
+
+
+def test_a_delete_refused_the_runs_row_answers_as_for_a_held_thread(
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #161, point 2, for the lock a delete takes after the thread's row: another session
+    holds the pending answer's run row. The delete, granted the thread's row, waits
+    chat.LOCK_WAIT_S for the run's row to cancel it, then answers the 409 of a held thread with
+    nothing written; once the row is free, the delete goes through and cancels the answer."""
+    alice, _, thread = ready
+    run = send(api, alice, thread).json()["run"]["id"]
+    monkeypatch.setattr(chat, "LOCK_WAIT_S", 0.2)
+    run_row = sa.select(AgentRun.id).where(AgentRun.id == uuid.UUID(run)).with_for_update()
+    before = stored(factory)
+    probes: list[str | None] = []
+    real = runs.request_cancel
+
+    def request_cancel(db: Session, *args: Any, **kwargs: Any) -> runs.CancelOutcome:
+        probes.append(db.scalar(sa.text("SHOW lock_timeout")))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(runs, "request_cancel", request_cancel)
+    with held_by_another(factory, run_row) as locked:
+        assert locked == uuid.UUID(run)
+        refused = api.request("DELETE", f"{THREADS}/{thread}", token=alice)
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": operator.THREAD_LOCKED}
+    assert refused.headers["cache-control"] == "no-store"
+    assert stored(factory) == before
+    assert probes == ["200ms"]  # past the thread's row, the delete's bound still holds
     assert api.request("DELETE", f"{THREADS}/{thread}", token=alice).status_code == 204
     with factory() as db:
         row = db.get(AgentRun, uuid.UUID(run))
