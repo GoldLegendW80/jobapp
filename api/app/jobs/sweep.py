@@ -262,10 +262,10 @@ def enabled_boards(search: SearchSection | None) -> list[Board]:
 
 
 def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
-    """The browser sources a sweep runs (browser B8): enabled, of a kind B8 reads, each once."""
+    """The browser sources a sweep runs (browser B8, B9): enabled, of a kind read, each once."""
     found: dict[tuple[str, str, str], BrowserSource] = {}
     for source in search.browser_sources if search else []:
-        if source.enabled and source.kind in ("google_careers", "vie"):
+        if source.enabled and source.kind in ("google_careers", "vie", "site"):
             found.setdefault((source.kind, source.query, source.location or ""), source)
     return list(found.values())
 
@@ -345,6 +345,7 @@ class Plan:
     known: Known
     schedule_slot: str | None = None
     sources: list[BrowserSource] = field(default_factory=list)
+    search: SearchSection | None = None  # for the score's bonus (scoring.bonus)
 
 
 INSERT_CHUNK = 500
@@ -434,7 +435,7 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
     text = posting.text[:POSTING_TEXT_MAX]
     rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
     score = (
-        scoring.score(text, plan.skills, title=posting.title)
+        scoring.score(text, plan.skills, title=posting.title, search=plan.search)
         if plan.skills is not None and text.strip()
         else None
     )
@@ -552,6 +553,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             known=Known(db, sweep.user_id),
             schedule_slot=stats.schedule_slot,
             sources=sources,
+            search=search,
         )
         db.commit()
     return plan

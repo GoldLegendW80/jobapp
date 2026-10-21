@@ -5,6 +5,7 @@ import { fakeCv, fakeDocumentOf } from "@/test/documents";
 import {
   characters,
   differences,
+  legacySentence,
   localPath,
   moved,
   notesByField,
@@ -146,5 +147,79 @@ describe("the draft of the Edit view", () => {
     expect(span("2021-03", null)).toBe("March 2021 to today");
     expect(span("2018", "2021-02")).toBe("2018 to February 2021");
     expect(span(null, "2021")).toBe("");
+  });
+});
+
+describe("the notes of an imported draft", () => {
+  it.each([
+    [
+      "experience.2.bullets.0",
+      "too_long",
+      "Left out of the imported file: employer 3, bullet 1, too long.",
+    ],
+    [
+      "experience.0.bullets.8",
+      "too_many",
+      "Left out of the imported file: employer 1, bullet 9, one too many.",
+    ],
+    [
+      "experience.0.bullets",
+      "wrong_type",
+      "Left out of the imported file: employer 1, bullets, of the wrong type.",
+    ],
+    [
+      "experience.1",
+      "duplicate_employer",
+      "Left out of the imported file: employer 2, the same employer twice.",
+    ],
+    [
+      "experience.0.role",
+      "too_long",
+      "Left out of the imported file: employer 1, role, too long.",
+    ],
+    [
+      "experience.0.employer_key",
+      "bad_format",
+      "Left out of the imported file: employer 1, employer key, not in the expected form.",
+    ],
+    [
+      "skills.0.items.30",
+      "too_many",
+      "Left out of the imported file: skill group 1, skill 31, one too many.",
+    ],
+    [
+      "highlights.1",
+      "empty",
+      "Left out of the imported file: highlight 2, empty.",
+    ],
+    [
+      "photo",
+      "unknown_field",
+      "Left out of the imported file: photo, not a field of this form.",
+    ],
+    [
+      "notes",
+      "control_character",
+      "Left out of the imported file: notes, holds a control character.",
+    ],
+    [
+      "headline",
+      "a_new_code",
+      "Left out of the imported file: headline, not valid.",
+    ],
+    [
+      "",
+      "not_json",
+      "The imported file could not be read (not a JSON file), so this draft started empty.",
+    ],
+    [
+      "",
+      "content_too_large",
+      "The imported file could not be read (too large to read), so this draft started empty.",
+    ],
+    ["", "12 more", "12 more parts of the imported file were left out."],
+  ])("%s %s", (path, reason, sentence) => {
+    expect(legacySentence(path, reason)).toBe(sentence);
+    expect(sentence).not.toMatch(/[–—]| - /);
   });
 });

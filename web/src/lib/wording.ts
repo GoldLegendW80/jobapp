@@ -32,6 +32,9 @@ export const WORDING = {
   like: "Like",
   pass: "Pass",
   undoLast: "Undo last",
+  reviewFirst: "Review first",
+  fullAuto: "Full auto",
+  searchOptions: "Search options",
   deckEmptyHint: "Find new postings, or lower the threshold in Search options.",
 } as const;
 

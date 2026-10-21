@@ -49,7 +49,16 @@ RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbi
 # Chromium's managed policy, which no profile state can undo: WebRTC sends no UDP outside the
 # proxy (WebRtcIPHandling; Debian's Chromium ignores the switch of the same name) and no QUIC.
 # WebRtcUdpPortRange stays unset on purpose. The profile's preferences (browserd/prep.py) say
-# the same again.
+# the same again. Every chrome:// page is blocked in every session (owner, 2026-10-20), but
+# chrome://policy and chrome://sandbox (browserd.probe), the new tab page and the browser's own
+# UI (chrome://*.top-chrome, the omnibox popup among them): chrome://inspect's remote debugging
+# switch opens a DevTools port in a session started without one (measured for B7),
+# chrome://flags and the settings pages change the browser. chrome://policy's test page is off
+# (PolicyTestPageEnabled): its "Apply policies" replaced this file's policies.
+# RemoteDebuggingAllowed and DeveloperToolsAvailability would also take CDP from the agents'
+# leases. No extension may be installed (Debian's wrapper adds --enable-remote-extensions, and
+# chrome://extensions is blocked). Chromium never offers to save a password
+# (PasswordManagerEnabled): the app stores none.
 COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json
 
 COPY browserd /opt/browserd/browserd
