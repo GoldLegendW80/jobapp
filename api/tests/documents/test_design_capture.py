@@ -302,16 +302,35 @@ def test_a_scanned_cv_is_captured_and_said_so(who: Person, monkeypatch: pytest.M
     assert "scanned" in row.manifest["capture"]["notes"]
 
 
-def test_the_file_without_its_bytes_fails_the_capture_and_keeps_classic(
+def test_the_file_without_its_bytes_fails_the_capture_at_once_and_keeps_classic(
     who: Person, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     services = Services(monkeypatch, design("Morgan Exampleton"))
     base = uploaded_base(who, raw=None)
-    generation = generation_row(who.factory, capture(who, base, "documents_design_valid"))
-    assert generation.status is GenerationStatus.failed
-    assert generation.error == "binding_gone"
+    with who.factory() as db:
+        generation, run_id = design_capture.request(db, who.user, base, at=AT)
+        db.commit()
+    assert run_id is None  # no model is called
+    assert (generation.status, generation.error) == (GenerationStatus.failed, "binding_gone")
     assert services.asked == []
     assert document_row(who.factory, base).template_slug == "classic"
+
+
+def test_bytes_gone_during_the_run_fail_it_as_gone(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Services(monkeypatch, design("Morgan Exampleton"))
+    base = uploaded_base(who)
+    with who.factory() as db:
+        generation, run_id = design_capture.request(
+            db, who.user, base, at=AT, script="documents_design_valid", settings=who.settings
+        )
+        db.execute(sa.text("UPDATE ingestion_documents SET bytes = NULL"))
+        db.commit()
+    assert run_id is not None
+    execute(who, run_id)
+    found = generation_row(who.factory, generation.id)
+    assert (found.status, found.error) == (GenerationStatus.failed, "binding_gone")
 
 
 def test_without_a_credential_the_capture_waits_then_starts(

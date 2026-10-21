@@ -65,19 +65,19 @@ async def inputs_of(scope: app_tools.Scope) -> design_capture.Inputs | None:
     if ids is None or scope.run_id is None:
         return None
     run = design_capture.state(scope.run_id)
-    if run.inputs is not None or run.gone:
-        return run.inputs
 
     def read() -> tuple[bytes, str]:
         with scope.sessions() as db:
             return design_capture.upload_bytes(db, scope.user_id, ids[1])
 
-    try:
-        raw, mime = await asyncio.to_thread(read)
-        run.inputs = await design_capture.read_inputs(raw, mime)
-    except design_capture.InputsGoneError:
-        run.gone = run.closed = True
-        return None
+    async with run.reading:
+        if run.inputs is not None or run.gone:
+            return run.inputs
+        try:
+            raw, mime = await asyncio.to_thread(read)
+            run.inputs = await design_capture.read_inputs(raw, mime)
+        except design_capture.InputsGoneError:
+            run.gone = run.closed = True
     return run.inputs
 
 

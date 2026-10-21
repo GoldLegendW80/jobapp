@@ -324,7 +324,8 @@ class RunState:
     closed: bool = False  # no submit is taken any more
     refused: bool = False  # closed by a refusal, nothing accepted
     gone: bool = False  # the upload could not be read
-    turn: asyncio.Lock = field(default_factory=asyncio.Lock)
+    turn: asyncio.Lock = field(default_factory=asyncio.Lock)  # one submit at a time
+    reading: asyncio.Lock = field(default_factory=asyncio.Lock)  # the inputs read once
 
 
 RUNS_KEPT = 64
@@ -463,7 +464,20 @@ def request(
     if document.scope != Scope.base or document.source_document_id is None:
         raise CaptureRefusedError("not_uploaded")
     figures = design_estimate.for_capture(db, user_id, document)
+    kept = db.scalar(
+        sa.select(sa.func.coalesce(sa.func.octet_length(IngestionDocument.raw), 0)).where(
+            IngestionDocument.id == document.source_document_id,
+            IngestionDocument.user_id == user_id,
+        )
+    )
     reason = writer_base.wait_reason(db, user_id)
+    if not kept:
+        # Nothing left to read: failed at once, no model is called (`binding_gone`).
+        status = GenerationStatus.failed
+    elif reason is not None:
+        status = GenerationStatus.waiting
+    else:
+        status = GenerationStatus.queued
     generation = generate.create(
         db,
         document,
@@ -473,10 +487,14 @@ def request(
         design_estimate.as_json(figures),
         figures.ceiling,
         at=at,
-        status=GenerationStatus.waiting if reason is not None else GenerationStatus.queued,
-        wait_reason=reason,
+        status=status,
+        wait_reason=reason if status is GenerationStatus.waiting else None,
     )
-    if reason is not None:
+    if status is GenerationStatus.failed:
+        generation.error, generation.finished_at = "binding_gone", at
+        db.flush()
+        logger.info("documents.design.no_bytes", extra={"generation_id": str(generation.id)})
+    if status is not GenerationStatus.queued:
         return generation, None
     try:
         run = writer_design.start(db, generation, at=at, script=script, settings=settings)
