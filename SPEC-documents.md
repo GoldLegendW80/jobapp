@@ -347,7 +347,7 @@ The command line's hard rule 9 says the PDF of an `applied` row is never regener
 | GET /api/documents/{id}/versions ; GET .../versions/{n} ; GET .../versions/{n}/pdf ; GET .../versions/{n}/page1.png | list, read with its corrections, download (`inline` PDF), the preview image of page 1 for phones and cards (only of a PDF the app rendered: an imported version's own PDF answers 404, and a PDF that cannot be drawn 422) |
 | POST .../versions/{n}/restore ; /approve ; /mark-sent | restore into the draft, approve, freeze |
 | GET /api/documents/{id}/messages ; POST /api/documents/{id}/messages `{text}` | the document's chat; a message answers 202 with the message and its generation, 409 while one runs |
-| GET /api/document-generations/{id} ; POST /api/document-generations/{id}/cancel | follow, cancel |
+| GET /api/document-generations/{id} ; POST /api/document-generations/{id}/cancel | follow; cancel a chat generation (202 when a run was stopped or asked to stop, 200 unchanged when it had ended) |
 | GET /api/document-templates ; GET /api/document-templates/{slug}/thumbnail?kind= ; DELETE /api/document-templates/{slug} | the gallery (manifest fields, both languages, plus the person's own templates marked `user`), the thumbnails (`Cache-Control: public, max-age` with the template version in the address; a user template's thumbnail is private), delete a user template |
 | GET /api/documents/consent ; POST /api/documents/consent `{version}` | the consent text with its estimates; record it |
 | GET /api/documents/spend `?min_fit=` | today against the safety ceiling, waiting, tokens and cost today and over 30 days, and how many postings of the last 30 days sit at or above the threshold asked (the current one by default) |

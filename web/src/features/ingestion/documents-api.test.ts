@@ -256,7 +256,26 @@ describe("calls", () => {
     const file = () => new File(["same bytes"], "a.txt");
     const first = await uploadDocument(file());
     const again = await uploadDocument(file());
-    expect(again).toMatchObject({ id: first.id, duplicate: true });
+    expect(again).toMatchObject({
+      id: first.id,
+      duplicate: true,
+      refused: null,
+    });
+  });
+
+  it("keeps the reason a file a run has read was not replaced", async () => {
+    const reason = "A run has read it, so this upload did not replace it.";
+    server.use(
+      http.post("*/api/ingestion/documents", () =>
+        HttpResponse.json({
+          ...fakeDocument(),
+          duplicate: true,
+          refused: reason,
+        }),
+      ),
+    );
+    const again = await uploadDocument(new File(["same bytes"], "a.txt"));
+    expect(again).toMatchObject({ duplicate: true, refused: reason });
   });
 
   it("sends a name the browser already made well formed", async () => {
