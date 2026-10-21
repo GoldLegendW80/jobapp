@@ -22,15 +22,16 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * Apply A13b against the real stack through Caddy plus the fake ATS forms server: Full auto. An
  * invented person with the consent, a base CV, a company cap that lets three applications go to
  * the one company of the invented postings (a cap of the person replaces Full auto's one per
- * company rule), and three postings on the plain fake Greenhouse forms (nothing a profile
+ * company rule), and five postings on the plain fake Greenhouse forms (nothing a profile
  * leaves, no free text, so no check by model is needed), each with its CV and letter written by
  * the documents pipeline on the fake backend.
  *
  * The person turns Full auto on in Settings, Applications (what a Like then does is said first)
- * and sets the hold to its floor, which this stack lowers to 60 s through its own settings
- * (tests/ats-forms-stub.compose.yml: APPLY_HOLD_S 60, APPLY_REHEARSALS 1). The first Like is the
- * rehearsal: filled, checked, nothing sent, then "Does this look right?" in the queue; Yes keeps
- * it there ready, and one click Approve submits it. Then two Likes: each is held with a
+ * and sets the hold to its floor, which this stack lowers to 60 s through a setting for tests
+ * only (tests/ats-forms-stub.compose.yml: TEST_APPLY_HOLD_S 60; the server's three rehearsals).
+ * The first three Likes are the rehearsals: each filled, checked, nothing sent, then "Does this
+ * look right?" in the queue; Yes keeps it there ready. One click Approve submits the first; a
+ * Yes alone sends nothing, so the other two keep waiting. Then two Likes: each is held with a
  * countdown; one is cancelled during its hold on a phone by keyboard and never reaches the
  * fake, the other is submitted by the app after its hold. The fake holds exactly two accepted
  * submissions, the approved rehearsal and the Full auto one.
@@ -40,8 +41,9 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  *   E2E_CADDY_URL=... E2E_ATS_FORMS_URL=... E2E_COMPOSE_PROJECT=... \
  *     pnpm --dir web exec playwright test -c e2e/apply-all.config.ts apply-a13.spec.ts
  */
-// Three fills of about 100 s each and three submit leases of about 120 s each (the rehearsal's
-// stops before the click), one after the other on the one browser, plus a hold of 60 s.
+// Five fills of about 100 s each and five submit leases of about 120 s each (the rehearsals'
+// stop before the click), one after the other on the one browser, plus a hold of 60 s; no test
+// waits for more than two fills and two leases.
 test.describe.configure({ mode: "serial", timeout: 900_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
@@ -55,24 +57,25 @@ let person: Person;
 let context: BrowserContext;
 let page: Page;
 let errors: string[];
-type Key = "rehearsal" | "submitted" | "cancelled";
+type Key =
+  "rehearsal" | "rehearsal2" | "rehearsal3" | "submitted" | "cancelled";
 /** The fake Greenhouse form of each posting (one job each), and what its title adds to the role. */
 const FORMS: Record<Key, { job: string; suffix: string }> = {
   rehearsal: { job: "4012345", suffix: "" },
+  rehearsal2: { job: "4012348", suffix: ", Perception" },
+  rehearsal3: { job: "4012349", suffix: ", Simulation" },
   submitted: { job: "4012346", suffix: ", Fleet" },
   cancelled: { job: "4012347", suffix: ", Controls" },
 };
 const KEYS = Object.keys(FORMS) as Key[];
-const postings: Record<Key, string> = {
-  rehearsal: "",
-  submitted: "",
-  cancelled: "",
-};
-const titles: Record<Key, string> = {
-  rehearsal: "",
-  submitted: "",
-  cancelled: "",
-};
+const postings = Object.fromEntries(KEYS.map((key) => [key, ""])) as Record<
+  Key,
+  string
+>;
+const titles = Object.fromEntries(KEYS.map((key) => [key, ""])) as Record<
+  Key,
+  string
+>;
 
 type PostingDocument = { kind: string; latest: { number: number } | null };
 
@@ -143,6 +146,26 @@ async function like(keys: Key[]) {
   await expect(
     page.getByRole("heading", { level: 1, name: "Applications" }),
   ).toBeVisible();
+}
+
+/** One rehearsal: Like, filled and checked with nothing sent, then Yes keeps it ready. */
+async function rehearse(key: Key): Promise<Locator> {
+  await like([key]);
+  const card = cardOf(key);
+  const question = card.getByRole("region", { name: "Does this look right?" });
+  await expect(question).toBeVisible({ timeout: FILL_MS });
+  await expect(card).toContainText("Nothing was sent.");
+  await expect(
+    card.getByRole("img", { name: "The form before the click" }),
+  ).toBeVisible();
+  await question.getByRole("button", { name: "Yes, it looks right" }).click();
+  await expect(
+    page
+      .getByText("Thank you. It waits in your queue, ready for your approval.")
+      .first(),
+  ).toBeVisible();
+  await expect(card).toContainText("waiting for your approval");
+  return card;
 }
 
 const accepted = async () =>
@@ -220,7 +243,7 @@ test("Full auto is turned on in Settings after it says what a Like then does, an
     `The app will submit applications for you when a posting's fit is at least ${min_fit}, at least 1 minute after each Like unless you cancel, and never more than one application per company in 30 days.`,
   );
   await expect(panel).toContainText(
-    'Your next Like is a rehearsal: the app fills the form and checks it, submits nothing, and asks you "Does this look right?" in Applications.',
+    'Your next 3 Likes are rehearsals: the app fills the form and checks it, submits nothing, and asks you "Does this look right?" in Applications.',
   );
   await panel.getByRole("button", { name: "Turn on Full auto" }).click();
   await expect(page.getByText("Full auto is on.").first()).toBeVisible();
@@ -247,29 +270,14 @@ test("Full auto is turned on in Settings after it says what a Like then does, an
   expect(await settings.json()).toMatchObject({
     mode_after_like: "full_auto",
     hold_s: 60,
-    rehearsals: 1,
+    rehearsals: 3,
     rehearsals_done: 0,
   });
 });
 
 test("the first Like is a rehearsal: nothing sent, Yes keeps it ready, one click Approve submits it", async () => {
-  await like(["rehearsal"]);
-  const card = cardOf("rehearsal");
-  const question = card.getByRole("region", { name: "Does this look right?" });
-  await expect(question).toBeVisible({ timeout: FILL_MS });
-  await expect(card).toContainText("Nothing was sent.");
-  await expect(
-    card.getByRole("img", { name: "The form before the click" }),
-  ).toBeVisible();
+  const card = await rehearse("rehearsal");
   expect(await accepted()).toEqual([]);
-
-  await question.getByRole("button", { name: "Yes, it looks right" }).click();
-  await expect(
-    page
-      .getByText("Thank you. It waits in your queue, ready for your approval.")
-      .first(),
-  ).toBeVisible();
-  await expect(card).toContainText("waiting for your approval");
   const approve = card.getByRole("button", { name: "Approve and submit" });
   await expect(approve).toBeEnabled();
   await approve.click();
@@ -288,7 +296,23 @@ test("the first Like is a rehearsal: nothing sent, Yes keeps it ready, one click
   expect(((await status.json()) as { status: string }).status).toBe("applied");
 });
 
-test("after the rehearsal, a Like held then cancelled on a phone by keyboard never reaches the fake", async () => {
+test("the second and third Likes are rehearsals too, and a Yes alone sends nothing", async () => {
+  for (const key of ["rehearsal2", "rehearsal3"] as const) {
+    const card = await rehearse(key);
+    await expect(
+      card.getByRole("button", { name: "Approve and submit" }),
+    ).toBeEnabled();
+  }
+  const sent = await accepted();
+  expect(sent.map((one) => one.job)).toEqual([FORMS.rehearsal.job]);
+  const settings = await page.request.get("/api/apply/settings");
+  expect(await settings.json()).toMatchObject({
+    rehearsals: 3,
+    rehearsals_done: 3,
+  });
+});
+
+test("after the rehearsals, a Like held then cancelled on a phone by keyboard never reaches the fake", async () => {
   await like(["submitted", "cancelled"]);
   await page.setViewportSize(PHONE);
   const card = cardOf("cancelled");
