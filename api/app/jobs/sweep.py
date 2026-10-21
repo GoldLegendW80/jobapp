@@ -30,6 +30,15 @@ One sweep, `run_sweep(sweep_id)`:
 6. End. `done` with the duration, or `failed` with a short error (time limit, cancellation, a
    bug); the row is never left running by a sweep that returns.
 
+After the boards, the `feeds` hook reads the person's freelance and project feeds (opportunities
+O7, app/opportunities/sources), then the `browser` hook their browser sources (browser B8). Both
+store through `store_postings`; a feed's postings also count as duplicates of a posting with the
+same company and title (`loose`), whatever their locations say, so a mission on a board and on
+Remote OK is one row naming both sources; never when the company is UNNAMED_CLIENT, the
+placeholder of a client a feed does not name, which only its address makes a duplicate. A
+posting may state its contract (`contract_type`, a feed's freelance mission); else the title,
+location and URL say it, as before.
+
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
 security, pentest, threat (Harald, 2026-10-06)" has the terms cyber, security, pentest, threat.
@@ -51,6 +60,7 @@ Nothing here logs posting texts.
 """
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -86,6 +96,7 @@ from app.profile.models import Profile
 from app.profile.schemas import (
     Board,
     BrowserSource,
+    Feed,
     SearchSection,
     SkillsSection,
     SweepSchedule,
@@ -222,11 +233,22 @@ class SearchFilter:
         found = self.terms_reason(
             posting.title, posting.location, posting.published, board_exclude, since
         )
-        if found is None and self.contract_types:
-            contract = kind(posting.title, posting.location, posting.url)
-            if contract.value not in self.contract_types:
-                return "contract"
+        if (
+            found is None
+            and self.contract_types
+            and contract_of(posting).value not in self.contract_types
+        ):
+            return "contract"
         return found
+
+
+def contract_of(posting: ats.Posting) -> ContractType:
+    """The contract a source states (a feed's freelance mission, opportunities O7), else the one
+    the title, location and URL say (the engine's `kind`)."""
+    if posting.contract_type is not None:
+        with contextlib.suppress(ValueError):
+            return ContractType(posting.contract_type)
+    return kind(posting.title, posting.location, posting.url)
 
 
 # --- what a sweep reads -------------------------------------------------------------------------
@@ -278,6 +300,12 @@ def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
     return list(found.values())
 
 
+def enabled_feeds(search: SearchSection | None) -> list[Feed]:
+    """The freelance and project feeds a sweep reads (opportunities O7): enabled, one per kind
+    (the profile refuses two)."""
+    return [feed for feed in search.feeds if feed.enabled] if search else []
+
+
 # --- stats --------------------------------------------------------------------------------------
 
 
@@ -309,6 +337,24 @@ class Stats:
 
 # --- duplicates ---------------------------------------------------------------------------------
 
+# The company a feed gives a client it does not name (opportunities O7, a one part Hacker News
+# "SEEKING FREELANCER" post). Two such postings are two clients even with the same title and
+# location, so neither the company, title and location rule nor the loose rule (company and
+# title) matches on it: only its address makes one a duplicate.
+UNNAMED_CLIENT = "Client on Hacker News"
+_UNNAMED_KEY = slugs.PostingKey.of(UNNAMED_CLIENT, "", "", None).identity[0]
+
+
+def _identity(key: slugs.PostingKey) -> tuple[str, str, str] | None:
+    """The company, title and location rule's key, None for an unnamed client."""
+    return None if key.identity[0] == _UNNAMED_KEY else key.identity
+
+
+def _pair(key: slugs.PostingKey) -> tuple[str, str] | None:
+    """The company and title of the loose rule, None for an unnamed client."""
+    identity = _identity(key)
+    return None if identity is None else (identity[0], identity[1])
+
 
 class Known:
     """The user's postings as duplicate keys and slugs, loaded once per sweep and kept up to date
@@ -322,6 +368,9 @@ class Known:
         # sources is one row naming both). Filled by the constructor and `add`.
         self.jobs: dict[str | tuple[str, str, str], uuid.UUID] = {}
         self.sources: dict[uuid.UUID, str] = {}
+        # Company and title alone (opportunities O7): a feed's posting is the same posting as a
+        # board's or another feed's with that company and title, whatever its location says.
+        self.pairs: dict[tuple[str, str], uuid.UUID | None] = {}
         rows = db.execute(
             sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source)
             .where(Job.user_id == user_id)
@@ -339,19 +388,32 @@ class Known:
     ) -> None:
         if key.url is not None:
             self.urls.add(key.url)
-        self.identities.add(key.identity)
+        identity = _identity(key)
+        if identity is not None:
+            self.identities.add(identity)
+        pair = _pair(key)
+        if pair is not None and self.pairs.get(pair) is None:
+            self.pairs[pair] = job_id
         if slug:
             self.slugs.add(slug)
         if job_id is not None:
             if key.url is not None:
                 self.jobs.setdefault(key.url, job_id)
-            self.jobs.setdefault(key.identity, job_id)
+            if identity is not None:
+                self.jobs.setdefault(identity, job_id)
             self.sources[job_id] = source or ""
 
-    def job_of(self, key: slugs.PostingKey) -> uuid.UUID | None:
-        """The job a duplicate is: by URL first, else by identity."""
+    def job_of(self, key: slugs.PostingKey, loose: bool = False) -> uuid.UUID | None:
+        """The job a duplicate is: by URL first, else by identity, else (`loose`) by company and
+        title."""
         found = self.jobs.get(key.url) if key.url is not None else None
-        return found if found is not None else self.jobs.get(key.identity)
+        identity = _identity(key)
+        if found is None and identity is not None:
+            found = self.jobs.get(identity)
+        pair = _pair(key)
+        if found is None and loose and pair is not None:
+            found = self.pairs.get(pair)
+        return found
 
     def note(self, job_id: uuid.UUID, source: str) -> str | None:
         """The job's sources with `source` added, None when it names it already or is full."""
@@ -364,8 +426,12 @@ class Known:
         self.sources[job_id] = joined
         return joined
 
-    def has(self, key: slugs.PostingKey) -> bool:
-        return (key.url is not None and key.url in self.urls) or key.identity in self.identities
+    def has(self, key: slugs.PostingKey, loose: bool = False) -> bool:
+        return (
+            (key.url is not None and key.url in self.urls)
+            or _identity(key) in self.identities
+            or (loose and _pair(key) in self.pairs)
+        )
 
 
 # A job's `source` names every source that found it, the first one first, joined by SOURCES_SEP
@@ -396,6 +462,7 @@ class Plan:
     schedule_slot: str | None = None
     sources: list[BrowserSource] = field(default_factory=list)
     search: SearchSection | None = None  # for the score's bonus (scoring.bonus)
+    feeds: list[Feed] = field(default_factory=list)  # opportunities O7
 
 
 INSERT_CHUNK = 500
@@ -434,9 +501,11 @@ def store_postings(
     board_exclude: Matcher | None,
     stats: Stats,
     now: datetime,
+    loose: bool = False,
 ) -> None:
     """store_board's steps for (company, posting) pairs of one source: a board, or a browser
-    source (browser B8), whose postings each name their company."""
+    source (browser B8), whose postings each name their company. `loose`: a feed's postings
+    (opportunities O7) are also duplicates of a posting with the same company and title."""
     since = plan.filter.since(now.astimezone(SWEEP_TZ).date())
     pending: list[_NewJob] = []
     noted: dict[uuid.UUID, str] = {}
@@ -446,9 +515,9 @@ def store_postings(
             continue
         stats.matched += 1
         key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
-        if plan.known.has(key):
+        if plan.known.has(key, loose):
             stats.duplicates += 1
-            job_id = plan.known.job_of(key)
+            job_id = plan.known.job_of(key, loose)
             joined = plan.known.note(job_id, source) if job_id is not None else None
             if joined is not None:
                 noted[job_id] = joined
@@ -504,7 +573,7 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
     )
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
-    contract = ContractType(kind(posting.title, posting.location, posting.url))
+    contract = contract_of(posting)
     # Pay and work mode (opportunities O3): what the ATS states, else what the text and the
     # location state in an accepted shape, else nothing.
     pay = posting.pay or pays.pay_of(text, freelance=contract is ContractType.Freelance)
@@ -599,6 +668,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             search, search_filter, error = None, None, SEARCH_INVALID
         boards = enabled_boards(search)
         sources = enabled_sources(search)
+        feeds = enabled_feeds(search)
         slot = sweep.stats.get("schedule_slot")
         stats = Stats(
             boards_total=len(boards),
@@ -607,7 +677,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=slot if isinstance(slot, str) else None,
         )
         sweep.stats = stats.as_json()
-        if search is None or search_filter is None or not (boards or sources):
+        if search is None or search_filter is None or not (boards or sources or feeds):
             if error == SEARCH_INVALID:
                 logger.warning(
                     "sweep failed: the stored search section does not validate",
@@ -627,6 +697,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=stats.schedule_slot,
             sources=sources,
             search=search,
+            feeds=feeds,
         )
         db.commit()
     return plan
@@ -682,6 +753,7 @@ async def run_sweep(
     timeout_s: float = SWEEP_TIMEOUT_S,
     heartbeat_s: float = HEARTBEAT_S,
     browser: BrowserHook | None = None,
+    feeds: BrowserHook | None = None,
 ) -> None:
     """Run one sweep to its end (module docstring). Never raises for a board's failure; any other
     error fails the sweep and is re-raised only for cancellation."""
@@ -752,6 +824,18 @@ async def run_sweep(
                     del outcome
                     slots.release()
                     await progress()
+                if plan.feeds and feeds is not None:
+                    # Opportunities O7: the person's freelance and project feeds, after the
+                    # boards (app/opportunities/sources).
+
+                    async def store_feed(
+                        source: str, found: Sequence[tuple[str, ats.Posting]]
+                    ) -> None:
+                        await asyncio.to_thread(
+                            _store_found, sessions, plan, source, found, stats, clock(), True
+                        )
+
+                    await feeds(plan, stats, store_feed, progress, started + timeout_s)
                 if plan.sources and browser is not None:
                     # Browser B8: the person's browser sources, after the boards.
 
@@ -824,7 +908,7 @@ def _store(
     counters and the duplicate keys are put back, so the stats count only what was stored."""
     counters = {name: getattr(stats, name) for name in COUNTERS}
     known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
-    noted = (dict(plan.known.jobs), dict(plan.known.sources))
+    noted = (dict(plan.known.jobs), dict(plan.known.sources), dict(plan.known.pairs))
     try:
         with sessions() as db:
             store_board(db, plan, board, result, stats, now)
@@ -833,7 +917,7 @@ def _store(
         for name, value in counters.items():
             setattr(stats, name, value)
         plan.known.urls, plan.known.identities, plan.known.slugs = known
-        plan.known.jobs, plan.known.sources = noted
+        plan.known.jobs, plan.known.sources, plan.known.pairs = noted
         raise
 
 
@@ -844,23 +928,25 @@ def _store_found(
     found: Sequence[tuple[str, ats.Posting]],
     stats: Stats,
     now: datetime,
+    loose: bool = False,
 ) -> None:
     """One browser source's postings in one transaction, put back as `_store` does. A posting
-    the site gives no date counts as published the day it was found (Google Careers shows none)."""
+    the site gives no date counts as published the day it was found (Google Careers shows none).
+    `loose` for a feed's postings (store_postings)."""
     today = now.astimezone(SWEEP_TZ).date().isoformat()
     found = [(company, replace(p, published=p.published or today)) for company, p in found]
     counters = {name: getattr(stats, name) for name in COUNTERS}
     known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
-    noted = (dict(plan.known.jobs), dict(plan.known.sources))
+    noted = (dict(plan.known.jobs), dict(plan.known.sources), dict(plan.known.pairs))
     try:
         with sessions() as db:
-            store_postings(db, plan, source, found, None, stats, now)
+            store_postings(db, plan, source, found, None, stats, now, loose)
             db.commit()
     except Exception:
         for name, value in counters.items():
             setattr(stats, name, value)
         plan.known.urls, plan.known.identities, plan.known.slugs = known
-        plan.known.jobs, plan.known.sources = noted
+        plan.known.jobs, plan.known.sources, plan.known.pairs = noted
         raise
 
 
@@ -969,7 +1055,7 @@ def scheduled_due(
                 )
             continue
         if not search.sweep_schedule.enabled or not (
-            enabled_boards(search) or enabled_sources(search)
+            enabled_boards(search) or enabled_sources(search) or enabled_feeds(search)
         ):
             continue
         for slot in schedule.due(search.sweep_schedule, now, window):

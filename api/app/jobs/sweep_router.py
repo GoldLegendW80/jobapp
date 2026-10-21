@@ -102,6 +102,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             result_pages=count(item, "result_pages"),
             found=count(item, "found"),
             new=count(item, "postings"),
+            skipped_by_rule=count(item, "skipped_by_rule"),
             error=item["error"] if isinstance(item.get("error"), str) else None,
         )
         for item in stats.get("sources") or []
@@ -207,7 +208,9 @@ def _list(
         search = sweep.user_search(db, user_id)
         plan = sweep.schedule_of(search)
         active = plan.enabled and bool(
-            sweep.enabled_boards(search) or sweep.enabled_sources(search)
+            sweep.enabled_boards(search)
+            or sweep.enabled_sources(search)
+            or sweep.enabled_feeds(search)
         )
         return SweepList(
             items=[sweep_out(row) for row in rows],

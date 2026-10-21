@@ -28,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { isFeedReading } from "@/features/opportunities/sources/source-words";
 import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
@@ -74,7 +75,9 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
           {total
             ? `${sweep.boards_done} of ${plural(total, "board")} read`
             : sweep.current_board
-              ? "Reading job sites in your browser"
+              ? isFeedReading(sweep.current_board)
+                ? "Reading freelance and project sources"
+                : "Reading job sites in your browser"
               : "Waiting for the worker"}
         </span>
         {sweep.current_board ? (

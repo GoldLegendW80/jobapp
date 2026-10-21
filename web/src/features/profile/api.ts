@@ -228,6 +228,20 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+  /** O7: the freelance and project feeds the sweep reads; O8's sources card edits them */
+  feeds?: Feed[];
+}
+
+export const FEED_KINDS = [
+  "remoteok",
+  "weworkremotely",
+  "hackernews_freelance",
+  "hackernews_hiring",
+] as const;
+export interface Feed {
+  kind: (typeof FEED_KINDS)[number];
+  terms: TermList;
+  enabled: boolean;
 }
 
 export interface PayRange {

@@ -46,7 +46,7 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 
 ## Rules every task follows
 - **Isolation:** at least one test with two people, A and B: B's postings, cards, Passes, undos, sources and wizard answers answer 404 to A, and nothing of B's appears in A's deck.
-- **Never a cybersecurity role:** every task that shows or starts work on a posting tests a title of apply A2's never apply table ("Cybersecurity Engineer", "Ingénieur Cybersécurité", a soft hyphen inside "Security"): it never shows in the deck, a Like on it is refused, a feed never stores it as `found`.
+- **Never a cybersecurity role:** every task that shows or starts work on a posting tests a title of apply A2's never apply table ("Cybersecurity Engineer", "Ingénieur Cybersécurité", a soft hyphen inside "Security"): it never shows in the deck, a Like on it is refused, a feed stores it exactly as a board would (`skipped` with the rule as its note when the sweep's whole word match finds it; orchestrator's decision of 2026-10-20 on PR #505: feeds follow the boards' rule).
 - **No real platform in a test.** Feeds are read from the fake feeds server only, opt in platforms from fixture pages only, forms from the fake ATS forms server only; the stub base address is refused in production. Real reads are human steps of Checkpoint O.
 - **Free and within terms, or opted in:** a source module names, in its docstring, the address and the date of the terms or feed notice it was built against, and shows the attribution the source asks. A platform whose terms forbid automated reading is read only through O7b's guard, never by a source module that skips it.
 - **Plain words:** every new label comes from `wording.ts`; no dashes as separators in any text a person reads.
@@ -239,13 +239,13 @@ Nothing yet. (The wizard's time from an empty account to the first card.)
 Nothing yet.
 
 ### O7
-Nothing yet. (Items per feed per sweep, the share marked Freelance, the time of a sweep with the three feeds.)
+On the fake feeds server (tests/feeds_stub.py), in the api tests on the Mac on 2026-10-20: the recorded `ok` variant gives 7 Remote OK postings (3 freelance), 3 We Work Remotely (2 freelance) and 3 client missions of the Hacker News freelance thread; 5,000 items (about 10 MB) is refused as `too_many` before any item is parsed, in under a second. `plain_text` on 80,000 characters of hostile markup (a "<" never closed, `<script>` repeated, `<p ` repeated, their mixes): under 0.025 s each (round 2 of PR #505; round 1's patterns took 0.6 to 2 s). Still to measure on the Jetson after the deploy (Checkpoint O, the owner's real feeds): items per feed per sweep, the share marked Freelance, the time of a sweep with the three feeds, and whether We Work Remotely's feed answers the Jetson (the spec's 403 note).
 
 ### O7b
 Nothing yet. (Pages read and seconds per sweep and platform, the missions found per platform, any checkpoint met.)
 
 ### O8
-Nothing yet.
+On the Mac on 2026-10-21, on a scratch stack with the fake feeds server: the O8 journey takes 9 s for its 5 tests, the whole opportunities group 59 s for 25. A sweep with We Work Remotely alone (the stub's `ok` variant) reports "3 postings found, 2 new" under "Freelance and project sources", in about 1 s. The card adds one request on the Search tab (the catalogue, cached 5 minutes). Screenshots under `tasks/evidence/opportunities-o8/`.
 
 ### O9a
 Nothing yet. (The tokens of one proposal.)

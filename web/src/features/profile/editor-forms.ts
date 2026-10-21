@@ -14,6 +14,7 @@ import {
   COMPANY_TYPES,
   CONTRACT_TYPES,
   CURRENCIES,
+  FEED_KINDS,
   INDUSTRIES_MAX,
   PAY_MAX,
   REMOTE_STANCES,
@@ -24,6 +25,7 @@ import {
   type BrowserSource,
   type Category,
   type Facts,
+  type Feed,
   type Gate,
   type Search,
   type Skills,
@@ -419,6 +421,17 @@ export const searchSchema = z
       salary: payFormSchema,
       daily_rate: payFormSchema,
     }),
+    // O7 and O8: the freelance and project feeds (the sources card). One entry per kind in the
+    // form, `stored` when the profile holds it; an entry the person never touched is left out on
+    // save, so a section saved before O7 round trips as it was.
+    feeds: z.array(
+      z.object({
+        kind: z.enum(FEED_KINDS),
+        terms: z.object(termListShape).superRefine(checkTerms),
+        enabled: z.boolean(),
+        stored: z.boolean(),
+      }),
+    ),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -474,7 +487,41 @@ export const toSearchForm = (search: Search): SearchForm => ({
     salary: toPayForm(search.compensation.salary),
     daily_rate: toPayForm(search.compensation.daily_rate),
   },
+  feeds: toFeedsForm(search.feeds ?? []),
 });
+
+/** The saved feeds in their order, then every other kind, off and without terms. */
+function toFeedsForm(feeds: readonly Feed[]): SearchForm["feeds"] {
+  const saved = feeds.map((f) => ({
+    kind: f.kind,
+    terms: toTermList(f.terms),
+    enabled: f.enabled,
+    stored: true,
+  }));
+  const missing = FEED_KINDS.filter(
+    (kind) => !feeds.some((f) => f.kind === kind),
+  );
+  return [
+    ...saved,
+    ...missing.map((kind) => ({
+      kind,
+      terms: { advanced_regex: false, terms: [] },
+      enabled: false,
+      stored: false,
+    })),
+  ];
+}
+
+/** The feeds to save: every saved one, and a new one once it is on or has terms. */
+function fromFeedsForm(feeds: SearchForm["feeds"]): Feed[] {
+  return feeds
+    .filter((f) => f.stored || f.enabled || f.terms.terms.length > 0)
+    .map((f) => ({
+      kind: f.kind,
+      terms: fromTermList(f.terms),
+      enabled: f.enabled,
+    }));
+}
 
 export const fromSearchForm = (values: SearchForm): Search => ({
   title_include: fromTermList(values.title_include),
@@ -521,4 +568,8 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     salary: fromPayForm(values.compensation.salary),
     daily_rate: fromPayForm(values.compensation.daily_rate),
   },
+  // Left out when empty: the api's default, so a section saved before O7 round trips as it was.
+  ...(fromFeedsForm(values.feeds).length > 0
+    ? { feeds: fromFeedsForm(values.feeds) }
+    : {}),
 });
