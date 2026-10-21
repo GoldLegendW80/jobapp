@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
+import { serverOffset } from "./full-auto-state";
+import { FullAutoSummary } from "./full-auto-summary";
 import {
   getQueue,
   queueCountKey,
@@ -16,6 +18,7 @@ import {
 } from "./queue-api";
 import { QueueCard } from "./queue-card";
 import { isWaiting, queuePoll } from "./queue-state";
+import { applySettingsKey, getApplySettings } from "./settings-api";
 
 /** The api answers at most this many items. */
 const QUEUE_MAX = 200;
@@ -23,7 +26,8 @@ const QUEUE_MAX = 200;
 /**
  * /applications, the review queue (SPEC-apply.md, "Frontend"): the applications of the person's
  * Likes, those waiting for the person first, then those under way. The page reads the queue
- * again by itself while something is under way, and keeps the app shell's count in step.
+ * again by itself while something is under way, and keeps the app shell's count in step. With
+ * Full auto, its day so far comes first, and each hold counts down on the server's clock.
  */
 export function QueuePage() {
   useTitle("Applications");
@@ -34,6 +38,12 @@ export function QueuePage() {
     queryFn: ({ signal }) => getQueue(signal),
     refetchInterval: (current) => queuePoll(current.state.data),
   });
+  const settings = useQuery({
+    queryKey: applySettingsKey,
+    queryFn: ({ signal }) => getApplySettings(signal),
+  });
+  const fullAuto = settings.data?.mode_after_like === "full_auto";
+  const offset = serverOffset(query.data?.now, query.dataUpdatedAt);
   const waitingOnYou = query.data?.waiting_on_you;
   useEffect(() => {
     if (waitingOnYou !== undefined) {
@@ -60,10 +70,14 @@ export function QueuePage() {
           Applications
         </h1>
         <p className="text-muted-foreground">
-          Your review queue: the assistant fills the form of each posting you
-          like, then waits. Nothing is sent until you approve it.
+          {settings.data === undefined
+            ? "Your review queue: the applications of the postings you like."
+            : fullAuto
+              ? "Your review queue. In Full auto your Like is your approval: the app submits what passes every check once the hold ends, unless you cancel it here, and everything else waits here for you."
+              : "Your review queue: the assistant fills the form of each posting you like, then waits. Nothing is sent until you approve it."}
         </p>
       </header>
+      <FullAutoSummary on={fullAuto} />
       {query.isPending ? (
         <p
           role="status"
@@ -109,6 +123,7 @@ export function QueuePage() {
                 empty="Nothing waits for you."
                 items={waiting}
                 onLeave={leave}
+                offset={offset}
               />
               <QueueSection
                 id="queue-under-way"
@@ -116,6 +131,7 @@ export function QueuePage() {
                 empty="Nothing is under way."
                 items={underWay}
                 onLeave={leave}
+                offset={offset}
               />
               {items.length >= QUEUE_MAX ? (
                 <p className="text-sm text-muted-foreground">
@@ -137,12 +153,14 @@ function QueueSection({
   empty,
   items,
   onLeave,
+  offset,
 }: {
   id: string;
   title: string;
   empty: string;
   items: QueueItem[];
   onLeave: () => void;
+  offset: number;
 }) {
   return (
     <section aria-labelledby={id} className="flex flex-col gap-3">
@@ -153,7 +171,7 @@ function QueueSection({
         <ul className="flex flex-col gap-4">
           {items.map((item) => (
             <li key={item.id}>
-              <QueueCard item={item} onLeave={onLeave} />
+              <QueueCard item={item} onLeave={onLeave} offset={offset} />
             </li>
           ))}
         </ul>

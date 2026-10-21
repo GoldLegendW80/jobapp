@@ -271,3 +271,53 @@ def test_the_base_chat_reads_its_own_file_only_and_its_estimate_counts_it(
         tools.NO_UPLOAD,
         True,
     )
+
+
+@pytest.mark.parametrize("state", ["secret", "reading", "failed", "clipped"])
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_file_the_base_chat_cannot_read_is_no_source_of_any_chat(
+    kind: str,
+    state: str,
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    hooks: list[uuid.UUID],
+) -> None:
+    # The posting's CV and letter read the file as the base CV's chat does: the clipped head of
+    # a file still readable (`writer_base.upload_text`), never the whole text of any file.
+    world = _world(factory, migrated_url, kind)
+    changes = {
+        "secret": "secret_warning = true, secret_confirmed_at = NULL",
+        "reading": "text_status = 'pending'",
+        "failed": "text_status = 'failed'",
+        "clipped": "text = repeat('x ', :half) || text",
+    }
+    with factory() as db:
+        db.execute(
+            sa.text(f"UPDATE ingestion_documents SET {changes[state]} WHERE id = :d"),
+            {"d": world.upload, "half": writer_base.UPLOAD_MAX_CHARS // 2},
+        )
+        db.commit()
+    run_id, binding = _chat(world, kind)
+    answer, error = _submit(world, kind, run_id, binding, world.draft)
+    assert error
+    assert answer.startswith("Not stored yet: the fact check found claims")
+    assert "(number_not_in_sources)" in answer
+
+
+@pytest.mark.parametrize("uploaded", [True, False], ids=["from an upload", "from the profile"])
+def test_a_base_chat_run_leaves_nothing_in_memory(
+    uploaded: bool, factory: sessionmaker[Session], migrated_url: str, hooks: list[uuid.UUID]
+) -> None:
+    world = _world(factory, migrated_url, "base")
+    document = world.base if uploaded else world.who.base
+    run_id, binding = _chat(world, "base", document)
+    draft = document_row(factory, document).draft
+    answer, error = _submit(world, "base", run_id, binding, draft)
+    if error:  # the correction pass, answered with the same draft: code removes the rest
+        answer, error = _submit(world, "base", run_id, binding, draft)
+    assert (answer, error) == (submit.STORED, False)
+    assert run_id not in writer_base._FIXED
+    chat.settle(factory, run_id, RunStatus.done, submit.take(run_id), chat.take(run_id), AT)
+    assert run_id not in writer_base._FIXED
+    assert run_id not in submit._RUNS
+    assert run_id not in chat._ASKED
