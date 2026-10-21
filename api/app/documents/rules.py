@@ -177,8 +177,11 @@ def soft_lengths(content: BaseModel, limits: SoftLimits) -> list[Issue]:
 
 def required_empty(content: BaseModel) -> list[Issue]:
     """The fields a document must not print empty: a CV's headline and summary, a letter's
-    subject and at least one paragraph. The automatic correction gives them a fallback."""
-    if isinstance(content, c.LetterContent):
+    subject and at least one paragraph, a proposal's subject and body. The automatic correction
+    gives them a fallback."""
+    if isinstance(content, c.ProposalContent):
+        missing = [p for p, v in (("subject", content.subject), ("body", content.body)) if not v]
+    elif isinstance(content, c.LetterContent):
         missing = [p for p, v in (("subject", content.subject),) if not v]
         if not content.paragraphs:
             missing.append("paragraphs")

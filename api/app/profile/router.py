@@ -235,7 +235,7 @@ def import_profile(
     raw: Annotated[bytes, Depends(_import_body)], user: CurrentUser, request: Request, db: Db
 ) -> Any:
     """Replace the whole profile with an export file: all seven sections in one transaction (an
-    older file without `preferences` reads its defaults; the stored onboarding dates are kept), one
+    older file without `preferences` reads its defaults; the stored onboarding part is kept), one
     revision each; the photo too when the file has one. With `base_revision`, a profile changed
     since then is a 409; without it the import simply applies after any save in progress."""
     try:
@@ -373,6 +373,12 @@ def delete_photo(user: CurrentUser, request: Request, db: Db) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE)
 
 
+def _onboarding_keys(raw: Any) -> frozenset[str]:
+    """The keys of `onboarding` a preferences save sent: one left out keeps its stored value."""
+    onboarding = raw.get("onboarding") if isinstance(raw, dict) else None
+    return frozenset(onboarding) if isinstance(onboarding, dict) else frozenset()
+
+
 @router.put(
     "/{section}",
     response_model=ProfileOut,
@@ -395,7 +401,13 @@ def save_section(
         raise _invalid(exc) from None
     try:
         profile = service.save_section(
-            db, user.id, section, data, body.base_revision, deps.clock(request)
+            db,
+            user.id,
+            section,
+            data,
+            body.base_revision,
+            deps.clock(request),
+            onboarding_sent=_onboarding_keys(body.data) if section == "preferences" else None,
         )
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)
