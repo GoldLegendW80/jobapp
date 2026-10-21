@@ -80,8 +80,8 @@ _PAGE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
 
 CHECK_SCALE = 2  # device pixels per CSS pixel of the screenshots
 CHECK_PAGE_HEIGHT = 1123  # an A4 page at 96 CSS pixels an inch
-# What is laid out lower is outside the check. Measured under the 256 MiB mem_limit (PR #518):
-# the screenshots of a page 1.3 A4 pages high peak at 226 MiB, of 1.75 pages at the limit.
+# What is laid out lower is outside the check: under the 256 MiB mem_limit the peak is 187 MiB at
+# 1005 px and at the limit from about 1550 px; 2.3 pages failed (measured on a Mac, PR #518).
 CHECK_MAX_HEIGHT = 3 * CHECK_PAGE_HEIGHT // 2
 CHECK_WIDTHS = (200, 1200)
 CHECK_NEEDLES = 400

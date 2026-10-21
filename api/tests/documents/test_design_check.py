@@ -30,7 +30,7 @@ def test_the_lone_canary_holds_one_item_per_list_and_texts_at_their_limits() -> 
         (content.highlights[0], c.BULLET_MAX),
         (content.experience[0].bullets[0], c.BULLET_MAX),
         (content.competencies[0], c.TERM_MAX),
-        (letter.content.paragraphs[0], c.PARAGRAPH_MAX),
+        (letter.content.paragraphs[0], design_check.LONE_PARAGRAPH),
         (letter.content.subject, c.LINE_MAX),
         (cv.view.employers[0].organisation, c.LINE_MAX),
         (cv.view.schools[0].school, c.LINE_MAX),

@@ -8,7 +8,8 @@ renderer's own Chromium lays out (renderer/server.py, POST /check):
 - the canary pages, two content shapes (SHAPES) of `_base/sample.json`'s invented CV and letter
   ("Alex Example"): the sample as it is, every list at two items or more, and `lone`, every
   list at one item (one employer with one bullet, one school, one language, one skill group of
-  one item, one highlight, one competency, one paragraph) and every text at its hard limit, so
+  one item, one highlight, one competency, one paragraph) and every text at its hard limit (the
+  paragraph at LONE_PARAGRAPH), so
   a box sized for the sample's texts, or a rule that only a lone item meets, shows. Every text
   of the content and of the profile is led by a token of its own (`Q`, three letters, `Z`), so
   each needle names one field; the contact lines, the periods and the letter's date as printed.
@@ -16,13 +17,14 @@ renderer's own Chromium lays out (renderer/server.py, POST /check):
 - each kind and shape at its loosest and its tightest step, laid out for print on a page as wide
   as an A4 page's text at the step's margin (`text_width`): `template_css` holds the template's
   `@page` to `size: A4` and `margin: var(--margin)`, so this is the page box print uses;
-- for every glyph of every needle: it has a box (`hidden` otherwise), inside the A4 width and
-  the measured height (`outside`), in a font of at least MIN_SIZE_PX (`small`), the element
-  at its centre is the one that holds the text (`covered`: a box, a photo or a pseudo element
-  of another element over it), and its pixels differ from the same page with that text painted
-  transparent by at least CONTRAST to one, on MIN_PIXELS device pixels at least (`contrast`: a
-  colour too close to the painted background, a pseudo element of its own element over it,
-  something half transparent above it). A needle with no occurrence is `unprinted`;
+- for every glyph of every needle: it has a box (`hidden` otherwise), inside the paper, the page
+  box and its margin, and above the measured height (`outside`), in a font of at least
+  MIN_SIZE_PX (`small`), the element at its centre is the one that holds the text (`covered`: a
+  box, a photo or a pseudo element of another element over it), and its pixels differ from the
+  same page with that text painted transparent by at least CONTRAST to one, on MIN_PIXELS
+  device pixels at least (`contrast`: a colour too close to the painted background, a pseudo
+  element of its own element over it, something half transparent above it). A needle with no
+  occurrence is `unprinted`;
 - the tightest step must lay the sample CV and letter out shorter than the loosest
   (`density_unread`), so the fit loop can tighten the template.
 
@@ -84,6 +86,9 @@ _FILLER = (
     "runbook", "incident", "teams", "deployment", "engineering",
 )  # fmt: skip
 _TOKENED = 6  # a token and its space
+# The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter (sidebar's) passes
+# CHECK_MAX_HEIGHT; a text box has no fixed height (template_css), so length beyond is pages.
+LONE_PARAGRAPH = 1_200
 
 
 class CheckUnavailableError(Exception):
@@ -166,7 +171,7 @@ def _lone(data: dict[str, Any]) -> None:
     letter.update(
         headline=filler(c.HEADLINE_MAX),
         closing=filler(c.LINE_MAX),
-        paragraphs=[filler(c.PARAGRAPH_MAX)],
+        paragraphs=[filler(LONE_PARAGRAPH)],
     )
 
 
@@ -270,9 +275,14 @@ def _open(png: bytes, size: tuple[int, int]) -> Image.Image:
 
 
 def problems_of(
-    checked: Checked, needles: tuple[tuple[str, str], ...], file: str, where: str
+    checked: Checked,
+    needles: tuple[tuple[str, str], ...],
+    file: str,
+    where: str,
+    margin: float = 0.0,
 ) -> list[Problem]:
-    """The fields of one check that the page does not truly show (module docstring)."""
+    """The fields of one check that the page does not truly show (module docstring). `margin`:
+    the page's margin in CSS pixels, where print still shows a glyph that reaches into it."""
     size = (checked.width * checked.scale, checked.shown * checked.scale)
     strong = strong_pixels(_open(checked.before, size), _open(checked.after, size))
     found: dict[tuple[str, str], None] = {}
@@ -282,7 +292,7 @@ def problems_of(
             if occurrence.size < MIN_SIZE_PX:
                 codes.append("small")
             for x, y, w, h, own in occurrence.glyphs:
-                codes.append(_glyph(checked, strong, x, y, w, h, own))
+                codes.append(_glyph(checked, strong, (x, y, w, h), own, margin))
         for code in codes:
             if code:
                 found[(path, code)] = None
@@ -293,11 +303,17 @@ def problems_of(
 
 
 def _glyph(
-    checked: Checked, strong: Image.Image, x: float, y: float, w: float, h: float, own: bool
+    checked: Checked,
+    strong: Image.Image,
+    box: tuple[float, float, float, float],
+    own: bool,
+    margin: float,
 ) -> str:
+    x, y, w, h = box
     if w <= 0 or h <= 0:
         return "hidden"
-    if x < -EDGE_PX or y < -EDGE_PX or x + w > checked.width + EDGE_PX:
+    edge = margin + EDGE_PX
+    if x < -edge or y < -edge or x + w > checked.width + edge:
         return "outside"
     if y + h > checked.shown + EDGE_PX:
         return "outside"
@@ -335,7 +351,8 @@ async def _one(
             raise CheckUnavailableError from None
         return [Problem(file, 0, "render", f"{where}: it does not lay out")], 0
     try:
-        found = await asyncio.to_thread(problems_of, checked, sample.needles, file, where)
+        margin = step.margin * CSS_PX_PER_MM
+        found = await asyncio.to_thread(problems_of, checked, sample.needles, file, where, margin)
     except (RenderError, OSError, Image.DecompressionBombError):
         return [Problem(file, 0, "render", f"{where}: it does not lay out")], 0
     return found, checked.height

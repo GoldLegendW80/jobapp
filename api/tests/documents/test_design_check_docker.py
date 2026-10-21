@@ -129,6 +129,13 @@ HIDING = [
         "covered",
         "roles[0].title",
     ),
+    # PR #518 round 2: a root margin print adds to the page's, which the check once replaced
+    (
+        "root_margin",
+        "html { margin-left: 120mm; } body { width: 175mm; }",
+        "outside",
+        "languages[1].level",
+    ),
 ]  # fmt: skip
 
 
@@ -138,6 +145,30 @@ def test_a_style_that_hides_a_field_is_refused_with_its_field(
 ) -> None:
     found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
     assert any(p.code == code and p.detail.startswith(f"{field} ") for p in found), (name, found)
+
+
+# PR #518 round 2: what only another content shape shows (both refused statically too, by
+# template_css: a height off the photo, a column track under TRACK_MIN).
+LONE = " one item per list and long texts"
+SHAPE_HIDING = [
+    ("box_shorter_than_a_long_summary", ".summary { height: 3.2em; }", "content.summary"),
+    (
+        "grid_of_a_lone_school",
+        ".schools .school:first-child:last-child { display: grid;"
+        " grid-template-columns: 0px 0px; grid-auto-flow: column; }",
+        "schools[0].",
+    ),
+]
+
+
+@pytest.mark.parametrize(("name", "css", "field"), SHAPE_HIDING)
+def test_a_style_that_fails_only_another_content_shape_is_refused(
+    stack: Stack, name: str, css: str, field: str
+) -> None:
+    found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
+    caught = [p for p in found if p.detail.startswith(field)]
+    assert caught, (name, found)
+    assert all(p.detail.endswith(LONE) for p in caught), (name, caught)
 
 
 def test_a_style_that_ignores_the_density_is_refused(stack: Stack) -> None:
@@ -158,6 +189,9 @@ def test_the_service_refuses_a_check_it_cannot_read(stack: Stack) -> None:
         b"{}",
         b"not json",
         json.dumps({"html": "", "needles": [], "width": 600, "name": "jcabcdefgh"}).encode(),
+        json.dumps(
+            {"html": "<p>x</p>", "needles": ["x" * 2000] * 9, "width": 600, "name": "jcabcdefgh"}
+        ).encode(),
     ):
         raw = stack.execute("renderer", "python", "-I", "-c", POST, stdin=body)
         assert raw.split(b"\n", 1)[0] == b"400"
