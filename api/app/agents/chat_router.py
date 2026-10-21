@@ -15,6 +15,9 @@
 - DELETE /api/agents/threads/{id}: delete it and its messages (204); an answer still pending is
   cancelled. The runs stay in the run log.
 
+A send or a delete waits chat.LOCK_WAIT_S at most for each lock it takes, the thread's row first,
+and answers 409 THREAD_LOCKED when one is not granted in time: nothing is written.
+
 Another user's thread answers 404 like one that does not exist; the user always comes from the
 session (default deny, CSRF on every write). Nothing here logs a message.
 """
@@ -165,7 +168,10 @@ def _busy(run_id: uuid.UUID | None, detail: str) -> JSONResponse:
     responses={
         **_401,
         **_404,
-        409: {"model": ThreadBusyOut, "description": "Still answering, or no model credential"},
+        409: {
+            "model": ThreadBusyOut,
+            "description": "Still answering, no model credential, or the thread is being updated",
+        },
         422: {"model": ErrorOut, "description": "Empty or too long message"},
         429: {"model": ErrorOut, "description": "Too many runs queued or running"},
         503: {"model": ErrorOut, "description": "Not configured, or the queue is down"},
@@ -198,17 +204,26 @@ async def send_message(
 def _delete(
     sessions: sessionmaker[Session], user_id: uuid.UUID, thread_id: uuid.UUID, now: datetime
 ) -> bool:
-    with sessions() as db:
-        deleted = chat.delete_thread(db, user_id, thread_id, now)
-        db.commit()
-        return deleted
+    try:
+        with sessions() as db, chat.bounded_lock_waits(db, chat.LOCK_WAIT_S):
+            deleted = chat.delete_thread(db, user_id, thread_id, now)
+            db.commit()
+            return deleted
+    except chat.ThreadLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=operator.THREAD_LOCKED, headers=NO_STORE
+        ) from None
 
 
 @router.delete(
     "/{thread_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    responses={**_401, **_404},
+    responses={
+        **_401,
+        **_404,
+        409: {"model": ErrorOut, "description": "The thread is being updated: try again"},
+    },
 )
 async def delete_thread(thread_id: str, user: CurrentUser, request: Request) -> Response:
     deleted = await run_in_threadpool(

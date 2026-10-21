@@ -137,7 +137,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-import sqlalchemy as sa
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -166,6 +165,7 @@ from app.agents.crypto import DecryptError, Keyring
 # The messages stored on a run (they reach the user) and what a caller may conclude from one
 # live in a module the api can import too; they are this module's names as before.
 from app.agents.failures import (
+    ANSWER_NOT_STORED,
     API_ERROR,
     BINDING_GONE,
     BUSY,
@@ -1186,20 +1186,34 @@ def _chat_reply(context: RunContext, run_id: uuid.UUID) -> Callable[[Session, ru
     return record
 
 
+async def _record_end(
+    recorder: Recorder, outcome: runs.Outcome, log: dict[str, Any]
+) -> tuple[runs.Outcome, bool]:
+    """Write the run's end: the outcome written, and whether it was (False: the run was no
+    longer running). A chat answer whose thread stays locked past its bound (`_chat_lock`) is
+    not stored: the run is failed at once instead, with ANSWER_NOT_STORED and what it used, in
+    a transaction of its own that writes the run's row and its last event and locks no thread
+    (the lock order of chat.py holds). The thread takes the next message as soon as its holder
+    lets go, instead of after the stale reaper."""
+    try:
+        return outcome, await asyncio.shield(recorder.finish(outcome))
+    except chat.ThreadLockedError:
+        failed = replace(outcome, status=RunStatus.failed, error=ANSWER_NOT_STORED, output=None)
+    logger.warning("agent run answer not stored: its thread stayed locked", extra=log)
+    return failed, await asyncio.shield(recorder.finish(failed))
+
+
 def _chat_lock(run_id: uuid.UUID, wait_s: float) -> Callable[[Session], None]:
     """Lock the thread of a chat run for the transaction that ends the run, waiting `wait_s`
     at most. The bound is the transaction's own (`SET LOCAL`): it also holds for the run's row
-    that the same transaction locks next, and is gone with the transaction. When it passes,
-    Postgres refuses the lock, the end of the run is not recorded by this worker (logged as
-    "agent run end not recorded") and the run is failed by the reaper like any run whose
-    worker could not finish it: bounded, where the wait used to have no end."""
+    that the same transaction locks next, and is gone with the transaction. When it passes on
+    the thread, Postgres refuses the lock and chat.ThreadLockedError is raised, the transaction
+    rolled back: `_record_end` then fails the run at once without the thread, and the worker is
+    free again."""
 
     def lock(db: Session) -> None:
-        db.execute(
-            sa.text("SELECT set_config('lock_timeout', :wait, true)"),
-            {"wait": f"{max(1, round(wait_s * 1000))}ms"},
-        )
-        chat.lock_thread_of_run(db, run_id)
+        with chat.bounded_lock_waits(db, wait_s):
+            chat.lock_thread_of_run(db, run_id)
 
     return lock
 
@@ -1550,7 +1564,7 @@ async def _execute(
             # What a run with a budget used, and the counts of a private run, on every path.
             outcome = _complete(outcome, state, definition)
             try:
-                recorded = await asyncio.shield(recorder.finish(outcome))
+                outcome, recorded = await _record_end(recorder, outcome, log)
             except Exception as exc:
                 recorded = False
                 _log_failure(
