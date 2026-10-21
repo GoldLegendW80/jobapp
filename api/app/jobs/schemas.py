@@ -616,7 +616,9 @@ class SourceOut(BaseModel):
     completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
     layout_changed, store_failed, lease_budget, lease_ended, time_budget, page_failed,
     browser_busy, browser_unavailable, or not_started for a source after one that stopped the
-    sweep's sources)."""
+    sweep's sources). A freelance and project feed (opportunities O7) is listed here too, its
+    `kind` the feed's, with its own codes (app/opportunities/sources ERRORS) and the postings the
+    never apply rules set aside (`skipped_by_rule`, opportunities O8)."""
 
     kind: str
     query: str
@@ -624,6 +626,7 @@ class SourceOut(BaseModel):
     result_pages: int = 0
     found: int = 0
     new: int = 0
+    skipped_by_rule: int = 0
     error: str | None = None
 
 

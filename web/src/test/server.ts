@@ -1,6 +1,8 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
+import { FEED_CATALOGUE } from "./feeds";
+
 /** Default handlers: a healthy api, nobody signed in, and no jobs. Tests override per case with `server.use(...)`. */
 /** An empty jobs list, the home page's first request once signed in. */
 export const emptyJobsPage = {
@@ -130,6 +132,10 @@ export const handlers = [
   // Nothing waits in the review queue (the app shell's Applications count).
   http.get("*/api/apply/queue/count", () =>
     HttpResponse.json({ waiting_on_you: 0 }),
+  ),
+  // The catalogue of freelance and project sources (the Search tab's sources card, O8).
+  http.get("*/api/opportunities/feeds", () =>
+    HttpResponse.json(FEED_CATALOGUE),
   ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),

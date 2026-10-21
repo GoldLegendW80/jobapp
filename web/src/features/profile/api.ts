@@ -228,7 +228,7 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
-  /** O7: the freelance and project feeds the sweep reads; kept as is by this tab until O8's card */
+  /** O7: the freelance and project feeds the sweep reads; O8's sources card edits them */
   feeds?: Feed[];
 }
 

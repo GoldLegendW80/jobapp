@@ -425,11 +425,24 @@ export function AddPostingButton() {
   );
 }
 
-function AddPostingDialog({ onClose }: { onClose: () => void }) {
+/**
+ * The "Add a posting" dialog. `initial` preselects fields (the Search tab's "Add a mission by
+ * hand" preselects the contract Freelance, opportunities O8); `onAdded` replaces the default of
+ * opening the new posting's page.
+ */
+export function AddPostingDialog({
+  onClose,
+  initial,
+  onAdded,
+}: {
+  onClose: () => void;
+  initial?: Partial<Draft>;
+  onAdded?: (job: { id: string }) => void;
+}) {
   const id = useId();
   const client = useQueryClient();
   const navigate = useNavigate();
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [draft, setDraft] = useState<Draft>({ ...EMPTY_DRAFT, ...initial });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<{
     text: string;
@@ -467,7 +480,8 @@ function AddPostingDialog({ onClose }: { onClose: () => void }) {
             : `Posting added, fit ${job.fit}.`,
         );
         onClose();
-        void navigate(`/jobs/${job.id}`);
+        if (onAdded) onAdded(job);
+        else void navigate(`/jobs/${job.id}`);
       },
       (failure: unknown) => {
         setPending(false);

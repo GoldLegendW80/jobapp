@@ -2,7 +2,8 @@
  * Search: what the sweep looks for. Title include and exclude terms and location terms as chips
  * (each list with its advanced switch), contract types as toggles, the remote stance, the minimum
  * fit to shortlist, the posting age window, the company boards (boards-table.tsx), the job sites
- * read in the browser (browser-sources-card.tsx) and the never-apply rules. Then what the person
+ * read in the browser (browser-sources-card.tsx), the freelance and project sources
+ * (opportunities/sources, O8) and the never-apply rules. Then what the person
  * aims for (target-fields.tsx, O4) and, as a card with its own Save, the preferences section
  * (preferences-card.tsx).
  */
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
+import { FreelanceSourcesCard } from "@/features/opportunities/sources/freelance-sources-card";
 import { cn } from "@/lib/utils";
 
 import {
@@ -207,6 +209,7 @@ export function SearchTab({
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           <BoardsTable form={form} />
           <BrowserSourcesCard form={form} />
+          <FreelanceSourcesCard form={form} />
           <NeverApply form={form} />
           <DocumentsSearchOptions form={form} />
           <SaveBar
