@@ -589,7 +589,7 @@ def _lock_source(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> uuid.UU
     query = (
         sa.select(IngestionDocument.id)
         .where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
-        .with_for_update(no_key=True)
+        .with_for_update(key_share=True)
     )
     _wait(db)
     return _execute(db, query).scalar_one_or_none()
