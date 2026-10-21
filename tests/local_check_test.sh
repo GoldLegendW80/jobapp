@@ -1272,7 +1272,7 @@ ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and
 
 # --- a batch runs only the journey groups it touches (issue #552) ---------------------------------
 # A base that holds the mapping (ci_plan.py, e2e_groups.py), three groups (apps by its specs, mail
-# and apply by their configs), the api modules mail and apply and a file of the api core. Its first
+# and apply by their configs), a web mail feature, api modules and an api core file. Its first
 # check has no PASS record under it, so every group runs; that check writes the record, and the
 # batches on top of it are scoped: documentation only, one module, a shared file, an unknown path,
 # LOCAL_CHECK_FULL=1. The stub runs the real scoped_groups and expected_steps.
@@ -1301,7 +1301,8 @@ scoped_branch() { # scoped_branch <name> <file> <content>: a branch of mapped wi
   git -C "$REPO" push -q origin "$1"
 }
 scoped_branch scope-docs .claude/notes.md "more notes"
-scoped_branch scope-mail api/app/mail/sync.py "from app.mail import db"
+scoped_branch scope-mail web/src/features/mail/Message.tsx 'export const value = 1;'
+scoped_branch scope-api api/app/mail/sync.py "from app.mail import db"
 scoped_branch scope-shared api/app/db.py 'URL = "y"'
 scoped_branch scope-unknown somewhere/new.txt "new"
 scoped_branch scope-failed-mapper .github/scripts/ci_plan.py 'raise RuntimeError("fixture mapper failure")'
@@ -1368,14 +1369,20 @@ ok "a documentation only batch on a checked base skips every journey group; its 
 
 scoped 0 --merge origin/scope-mail
 out_has "journeys: scoped, ran mail; skipped apps, apply, sweep"
-out_has "  run   mail             api/app/mail/sync.py: the module mail"
+out_has "  run   mail             web/src/features/mail/Message.tsx: the module mail"
 out_has "journeys-mail"
 out_lacks "journeys-apply"
 [[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply sweep | scoped" ]] || fail "one module: $(journeys_of "$(tree_of)")"
-ok "a change in one module runs only its groups"
+ok "a change in one web feature runs only its groups"
+
+scoped 0 --merge origin/scope-api
+out_has "journeys: full (api/app/mail/sync.py: API application changes run every group), ran apps, apply, mail, sweep"
+[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "API application path narrowed journeys"
+changes_match "$(tree_of)"
+ok "an API application change runs every group and records its policy and exact change metadata"
 
 scoped 0 --merge origin/scope-shared
-out_has "journeys: full (api/app/db.py: the api core), ran apps, apply, mail, sweep"
+out_has "journeys: full (api/app/db.py: API application changes run every group), ran apps, apply, mail, sweep"
 scoped 0 --merge origin/scope-unknown
 out_has "journeys: full (somewhere/new.txt: no rule names this path), ran apps, apply, mail, sweep"
 [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "unknown path: $(journeys_of "$(tree_of)")"
