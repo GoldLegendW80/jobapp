@@ -13,13 +13,14 @@ before any decision. One job at a time (the queue's concurrency is 1, the browse
 2. The documents through `documents.current` (D14): no CV and none coming is `blocked` with
    `no_documents`; a CV or a letter still being written keeps the application `queued` with
    `needs` = `documents:<reason>`, and the tick asks again. An approved version whose render is
-   queued or running is waited for the same way (`documents:rendering`) instead of the older
-   rendered one (test_which_version_the_run_takes). A wait on a render ends with it: its PDF
-   stored, or the render failed (back to idle with its code), and `documents.current` answers
-   the latest rendered version; a render still on its way RENDER_WAIT_S after the wait began
-   ends the application `failed` with `documents_rendering`, before any lease. Nothing is
-   refused on content: the versions sent, their fit and their corrections are stored on the
-   application (`document_versions`) for the run report.
+   queued or running is waited for the same way (`documents:rendering`), and the older rendered
+   one is not filled in its place (test_which_version_the_run_takes). A wait on a render ends
+   with the render: its PDF stored, or the render failed (back to idle with its code), after
+   which `documents.current` answers as for any document (the latest rendered version, else
+   none); a render still queued or running RENDER_WAIT_S after the wait began ends the
+   application `failed` with `documents_rendering`, before any lease. Nothing is refused on
+   content: the versions sent, their fit and their corrections are stored on the application
+   (`document_versions`) for the run report.
 3. The lease (purpose `apply_fill`, the adapter's hosts and the form's host only). Behind another
    person's lease the application stays `queued` with `needs` = `browser_queue` and an event with
    its place (written when the place changes); the tick asks again within the ticket's 60 s. A
@@ -260,7 +261,7 @@ def _bank(db: Session, user_id: uuid.UUID) -> AnswerBank:
     return AnswerBank(user_id, {key: value for key, value in rows if isinstance(value, str)})
 
 
-# render_job.JOB_TIMEOUT_S is 19 minutes: a render still on its way after an hour never ends.
+# Over twice render_job.JOB_TIMEOUT_S: a render still queued or running by then is lost.
 RENDER_WAIT_S = 3600
 RENDERING = f"documents:{documents.RENDERING}"
 RENDERING_CODE = "documents_rendering"

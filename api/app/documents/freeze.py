@@ -22,7 +22,8 @@ module is the one place that decides which version that is, and what the apply m
   version lands after it.
 - `current`: what the apply module sends, the approved version else the latest rendered one,
   of the posting's CV and letter, with the reason a document is not there yet and whether the
-  approved version is still rendering (the apply module waits for it, never sends an older one).
+  approved version is still rendering (the apply module waits for it rather than fill an older
+  one).
 - `freeze`: the apply module attaches a version to a submission. It never refuses on content
   (an overflowing version, one with corrections, one with notes), and returns the version's fit
   and corrections for the run report. Freezing a frozen version changes nothing.
