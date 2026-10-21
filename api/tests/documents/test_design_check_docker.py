@@ -15,8 +15,9 @@ import re
 
 import pytest
 
-from app.documents import design_check, render_client, templates
+from app.documents import design_capture, design_check, render_client, template_rules, templates
 from app.documents.render_client import Checked, RenderError
+from app.ingestion.parser_client import DesignPdf
 from tests.documents.test_renderer_container import Stack, stack
 
 __all__ = ["stack"]
@@ -160,3 +161,37 @@ def test_the_service_refuses_a_check_it_cannot_read(stack: Stack) -> None:
     ):
         raw = stack.execute("renderer", "python", "-I", "-c", POST, stdin=body)
         assert raw.split(b"\n", 1)[0] == b"400"
+
+
+def test_the_recorded_streams_template_passes_the_real_check(stack: Stack) -> None:
+    stream = json.loads(
+        (agents_root() / "fake_streams" / "documents_design_valid.json").read_text("utf-8")
+    )
+    (files,) = [
+        block["input"]
+        for step in stream["steps"]
+        for block in (step["message"].get("message") or {}).get("content", [])
+        if block.get("name") == "mcp__app__submit_template"
+    ]
+    inputs = design_capture.Inputs(
+        "pdf",
+        template_rules.from_pdf(DesignPdf(1, False, False, (), (), ())),
+        "optional",
+        {},
+        (),
+        (),
+    )
+    named = {"cv.html.j2": files["cv_html"], "letter.html.j2": files["letter_html"]}
+    found = asyncio.run(
+        design_capture.validate({**named, "style.css": files["css"]}, inputs, checker(stack))
+    )
+    assert found.problems == ()
+    assert found.template is not None
+
+
+def agents_root():
+    from pathlib import Path
+
+    import app.agents
+
+    return Path(app.agents.__file__).parent
