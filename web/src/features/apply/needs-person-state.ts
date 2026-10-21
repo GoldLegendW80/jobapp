@@ -4,9 +4,10 @@
  */
 import { z } from "zod";
 
+import { formatDateTime } from "@/features/jobs/format";
 import { request } from "@/lib/api";
 
-import type { Application } from "./apply-api";
+import type { Application, ApplicationEvent } from "./apply-api";
 import { queueKey } from "./queue-api";
 
 /** The steps the person takes in the live view while the assistant waits (api failures.WAIT_ON_PAGE). */
@@ -46,7 +47,7 @@ export function needOf(application: Application): Need {
     case "payment_requested":
       return {
         title: "A payment was asked",
-        what: `${PAYMENT_SENTENCE} Nothing was typed. Reject it, or look at the posting yourself.`,
+        what: `${PAYMENT_SENTENCE} No card detail was typed and nothing was sent. Reject it, or look at the posting yourself.`,
       };
     case "signin":
       return {
@@ -59,6 +60,31 @@ export function needOf(application: Application): Need {
         what: "The assistant could not go on with this form. Look at it below, then approve or reject it.",
       };
   }
+}
+
+/**
+ * The run's wait for the person on the page (api run._wait_for_person), from the application's
+ * events: when the last wait began and whether it ended; null when no wait was noted.
+ */
+export function waitOf(
+  events: readonly ApplicationEvent[],
+): { since: string; over: boolean } | null {
+  let wait: { since: string; over: boolean } | null = null;
+  for (const event of events) {
+    if (event.kind === "waiting_person")
+      wait = { since: event.at, over: false };
+    else if (wait && event.kind === "person_not_back") wait.over = true;
+  }
+  return wait;
+}
+
+/** When a queued retry is due (api failures.after_failure's `due`), from its last event. */
+export function retrySentence(events: readonly ApplicationEvent[]): string {
+  const retry = events.filter((event) => event.kind === "retry").at(-1);
+  const due = retry?.data.due;
+  return typeof due === "string"
+    ? `The last attempt did not finish. The assistant tries again at ${formatDateTime(due)}.`
+    : "The last attempt did not finish. The assistant tries again by itself.";
 }
 
 const countSchema = z.object({ needs_you: z.number().int().default(0) });

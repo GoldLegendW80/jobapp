@@ -1,16 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { jobKey, jobsKey, patchJob, type JobDetail } from "@/features/jobs/api";
+import {
+  isStale,
+  jobKey,
+  jobsKey,
+  patchJob,
+  type JobDetail,
+} from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
 
-import type { Application } from "./apply-api";
+import type { Application, ApplicationEvent } from "./apply-api";
 import { LiveViewSlot } from "./live-view-slot";
 import {
   getNeedsCount,
   needOf,
   needsCountKey,
   ON_PAGE,
+  waitOf,
 } from "./needs-person-state";
 import { COUNT_POLL_MS } from "./queue-state";
 
@@ -25,9 +32,12 @@ import { COUNT_POLL_MS } from "./queue-state";
 export function NeedsPerson({
   application,
   job,
+  events,
 }: {
   application: Application | null;
   job: JobDetail;
+  // The application's events; undefined while they load.
+  events?: readonly ApplicationEvent[];
 }) {
   if (application?.state === "posting_closed") {
     return <ClosedProposal job={job} />;
@@ -41,12 +51,35 @@ export function NeedsPerson({
         <AlertDescription>{need.what}</AlertDescription>
       </Alert>
       {ON_PAGE.has(application.needs ?? "") ? (
-        <LiveViewSlot
-          waiting={false}
-          status="The assistant waits for you. Take over to finish this step."
-        />
+        <OnPageSlot events={events} />
       ) : null}
     </div>
+  );
+}
+
+const WAITS = "The assistant waits for you. Take over to finish this step.";
+
+/** The live view while the run waits for the person on the page, and words once it stopped. */
+function OnPageSlot({ events }: { events?: readonly ApplicationEvent[] }) {
+  if (events === undefined) {
+    return <LiveViewSlot idle={WAITS} leaseOf="none" />;
+  }
+  const wait = waitOf(events);
+  if (wait === null || wait.over) {
+    return (
+      <LiveViewSlot
+        idle="The assistant stopped waiting, so there is no live view. The application waits here for you."
+        leaseOf="none"
+        stopped
+      />
+    );
+  }
+  return (
+    <LiveViewSlot
+      idle={WAITS}
+      leaseOf={{ startedBy: wait.since }}
+      status={WAITS}
+    />
   );
 }
 
@@ -58,6 +91,11 @@ function ClosedProposal({ job }: { job: JobDetail }) {
     onSuccess: (updated) => {
       client.setQueryData(jobKey(job.id), updated);
       void client.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (error) => {
+      // Changed in another tab: read it again, so a second click carries its `updated_at`.
+      if (isStale(error))
+        void client.invalidateQueries({ queryKey: jobKey(job.id) });
     },
   });
   if (job.status === "closed") return null;

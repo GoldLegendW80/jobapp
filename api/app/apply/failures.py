@@ -2,14 +2,16 @@
 A10a). Pure rules and the few writes `run.py` asks for; no browser call here.
 
 - **Retries before the click.** A fill that ends on a passing fault (`RETRYABLE`: a navigation
-  timeout or failure, a 5xx page, browserd unavailable, the lease gone under the fill, a stop or a
-  crash of the worker) goes back to `queued` with `needs` = `retry` while retries are left: the
-  waits are APPLY_RETRY_DELAYS_S (600 then 3,600 s), the first after attempt 1, the second after
-  attempt 2; after the last it ends `failed` with its code. Any other code ends `failed` at once
-  (an allow list: a code this module does not know is never retried). `run.due` asks for a retry
-  only once its time came (`retry_waiting`, by the clock it is given), so the person's next
-  application goes meanwhile. A retry is a fill: it never moves an application past `ready`, so
-  never to a click, and the authorisation of a Like or an approval is spent only by the gate.
+  timeout or failure, a 5xx page, browserd unavailable, the lease gone under the fill (a browser
+  crash ends it), a stop or a dead worker) goes back to `queued` with `needs` = `retry` while
+  retries are left: the waits are APPLY_RETRY_DELAYS_S (600 then 3,600 s), the first after
+  attempt 1, the second after attempt 2; after the last it ends `failed` with its code. Any
+  other code ends `failed` at once (an allow list: a code this module does not know is never
+  retried), `internal_error` (a bug of our own code, which would repeat) included. `run.due`
+  asks for a retry only once its time came (`retry_waiting`, by the clock it is given), so the
+  person's next application goes meanwhile. A retry is a fill: it never moves an application
+  past `ready`, so never to a click, and the authorisation of a Like or an approval is spent
+  only by the gate.
 - **The person.** `needs_person` keeps its reason in `needs`: `captcha`, `required_left`,
   `email_code`, `payment_requested`, `signin` (until A10b, the review queue's "Needs you: sign
   in"), and the run's own (`form_changed`, `no_adapter`, ...). In Review first, for a step on the
@@ -17,7 +19,9 @@ A10a). Pure rules and the few writes `run.py` asks for; no browser call here.
   APPLY_NEEDS_PERSON_WAIT_S, then the lease ends and the application keeps waiting. Full auto never
   waits: its item goes to the review queue (`full_auto.hand_over`).
 - **A payment page** (`payment_page`): a field for a card number or a card's security code, or a
-  card payment frame, ends the attempt as `needs_person: payment_requested`, nothing typed.
+  card payment frame, ends the attempt as `needs_person: payment_requested`. The run reads the
+  page before the adapter's or the form agent's fill, so a card shown at the start ends it with
+  nothing typed; a card shown only after the fill ends it too, whatever state the fill reached.
 
 Declared open points: the retry's time is counted from `updated_at`, which nothing writes on a
 `queued` application before it is due; the wait for the person runs on the lease's active time,
@@ -49,7 +53,6 @@ RETRYABLE = frozenset(
         "unavailable",
         "ended",
         "interrupted",
-        "internal_error",
     }
 )
 # The steps the person takes on the page itself, for which a Review first run keeps the lease.

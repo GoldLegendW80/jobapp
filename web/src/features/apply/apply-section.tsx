@@ -27,6 +27,7 @@ import {
   type Approval,
 } from "./apply-api";
 import {
+  APPLY_POLL_MS,
   blockingFields,
   documentLine,
   hasForm,
@@ -43,6 +44,7 @@ import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot } from "./live-view-slot";
 import { NeedsPerson } from "./needs-person";
+import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
 import { ShotView } from "./shot-view";
 
@@ -126,12 +128,26 @@ export function ApplySection({ job }: { job: JobDetail }) {
     retryDelay: POLL_RETRY_MS,
   });
   const approval = approvalQuery.data;
+  // A step on the page: the run may wait for the person, and its events say until when.
+  const onPage =
+    application?.state === "needs_person" &&
+    ON_PAGE.has(application.needs ?? "");
+  const retrying =
+    application?.state === "queued" && application.needs === "retry";
   const detail = useQuery({
     queryKey: applicationKey(id ?? ""),
     queryFn: ({ signal }) => getApplication(id as string, signal),
     enabled:
       id !== undefined &&
-      (hasReport(application) || application?.state === "held"),
+      (hasReport(application) ||
+        application?.state === "held" ||
+        onPage ||
+        retrying),
+    refetchInterval: (current) => {
+      const events = current.state.data?.events;
+      const wait = onPage && events ? waitOf(events) : null;
+      return wait && !wait.over ? APPLY_POLL_MS : false;
+    },
   });
 
   const holdUntil =
@@ -148,6 +164,16 @@ export function ApplySection({ job }: { job: JobDetail }) {
     void queryClient.invalidateQueries({ queryKey: applicationKey(id) });
     void queryClient.invalidateQueries({ queryKey: jobKey(job.id) });
   }, [state, id, job.id, queryClient]);
+
+  // The person took the step in the live view and the run went on: follow it.
+  const detailState = detail.data?.state;
+  useEffect(() => {
+    if (onPage && detailState !== undefined && detailState !== state) {
+      void queryClient.invalidateQueries({
+        queryKey: applicationsKey(job.id),
+      });
+    }
+  }, [onPage, detailState, state, job.id, queryClient]);
 
   const settle = (changed?: Application) => {
     if (changed) {
@@ -317,9 +343,28 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
-          <NeedsPerson application={application} job={job} />
-          {phase === "waiting" || phase === "filling" ? (
-            <LiveViewSlot waiting={phase === "waiting"} />
+          <NeedsPerson
+            application={application}
+            job={job}
+            events={onPage ? detail.data?.events : undefined}
+          />
+          {phase === "filling" ? (
+            <LiveViewSlot
+              idle="The assistant is filling the form. A screenshot of the filled form appears here when it is done."
+              leaseOf="any"
+            />
+          ) : null}
+          {phase === "waiting" ? (
+            <LiveViewSlot
+              idle={
+                retrying
+                  ? detail.data
+                    ? retrySentence(detail.data.events)
+                    : "The last attempt did not finish. The assistant tries again by itself."
+                  : "The browser starts soon. A screenshot of the filled form appears here when it is done."
+              }
+              leaseOf="none"
+            />
           ) : null}
 
           {application && hasForm(application) ? (

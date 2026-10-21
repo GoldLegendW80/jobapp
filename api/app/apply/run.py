@@ -104,6 +104,8 @@ STAGE_FROM = frozenset({JobStatus.found, JobStatus.shortlisted, JobStatus.cv_rea
 FILLED = frozenset({"filled", "unverified"})
 INTERRUPTED = "interrupted"
 DUE_LIMIT = 200
+# A step the person takes on the page: what the page shows wins over its HTTP status.
+_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT})
 
 
 class RunTools(ats_base.Tools, Protocol):
@@ -825,6 +827,8 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
         if not opened.get("ok"):
             return Result(State.failed, error=str(opened.get("error") or "failed"))
         shot = await tools.snapshot()
+        if _card_asked(shot):
+            return await _payment_asked(tools)
         adapter = adapter_for(
             plan.form_url, str(shot.get("snapshot") or ""), stub_base=services.stub_base
         )
@@ -843,7 +847,10 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
 async def _fill_on_page(
     services: Services, plan: Plan, adapter: ats_base.Adapter, tools: RunTools
 ) -> Result:
-    """The adapter's fill of the page shown, then the answer agent for what is left."""
+    """The adapter's fill of the page shown, then the answer agent for what is left. A page
+    that asks for a card ends here, before anything is typed."""
+    if _card_asked(await tools.snapshot()):
+        return await _payment_asked(tools)
     report = await adapter.fill_form(tools, plan.context)
     cost: dict[str, Any] = {"agent": "not_run"}
     if not report.stopped:
@@ -858,14 +865,24 @@ async def _fill_on_page(
     )
 
 
+def _card_asked(shot: dict[str, Any]) -> bool:
+    return bool(shot.get("ok")) and failures.payment_page(str(shot.get("snapshot") or ""))
+
+
+async def _payment_asked(tools: RunTools) -> Result:
+    return Result(State.needs_person, needs=failures.PAYMENT, shot=await shots.take(tools))
+
+
 async def _checked(result: Result, tools: _Watched) -> Result:
-    """What the page says beside the adapter's reading (A10a): a 404 page is a closed posting,
-    a 5xx page a passing fault (retried), a card field a payment asked. A filled form is kept."""
-    if result.state is State.ready:
+    """What the page says beside the adapter's reading (A10a). A step the person takes on the
+    page (captcha, sign in, e-mail code, a card asked) is kept whatever the page's status; else
+    a 404 page is a closed posting and a 5xx page a passing fault (retried). A card field or
+    frame on the page after the fill asks for payment, whatever state the fill reached."""
+    if result.needs in _ON_PAGE:
         return result
-    if tools.status == 404:
+    if result.state is not State.ready and tools.status == 404:
         return replace(result, state=State.posting_closed, needs=None, error="posting_closed")
-    if tools.status is not None and tools.status >= 500:
+    if result.state is not State.ready and tools.status is not None and tools.status >= 500:
         return replace(result, state=State.failed, needs=None, error=failures.HTTP_5XX)
     if result.state is State.posting_closed or result.error in failures.RETRYABLE:
         return result
@@ -873,14 +890,15 @@ async def _checked(result: Result, tools: _Watched) -> Result:
         shot = await tools.snapshot()
     except BrowserError:
         return result
-    if shot.get("ok") and failures.payment_page(str(shot.get("snapshot") or "")):
+    if _card_asked(shot):
         return replace(result, state=State.needs_person, needs=failures.PAYMENT, error=None)
     return result
 
 
-async def _guarded(work: Awaitable[Result]) -> Result:
+async def _guarded(work: Awaitable[Result], tools: _Watched) -> Result:
+    """The fill then `_checked`; nothing either raises escapes, so nothing leaves it `filling`."""
     try:
-        return await work
+        return await _checked(await work, tools)
     except BrowserError as exc:  # the lease ended under the fill, browserd went away
         return Result(State.failed, error=exc.code)
     except Exception as exc:  # never leave an application `filling`
@@ -927,19 +945,24 @@ async def _wait_for_person(
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
             return "person_acted"
-        result = await _checked(
-            await _guarded(_fill_on_page(services, plan, adapter, tools)), tools
-        )
-        written = await db(
-            partial(
-                finish,
-                application_id=application_id,
-                result=result,
-                now=services.clock(),
-                started=started,
-                delays=services.delays(),
+        result = await _guarded(_fill_on_page(services, plan, adapter, tools), tools)
+        try:
+            written = await db(
+                partial(
+                    finish,
+                    application_id=application_id,
+                    result=result,
+                    now=services.clock(),
+                    started=started,
+                    delays=services.delays(),
+                )
             )
-        )
+        except Exception as exc:  # as in `fill`: the posting's row held, the store gone
+            logger.error("apply.finish_failed", extra={"error": type(exc).__name__})
+            now, delays = services.clock(), services.delays()
+            return str(
+                await db(partial(interrupt, application_id=application_id, now=now, delays=delays))
+            )
         if written != State.needs_person.value or result.needs not in failures.WAIT_ON_PAGE:
             return written
         reason = result.needs
@@ -1004,7 +1027,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
         tools = _Watched(lease_tools)
-        result = await _checked(await _guarded(_drive(services, plan, tools)), tools)
+        result = await _guarded(_drive(services, plan, tools), tools)
         try:
             written = await asyncio.to_thread(
                 _in_db,

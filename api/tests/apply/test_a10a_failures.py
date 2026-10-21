@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import failures, run, states
 from app.apply.models import Application, Mode, State
+from tests.apply.a4_support import Spec
 from tests.apply.a5_support import FakeAgent, FakeLeases, RunForm, run_ashby
 from tests.apply.conftest import AT, Person
 from tests.apply.test_a5_run import (
@@ -90,7 +91,8 @@ def kinds(db: Session, app_id: uuid.UUID) -> list[str]:
         (1, "http_5xx", 600),
         (1, "unavailable", 600),
         (1, "interrupted", 600),
-        (2, "internal_error", 3600),
+        (1, "internal_error", None),
+        (2, "internal_error", None),
         (1, "submit", None),
         (1, "danger", None),
         (1, "form_changed", None),
@@ -338,14 +340,136 @@ def test_a_payment_page_ends_the_attempt_with_nothing_typed(
     assert not [c for c in form.calls if c[0] in ("type", "click", "select_option")]
 
 
+@pytest.mark.parametrize("required", [True, False])
+def test_a_card_field_beside_a_fillable_form_ends_before_anything_is_typed(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, required: bool
+) -> None:
+    app_id = started(db, person_a)
+    form = run_ashby()
+    form.fields.append(Spec("Card number", "text", required=required))
+    agent = FakeAgent(why_answer)
+    assert fill(svc_for(factory, form, stub, answer_agent=agent), app_id) == "needs_person"
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.needs_person, failures.PAYMENT)
+    assert not [c for c in form.calls if c[0] in ("type", "click", "select_option")]
+    assert agent.requests == []
+
+
+def with_frame(form: RunForm, shown: Callable[[RunForm], bool]) -> None:
+    """A card payment frame on the page once `shown` holds."""
+    render = form.render
+
+    def framed() -> str:
+        page = render()
+        if shown(form):
+            page += '\n- iframe "Secure card payment input frame" [ref=e9999]'
+        return page
+
+    form.render = framed  # type: ignore[method-assign]
+
+
+def test_a_card_frame_beside_a_complete_form_ends_before_anything_is_typed(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = started(db, person_a)
+    form = run_ashby()
+    with_frame(form, lambda f: True)
+    agent = FakeAgent(why_answer)
+    assert fill(svc_for(factory, form, stub, answer_agent=agent), app_id) == "needs_person"
+    assert application(db, app_id).needs == failures.PAYMENT
+    assert not [c for c in form.calls if c[0] in ("type", "click", "select_option")]
+
+
+def test_a_card_frame_shown_after_a_complete_fill_is_still_a_payment(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = started(db, person_a)
+    form = run_ashby()
+    with_frame(form, lambda f: f.submit_clicks == 0 and any(c[0] == "type" for c in f.calls))
+    agent = FakeAgent(why_answer)
+    assert fill(svc_for(factory, form, stub, answer_agent=agent), app_id) == "needs_person"
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.needs_person, failures.PAYMENT)
+    assert form.submit_clicks == 0
+
+
+@pytest.mark.parametrize("status", [404, 500, 503])
+def test_a_captcha_on_a_page_with_an_error_status_asks_the_person(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, status: int
+) -> None:
+    app_id = started(db, person_a)
+    form = captcha_form()
+    with_status(form, status)
+    svc = svc_for(factory, form, stub, needs_person_wait_s=60)
+    svc.sleep = PersonMoves(svc, {})
+    assert fill(svc, app_id) == "needs_person"
+    found = application(db, app_id)
+    assert (found.state, found.needs, found.error_code) == (State.needs_person, "captcha", None)
+
+
+def test_a_bug_in_our_code_ends_failed_at_once(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = started(db, person_a)
+    form = run_ashby()
+
+    def bug(f: RunForm, n: int) -> None:
+        if n == 8:
+            raise KeyError("a field")
+
+    form.on_call = bug
+    assert fill(svc_for(factory, form, stub), app_id) == "failed"
+    found = application(db, app_id)
+    assert (found.state, found.error_code, found.attempt) == (State.failed, "internal_error", 1)
+    assert app_id not in run.due(db, AT + timedelta(days=30), DELAYS)
+
+
+@pytest.mark.parametrize(
+    ("delays", "state", "needs"),
+    [(DELAYS, State.queued, failures.RETRY), ((), State.failed, None)],
+)
+def test_a_finish_that_raises_after_the_persons_step_never_leaves_it_filling(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    monkeypatch: pytest.MonkeyPatch,
+    delays: tuple[int, ...],
+    state: State,
+    needs: str | None,
+) -> None:
+    app_id = started(db, person_a)
+    form, leases = captcha_form(), FakeLeases()
+    svc = svc_for(factory, form, stub, leases=leases, retry_delays_s=delays)
+    finish, calls = run.finish, []
+
+    def held(*args: Any, **kwargs: Any) -> str:
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("lock timeout")
+        return finish(*args, **kwargs)
+
+    monkeypatch.setattr(run, "finish", held)
+
+    def solve() -> None:
+        form.captcha = ""
+
+    svc.sleep = PersonMoves(svc, {1: solve})
+    assert fill(svc, app_id) == state.value
+    found = application(db, app_id)
+    assert (found.state, found.needs, found.error_code) == (state, needs, "interrupted")
+    assert len(leases.released) == 1
+
+
 def test_the_dot_counts_the_persons_own_items_only(
     db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person, stub: str
 ) -> None:
-    app_id = started(db, person_a)
-    svc = svc_for(factory, run_ashby(), stub)
-    assert fill(svc, app_id) == "needs_person"
+    a_id = started(db, person_a)
+    assert fill(svc_for(factory, run_ashby(), stub), a_id) == "needs_person"
+    b_id = started(db, person_b)
+    assert fill(svc_for(factory, run_ashby(), stub), b_id) == "needs_person"
     assert failures.needs_count(db, person_a.user_id) == 1
-    assert failures.needs_count(db, person_b.user_id) == 0
+    assert failures.needs_count(db, person_b.user_id) == 1
 
 
 # --- a payment page ------------------------------------------------------------------------------
