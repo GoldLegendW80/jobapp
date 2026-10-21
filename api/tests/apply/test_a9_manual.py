@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import gate, manual, service, states
+from app.apply import gate, manual, manual_router, service, states
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.documents.models import DocumentVersion
 from app.identity import security
@@ -397,6 +397,10 @@ def test_a_never_apply_posting_opens_with_its_warning(
     app_id = start_manual(db, person_a)
     created = next(e for e in events(db, app_id) if e.kind == "created")
     assert created.data["warnings"] == ["never_apply_role"]
+    shown = manual_router._warnings(db, db.get(Application, app_id))
+    assert [(w.code, w.sentence) for w in shown] == [
+        ("never_apply_role", "Your rules exclude this role.")
+    ]
     form = manual_ashby()
     channel = FakeChannel([None, "close"])
     assert session(manual_services(factory, form, channel, stub=stub), app_id) == "cancelled"
@@ -535,6 +539,7 @@ def test_the_routes(
         view = api.get(base, token=token_a).json()
         assert view["state"] == "queued"
         assert view["confirmation_seen"] is False
+        assert view["warnings"] == []
 
         done = api.post(f"{base}/record", token=token_a, json={"seen": False})
         assert done.status_code == 200

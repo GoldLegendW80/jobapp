@@ -6,7 +6,8 @@
 - GET /api/applications/{id}/manual: the application's state and the session's status: its
   phase (`waiting` with the place, `open`, `ended`), the documents placed, whether the page shows
   a confirmation, whether a file chooser waits for a document, the seconds before the idle
-  timeout and `idle_warning` a minute before it, the command under way and the last outcome.
+  timeout and `idle_warning` a minute before it, the command under way and the last outcome; and
+  the warnings of the start (`{code, sentence}`: "Your rules exclude this role.").
 - POST /api/applications/{id}/manual/actions `{action}`: "Attach my CV" (`attach_cv`), "Attach my
   letter" (`attach_letter`), "Fill my details" (`fill_details`). 202; 409 `no_session` while the
   session is not open, `too_many` past manual.COMMANDS_MAX waiting.
@@ -27,15 +28,16 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 import anyio
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictBool
 from sqlalchemy.orm import Session
 
 from app import queue as queues
-from app.apply import gate, manual, service
-from app.apply.models import Mode, State
-from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
+from app.apply import gate, guardrails, manual, service
+from app.apply.models import ApplicationEvent, Mode, State
+from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut, WarningOut
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
@@ -93,6 +95,7 @@ class ManualOut(BaseModel):
     idle_warning: bool = False
     busy: str | None = None
     last: LastOut | None = None
+    warnings: list[WarningOut] = []
 
 
 _404 = {404: {"model": ErrorOut, "description": "No such application (or not yours)"}}
@@ -132,7 +135,28 @@ def _redis(request: Request, work: Callable[[manual.Channel], Awaitable[Any]]) -
         return None
 
 
-def _status(request: Request, application: Any) -> ManualOut:
+def _warnings(db: Session, application: Any) -> list[WarningOut]:
+    """The warnings of the start, as the `created` event keeps their codes."""
+    data = db.execute(
+        sa.select(ApplicationEvent.data)
+        .where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "created",
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    codes = (data or {}).get("warnings")
+    if not isinstance(codes, list):
+        return []
+    return [
+        WarningOut(code=c, sentence=guardrails.WARNINGS[c])
+        for c in codes
+        if c in guardrails.WARNINGS
+    ]
+
+
+def _status(request: Request, db: Session, application: Any) -> ManualOut:
     found = _redis(request, lambda channel: channel.status(application.id)) or {}
     phase = found.get("phase") if found.get("phase") in ("waiting", "open", "ended") else None
     last = found.get("last") if isinstance(found.get("last"), dict) else None
@@ -147,12 +171,13 @@ def _status(request: Request, application: Any) -> ManualOut:
         idle_warning=found.get("idle_warning") is True,
         busy=found.get("busy") if isinstance(found.get("busy"), str) else None,
         last=LastOut(**last) if last and set(last) == {"action", "outcome"} else None,
+        warnings=_warnings(db, application),
     )
 
 
 @router.get("/api/applications/{application_id}/manual", response_model=ManualOut, responses=_404)
 def read_manual(application_id: str, request: Request, user: CurrentUser, db: Db) -> ManualOut:
-    return _status(request, _owned(db, user, application_id))
+    return _status(request, db, _owned(db, user, application_id))
 
 
 @router.post(
@@ -185,7 +210,7 @@ def open_session(
         except Exception as exc:
             logger.warning("apply.manual_enqueue_failed", extra={"error": type(exc).__name__})
             return _refusal("unavailable")
-    return _status(request, application)
+    return _status(request, db, application)
 
 
 @router.post(
@@ -207,7 +232,7 @@ def act(
         return _refusal("unavailable")
     if not pushed:
         return _refusal("too_many")
-    return _status(request, application)
+    return _status(request, db, application)
 
 
 @router.post(

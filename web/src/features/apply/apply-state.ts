@@ -105,10 +105,21 @@ function waitingLine(needs: string | null): string {
   return "Waiting for a browser. Starting in a few seconds, and it can take up to a minute.";
 }
 
+/** Apply myself: the person fills and sends the form, the app only records it (A9). */
+const MANUAL_LINES: Record<string, string> = {
+  queued: "Opening your browser on the form. It can take up to a minute.",
+  filling:
+    "The form is open in your browser below. You fill it and click its Submit button yourself.",
+  cancelled:
+    "You closed the last session without recording it as sent. Nothing was submitted by the app.",
+};
+
 /** The status line under the section's title. */
 export function statusLine(application: Application | null | undefined) {
   if (!application)
     return "No application yet. Nothing is sent without your approval.";
+  if (application.mode === "manual" && application.state in MANUAL_LINES)
+    return MANUAL_LINES[application.state];
   switch (application.state) {
     case "queued":
       return waitingLine(application.needs);

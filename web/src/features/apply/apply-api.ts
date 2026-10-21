@@ -134,11 +134,17 @@ export const getApproval = (
     validate: (body) => approvalSchema.parse(body),
   });
 
-/** Apply with Review first: the agent fills the form and stops for the person's approval. */
-export const startApplication = (postingId: string): Promise<Started> =>
+/**
+ * Apply with Review first (the agent fills the form and stops for the person's approval) or Apply
+ * myself (the person fills and sends it in the live view, A9).
+ */
+export const startApplication = (
+  postingId: string,
+  mode: "review" | "manual" = "review",
+): Promise<Started> =>
   request(`/postings/${id(postingId)}/applications`, {
     method: "POST",
-    body: { mode: "review" },
+    body: { mode },
     timeoutMs: TIMEOUT_MS,
     validate: (body) => startedSchema.parse(body),
   });

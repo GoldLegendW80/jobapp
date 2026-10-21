@@ -40,6 +40,7 @@ import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { LiveViewSlot } from "./live-view-slot";
+import { ManualPanel } from "./manual-panel";
 import { RunReport } from "./run-report";
 import { ShotView } from "./shot-view";
 
@@ -111,6 +112,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const application = latest.data ?? null;
   const phase = phaseOf(application);
   const id = application?.id;
+  const manual = application?.mode === "manual";
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(id ?? ""),
@@ -166,7 +168,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   };
 
   const start = useMutation({
-    mutationFn: () => startApplication(job.id),
+    mutationFn: (mode: "review" | "manual") => startApplication(job.id, mode),
     onMutate: () => {
       setNotice(null);
     },
@@ -302,8 +304,15 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
-          {phase === "waiting" || phase === "filling" ? (
+          {(phase === "waiting" || phase === "filling") && !manual ? (
             <LiveViewSlot waiting={phase === "waiting"} />
+          ) : null}
+          {application && manual ? (
+            <ManualPanel
+              application={application}
+              onChanged={settle}
+              onFailed={failed}
+            />
           ) : null}
 
           {application && hasForm(application) ? (
@@ -355,10 +364,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   className="w-full sm:w-fit"
                   disabled={busy}
                   onClick={() => {
-                    start.mutate();
+                    start.mutate("review");
                   }}
                 >
-                  {start.isPending ? (
+                  {start.isPending && start.variables === "review" ? (
                     <LoaderCircle aria-hidden="true" className="animate-spin" />
                   ) : null}
                   Apply (Review first)
@@ -366,10 +375,15 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 <Button
                   variant="outline"
                   className="w-full sm:w-fit"
-                  disabled
-                  title="Coming soon"
+                  disabled={busy}
+                  onClick={() => {
+                    start.mutate("manual");
+                  }}
                 >
-                  Apply myself (coming soon)
+                  {start.isPending && start.variables === "manual" ? (
+                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  ) : null}
+                  Apply myself
                 </Button>
               </>
             ) : null}
@@ -421,7 +435,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 Try again
               </Button>
             ) : null}
-            {canCancel(application) ? (
+            {canCancel(application) && !manual ? (
               <Button
                 variant="outline"
                 className="w-full sm:w-fit"
@@ -437,7 +451,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
           {phase === "idle" ? (
             <p className="text-sm text-muted-foreground">
               The assistant fills the form and stops. You look at every answer,
-              then approve.
+              then approve. With Apply myself, you fill and send the form
+              yourself in your browser here.
             </p>
           ) : null}
 
