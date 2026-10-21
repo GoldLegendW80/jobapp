@@ -1288,6 +1288,14 @@ and the sweeps to a stub of the three APIs; with `ATS_BASE_URL_ORG_PREFIX=fake-`
 starting with it go there (`tests/compose.j5-e2e.yml`), the CI stack sends every org
 (`tests/ats-stub.compose.yml`).
 
+LinkedIn's 7 day pause after a security check (browser B10) has no button to lift it. Only the
+owner can, by deleting the person's rows of `linkedin_checkpoints`:
+
+```bash
+ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'" <<< "
+DELETE FROM linkedin_checkpoints WHERE user_id = (SELECT id FROM users WHERE email = 'e2e-someone@example.org');"
+```
+
 ## Agent runs
 
 Claude agents run in the `worker` (SPEC-agents.md, agents A2), on the user's own model credential

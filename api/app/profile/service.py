@@ -11,11 +11,17 @@ increments the revision and appends its profile_revisions row, the second then s
 revision and is refused as stale. The unique (user_id, revision) constraint is a second guard.
 An import takes the same lock and writes all seven sections at once, one revision each.
 `preferences.onboarding` belongs to the first login wizard (opportunities O5): only
-`record_onboarding` writes it; a save that changes it is refused (ReservedFieldError) and an
-import keeps the stored dates.
+`record_onboarding` and `record_onboarding_step` write it; a save that changes it is refused
+(ReservedFieldError) and an import keeps the stored value (the dates and the steps passed).
 The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
+The LinkedIn consent (browser B10) cannot be written through a section: on the `search`
+section's `linkedin` entry, `enabled`, `accepted_at` and `text_version` keep their stored values
+(off and none when nothing is stored) on every save and import, unless the caller passes
+`linkedin_consent=True`, which only PUT /api/browser/linkedin does (it shows the sentence and
+records the person's accept). The words and the location of the entry are saved as sent, and an
+entry left out removes it, which turns LinkedIn off.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -30,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
 from app.profile.photo import Photo
-from app.profile.schemas import SECTION_MODELS, SECTIONS
+from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS
 
 REVISIONS_PAGE_MAX = 100
 
@@ -85,6 +91,42 @@ def sections_view(profile: Profile) -> dict[str, dict[str, Any] | None]:
     return {name: stored.get(name) for name in SECTIONS}
 
 
+CONSENT_FIELDS = ("enabled", "accepted_at", "text_version")
+LINKEDIN = "linkedin"
+
+
+def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
+    """`data` (a validated search section) with its linkedin entry's consent fields put back to
+    the stored ones: off and none when no linkedin entry is stored."""
+    sources = data.get("browser_sources")
+    if not isinstance(sources, list) or not any(
+        isinstance(s, dict) and s.get("kind") == LINKEDIN for s in sources
+    ):
+        return data
+    before = next(
+        (
+            s
+            for s in (stored or {}).get("browser_sources") or []
+            if isinstance(s, dict) and s.get("kind") == LINKEDIN
+        ),
+        None,
+    )
+    kept = {
+        "enabled": bool(before.get("enabled")) if before else False,
+        "accepted_at": before.get("accepted_at") if before else None,
+        "text_version": before.get("text_version") if before else None,
+    }
+    if (kept["accepted_at"] is None) != (kept["text_version"] is None):
+        kept = {"enabled": False, "accepted_at": None, "text_version": None}
+    return {
+        **data,
+        "browser_sources": [
+            {**s, **kept} if isinstance(s, dict) and s.get("kind") == LINKEDIN else s
+            for s in sources
+        ],
+    }
+
+
 def save_section(
     db: Session,
     user_id: uuid.UUID,
@@ -92,25 +134,31 @@ def save_section(
     data: dict[str, Any],
     base_revision: int,
     now: datetime,
+    *,
+    linkedin_consent: bool = False,
 ) -> Profile:
     """Replace one section with already validated `data` and record the revision.
 
     Raises StaleRevisionError (with the current profile, still locked) when `base_revision`
     is not the stored revision, and ReservedFieldError when a `preferences` save changes the
-    onboarding dates.
+    onboarding dates. The LinkedIn consent of a `search` section is kept as stored unless
+    `linkedin_consent` (the module docstring).
     """
     if section not in SECTIONS:
         raise ValueError(f"unknown section {section!r}")
     profile = _locked(db, user_id, now)
     if profile.revision != base_revision:
         raise StaleRevisionError(profile)
+    if section == "search" and not linkedin_consent:
+        data = _keep_consent((profile.sections or {}).get("search"), data)
     if section == "preferences" and data.get("onboarding") != _onboarding(profile):
         raise ReservedFieldError("onboarding")
     return _write(db, profile, section, data, now)
 
 
 def _onboarding(profile: Profile) -> dict[str, Any]:
-    """The stored onboarding dates, in their stored form (null each when never written)."""
+    """The stored onboarding part, in its stored form (null dates and no step when never
+    written)."""
     stored = (profile.sections or {}).get("preferences")
     model = SECTION_MODELS["preferences"]
     return model.model_validate(stored or {}).model_dump(mode="json")["onboarding"]
@@ -156,7 +204,13 @@ def import_profile(
     profile = _locked(db, user_id, now)
     if base_revision is not None and profile.revision != base_revision:
         raise StaleRevisionError(profile)
-    sections = {**sections, "preferences": {**sections["preferences"]}}
+    # An imported file never carries a LinkedIn acceptance (another account's, or an old one),
+    # nor onboarding dates (the stored ones stay).
+    sections = {
+        **sections,
+        "search": _keep_consent((profile.sections or {}).get("search"), sections["search"]),
+        "preferences": {**sections["preferences"]},
+    }
     sections["preferences"]["onboarding"] = _onboarding(profile)
     revision = profile.revision
     for name in SECTIONS:
@@ -190,6 +244,23 @@ def record_onboarding(db: Session, user_id: uuid.UUID, field: str, now: datetime
     model = SECTION_MODELS["preferences"]
     data = model.model_validate(stored).model_dump(mode="json")
     data["onboarding"][field] = now.astimezone(UTC).isoformat()
+    data = model.model_validate(data).model_dump(mode="json")
+    return _write(db, profile, "preferences", data, now)
+
+
+def record_onboarding_step(db: Session, user_id: uuid.UUID, step: str, now: datetime) -> Profile:
+    """Add `step` to the wizard's `steps_passed` (opportunities O5), one revision of
+    `preferences`, whatever revision the caller loaded, under the profile row lock. A step
+    already passed adds no revision."""
+    if step not in WIZARD_STEPS:
+        raise ValueError(f"unknown wizard step {step!r}")
+    profile = _locked(db, user_id, now)
+    stored = (profile.sections or {}).get("preferences") or {}
+    model = SECTION_MODELS["preferences"]
+    data = model.model_validate(stored).model_dump(mode="json")
+    if step in data["onboarding"]["steps_passed"]:
+        return profile
+    data["onboarding"]["steps_passed"] = [*data["onboarding"]["steps_passed"], step]
     data = model.model_validate(data).model_dump(mode="json")
     return _write(db, profile, "preferences", data, now)
 

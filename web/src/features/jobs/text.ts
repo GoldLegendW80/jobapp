@@ -54,6 +54,11 @@ const FIELD_LABELS: Record<string, string> = {
   location: "location",
   contract_type: "contract type",
   url: "link",
+  work_mode: "work mode",
+  pay_min: "pay",
+  pay_max: "pay",
+  pay_currency: "pay",
+  pay_period: "pay",
 };
 
 /** One line for an event of the timeline. */
@@ -94,7 +99,11 @@ export function describeEvent(
       const changes = data.changes;
       const names =
         changes && typeof changes === "object"
-          ? Object.keys(changes).map((name) => FIELD_LABELS[name] ?? name)
+          ? [
+              ...new Set(
+                Object.keys(changes).map((name) => FIELD_LABELS[name] ?? name),
+              ),
+            ]
           : [];
       return names.length ? `Edited the ${names.join(", ")}` : "Edited";
     }

@@ -346,6 +346,63 @@ describe("edit details", () => {
     });
   });
 
+  it("sets the work mode and the pay, and removes them", async () => {
+    const api = fakeEditableJob(makeDetail());
+    const user = userEvent.setup();
+    await openDetail();
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    let dialog = await screen.findByRole("dialog", { name: "Edit details" });
+    await user.selectOptions(
+      within(dialog).getByLabelText("Work mode"),
+      "Hybrid",
+    );
+    await user.type(within(dialog).getByLabelText("Lowest pay"), "550");
+    await user.type(within(dialog).getByLabelText("Highest pay"), "650");
+    await user.selectOptions(within(dialog).getByLabelText("Per"), "a day");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(api.patches[0]).toEqual({
+      work_mode: "hybrid",
+      pay: { min: 550, max: 650, currency: "EUR", period: "day" },
+      updated_at: "2026-10-09T08:00:00Z",
+    });
+
+    await waitFor(() => {
+      expect(history()[0]).toBe("Edited the work mode, pay");
+    });
+    expect(screen.getByText("550 to 650 EUR a day")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    dialog = await screen.findByRole("dialog", { name: "Edit details" });
+    expect(within(dialog).getByLabelText("Lowest pay")).toHaveValue("550");
+    await user.selectOptions(
+      within(dialog).getByLabelText("Work mode"),
+      "Not stated",
+    );
+    await user.clear(within(dialog).getByLabelText("Lowest pay"));
+    await user.clear(within(dialog).getByLabelText("Highest pay"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(api.patches[1]).toMatchObject({ work_mode: null, pay: null });
+    });
+  });
+
+  it("refuses a pay that is not whole numbers, lowest first", async () => {
+    const api = fakeEditableJob(makeDetail());
+    const user = userEvent.setup();
+    await openDetail();
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit details" });
+    await user.type(within(dialog).getByLabelText("Lowest pay"), "700");
+    await user.type(within(dialog).getByLabelText("Highest pay"), "600");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(
+      await within(dialog).findByText(/The pay needs whole numbers/),
+    ).toBeVisible();
+    expect(api.patches).toEqual([]);
+  });
+
   it("links to the existing posting on a duplicate", async () => {
     const other = "00000000-0000-4000-9000-000000000099";
     fakeEditableJob(makeDetail(), {
