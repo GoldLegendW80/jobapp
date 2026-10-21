@@ -28,6 +28,7 @@ function applicationLease(browser: Browser | undefined, of: LeaseOf) {
     return null;
   if (!FILL_PURPOSES.has(lease.purpose)) return null;
   if (of === "any") return lease;
+  // browserd's started_at against the api's waiting_person time: right only while both share the host clock.
   const started = Date.parse(lease.started_at);
   const by = Date.parse(of.startedBy);
   return started <= by ? lease : null;

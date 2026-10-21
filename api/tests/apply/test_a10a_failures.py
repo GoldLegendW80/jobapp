@@ -407,6 +407,39 @@ def test_a_captcha_on_a_page_with_an_error_status_asks_the_person(
     assert (found.state, found.needs, found.error_code) == (State.needs_person, "captcha", None)
 
 
+@pytest.mark.parametrize("status", [404, 503])
+@pytest.mark.parametrize(
+    ("answers", "ends", "needs"),
+    [(False, State.needs_person, "required_left"), (True, State.ready, None)],
+)
+def test_the_refill_after_the_person_ignores_the_status_of_the_page_first_opened(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    status: int,
+    answers: bool,
+    ends: State,
+    needs: str | None,
+) -> None:
+    app_id = started(db, person_a)
+    form, leases = captcha_form(), FakeLeases()
+    with_status(form, status)
+    agent = FakeAgent(why_answer) if answers else None
+    svc = svc_for(factory, form, stub, leases=leases, answer_agent=agent)
+
+    def solve() -> None:
+        form.captcha = ""
+
+    svc.sleep = PersonMoves(svc, {1: solve})
+    assert fill(svc, app_id) == ends.value
+    found = application(db, app_id)
+    assert (found.state, found.needs, found.error_code) == (ends, needs, None)
+    assert found.attempt == 1
+    assert len(leases.released) == 1
+    assert form.submit_clicks == 0
+
+
 def test_a_bug_in_our_code_ends_failed_at_once(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:

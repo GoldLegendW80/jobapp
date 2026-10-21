@@ -945,6 +945,8 @@ async def _wait_for_person(
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
             return "person_acted"
+        # The person reached this page in the live view, not by `navigate`: its status is unknown.
+        tools.status = None
         result = await _guarded(_fill_on_page(services, plan, adapter, tools), tools)
         try:
             written = await db(
