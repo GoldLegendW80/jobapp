@@ -279,10 +279,6 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
         sa.select(
             step,
             IngestionDocument.name,
-            sa.and_(
-                IngestionDocument.secret_warning.is_(True),
-                IngestionDocument.secret_confirmed_at.is_(None),
-            ).label("secret"),
             AgentRun.status,
             AgentRun.error,
             AgentRun.input_tokens,
@@ -307,10 +303,19 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
     read: set[uuid.UUID] = set()
     extracted: set[uuid.UUID] = set()
     cut_short: set[uuid.UUID] = set()  # an extraction that failed or was cancelled
-    secret: set[uuid.UUID] = set()  # a possible secret waits for the user's confirmation
+    # A possible secret waits for the user's confirmation: every document of the run, a step row
+    # or none (one flagged at upload is refused at the start and has no step).
+    secret = set(
+        db.scalars(
+            sa.select(IngestionDocument.id).where(
+                IngestionDocument.user_id == run.user_id,
+                IngestionDocument.id.in_(list(run.document_ids)),
+                IngestionDocument.secret_warning.is_(True),
+                IngestionDocument.secret_confirmed_at.is_(None),
+            )
+        )
+    )
     for row in rows:
-        if row.secret:
-            secret.add(row[0].document_id)
         one = row[0]
         has_agent = row.status is not None
         tokens = int(row.input_tokens or 0) + int(row.output_tokens or 0) if has_agent else None

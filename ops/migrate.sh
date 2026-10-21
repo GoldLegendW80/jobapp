@@ -102,9 +102,13 @@ failed_at() {
 }
 
 # lock_timeout <file> <line>: whether the output from that line on ends on a lock timeout
-# (SQLSTATE 55P03, psycopg's LockNotAvailable): the upgrade waited on the running release.
+# (SQLSTATE 55P03, psycopg's LockNotAvailable): the upgrade waited on the running release. Only
+# the last exception line counts (the one failed_at names), so a migration that printed those
+# words, or a lock timeout caught before another failure, is that other failure.
 lock_timeout() {
-  tail -n "+$2" "$1" | grep -Eq 'LockNotAvailable|55P03|canceling statement due to lock timeout'
+  tail -n "+$2" "$1" | awk '
+    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { last = $0 }
+    END { exit !(last ~ /LockNotAvailable|55P03|canceling statement due to lock timeout/) }'
 }
 
 [[ $# -eq 0 ]] || die "usage: ops/migrate.sh (no argument; settings come from the environment)"

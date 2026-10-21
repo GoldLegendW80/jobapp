@@ -21,7 +21,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import deletion, engine, runs_router
+from app.ingestion import deletion, engine, estimate_router, runs_router
 from app.ingestion.models import IngestionDocument, TextStatus
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus, StepStatus
 from tests.agents.run_helpers import add_user, now, save_credential
@@ -780,3 +780,32 @@ def test_the_run_summary_names_a_document_not_read_for_a_secret_its_transcriptio
     assert (out.status, out.partial) == (RunStatus.done, True)
     assert out.unread_document_ids == [scan]
     assert out.secret_document_ids == ([] if confirmed else [scan])
+
+
+def test_the_run_summary_names_a_document_with_a_secret_that_has_no_step(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """#541 round 2: the start refuses a document flagged at upload, so it gets no step row. A run
+    that names one anyway still says why it was not read."""
+    flagged = add_document(factory, alice, "A made-up note with a possible secret.")
+    other = add_document(factory, alice, eh.text_of(1))
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(IngestionDocument)
+            .where(IngestionDocument.id == flagged)
+            .values(secret_warning=True)
+        )
+    with factory() as db:
+        quote = estimate_router.quote(db, alice, [str(flagged), str(other)])
+    assert [(one.id, one.code) for one in quote.unreadable] == [(flagged, "secret_unconfirmed")]
+    assert "unreadable_documents" in quote.blockers
+    run_id = eh.start(factory, alice, [other])
+    eh.set_run(factory, run_id, document_ids=[flagged, other])
+    eh.advance(factory, run_id, settings)
+    while eh.run_of(factory, run_id).status is RunStatus.running:
+        eh.finish_step(factory, run_id, settings)
+    assert {one.document_id for one in eh.steps_of(factory, run_id)} == {other}
+    with factory() as db:
+        out = runs_router.run_out(db, eh.run_of(factory, run_id), now())
+    assert out.unread_document_ids == [flagged]
+    assert out.secret_document_ids == [flagged]

@@ -2206,6 +2206,11 @@ case "$args" in
         exit 1
       fi
     fi
+    if [[ -n "${FAKE_SAYS_55P03:-}" ]]; then
+      # A data migration that prints the words of a lock timeout, then one it caught itself.
+      echo "INFO  [migration] a row said: SQLSTATE 55P03 LockNotAvailable" >&2
+      echo "psycopg.errors.LockNotAvailable: canceling statement due to lock timeout" >&2
+    fi
     if [[ -n "${FAKE_FAIL_MIGRATE:-}" ]]; then
       # What a failing data migration prints: SQL with its parameters, Postgres' DETAIL with a
       # row's values, an address. None of it may reach the public run log.
@@ -2333,13 +2338,19 @@ out_lacks "run the deploy again. A statement"
 [[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 2 ]] || fail "a failing migration was retried: $(cat "$MIG/calls")"
 mig 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
 [[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "a failing migration was retried: $(cat "$MIG/calls")"
+# 55P03 earlier in the output, another error last: only the final exception line decides.
+mig 1 FAKE_PENDING=1 FAKE_SAYS_55P03=1 FAKE_FAIL_MIGRATE=1
+out_has "Fix the migration and deploy again"
+out_has "   error: psycopg.errors.DuplicateColumn"
+out_lacks "lock timeout (SQLSTATE 55P03) in attempt"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "55P03 before another error was retried: $(cat "$MIG/calls")"
 for bad in 0 10 x; do
   mig 1 MIGRATE_ATTEMPTS="$bad"
   out_has "MIGRATE_ATTEMPTS must be a whole number from 1 to 9"
 done
 mig 1 MIGRATE_RETRY_WAIT_S=-1
 out_has "MIGRATE_RETRY_WAIT_S must be a whole number of seconds"
-ok "a lock timeout (55P03) runs the upgrade again, at most MIGRATE_ATTEMPTS times, then says: lock timeout, run the deploy again; any other failure is never retried"
+ok "a lock timeout (55P03) runs the upgrade again, at most MIGRATE_ATTEMPTS times, then says: lock timeout, run the deploy again; any other failure is never retried, even with 55P03 earlier in its output"
 mig 1 FAKE_TIMEOUT=1 MIGRATE_TIMEOUT_S=7
 out_has "did not finish within 7s and were stopped"
 out_has "nothing was restarted"

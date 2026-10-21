@@ -5,7 +5,11 @@ positions, the extractor version and the model), stored on its row as `identity_
 counts as finished for a later run when it ended `done` in any run of the same user, whatever
 became of that run (a cancelled run keeps the items of its finished steps), **and** it was
 planned on the text its document stores now (`text_sha256`: a replaced text keeps the row and
-the hash of its file, so the identity alone cannot tell).
+the hash of its file, so the identity alone cannot tell), **and** an extraction step covered the
+range the new plan gives its part. The identity holds the part number, not its range: a change
+of `plan.cut` that keeps EXTRACTOR_VERSION (the floor of 2026-10-21) moves some ranges, and a part
+whose range moved is read again, so no character is left unread. A step stored without a range
+counts as the whole text, `(0, n)`, as `agents.py` reads it.
 
 `finished` is registered as the provider of the estimate (`estimate_router.quote`), so the
 dialog, the start of a run and the engine all plan from the same answer. `source_steps` is the
@@ -46,6 +50,16 @@ def _of_stored_text(step: type[IngestionRunStep]) -> sa.ColumnElement[bool]:
     )
 
 
+def _text_length(step: type[IngestionRunStep]) -> sa.ScalarSelect[int]:
+    """The length of the text the step's document stores now (0 without one)."""
+    return (
+        sa.select(sa.func.coalesce(sa.func.char_length(IngestionDocument.text), 0))
+        .where(IngestionDocument.id == step.document_id)
+        .correlate(step)
+        .scalar_subquery()
+    )
+
+
 def finished(
     db: Session, user_id: uuid.UUID, selected: Sequence[plan.Document], model: str
 ) -> Collection[plan.Identity]:
@@ -56,14 +70,13 @@ def finished(
     # Every identity the selection can have, reused or not: the plan is the one place that
     # knows how a document becomes steps.
     candidates = {
-        identity_hash(step.identity): step.identity
-        for step in plan.build(selected, model=model).steps
+        identity_hash(step.identity): step for step in plan.build(selected, model=model).steps
     }
     if not candidates:
         return frozenset()
     step = IngestionRunStep
-    found = db.scalars(
-        sa.select(step.identity_hash)
+    found = db.execute(
+        sa.select(step.identity_hash, step.range_start, step.range_end, _text_length(step))
         .join(IngestionRun, IngestionRun.id == step.ingestion_run_id)
         .where(
             IngestionRun.user_id == user_id,
@@ -74,13 +87,27 @@ def finished(
         )
         .distinct()
     )
-    return frozenset(candidates[one] for one in found)
+    return frozenset(
+        candidates[one].identity
+        for one, start, end, length in found
+        if _same_range(candidates[one], start, end, length)
+    )
+
+
+def _same_range(new: plan.Step, start: int | None, end: int | None, length: int) -> bool:
+    """Whether a finished step stored with `(start, end)` covered what `new` would read. Only an
+    extraction step with known offsets has a range to compare; a stored null range is `(0, n)`."""
+    if new.kind is not plan.StepKind.extract or new.start is None or new.end is None:
+        return True
+    stored = (0 if start is None else start, length if end is None else end)
+    return stored == (new.start, new.end)
 
 
 def source_steps(db: Session, ingestion_run_id: uuid.UUID) -> list[uuid.UUID]:
     """The ids of the steps whose items are this run's: its own steps that ended `done` or were
     interrupted with items stored, and for each `reused` step the latest earlier `done` step of
-    the same user with the same identity and the same text. A reader of `ingestion_items`
+    the same user with the same identity, the same text and the same range (a null range is
+    `(0, n)`, the whole text). A reader of `ingestion_items`
     selects `step_id IN (these)` together with `tools.of_stored_text()`."""
     step = IngestionRunStep
     own = list(
@@ -93,6 +120,7 @@ def source_steps(db: Session, ingestion_run_id: uuid.UUID) -> list[uuid.UUID]:
     earlier = aliased(IngestionRunStep)
     earlier_run = aliased(IngestionRun)
     run = aliased(IngestionRun)
+    length = _text_length(step)
     stood_for = db.execute(
         sa.select(step.id, earlier.id)
         .join(run, run.id == step.ingestion_run_id)
@@ -103,6 +131,9 @@ def source_steps(db: Session, ingestion_run_id: uuid.UUID) -> list[uuid.UUID]:
                 earlier.document_id == step.document_id,
                 earlier.text_sha256 == step.text_sha256,
                 earlier.status == StepStatus.done,
+                sa.func.coalesce(earlier.range_start, 0) == sa.func.coalesce(step.range_start, 0),
+                sa.func.coalesce(earlier.range_end, length)
+                == sa.func.coalesce(step.range_end, length),
             ),
         )
         .join(

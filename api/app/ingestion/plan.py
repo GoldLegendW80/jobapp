@@ -171,8 +171,9 @@ def cut(text: str) -> tuple[tuple[int, int], ...]:
 
     The floor changed the cut without raising EXTRACTOR_VERSION (owner, 2026-10-21, #408 and
     #115: nothing already read is read again). The cut moves only for a text that has a break in
-    the first half of a window and none in the second, and a finished step of such a text stays
-    reused by its part number."""
+    the first half of a window and none in the second. Reuse compares the stored range of a
+    finished step with the new one (`reuse.finished`), so only a part whose range moved is read
+    again."""
     parts: list[tuple[int, int]] = []
     start, length = 0, len(text)
     while length - start > PART_MAX_CHARS:
