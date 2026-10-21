@@ -16,6 +16,8 @@ signal its Chromium itself; this child does it under the profile's uid, then exi
 - the Singleton* lock files removed: a lock left by another host name (a container recreated on
   the persisted volume) blocks Chromium for 20 s and more (B1). browserd runs no other Chromium
   when it calls this;
+- the tabs of the last session removed (SAVED_TABS): every session opens on its own address
+  alone, so it never starts past the cap of TABS_MAX tabs (issue #488);
 - the preferences Chromium reads at start: the languages (`--lang` is ignored on Linux, B1),
   continue where you left off (session cookies survive a restart), no password saving, no card
   autofill, downloads into the lease's directory without a prompt; in Local State, the remote
@@ -39,9 +41,20 @@ PROFILE = re.compile(r"/profiles/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 FLAGS = ("enabled_labs_experiments", "enabled_labs_experiments_origin_lists")
 # The policies chrome://policy/test's "Restart and apply" saves for the next start.
 TEST_POLICIES = "local_test_policies_for_next_startup"
+# Where Chromium keeps the tabs of the last session (Default/Sessions since Chromium 100, the four
+# files before it). With "continue where you left off" it reopens them at the next start beside
+# the address it is given, so a profile gained one tab per lease, past TABS_MAX (issue #488).
+SAVED_TABS = (
+    "data/Default/Sessions",
+    "data/Default/Current Session",
+    "data/Default/Current Tabs",
+    "data/Default/Last Session",
+    "data/Default/Last Tabs",
+)
 # What Chromium rebuilds by itself: its disk caches (the cache lives in the profile, which is
 # not under XDG_CONFIG_HOME), shader caches, crash reports. Cookies, Local Storage, IndexedDB,
-# Session Storage, Sessions and Preferences are never in this list.
+# Session Storage and Preferences are never in this list (Sessions, the saved tabs, go before
+# every start: SAVED_TABS).
 CACHES = (
     "cache",
     "data/Default/Cache",
@@ -68,6 +81,16 @@ def merge(into: dict, extra: dict) -> dict:
     return into
 
 
+def remove(path: str) -> None:
+    """A directory removed whole, a file or a link unlinked (a link is never followed), nothing
+    when it is not there."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+
+
 def prepare(profile: str, lease: str, languages: str) -> None:
     os.umask(0o077)
     for path in (
@@ -82,6 +105,8 @@ def prepare(profile: str, lease: str, languages: str) -> None:
     for name in LOCKS:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(f"{profile}/data/{name}")
+    for saved in SAVED_TABS:
+        remove(os.path.join(profile, saved))
     path = f"{profile}/data/Default/Preferences"
     try:
         with open(path, encoding="utf-8") as handle:
