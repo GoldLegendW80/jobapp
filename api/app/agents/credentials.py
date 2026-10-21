@@ -19,8 +19,8 @@ Formats (checked before anything is stored, messages name the field like the acc
   letters, digits, `-` and `_` are allowed, MIN_LENGTH to MAX_LENGTH characters.
 
 That shape (`shape_error`: the prefix, the characters, the length) is checked again on the
-decrypted value before a run or Verify uses it, so a row written some other way than through the
-save never reaches either, and the log filter's shape always covers the whole secret.
+decrypted value before a run or Verify uses it, so a row off it, written some other way than
+through the save, never reaches either, and the log filter's shape always covers the whole secret.
 """
 
 import logging
