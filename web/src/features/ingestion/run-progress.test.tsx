@@ -100,7 +100,7 @@ describe("the run on the page", () => {
     expect(
       screen.getByText(new RegExp(OVERSHOOT.slice(0, 40))),
     ).toHaveTextContent(
-      "While a step is being read the figure is behind: what the step writes is counted when it ends.",
+      "While a step is being read the figure is behind: what the step writes is counted when it ends. If the server restarts during a step, the request it was making is not counted.",
     );
     expect(
       screen.getByRole("button", { name: "Cancel the run" }),
@@ -168,7 +168,7 @@ describe("the run on the page", () => {
       "It has used 380,000 tokens, and its ceiling is 352,440 tokens.",
     );
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
-      "Continue raises the ceiling by 176,220 tokens, to 528,660 tokens, and the run goes on. Cancel ends it here.",
+      "Continue raises the ceiling by 176,220 tokens, to 528,660 tokens, and the run goes on. Cancel ends it here. Left paused for 24 hours, the run ends with what it has read.",
     );
     expect(screen.queryByRole("button", { name: /Resume/ })).toBeNull();
     expect(
@@ -242,6 +242,9 @@ describe("the run on the page", () => {
     );
     expect(state).toHaveTextContent("The run is paused.");
     expect(screen.getByTestId("paused-reason")).toHaveTextContent(reason);
+    expect(state).toHaveTextContent(
+      "Resume starts again with the step that stopped. Left paused for 24 hours, the run ends with what it has read.",
+    );
     expect(screen.queryByRole("button", { name: /Continue/ })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Resume the run" }));
     await waitFor(() => {
