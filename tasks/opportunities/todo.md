@@ -245,7 +245,7 @@ On the fake feeds server (tests/feeds_stub.py), in the api tests on the Mac on 2
 Nothing yet. (Pages read and seconds per sweep and platform, the missions found per platform, any checkpoint met.)
 
 ### O8
-Nothing yet.
+On the Mac on 2026-10-21, on a scratch stack with the fake feeds server: the O8 journey takes 9 s for its 5 tests, the whole opportunities group 59 s for 25. A sweep with We Work Remotely alone (the stub's `ok` variant) reports "3 postings found, 2 new" under "Freelance and project sources", in about 1 s. The card adds one request on the Search tab (the catalogue, cached 5 minutes). Screenshots under `tasks/evidence/opportunities-o8/`.
 
 ### O9a
 Nothing yet. (The tokens of one proposal.)

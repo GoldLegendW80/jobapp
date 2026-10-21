@@ -237,11 +237,15 @@ describe("Find jobs", () => {
       error,
     });
     fakeSweeps({
+      // The running state for several polls, so the progress is still there when it is read on
+      // a loaded machine.
       states: [
-        makeSweep({
-          boards_total: 0,
-          current_board: "google_careers:ai engineer/Paris",
-        }),
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: "google_careers:ai engineer/Paris",
+          }),
+        ),
         finished({
           sources: [
             source("google_careers", "ai engineer", 3, 2, null, "Paris"),
