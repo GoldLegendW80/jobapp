@@ -109,33 +109,84 @@ test("the Chat button opens an empty conversation with example questions", async
 });
 
 test("a message streams its answer live, then the stored answer replaces it", async () => {
-  await panel().getByRole("button", { name: FIRST }).click();
-  await expect(composer()).toHaveValue(FIRST);
-  await composer().press("Enter");
-  await expect(messages().first()).toContainText(FIRST);
-  await expect(live()).toBeVisible();
-  // The whole conversation is on screen: the message and the answer being written.
-  await expect(messages()).toHaveCount(1);
-  await expect(panel().getByText("Older messages are not shown.")).toHaveCount(
-    0,
-  );
-  await expect(panel().getByRole("button", { name: "Send" })).toBeDisabled();
-  // The recorded stream: the agent reads the posting, says so, then answers.
-  await expect(live()).toContainText(
-    /Reading the posting|Let me read the posting again\./,
-    { timeout: 15_000 },
-  );
-  await shots(page, "streaming", false);
-  await expect(live()).toHaveCount(0, { timeout: 30_000 });
-  const answer = messages().nth(1);
-  await expect(answer).toHaveAttribute("data-role", "assistant");
-  await expect(answer).toContainText(`You asked: ${FIRST}`);
-  await expect(answer).toContainText(
-    "This conversation held 0 earlier messages when you wrote, 0 left out.",
-  );
-  await expect(panel().getByRole("status")).toContainText(
-    `Answer: You asked: ${FIRST}`,
-  );
+  // Keep the thread busy until the pending-message controls have been exercised, even if
+  // the fake worker finishes before the browser reaches them.
+  let release = () => {};
+  const inspected = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const threadRead = /\/api\/agents\/threads\/[^/?]+$/;
+  await page.route(threadRead, async (route) => {
+    const response = await route.fetch();
+    const detail = (await response.json()) as {
+      active_run_id: string | null;
+      messages: Array<{ role: string }>;
+    };
+    if (
+      detail.active_run_id === null &&
+      detail.messages.some((message) => message.role === "assistant")
+    ) {
+      await inspected;
+    }
+    await route.fulfill({ response });
+  });
+  try {
+    await panel().getByRole("button", { name: FIRST }).click();
+    await expect(composer()).toHaveValue(FIRST);
+    await composer().press("Enter");
+    await expect(messages().first()).toContainText(FIRST);
+    await expect(live()).toBeVisible();
+    // The whole conversation is on screen: the message and the answer being written.
+    await expect(messages()).toHaveCount(1);
+    await expect(
+      panel().getByText("Older messages are not shown."),
+    ).toHaveCount(0);
+    await expect(panel().getByRole("button", { name: "Send" })).toBeDisabled();
+    // The recorded stream: the agent reads the posting, says so, then answers.
+    await expect(live()).toContainText(
+      /Reading the posting|Let me read the posting again\./,
+      { timeout: 15_000 },
+    );
+    await composer().fill("Keep this as a draft");
+    await composer().press("Enter");
+    const held = panel().getByTestId("chat-held-message");
+    await expect(held).toContainText("Keep this as a draft");
+    await expect(held).toContainText("Pending");
+    await expect(
+      panel().getByText(/Your message will be sent when/),
+    ).toHaveAttribute("aria-live", "polite");
+    for (const width of [320, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(held.getByRole("button", { name: "Cancel" })).toBeVisible();
+      await shots(page, `held-${width}`, false);
+    }
+    await held.getByRole("button", { name: "Cancel" }).click();
+    await expect(held).toHaveCount(0);
+    await expect(composer()).toHaveValue("Keep this as a draft");
+    await expect(composer()).toBeFocused();
+    release();
+    await shots(page, "streaming", false);
+    await expect(live()).toHaveCount(0, { timeout: 30_000 });
+    const answer = messages().nth(1);
+    await expect(answer).toHaveAttribute("data-role", "assistant");
+    await expect(answer).toContainText(`You asked: ${FIRST}`);
+    await expect(answer).toContainText(
+      "This conversation held 0 earlier messages when you wrote, 0 left out.",
+    );
+    await expect(panel().getByRole("status")).toContainText(
+      `Answer: You asked: ${FIRST}`,
+    );
+    await expect(panel().getByRole("button", { name: "Send" })).toBeEnabled();
+    await expect(composer()).toHaveValue("Keep this as a draft");
+    await expect(messages()).toHaveCount(2);
+    const listed = await page.request.get("/api/agents/runs?agent=job_chat");
+    expect(((await listed.json()) as { items: unknown[] }).items).toHaveLength(
+      1,
+    );
+  } finally {
+    release();
+    await page.unroute(threadRead);
+  }
 });
 
 test("the conversation and the open panel survive a reload", async () => {
