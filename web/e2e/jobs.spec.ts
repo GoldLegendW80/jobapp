@@ -27,9 +27,10 @@ const shots = makeShots("jobs-j3", "jobs");
  *
  * Two data modes:
  * - default: the job folder of E2E_JOBS_DATA (default ../data next to the app folder, Harald's;
- *   the gate gives .github/scripts/synthetic_jobs.py) is converted on the Mac and imported with
- *   the CLI in the api container, as `./deploy.sh jobs import` does. E2E_JOBS_FILE skips the
- *   conversion and imports an already converted document. On a scratch Compose project:
+ *   the gate gives the folder .github/scripts/synthetic_jobs.py writes) is converted on the Mac
+ *   and imported with the CLI in the api container, as `./deploy.sh jobs import` does.
+ *   E2E_JOBS_FILE skips the conversion and imports an already converted document. On a scratch
+ *   Compose project:
  *     HTTP_PORT=8113 docker compose -p jobapp-j3 -f compose.yml -f compose.mac.yml up -d --build --wait
  *     docker compose -p jobapp-j3 -f compose.yml exec -T api alembic upgrade head
  *     E2E_CADDY_URL=http://127.0.0.1:8113 E2E_COMPOSE_PROJECT=jobapp-j3 \
