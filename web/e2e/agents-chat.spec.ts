@@ -158,7 +158,17 @@ test("a message streams its answer live, then the stored answer replaces it", as
     for (const width of [320, 768, 1024, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await expect(held.getByRole("button", { name: "Cancel" })).toBeVisible();
-      await shots(page, `held-${width}`, false);
+      const overflow = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(overflow, `held ${width}`).toBe(0);
+      await page.screenshot({
+        path: test.info().outputPath(`held-${width}.png`),
+        fullPage: false,
+        animations: "disabled",
+      });
     }
     await held.getByRole("button", { name: "Cancel" }).click();
     await expect(held).toHaveCount(0);
