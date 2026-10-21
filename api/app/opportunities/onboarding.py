@@ -132,8 +132,7 @@ def dismiss(db: Session, user: User, now: datetime) -> State:
 def pass_step(db: Session, user: User, step: str, now: datetime) -> State:
     """Keep `step` among the steps passed (once); nothing once the wizard is finished. The
     caller commits."""
-    if state(db, user, now).completed_at is None:
-        profile_service.record_onboarding_step(db, user.id, step, now)
+    profile_service.record_onboarding_step(db, user.id, step, now)
     return state(db, user, now)
 
 

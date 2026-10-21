@@ -276,14 +276,15 @@ def record_onboarding_step(db: Session, user_id: uuid.UUID, step: str, now: date
     """Add `step` to the wizard's `steps_passed` (opportunities O5), under the profile row lock.
     No revision: the steps are the wizard's bookkeeping, never the person's edit, so a tab that
     loaded the profile before the step still saves on its revision (a save keeps the stored
-    steps). A step already passed changes nothing."""
+    steps). A step already passed, or any step once the wizard is finished (read under the
+    lock), changes nothing."""
     if step not in WIZARD_STEPS:
         raise ValueError(f"unknown wizard step {step!r}")
     profile = _locked(db, user_id, now)
     stored = (profile.sections or {}).get("preferences") or {}
     model = SECTION_MODELS["preferences"]
     data = model.model_validate(stored).model_dump(mode="json")
-    if step in data["onboarding"]["steps_passed"]:
+    if data["onboarding"]["completed_at"] is not None or step in data["onboarding"]["steps_passed"]:
         return profile
     data["onboarding"]["steps_passed"] = [*data["onboarding"]["steps_passed"], step]
     data = model.model_validate(data).model_dump(mode="json")
