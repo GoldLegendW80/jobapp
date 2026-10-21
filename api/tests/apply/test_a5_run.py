@@ -335,7 +335,9 @@ def test_the_browser_crashing_mid_fill_fails_it_and_releases_the_lease(
     app_id = started(db, person_a)
     form, leases = run_ashby(), FakeLeases()
     form.crash_at = 8
-    assert fill(services(factory, form, leases, stub_base=stub), app_id) == "failed"
+    # No retry left (A10a retries it otherwise, test_a10a_failures).
+    svc = services(factory, form, leases, stub_base=stub, retry_delays_s=())
+    assert fill(svc, app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "ended")
     assert len(leases.released) == 1
