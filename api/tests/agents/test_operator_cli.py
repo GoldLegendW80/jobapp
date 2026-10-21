@@ -9,14 +9,22 @@ from typing import Any, ClassVar
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
 from app.agents import cli, credentials, operator, runs
 from app.agents.crypto import Keyring
-from app.agents.models import AgentMessage, AgentRun, AgentThread, CredentialKind, RunStatus
+from app.agents.models import (
+    AgentMessage,
+    AgentRun,
+    AgentThread,
+    CredentialKind,
+    ModelCredential,
+    RunStatus,
+)
 from app.config import get_settings
-from app.identity.models import Role
+from app.identity.models import Role, User
 from tests.agents.conftest import API_KEY, OAUTH, new_key
 from tests.agents.run_helpers import add_job
 from tests.identity.api_helpers import Clock, make_user
@@ -170,26 +178,113 @@ def test_another_kind_of_account_is_refused_and_nothing_is_written(
     assert OWNER not in printed
 
 
-def test_the_check_reads_the_account_as_it_is_when_the_run_is_written(
+def change_inside_the_start(
+    monkeypatch: pytest.MonkeyPatch,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    key: str,
+    user_id: uuid.UUID,
+    change: str,
+    at_call: int,
+) -> list[int]:
+    """`credentials.get` of the start, its `at_call`th call, commits `change` from another
+    session after reading: inside the transaction that writes, before the check."""
+    real = credentials.get
+    calls: list[int] = []
+
+    def get(db: Session, user: uuid.UUID) -> Any:
+        found = real(db, user)
+        calls.append(len(calls) + 1)
+        if len(calls) == at_call:
+            with factory() as other, other.begin():
+                if change == "demote":
+                    other.execute(
+                        sa.update(User).where(User.id == user_id).values(role=Role.member)
+                    )
+                else:
+                    kind = CredentialKind.anthropic_api_key
+                    keyring = Keyring.from_text(key)
+                    credentials.save(other, keyring, user_id, kind, API_KEY, clock.now)
+        return found
+
+    monkeypatch.setattr(operator.credentials, "get", get)
+    return calls
+
+
+@pytest.mark.parametrize("change", ["demote", "api_key"])
+def test_a_triage_sees_the_account_changed_inside_its_transaction(
     factory: sessionmaker[Session],
     clock: Clock,
     key: str,
     fake_queue: type[FakeQueue],
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
 ) -> None:
     user_id, job = account(factory, clock, key)
-    with factory() as db, db.begin():
-        credentials.save(
-            db,
-            Keyring.from_text(key),
-            user_id,
-            CredentialKind.anthropic_api_key,
-            API_KEY,
-            clock.now,
-        )
+    calls = change_inside_the_start(monkeypatch, factory, clock, key, user_id, change, 1)
     code, out, _ = start(capsys, "triage", job)
-    assert (code, out["http"]) == (1, 403)
+    assert calls == [1]
+    assert (code, out["http"], out["detail"]) == (1, 403, operator.NOT_ALLOWED)
     assert counts(factory) == (0, 0, 0)
+    assert fake_queue.jobs == []
+
+
+@pytest.mark.parametrize("change", ["demote", "api_key"])
+def test_a_chat_sees_the_account_changed_between_thread_and_message(
+    factory: sessionmaker[Session],
+    clock: Clock,
+    key: str,
+    fake_queue: type[FakeQueue],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    user_id, job = account(factory, clock, key)
+    calls = change_inside_the_start(monkeypatch, factory, clock, key, user_id, change, 2)
+    code, out, _ = start(capsys, "chat", job)
+    assert calls == [1, 2]  # the thread's check, then the message's
+    assert (code, out["http"], out["detail"]) == (1, 403, operator.NOT_ALLOWED)
+    with factory() as db:
+        thread = db.scalars(sa.select(AgentThread)).one()
+    assert (out["thread_id"], out["thread_created"]) == (str(thread.id), True)
+    assert "run_id" not in out
+    assert counts(factory) == (0, 1, 0)
+    assert fake_queue.jobs == []
+
+
+@pytest.mark.parametrize("what", ["triage", "chat"])
+def test_a_demotion_after_the_check_waits_for_the_start_to_commit(
+    factory: sessionmaker[Session],
+    clock: Clock,
+    key: str,
+    fake_queue: type[FakeQueue],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    what: str,
+) -> None:
+    user_id, job = account(factory, clock, key)
+    real = operator._check
+    waited: list[str] = []
+
+    def check(db: Session, user: uuid.UUID, only: operator.Only | None) -> None:
+        real(db, user, only)
+        for statement in [
+            sa.update(User).where(User.id == user_id).values(role=Role.member),
+            sa.delete(ModelCredential).where(ModelCredential.user_id == user_id),
+        ]:
+            try:
+                with factory() as other, other.begin():
+                    other.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
+                    other.execute(statement)
+            except OperationalError as exc:
+                waited.append("waited" if "lock timeout" in str(exc) else "other")
+
+    monkeypatch.setattr(operator, "_check", check)
+    code, out, _ = start(capsys, what, job)
+    assert (code, out["http"]) == (0, 202)
+    checks = 1 if what == "triage" else 2
+    assert waited == ["waited", "waited"] * checks
 
 
 def test_no_credential_unknown_job_and_unknown_account(

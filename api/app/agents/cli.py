@@ -16,10 +16,11 @@ start begins one run with no web session, through the functions the routes call
 (app/agents/operator.py): a triage of the job, or a chat message on the job's thread. It reads
 one JSON object on stdin, {"owner": <the account's e-mail>, "message": <the chat text>}, so
 neither appears in a process list, and refuses unless that account has the role and a credential
-of the kind named, checked in the transaction that writes. It prints one JSON line: `http`, the
-status the endpoint would answer, then ids and counts, or the refusal's `detail`, or the
-`error_class` of an unexpected error (never its message, which could quote the input). Never the
-e-mail, never the message. Exit codes: 0 queued (202), 1 refused or failed, 2 invalid arguments.
+of the kind named, checked in the transaction that writes. Its last line on stdout (after the JSON
+log lines) is one JSON object: `http`, the status the endpoint would answer, then ids and counts
+(`thread_id` too for a chat refused after its thread was opened), or the refusal's `detail`, or
+the `error_class` of an unexpected error (never its message, which could quote the input). Never
+the e-mail, never the message. Exit codes: 0 queued (202), 1 refused or failed, 2 invalid arguments.
 """
 
 import argparse
@@ -44,6 +45,7 @@ from app.config import ConfigError, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import service as identity_service
 from app.identity.models import Role
+from app.logging_config import configure_logging
 from app.mail import accounts as mail_accounts
 from app.main import credentials_keyring
 
@@ -120,24 +122,25 @@ def _begin(
     job_id: uuid.UUID,
     text: str,
     only: operator.Only,
-) -> tuple[uuid.UUID, dict[str, object]]:
-    """The run created and committed, not yet queued, and what to print about it."""
+    told: dict[str, object],
+) -> uuid.UUID:
+    """The run created and committed, not yet queued. What to print about it goes in `told` as
+    soon as it is known, so a chat refused after its thread was opened still names the thread."""
     settings = get_settings()
     now = identity_service.utcnow
     if kind == "triage":
         agent, data = operator.prepare("triage", job_id, {}, settings.app_env)
-        started = operator.create_run(sessions, user_id, agent, job_id, data, now(), only)
-        return started.id, {}
+        return operator.create_run(sessions, user_id, agent, job_id, data, now(), only).id
     try:
         body = MessageIn(text=text)
     except ValidationError:
         raise operator.Refused(422, TOO_LONG if text.strip() else operator.EMPTY) from None
     cleaned = operator.clean_text(body.text)
     thread, created = operator.open_thread(sessions, user_id, job_id, now(), only)
-    told: dict[str, object] = {"thread_id": str(thread.id), "thread_created": created}
+    told.update(thread_id=str(thread.id), thread_created=created)
     sent = operator.send_message(sessions, user_id, thread.id, cleaned, now(), only)
     told["message_id"] = sent.message.id
-    return sent.run.id, told
+    return sent.run.id
 
 
 async def _enqueue(sessions: sessionmaker[Session], run_id: uuid.UUID) -> bool:
@@ -168,8 +171,8 @@ def start(kind: str, job_id: uuid.UUID, only: operator.Only, stdin: TextIO) -> i
             user = identity_service.get_user_by_email(db, email)
         if user is None:
             raise operator.Refused(404, NO_ACCOUNT)
-        run_id, told = _begin(sessions, kind, user.id, job_id, text, only)
-        out.update(told, run_id=str(run_id))
+        run_id = _begin(sessions, kind, user.id, job_id, text, only, out)
+        out.update(run_id=str(run_id))
         out.update(enqueued=asyncio.run(_enqueue(sessions, run_id)), http=202)
     except HTTPException as exc:
         out.update(http=exc.status_code, detail=str(exc.detail))
@@ -198,4 +201,5 @@ def main(argv: Sequence[str] | None = None, stdin: TextIO | None = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover, the tests call main()
+    configure_logging(get_settings().log_level)
     sys.exit(main())

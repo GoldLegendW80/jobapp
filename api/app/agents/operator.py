@@ -6,8 +6,11 @@ which has no web session. A refusal raises `Refused`, an HTTPException with the 
 and headers the endpoint answers; `Busy` is the 409 of a thread that cannot take a message.
 
 `only` restricts the account a start may write for (the operator's: an admin with a credential of
-the subscription kind). It is checked in the transaction that writes, after the credential check,
-so a role or credential changed meanwhile is seen. The routes pass none: the session is the user.
+the subscription kind). It is checked in the transaction that writes, after the credential read,
+on the user and credential rows read again under a share lock held to the commit: a role or
+credential changed before the check is seen, and one changed after it waits for the commit. The
+worker reads the credential again when the run starts. The routes pass none: the session is the
+user.
 """
 
 import json
@@ -24,7 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.agents import chat, credentials, definitions, runs
 from app.agents.crypto import Keyring
-from app.agents.models import CredentialKind
+from app.agents.models import CredentialKind, ModelCredential
 from app.agents.schemas import (
     RunJobOut,
     RunOut,
@@ -82,11 +85,18 @@ def _too_many() -> Refused:
     return Refused(status.HTTP_429_TOO_MANY_REQUESTS, TOO_MANY, {"Retry-After": "30"})
 
 
-def _check(db: Session, user_id: uuid.UUID, kind: CredentialKind, only: Only | None) -> None:
+def _check(db: Session, user_id: uuid.UUID, only: Only | None) -> None:
     if only is None:
         return
-    user = db.get(User, user_id, populate_existing=True)
-    if user is None or user.role is not only.role or kind is not only.credential_kind:
+    shared = {"read": True}  # FOR SHARE: a demotion or a credential swap waits for the commit
+    user = db.get(User, user_id, populate_existing=True, with_for_update=shared)
+    credential = db.get(ModelCredential, user_id, populate_existing=True, with_for_update=shared)
+    if (
+        user is None
+        or user.role is not only.role
+        or credential is None
+        or credential.kind is not only.credential_kind
+    ):
         db.rollback()
         raise Refused(status.HTTP_403_FORBIDDEN, NOT_ALLOWED)
 
@@ -141,7 +151,7 @@ def create_run(
         credential = credentials.get(db, user_id)
         if credential is None:
             raise Refused(status.HTTP_409_CONFLICT, NO_CREDENTIAL)
-        _check(db, user_id, credential.kind, only)
+        _check(db, user_id, only)
         job = jobs_service.get_job(db, user_id, job_id) if job_id is not None else None
         if job_id is not None and job is None:
             raise Refused(status.HTTP_404_NOT_FOUND, JOB_NOT_FOUND)
@@ -169,7 +179,7 @@ def open_thread(
             credential = credentials.get(db, user_id)
             if credential is None:
                 raise Refused(status.HTTP_409_CONFLICT, NO_CREDENTIAL)
-            _check(db, user_id, credential.kind, only)
+            _check(db, user_id, only)
         job = jobs_service.get_job(db, user_id, job_id)
         if job is None:
             raise Refused(status.HTTP_404_NOT_FOUND, JOB_NOT_FOUND)
@@ -196,7 +206,7 @@ def send_message(
         if credential is None:
             db.rollback()
             raise Busy(None, NO_CREDENTIAL)
-        _check(db, user_id, credential.kind, only)
+        _check(db, user_id, only)
         try:
             message, run = chat.send(db, user_id, thread, text, now)
         except chat.ThreadBusyError as exc:
