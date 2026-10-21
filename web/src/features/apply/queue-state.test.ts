@@ -167,6 +167,57 @@ describe("how often the queue is read again", () => {
   });
 
   it.each([
+    ["2001-02-03T09:59:59Z", QUEUE_WAIT_POLL_MS],
+    ["2001-02-03T10:00:00Z", QUEUE_WAIT_POLL_MS],
+    ["2001-02-03T10:00:01Z", 1_000],
+    ["2001-02-03T10:01:00Z", 60_000],
+    [undefined, QUEUE_WAIT_POLL_MS],
+    [null, QUEUE_WAIT_POLL_MS],
+    ["not a date", QUEUE_WAIT_POLL_MS],
+  ] as const)(
+    "follows a paced Full auto hold on the server's clock, then the pace fallback (%s)",
+    (hold_until, interval) => {
+      const queue = {
+        now: "2001-02-03T10:00:00Z",
+        items: [
+          queueItem(1, "held", {
+            mode: "full_auto",
+            needs: "host_pace",
+            hold_until,
+          }),
+        ],
+        waiting_on_you: 0,
+      };
+
+      expect(queuePoll(queue, now, serverOffset(queue.now, now))).toBe(
+        interval,
+      );
+    },
+  );
+
+  it.each(["queued", "filling", "ready", "approved", "submitting"])(
+    "keeps the active work interval for %s beside a paced Full auto item past its hold",
+    (state) => {
+      const queue = {
+        now: "2001-02-03T10:00:00Z",
+        items: [
+          queueItem(1, "held", {
+            mode: "full_auto",
+            needs: "host_pace",
+            hold_until: "2001-02-03T09:59:59Z",
+          }),
+          queueItem(2, state, { mode: "full_auto" }),
+        ],
+        waiting_on_you: 0,
+      };
+
+      expect(queuePoll(queue, now, serverOffset(queue.now, now))).toBe(
+        QUEUE_POLL_MS,
+      );
+    },
+  );
+
+  it.each([
     ["2026-10-14T09:01:00Z", QUEUE_POLL_MS],
     ["2026-10-14T09:00:01Z", 1_000],
   ] as const)(

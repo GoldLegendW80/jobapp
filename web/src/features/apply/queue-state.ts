@@ -44,11 +44,13 @@ export function queuePoll(
     if (item.state === "held") {
       const end = Date.parse(item.hold_until ?? "");
       const left = end - (pageNow + offset);
+      const afterHold =
+        item.needs === "host_pace" ? QUEUE_WAIT_POLL_MS : QUEUE_POLL_MS;
       interval = !Number.isFinite(end)
         ? QUEUE_WAIT_POLL_MS
         : left > 0
           ? left
-          : QUEUE_POLL_MS;
+          : afterHold;
     } else if (item.state === "approved" && item.needs === "host_pace") {
       interval = QUEUE_WAIT_POLL_MS;
     }
