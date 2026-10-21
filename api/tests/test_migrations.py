@@ -19,7 +19,7 @@ from app.config import ConfigError, get_settings
 from app.models_base import NAMING_CONVENTION, Base
 
 API_DIR = Path(__file__).resolve().parents[1]
-HEAD = "0019"
+HEAD = "0020"
 
 
 def alembic_config() -> Config:
