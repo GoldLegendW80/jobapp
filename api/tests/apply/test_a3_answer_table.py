@@ -3601,7 +3601,7 @@ def test_round7_has_every_follow_up_and_half_of_our_own_are_traps() -> None:
     own = [c for c in ROUND7 if c.origin in ("own7", "trap7")]
     assert len(review) == 5
     assert len(own) >= 80
-    assert sum(c.origin == "trap7" for c in own) * 2 >= len(own) - 10
+    assert sum(c.origin == "trap7" for c in own) * 2 >= len(own)
     assert len({c.name for c in ROUND7}) == len(ROUND7)
 
 
