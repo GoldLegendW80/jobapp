@@ -423,14 +423,16 @@ def test_pages_of_another_folder_are_served_and_their_posts_recorded(forms: Form
 
 
 # --- the bounds of a request ---------------------------------------------------------------------
-def raw(forms: Forms, head: str, body: bytes = b"") -> int | None:
+def raw(forms: Forms, head: str, body: bytes = b"", *, close_write: bool = True) -> int | None:
     """Send a request exactly as written (urllib would correct it) and return the status of the
-    answer, or None when the server closed the connection without one."""
+    answer, or None when the server closed the connection without one. With close_write False
+    the body never ends, so a server that reads it to its end answers nothing (a timeout)."""
     port = int(forms.base.rsplit(":", 1)[1])
     answer = b""
     with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
         sock.sendall(head.encode("latin-1") + b"\r\n\r\n" + body)
-        sock.shutdown(socket.SHUT_WR)
+        if close_write:
+            sock.shutdown(socket.SHUT_WR)
         with contextlib.suppress(ConnectionResetError):
             while chunk := sock.recv(65536):
                 answer += chunk
@@ -546,13 +548,21 @@ def test_a_content_length_that_is_not_one_run_of_ascii_digits_is_refused(
         pytest.param(["9" * 5000], 413, id="5000-nines-413"),
     ],
 )
-def test_a_post_whose_length_cannot_be_trusted_is_answered_before_any_body_is_read(
+def test_a_post_whose_length_cannot_be_trusted_is_refused_and_nothing_is_recorded(
     forms: Forms, headers: list[str], status: int
 ) -> None:
     head = "\r\n".join(
         ["POST /_stub/submit/bounds HTTP/1.0", *(f"Content-Length: {one}" for one in headers)]
     )
     assert raw(forms, head) == status
+    assert forms.submissions() == []
+
+
+def test_a_negative_length_is_answered_without_waiting_for_the_end_of_the_body(
+    forms: Forms,
+) -> None:
+    head = "POST /_stub/submit/bounds HTTP/1.0\r\nContent-Length: -1"
+    assert raw(forms, head, b"name=Alex&more=", close_write=False) == 400
     assert forms.submissions() == []
 
 
@@ -623,10 +633,14 @@ def test_the_server_listens_on_the_loopback_unless_told_otherwise(
     assert hosts == ["127.0.0.1", "0.0.0.0"]  # noqa: S104
 
 
+COMPOSE_FILES = ("compose*.yml", "tests/*compose*.yml", "api/tests/**/compose*.yml")
+
+
 def stub_services() -> list[dict[str, Any]]:
-    """Every Compose service, in any compose file of the repository, that runs the stub."""
+    """Every service of the compose files (at the root, in tests/, under api/tests/) that runs
+    the stub."""
     found = []
-    for path in sorted({*ROOT.glob("compose*.yml"), *ROOT.glob("tests/*.compose.yml")}):
+    for path in sorted({path for pattern in COMPOSE_FILES for path in ROOT.glob(pattern)}):
         services = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("services") or {}
         for service in services.values():
             command = (service or {}).get("command") or []

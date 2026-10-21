@@ -38,9 +38,10 @@ Ashby's invisible check rejects a submit that comes less than --min-dwell-ms aft
 and one made with navigator.webdriver set. The browser-side signals are `_signal_dwell_ms` and
 `_signal_webdriver`; the page script sends them.
 
-A request it cannot read is answered: 400 for a target that is no address or a Content-Length
-that is not one header of ASCII digits, 413 for a body over MAX_BODY (both before any of the
-body is read), 404 for a file name the file system refuses (a NUL byte, a name too long).
+These requests are answered, not dropped: 400 for a target that is no address or a
+Content-Length that is not one header of ASCII digits, 413 for a body over MAX_BODY (both
+without waiting for the body), 404 for a file name the file system refuses (a NUL byte, a name
+too long). A text part in a charset Python cannot decode is read as UTF-8.
 
     python3 tests/ats_forms_stub.py [--port 8100] [--host 127.0.0.1] [--min-dwell-ms 3000]
                                     [--slow-seconds 10]
@@ -788,7 +789,7 @@ ASCII_DIGITS = re.compile(r"[0-9]+")
 def body_length(headers: list[str] | None) -> int | None:
     """The length of a body by its Content-Length headers: 0 when there is none, None (a 400)
     unless there is exactly one and it is ASCII digits (RFC 9110, 8.6), and MAX_BODY + 1 for any
-    length over the bound, found before int() meets a run of digits it refuses (over 4300)."""
+    length over the bound, judged by its count of digits first (int() refuses over 4300)."""
     if not headers:
         return 0
     value = headers[0].strip(" \t")
