@@ -56,7 +56,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.agents import credentials, definitions, failures
 from app.agents import runs as agent_runs
-from app.agents.models import AgentEvent, AgentRun
+from app.agents.models import AgentEvent, AgentRun, CredentialKind
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
 from app.ingestion import agents, citations, estimate, estimate_router, merge, plan, reuse
@@ -86,6 +86,11 @@ ATTEMPTS = 2  # a step cut by a restart or failed by the box runs once more, the
 TOKEN_CEILING = "token_ceiling"  # noqa: S105, a reason, not a secret
 WAITING_SLOTS = "slots"
 QUEUE_DOWN = "The agent queue is unavailable."
+CREDENTIAL_CHANGED = (
+    "Your Anthropic credential was replaced by one of another kind since this run started, so "
+    "the steps left would use another model than the estimate you agreed to. Put back a "
+    "credential of the earlier kind and resume, or cancel and start a new run."
+)
 TRANSCRIBE_NAME = "document_transcribe"  # registered by G14
 AGENT_OF = {plan.StepKind.extract: agents.EXTRACT_NAME, plan.StepKind.transcribe: TRANSCRIBE_NAME}
 REAPED = frozenset({agent_runs.INTERRUPTED, agent_runs.STOPPED, agent_runs.LOST, agent_runs.STALE})
@@ -104,6 +109,10 @@ CUT_GROWTH = 2
 # `advance` raising this many times in a row at the cron (about as many minutes) closes the run:
 # a run that cannot move must not stay the user's one active run for ever.
 ADVANCE_FAILURES = 5
+# The database itself failed (down, a lock or statement timeout, the pool empty): it may say
+# nothing about the run, so such a failure closes it only at this larger count, about an hour.
+DATABASE_FAILURES = (sa.exc.OperationalError, sa.exc.TimeoutError)
+DATABASE_ADVANCE_FAILURES = 60
 # Two failures closer than this count once: ticks that waited behind a long job run back to
 # back and must not close a run in one instant. The cron ticks every minute and a statement
 # times out after 15 seconds, so two real ticks are never this close; the five failures that
@@ -288,6 +297,19 @@ def _lock(db: Session, run_id: uuid.UUID, user_id: uuid.UUID | None = None) -> I
         query = query.where(IngestionRun.user_id == user_id)
     return db.execute(
         query.with_for_update().execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+
+
+def _first_kind(db: Session, run: IngestionRun) -> CredentialKind | None:
+    """The kind of credential the run's first agent run revealed (`record_credential_kind`,
+    which `finish` never overwrites, unlike the model the SDK reports): its model is the one of
+    the estimate the user agreed to. None while no agent run has revealed one."""
+    return db.execute(
+        sa.select(AgentRun.credential_kind)
+        .join(IngestionRunStep, IngestionRunStep.agent_run_id == AgentRun.id)
+        .where(IngestionRunStep.ingestion_run_id == run.id, AgentRun.credential_kind.is_not(None))
+        .order_by(AgentRun.created_at, AgentRun.id)
+        .limit(1)
     ).scalar_one_or_none()
 
 
@@ -594,6 +616,10 @@ def _next(
     agent = definitions.AGENTS[AGENT_OF[step.kind]]
     credential = credentials.get(db, run.user_id)
     model = plan.model_for(credential.kind if credential is not None else None)
+    first = _first_kind(db, run)
+    if credential is not None and first is not None and plan.model_for(first) != model:
+        _pause(run, CREDENTIAL_CHANGED, now)
+        return Moved(run.status)
     db.execute(
         sa.select(IngestionRunStep.id).where(IngestionRunStep.id == step.id).with_for_update()
     )
@@ -771,8 +797,11 @@ def _planned_again(
     if not citations.prepare(text).readable:
         return None
     digest = text_sha256(text)
-    credential = credentials.get(db, run.user_id)
-    model = plan.model_for(credential.kind if credential is not None else None)
+    first = _first_kind(db, run)
+    if first is None:
+        credential = credentials.get(db, run.user_id)
+        first = credential.kind if credential is not None else None
+    model = plan.model_for(first)
     described = plan.Document(
         document_id, bytes(document.sha256).hex(), len(text), (), plan.cut(text)
     )
@@ -1014,21 +1043,27 @@ def queue_failed(db: Session, run_id: uuid.UUID, agent_run_id: uuid.UUID, now: d
 # --- callers: the routes, the hook and the cron ------------------------------------------------
 
 
-def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
+def advance_failed(
+    db: Session, run_id: uuid.UUID, now: datetime, bound: int = ADVANCE_FAILURES
+) -> bool:
     """`advance` raised for this run at the cron. Counted in the run's row, in a transaction of
-    its own (the caller's); at `ADVANCE_FAILURES` in a row the run is closed `failed` with
+    its own (the caller's); at `bound` in a row (`ADVANCE_FAILURES`, or
+    `DATABASE_ADVANCE_FAILURES` for a failure of the database) the run is closed `failed` with
     `STUCK`, whatever it had read, without a merge (the merge may be what raises): the user can
-    start a new run, which reuses the steps that ended `done`. True when it closed the run.
-    The close uses as little as it can: no item is read, no event deleted."""
+    start a new run, which reuses the steps that ended `done`. A run whose cancel was asked is
+    closed `cancelled` at its first failure: a Cancel closes through `advance`, which fails.
+    True when it closed the run. The close uses as little as it can: no item is read, no event
+    deleted."""
     run = _lock(db, run_id)
     if run is None or run.status not in ACTIVE:
         return False
+    cancelled = run.cancel_requested_at is not None
     last = run.advance_failed_at
-    if last is not None and now - last < ADVANCE_FAILURE_GAP:
+    if not cancelled and last is not None and now - last < ADVANCE_FAILURE_GAP:
         return False  # the same stall, seen again by a tick that had piled up behind it
     run.advance_failures += 1
     run.advance_failed_at = now
-    if run.advance_failures < ADVANCE_FAILURES:
+    if not cancelled and run.advance_failures < bound:
         return False
     _close_stuck(db, run, now)
     logger.error(
@@ -1037,13 +1072,21 @@ def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
             "ingestion_run_id": str(run.id),
             "user_id": str(run.user_id),
             "failures": run.advance_failures,
+            "status": run.status.value,
         },
     )
     return True
 
 
+def _stuck_end(run: IngestionRun) -> RunStatus:
+    """The status `_close_stuck` closes this run on: `cancelled` when its cancel was asked."""
+    return RunStatus.cancelled if run.cancel_requested_at is not None else RunStatus.failed
+
+
 def _close_stuck(db: Session, run: IngestionRun, now: datetime) -> None:
-    """Close the locked active run `failed` with `STUCK`: the exit of a run that cannot move."""
+    """Close the locked active run that cannot move: `failed` with `STUCK`, or `cancelled` when
+    its cancel was asked (`_stuck_end`)."""
+    cancelled = _stuck_end(run) is RunStatus.cancelled
     current = _running(_steps(db, run.id))
     if current is not None and current.agent_run_id is not None:
         try:
@@ -1074,21 +1117,23 @@ def _close_stuck(db: Session, run: IngestionRun, now: datetime) -> None:
             "ingestion_stuck_record_failed",
             extra={"ingestion_run_id": str(run.id), "error_type": type(error).__name__},
         )
-    run.status = RunStatus.failed
-    run.partial = True
+    run.status = RunStatus.cancelled if cancelled else RunStatus.failed
+    run.partial = not cancelled  # as `_close` leaves a cancelled run
     run.waiting = None
     run.paused_reason = None
     run.paused_at = None
-    run.closed_reason = STUCK
+    run.closed_reason = None if cancelled else STUCK
     run.finished_at = now
 
 
 @dataclass(frozen=True)
 class HandClose:
-    """What `close_by_hand` found, and did: the run's status before it, its planned steps, the
-    agent run of its running step (asked to stop by the close), and whether it closed the run."""
+    """What `close_by_hand` found, and did: the run's status before it, the status it ends on
+    (or would end on, on a dry run), its planned steps, the agent run of its running step (asked
+    to stop by the close), and whether it closed the run."""
 
     status: RunStatus
+    ends: RunStatus
     planned: int
     agent_run_id: uuid.UUID | None
     closed: bool
@@ -1106,25 +1151,33 @@ def close_by_hand(
         return None
     steps = _steps(db, run.id)
     current = _running(steps)
+    active = run.status in ACTIVE
     found = HandClose(
         status=run.status,
+        ends=_stuck_end(run) if active else run.status,
         planned=sum(1 for step in steps if step.status is StepStatus.planned),
         agent_run_id=current.agent_run_id if current is not None else None,
         closed=False,
     )
-    if dry_run or run.status not in ACTIVE:
+    if dry_run or not active:
         return found
     _close_stuck(db, run, now)
     logger.warning(
         "ingestion_run_closed_by_hand",
-        extra={"ingestion_run_id": str(run.id), "user_id": str(run.user_id)},
+        extra={
+            "ingestion_run_id": str(run.id),
+            "user_id": str(run.user_id),
+            "status": run.status.value,
+        },
     )
     return replace(found, closed=True)
 
 
-def _advance_failed(sessions: sessionmaker[Session], run_id: uuid.UUID, now: datetime) -> bool:
+def _advance_failed(
+    sessions: sessionmaker[Session], run_id: uuid.UUID, now: datetime, bound: int
+) -> bool:
     with sessions() as db, db.begin():
-        return advance_failed(db, run_id, now)
+        return advance_failed(db, run_id, now, bound)
 
 
 def _advance(
@@ -1275,7 +1328,9 @@ async def tick(
 ) -> int:
     """The cron, every minute: every run that is not final is advanced, one after the other. A
     run that fails here does not stop the others; its failure is counted (`advance_failed`) and
-    logged by its type only, since the message of an error may quote what it was handling."""
+    logged by its type only, since the message of an error may quote what it was handling. A
+    failure of the database itself (DATABASE_FAILURES) may say nothing about the run: five of
+    them would close runs that are well, so it closes one at `DATABASE_ADVANCE_FAILURES`."""
     moved = 0
     for run_id in await asyncio.to_thread(_due, sessions):
         try:
@@ -1283,8 +1338,10 @@ async def tick(
             moved += 1
         except Exception as error:
             _log_failure("ingestion_advance_failed", run_id, error)
+            database = isinstance(error, DATABASE_FAILURES)
+            bound = DATABASE_ADVANCE_FAILURES if database else ADVANCE_FAILURES
             try:
-                await asyncio.to_thread(_advance_failed, sessions, run_id, clock())
+                await asyncio.to_thread(_advance_failed, sessions, run_id, clock(), bound)
             except Exception as again:
                 _log_failure("ingestion_advance_count_failed", run_id, again)
     await asyncio.to_thread(_purge, sessions, clock())

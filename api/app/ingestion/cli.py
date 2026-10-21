@@ -4,8 +4,9 @@
 
 close-run closes an ingestion run that cannot move (its `advance` keeps failing, or a route
 failed after recording a request) the way the cron does after `engine.ADVANCE_FAILURES` failures
-in a row: `failed` with the `engine.STUCK` sentence, its planned steps cancelled, the agent run of
-its running step asked to stop, the steps that ended `done` kept for the user's next run. One
+in a row: `failed` with the `engine.STUCK` sentence (or `cancelled` when the user's Cancel was
+asked), its planned steps cancelled, the agent run of its running step asked to stop, the steps
+that ended `done` kept for the user's next run. It prints the status the run ends on. One
 transaction, under the run's row lock. A run that has already ended is left as it is, so running
 the command again changes nothing. --dry-run prints what the close would do and changes nothing.
 It prints ids, statuses and counts only (never a document, an item or an e-mail address) and logs
@@ -67,11 +68,12 @@ def close_run(run_id: uuid.UUID, dry_run: bool) -> int:
         stop = f", the agent run {found.agent_run_id} of its running step asked to stop"
     if not found.closed:
         print(
-            f"Dry run: run {run_id} is {found.status.value}. Closing it would mark it failed, "
-            f"with {_steps(found.planned)} cancelled{stop}. Nothing was changed."
+            f"Dry run: run {run_id} is {found.status.value}. Closing it would mark it "
+            f"{found.ends.value}, with {_steps(found.planned)} cancelled{stop}. "
+            "Nothing was changed."
         )
         return 0
-    print(f"Run {run_id} closed: failed, {_steps(found.planned)} cancelled{stop}.")
+    print(f"Run {run_id} closed: {found.ends.value}, {_steps(found.planned)} cancelled{stop}.")
     return 0
 
 

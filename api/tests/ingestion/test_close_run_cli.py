@@ -4,8 +4,11 @@ call and an unknown run change nothing; only ids, statuses and counts are printe
 
 import asyncio
 import uuid
+from collections.abc import Callable
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.crypto import Keyring
@@ -131,6 +134,85 @@ def test_a_paused_run_is_closed_too(
     closed = eh.run_of(factory, run_id)
     assert (closed.status, closed.paused_reason, closed.paused_at) == (RunStatus.failed, None, None)
     assert "planned" not in eh.statuses(factory, run_id)
+
+
+def test_a_run_whose_cancel_was_asked_closes_cancelled(
+    factory: sessionmaker[Session],
+    owner: uuid.UUID,
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_id = stuck(factory, owner, settings)
+    agent_id = eh.running(factory, run_id).agent_run_id
+    eh.set_run(factory, run_id, cancel_requested_at=now())
+
+    code, out = close(capsys, str(run_id), "--dry-run")
+    assert code == 0
+    assert out.startswith(f"Dry run: run {run_id} is running. Closing it would mark it cancelled,")
+    assert eh.run_of(factory, run_id).status is RunStatus.running
+
+    with caplog.at_level("INFO", logger="app.ingestion.engine"):
+        code, out = close(capsys, str(run_id))
+    assert (code, out.strip()) == (
+        0,
+        f"Run {run_id} closed: cancelled, 2 planned steps cancelled, the agent run {agent_id} "
+        "of its running step asked to stop.",
+    )
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.closed_reason, closed.partial) == (
+        RunStatus.cancelled,
+        None,
+        False,
+    )
+    logged = [one for one in caplog.records if one.getMessage() == "ingestion_run_closed_by_hand"]
+    assert [one.__dict__["status"] for one in logged] == ["cancelled"]
+    assert close(capsys, str(run_id)) == (
+        0,
+        f"Run {run_id} has already ended (cancelled). Nothing was changed.\n",
+    )
+
+
+def waiting(factory: sessionmaker[Session], act: Callable[[Session], object]) -> None:
+    """`act` in another session that waits at most 100 ms for a row lock."""
+    with factory() as other, other.begin():
+        other.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
+        act(other)
+
+
+def test_an_advance_waits_for_a_close_by_hand_and_leaves_the_run_closed(
+    factory: sessionmaker[Session], owner: uuid.UUID, settings: Settings
+) -> None:
+    run_id = stuck(factory, owner, settings)
+    with factory() as db, db.begin():
+        found = engine.close_by_hand(db, run_id, now())  # not committed yet
+        assert found is not None
+        assert found.closed
+        with pytest.raises(OperationalError, match="lock timeout"):
+            waiting(factory, lambda other: engine.advance(other, run_id, now(), settings))
+    eh.advance(factory, run_id, settings)
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.closed_reason) == (RunStatus.failed, engine.STUCK)
+    assert eh.statuses(factory, run_id) == ["running", "cancelled", "cancelled"]
+
+
+def test_a_close_by_hand_waits_for_an_advance_and_reads_what_it_wrote(
+    factory: sessionmaker[Session], owner: uuid.UUID, settings: Settings
+) -> None:
+    run_id = stuck(factory, owner, settings)
+    first = eh.running(factory, run_id).agent_run_id
+    eh.end_agent(factory, first, tokens=1_000)
+    with factory() as db, db.begin():
+        engine.advance(db, run_id, now(), settings)  # the next step starts, not committed yet
+        with pytest.raises(OperationalError, match="lock timeout"):
+            waiting(factory, lambda other: engine.close_by_hand(other, run_id, now()))
+    second = eh.running(factory, run_id).agent_run_id
+    assert second not in (None, first)
+    with factory() as db, db.begin():
+        found = engine.close_by_hand(db, run_id, now())
+    assert found is not None
+    assert (found.closed, found.planned, found.agent_run_id) == (True, 1, second)
+    assert eh.statuses(factory, run_id) == ["done", "cancelled", "cancelled"]
 
 
 def test_an_unknown_run_changes_nothing(

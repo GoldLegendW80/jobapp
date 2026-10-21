@@ -1,7 +1,7 @@
 /**
  * The checks the Import dialog runs on a chosen file before anything is sent, in the order the api
  * runs them (schemas.py parse_document): size, JSON, format, version, then the shape of the
- * document (six sections, each an object; an optional photo). The api validates every field of
+ * document (six sections, each an object, and preferences when present; an optional photo). The api validates every field of
  * every section again on import and answers 422 with the first problem; this side only catches
  * the files that are plainly not a profile export, and describes the ones that are.
  */
@@ -70,6 +70,11 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** The preferences row of a file written before preferences existed: the file wins, so the
+ * import sets the language and tone of documents back to their defaults. */
+export const OLDER_FILE_PREFERENCES =
+  "Not in this older file: the import resets the documents' language and tone to the defaults (auto, plain)";
+
 /** A few words on what a section of the file holds. */
 export function describeSection(name: SectionName, data: unknown): string {
   const s = isObject(data) ? data : {};
@@ -98,6 +103,15 @@ export function describeSection(name: SectionName, data: unknown): string {
     }
     case "answers":
       return plural(count(s.work_authorization), "country", "countries");
+    case "preferences": {
+      const language =
+        typeof s.documents_language === "string"
+          ? s.documents_language
+          : "auto";
+      const tone =
+        typeof s.documents_tone === "string" ? s.documents_tone : "plain";
+      return `Documents: language ${language}, tone ${tone}`;
+    }
   }
 }
 
@@ -162,7 +176,11 @@ export function checkImportFile(
   if (!isObject(sections)) {
     return { ok: false, error: "The file has no sections." };
   }
-  const missing = SECTIONS.filter((name) => !(name in sections));
+  // Preferences came after version 1 files were first written: an older file has none (the api
+  // reads its defaults then).
+  const missing = SECTIONS.filter(
+    (name) => !(name in sections) && name !== "preferences",
+  );
   if (missing.length > 0) {
     return {
       ok: false,
@@ -178,7 +196,9 @@ export function checkImportFile(
       error: `Unknown section in the file: ${extra.join(", ")}.`,
     };
   }
-  const notObject = SECTIONS.filter((name) => !isObject(sections[name]));
+  const notObject = SECTIONS.filter(
+    (name) => name in sections && !isObject(sections[name]),
+  );
   if (notObject.length > 0) {
     return {
       ok: false,
@@ -196,9 +216,19 @@ export function checkImportFile(
   const changes = SECTIONS.map((name) => ({
     name,
     label: SECTION_LABELS[name],
-    detail: describeSection(name, sections[name]),
+    detail:
+      name === "preferences" && !("preferences" in sections)
+        ? OLDER_FILE_PREFERENCES
+        : describeSection(name, sections[name]),
     changed: !sameData(
-      { ...EMPTY[name], ...(sections[name] as object) },
+      {
+        ...EMPTY[name],
+        ...(sections[name] as object | undefined),
+        // An import keeps the stored onboarding dates (O4): they never count as a change.
+        ...(name === "preferences"
+          ? { onboarding: profile.sections.preferences.onboarding }
+          : {}),
+      },
       profile.sections[name],
     ),
   }));

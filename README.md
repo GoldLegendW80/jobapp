@@ -1196,8 +1196,9 @@ the other addresses of the /64 yet (issue #152).
 ## Profile export and import
 
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;
-`POST /api/profile/import` takes that file back (2 MB at most) and replaces all six sections in
-one transaction, one revision each. Harald's engine files convert into the same format on the
+`POST /api/profile/import` takes that file back (2 MB at most) and replaces all seven sections in
+one transaction, one revision each (a file written before `preferences` existed reads its
+defaults, and the onboarding dates stored for the account are kept). Harald's engine files convert into the same format on the
 Mac, then load into one account inside the api container:
 
 ```bash
@@ -1406,11 +1407,13 @@ curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json
 ```
 
 A run that cannot move (its `advance` keeps failing) is closed by the cron after five failures in
-a row. The operator can close it at once: `./deploy.sh ingestion close-run <run id> --dry-run`
-prints what the close would do, the same without `--dry-run` closes it (`python -m
-app.ingestion.cli close-run` in the api container): `failed` with the stuck sentence, the planned
-steps cancelled, the running step's agent run asked to stop, the steps read kept for the next run.
-A run that has already ended is left as it is, so running it again changes nothing.
+a row (sixty for a failure of the database, the first one when the user asked to cancel it). The
+operator can close it at once: `./deploy.sh ingestion close-run <run id> --dry-run` prints what
+the close would do, the same without `--dry-run` closes it (`python -m app.ingestion.cli
+close-run` in the api container): `failed` with the stuck sentence, or `cancelled` when the user
+asked to cancel it, the planned steps cancelled, the running step's agent run asked to stop, the
+steps read kept for the next run. It prints the status the run ends on. A run that has already
+ended is left as it is, so running it again changes nothing.
 
 ## The parser service
 
