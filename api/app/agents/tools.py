@@ -63,7 +63,8 @@ EMPTY_SECTION = "The profile has no {section} section yet."
 # What get_profile_section shows of a section. Identity is an allow list: a contact field
 # added to the profile later never reaches the model by default. Search drops the board list,
 # the browser sources and the schedule (not needed to judge a posting) and the pay sought (the
-# person's own figures); preferences drops the wizard's dates; the other sections are shown whole.
+# person's own figures); preferences drops the wizard's part (its dates and steps); the other
+# sections are shown whole.
 SHOWN_FIELDS = {"identity": ("headline", "city", "country", "languages")}
 HIDDEN_FIELDS = {
     "search": ("boards", "browser_sources", "sweep_schedule", "compensation"),

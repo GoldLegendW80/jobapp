@@ -4,7 +4,9 @@
 contract with the swipe deck (product #74), whose signature and answers change only with both
 plans. A Like is the application itself:
 
-1. Under the posting's row lock, then the person's apply lock (the order of `service.start` and
+1. Under the posting's row lock, a posting the person passed (status `skipped`, the deck's Pass)
+   is refused `passed` at once, in Full auto too: the undo of the Pass puts it back first. Then,
+   under that lock and the person's apply lock (the order of `service.start` and
    of the gate): never apply (`guardrails.never_apply`, A2's fold) refuses at once; then the one
    refusal of a Like's own, `same_role_live`: another posting of the person at the same company
    with the same title (A2's `company_key` and `title_key`) has an application under way, not
@@ -56,12 +58,13 @@ from app.documents.models import (
     Kind,
 )
 from app.jobs import service as jobs_service
-from app.jobs.models import Job
+from app.jobs.models import Job, JobStatus
 
 logger = logging.getLogger(__name__)
 
 SENTENCES = {
     "same_role_live": "An application to the same role at this company is already under way.",
+    "passed": "You passed this posting. Undo the Pass first if you want to apply.",
 }
 
 
@@ -160,6 +163,9 @@ def on_like(
     posting = jobs_service.lock_job(db, user_id, posting_id)
     if posting is None:
         raise service.PostingNotFoundError(str(posting_id))
+    if posting.status is JobStatus.skipped:
+        # The Pass (opportunities) took the same lock: a Pass whose answer was lost is seen here.
+        raise service.RefusedError(guardrails.Refusal("passed"))
     service._lock_person(db, user_id)
     values = caps.settings_of(db, user_id)
     in_force = values.mode_after_like

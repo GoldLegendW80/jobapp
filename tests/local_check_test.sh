@@ -318,6 +318,48 @@ out_has "journeys-sweep             FAIL"
 [[ "$(ups)" == 3 ]] || fail "a port that is always taken: $(ups) starts, expected 3"
 ok "a stack that cannot bind its port is taken down and started on another, three starts at most, and four stacks hold four different ports"
 
+# Issue #530: the database is migrated before the full `up --wait`, so the worker never starts on
+# an empty database; each start of a retry migrates its fresh stack again, with the same compose
+# files as its `up`, and nothing migrates after `up` any more.
+stack_order() {
+  awk '$1 == "docker" {
+    if (/ run --rm -T api alembic upgrade head/) printf "migrate "
+    else if (/ up -d /) printf "up "
+    else if (/ down /) printf "down "
+    else if (/ exec .*alembic/) printf "exec-migrate "
+  }' "$STUB_CALLS"
+}
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=0 "$CHECK" --only journeys
+[[ "$(stack_order)" == "migrate up down " ]] || fail "one start: $(stack_order)(expected migrate up down)"
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+[[ "$(stack_order)" == "migrate up down migrate up down " ]] || fail "one failed start: $(stack_order)(expected migrate up down migrate up down)"
+migrate_files="$(grep ' run --rm -T api alembic upgrade head' "$STUB_CALLS" | head -n 1 | sed 's/ run --rm.*//')"
+up_files="$(grep ' up -d ' "$STUB_CALLS" | head -n 1 | sed 's/ up -d.*//')"
+[[ -n "$migrate_files" && "$migrate_files" == "$up_files" ]] || fail "the migration and the up do not use the same compose files: '$migrate_files' and '$up_files'"
+grep -q 'networks-' <<<"$migrate_files" || fail "the migration does not use the stack's networks: $migrate_files"
+cat >"$WORK/migrate-fails.sh" <<'EOF'
+docker() {
+  echo "docker $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" alembic upgrade head "*) echo "sqlalchemy.exc.ProgrammingError: a broken migration" >&2; return 1 ;;
+  esac
+  return 0
+}
+journey_play() { echo "journey_play" >>"$STUB_CALLS"; }
+stub_plan() {
+  pick_journey_ports sweep
+  run_step journeys-sweep s_journey sweep || true
+}
+EOF
+: >"$STUB_CALLS"
+run 1 env LOCAL_CHECK_STUB="$WORK/migrate-fails.sh" "$CHECK" --only journeys
+out_has "journeys-sweep             FAIL"
+[[ "$(stack_order)" == "migrate down " ]] || fail "a failed migration: $(stack_order)(expected migrate down, no up and no retry)"
+! grep -q '^journey_play' "$STUB_CALLS" || fail "the journeys ran on a stack whose migration failed"
+ok "the database is migrated before the full up, on every start with the same files, and a failed migration fails the group without a retry"
+
 # The mail group also publishes the fake Google on a port of its own: when that one is taken, the
 # retry changes it too, instead of failing the three starts on the same stub port.
 cat >"$WORK/ports-mail.sh" <<'EOF'
@@ -933,6 +975,62 @@ PY
 nothing_left "a pass"
 ok "a pass with stub steps ends with LOCAL CHECK: STUB PASS, never LOCAL CHECK: PASS, and its record says stub"
 ok "a pass writes .local-check/<tree sha>.json: the tree GitHub gets from the same merges, base, merged commits, steps, tools, date"
+
+# --- a pinned pull request head (issue #468) ---------------------------------------------------------
+# refs/pull/7/head on origin, as GitHub keeps it: approved at one commit, then a push on top of it.
+git -C "$REPO" checkout -q -b pr7 main
+printf 'approved\n' >"$REPO/p7.txt"
+git -C "$REPO" add -A
+git -C "$REPO" commit -q -m "pr7 approved"
+approved7="$(git -C "$REPO" rev-parse HEAD)"
+printf 'pushed after the approval\n' >>"$REPO/p7.txt"
+git -C "$REPO" commit -q -a -m "pr7 later push"
+later7="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" push -q origin "HEAD:refs/pull/7/head"
+git -C "$REPO" checkout -q main
+records_before="$(records)"
+run 0 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --merge "7@$approved7"
+out_has "pull request 7: checked at the pinned $approved7, its head is now $later7"
+[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ STUB\ PASS\ ([0-9a-f]{40})\  ]] || fail "last line of a pinned pass: $(last_line)"
+record7="$RECORDS/${BASH_REMATCH[1]}.json"
+python3 - "$record7" "$approved7" <<'PY2' || fail "the record of a pinned check does not list the approved commit"
+import json
+import sys
+
+record = json.load(open(sys.argv[1]))
+assert record["merged"] == [{"ref": "pull request 7", "commit": sys.argv[2]}], record["merged"]
+PY2
+rm -f "$record7"
+nothing_left "a pinned pass"
+ok "--merge <n>@<sha> checks that commit of the pull request, not the head pushed after it, and the record lists it"
+
+run 0 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --merge 7
+out_lacks "checked at the pinned"
+[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ STUB\ PASS\ ([0-9a-f]{40})\  ]] || fail "last line of an unpinned pass: $(last_line)"
+record7="$RECORDS/${BASH_REMATCH[1]}.json"
+grep -qF "$later7" "$record7" || fail "a bare number does not check the current head: $(cat "$record7")"
+rm -f "$record7"
+nothing_left "an unpinned pass"
+ok "--merge <n> still checks the current head of the pull request"
+
+# A head rewritten (force push) so the approved commit is no longer in its history: refused.
+git -C "$REPO" checkout -q -b pr7-rewritten main
+printf 'rewritten\n' >"$REPO/p7.txt"
+git -C "$REPO" add -A
+git -C "$REPO" commit -q -m "pr7 rewritten"
+rewritten7="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" push -q -f origin "HEAD:refs/pull/7/head"
+git -C "$REPO" checkout -q main
+run 4 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --merge "7@$approved7"
+out_has "pull request 7: $approved7 is not in the history of its head $rewritten7, nothing was checked"
+out_lacks "LOCAL CHECK:"
+run 4 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --merge "7@${approved7:0:7}"
+out_has "a pinned pull request is <number>@<full 40 character sha>"
+run 4 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --merge "8@$approved7"
+out_has "cannot fetch pull request 8 from origin"
+[[ "$(records)" == "$records_before" ]] || fail "a refused pinned check wrote a record"
+nothing_left "a refused pinned check"
+ok "a pinned commit that is not in the history of the head, a short sha, or a pull request that does not exist: exit 4, nothing checked, no record"
 
 # --- the lock --------------------------------------------------------------------------------------
 # A length of its own, so that the test can look for this step among the processes.

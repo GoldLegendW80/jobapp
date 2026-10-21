@@ -30,9 +30,10 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs.models import ContractType, JobStatus
+from app.jobs.models import ContractType, Job, JobStatus, WorkMode
 from app.opportunities import deck as decks
 from app.opportunities import passes
+from app.opportunities import pay as pays
 
 NO_STORE = {"Cache-Control": "no-store"}
 NOT_FOUND = "Posting not found."
@@ -66,9 +67,9 @@ class CardOut(BaseModel):
     fit: int | None
     found_on: str
     reason: ReasonOut
-    # O3 fills them from the posting; None until then.
+    # What the posting states (O3): "45,000 to 55,000 EUR a year", "remote"; None when nothing.
     pay: str | None = None
-    work_mode: str | None = None
+    work_mode: WorkMode | None = None
 
 
 class DeckOut(BaseModel):
@@ -125,6 +126,16 @@ def _card(card: decks.Card) -> CardOut:
         reason=ReasonOut(
             matches=list(card.reason.matches), gap=card.reason.gap, text=card.reason.text
         ),
+        pay=_pay(posting),
+        work_mode=posting.work_mode,
+    )
+
+
+def _pay(posting: Job) -> str | None:
+    if posting.pay_min is None or posting.pay_currency is None or posting.pay_period is None:
+        return None
+    return pays.pay_text(
+        posting.pay_min, posting.pay_max, posting.pay_currency, str(posting.pay_period)
     )
 
 

@@ -5,12 +5,17 @@
 #
 #   ops/local-check.sh                                  origin/main as it is
 #   ops/local-check.sh --merge 121 --merge 118          origin/main, then pull request 121, then 118
+#   ops/local-check.sh --merge 121@<full sha>           pull request 121 at that commit of its head
 #   ops/local-check.sh --merge origin/platform/x        a branch or a commit instead of a number
 #   ops/local-check.sh --base <ref> --only api          another base; one CI job only (no record)
 #   ops/local-check.sh --jobs 6                         pytest and vitest processes (default: cores - 2)
 #
 # What it does. After a fetch, a throwaway detached worktree of --base under a temporary folder;
-# each --merge ref merged there in the order given (git merge --no-ff --no-edit); then, in that
+# each --merge ref merged there in the order given (git merge --no-ff --no-edit). A pull request
+# number merges its head as origin has it now; <n>@<full sha> (issue #468, what ops/ship.sh gives:
+# the head the review approved) merges exactly that commit, and refuses (exit 4) unless the commit
+# is the head of pull request n or in its history, so a push after the approval is never what is
+# checked. Then, in that
 # tree, the FULL set, whatever the batch touches (the path plan of .github/scripts/ci_plan.py
 # narrowed a pull request's run; a batch check does not narrow):
 #
@@ -80,8 +85,8 @@
 # commit whose tree has such a record.
 #
 # Exit status: 0 passed, 1 a check failed, 2 a merge conflict (a result, not a crash), 3 the lock
-# or the disk, 4 the check could not be prepared (no fetch, a tool missing), 64 wrong arguments,
-# 130 interrupted.
+# or the disk, 4 the check could not be prepared (no fetch, a tool missing, a pinned head that is
+# not in its pull request's history), 64 wrong arguments, 130 interrupted.
 #
 # Not run here: tests/compose_smoke.sh. CI never ran it (it publishes 127.0.0.1:8000 and :5432,
 # the ports of a developer's own stack); it stays a test run by hand.
@@ -102,10 +107,10 @@ STEP_TIMEOUT="${LOCAL_CHECK_STEP_TIMEOUT:-1200}"
 KEEP_LOGS=10
 INT_GRACE="${LOCAL_CHECK_INT_GRACE:-8}"
 
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() {
   printf '%s: %s\n' "$PROG" "$*" >&2
-  printf 'usage: %s [--base <ref>] [--merge <ref or pull request number> ...] [--only api|checks|journeys ...] [--jobs N]\n' "$PROG" >&2
+  printf 'usage: %s [--base <ref>] [--merge <ref, pull request number or number@sha> ...] [--only api|checks|journeys ...] [--jobs N]\n' "$PROG" >&2
   exit 64
 }
 say() { printf '%s\n' "$*"; }
@@ -308,6 +313,18 @@ for ref in ${MERGES[@]+"${MERGES[@]}"}; do
     git -C "$ROOT" fetch -q origin "pull/$ref/head" 2>/dev/null || fail_prepare "cannot fetch pull request $ref from origin"
     sha="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
     ref="pull request $ref"
+  elif [[ "$ref" =~ ^([0-9]+)@([0-9a-f]{40})$ ]]; then
+    # A pinned head: that commit, which must be the head of the pull request or in its history.
+    pin_number="${BASH_REMATCH[1]}"
+    sha="${BASH_REMATCH[2]}"
+    git -C "$ROOT" fetch -q origin "pull/$pin_number/head" 2>/dev/null || fail_prepare "cannot fetch pull request $pin_number from origin"
+    pin_head="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+    git -C "$ROOT" merge-base --is-ancestor "$sha" "$pin_head" 2>/dev/null ||
+      fail_prepare "pull request $pin_number: $sha is not in the history of its head $pin_head, nothing was checked"
+    [[ "$pin_head" == "$sha" ]] || say "pull request $pin_number: checked at the pinned $sha, its head is now $pin_head"
+    ref="pull request $pin_number"
+  elif [[ "$ref" =~ ^[0-9]+@ ]]; then
+    fail_prepare "--merge $ref: a pinned pull request is <number>@<full 40 character sha>"
   else
     sha="$(git -C "$ROOT" rev-parse --verify -q "$ref^{commit}")" || fail_prepare "--merge $ref names no commit"
   fi
@@ -854,6 +871,7 @@ journey_play() ( # journey_play <group> <Playwright arguments>
 # A start that fails on "Pool overlaps" (a network left by a check that died) is taken down and
 # started again on another network slot, within the same three starts: the bad slot stays claimed,
 # and `slot`, s_journey's local, names the new one so that s_journey frees that one.
+# Each start migrates the database first, then brings the whole stack up (see below).
 stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or one shard of it
   local part="$1" project="$2" port="" out attempt=1 rc why group="${1%%.*}"
   shift 2
@@ -864,7 +882,15 @@ stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or o
     export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port"
     echo "stack $project on $E2E_CADDY_URL"
     rc=0
-    docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300 >"$out" 2>&1 || rc=$?
+    # The database is migrated before the full `up --wait` (issue #530): `run` starts the api's
+    # dependencies (db, redis, the ATS stub) and waits for them to be healthy, then runs the
+    # migration in a container of its own. Migrated after `up`, the worker started on an empty
+    # database (every start hook and cron failing on a missing table) and, under the gate's load,
+    # missed its healthcheck: `up --wait` then failed the whole group on "worker is unhealthy".
+    {
+      docker compose -p "$project" "$@" run --rm -T api alembic upgrade head &&
+        docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300
+    } >"$out" 2>&1 || rc=$?
     cat "$out"
     ((rc != 0)) || return 0
     ((attempt < 3)) || return "$rc"
@@ -943,7 +969,6 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
   esac
   specs="$(journey_specs "$part")"
   stack_up "$part" "$project" "${files[@]}" &&
-    docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
     journey_play "$run" "$specs" || rc=$?
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$run.log" 2>&1 || true
   # The slot is free again only when its stack is gone: one that could not be taken down keeps

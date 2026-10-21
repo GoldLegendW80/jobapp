@@ -17,13 +17,11 @@ to 7. Owner decisions: [../decisions.md](../decisions.md).
 1. **Issue.** Every task is a GitHub issue, from a module plan (`tasks/<module>/todo.md`, one
    section per task id such as D12 or A5), a review follow up, or an owner request. No issue, no
    work: create it first (`gh issue create`).
-2. **Card.** Put it on the board with its module and horizon, and move it on every change of
-   state: `ops/card.sh <issue url> doing <module> now` when an agent starts,
-   `ops/card.sh <pr url> doing <module> now` when the pull request opens. Merges move closed
-   issues to Done by themselves (`ops/ship.sh` sets Done right after the merge). After each agent
-   hands back, audit the board in one command (closed but not Done, open but Done, open issues
-   and pull requests missing) and fix it. The owner judges progress by the Done column: prefer
-   shipping approved work early to starting new tasks.
+2. **Card.** The agent that starts a task runs `ops/card.sh <issue url> doing <module> now`
+   (Building); every other move is made by `ops/board-sync.py` from GitHub facts (The board,
+   below), so nobody moves cards by hand. After each agent hands back, a dry run of the sync
+   (`ops/board-sync.py`, no `--apply`) prints how many tasks sit in each column. The owner judges
+   progress by the Live column: prefer shipping approved work early to starting new tasks.
 3. **Builder.** One fresh subagent per task (`.claude/agents/implementer.md`, or the Agent tool
    with the builder brief below), on its own branch `<module>/<task-id>-<slug>` in its own
    worktree `.claude/worktrees/<name>`. It hands back a pull request number and head sha.
@@ -52,6 +50,39 @@ to 7. Owner decisions: [../decisions.md](../decisions.md).
 10. **After.** Follow ups from the review files become issues with cards; the merged branch's
     worktree is removed (`git worktree remove .claude/worktrees/<name>`), its scratch images
     removed by tag; [../STATUS.md](../STATUS.md) gets the new state.
+
+## The board (issue #500)
+
+Project 1 of GoldLegendW80 has one column (Status option) per step of the pipeline, in this
+order, and one card per task: the issue. A pull request that closes an issue has no card of its
+own (the sync archives it); one that closes no issue keeps its card.
+
+| Column | A task is there when |
+|---|---|
+| Needs you | open, label `owner`, no open pull request |
+| Paused | open, label `paused`, no open pull request |
+| Spec | open, label `spec` |
+| Ready | open, nothing started; also when a `Depends on #N` line names an open issue or pull request (the snapshot column `blocked_by` names it) |
+| Building | an agent started it (`ops/card.sh <issue url> doing <module> now`), or its pull request is a draft |
+| In review | its pull request has no verdict yet |
+| Fix & re-check | the latest verdict asks for changes, or a commit came after the approval |
+| Approved | approved on its current head, waits for the gate |
+| Gating | in the batch `ops/ship.sh` is checking (`.local-check/ship.lock/batch`) |
+| Merged | on main, not in the deployed commit yet |
+| Live | in the commit the Jetson runs (the `JOBAPP-VERIFY commit=` of the last deploy) |
+| Dropped | closed as not planned, or its pull request closed unmerged |
+| Epic | a lane's tracking issue (label `epic`) |
+
+What moves a card: `ops/board-sync.py --apply`, which computes every column from GitHub facts
+only (labels, bodies, pull request states, `REVIEW VERDICT` reviews and their heads, the last
+deploy run), so it is safe to repeat. `ops/ship.sh` runs it at the start of the gate, after the
+merges and after the deploy; a failed sync prints one line and never fails the ship. Building is
+the one fact GitHub does not hold, which is why agents run `ops/card.sh ... doing` when they
+start: the sync keeps Building until a pull request exists. The Module field comes from the title
+(`A5 ...` is apply, `O4 ...` opportunities), else the lane label. Every sync, dry or not, writes
+a snapshot to `.local-check/board/` (`tasks.csv`, `daily.csv`, `history.csv`, `meta.csv`, git
+ignored) that the dashboard with the charts reads. `--setup` replaces the Status and Module
+options with the list of the script, once, when that list changes.
 
 ## Deploy from any machine (owner, 2026-10-15)
 

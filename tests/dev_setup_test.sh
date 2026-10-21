@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Tests of the two helper scripts of the development workflow: ops/dev-setup.sh (what a new
-# laptop needs, read only) and ops/card.sh (a card on the project board). Every tool they call is
-# a fake on a PATH that holds nothing else but a few system utilities, and writes what it was
-# asked into a log: nothing is installed, pulled, signed in, connected or sent.
+# Tests of the helper scripts of the development workflow: ops/dev-setup.sh (what a new laptop
+# needs, read only), ops/card.sh (a card on the project board) and, at the end, the stage rules of
+# ops/board-sync.py (tests/board_sync_test.py, fixtures only). Every tool they call is a fake on a
+# PATH that holds nothing else but a few system utilities, and writes what it was asked into a
+# log: nothing is installed, pulled, signed in, connected or sent.
 #
 #   tests/dev_setup_test.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHON="$(command -v python3)" # before PATH holds only the fakes
 WORK="$(mktemp -d)"
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
@@ -65,6 +67,14 @@ case "$1 $2" in
   [[ -n "${FAKE_GH_NO_SCOPES:-}" ]] || echo "  - Token scopes: ${FAKE_GH_SCOPES-'gist', 'project', 'read:org', 'repo', 'workflow'}"
   ;;
 "project item-add") echo "PVTI_fakeitem" ;;
+"project field-list")
+  # What gh prints for the --jq of card.sh: field, field id, option, option id, tab separated.
+  {
+    printf 'Status\tSF_status\t%s\n' "Needs you" "Ready" "Building" "In review" "Fix & re-check" "Live"
+    printf 'Module\tSF_module\t%s\n' opportunities platform apply
+    printf 'Horizon\tSF_horizon\t%s\n' Now Next Later
+  } | awk -F'\t' -v drop="${FAKE_GH_NO_OPTION:-}" '$3 != drop { printf "%s\t%s\t%s\t%08x\n", $1, $2, $3, NR }'
+  ;;
 esac
 exit 0
 EOF
@@ -402,16 +412,34 @@ done
 ok "card.sh: a wrong count, status, module, horizon or url exits 64 before any gh call"
 
 card 0 "$URL" doing platform now
+grep -qF "gh project field-list 1 --owner GoldLegendW80 --format json --jq" "$CALLS" || fail "field-list: $(cat "$CALLS")"
+[[ "$(grep -c "project field-list" "$CALLS")" == 1 ]] || fail "more than one field-list: $(cat "$CALLS")"
 grep -qF "gh project item-add 1 --owner GoldLegendW80 --url $URL --format json --jq .id" "$CALLS" || fail "item-add: $(cat "$CALLS")"
-for pair in "PVTSSF_lAHOA9eVYc4BmeB8zhlG8_A --single-select-option-id 47fc9ee4" \
-  "PVTSSF_lAHOA9eVYc4BmeB8zhlG9Os --single-select-option-id 2b39a4a2" \
-  "PVTSSF_lAHOA9eVYc4BmeB8zhlG9O0 --single-select-option-id ff3c9fd9"; do
+# The fake's option ids count its lines in hex: Building 00000003, platform 00000008, Now 0000000a.
+for pair in "SF_status --single-select-option-id 00000003" "SF_module --single-select-option-id 00000008" \
+  "SF_horizon --single-select-option-id 0000000a"; do
   grep -qF -- "--project-id PVT_kwHOA9eVYc4BmeB8 --id PVTI_fakeitem --field-id $pair" "$CALLS" || fail "no edit '$pair': $(cat "$CALLS")"
 done
-card 0 "https://github.com/GoldLegendW80/jobapp/pull/323" "done" 23d87376 later
-grep -qF -- "--single-select-option-id 98236657" "$CALLS" || fail "done: $(cat "$CALLS")"
-grep -qF -- "--single-select-option-id 23d87376" "$CALLS" || fail "apply by id: $(cat "$CALLS")"
-grep -qF -- "--single-select-option-id a62bd178" "$CALLS" || fail "later: $(cat "$CALLS")"
-ok "card.sh: adds the item to project 1 and sets Status, Module (by name or option id) and Horizon"
+card 0 "https://github.com/GoldLegendW80/jobapp/pull/323" "done" 00000009 later
+grep -qF -- "--field-id SF_status --single-select-option-id 00000006" "$CALLS" || fail "done is Live: $(cat "$CALLS")"
+grep -qF -- "--field-id SF_module --single-select-option-id 00000009" "$CALLS" || fail "apply by id: $(cat "$CALLS")"
+grep -qF -- "--field-id SF_horizon --single-select-option-id 0000000c" "$CALLS" || fail "later: $(cat "$CALLS")"
+card 0 "$URL" todo opportunities next
+grep -qF -- "--field-id SF_status --single-select-option-id 00000002" "$CALLS" || fail "todo is Ready: $(cat "$CALLS")"
+grep -qF -- "--field-id SF_module --single-select-option-id 00000007" "$CALLS" || fail "opportunities: $(cat "$CALLS")"
+ok "card.sh: looks the ids up by name in one field-list call, todo Ready, doing Building, done Live, opportunities, a module by option id"
+
+for missing in Building platform; do
+  FAKE_GH_NO_OPTION="$missing" card 1 "$URL" doing platform now
+  grep -qF "has no option $missing" "$WORK/out" || fail "missing $missing: $(cat "$WORK/out")"
+  ! grep -qF "item-add" "$CALLS" || fail "card.sh added an item without the option $missing: $(cat "$CALLS")"
+done
+card 1 "$URL" doing deadbeef now
+grep -qF "has no option deadbeef" "$WORK/out" || fail "unknown option id: $(cat "$WORK/out")"
+ok "card.sh: an option the board lacks (a name or an id) exits 1 before the card is touched"
+
+# The stage rules of ops/board-sync.py, on fixtures: no network, no gh.
+"$PYTHON" "$ROOT/tests/board_sync_test.py" >"$WORK/board" 2>&1 || fail "tests/board_sync_test.py: $(tail -n 30 "$WORK/board")"
+ok "board-sync: $(grep -o 'Ran [0-9]* tests' "$WORK/board") of tests/board_sync_test.py passed"
 
 echo "dev_setup_test: $passed passed"
