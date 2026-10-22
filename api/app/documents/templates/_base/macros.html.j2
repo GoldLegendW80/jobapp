@@ -6,6 +6,10 @@
 
 {% macro label(key) %}{{ labels[key] }}{% endmacro %}
 
+{#- Each word of a name in a box of its own (the template's CSS makes it an inline block): a line
+    breaks between two words, never at a hyphen; a no break space stays inside its word. -#}
+{% macro words(text, class="word") %}{% for word in text.split(" ") if word %}{% if not loop.first %} {% endif %}<span class="{{ class }}">{{ word }}</span>{% endfor %}{% endmacro %}
+
 {% macro contact_lines(class="contact") %}
 {% if contact %}
 <ul class="{{ class }}">
@@ -24,7 +28,7 @@
 <header class="head">
 {{ portrait() }}
 <div class="headtext">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name">{{ words(name) }}</h1>
 {% if headline %}<p class="headline">{{ headline }}</p>{% endif %}
 {{ contact_lines() }}
 </div>

@@ -11,6 +11,10 @@ answers 404 as if it did not exist (the store reads the person's rows only). Eve
 of the app. A PDF or a page image is read from the version row: nothing of the request reaches
 the file system, and a thumbnail's file is the registry's, found by its slug.
 
+An outreach proposal (issue #485) is text only: a save or a restore of its draft makes a
+version at once (no render does), and "Render" and the language or template switch answer 422
+(`NOT_RENDERED`). Its versions are listed, read and approved as any document's.
+
 Never blocked: a draft with notes is saved and rendered (the notes come back in the answer); an
 overflow is stored. What can be refused is capacity (429, renders waiting) and a stale save
 (409 with the current draft).
@@ -49,8 +53,17 @@ from sqlalchemy.orm import Session
 from app import queue as queues
 from app.db import get_session
 from app.documents import content as c
-from app.documents import corrections, freeze, render_client, render_job, store, templates
+from app.documents import (
+    corrections,
+    freeze,
+    render_client,
+    render_job,
+    store,
+    submit,
+    templates,
+)
 from app.documents.models import (
+    RENDERED_KINDS,
     Author,
     Document,
     DocumentGeneration,
@@ -95,6 +108,7 @@ NO_REVISION = "Say which revision you saved from (If-Match)."
 BAD_REVISION = "If-Match must be the draft's revision, a number."
 QUEUE_FULL = "Several previews are already waiting. Try again in a moment."
 FROZEN = "This version was sent: it keeps its own mark."
+NOT_RENDERED = "A proposal is text only: it has no template and no preview. Edit its text."
 
 _previews = threading.BoundedSemaphore(PREVIEWS_AT_ONCE)
 
@@ -329,7 +343,23 @@ def _queue(
 
 
 def _checked(db: Session, document: Document, at: datetime) -> Any:
+    if document.kind not in RENDERED_KINDS:
+        return submit.proposal_edit_sources(db, document, at)
     return render_job.sources_of(render_job.read_context(db, document, at), document)
+
+
+def _rendered(document: Document) -> None:
+    """A kind the renderer draws (a CV, a letter), else 422: a proposal is text only."""
+    if document.kind not in RENDERED_KINDS:
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, NOT_RENDERED)
+
+
+def _keep_text(db: Session, user: User, document: Document, origin: Origin, at: datetime) -> Any:
+    """The draft of a text only document (a proposal) as a version, committed: what a render
+    does for a CV or a letter. The same content saved again is the same version."""
+    store.snapshot(db, user.id, document.id, origin, at=at)
+    store.commit(db)
+    return _own(db, user, document.id)
 
 
 # Letters NFKD leaves whole, by their ASCII spelling in small letters (`_cased` writes their
@@ -544,6 +574,8 @@ def save_draft(
     except store.NotFoundError:
         db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+    if document.kind not in RENDERED_KINDS:
+        return _document_out(db, _keep_text(db, user, document, Origin.edited, at))
     document = _queue(request, db, user, document_id, edit=True)
     return _document_out(db, document)
 
@@ -554,8 +586,8 @@ def patch_document(
 ) -> DocumentOut:
     """Change the language or the template: a new version, rendered. A frozen version stays as
     it is. An unknown template, or another person's own, is 422. A change to what the document
-    already has asks for nothing, so it is never refused."""
-    _own(db, user, document_id)
+    already has asks for nothing, so it is never refused. A proposal has neither to switch."""
+    _rendered(_own(db, user, document_id))
     try:
         made = render_job.switch(
             db,
@@ -585,8 +617,9 @@ def patch_document(
     responses={429: {"description": "Too many renders of this person wait"}},
 )
 def render(document_id: uuid.UUID, user: CurrentUser, request: Request, db: Db) -> QueuedOut:
-    """Queue a render of the draft. Asked again before it ran, it is the same render."""
-    _own(db, user, document_id)
+    """Queue a render of the draft. Asked again before it ran, it is the same render. A
+    proposal is never rendered (422)."""
+    _rendered(_own(db, user, document_id))
     document = _queue(request, db, user, document_id, edit=False)
     return QueuedOut(render=_render_out(document))
 
@@ -695,6 +728,8 @@ def restore_version(
     except store.NotFoundError:
         db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, VERSION_NOT_FOUND) from None
+    if document.kind not in RENDERED_KINDS:
+        return _document_out(db, _keep_text(db, user, document, Origin.restored, at))
     document = _queue(request, db, user, document_id, edit=True)
     return _document_out(db, document)
 

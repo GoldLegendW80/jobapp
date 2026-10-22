@@ -126,9 +126,13 @@ li, p { overflow-wrap: anywhere; }
 
 .letter-body { padding-top: 16pt; }
 .letter-body p { margin-bottom: var(--item-gap); }
-.date { text-align: right; font-style: italic; color: #4d4943; }
+/* the inset keeps the italic's overhang inside the margin */
+.date { text-align: right; font-style: italic; color: #4d4943; padding-right: 1pt; }
 .recipient { margin-top: var(--section-gap); }
 .subject { margin: var(--section-gap) 0; }
 .paragraph { text-align: justify; white-space: pre-line; }
 .closing { margin-top: var(--section-gap); }
 .signature { font-weight: 600; letter-spacing: 0.08em; margin-top: var(--section-gap); }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }

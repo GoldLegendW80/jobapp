@@ -68,13 +68,14 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import queue as queues
 from app.identity.models import User
 from app.jobs import ats, schedule, scoring, service
 from app.jobs import slug as slugs
@@ -1087,6 +1088,70 @@ def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime)
     service.SweepRunningError when one is running; the caller commits."""
     reap_stale(db, now, user_id)
     return service.start_sweep(db, user_id, trigger, now)
+
+
+BeginOutcome = Literal["started", "running", "no_boards", "search_invalid", "queue_down"]
+
+
+@dataclass(frozen=True)
+class Begun[T]:
+    """What `begin` did. `sweep_id` is the new sweep (started) or the one already running
+    (running), None otherwise; `view` is the caller's view of the new sweep, read before its
+    commit."""
+
+    outcome: BeginOutcome
+    sweep_id: uuid.UUID | None = None
+    view: T | None = None
+
+
+def _insert[T](
+    sessions: sessionmaker[Session], user_id: uuid.UUID, now: datetime, view: Callable[[Sweep], T]
+) -> Begun[T]:
+    with sessions() as db:
+        try:
+            search = load_search(db, user_id)
+        except InvalidSearchError:
+            return Begun("search_invalid")
+        if not (enabled_boards(search) or enabled_sources(search) or enabled_feeds(search)):
+            return Begun("no_boards")
+        try:
+            row = start(db, user_id, SweepTrigger.manual, now)
+            begun = Begun("started", row.id, view(row))
+            db.commit()
+        except service.SweepRunningError:
+            db.rollback()
+            running = service.running_sweep(db, user_id)
+            if running is None:  # finished between the insert and this read
+                return _insert(sessions, user_id, now, view)
+            return Begun("running", running.id)
+    return begun
+
+
+async def begin[T](
+    sessions: sessionmaker[Session],
+    queue: queues.Queue,
+    user_id: uuid.UUID,
+    now: datetime,
+    view: Callable[[Sweep], T],
+) -> Begun[T]:
+    """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
+    and of the first login wizard's Start (opportunities O5). No sweep without an enabled board
+    or source, or with a search section that no longer validates; the running one when the user
+    has one; a queue that is down fails the new sweep at once, so it never blocks the next try."""
+    begun = await asyncio.to_thread(_insert, sessions, user_id, now, view)
+    if begun.outcome != "started" or begun.sweep_id is None:
+        return begun
+    try:
+        await queue.enqueue(
+            "run_sweep",
+            str(begun.sweep_id),
+            queue=queues.SWEEPS,
+            job_id=queues.sweep_job_id(begun.sweep_id),
+        )
+    except queues.QueueUnavailableError:
+        await asyncio.to_thread(fail_sweep, sessions, begun.sweep_id, QUEUE_DOWN, now)
+        return Begun("queue_down")
+    return begun
 
 
 def sweeps_of(db: Session, user_id: uuid.UUID, limit: int) -> Sequence[Sweep]:

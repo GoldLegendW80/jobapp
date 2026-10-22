@@ -1,6 +1,8 @@
 """The content of a document: structured fields (SPEC-documents.md, "Content", Decision 6).
 
-A CV, a base CV (a CV with its `fixed` block) and a letter are Pydantic models with the hard
+A CV, a base CV (a CV with its `fixed` block), a letter and an outreach proposal (issue #485:
+a subject and a short body for a posting whose only way to apply is an e-mail address, text only,
+never rendered) are Pydantic models with the hard
 limits of the spec: beyond them the api and the submit tools refuse. The soft limits (the
 counters shown under a field) belong to each template and live in `rules.SoftLimits`.
 
@@ -40,8 +42,8 @@ from app.profile.schemas import OptPeriod, Slug
 
 SCHEMA = 1
 
-Kind = Literal["cv", "letter", "base"]
-KINDS: tuple[Kind, ...] = ("cv", "letter", "base")
+Kind = Literal["cv", "letter", "base", "proposal"]
+KINDS: tuple[Kind, ...] = ("cv", "letter", "base", "proposal")
 
 # Hard limits, refused beyond (the spec's "Limits per field").
 HEADLINE_MAX = 200
@@ -57,12 +59,18 @@ HIGHLIGHTS_MAX = 3
 COMPETENCIES_MAX = 8
 SKILLS_MAX = 4
 PARAGRAPHS_MAX = 5
+# A proposal: the writer is asked for at most PROPOSAL_WORDS words, more than PROPOSAL_WORDS_MAX
+# are refused ("about 150 words"), and the body's characters are capped as a paragraph's.
+PROPOSAL_WORDS = 150
+PROPOSAL_WORDS_MAX = 180
+PROPOSAL_BODY_MAX = 1_500
 # The render minimums: what a template needs to print the document at all. Only a letter has
 # one: a paragraph. The corrections never leave less (`corrections.remove_remaining`).
 RENDER_MIN: dict[str, dict[str, int]] = {
     "cv": {"highlights": 0, "competencies": 0, "skills": 0},
     "base": {"highlights": 0, "competencies": 0, "skills": 0},
     "letter": {"paragraphs": 1},
+    "proposal": {},
 }
 # Limits the spec leaves to the plan: one line, one term of a list, the notes.
 LINE_MAX = 200
@@ -251,12 +259,52 @@ class LetterContent(_Content):
     closing: _text(LINE_MAX) = ""
 
 
-Content = CvContent | LetterContent  # BaseCvContent is a CvContent
+# An address as the proposal's `to` holds it: one `@`, no space. Which address of a posting is
+# chosen is the caller's rule (apply's, for O9a); this only keeps the field one address.
+_ADDRESS = re.compile(r"[^@\s]{1,64}@[^@\s]{1,190}")
+
+
+def word_count(text: str) -> int:
+    return len(text.split())
+
+
+class ProposalContent(_Content):
+    """An outreach proposal: what the person sends from their own mail program. `to` is the
+    address it goes to, set by the app from the posting (never by the writer) and not printed
+    prose: the fact check reads the subject and the body only."""
+
+    target: _text(LINE_MAX) = ""  # shown in the app, not sent
+    to: _text(LINE_MAX) = ""
+    subject: _text(LINE_MAX) = ""
+    body: _text(PROPOSAL_BODY_MAX, multiline=True) = ""
+
+    @field_validator("to")
+    @classmethod
+    def _one_address(cls, value: str) -> str:
+        if value and not _ADDRESS.fullmatch(value):
+            raise PydanticCustomError("bad_address", "not one e-mail address")
+        return value
+
+    @field_validator("body")
+    @classmethod
+    def _short(cls, value: str) -> str:
+        words = word_count(value)
+        if words > PROPOSAL_WORDS_MAX:
+            raise PydanticCustomError(
+                "too_many_words",
+                "the body has {words} words, at most {limit} allowed",
+                {"words": words, "limit": PROPOSAL_WORDS_MAX},
+            )
+        return value
+
+
+Content = CvContent | LetterContent | ProposalContent  # BaseCvContent is a CvContent
 
 MODELS: dict[str, type[_Content]] = {
     "cv": CvContent,
     "letter": LetterContent,
     "base": BaseCvContent,
+    "proposal": ProposalContent,
 }
 
 
@@ -275,7 +323,14 @@ _CODES = {
     "value_error": "bad_format",
 }
 _OWN_CODES = frozenset(
-    ("duplicate_employer", "content_too_large", "control_character", "lone_surrogate")
+    (
+        "duplicate_employer",
+        "content_too_large",
+        "control_character",
+        "lone_surrogate",
+        "bad_address",
+        "too_many_words",
+    )
 )
 
 
@@ -303,7 +358,7 @@ def _code(error_type: str) -> str:
     return _CODES.get(error_type, "invalid")
 
 
-def parse(kind: Kind, data: object) -> CvContent | LetterContent:
+def parse(kind: Kind, data: object) -> Content:
     """The validated content of `kind`, or `ContentInvalidError` with every field error in order."""
     model = MODELS[kind]
     try:
@@ -352,7 +407,10 @@ def content_hash(kind: Kind, content: BaseModel) -> bytes:
 
 def text_fields(content: BaseModel) -> list[tuple[str, str]]:
     """Every printed text field as `(path, text)`, in the order a reader meets them. `target`,
-    `notes` and the fixed facts are not written prose of the document and are left out."""
+    `notes`, a proposal's `to` and the fixed facts are not written prose of the document and are
+    left out."""
+    if isinstance(content, ProposalContent):
+        return [("subject", content.subject), ("body", content.body)]
     if isinstance(content, LetterContent):
         out = [
             ("headline", content.headline),
@@ -381,4 +439,6 @@ def kind_of(content: BaseModel) -> Kind:
         return "base"
     if isinstance(content, LetterContent):
         return "letter"
+    if isinstance(content, ProposalContent):
+        return "proposal"
     return "cv"
