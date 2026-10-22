@@ -43,19 +43,28 @@ const preferencesSchema = z.object({
     completed_at: z.string().nullable(),
     dismissed_at: z.string().nullable(),
     steps_passed: z.array(z.string()),
+    starter_handled: z.array(z.string()).optional(),
   }),
   documents_language: z.enum(DOCUMENTS_LANGUAGES),
   documents_tone: z.enum(DOCUMENTS_TONES),
 });
 type PreferencesForm = z.infer<typeof preferencesSchema>;
 
+// The onboarding part goes back exactly as loaded: only the wizard's routes write it.
+const copyOnboarding = (
+  o: Preferences["onboarding"],
+): Preferences["onboarding"] => ({
+  ...o,
+  steps_passed: [...o.steps_passed],
+  ...(o.starter_handled ? { starter_handled: [...o.starter_handled] } : {}),
+});
 const toForm = (p: Preferences): PreferencesForm => ({
   ...p,
-  onboarding: { ...p.onboarding, steps_passed: [...p.onboarding.steps_passed] },
+  onboarding: copyOnboarding(p.onboarding),
 });
 const fromForm = (v: PreferencesForm): Preferences => ({
   ...v,
-  onboarding: { ...v.onboarding, steps_passed: [...v.onboarding.steps_passed] },
+  onboarding: copyOnboarding(v.onboarding),
 });
 
 export function PreferencesCard({

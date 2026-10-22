@@ -257,6 +257,8 @@ export interface Preferences {
     dismissed_at: string | null;
     /** the wizard's steps passed (Next or Skip), so another device resumes there */
     steps_passed: string[];
+    /** the starter list's boards and sites added or removed (O5b), never proposed again */
+    starter_handled?: string[];
   };
   documents_language: (typeof DOCUMENTS_LANGUAGES)[number];
   documents_tone: (typeof DOCUMENTS_TONES)[number];

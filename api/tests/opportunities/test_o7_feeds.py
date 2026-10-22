@@ -48,6 +48,7 @@ from tests.opportunities.o7_support import (
     runner,
     stub_module,
 )
+from tests.opportunities.o7_support import stats as stub_stats
 
 __all__ = ["feeds_stub"]
 
@@ -440,14 +441,17 @@ def test_a_sweep_reads_the_enabled_feeds_and_stores_their_missions(
         "Forward Deployed Engineer",  # We Work Remotely, contract
         "GenAI engineer for an LLM evaluation pipeline",  # Hacker News, a client
         "AI engineer",  # Hacker News, the long post
-        # Spellings the sweep's whole word match lets through, for a feed as for a board (the
-        # deck and apply read the rules folded: test_the_deck_shows_the_missions...).
+    }
+    # The never apply rule, as for a board: stored `skipped`, the rule as the note. The sweep
+    # reads the rules folded, as apply does (app/jobs/never_apply.py, #601), so "Cybersecurity"
+    # and a soft hyphen inside "Security" are skipped too.
+    ruled = {title: job for title, job in found.items() if job.status is JobStatus.skipped}
+    assert set(ruled) == {
+        "Threat AI Engineer",
+        "Security AI engineer",
         "Cybersecurity AI Engineer",
         "Secu\u00adrity AI Engineer",
     }
-    # The never apply rule, as for a board: stored `skipped`, the rule as the note.
-    ruled = {title: job for title, job in found.items() if job.status is JobStatus.skipped}
-    assert set(ruled) == {"Threat AI Engineer", "Security AI engineer"}
     assert all(job.notes == OWNER_RULE for job in ruled.values())
     assert ruled["Threat AI Engineer"].source == "remoteok"
     assert ruled["Security AI engineer"].source == "hackernews:freelance"
@@ -477,10 +481,10 @@ def test_a_sweep_reads_the_enabled_feeds_and_stores_their_missions(
     assert not any("Ingénieur" in title for title in found)
     reported = entries(done)
     assert reported["remoteok"]["error"] is None
-    assert reported["remoteok"]["skipped_by_rule"] == 1
+    assert reported["remoteok"]["skipped_by_rule"] == 3
     assert reported["weworkremotely"]["skipped_by_rule"] == 0
     assert reported["hackernews_freelance"]["skipped_by_rule"] == 1
-    assert done.stats["skipped_by_rule"] == 2
+    assert done.stats["skipped_by_rule"] == 4
     assert reported["remoteok"]["postings"] == 6
     assert reported["weworkremotely"]["postings"] == 1  # Larkspur's was a duplicate
     assert reported["hackernews_freelance"]["postings"] == 3
@@ -517,8 +521,8 @@ def test_the_deck_shows_the_missions_with_their_source(
     assert mission["source"] == "remoteok"
     assert mission["url"].startswith("https://remoteok.com/remote-jobs/")
     assert mission["contract_type"] == "Freelance"
-    # Every never apply spelling: skipped by the sweep ("Threat"), or stored by its whole word
-    # match and hidden by the deck's folded one ("Cybersecurity", a soft hyphen in "Security").
+    # Every never apply spelling is skipped by the sweep's folded match ("Threat",
+    # "Cybersecurity", a soft hyphen in "Security"), and the deck checks again.
     titles = [card["title"] for card in cards]
     assert not any("ecur" in t or "Cyber" in t or "Threat" in t for t in titles), titles
 
@@ -675,11 +679,15 @@ def test_the_thread_reads_at_most_the_comments_allowed(
     factory: sessionmaker[Session], person_a: Person, fake_ats: FakeAts, feeds_stub: Any
 ) -> None:
     set_profile(factory, person_a.user_id, feeds_search(feed("hackernews_freelance")))
-    done = sweep_feeds(factory, person_a, fake_ats, runner(feeds_stub, "many", max_comments=10))
+    hook = runner(feeds_stub, "many", max_comments=10, timeout_s=10.0)
+    done = sweep_feeds(factory, person_a, fake_ats, hook)
     assert done.status is SweepStatus.done
     assert entries(done)["hackernews_freelance"]["postings"] == 10
     # The account, the submissions up to the freelance thread (3003 then 3002), 10 comments.
-    assert requests_to(feeds_stub, "/many/hackernews/") == 1 + 2 + 10
+    # Distinct addresses, not requests: on a loaded machine a read past the client's timeout is
+    # retried, which reads the same comment again, never one more.
+    read = [path for path in stub_stats(feeds_stub) if "/many/hackernews/" in path]
+    assert len(read) == 1 + 2 + 10
 
 
 def test_a_store_failure_is_reported_without_the_text(

@@ -43,7 +43,7 @@ Port of `engine/jobs.py score_row` against the user's `skills` section, using `a
 - Backend fetches each enabled board of the user's `search.boards` with httpx (timeouts, retries with backoff, polite concurrency of 4, a User-Agent naming the app), parses Ashby, Greenhouse and Lever exactly as `engine/jobs.py fetch` does, filters with the user's include, exclude, per-board exclude and location terms and the days window, dedupes against existing rows, stores new ones as `found` with the posting text, scores them.
 - Runs in the `worker` container (first use of Redis as a queue, with RQ or arq; the choice is recorded in the plan), one sweep per user at a time, progress visible in the UI, a summary at the end (boards ok and failed, postings seen, matches, new).
 - Automatic sweeps per user, off by default: the user turns them on and picks weekdays, one to four local times and a time zone (`search.sweep_schedule`); a worker tick every 5 minutes starts each due slot once, daylight saving time handled.
-- `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note (hard rule 11 generalised).
+- `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note (hard rule 11 generalised). Sweeps and apply share `jobs/never_apply.py`: accents, case, compatibility forms, hidden characters and lookalike letters are folded, and a term at the start or end of a glued word also matches. The original title, company and rule note stay unchanged.
 - If an ATS blocks plain HTTP from the Jetson, that board is reported as failed; browser-based fetching comes with the `browser` module.
 
 ## Import of Harald's data

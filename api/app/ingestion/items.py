@@ -38,7 +38,14 @@ each with its reason:
   alone: two positions at one company are two facts, and "2021" and "2021-03" for one start
   still share a key and are shown as a conflict. Stated cost: two positions started in the same
   year at one organisation share a key, and two documents that disagree on the year make two
-  entries. A school is keyed the same way (the year of its start, not the month).
+  entries. A school is keyed the same way (the year of its start, not the month). The owner kept
+  this key on 2026-10-21 (#174, #111): the review page says such a conflict may be two entries.
+- Splits by design, each a fact the key does not join: accents are folded for an employer
+  (through its slug, "Societe" and "Société" are one organisation) and kept for languages, fact
+  titles, skills, gates and schools ("Francais" and "Français" are two languages); the path of
+  a link is case sensitive (only its scheme, "www." and host are folded).
+- A name written as `~` and 32 hexadecimal characters is refused (HASH_FORM): that is how a key
+  holds a long name, so such a title would take the key of another entry.
 - The `key` of a stored employer (a slug other modules refer to) is never proposed: a new
   employer takes the identity above as its `key` (with a number added if another employer
   already holds it), and an existing one keeps its own.
@@ -217,6 +224,15 @@ SHARED_KEY = (
     "several entries of the profile share this key, so the item cannot say which one it is "
     "about: tell them apart or keep one, then decide again"
 )
+TAKEN_KEY = (
+    "another entry of the profile already has this name and date: change one of them, or keep "
+    "the other entry"
+)
+HASH_FORM = "a name cannot be written as ~ followed by 32 hexadecimal characters"
+_HASH_FORM = re.compile(r"~[0-9a-f]{32}")
+# The field whose folded text is the identity of an entry of these slots (`_identity`, `_name`).
+_NAMED = {"blocks": "title", "education": "school", "work_authorization": "country"}
+_NAMED_BY_NAME = ("languages", "have", "adjacent", "none", "gates")
 ADVANCED_LIST = (
     "this list is written as regular expressions: its terms are edited by hand, not by an item"
 )
@@ -345,6 +361,7 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "preferences.onboarding.completed_at": _T.SETTING,
         "preferences.onboarding.dismissed_at": _T.SETTING,
         "preferences.onboarding.steps_passed[]": _T.SETTING,
+        "preferences.onboarding.starter_handled[]": _T.SETTING,
         "preferences.documents_language": _T.SETTING,
         "preferences.documents_tone": _T.SETTING,
         "answers.work_authorization[].country": _T.TEXT,
@@ -568,6 +585,16 @@ def is_locked(section: str, key: str) -> bool:
     experience): such an item is accepted on its own, never in bulk. An unknown key is locked."""
     slot = SLOTS.get(section, {}).get(key.split(":", 1)[0] if isinstance(key, str) else "")
     return slot is None or slot.locked
+
+
+def removes_a_list(section: str, key: Any, action: Any) -> bool:
+    """Whether an item removes an entry, a line or a whole list, which the extraction refuses
+    (`tools.REMOVAL_OF_A_LIST`) and the merge drops from the rows a step reused (#408). A removal
+    of a setting or of an unknown key is left to `build`, which names it."""
+    if action != Action.remove.value or not isinstance(key, str):
+        return False
+    slot = SLOTS.get(section, {}).get(key.partition(":")[0])
+    return slot is not None and slot.kind not in (SlotKind.scalar, SlotKind.setting)
 
 
 # --- text -----------------------------------------------------------------------------------------
@@ -935,6 +962,10 @@ def build(
                 period = cleaned.get(name)
                 if kind is FieldType.DATE and period and not _ASCII_PERIOD.fullmatch(period):
                     raise ItemError(INVALID_VALUE, f"value.{name}", ASCII_DATE)
+    named = _NAMED.get(slot.name, "name" if slot.name in _NAMED_BY_NAME else None)
+    text = cleaned.get(named) if named and isinstance(cleaned, dict) else None
+    if isinstance(text, str) and _HASH_FORM.fullmatch(fold(text)):
+        raise ItemError(INVALID_VALUE, f"value.{named}", HASH_FORM)
     whole = entry_key(slot, cleaned)
     if parse_key(section, whole)[1] != whole:  # never, by construction: see `_settled`
         raise ItemError(INVALID_VALUE)
@@ -1070,8 +1101,9 @@ def apply(
     action, nothing is applied: the item cannot say which entry it is about.
 
     Raises ProfileConflict when the section as it is cannot take the item (SHARED_KEY when
-    several entries share the key), and pydantic.ValidationError when what is stored no longer
-    fits its model.
+    several entries share the key, TAKEN_KEY when the entry it writes would then share its key
+    with another one: an edit that renames an entry onto another's name and date), and
+    pydantic.ValidationError when what is stored no longer fits its model.
     """
     after = canonical(section, data)
     slot, key = parse_key(section, item.key if at is None else at)
@@ -1110,6 +1142,8 @@ def apply(
             if slot.name == "employers" and "key" not in entry:
                 entry["key"] = _unused_key(entries, _identity(slot, entry))
             _insert(slot, entries, entry)
+        if item.key != key and len(_matches(slot, entries, item.key)) > 1:
+            raise ProfileConflict(TAKEN_KEY)  # an edit renamed it onto another entry's key
         after[slot.name] = entries
     try:
         return schemas.validate_section(section, after)

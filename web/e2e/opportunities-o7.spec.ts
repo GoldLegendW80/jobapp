@@ -24,10 +24,10 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * its `ok` variant: invented companies, never a real platform). A finds the missions in Discover:
  * the card says "via Remote OK" and links back to the posting on Remote OK, as Remote OK asks,
  * and the contract reads "Freelance mission"; the Hacker News client's mission links to its
- * comment. A feed follows the never apply rule exactly as a board does: the sweep stores a title
- * its whole word match finds ("Threat AI Engineer", "Security AI engineer") as `skipped` with the
- * rule as its note, and a spelling it lets through ("Cybersecurity", a soft hyphen in "Security")
- * as a board's would be; no cybersecurity mission, in any spelling, ever shows in the deck. Person
+ * comment. A feed follows the never apply rule exactly as a board does: the sweep reads the rules
+ * folded, as apply does, and stores every spelling ("Threat AI Engineer", "Security AI engineer",
+ * "Cybersecurity", a soft hyphen in "Security") as `skipped` with the rule as its note; no
+ * cybersecurity mission, in any spelling, ever shows in the deck. Person
  * B, who turned on no feed, has an empty deck and never reads A's mission.
  *
  * Locally, as opportunities-all.config.ts says, with -f tests/feeds-stub.compose.yml added, then:
@@ -197,12 +197,18 @@ test("A turns on two feeds and the sweep stores their missions", async () => {
     contract_type: "Freelance",
     url: "https://news.ycombinator.com/item?id=4001",
   });
-  // The never apply rule, as for a board: what its whole word match finds is stored skipped,
+  // The never apply rule, as for a board, read folded: every spelling is stored skipped,
   // with the rule as its note, never found.
-  const ruled = found.filter((r) => /\b(?:threat|security)\b/i.test(r.title));
+  const ruled = found.filter((r) =>
+    /cyber|secu|threat/i.test(r.title.replace(/\u00ad/g, "")),
+  );
   expect(
-    ruled.map((r) => [r.title, r.source, r.status, r.notes]).sort(),
+    ruled
+      .map((r) => [r.title.replace(/\u00ad/g, ""), r.source, r.status, r.notes])
+      .sort(),
   ).toEqual([
+    ["Cybersecurity AI Engineer", "remoteok", "skipped", RULE],
+    ["Security AI Engineer", "remoteok", "skipped", RULE],
     ["Security AI engineer", "hackernews:freelance", "skipped", RULE],
     ["Threat AI Engineer", "remoteok", "skipped", RULE],
   ]);

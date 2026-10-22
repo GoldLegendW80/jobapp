@@ -158,4 +158,28 @@ describe("preferences card", () => {
       dates,
     );
   });
+
+  it("sends the starter list's handled keys back on save, or the api refuses it", async () => {
+    const sections = haraldLike();
+    const onboarding = {
+      completed_at: null,
+      dismissed_at: null,
+      steps_passed: [],
+      starter_handled: ["ashby:fake-ok", "source:vie"],
+    };
+    const { user, state } = await open({
+      ...sections,
+      preferences: { ...sections.preferences, onboarding },
+    });
+    const card = within(screen.getByRole("form", { name: "Preferences" }));
+    await user.selectOptions(
+      card.getByLabelText("Tone of documents"),
+      "formal",
+    );
+    await user.click(card.getByRole("button", { name: "Save preferences" }));
+    await screen.findByText("Preferences saved.");
+    expect((lastSave(state, "preferences") as Preferences).onboarding).toEqual(
+      onboarding,
+    );
+  });
 });

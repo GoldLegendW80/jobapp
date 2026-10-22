@@ -395,13 +395,9 @@ def _judge(
 
 
 def _removes_a_list(section: str, entry: Mapping[str, Any]) -> bool:
-    """Whether the item removes an entry, a line or a whole list. A removal of a setting or of an
-    unknown key is left to the item model, which names it."""
-    key = entry.get("key")
-    if entry.get("action") != items.Action.remove.value or not isinstance(key, str):
-        return False
-    slot = items.SLOTS[section].get(key.partition(":")[0])
-    return slot is not None and slot.kind not in (items.SlotKind.scalar, items.SlotKind.setting)
+    """Whether the item removes an entry, a line or a whole list (`items.removes_a_list`, the
+    rule the merge applies to the rows of a reused step too)."""
+    return items.removes_a_list(section, entry.get("key"), entry.get("action"))
 
 
 def _bucket(section: str, entry: object, item: items.Item | None) -> str | None:
