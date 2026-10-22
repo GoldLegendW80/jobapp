@@ -73,14 +73,15 @@ async function posting(
 
 async function app(
   job: string,
-): Promise<{ id: string; state: string; needs: string | null; mode: string }> {
+): Promise<
+  { id: string; state: string; needs: string | null; mode: string } | undefined
+> {
   const read = await page.request.get(
     `/api/applications?posting_id=${job}&limit=1`,
   );
   const { items } = (await read.json()) as {
     items: { id: string; state: string; needs: string | null; mode: string }[];
   };
-  if (!items[0]) throw new Error("No application was created.");
   return items[0];
 }
 
@@ -173,6 +174,15 @@ test("an invented candidate prepares documents", async () => {
   await waitForRender(page.request, base_cv.id, 1);
 });
 
+async function reviewShot(name: string): Promise<void> {
+  await expect(
+    page
+      .getByRole("region", { name: "Apply", exact: true })
+      .getByRole("button", { name: "Approve and submit", exact: true }),
+  ).toBeVisible();
+  await shots(page, name);
+}
+
 async function approveAndSubmit(job: string): Promise<void> {
   const section = page.getByRole("region", { name: "Apply", exact: true });
   await section
@@ -186,7 +196,7 @@ async function approveAndSubmit(job: string): Promise<void> {
     })
     .click();
   await expect
-    .poll(async () => (await app(job)).state, { timeout: 240_000 })
+    .poll(async () => (await app(job))?.state, { timeout: 240_000 })
     .toBe("submitted");
 }
 
@@ -207,7 +217,7 @@ test("heavy Workday account handoff and ordered wizard submit once after approva
   await expect
     .poll(
       async () => {
-        const current = await page.request.get("/api/browser/sessions/current");
+        const current = await page.request.get("/api/browser");
         if (current.ok()) {
           const view = (await current.json()) as {
             lease: { purpose: string; active_s: number } | null;
@@ -215,7 +225,7 @@ test("heavy Workday account handoff and ordered wizard submit once after approva
           if (view.lease?.purpose === "apply_fill")
             activeSamples.push(view.lease.active_s);
         }
-        return (await app(job)).state;
+        return (await app(job))?.state;
       },
       { timeout: 300_000 },
     )
@@ -234,7 +244,7 @@ test("heavy Workday account handoff and ordered wizard submit once after approva
     `A15 Workday active samples: ${activeSamples.join(",")}; wall including handoff: ${upperBoundSeconds}s`,
   );
   expect((await stub.submissions()).length).toBe(before);
-  await shots(page, "workday-review");
+  await reviewShot("workday-review");
   await approveAndSubmit(job);
   const submitted = await stub.submissions();
   expect(submitted.length).toBe(before + 1);
@@ -259,10 +269,10 @@ for (const kind of ["google_careers", "vie"]) {
       .getByRole("button", { name: "Apply (Review first)", exact: true })
       .click();
     await expect
-      .poll(async () => (await app(job)).state, { timeout: 240_000 })
+      .poll(async () => (await app(job))?.state, { timeout: 240_000 })
       .toBe("ready");
     expect((await stub.submissions()).length).toBe(before);
-    await shots(page, `${kind}-review`);
+    await reviewShot(`${kind}-review`);
     await approveAndSubmit(job);
     const submitted = await stub.submissions();
     expect(submitted.length).toBe(before + 1);
@@ -288,11 +298,12 @@ test("an unknown required early field resumes all remaining steps before approva
     .getByRole("button", { name: "Apply (Review first)", exact: true })
     .click();
   await expect
-    .poll(async () => (await app(job)).needs, { timeout: 180_000 })
+    .poll(async () => (await app(job))?.needs, { timeout: 180_000 })
     .toBe("required_left");
   const current = await app(job);
+  expect(current).toBeDefined();
   const read = await page.request.get(
-    `/api/applications/${current.id}/approval`,
+    `/api/applications/${current!.id}/approval`,
   );
   const view = (await read.json()) as {
     answers: { field_key: string; label: string }[];
@@ -302,7 +313,7 @@ test("an unknown required early field resumes all remaining steps before approva
   );
   expect(field).toBeTruthy();
   const answer = await page.request.put(
-    `/api/applications/${current.id}/answers/${encodeURIComponent(field!.field_key)}`,
+    `/api/applications/${current!.id}/answers/${encodeURIComponent(field!.field_key)}`,
     {
       headers: CSRF,
       data: { value: "Example Cedar" },
@@ -310,7 +321,7 @@ test("an unknown required early field resumes all remaining steps before approva
   );
   expect(answer.status()).toBe(200);
   await expect
-    .poll(async () => (await app(job)).state, { timeout: 240_000 })
+    .poll(async () => (await app(job))?.state, { timeout: 240_000 })
     .toBe("ready");
   expect((await stub.submissions()).length).toBe(before);
   await approveAndSubmit(job);

@@ -333,16 +333,18 @@ Synthetic Postgres/Redis tests cover exact approval, own-company Full auto, hold
 ### A15
 Implemented against the fake ATS pages only on 2026-10-22. The isolated owned run tests pass
 for Workday, Google Careers and VIE, with one gate click after approval and no model fill.
-The 105 pure cases cover supported addresses and neighbours, ordered replay, sign-in expiry and
+The pure cases cover supported addresses and neighbours, ordered replay, sign-in expiry and
 cancellation, payment and profile walls, changed summaries and targets, and an unknown required
 field on an early step with a disabled Next. Answering that field queues a fresh fill against
 the same ordered field structure before a final approval. Internal shape records remain in the
 approval hash and are not shown as candidate answers.
 
-The Workday fake allocates 48 MiB for the browser memory guard. Its actual human paced browser
-duration and screenshots are pending the isolated journey; the shared 15 minute lease maximum
-has not changed. Google reads the unique actual Apply href of the exact posting and binds it in
-the approval hash. Unknown application route shapes and button-only openers need the person;
+The five actual Playwright tests passed on the isolated fake stack in 6.6 minutes, covering
+all three adapters and the early required-answer continuation. The Workday fake touches 48 MiB;
+its fill took 47.394 seconds wall time including the watched handoff, with active samples from
+8 to 33 seconds. The browser cgroup peaked at 454,807,552 bytes under its 1 GiB cap, with no OOM
+or restart. These are fixture measurements; the shared 15 minute lease maximum has not changed.
+Google reads the unique actual Apply href of the exact posting and binds it in the approval hash. Unknown application route shapes and button-only openers need the person;
 no real Google application route or real-site submission has been exercised. Commands and exact
 pending checks are in [the evidence](../evidence/apply-a15/tests.txt).
 
