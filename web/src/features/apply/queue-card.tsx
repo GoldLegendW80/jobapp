@@ -282,6 +282,12 @@ export function QueueCard({
       </header>
 
       <p className="text-sm">{statusLine(item)}</p>
+      {item.mode === "manual" ? (
+        <p className="text-sm">
+          Open the posting to reopen your browser, record that you submitted it
+          or close this application.
+        </p>
+      ) : null}
       {item.state === "needs_person" && item.needs === "signin" ? (
         <LaterHandoffBanner
           module="application"

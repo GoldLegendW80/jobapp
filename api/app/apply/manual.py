@@ -303,6 +303,7 @@ def close(
         return State.submitted.value
     states.move(application, State.queued, now)
     application.needs = ENDED
+    application.error_code = None
     return State.queued.value
 
 
@@ -318,10 +319,73 @@ def reset_interrupted(db: Session, now: datetime) -> int:
         .scalars()
         .all()
     )
-    return sum(
-        close(db, application_id, "interrupted", now) != State.filling.value
-        for application_id in ids
+    count = 0
+    for application_id in ids:
+        try:
+            with db.begin_nested():
+                count += close(db, application_id, "interrupted", now) != State.filling.value
+        except jobs_service.JobBusyError:
+            mark_ended(db, application_id, "interrupted", now)
+    return count
+
+
+def mark_ended(
+    db: Session, application_id: uuid.UUID, code: str, now: datetime, *, seen: bool = False
+) -> None:
+    """Durable worker recovery without the posting lock. Only the ended session writes this;
+    a tick must check browserd before recovering it. The posting remains held throughout."""
+    application = db.get(Application, application_id)
+    if (
+        application is None
+        or application.mode is not Mode.manual
+        or application.state is not State.filling
+    ):
+        return
+    application.needs, application.error_code = ENDED, code
+    application.updated_at = now
+    if seen and not _confirmed(db, application):
+        saw(db, application_id, now)
+
+
+def ended_ids(db: Session) -> list[uuid.UUID]:
+    return list(
+        db.scalars(
+            sa.select(Application.id).where(
+                Application.mode == Mode.manual,
+                Application.state == State.filling,
+                Application.needs == ENDED,
+            )
+        )
     )
+
+
+async def recover_ended(fill: run.Services, ids: list[uuid.UUID]) -> int:
+    """Retry one transaction per ended manual session, never a currently live one."""
+    if not ids:
+        return 0
+    # A manual job owns the whole apply queue. A remaining manual lease may still belong to
+    # that job on another worker; fail closed until browserd confirms it is gone.
+    current = (await fill.leases.client.current()).get("lease") or {}
+    if current.get("purpose") == PURPOSE:
+        return 0
+    count = 0
+    for application_id in ids:
+
+        def step(db: Session, wanted: uuid.UUID = application_id) -> bool:
+            application = db.get(Application, wanted)
+            if (
+                application is None
+                or application.needs != ENDED
+                or application.state is not State.filling
+            ):
+                return False
+            return close(db, wanted, application.error_code or "ended", fill.clock()) != "filling"
+
+        try:
+            count += await asyncio.to_thread(run._in_db, fill.sessions, step)
+        except jobs_service.JobBusyError:
+            continue
+    return count
 
 
 def record(
@@ -495,15 +559,20 @@ async def _loop(
 
 
 async def _close(fill: run.Services, application_id: uuid.UUID, code: str, seen: bool) -> str:
-    """`close`, asked again past a busy posting (a worker restart ends what is left)."""
+    """Bounded immediate retries; the apply tick retries the durable marker thereafter."""
+    await asyncio.to_thread(
+        run._in_db,
+        fill.sessions,
+        lambda db: mark_ended(db, application_id, code, fill.clock(), seen=seen),
+    )
 
     def step(db: Session) -> str:
         return close(db, application_id, code, fill.clock(), seen=seen)
 
-    for _ in range(CLOSE_TRIES - 1):
+    for _ in range(CLOSE_TRIES):
         with contextlib.suppress(jobs_service.JobBusyError):
             return await asyncio.to_thread(run._in_db, fill.sessions, step)
-    return await asyncio.to_thread(run._in_db, fill.sessions, step)
+    return "recovery_pending"
 
 
 async def session(
@@ -589,13 +658,7 @@ async def session(
             logger.error("apply.manual_crashed", extra={"error": type(exc).__name__})
             code = "internal_error"
     except asyncio.CancelledError:
-        await asyncio.shield(
-            asyncio.to_thread(
-                run._in_db,
-                fill.sessions,
-                lambda db: close(db, application_id, "interrupted", fill.clock(), seen=s.seen),
-            )
-        )
+        await asyncio.shield(_close(fill, application_id, "interrupted", s.seen))
         raise
     finally:
         try:

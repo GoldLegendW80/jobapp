@@ -20,6 +20,17 @@ import {
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
 const SEPARATOR = /[–—]| - /;
 
+it("keeps an ended manual session waiting for explicit resolution on the posting page", () => {
+  const item = queueItem(1, "queued", {
+    mode: "manual",
+    needs: "session_ended",
+  });
+  expect(isWaiting(item)).toBe(true);
+  expect(canCancel(item)).toBe(false);
+  expect(canReject(item)).toBe(false);
+  expect(needsPostingPage(item)).toBe(true);
+});
+
 describe("the line of a document and its check", () => {
   it.each([
     ["cv", 3, "one_page", 0, "CV version 3: fits on one page"],

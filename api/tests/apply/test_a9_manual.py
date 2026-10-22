@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import gate, manual, manual_router, run, service, states
+from app.apply import gate, manual, manual_router, queue_router, run, service, states
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.browser.client import BrowserError
 from app.documents.models import DocumentVersion
@@ -423,6 +423,58 @@ def test_a_worker_restart_without_a_confirmation_leaves_it_open_to_the_person(
     found = application(db, app_id)
     assert (found.state, found.needs) == (State.queued, manual.ENDED)
     assert status(db, person_a) is not JobStatus.applied
+
+
+def test_an_ended_manual_session_stays_visible_and_held_until_the_person_resolves_it(
+    db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person
+) -> None:
+    app_id = start_manual(db, person_a)
+    left_filling(factory, app_id, seen=False)
+    assert [row[0].id for row in db.execute(queue_router._queued(person_a.user_id))] == [app_id]
+    assert queue_router._waiting_count(db, person_a.user_id) == 1
+    assert queue_router._waiting_count(db, person_b.user_id) == 0
+    with pytest.raises(service.RefusedError):
+        service.start(db, person_a.user_id, person_a.posting_id, Mode.manual, False, now=AT)
+
+
+def test_busy_end_is_recovered_on_the_tick_without_resetting_a_live_session(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = start_manual(db, person_a)
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        s.commit()
+    close = manual.close
+
+    def busy(*args: Any, **kwargs: Any) -> str:
+        raise jobs_service.JobBusyError
+
+    monkeypatch.setattr(manual, "close", busy)
+    channel = FakeChannel()
+    svc = manual_services(factory, manual_ashby(), channel)
+    assert asyncio.run(manual._close(svc.fill, app_id, "interrupted", False)) == "recovery_pending"
+    monkeypatch.setattr(manual, "close", close)
+
+    class Browser:
+        live = True
+
+        async def current(self) -> dict[str, Any]:
+            return {"lease": {"purpose": manual.PURPOSE}} if self.live else {"lease": None}
+
+    browser = Browser()
+    svc.fill.leases.client = browser
+    assert asyncio.run(manual.recover_ended(svc.fill, [app_id])) == 0
+    assert application(db, app_id).state is State.filling
+    browser.live = False
+    assert asyncio.run(manual.recover_ended(svc.fill, [app_id])) == 1
+    assert (application(db, app_id).state, application(db, app_id).needs) == (
+        State.queued,
+        manual.ENDED,
+    )
+    assert asyncio.run(manual.recover_ended(svc.fill, [app_id])) == 0
 
 
 def test_closing_after_a_confirmation_records_it(

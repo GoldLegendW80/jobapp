@@ -208,7 +208,17 @@ def _deciding() -> sa.ColumnElement[bool]:
 
 def _waiting() -> sa.ColumnElement[bool]:
     return sa.or_(
-        sa.and_(Application.state.in_(WAITING_ON_YOU), ~_deciding()), _rehearsal_waiting()
+        sa.and_(Application.state.in_(WAITING_ON_YOU), ~_deciding()),
+        _rehearsal_waiting(),
+        _manual_ended(),
+    )
+
+
+def _manual_ended() -> sa.ColumnElement[bool]:
+    return sa.and_(
+        Application.mode == Mode.manual,
+        Application.state.in_((S.queued, S.filling)),
+        Application.needs == "session_ended",
     )
 
 
@@ -218,7 +228,7 @@ def _queued(user_id: uuid.UUID) -> sa.Select[Any]:
         .join(Job, sa.and_(Job.id == Application.posting_id, Job.user_id == Application.user_id))
         .where(
             Application.user_id == user_id,
-            Application.mode != Mode.manual,
+            sa.or_(Application.mode != Mode.manual, _manual_ended()),
             sa.or_(Application.state.in_(UNDER_WAY), _deciding(), _waiting()),
         )
     )
@@ -229,7 +239,7 @@ def _waiting_count(db: Session, user_id: uuid.UUID) -> int:
         db.execute(
             sa.select(sa.func.count()).where(
                 Application.user_id == user_id,
-                Application.mode != Mode.manual,
+                sa.or_(Application.mode != Mode.manual, _manual_ended()),
                 _waiting(),
             )
         ).scalar_one()

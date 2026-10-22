@@ -714,9 +714,14 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     """Queues a fill for every application waiting for one, the submit of every approved one
     (apply A6) and the decision of every `ready` Full auto one on the agents queue (A13c).
     Answers a count, nothing else."""
+    from app.apply import manual as apply_manual
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
 
+    with sessions_of(ctx)() as db:
+        ended = apply_manual.ended_ids(db)
+    if ended:
+        await apply_manual.recover_ended(apply_services(ctx), ended)
     with sessions_of(ctx)() as db:
         due = apply_run.due(db)
         approved = apply_submit_run.due(db)
@@ -778,15 +783,16 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
 
     clock = clock_of(ctx)
 
-    def step(db: Session) -> int:
-        # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
-        return (
-            apply_run.reset_interrupted(db, clock())
-            + apply_submit_run.reset_interrupted(db, clock())
-            + apply_manual.reset_interrupted(db, clock())
+    count = 0
+    # A busy manual posting must never roll back an already reset fill or uncertain submit.
+    for reset in (
+        apply_run.reset_interrupted,
+        apply_submit_run.reset_interrupted,
+        apply_manual.reset_interrupted,
+    ):
+        count += await asyncio.to_thread(
+            apply_run._in_db, sessions_of(ctx), lambda db, step=reset: step(db, clock())
         )
-
-    count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
     if count:
         logger.info("apply.fill.reset", extra={"count": count})
     return count
