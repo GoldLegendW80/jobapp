@@ -22,7 +22,7 @@ an approval of an original snapshot is not an approval of the combined tree.
 |---|---|---|---|
 | A1 to A8: forms, answers, fill, approval, reports, base adapters | Main plus existing apply snapshots | Audit interactions and refusal paths; fix specification gaps | Complete apply tests and fake ATS journeys |
 | A9: Apply myself | #517 snapshot | Check manual/session recovery and file chooser follow ups | Manual journey, no app submit click, isolation |
-| A10a: retries and needs you | #516 snapshot | Owner's 429 retry, 403 needs-you and 410 closed rules | Injected-clock failure and recovery tests |
+| A10a: retries and needs you | #516 snapshot | Owner's HTTP rules and the full 30-minute captcha/email-code wait outside active lease time | Injected-clock failure, timer and recovery tests |
 | A10b: sign-in recovery | Missing | #578: attended and unattended handoff, later callback, expired sessions and lease survival | Fake login walls, idempotent resume, Full auto becomes review |
 | A11 to A13c: caps, Like queue and Full auto | Main plus #591, #598, #470 | Verify composed decision, hold, rehearsals, model check, pauses and final rechecks | Counted fake submissions, clock/cap tests and journeys |
 | A14: email applications | Missing; required mail send components also missing | #251: draft, exact authorisation, provider boundary, send gate, uncertainty resolution and UI | Fake Gmail only, immutable attachments, no duplicate send |
