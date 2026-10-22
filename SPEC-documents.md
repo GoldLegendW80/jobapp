@@ -150,7 +150,7 @@ documents(id uuid pk, user_id uuid not null fk users on delete cascade,
           name text null, is_default bool not null default false,          -- base CVs only
           base_source enum base_source(profile, built, uploaded) null,     -- base CVs only
           base_document_id uuid null fk documents on delete set null,      -- a posting's CV: the base CV it was written from
-          kind enum document_kind(cv, letter) not null,
+          kind enum document_kind(cv, letter, proposal) not null,       -- proposal: migration 0022 (issue #485)
           language enum document_language(en, fr) not null,
           template_slug text not null,                          -- a bundled slug, or a user template's slug (upload-xxxxxxxx)
           draft jsonb not null, draft_schema int not null, draft_revision int not null default 1,
@@ -252,10 +252,11 @@ The automatic generation setting is not a table: it is a block of the profile's 
 
 ## The writers
 
-Four agents, registered by the module with `definitions.register`, each with its prompt under `api/app/documents/prompts/` (versioned with the code, never containing anyone's data):
+Five agents, registered by the module with `definitions.register`, each with its prompt under `api/app/documents/prompts/` (versioned with the code, never containing anyone's data):
 - `documents_base`: reads the uploaded CV's text (`get_upload_text`) or the profile, and writes a base CV with its `fixed` block (`submit_base`).
 - `documents_cv`: reads the posting (`get_job`), the profile sections `facts`, `experience`, `skills`, `answers` (`get_profile_section`; `identity` answers "not available"), the base CV the generation names (`get_base_cv`), and writes `submit_cv`.
 - `documents_letter`: the same, plus the posting's CV (`get_document("cv")`), and writes `submit_letter`.
+- `documents_proposal` (issue #485, for opportunities O9a): the letter's reads plus `get_draft` (whose `to` is the address it goes to), and writes `submit_proposal`: an outreach proposal for a posting whose only way to apply is an e-mail address, a subject and a body of at most about 150 words (more than 180 refused), through the same fact check as a letter (the posting's title and company may be named; unsupported claims corrected, never blocked, the corrections listed). `to` is the app's, put back on every submit. A posting with no text gets a short generic proposal from its title and company. Text only: no template prints it, the renderer never draws it ("Render" and the template or language switch answer 422, a hand save makes its version at once), the chat refuses it, and the app never sends it. `proposal.create(db, user_id, posting_id, contact=..., at=...)` makes it, one per posting: a second call returns the first.
 - `documents_design` (task D25b): the vision model that writes a template from an uploaded CV; reads the page images and the layout extraction it is handed and writes `submit_template`; see "Base CVs".
 - In a chat, the same agent of the document's kind gets `get_draft`, the conversation, and `set_template(slug)`. In the design chat of D26, the design agent gets the current template and the original's page images.
 

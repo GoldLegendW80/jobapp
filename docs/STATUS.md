@@ -4,7 +4,7 @@ The state of the build, for whoever picks it up next (a person or a new orchestr
 Updated by the orchestrator after every shipped batch; the live truth is always
 `gh pr list --state open`, `gh issue list --state open` and the board (project 1 of
 GoldLegendW80, "Jobapp roadmap"). How work flows: [agents/orchestration.md](agents/orchestration.md).
-What the owner decided: [decisions.md](decisions.md).
+What the owner decided (latest: 2026-10-21): [decisions.md](decisions.md).
 
 Last updated: 2026-10-15.
 

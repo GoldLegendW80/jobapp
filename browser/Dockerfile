@@ -10,9 +10,12 @@
 #
 # Chromium is pinned by Debian version (bookworm-security) and the image is rebuilt when Debian
 # publishes a security update: build with --build-arg CHROMIUM_VERSION=<new version>.
+# bookworm-security serves only its latest Chromium, so an older pin fails the build. To bump,
+# set the Candidate this prints: docker run --rm debian:bookworm-slim sh -c
+# 'apt-get update -qq && apt-cache policy chromium'
 FROM debian:bookworm-slim
 
-ARG CHROMIUM_VERSION=155.0.8059.39-1~deb12u1
+ARG CHROMIUM_VERSION=155.0.8059.79-1~deb12u1
 ARG PLAYWRIGHT_VERSION=1.55.0
 
 ENV DEBIAN_FRONTEND=noninteractive \

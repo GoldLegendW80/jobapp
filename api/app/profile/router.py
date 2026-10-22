@@ -76,7 +76,7 @@ router = APIRouter(prefix="/api/profile", tags=["profile"], dependencies=[Depend
 router.include_router(boards.router)
 
 UNKNOWN_SECTION = "Unknown profile section."
-ONBOARDING_RESERVED = "The onboarding dates and steps are set by the welcome steps, not by a save."
+ONBOARDING_RESERVED = "The onboarding dates are set by the welcome steps, not by a save."
 REVISION_NOT_FOUND = "Revision not found."
 STALE = "The profile changed since you loaded it. Review the current version and save again."
 TOO_LARGE = "The import file is larger than 2 MB."
@@ -373,6 +373,12 @@ def delete_photo(user: CurrentUser, request: Request, db: Db) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE)
 
 
+def _onboarding_keys(raw: Any) -> frozenset[str]:
+    """The keys of `onboarding` a preferences save sent: one left out keeps its stored value."""
+    onboarding = raw.get("onboarding") if isinstance(raw, dict) else None
+    return frozenset(onboarding) if isinstance(onboarding, dict) else frozenset()
+
+
 @router.put(
     "/{section}",
     response_model=ProfileOut,
@@ -395,7 +401,13 @@ def save_section(
         raise _invalid(exc) from None
     try:
         profile = service.save_section(
-            db, user.id, section, data, body.base_revision, deps.clock(request)
+            db,
+            user.id,
+            section,
+            data,
+            body.base_revision,
+            deps.clock(request),
+            onboarding_sent=_onboarding_keys(body.data) if section == "preferences" else None,
         )
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)

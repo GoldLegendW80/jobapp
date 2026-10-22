@@ -158,7 +158,8 @@ for (const slug of TEMPLATES) {
       const pdf = await pdfOf(page.request, ids[kind], latest[kind]);
       expect(pdf.pages).toBe(1);
       expect(pdf.text).toContain(person.name);
-      expect(pdf.text.replace(/\s+/g, "")).toContain(person.email);
+      // the address whole on its line: white space inside it fails
+      expect(pdf.text).toContain(person.email);
       if (kind === "cv") {
         expect(pdf.text).toContain(person.firstEmployer);
         if (slug === "plain") {

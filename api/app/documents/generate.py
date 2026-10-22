@@ -60,6 +60,9 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    (`shortening_ceiling`): passes clicked one after another share the one budget the automatic
    pass had. A person whose runs are all busy is refused too: nothing starts a queued pass
    later.
+6. An outreach proposal (issue #485, `proposal.create`): a `posting` generation of a posting's
+   proposal, written by `writer_proposal` through the same steps, never followed by anything
+   and never rendered: `finish` stores its version and its draft and marks no render.
 
 Logs carry ids, modes, statuses, counts and codes, never a text.
 """
@@ -85,9 +88,19 @@ from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, RunStatus
 from app.config import Settings, get_settings
 from app.documents import content as c
-from app.documents import eligibility, render_job, rules, store, submit, writer_cv, writer_letter
+from app.documents import (
+    eligibility,
+    render_job,
+    rules,
+    store,
+    submit,
+    writer_cv,
+    writer_letter,
+    writer_proposal,
+)
 from app.documents.corrections import Correction
 from app.documents.models import (
+    RENDERED_KINDS,
     Author,
     Document,
     DocumentGeneration,
@@ -136,12 +149,30 @@ DEFAULT_SCRIPTS = {
     (Kind.cv, GenerationMode.posting): "documents_cv_valid",
     (Kind.cv, GenerationMode.shorten): "documents_cv_shorten",
     (Kind.letter, GenerationMode.posting): "documents_letter_valid",
+    (Kind.proposal, GenerationMode.posting): "documents_proposal_valid",
 }
 # The writer of each kind of posting document, and the modes it writes in.
 WRITERS = {
     Kind.cv: (writer_cv.CV_WRITER, (GenerationMode.posting, GenerationMode.shorten)),
     Kind.letter: (writer_letter.LETTER_WRITER, (GenerationMode.posting,)),
+    Kind.proposal: (writer_proposal.PROPOSAL_WRITER, (GenerationMode.posting,)),
 }
+
+
+@dataclass(frozen=True)
+class _TextKind:
+    soft_limits: rules.SoftLimits
+
+
+@dataclass(frozen=True)
+class _TextOnly:
+    """What `start` reads of a template for a kind no template prints (an outreach proposal,
+    issue #485): no soft limits, the hard limits of its content are its limits."""
+
+    kinds: Mapping[str, _TextKind]
+
+
+TEXT_ONLY = _TextOnly({Kind.proposal.value: _TextKind(submit.NO_SOFT_LIMITS)})
 
 
 @dataclass(frozen=True)
@@ -305,7 +336,11 @@ def create(
                     raise store.NotFoundError(base_document_id)
                 name_base(db, document, base)
             estimate = {**estimate, WRITE_TEMPLATE: document.template_slug}
-        elif document.posting_id is not None and not _has_version(db, document):
+        elif (
+            document.kind == Kind.letter
+            and document.posting_id is not None
+            and not _has_version(db, document)
+        ):
             cv = next(
                 (
                     found
@@ -362,11 +397,15 @@ def start(
         raise ValueError(f"the generation is {generation.status.value}: it has its run")
     document = store.lock_document(db, generation.user_id, generation.document_id)
     if document.scope != Scope.posting or document.kind not in WRITERS:
-        raise ValueError("the writers write a posting's CV or letter only")
+        raise ValueError("the writers write a posting's CV, letter or proposal only")
     definition, modes = WRITERS[document.kind]
     if generation.mode not in modes:
         raise ValueError(f"not a mode of the {document.kind.value} writer: {generation.mode.value}")
-    template = render_job.template_of(db, generation.user_id, document.template_slug)
+    template = (
+        render_job.template_of(db, generation.user_id, document.template_slug)
+        if document.kind in RENDERED_KINDS
+        else TEXT_ONLY
+    )
     data: dict[str, Any] = {
         "generation_id": str(generation.id),
         "mode": generation.mode.value,
@@ -434,8 +473,14 @@ def finish(
     document = store.lock_document(db, user_id, generation.document_id)
     records = list(corrections)
     revision: int | None = None
-    # What the render will print it with, so its snapshot reuses this version and its link.
-    template = render_job.template_of(db, user_id, document.template_slug)
+    # What the render will print it with, so its snapshot reuses this version and its link. A
+    # proposal is text only: its versions keep the document's slug, at version 1, as a hand
+    # save's snapshot does (router.py).
+    if document.kind in RENDERED_KINDS:
+        template = render_job.template_of(db, user_id, document.template_slug)
+        printed_with, printed_version = template.slug, template.version
+    else:
+        printed_with, printed_version = document.template_slug, 1
     if document.draft_revision == generation.base_draft_revision:
         store.save_draft(
             db, user_id, document.id, c.dump(content), document.draft_revision, Author.writer, at=at
@@ -449,14 +494,15 @@ def finish(
             generation_id=generation.id,
             corrections=records,
             profile_revision=_profile_revision(db, user_id),
-            template_slug=template.slug,
-            template_version=template.version,
+            template_slug=printed_with,
+            template_version=printed_version,
         )
         generation.outcome = GenerationOutcome.draft_replaced
-        document, fresh = render_job.mark_queued(
-            db, user_id, document.id, revision=document.draft_revision, bounded=False
-        )
-        revision = document.draft_revision if fresh else None
+        if document.kind in RENDERED_KINDS:  # a proposal is text only: nothing renders it
+            document, fresh = render_job.mark_queued(
+                db, user_id, document.id, revision=document.draft_revision, bounded=False
+            )
+            revision = document.draft_revision if fresh else None
     else:
         version, _ = store.snapshot(
             db,
@@ -468,8 +514,8 @@ def finish(
             corrections=records,
             profile_revision=_profile_revision(db, user_id),
             content=c.dump(content),
-            template_slug=template.slug,
-            template_version=template.version,
+            template_slug=printed_with,
+            template_version=printed_version,
         )
         generation.outcome = GenerationOutcome.kept_as_version
     generation.status = GenerationStatus.done
@@ -689,7 +735,7 @@ async def _send(
 async def on_final(final: FinalRun) -> None:
     """The writers' final hook: settle the generation, queue its render, and after a CV start
     the posting's letter."""
-    if final.agent not in (writer_cv.NAME, writer_letter.NAME):
+    if final.agent not in (writer_cv.NAME, writer_letter.NAME, writer_proposal.NAME):
         return
     taken = submit.take(final.run_id)
     render = await asyncio.to_thread(

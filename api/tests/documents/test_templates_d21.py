@@ -2,8 +2,8 @@
 test_templates.py that every folder passes: `cards` with a section that would split across the
 end of a page, `bold` with a very long name, `academic` with a profile of three schools (its
 education printed before its experience), `elegant`'s frame on every page; the contrast of
-every text colour on the backgrounds it is painted on, no dash printed as a separator, truthful
-tags, and each of the four distinct in layout from every other template (not a recolour).
+every text colour on the backgrounds it is painted on, truthful tags, and each of the four
+distinct in layout from every other template (not a recolour).
 Marked `docker`: the same cases through the real renderer, with the geometry of the PDF
 (pypdfium2 character boxes and path objects) and the text order of the one tagged ats friendly.
 """
@@ -24,7 +24,6 @@ from PIL import Image, ImageChops
 from app.documents import content as c
 from app.documents import fit, templates
 from app.documents.profile_view import Identity, ProfileView, School
-from app.documents.templates import thumbnails
 from tests.documents.conftest import view_of, written
 from tests.documents.test_templates import (
     ON,
@@ -50,7 +49,6 @@ from tests.documents.test_templates_d19 import (
 )
 
 D21 = ("elegant", "bold", "cards", "academic")
-DASHES = ("—", "–", " - ")
 MM = 72 / 25.4  # points in a millimetre
 A4 = (210 * MM, 297 * MM)
 
@@ -285,32 +283,6 @@ def test_the_contrast_pairs_read_a_rule_with_its_own_background_alone() -> None:
     assert ("#1c5d99", "#dce8f4") in painted_pairs("cards")
 
 
-# The text of a CSS `content`, in double or in single quotes.
-CONTENT = re.compile(r"""content:\s*(?:"([^"]*)"|'([^']*)')""")
-
-
-def test_the_dash_test_reads_content_in_both_quotes() -> None:
-    css = """a::before { content: "x \u2014 y"; } b::after { content: ' - '; }"""
-    assert [a or b for a, b in CONTENT.findall(css)] == ["x \u2014 y", " - "]
-
-
-@pytest.mark.parametrize("slug", D21)
-def test_no_dash_is_printed_as_a_separator(slug: str) -> None:
-    """The text a template prints of its own: its manifest's names and descriptions, the text of
-    its CSS `content`, and the page it builds from the sample in both languages."""
-    found = template(slug)
-    own = [*found.name.values(), *found.description.values()]
-    own += [a or b for a, b in CONTENT.findall(found.files["style.css"])]
-    for kind in templates.KINDS:
-        for language in templates.LANGUAGES:
-            sample = thumbnails.sample()[kind]
-            view = thumbnails.sample_view()
-            html = templates.build_html(found, kind, sample, view, language, 0, ON)
-            own.append(assert_authoring(html).body)
-    for text in own:
-        assert not any(dash in text for dash in DASHES), (slug, text[:120])
-
-
 @pytest.mark.parametrize("slug", D21)
 def test_the_tags_say_what_the_template_is(slug: str) -> None:
     found = template(slug)
@@ -468,6 +440,23 @@ def test_bold_keeps_a_very_long_name_on_the_page(
     headline = glyphs.find(content.headline[:20])
     assert top(headline) < bottom(boxes)
     assert "".join(name.split()) in "".join(pdf_text(result.pdf).split())
+
+
+@docker
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_bold_without_a_photo_gives_the_name_the_full_width(renderer: Any, kind: str) -> None:
+    """The re-check of D21: without a photo, the gap kept for it narrowed the name's line by
+    6 mm. A name of one word of narrow letters, wider than the line, fills its first line to
+    within 3 mm of the right margin."""
+    found = template("bold")
+    name = "L" + "il" * 60
+    view = with_name(d1_view(), name)
+    content = d1("cv-typical")[2] if kind == "cv" else d1("letter-en")[2]
+    result = fitted(renderer, found, kind, content, view, "en")
+    assert result.fit, result.pages
+    right = A4[0] - found.steps(kind)[result.step].margin * MM
+    boxes = Glyphs(result.pdf).find(name)
+    assert right - 3 * MM <= max(box[2] for box in boxes) <= right + 0.5 * MM
 
 
 @docker

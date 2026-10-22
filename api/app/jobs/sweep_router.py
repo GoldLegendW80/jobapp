@@ -32,7 +32,7 @@ from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.jobs import schedule, service, sweep
-from app.jobs.models import Sweep, SweepStatus, SweepTrigger
+from app.jobs.models import Sweep, SweepStatus
 from app.jobs.schemas import (
     BoardFailureOut,
     ScheduleOut,
@@ -161,35 +161,6 @@ def _sweep_id(value: str) -> uuid.UUID:
 # --- start --------------------------------------------------------------------------------------
 
 
-def _start(
-    sessions: sessionmaker[Session], user_id: uuid.UUID, now: datetime
-) -> SweepOut | uuid.UUID | str:
-    """The new sweep; the running sweep's id when there is one; the reason it cannot start (a
-    message for a 422) without enabled boards or with a search section that no longer validates."""
-    with sessions() as db:
-        try:
-            search = sweep.load_search(db, user_id)
-        except sweep.InvalidSearchError:
-            return sweep.SEARCH_INVALID
-        if not (
-            sweep.enabled_boards(search)
-            or sweep.enabled_sources(search)
-            or sweep.enabled_feeds(search)
-        ):
-            return sweep.NO_BOARDS
-        try:
-            row = sweep.start(db, user_id, SweepTrigger.manual, now)
-            out = sweep_out(row)
-            db.commit()
-        except service.SweepRunningError:
-            db.rollback()
-            running = service.running_sweep(db, user_id)
-            if running is None:  # finished between the insert and this read
-                return _start(sessions, user_id, now)
-            return running.id
-    return out
-
-
 @router.post(
     "",
     status_code=status.HTTP_202_ACCEPTED,
@@ -208,29 +179,21 @@ def _start(
 async def start_sweep(user: CurrentUser, request: Request) -> Any:
     """Sweep the caller's enabled boards now. The work happens in the worker: follow it with
     GET /api/jobs/sweeps/{id} or its /events stream."""
-    sessions = sessions_of(request)
-    now = deps.clock(request)
-    started = await run_in_threadpool(_start, sessions, user.id, now)
-    if isinstance(started, str):
-        raise HTTPException(status_code=422, detail=started)
-    if isinstance(started, uuid.UUID):
-        body = SweepConflictOut(detail=RUNNING, sweep_id=started).model_dump(mode="json")
+    begun = await sweep.begin(
+        sessions_of(request), queue_of(request), user.id, deps.clock(request), sweep_out
+    )
+    if begun.outcome == "running" and begun.sweep_id is not None:
+        body = SweepConflictOut(detail=RUNNING, sweep_id=begun.sweep_id).model_dump(mode="json")
         return JSONResponse(status_code=409, content=body, headers=NO_STORE)
-    try:
-        await queue_of(request).enqueue(
-            "run_sweep",
-            str(started.id),
-            queue=queues.SWEEPS,
-            job_id=queues.sweep_job_id(started.id),
-        )
-    except queues.QueueUnavailableError:
-        await run_in_threadpool(
-            sweep.fail_sweep, sessions, started.id, sweep.QUEUE_DOWN, deps.clock(request)
-        )
+    if begun.outcome == "queue_down":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=sweep.QUEUE_DOWN
-        ) from None
-    return started
+        )
+    if begun.outcome == "search_invalid":
+        raise HTTPException(status_code=422, detail=sweep.SEARCH_INVALID)
+    if begun.outcome == "no_boards" or begun.view is None:
+        raise HTTPException(status_code=422, detail=sweep.NO_BOARDS)
+    return begun.view
 
 
 # --- read ---------------------------------------------------------------------------------------

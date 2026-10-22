@@ -8,7 +8,8 @@
  *
  * Messages are plain text (no markdown is rendered). While an answer is pending the Send button
  * is disabled (the server would answer 409); the draft can still be written. Screen readers hear
- * each new answer once, through one polite live region, never the pieces of a growing answer
+ * each new answer once and changes to the composer hint, through polite live regions, never
+ * the pieces of a growing answer
  * (its bubble is aria-busy and not live). The list follows the newest text only while the reader
  * is at its bottom (use-stick-to-bottom.ts). Nothing here is animated but the small spinners,
  * which stand still under prefers-reduced-motion.
@@ -309,6 +310,9 @@ function ChatBody({ job }: { job: JobDetail }) {
   );
   // Another job is another conversation: nothing held for the previous one goes out.
   const held = heldFor?.job === job.id ? heldFor.text : null;
+  if (heldFor !== null && heldFor.job !== job.id) {
+    setHeld(null);
+  }
   const [announcement, setAnnouncement] = useState("");
   const announced = useRef<number | null | undefined>(undefined);
   const { follow } = useStickToBottom(list);
@@ -377,7 +381,7 @@ function ChatBody({ job }: { job: JobDetail }) {
   const liveSteps = activeRun ?? "";
   useLayoutEffect(() => {
     follow();
-  }, [follow, messages.length, liveSteps]);
+  }, [follow, messages.length, liveSteps, held]);
 
   const send = useMutation({
     onMutate: () => {
@@ -596,6 +600,36 @@ function ChatBody({ job }: { job: JobDetail }) {
             </ol>
           </>
         )}
+        {holding ? (
+          <div
+            data-testid="chat-held-message"
+            className="flex flex-col items-end gap-1"
+          >
+            <span className="sr-only">You:</span>
+            <div
+              className={cn(
+                BUBBLE,
+                "rounded-br-sm border border-dashed bg-muted",
+              )}
+            >
+              {held}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Pending</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setHeld(null);
+                  composer.current?.focus();
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
       <form
         onSubmit={submit}
@@ -648,7 +682,12 @@ function ChatBody({ job }: { job: JobDetail }) {
             <span className="sr-only">Send</span>
           </Button>
         </div>
-        <p id={ids.hint} className="text-xs text-muted-foreground">
+        <p
+          id={ids.hint}
+          className="text-xs text-muted-foreground"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {holding
             ? `Your message will be sent when ${
                 busy ? "the answer is complete" : "the conversation has loaded"

@@ -23,7 +23,6 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 .head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 6mm;
   align-items: end;
   padding-bottom: 6pt;
   border-bottom: 5pt solid #16171b;
@@ -60,8 +59,10 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 }
 /* a line wraps between contact lines, never inside an address unless it alone is wider */
 .contact li { overflow-wrap: break-word; max-width: 100%; }
+/* the gap beside the photo is its own margin: without a photo the name takes the full width */
 .photo {
   display: block;
+  margin-left: 6mm;
   width: 30mm;
   height: 30mm;
   object-fit: cover;

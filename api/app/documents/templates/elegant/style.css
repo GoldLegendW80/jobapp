@@ -186,4 +186,6 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   font-size: 1.5em;
   font-style: italic;
   margin-top: var(--section-gap);
+  /* the inset keeps the italic's overhang inside the padding */
+  padding-left: 1pt;
 }
