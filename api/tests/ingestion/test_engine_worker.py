@@ -46,16 +46,31 @@ def test_the_cron_runs_every_minute_on_the_ingestion_queue_and_keeps_no_result()
     assert (function.keep_result_s, function.max_tries) == (0, 1)
 
 
-def test_the_limits_of_the_agents_queue_count_the_ingestion_agents() -> None:
+def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply() -> None:
     spec = worker.agents_queue()
+    from app.apply import form_agent
+
     assert agents.EXTRACT_NAME in definitions.AGENTS  # registered by building the queue
-    assert spec.job_timeout_s == agents.EXTRACT_WALL_TIME_S + worker.AGENT_JOB_MARGIN_S
+    assert definitions.AGENTS[agents.EXTRACT_NAME].wall_time_s == agents.EXTRACT_WALL_TIME_S == 900
+    assert (
+        definitions.AGENTS[agents.TRANSCRIBE_NAME].wall_time_s
+        == agents.TRANSCRIBE_WALL_TIME_S
+        == 900
+    )
+    # Apply's aggregate transport allowance includes bounded person-owned pauses. It does
+    # not give ingestion or the form agent more than their original 900 seconds of work.
+    assert form_agent.WALL_TIME_S == 900
+    assert form_agent.SIGNIN_WAIT_S == 1800
+    assert form_agent.TAKEOVER_WAIT_S == 900
+    assert definitions.AGENTS[form_agent.NAME].wall_time_s == 3600
+    assert spec.name == queues.AGENTS
+    assert spec.max_jobs == worker.MAX_AGENT_RUNS == 2
+    assert spec.job_timeout_s == 3720  # 3600 aggregate transport, 120 runner cleanup
     assert all(agent.wall_time_s <= spec.job_timeout_s for agent in definitions.AGENTS.values())
     (run_agent,) = [one for one in spec.functions if one.name == "run_agent"]
-    assert run_agent.timeout_s == spec.job_timeout_s
-    assert worker.agent_stale_running().total_seconds() == (
-        agents.EXTRACT_WALL_TIME_S + worker.AGENT_STALE_MARGIN_S
-    )
+    assert run_agent.timeout_s == spec.job_timeout_s == 3720
+    assert run_agent.max_tries == 1
+    assert worker.agent_stale_running().total_seconds() == 3900  # 3600 plus 300 stale grace
 
 
 def test_an_agent_longer_than_the_job_timeout_registered_when_the_queue_is_built(
@@ -70,7 +85,16 @@ def test_an_agent_longer_than_the_job_timeout_registered_when_the_queue_is_built
     monkeypatch.setattr(worker, "queues", lambda settings=None: [spec])
     with pytest.raises(worker.AgentTooLongError):
         worker.checked_queues(settings)  # what `main` serves
-    assert worker.agents_queue().job_timeout_s == longer.wall_time_s + worker.AGENT_JOB_MARGIN_S
+    updated = worker.agents_queue()
+    assert updated.job_timeout_s == longer.wall_time_s + worker.AGENT_JOB_MARGIN_S
+    (run_agent,) = [one for one in updated.functions if one.name == "run_agent"]
+    assert run_agent.timeout_s == updated.job_timeout_s
+    assert updated.max_jobs == 2
+    assert worker.agent_stale_running().total_seconds() == (
+        longer.wall_time_s + worker.AGENT_STALE_MARGIN_S
+    )
+    assert definitions.AGENTS[agents.EXTRACT_NAME].wall_time_s == 900
+    assert definitions.AGENTS[agents.TRANSCRIBE_NAME].wall_time_s == 900
 
 
 def test_the_runner_is_given_what_the_hook_needs_to_queue_the_next_step(
