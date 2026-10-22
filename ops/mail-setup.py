@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import os
 import secrets
+import stat
 from pathlib import Path
 
 
@@ -30,7 +31,29 @@ def main() -> None:
     ]
     if any(path.exists() for path in paths):
         parser.error("setup files already exist; no credential was changed")
-    (root / ".secrets").mkdir(mode=0o755, exist_ok=True)
+    directory = root / ".secrets"
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        created = False
+    else:
+        created = True
+    try:
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        parser.error(".secrets must be a real directory; no credential was changed")
+    try:
+        if created:
+            os.fchmod(descriptor, 0o755)
+        else:
+            mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            if mode & 0o111 != 0o111 or mode & 0o022:
+                parser.error(
+                    "existing .secrets permissions must allow traversal by all users "
+                    "and forbid group or other writes; no credential was changed"
+                )
+    finally:
+        os.close(descriptor)
     signing, default, provider = (secrets.token_urlsafe(48) for _ in range(3))
     values = [
         (f"MAIL_SEND_KEY={signing}\n", args.owner_uid, 0o600),
@@ -49,14 +72,17 @@ def main() -> None:
         ),
     ]
     for path, (value, uid, mode) in zip(paths, values, strict=True):
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         try:
             os.fchown(descriptor, uid, -1)
-            with os.fdopen(descriptor, "w") as stream:
+            os.fchmod(descriptor, mode)
+            with os.fdopen(descriptor, "w", closefd=False) as stream:
                 stream.write(value)
         except BaseException:
             path.unlink(missing_ok=True)
             raise
+        finally:
+            os.close(descriptor)
     print(
         "Created API-only send authority and isolated Redis credentials. No secret was printed."
     )

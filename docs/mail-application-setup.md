@@ -31,6 +31,13 @@ to install host firewall rules and assign the provider's credential file to serv
 They create new random credentials without displaying them and refuse to overwrite existing
 files. The setup does not connect to Google or send a message.
 
+New files receive their intended permissions regardless of the operator's umask: plaintext
+credentials use mode 600 and the hashed Redis ACL uses mode 444. A new `.secrets` directory
+uses mode 755 so the separate runtime users can traverse it. An existing `.secrets` must be a
+real directory with traversal permission for all users and no group or other write permission.
+Setup preserves its permissions and refuses an incompatible directory before creating credentials.
+Review any existing contents and permissions yourself before retrying.
+
 ```sh
 sudo python3 ops/mail-setup.py --directory "$PWD" --owner-uid "$(id -u)"
 sudo env JOBAPP_EGRESS_KIND=mail bash ops/browser-egress.sh install jobapp_gmail_egress
