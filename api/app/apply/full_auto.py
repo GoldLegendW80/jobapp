@@ -263,10 +263,13 @@ def expired(application: Application, spent: Authorisation, now: datetime) -> bo
     a Full auto Like's row already expires `LIKE_VALID` after the Like."""
     if spent.kind is not gate_kind(application.mode):
         return True
-    if now < spent.expires_at:
-        return False
+    return now >= deadline(application, spent)
+
+
+def deadline(application: Application, spent: Authorisation) -> datetime:
+    """The exact spent approval's effective end, before its pace wait is cleared."""
     paced = spent.kind is AuthorisationKind.person_approval and application.needs == "host_pace"
-    return not (paced and now < spent.created_at + LIKE_VALID)
+    return spent.created_at + LIKE_VALID if paced else spent.expires_at
 
 
 def gate_kind(mode: Mode) -> AuthorisationKind | None:

@@ -488,14 +488,18 @@ def test_mail_final_lock_pause_is_a_known_atomic_non_send(
     def lock(*args, **kwargs):
         found = original_lock(*args, **kwargs)
         lock_calls[0] += 1
-        # _decide owns the first lock, the final pre-arm check owns the second.
-        if lock_calls[0] == (3 if boundary == "after_commit" else 2) and boundary != "host":
+        # _decide also calls prepare, which takes the application locks again. Identify
+        # the actual phase from the durable send binding, rather than its call count.
+        application = found[0]
+        if (boundary == "after_commit" and application.state is State.submitting) or (
+            boundary == "owner" and application.mail_send_id is not None
+        ):
             change()
         return found
 
     def reserve(*args, **kwargs):
         answer = original_reserve(*args, **kwargs)
-        if boundary == "host" and lock_calls[0] >= 2:
+        if boundary == "host" and args[1].mail_send_id is not None:
             change()
         return answer
 

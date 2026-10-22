@@ -172,6 +172,7 @@ class Plan:
     authorisation_id: uuid.UUID | None
     answers_hash: bytes = field(repr=False)
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
+    authorisation_deadline: datetime | None = None
 
 
 @dataclass
@@ -253,6 +254,11 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
     spent = _spent(db, application)
     if spent is None or full_auto.expired(application, spent, now):
         return Stop(State.ready, "authorisation_expired")
+    return _checks(db, application, posting, now)
+
+
+def _checks(db: Session, application: Application, posting: Job, now: datetime) -> Stop | None:
+    """Mutable non-authority guards, also checked after the admitted authority was consumed."""
     code = guardrails.never_apply(
         posting,
         gate._rules(db, application.user_id),
@@ -416,6 +422,11 @@ def arm(
     if until is not None:
         run._wait(db, application, "host_pace", now, until=until.isoformat())
         return "paced"
+    spent = _spent(db, application)
+    if spent is None:
+        _stop(db, application, Stop(State.ready, "authorisation_expired"), now)
+        return State.ready.value
+    plan.authorisation_deadline = full_auto.deadline(application, spent)
     states.move(application, State.submitting, now)
     application.needs = None
     gate._event(db, application, "click", now, attempt=application.attempt)
@@ -774,7 +785,7 @@ async def _after_arm(
     application_id = plan.application_id
     loop = asyncio.get_running_loop()
 
-    def before_click(db: Session) -> str | None:
+    def before_click(db: Session) -> str | datetime:
         found = _locked(db, application_id)
         if found is None or found[0].state is not State.submitting:
             return "superseded"
@@ -789,7 +800,9 @@ async def _after_arm(
         if code is None and (
             spent is None
             or spent.id != plan.authorisation_id
-            or full_auto.expired(application, spent, now)
+            or spent.kind is not full_auto.gate_kind(application.mode)
+            or plan.authorisation_deadline is None
+            or now >= plan.authorisation_deadline
         ):
             code = "authorisation_expired"
         if code is None and (
@@ -798,16 +811,36 @@ async def _after_arm(
             or gate.current_hash(db, application) != plan.answers_hash
         ):
             code = "stale"
-        if code is None and (refused := recheck(db, application, posting, now)):
+        if code is None and (refused := _checks(db, application, posting, now)):
             code = refused.code
         if code:
             _stop(db, application, Stop(State.ready, code), now, click_refused=True)
             return State.ready.value
-        return None
+        return plan.authorisation_deadline
 
-    if stopped := await asyncio.to_thread(_in_db, services.sessions, before_click):
-        return stopped
+    admitted = await asyncio.to_thread(_in_db, services.sessions, before_click)
+    if isinstance(admitted, str):
+        return admitted
+    # The commit above can itself wait. No database work separates this live pause read,
+    # fresh clock and external click; the deadline belongs to the exact admitted authority.
+    try:
+        paused = await services.paused()
+    except Exception:
+        paused = True
     clicked = services.clock()
+    code = gate.switch_code(gate.Switches(enabled=services.enabled, paused=paused))
+    if code is None and clicked >= admitted:
+        code = "authorisation_expired"
+    if code:
+
+        def refuse(db: Session) -> str:
+            found = _locked(db, application_id)
+            if found is None or found[0].state is not State.submitting:
+                return "superseded"
+            _stop(db, found[0], Stop(State.ready, code), clicked, click_refused=True)
+            return State.ready.value
+
+        return await asyncio.to_thread(_in_db, services.sessions, refuse)
     code: str | None = None
     after: bytes | None = None
     try:
