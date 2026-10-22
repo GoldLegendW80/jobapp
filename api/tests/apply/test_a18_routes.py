@@ -1,8 +1,13 @@
 """Real create_app request boundaries, owned field edits and screenshot isolation."""
 
 import asyncio
+import uuid
 
-from app.apply import site_profile
+import pytest
+import sqlalchemy as sa
+
+from app.apply import profile_leases, site_profile
+from app.apply.models import Authorisation, SiteProfileRun, SiteRunState
 from app.profile import service as profiles
 from tests.apply.a18_support import Portal, services
 from tests.apply.conftest import AT
@@ -31,8 +36,6 @@ def test_site_profile_request_types_and_ownership(api, app, factory, a, b, monke
     )
     assert response.status_code == 201, response.text
     run_id = response.json()["id"]
-    import uuid
-
     with factory() as db:
         profile = profiles.get_profile(db, a, AT)
         for name in ("identity", "experience", "skills", "answers"):
@@ -49,7 +52,15 @@ def test_site_profile_request_types_and_ownership(api, app, factory, a, b, monke
     assert api.request("PUT", path, token=token, json={"value": True}).status_code == 409
     assert api.request("PUT", path, token=token, json={"value": {}}).status_code == 422
     assert api.request("PUT", path, token=token, json={"value": "x" * 10001}).status_code == 422
-    assert api.request("PUT", path, token=token, json={"replace": True}).status_code == 200
+    edited = str(name["value"]).upper()
+    updated = api.request("PUT", path, token=token, json={"value": edited, "replace": True})
+    assert updated.status_code == 200, updated.text
+    reread = api.get(f"/api/site-profiles/{run_id}", token=token).json()["sections"][0]
+    persisted = next(row for row in reread["fields"] if row["field_key"] == name["field_key"])
+    assert persisted["value"] == edited
+    assert persisted["replace"] is True
+    assert reread["values_hash"] == updated.json()["sections"][0]["values_hash"]
+    assert reread["values_hash"] != part["values_hash"]
     assert api.get(f"/api/site-profiles/{run_id}", token=other).status_code == 404
     assert (
         api.request("PUT", path, token=other, json={"value": "Another person"}).status_code == 404
@@ -71,3 +82,59 @@ def test_site_profile_request_types_and_ownership(api, app, factory, a, b, monke
         ).status_code
         == 404
     )
+
+
+@pytest.mark.parametrize("operation", ["approve", "skip", "confirm-autosave", "cancel"])
+def test_site_profile_decisions_persist_across_requests(
+    api, app, factory, a, monkeypatch, operation
+):
+    async def queued(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(app.state.queue, "enqueue", queued)
+    monkeypatch.setattr(profile_leases, "cancel_bound", queued)
+    token = api.login_token(USER_A)
+    made = api.post(
+        "/api/site-profiles", token=token, json={"url": "https://portal.example/profile"}
+    )
+    assert made.status_code == 201, made.text
+    run_id = made.json()["id"]
+    with factory() as db:
+        profile = profiles.get_profile(db, a, AT)
+        for name in ("identity", "experience", "skills", "answers"):
+            profile = profiles.save_section(db, a, name, full(name), profile.revision, AT)
+        db.commit()
+    asyncio.run(site_profile.fill(services(factory, Portal()), uuid.UUID(run_id)))
+    path = f"/api/site-profiles/{run_id}"
+    part = api.get(path, token=token).json()["sections"][0]
+    suffix = f"sections/{part['section']}/{operation}"
+    if operation == "confirm-autosave":
+        with factory() as db:
+            run = db.get(SiteProfileRun, uuid.UUID(run_id))
+            run.state, run.needs, run.autosave = (
+                SiteRunState.needs_person,
+                "autosave_confirmation",
+                True,
+            )
+            db.commit()
+        suffix = operation
+    elif operation == "cancel":
+        suffix = operation
+    body = {"values_hash": part["values_hash"]} if operation == "approve" else None
+    response = api.post(f"{path}/{suffix}", token=token, json=body)
+    assert response.status_code == 200, response.text
+    persisted = api.get(path, token=token).json()
+    if operation == "approve":
+        assert persisted["sections"][0]["state"] == "approved"
+        with factory() as db:
+            auth = db.scalar(sa.select(Authorisation).where(Authorisation.site_run_id == run_id))
+            assert bytes(auth.answers_hash).hex() == part["values_hash"]
+    elif operation == "skip":
+        assert persisted["sections"][0]["state"] == "skipped"
+        assert persisted["state"] == "done"
+    elif operation == "confirm-autosave":
+        assert persisted["autosave_confirmed"] is True
+        assert persisted["state"] == "queued"
+        assert persisted["needs"] is None
+    else:
+        assert persisted["state"] == "cancelled"

@@ -59,4 +59,5 @@ def skip(run_id: uuid.UUID, section: str, request: Request, user: UserDep, db: D
     part.state = "skipped"
     site_profile.event(part, "skipped", deps.clock(request))
     site_profile.finish_state(db, run, deps.clock(request))
+    db.commit()
     return detail(db, run)

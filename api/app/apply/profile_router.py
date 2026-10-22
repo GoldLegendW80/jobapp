@@ -161,7 +161,7 @@ def edit(
         raise HTTPException(404, "No such profile field.") from None
     except site_profile.RefusedError as exc:
         return refusal(exc)
-    db.flush()
+    db.commit()
     return detail(db, owned(db, user.id, run_id))
 
 
