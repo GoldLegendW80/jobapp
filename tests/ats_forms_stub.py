@@ -112,8 +112,8 @@ POSTINGS: dict[str, dict[str, dict[str, tuple[str, str, str]]]] = {
                 "Software Engineer, Agents",
                 "Remote, Europe",
             ),
-            # Two more forms of one company: a journey that applies more than once needs
-            # distinct form addresses (apply A13b).
+            # More forms of one company: a journey that applies more than once needs distinct
+            # form addresses (apply A13b: three rehearsals, then two Full auto Likes).
             "4012346": (
                 "Northwind Labs",
                 "Robotics Engineer, Fleet",
@@ -123,6 +123,16 @@ POSTINGS: dict[str, dict[str, dict[str, tuple[str, str, str]]]] = {
                 "Northwind Labs",
                 "Controls Engineer",
                 "Berlin, Germany",
+            ),
+            "4012348": (
+                "Northwind Labs",
+                "Perception Engineer",
+                "Paris, France",
+            ),
+            "4012349": (
+                "Northwind Labs",
+                "Simulation Engineer",
+                "Remote, Europe",
             ),
         }
     },
