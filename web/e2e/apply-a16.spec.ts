@@ -266,7 +266,14 @@ test("three rehearsals send nothing, then Full auto holds and submits exactly on
     .poll(async () => (await latest(id)).state, { timeout: FILL })
     .toBe("held");
   await page.goto("/applications");
-  await expect(page.getByRole("timer")).toBeVisible();
+  const heldCard = page.getByRole("article", {
+    name: `${person.posting.title} 4100000105`,
+    exact: true,
+  });
+  await expect(heldCard).toContainText(
+    "Full auto: your Like approved it. It is held so you can cancel, then checked once more and submitted.",
+  );
+  await expect(heldCard.getByRole("timer")).toBeVisible();
   await shots(page, "held");
   await expect
     .poll(async () => (await latest(id)).state, { timeout: FILL })
@@ -396,6 +403,27 @@ test("a checkpoint pauses LinkedIn for seven days and moves held work to review"
   );
   expect(await accepted()).toHaveLength(3);
   await page.goto("/applications");
+  const waiting = page.getByRole("region", { name: /^Waiting for you/ });
+  const returned = waiting.getByRole("article", {
+    name: `${person.posting.title} 4100000109`,
+    exact: true,
+  });
+  await expect(returned).toContainText(
+    "Filled and waiting for your approval. Nothing is sent until you approve.",
+  );
+  await expect(returned).toContainText(
+    "Why it came back: LinkedIn is paused for a week after a security check. Nothing was sent.",
+  );
+  await expect(
+    returned.getByRole("button", { name: "Review the answers", exact: true }),
+  ).toBeVisible();
+  const stopped = waiting.getByRole("article", {
+    name: `${person.posting.title} 4100000110`,
+    exact: true,
+  });
+  await expect(stopped).toContainText(
+    "The form needs you before it can go on. Nothing was sent.",
+  );
   await shots(page, "checkpoint-review");
 });
 

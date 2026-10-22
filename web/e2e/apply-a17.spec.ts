@@ -10,11 +10,12 @@ import {
   signUp,
   waitForRender,
 } from "./documents-helpers";
-import { clearAttempts, newContext, watchErrors } from "./stack";
+import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
 
 // Registered by apply-all.config.ts's apply- prefix. Two isolated invented people, the
 // local fake Greenhouse form, and one explicit UI approval. No real account or site.
 test.describe.configure({ timeout: 600_000 });
+const shots = makeShots("apply-a17", "two-users");
 
 type Approval = {
   answers_hash: string;
@@ -192,6 +193,22 @@ test("A approves one fake submission; B and a signed-out person cannot read its 
     expect(
       (await stub.submissions()).filter((one) => one.accepted),
     ).toHaveLength(0);
+
+    await expect(section).toContainText(marker);
+    await expect(section).toContainText(
+      "Filled and waiting for your approval.",
+    );
+    await expect(
+      section.getByRole("button", { name: "Approve and submit", exact: true }),
+    ).toBeEnabled();
+    await shots(page, "owner-review");
+    await otherPage.goto(`/jobs/${posting}`);
+    await expect(
+      otherPage.getByRole("heading", { name: "Page not found", exact: true }),
+    ).toBeVisible();
+    await expect(otherPage.locator("body")).not.toContainText(marker);
+    await shots(otherPage, "other-denied");
+    await expect(otherPage.locator("body")).not.toContainText(marker);
 
     await section.getByRole("button", { name: "Approve and submit" }).click();
     const dialog = page.getByRole("alertdialog");
