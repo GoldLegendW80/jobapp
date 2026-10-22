@@ -318,7 +318,8 @@ _LEGAL_FORMS = frozenset(
 def title_key(title: str) -> str:
     """The title compared for the same role: folded, gender markers dropped, words of a-z and
     0-9 separated by one space."""
-    return slug.text_key(_GENDER.sub(" ", slug.fold(unicodedata.normalize("NFKC", title))))
+    marked = unicodedata.normalize("NFKC", title).casefold()
+    return slug.text_key(fold(_GENDER.sub(" ", marked)))
 
 
 def company_key(company: str) -> str:
