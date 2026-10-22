@@ -412,11 +412,19 @@ class Live:
         lease = self.manager.current()
         if lease is None:
             raise LeaseError(404, "no_such_lease")
+        now = self.manager.clock()
+        deadline = now + TAKEOVER_S
+        if lease.state == "waiting_person" and lease.wait_reason == "takeover":
+            # Changing viewers keeps this continuous pause's original allowance.
+            if lease.wait_deadline is None or now >= lease.wait_deadline:
+                self.give_back(lease_id)
+                raise LeaseError(409, "takeover_expired")
+            deadline = min(deadline, lease.wait_deadline)
         lease.scratch["input_epoch"] = lease.scratch.get("input_epoch", 0) + 1
         if lease.state == "active":
-            lease.wait_person(self.manager.clock(), "takeover", "", TAKEOVER_S)
+            lease.wait_person(now, "takeover", "", TAKEOVER_S)
         self.input_lease, self.input_viewer = lease_id, viewer
-        self.input_until = self.manager.clock() + TAKEOVER_S
+        self.input_until = deadline
         self.absent_since = None
         self.used.add(lease_id)
         self.given_back.clear()
