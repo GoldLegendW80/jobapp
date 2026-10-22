@@ -27,9 +27,22 @@ services:
     depends_on:
       gmailstub:
         condition: service_healthy
+      gmailmcp:
+        condition: service_healthy
 
   worker:
     environment: *fake-google
+    depends_on:
+      gmailstub:
+        condition: service_healthy
+
+  gmailmcp:
+    environment:
+      APP_ENV: test
+      GOOGLE_API_BASE_URL: http://gmailstub:8098
+      GOOGLE_AUTH_URL: http://127.0.0.1:${GMAIL_STUB_PORT:-8098}/o/oauth2/v2/auth
+      GOOGLE_TOKEN_BASE_URL: http://gmailstub:8098
+    networks: [default, mailmcp]
     depends_on:
       gmailstub:
         condition: service_healthy

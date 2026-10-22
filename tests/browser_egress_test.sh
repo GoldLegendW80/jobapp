@@ -92,6 +92,13 @@ for bad in 256.1.1.1 010.1.1.1 1.2.3 1.2.3.4.5 "1.2.3.4;id" ::1 fd00::1 " 1.2.3.
 done
 ok "bad bridge names (too long, spaces, shell, slash) and bad resolvers (out of range, IPv6, junk) refused"
 
+step "mail has its own firewall chains"
+JOBAPP_EGRESS_KIND=mail bash "$SCRIPT" rules br-0123456789ab 1.1.1.1 >"$WORK/mail-rules"
+grep -q -- '-j JOBAPP-MAIL-EGRESS$' "$WORK/mail-rules" || fail "mail does not have its own egress chain"
+grep -q -- '-j JOBAPP-MAIL-EGRESS-IN$' "$WORK/mail-rules" || fail "mail does not have its own host-input chain"
+grep -q -- '-d 169.254.0.0/16 -j DROP' "$WORK/mail-rules" || fail "mail can reach metadata"
+ok "mail and browser chains are distinct, with the same private-address refusals"
+
 step "resolvers: as Docker reads them"
 funcs="$WORK/funcs.sh"
 sed '/^main "\$@"$/d' "$SCRIPT" >"$funcs"
@@ -251,7 +258,7 @@ step "boot: the browser has no restart policy and nothing at boot starts it"
 restart="$(awk '/^  browser:$/ { f = 1; next } f && /^  [a-z]/ { exit } f && /^    restart:/ { print }' compose.yml)"
 [[ "$restart" == '    restart: "no"' ]] || fail "the browser service restart policy is '$restart', not \"no\""
 unit_start="$(sed -n 's/^ExecStart=//p' "$SCRIPT")"
-[[ "$unit_start" == "/usr/local/sbin/jobapp-browser-egress apply --boot" ]] || fail "the boot unit runs '$unit_start'"
+[[ "$unit_start" == "/usr/local/sbin/jobapp-\$EGRESS_NAME-egress apply --boot" ]] || fail "the boot unit runs '$unit_start'"
 grep -n "profile browser\|compose.* up\|create browser" tests/reboot_check.sh && fail "tests/reboot_check.sh starts the browser"
 ok "compose: browser restart is \"no\"; the boot unit only applies the rules; the reboot check never starts the browser"
 
