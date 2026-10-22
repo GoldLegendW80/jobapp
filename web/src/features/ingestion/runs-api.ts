@@ -180,6 +180,8 @@ export const runSchema = z.object({
   cancel_requested: z.boolean(),
   document_ids: z.array(z.string()),
   unread_document_ids: z.array(z.string()),
+  /** Unread documents whose text holds a possible secret not yet confirmed. */
+  secret_document_ids: z.array(z.string()).default([]),
   current_agent_run_id: z.string().nullable(),
   tokens: z.object({
     spent: z.number(),

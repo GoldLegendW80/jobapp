@@ -1,23 +1,28 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
-import { fakeDocuments, fakePrompt } from "@/test/ingestion";
+import { fakeDocument, fakeDocuments, fakePrompt } from "@/test/ingestion";
 import { fakeRuns } from "@/test/ingestion-runs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
 
 import { ProposalList } from "./proposal-list";
 import { PROMPT_READY } from "./step-prompt";
 import { REVIEW_READY } from "./step-review";
 import { isStepId, STEP_IDS } from "./steps";
 
-async function open(path = "/profile/fill") {
+async function open(
+  path = "/profile/fill",
+  documents: Parameters<typeof fakeDocuments>[0] = [],
+) {
   fakeSession(member);
-  fakeDocuments();
+  fakeDocuments(documents);
   fakePrompt();
   fakeRuns();
   const app = renderApp(path);
@@ -25,6 +30,8 @@ async function open(path = "/profile/fill") {
     level: 1,
     name: "Fill my profile with an agent",
   });
+  // The open step is shown once the list of documents says which.
+  await screen.findByRole("heading", { level: 2, name: /^Step \d:/ });
   return app;
 }
 
@@ -52,6 +59,60 @@ describe("/profile/fill", () => {
     expect(
       within(steps()).getByRole("button", { name: /Step 2: Documents/ }),
     ).not.toHaveAttribute("aria-current");
+  });
+
+  it("opens on the documents for a user who has one, the prompt one click away", async () => {
+    const user = userEvent.setup();
+    const app = await open("/profile/fill", [fakeDocument({ name: "cv.pdf" })]);
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Step 2: Add your documents",
+      }),
+    ).toBeVisible();
+    expect(app.location()).toBe("/profile/fill?step=documents");
+    const prepare = within(steps()).getByRole("button", {
+      name: /Step 1: Prepare/,
+    });
+    expect(prepare).toBeVisible();
+    expect(prepare).toBeEnabled();
+    await user.click(prepare);
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Step 1: Prepare a dossier with a coding assistant",
+      }),
+    ).toBeVisible();
+    expect(app.location()).toBe("/profile/fill?step=prompt");
+  });
+
+  it("opens on the prompt when the list of documents cannot be read", async () => {
+    fakeSession(member);
+    fakeDocuments([fakeDocument()]);
+    server.use(
+      http.get("*/api/ingestion/documents", () =>
+        HttpResponse.json({ detail: "database down" }, { status: 503 }),
+      ),
+    );
+    fakePrompt();
+    fakeRuns();
+    const app = renderApp("/profile/fill");
+    expect(
+      await screen.findByRole(
+        "heading",
+        { level: 2, name: /Prepare a dossier/ },
+        { timeout: 10_000 },
+      ),
+    ).toBeVisible();
+    expect(app.location()).toBe("/profile/fill");
+  });
+
+  it("an address that names a step is kept, documents or not", async () => {
+    const app = await open("/profile/fill?step=prompt", [fakeDocument()]);
+    expect(
+      screen.getByRole("heading", { level: 2, name: /Prepare a dossier/ }),
+    ).toBeVisible();
+    expect(app.location()).toBe("/profile/fill?step=prompt");
   });
 
   it("lists the three steps as controls, none of them as Soon", async () => {

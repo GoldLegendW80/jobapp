@@ -564,6 +564,16 @@ def is_locked(section: str, key: str) -> bool:
     return slot is None or slot.locked
 
 
+def removes_a_list(section: str, key: Any, action: Any) -> bool:
+    """Whether an item removes an entry, a line or a whole list, which the extraction refuses
+    (`tools.REMOVAL_OF_A_LIST`) and the merge drops from the rows a step reused (#408). A removal
+    of a setting or of an unknown key is left to `build`, which names it."""
+    if action != Action.remove.value or not isinstance(key, str):
+        return False
+    slot = SLOTS.get(section, {}).get(key.partition(":")[0])
+    return slot is not None and slot.kind not in (SlotKind.scalar, SlotKind.setting)
+
+
 # --- text -----------------------------------------------------------------------------------------
 
 # Format characters that a reader sees (the Arabic number signs, the end of ayah and their like):

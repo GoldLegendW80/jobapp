@@ -2236,6 +2236,19 @@ case "$args" in
     if [[ -n "${FAKE_LEAK:-}" ]]; then
       echo "OperationalError: postgresql+psycopg://jobapp:CANARYPASSWORD@db:5432/jobapp refused" >&2
     fi
+    if [[ -n "${FAKE_LOCK_TIMEOUTS:-}" ]]; then
+      # The first FAKE_LOCK_TIMEOUTS runs wait on a lock of the running release: 55P03.
+      echo x >>"$FAKE_DIR/lock-tries"
+      if (($(wc -l <"$FAKE_DIR/lock-tries") <= FAKE_LOCK_TIMEOUTS)); then
+        echo "sqlalchemy.exc.OperationalError: (psycopg.errors.LockNotAvailable) canceling statement due to lock timeout" >&2
+        exit 1
+      fi
+    fi
+    if [[ -n "${FAKE_SAYS_55P03:-}" ]]; then
+      # A data migration that prints the words of a lock timeout, then one it caught itself.
+      echo "INFO  [migration] a row said: SQLSTATE 55P03 LockNotAvailable" >&2
+      echo "psycopg.errors.LockNotAvailable: canceling statement due to lock timeout" >&2
+    fi
     if [[ -n "${FAKE_FAIL_MIGRATE:-}" ]]; then
       # What a failing data migration prints: SQL with its parameters, Postgres' DETAIL with a
       # row's values, an address. None of it may reach the public run log.
@@ -2286,11 +2299,11 @@ in_dir() { # in_dir <dir> <cmd...>: run cmd there
 mig() {
   local want="$1"
   shift
-  rm -f "$MIG/calls" "$MIG/db-up" "$MIG/ups"
+  rm -f "$MIG/calls" "$MIG/db-up" "$MIG/ups" "$MIG/lock-tries"
   rm -rf "$MIG/logs"
   : >"$MIG/calls"
   run "$want" in_dir "$MIG/app" env -u COMPOSE -u MIGRATE_TIMEOUT_S -u MIGRATE_CONTAINER -u BACKUP_DIR \
-    MIGRATE_LOG_DIR="$MIG/logs" "$@" FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
+    -u MIGRATE_ATTEMPTS MIGRATE_RETRY_WAIT_S=0 MIGRATE_LOG_DIR="$MIG/logs" "$@" FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
 }
 # mig_log: the whole output the last run kept (one file)
 mig_log() { cat "$MIG"/logs/migrate-*.log; }
@@ -2339,6 +2352,43 @@ grep -q "migrations applied" "$WORK/out" && fail "a failed migration was reporte
 untouched "$MIG/calls"
 grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the one off container was not removed after a failure"
 ok "a failing migration: exit 1 with the step, the exception's class and what to do, no SQL, parameter, row value or address in the output (kept in a 600 file of a 700 folder), the stack untouched, the container removed"
+# Issue #408: a lock timeout (55P03) is the running release holding a lock, not a bad migration.
+mig 0 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=2
+out_has "lock timeout (SQLSTATE 55P03) in attempt 1 of 3: the upgrade was rolled back whole; trying again in 0s"
+out_has "lock timeout (SQLSTATE 55P03) in attempt 2 of 3"
+out_has "migrations applied: 1"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 3 ]] || fail "not three attempts: $(cat "$MIG/calls")"
+untouched "$MIG/calls"
+mig 1 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=3
+out_has "lock timeout: run the deploy again"
+out_has "in each of 3 attempts"
+out_has "   error: sqlalchemy.exc.OperationalError"
+out_lacks "Fix the migration"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 3 ]] || fail "not three attempts: $(cat "$MIG/calls")"
+untouched "$MIG/calls"
+mig 1 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=1 MIGRATE_ATTEMPTS=1
+out_has "lock timeout: run the deploy again"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "MIGRATE_ATTEMPTS=1 ran again: $(cat "$MIG/calls")"
+# Another failure after a lock timeout is that failure, never retried, never called a lock timeout.
+mig 1 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=1 FAKE_FAIL_MIGRATE=1
+out_has "Fix the migration and deploy again"
+out_lacks "run the deploy again. A statement"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 2 ]] || fail "a failing migration was retried: $(cat "$MIG/calls")"
+mig 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "a failing migration was retried: $(cat "$MIG/calls")"
+# 55P03 earlier in the output, another error last: only the final exception line decides.
+mig 1 FAKE_PENDING=1 FAKE_SAYS_55P03=1 FAKE_FAIL_MIGRATE=1
+out_has "Fix the migration and deploy again"
+out_has "   error: psycopg.errors.DuplicateColumn"
+out_lacks "lock timeout (SQLSTATE 55P03) in attempt"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "55P03 before another error was retried: $(cat "$MIG/calls")"
+for bad in 0 10 x; do
+  mig 1 MIGRATE_ATTEMPTS="$bad"
+  out_has "MIGRATE_ATTEMPTS must be a whole number from 1 to 9"
+done
+mig 1 MIGRATE_RETRY_WAIT_S=-1
+out_has "MIGRATE_RETRY_WAIT_S must be a whole number of seconds"
+ok "a lock timeout (55P03) runs the upgrade again, at most MIGRATE_ATTEMPTS times, then says: lock timeout, run the deploy again; any other failure is never retried, even with 55P03 earlier in its output"
 mig 1 FAKE_TIMEOUT=1 MIGRATE_TIMEOUT_S=7
 out_has "did not finish within 7s and were stopped"
 out_has "nothing was restarted"
@@ -2521,7 +2571,7 @@ ok "browser_egress: a failed image build removes the previous browser (skip) and
 run 1 deploy_order "ops/migrate.sh"
 out_has "the migrations did not apply"
 out_has "the containers on fakejetson were not touched and still run the previous release"
-out_has "Fix the migration and run ./deploy.sh again"
+out_has "After a lock timeout, just run ./deploy.sh again; otherwise fix the migration and run ./deploy.sh again"
 untouched "$WORK/order"
 grep -qx "health" "$WORK/order" && fail "the deploy went on after a failed migration"
 ok "a failing migration stops ./deploy.sh before compose up: exit 1, nothing restarted, the message says what to do"

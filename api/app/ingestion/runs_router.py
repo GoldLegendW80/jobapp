@@ -189,6 +189,12 @@ class RunOut(BaseModel):
     cancel_requested: bool
     document_ids: list[uuid.UUID]
     unread_document_ids: list[uuid.UUID]
+    secret_document_ids: list[uuid.UUID] = Field(
+        description="Among `unread_document_ids`, the documents whose text holds a possible "
+        "secret the user has not confirmed (found at upload or by a transcription during the "
+        "run): no step reads such a text, and the summary says so. Read as the documents are "
+        "now: once confirmed, a document leaves this list."
+    )
     current_agent_run_id: uuid.UUID | None
     tokens: TokensOut
     counts: CountsOut
@@ -297,6 +303,18 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
     read: set[uuid.UUID] = set()
     extracted: set[uuid.UUID] = set()
     cut_short: set[uuid.UUID] = set()  # an extraction that failed or was cancelled
+    # A possible secret waits for the user's confirmation: every document of the run, a step row
+    # or none (one flagged at upload is refused at the start and has no step).
+    secret = set(
+        db.scalars(
+            sa.select(IngestionDocument.id).where(
+                IngestionDocument.user_id == run.user_id,
+                IngestionDocument.id.in_(list(run.document_ids)),
+                IngestionDocument.secret_warning.is_(True),
+                IngestionDocument.secret_confirmed_at.is_(None),
+            )
+        )
+    )
     for row in rows:
         one = row[0]
         has_agent = row.status is not None
@@ -362,6 +380,7 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
         cancel_requested=run.cancel_requested_at is not None,
         document_ids=list(run.document_ids),
         unread_document_ids=[one for one in run.document_ids if one not in read],
+        secret_document_ids=[one for one in run.document_ids if one not in read and one in secret],
         current_agent_run_id=current,
         tokens=TokensOut(
             spent=spent,
