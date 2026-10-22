@@ -316,21 +316,23 @@ RENDERING_CODE = "documents_rendering"
 
 def _render_wait_began(db: Session, application: Application, kind: str, now: datetime) -> datetime:
     """When the application began to wait on the render of its `kind` document: the time of
-    that wait's `waiting` event, else `now` (this ask begins the wait and writes the event). A
-    wait the application left (`needs` took another value) and took again begins anew, though
-    its last `waiting` event reads the same."""
-    wanted = {"needs": RENDERING, "document": kind}
+    that wait's `waiting` event, else `now`. Only a new fill attempt gets a new bound; polling,
+    a changed `needs` or releasing a dead browser lease does not restart the same wait."""
+    wanted = {"needs": RENDERING, "document": kind, "attempt": application.attempt}
     last = db.execute(
         sa.select(ApplicationEvent.at, ApplicationEvent.data)
         .where(
             ApplicationEvent.application_id == application.id,
             ApplicationEvent.user_id == application.user_id,
             ApplicationEvent.kind == "waiting",
+            ApplicationEvent.data["needs"].astext == RENDERING,
+            ApplicationEvent.data["document"].astext == kind,
         )
         .order_by(ApplicationEvent.id.desc())
         .limit(1)
     ).first()
-    if application.needs == RENDERING and last is not None and last.data == wanted:
+    # Legacy waits have no attempt marker: retain their original deadline conservatively.
+    if last is not None and last.data.get("attempt", application.attempt) == application.attempt:
         return last.at
     _event(db, application, "waiting", now, **wanted)
     # `_wait` reads the last event next, and the sessions do not autoflush.
@@ -415,7 +417,12 @@ def prepare(
             if (now - began).total_seconds() >= RENDER_WAIT_S:
                 _end(db, application, State.failed, RENDERING_CODE, now)
                 return "failed"
-        _wait(db, application, needs, now, document=kind)
+            # The clock helper owns this wait's single event. A second event here would
+            # move its deadline when another waiting reason briefly took `needs`.
+            application.needs = needs
+            application.updated_at = now
+        else:
+            _wait(db, application, needs, now, document=kind)
         return "waiting_documents"
     versions: dict[str, Any] = {}
     pdfs: dict[str, bytes] = {}
@@ -574,6 +581,12 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 options=list(item.options) or None,
                 value=_value(outcome.answer, outcome.filled.status),
                 source=_source(outcome.answer, outcome.filled.status),
+                document_letter=(
+                    item.kind in {"text", "textarea"}
+                    and isinstance(outcome.answer, Answer)
+                    and outcome.answer.source == "documents.letter_text"
+                ),
+                left_reason=outcome.filled.code if outcome.filled.status == "left" else None,
                 required=item.required,
                 approved=False,
             )
@@ -676,14 +689,18 @@ def finish(
         return follow_company(db, application, posting, result.company_url, now)
     # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
     # replaces them, for a field the form still has.
-    mine = db.execute(
-        sa.select(ApplicationAnswer.field_key, ApplicationAnswer.value).where(
-            ApplicationAnswer.application_id == application.id,
-            ApplicationAnswer.user_id == application.user_id,
-            ApplicationAnswer.source == AnswerSource.person,
+    mine = (
+        db.execute(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == application.user_id,
+                ApplicationAnswer.source == AnswerSource.person,
+            )
         )
-    ).all()
-    theirs = {key: value for key, value in mine}
+        .scalars()
+        .all()
+    )
+    theirs = {row.field_key: row for row in mine}
     db.execute(
         sa.delete(ApplicationAnswer).where(
             ApplicationAnswer.application_id == application.id,
@@ -693,7 +710,13 @@ def finish(
     rows = _answer_rows(application, result.report)
     for row in rows:
         if row.field_key in theirs and not row.field_key.startswith("skipped:"):
-            row.value, row.source = theirs[row.field_key], AnswerSource.person
+            old = theirs[row.field_key]
+            # A reused key on a changed form must not transfer the old field's allowance.
+            same_shape = (row.label, row.kind, row.options) == (old.label, old.kind, old.options)
+            if same_shape:
+                row.value, row.source = old.value, AnswerSource.person
+                row.document_letter = bool(row.document_letter or old.document_letter)
+                row.left_reason = None
     db.add_all(rows)
     counts = _counts(result.report)
     _event(db, application, "filled", now, **counts)

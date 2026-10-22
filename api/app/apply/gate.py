@@ -59,6 +59,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, service, states
+from app.apply.answer_limits import ANSWER_MAX, LETTER_MAX, letter_issue
 from app.apply.models import (
     AnswerSource,
     Application,
@@ -115,6 +116,10 @@ SENTENCES = {
     "not_editable": "The answers of this application can no longer be changed.",
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
+    "letter_too_long": "Shorten the letter to at most 10000 characters before saving.",
+    "letter_control_character": (
+        "Remove tabs, carriage returns and other control characters before saving the letter."
+    ),
     "not_an_option": "This form does not offer that choice.",
     # Not a refusal: the error code of a `submitted` application whose posting kept its status.
     "status_not_set": (
@@ -209,9 +214,11 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
             row.field_key,
             row.label,
             row.kind,
+            row.options,
             row.value,
             str(getattr(row.source, "value", row.source)),
             bool(row.required),
+            bool(row.document_letter),
         ]
         for row in rows
     )
@@ -603,7 +610,12 @@ def confirm_submitted(
 # The person's own answer to a field (`set_answer`): before the click only, and never a file (the
 # documents) or a widget the app cannot fill (`skipped:`).
 EDITABLE = frozenset({State.needs_person, State.ready, State.approved})
-ANSWER_MAX = 5000
+
+
+def answer_max(row: ApplicationAnswer) -> int:
+    return LETTER_MAX if row.document_letter and row.kind in {"text", "textarea"} else ANSWER_MAX
+
+
 TEXT_KINDS = frozenset({"text", "textarea", "select", "combobox", "single", "date"})
 CHOICE_KINDS = frozenset({"select", "combobox", "single"})  # the value is one of the options
 ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -685,7 +697,9 @@ def set_answer(
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
         raise InvalidAnswerError("wrong_type")
-    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > ANSWER_MAX):
+    if isinstance(value, str) and row.document_letter and (issue := letter_issue(value)):
+        raise InvalidAnswerError(issue)
+    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > answer_max(row)):
         raise InvalidAnswerError("wrong_type")
     if isinstance(value, str) and row.kind == "date" and not _is_date(value):
         raise InvalidAnswerError("wrong_type")

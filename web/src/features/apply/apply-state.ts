@@ -95,6 +95,8 @@ const NEEDS: Record<string, string> = {
 };
 
 const FAILURES: Record<string, string> = {
+  documents_rendering:
+    "your CV or letter was still being prepared after an hour",
   interrupted: "it was interrupted",
   internal_error: "something went wrong on our side",
   form_changed: "the form changed while it was being filled",

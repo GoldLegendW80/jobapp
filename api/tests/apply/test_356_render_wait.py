@@ -31,7 +31,7 @@ from tests.documents.conftest import load
 
 PDF_2 = b"%PDF-1.7\n" + bytes(reversed(range(256))) + b"\n%%EOF\n"
 NAMES = {Kind.cv: run.CV_NAME, Kind.letter: run.LETTER_NAME}
-RENDERING = {"needs": "documents:rendering"}
+RENDERING = {"needs": "documents:rendering", "attempt": 0}
 SECOND = timedelta(seconds=1)
 
 
@@ -298,14 +298,17 @@ def test_the_bound_outlasts_two_render_jobs_at_their_ceiling() -> None:
 
 
 @pytest.mark.parametrize("state", [RenderState.queued, RenderState.rendering])
+@pytest.mark.parametrize("mode", [Mode.review, Mode.manual])
 def test_an_approved_render_that_never_ends_fails_the_application_at_the_bound(
     db: Session,
     factory: sessionmaker[Session],
     person_a: Person,
     state: RenderState,
+    mode: Mode,
     bound: timedelta,
 ) -> None:
     app_id = started(db, person_a)
+    db.execute(sa.update(Application).where(Application.id == app_id).values(mode=mode))
     second_version(db, person_a, Kind.cv, state)
     assert ask(factory, app_id, AT) == "waiting_documents"
     assert ask(factory, app_id, AT + bound - SECOND) == "waiting_documents"
@@ -313,6 +316,23 @@ def test_an_approved_render_that_never_ends_fails_the_application_at_the_bound(
     assert waits(db, app_id) == [({**RENDERING, "document": "cv"}, AT)]
 
     assert ask(factory, app_id, AT + bound) == "failed"
+    ended(db, app_id)
+    # Ended: the tick asks no more, nothing was chosen, nothing was placed.
+    assert ask(factory, app_id, AT + bound + SECOND) == "not_queued"
+    assert app_id not in run.due(db)
+
+
+def test_needs_changes_do_not_refresh_the_same_render_wait(
+    db: Session, factory: sessionmaker[Session], person_a: Person, bound: timedelta
+) -> None:
+    app_id = started(db, person_a)
+    second_version(db, person_a, Kind.cv)
+    assert ask(factory, app_id, AT) == "waiting_documents"
+    db.execute(sa.update(Application).where(Application.id == app_id).values(needs="retry"))
+    db.commit()
+    assert ask(factory, app_id, AT + SECOND) == "waiting_documents"
+    assert ask(factory, app_id, AT + bound) == "failed"
+    assert waits(db, app_id) == [({**RENDERING, "document": "cv"}, AT)]
     ended(db, app_id)
     # Ended: the tick asks no more, nothing was chosen, nothing was placed.
     assert ask(factory, app_id, AT + bound + SECOND) == "not_queued"
@@ -350,22 +370,22 @@ def test_each_render_waited_for_has_its_own_bound(
     ended(db, app_id)
 
 
-def test_a_wait_the_application_left_starts_a_new_bound(
+def test_a_genuinely_new_attempt_starts_a_new_bound(
     db: Session, factory: sessionmaker[Session], person_a: Person, bound: timedelta
 ) -> None:
-    """The application stopped waiting on the render (another step took `needs`, as a lease wait
-    or a retry does) and waits on the same render again: the last `waiting` event reads the
-    same, yet the bound counts from this wait, which writes its own event."""
+    """Only an attempt actually begun, not a changed status or lease restart, gets a new hour."""
     app_id = started(db, person_a)
     second_version(db, person_a, Kind.cv)
     assert ask(factory, app_id, AT) == "waiting_documents"
-    db.execute(sa.update(Application).where(Application.id == app_id).values(needs="retry"))
+    db.execute(
+        sa.update(Application).where(Application.id == app_id).values(needs="retry", attempt=1)
+    )
     db.commit()
     again = AT + 2 * bound
     assert ask(factory, app_id, again) == "waiting_documents"
     assert waits(db, app_id) == [
         ({**RENDERING, "document": "cv"}, AT),
-        ({**RENDERING, "document": "cv"}, again),
+        ({**RENDERING, "document": "cv", "attempt": 1}, again),
     ]
     assert ask(factory, app_id, again + bound - SECOND) == "waiting_documents"
     assert ask(factory, app_id, again + bound) == "failed"

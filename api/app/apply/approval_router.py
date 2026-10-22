@@ -15,7 +15,8 @@
   hash, any approval void (`approved` goes back to `ready`); the submit lease refills and reads it
   back, and a refill by the run keeps it. 200 with the approval view; 422 `{detail, code}` for an
   unknown field (`unknown_field`: none, a file, a skipped widget) or a value that does not fit it
-  (`wrong_type`: a text for a text, select or combobox, at most 5000 characters; true or false for
+  (`wrong_type`: a text for a text, select or combobox, at most 5000 characters, or 10000 for an
+  adapter-owned document-letter box; true or false for
   a checkbox or a yes or no question); 409 `not_editable` once the app clicked or after an end.
 - POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
   an approval; cancel: anything before the click).
@@ -76,7 +77,7 @@ class ApproveIn(BaseModel):
 class AnswerIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    value: Annotated[str, Field(min_length=1, max_length=gate.ANSWER_MAX)] | StrictBool
+    value: Annotated[str, Field(min_length=1, max_length=gate.LETTER_MAX)] | StrictBool
 
 
 class AnswerOut(BaseModel):
@@ -89,6 +90,8 @@ class AnswerOut(BaseModel):
     required: bool
     approved: bool
     you_answer: bool  # left by the app: the person answers it on the site, or leaves it
+    max_chars: int
+    left_reason: str | None = None
 
 
 class ShotOut(BaseModel):
@@ -161,6 +164,8 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
             required=row.required,
             approved=row.approved,
             you_answer=row.source is AnswerSource.left,
+            max_chars=gate.answer_max(row),
+            left_reason=row.left_reason if row.source is AnswerSource.left else None,
         )
         for row in gate.rows_of(db, application)
         if not row.field_key.startswith("designated:shape:")

@@ -866,6 +866,11 @@ def _same(shown: str, wanted: str) -> bool:
 
 async def _fill_text(adapter: Adapter, tools: Tools, item: Field, answer: answers.Answer) -> Filled:
     wanted = _value(answer)
+    if answer.source == "documents.letter_text":
+        from app.apply.answer_limits import letter_issue
+
+        if issue := letter_issue(wanted):
+            return Filled("left", issue)
     if not wanted:
         return Filled("left", "empty_answer")
     if code := _ok(await tools.type(item.ref, wanted, item.label)):

@@ -412,6 +412,25 @@ def test_the_letter_goes_into_additional_information() -> None:
 
 
 @pytest.mark.parametrize(
+    ("letter", "code"),
+    [
+        ("x" * 10_001, "letter_too_long"),
+        ("a\tb", "letter_control_character"),
+        ("a\rb", "letter_control_character"),
+        ("a\x7fb", "letter_control_character"),
+    ],
+    ids=["over-limit", "tab", "carriage-return", "delete-control"],
+)
+def test_an_untypable_letter_is_left_with_its_reason(letter: str, code: str) -> None:
+    form = lever_form(files=("cv.pdf",))
+    report = filled(form, context(letter=letter))
+    found = outcome(report, COMMENTS)
+    assert (found.filled.status, found.filled.code) == ("left", code)
+    assert form.spec(COMMENTS).value == ""
+    assert not [call for call in form.calls if call[0] == "type" and call[1].get("text") == letter]
+
+
+@pytest.mark.parametrize(
     ("role", "kept"),
     [
         *((r, ats_base.TEXT_MAX) for r in ("textbox", "searchbox", "spinbutton", "combobox")),
