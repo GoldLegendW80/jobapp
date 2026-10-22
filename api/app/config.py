@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     )
     # How long a row of the send log lives, in days.
     mail_sends_keep_days: int = Field(default=365, ge=30, le=3650)
+    gmail_mcp_url: str = "http://gmailmcp:9400/mcp"
+    mail_send_key: SecretStr | None = None
+    gmail_mcp_redis_password_file: str | None = None
     # The browser module (SPEC-browser). browserd's control API on the internal `browsing` network,
     # behind a shared secret only the api, the worker and the browser container hold. Empty: no
     # browser (the api answers that it is not available).

@@ -430,7 +430,16 @@ async def _connect(
         if tokens.refresh_token is None:
             return await refuse("no_refresh_token")
         try:
-            profile = await google.get_profile(Grant(uid, tokens.refresh_token))
+            sealed = keyring.encrypt(tokens.refresh_token, user_id, TOKEN_KIND)
+            profile = await google.connection_profile(
+                MailAccount(
+                    user_id=user_id,
+                    email=info.email,
+                    refresh_token_encrypted=sealed.ciphertext,
+                    key_version=sealed.key_version,
+                ),
+                keyring,
+            )
         except GoogleError as failed:
             log.event("mail.oauth.failed", user_id=uid, call="profile", code=stored_code(failed))
             return await refuse("profile")

@@ -1,43 +1,4 @@
-"""The one client of Google (mail M1): every HTTP call the app makes to Google is built here.
-
-OAuth (the consent address, the code exchange, the refresh, the revocation), `userinfo`, and the
-Gmail read calls: `getProfile`, `messages.list`, `messages.get`, `history.list`, `threads.get`
-and `attachments.get`. **There is no function that sends a mail, and none may be added**: the
-only code that builds that request is one private function of `app/mail/gate.py` (M12), which
-takes from this module what it needs and nothing more (`access_token`, `gmail_url`,
-`TIMEOUT`, `raise_for_answer`). A test reads this file and fails if it names that call.
-
-Where the calls go. Unset, the three settings mean Google: `GOOGLE_AUTH_URL` (where the browser
-is sent), `GOOGLE_TOKEN_BASE_URL` (`/token`, `/revoke`) and `GOOGLE_API_BASE_URL` (Gmail under
-`/gmail/v1/users/me`, userinfo under `/v1/userinfo`). Tests point them at the fake of
-`api/tests/mail/fake_gmail.py`. `endpoints()` refuses a Google address when APP_ENV is test, and
-anything but Google when it is production (the settings refuse the three variables there too).
-
-Rules of every call, with the figures of "Google at the HTTP boundary" (tasks/mail/todo.md):
-
-- **Timeouts:** 10 s to connect and 10 s to read (`TIMEOUT`).
-- **Bounded answers:** `messages.get` 8 MB, every other JSON answer 2 MB, `attachments.get`
-  36 MB read as a stream and decoded in pieces of at most 64 KB, never held whole. Over the cap:
-  `TooLargeError`.
-- **Retries inside one call:** 429, 403 with a rate limit reason and 5xx only: up to three more
-  tries after 1 s, 2 s and 4 s (plus up to a quarter of jitter). A `Retry-After` of at most
-  `RETRY_AFTER_INLINE_S` is waited instead; a longer one raises at once and carries the figure.
-  A timeout, a broken connection and an unreadable answer are not retried here. After that the
-  caller owns the account's backoff: `next_backoff()` gives the delay (5 minutes, doubling, at
-  most 6 hours).
-- **Tokens:** access tokens live in this object's memory only, until they expire. A 401
-  refreshes once; a second 401, or `invalid_grant`, is `RevokedError`.
-- **Quota:** each call spends its quota units in a counter per user and per minute
-  (`Budget`), which refuses to pass half of Google's documented per user rate. The counter is
-  per process: the worker syncs, the api only downloads attachments.
-- **Downloads:** two at once for the process, one per user (`DOWNLOADS_PROCESS`,
-  `DOWNLOADS_USER`); the next one waits.
-- **Privacy:** tokens are registered with the log scrubber while in use, errors carry a code
-  and never Google's text (`app/mail/errors.py`), and the module logs through `app/mail/log.py`
-  only.
-
-One `GoogleClient` per process. `transport`, `clock`, `sleep` and `jitter` are for tests.
-"""
+"""Google OAuth and bounded wire helpers. Gmail calls live in app.gmailmcp."""
 
 from __future__ import annotations
 
@@ -529,6 +490,7 @@ class GoogleClient:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = random.random,
     ) -> None:
+        self.settings = settings
         self.endpoints = endpoints(settings)
         self._client_id = settings.google_oauth_client_id
         self._client_secret = (
@@ -545,6 +507,19 @@ class GoogleClient:
         # user id -> (fingerprint of the refresh token, access token, the clock when it ends)
         self._tokens: dict[str, tuple[str, str, float]] = {}
         self._refreshing: dict[str, asyncio.Lock] = {}
+
+    async def connection_profile(self, account: Any, keyring: Any) -> Profile:
+        from app.mail.mcp_client import GmailMcp
+
+        found = await GmailMcp(self.settings, self, keyring).get_profile(account)
+        if "error" in found:
+            raise GoogleDownError(reason="unreachable")
+        return Profile(
+            email=_text(found, "emailAddress"),
+            messages_total=_count(found, "messagesTotal"),
+            threads_total=_count(found, "threadsTotal"),
+            history_id=_text(found, "historyId"),
+        )
 
     @property
     def gmail_url(self) -> str:
@@ -764,285 +739,6 @@ class GoogleClient:
             return await self._retrying("userinfo", once)
 
     # -- Gmail --
-
-    async def _gmail(
-        self,
-        grant: Grant,
-        call: str,
-        path: str,
-        params: Sequence[tuple[str, str]] = (),
-        *,
-        cap: int = JSON_MAX_BYTES,
-    ) -> dict[str, Any]:
-        url = f"{self.endpoints.gmail_url}{path}"
-
-        async def exchange() -> Answer:
-            self.budget.spend(grant.user_id, UNITS[call])
-            token = await self._token(grant)
-            with log.hide(token):
-                return await self._send("GET", url, params=params, bearer=token, cap=cap)
-
-        async def once() -> dict[str, Any]:
-            answer = await exchange()
-            if answer.status == 401:
-                # The token died early (revoked, or Google's clock is ahead): one refresh.
-                self.forget(grant.user_id)
-                answer = await exchange()
-            raise_for_answer(answer, call)
-            return _loads(answer.body)
-
-        with log.hide(grant.refresh_token, self._client_secret):
-            try:
-                return await self._retrying(call, once)
-            except GoogleError as error:
-                log.event(
-                    "mail.google.failed",
-                    user_id=grant.user_id,
-                    call=call,
-                    code=error.code,
-                    status=error.status,
-                    reason=error.reason,
-                )
-                raise
-
-    async def get_profile(self, grant: Grant) -> Profile:
-        found = await self._gmail(grant, "getProfile", "/profile")
-        return Profile(
-            email=_text(found, "emailAddress"),
-            messages_total=_count(found, "messagesTotal"),
-            threads_total=_count(found, "threadsTotal"),
-            history_id=_text(found, "historyId"),
-        )
-
-    async def list_messages(
-        self,
-        grant: Grant,
-        *,
-        q: str | None = None,
-        page_token: str | None = None,
-        max_results: int = PAGE_SIZE,
-        include_spam_trash: bool = False,
-    ) -> MessagePage:
-        """One page of `messages.list`: ids only."""
-        params = [("maxResults", str(max(1, min(500, max_results))))]
-        if q:
-            params.append(("q", q))
-        if page_token:
-            params.append(("pageToken", page_token))
-        if include_spam_trash:
-            params.append(("includeSpamTrash", "true"))
-        found = await self._gmail(grant, "messages.list", "/messages", params)
-        token = found.get("nextPageToken")
-        return MessagePage(
-            refs=tuple(
-                MessageRef(_text(item, "id"), _text(item, "threadId"))
-                for item in _items(found, "messages")
-            ),
-            next_page_token=token if isinstance(token, str) and token else None,
-            estimate=_count(found, "resultSizeEstimate"),
-        )
-
-    async def list_all_messages(
-        self, grant: Grant, *, q: str | None = None, limit: int = 5000, page_cap: int = PAGE_CAP
-    ) -> Listing:
-        """Every page of a search, cut at `limit` ids, at `page_cap` pages, and as soon as a
-        page token comes back a second time."""
-        refs: list[MessageRef] = []
-        seen: set[str] = set()
-        token: str | None = None
-        pages = 0
-        stopped: Literal["end", "limit", "page_cap", "page_token_repeated"] = "end"
-        while True:
-            page = await self.list_messages(grant, q=q, page_token=token)
-            pages += 1
-            refs.extend(page.refs)
-            token = page.next_page_token
-            if len(refs) >= limit:
-                stopped = "limit"
-            elif token is None:
-                stopped = "end"
-            elif token in seen:
-                stopped = "page_token_repeated"
-            elif pages >= page_cap:
-                stopped = "page_cap"
-            else:
-                seen.add(token)
-                continue
-            break
-        if stopped in ("page_cap", "page_token_repeated"):
-            log.event("mail.google.listing_cut", user_id=grant.user_id, reason=stopped, pages=pages)
-        return Listing(tuple(refs[:limit]), pages, stopped)
-
-    async def get_message(
-        self,
-        grant: Grant,
-        message_id: str,
-        *,
-        format: Literal["full", "metadata"] = "full",
-        metadata_headers: Sequence[str] = (),
-    ) -> dict[str, Any]:
-        """One message as Google splits it (never `format=raw`). Over 8 MB: `TooLargeError`."""
-        params = [("format", format)]
-        if format == "metadata":
-            params += [("metadataHeaders", name) for name in metadata_headers]
-        found = await self._gmail(
-            grant,
-            "messages.get",
-            f"/messages/{_safe_id(message_id)}",
-            params,
-            cap=MESSAGE_MAX_BYTES,
-        )
-        _text(found, "id")
-        return found
-
-    async def get_messages(self, grant: Grant, message_ids: Sequence[str]) -> Fetched:
-        """Each message in full, one after the other. An id that is gone (404) is skipped and
-        counted; a message over the cap comes back as metadata and is named in `truncated`."""
-        messages: list[Mapping[str, Any]] = []
-        truncated: set[str] = set()
-        gone = 0
-        for message_id in message_ids:
-            try:
-                try:
-                    messages.append(await self.get_message(grant, message_id))
-                except TooLargeError:
-                    messages.append(await self.get_message(grant, message_id, format="metadata"))
-                    truncated.add(message_id)
-            except NotFoundError:
-                gone += 1
-        if gone or truncated:
-            log.event(
-                "mail.google.fetched",
-                user_id=grant.user_id,
-                count=len(messages),
-                gone=gone,
-                truncated=len(truncated),
-            )
-        return Fetched(tuple(messages), gone, frozenset(truncated))
-
-    async def get_thread(
-        self,
-        grant: Grant,
-        thread_id: str,
-        *,
-        format: Literal["full", "metadata", "minimal"] = "metadata",
-    ) -> dict[str, Any]:
-        """One conversation with its messages. Not in the plan's list of calls: kept to
-        `metadata` by default, so its answer stays under the 2 MB cap of a JSON answer."""
-        found = await self._gmail(
-            grant, "threads.get", f"/threads/{_safe_id(thread_id)}", [("format", format)]
-        )
-        _text(found, "id")
-        _items(found, "messages")
-        return found
-
-    async def list_history(
-        self,
-        grant: Grant,
-        start_history_id: str,
-        *,
-        history_types: Sequence[str] = (
-            "messageAdded",
-            "messageDeleted",
-            "labelAdded",
-            "labelRemoved",
-        ),
-        page_token: str | None = None,
-        max_results: int = PAGE_SIZE,
-    ) -> HistoryPage:
-        """One page of what changed since `start_history_id`. Too old: `HistoryExpiredError`."""
-        params = [
-            ("startHistoryId", start_history_id),
-            ("maxResults", str(max(1, min(500, max_results)))),
-        ]
-        params += [("historyTypes", name) for name in history_types]
-        if page_token:
-            params.append(("pageToken", page_token))
-        found = await self._gmail(grant, "history.list", "/history", params)
-        token = found.get("nextPageToken")
-        return HistoryPage(
-            records=tuple(_items(found, "history")),
-            next_page_token=token if isinstance(token, str) and token else None,
-            history_id=_text(found, "historyId"),
-        )
-
-    async def download_attachment(
-        self, grant: Grant, message_id: str, attachment_id: str
-    ) -> AsyncIterator[bytes]:
-        """The bytes of one attachment, in pieces of at most 64 KB, read as they are sent. Two
-        downloads run at once in the process and one per user: the next one waits here. Close
-        the iterator (`contextlib.aclosing`) when stopping early, so the slot is freed."""
-        url = (
-            f"{self.endpoints.gmail_url}/messages/{_safe_id(message_id)}"
-            f"/attachments/{_safe_id(attachment_id)}"
-        )
-        await self.slots.acquire(grant.user_id)
-        try:
-            with log.hide(grant.refresh_token, self._client_secret), log.quiet():
-                async for piece in self._download(grant, url):
-                    yield piece
-        finally:
-            self.slots.release(grant.user_id)
-
-    async def _download(self, grant: Grant, url: str) -> AsyncIterator[bytes]:
-        refreshed = False
-        retries = iter(RETRY_DELAYS_S)
-        while True:
-            self.budget.spend(grant.user_id, UNITS["attachments.get"])
-            token = await self._token(grant)
-            try:
-                with log.hide(token):
-                    async with (
-                        self._http() as http,
-                        http.stream(
-                            "GET",
-                            url,
-                            headers={
-                                "Authorization": f"Bearer {token}",
-                                "Accept": "application/json",
-                            },
-                        ) as response,
-                    ):
-                        if response.status_code == 200:
-                            chunks = response.aiter_bytes(CHUNK_BYTES)
-                            async for piece in decode_attachment(chunks):
-                                yield piece
-                            return
-                        body = bytearray()
-                        async for chunk in response.aiter_bytes(CHUNK_BYTES):
-                            body += chunk[: JSON_MAX_BYTES - len(body)]
-                        answer = Answer(
-                            response.status_code,
-                            {name.lower(): value for name, value in response.headers.items()},
-                            bytes(body),
-                        )
-            except httpx.TimeoutException:
-                raise GoogleTimeoutError(reason="timeout") from None
-            except (httpx.HTTPError, OSError):
-                raise GoogleDownError(reason="unreachable") from None
-            if answer.status == 401 and not refreshed:
-                refreshed = True
-                self.forget(grant.user_id)
-                continue
-            try:
-                raise_for_answer(answer, "attachments.get")
-            except GoogleError as error:
-                delay = next(retries, None)
-                short = error.retry_after is None or error.retry_after <= RETRY_AFTER_INLINE_S
-                if delay is None or not error.retryable or not short:
-                    log.event(
-                        "mail.google.failed",
-                        user_id=grant.user_id,
-                        call="attachments.get",
-                        code=error.code,
-                        status=error.status,
-                    )
-                    raise
-                await self._sleep(
-                    float(error.retry_after)
-                    if error.retry_after is not None
-                    else delay * (1 + RETRY_JITTER * min(1.0, max(0.0, self._jitter())))
-                )
 
 
 def _fingerprint(grant: Grant) -> str:
