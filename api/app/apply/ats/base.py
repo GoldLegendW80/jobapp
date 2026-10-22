@@ -331,16 +331,21 @@ def _around(group: Node, control: Node) -> tuple[list[str], list[str]]:
 
 
 def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
-    """The field group a control stands in (the nearest of three ancestors with words before
-    the control), its label (those words, marks off, cut at `NAME_MAX` as it makes the field's
-    key) and the words after the control (a chosen file's name)."""
+    """The nearest labelled ancestor, its accessible name (or preceding text when unnamed),
+    and the words after the control (a chosen file's name). Chromium repeats named groups'
+    visible label in their children; that text is not a second part of the field's name."""
     inner, group = control, control.parent
     for _ in range(3):
         if group is None or group.role == "root":
             break
         before, after = _around(group, inner)
         if before:
-            label, required = label_of(" ".join(w for w in before if w not in ("*", "✱")))
+            name = (
+                group.name
+                if group.role == "group" and group.name
+                else " ".join(w for w in before if w not in ("*", "✱"))
+            )
+            label, required = label_of(name)
             return group, label[:NAME_MAX], required or "*" in before or "✱" in before, after
         inner, group = group, group.parent
     return None, "", False, []
