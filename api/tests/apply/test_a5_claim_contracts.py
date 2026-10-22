@@ -264,3 +264,78 @@ def test_a_posting_link_is_still_reported_by_the_fact_check() -> None:
         "My work is at https://agents.example.org/demo."
     )
     assert judged(value).code == "fact_check"
+
+
+@pytest.mark.parametrize("entity", ["company", "skill", "title", "employer", "project"])
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "I build agents and test them in Modelport.",
+        "I build agents and design software near Modelport.",
+        "I create robots at Modelport.",
+        "I develop tools from Modelport.",
+    ],
+)
+def test_entity_words_do_not_prove_a_work_location(entity: str, claim: str) -> None:
+    fields = {
+        "company": {"participants": ("Modelport Robotics",)},
+        "skill": {"known_terms": ("Modelport",)},
+        "title": {"titles": ("Modelport Engineer",)},
+        "employer": {"employers": ("Modelport",)},
+        "project": {"profile": ("I built the Modelport project for agents.",)},
+    }
+    assert judged(claim, sources=replace(SOURCES, **fields[entity])).answer is None
+
+
+@pytest.mark.parametrize("actor", ["I", "We"])
+@pytest.mark.parametrize("verb", ["built", "created", "developed"])
+@pytest.mark.parametrize("preposition", ["in", "at", "near"])
+def test_a_locative_paraphrase_retains_the_actual_work_relationship(
+    actor, verb, preposition
+) -> None:
+    source = f"{actor} built agents {preposition} the Example simulation."
+    value = f"{actor} {verb} agents {preposition} the Example simulation."
+    assert judged(value, sources=replace(SOURCES, profile=(source,))).answer
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "We created agents in the Example simulation.",
+        "I will build agents in the Example simulation.",
+        "I create agents in the Example simulation.",
+        "I tested agents in the Example simulation.",
+        "I built robots in the Example simulation.",
+        "I built agents near the Example simulation.",
+    ],
+)
+def test_a_source_relationship_cannot_change_its_actor_predicate_object_or_preposition(
+    value,
+) -> None:
+    source = "I built agents in the Example simulation."
+    assert judged(value, sources=replace(SOURCES, profile=(source,))).answer is None
+
+
+@pytest.mark.parametrize(
+    ("source", "value"),
+    [
+        ("I build agents and test them in Python.", "I build agents and evaluate them in Python."),
+        (
+            "We built agents and evaluated them in Python.",
+            "We built agents and tested them in Python.",
+        ),
+        ("I built robots in Python.", "I developed robots in Python."),
+        ("I built agents in a location service.", "I created agents in a location service."),
+    ],
+)
+def test_grounded_technical_locatives_and_coordinated_predicates_remain_useful(
+    source, value
+) -> None:
+    assert judged(value, sources=replace(SOURCES, profile=(source,))).answer
+
+
+@pytest.mark.parametrize("actor", ["I", "We"])
+def test_a_coordinated_object_list_can_have_more_than_two_nouns(actor) -> None:
+    assert judged(
+        f"{actor} would bring my agent and software and evaluation work to the team."
+    ).answer

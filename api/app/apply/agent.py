@@ -21,6 +21,9 @@ job-topic vocabulary. This allows supported technical paraphrases without invent
 new nouns, places or arrangements. Clauses joined by conjunctions are checked separately, so a
 job sentence cannot carry an unsupported second claim. Ambiguous arrangement vocabulary needs
 a complete sourced technical past action; consent and other closed statements stay refused.
+Locative complements in a person's claim retain their source actor, predicate, object and
+preposition. Entity or skill words alone do not establish that relationship. Coordinated
+predicates retain their subject, and coordinated objects retain their list context.
 The prepared letter enters these sources through the immutable run context, rather than an
 edited answer. `undashed` applies the owner's separator rule before matching and checking text.
 Fact checking remains independent; Full auto's model check still applies to the resulting text.
@@ -761,11 +764,24 @@ _CLAIM_TOPIC = re.compile(
     r"\b(?:robot\w*|agents?|software|ai|evaluat\w*|build\w*|built|project\w*|projet\w*"
     r"|engineer\w*|develop\w*|design\w*|integrat\w*|algorith\w*|system\w*|tools?|work|test\w*|problem\w*)\b"
 )
-_COORDINATED_ACTION = re.compile(r"^(?:build|design|develop|create|improve|test|evaluate)\b")
+_COORDINATED_ACTION = re.compile(
+    r"^(?:build|built|design|designed|develop|developed|create|created|improve|improved"
+    r"|test|tested|evaluate|evaluated)\b"
+)
 _COORDINATED_OBJECT = re.compile(
     r"^(?:agents?|robotics|software|ai|evaluation)(?: work)?"
     r"(?: to (?:the|this|your|our) team)?$"
 )
+_FIRST_PERSON = re.compile(r"^(i|we)\b")
+_LOCATIVE = re.compile(r"\b(?:in|from|at|near|out of) (?!charge\b|front of\b)")
+_RELATION_VERBS = {
+    **dict.fromkeys(("build", "develop", "create"), "build"),
+    **dict.fromkeys(("built", "developed", "created"), "built"),
+    **dict.fromkeys(("building", "developing", "creating"), "building"),
+    **dict.fromkeys(("test", "evaluate"), "test"),
+    **dict.fromkeys(("tested", "evaluated"), "tested"),
+    **dict.fromkeys(("testing", "evaluating"), "testing"),
+}
 # Grammar and neutral motivation words add no personal fact. Content words must belong to a
 # supported job topic or the permitted sources; the model's source label is not proof.
 _CLAIM_GLUE = frozenset(
@@ -865,6 +881,7 @@ _CLAIM_GLUE = frozenset(
         "evaluated",
         "evaluation",
         "test",
+        "tested",
         "tests",
         "testing",
         "because",
@@ -951,6 +968,33 @@ _CLAIM_GLUE = frozenset(
 )
 
 
+def _claim_relation(clause: str, subject: str = "") -> tuple[str, ...] | None:
+    if not _FIRST_PERSON.match(clause):
+        if not subject or not _COORDINATED_ACTION.match(clause):
+            return None
+        clause = f"{subject} {clause}"
+    words = clause.split()
+    for index, word in enumerate(words[1:], 1):
+        if word in _RELATION_VERBS:
+            words[index] = _RELATION_VERBS[word]
+            break
+    return tuple(words)
+
+
+def _source_relations(texts: Sequence[str]) -> set[tuple[str, ...]]:
+    relations = set()
+    for text in texts:
+        for sentence in _SENTENCES.split(undashed(text)):
+            subject = ""
+            for raw in _CLAUSES.split(sentence):
+                clause = answers.option_key(raw)
+                if actor := _FIRST_PERSON.match(clause):
+                    subject = actor.group(1)
+                if relation := _claim_relation(clause, subject):
+                    relations.add(relation)
+    return relations
+
+
 def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bool = False) -> bool:
     texts = (
         *sources.profile,
@@ -963,9 +1007,10 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
     )
     stored = {answers.option_key(c) for text in texts for c in _CLAUSES.split(undashed(text))}
     words = {w for text in texts for w in answers.option_key(text).split()}
+    relations = _source_relations((*sources.profile, *sources.answers))
     found = False
     for sentence in _SENTENCES.split(value):
-        subject = False
+        subject = ""
         object_list = False
         for raw in _CLAUSES.split(sentence):
             clause = answers.option_key(raw)
@@ -975,20 +1020,27 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
             framed = bool(_CLAIM_FRAME.search(clause) and _CLAIM_TOPIC.search(clause))
             # A conjunction can retain a first-person subject or continue the object of
             # "bring my ...". It cannot lend that frame to another independent assertion.
-            coordinated = subject and (
-                bool(_COORDINATED_ACTION.search(clause))
-                or (object_list and bool(_COORDINATED_OBJECT.fullmatch(clause)))
+            object_continuation = object_list and bool(_COORDINATED_OBJECT.fullmatch(clause))
+            coordinated = bool(subject) and (
+                bool(_COORDINATED_ACTION.search(clause)) or object_continuation
             )
             if clause not in stored:
                 if exact or not (framed or coordinated):
+                    return False
+                if (
+                    _LOCATIVE.search(clause)
+                    and (relation := _claim_relation(clause, subject))
+                    and relation not in relations
+                ):
                     return False
                 if any(
                     w not in words and w not in _CLAIM_GLUE and not _SUBJECT.fullmatch(w)
                     for w in clause.split()
                 ):
                     return False
-            subject = subject or bool(re.match(r"^(?:i|we)\b", clause))
-            object_list = bool(
+            if actor := _FIRST_PERSON.match(clause):
+                subject = actor.group(1)
+            object_list = object_continuation or bool(
                 re.match(r"^(?:i|we) (?:would |can |could )?bring (?:my|our)\b", clause)
             )
     return found
