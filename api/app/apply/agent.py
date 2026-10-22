@@ -877,6 +877,7 @@ _CLAIM_GLUE = frozenset(
         "ai",
         "software",
         "operations",
+        "warehouse",
         "field",
         "physical",
         "world",
@@ -969,15 +970,12 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         return Verdict(key, None, "no_source")
     value = value.strip()
     source = f"agent.{proposal.source}"
+    picked = None
     if question.kind in ("select", "combobox"):
         picked = answers.match_option(value, question.options)
         if picked is None:
             return Verdict(key, None, "no_matching_option")
-        if _issues(picked, sources):
-            return Verdict(key, None, "fact_check")
-        if not _supported_claims(picked, sources):
-            return Verdict(key, None, "unsupported_claim")
-        return Verdict(key, answers.Answer(picked, source, picked), "accepted")
+        value = picked
     value = undashed(value)
     if len(value) > VALUE_MAX:
         return Verdict(key, None, "too_long")
@@ -999,7 +997,13 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
     # assembled from individually known words. Recognised technical noun phrases retain their
     # ordinary reading; other overlaps are allowed only as a complete sourced past action.
     reading = _TECHNICAL_TEXT.sub("project", plain)
-    if _PRACTICAL.search(reading) and not (
+    team = _TEAM_DETAIL.search(plain)
+    practical = (
+        _PRACTICAL.search(reading)
+        or _names_where(reading)
+        or (team and not _FIELD_TOPIC.fullmatch(team.group(1)))
+    )
+    if practical and not (
         re.match(r"^(?:i|we) (?:built|developed|designed|created|implemented|led)\b", plain)
         and _FACT_QUESTION.search(plain)
         and _supported_claims(value, sources, exact=True)
@@ -1009,16 +1013,15 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         return Verdict(key, None, "fact_check")
     if not supported:
         return Verdict(key, None, "unsupported_claim")
-    return Verdict(key, answers.Answer(value, source), "accepted")
+    return Verdict(key, answers.Answer(value, source, picked), "accepted")
 
 
 def judge(
     questions: Sequence[Question], reply: Reply, sources: factcheck_rules.Sources
 ) -> list[Verdict]:
     """One verdict per question asked, in their order: a question the reply does not answer, or
-    answers twice, stays left; a proposal for a question not asked is ignored. The `source` of a
-    proposal is declared by the model and checked only by `factcheck_rules` (see the module
-    docstring), not against the profile text."""
+    answers twice, stays left; a proposal for a question not asked is ignored. Topic structure,
+    provenance and fact checking apply regardless of the model's declared `source`."""
     by_key: dict[str, list[Proposal]] = {}
     for proposal in reply.proposals:
         by_key.setdefault(proposal.key, []).append(proposal)

@@ -151,6 +151,25 @@ def test_private_practical_answers_do_not_become_proof() -> None:
     assert judged("Berlin suits me", sources=sources).answer is None
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "I can work in Berlin.",
+        "I want to build robots with our US team.",
+    ],
+)
+def test_a_company_name_is_no_proof_of_a_persons_location(value: str) -> None:
+    sources = replace(SOURCES, participants=("Berlin US Robotics",))
+    assert judged(value, sources=sources).answer is None
+
+
+def test_choice_options_get_the_same_practicality_guards_as_text() -> None:
+    question = agent.Question("k", "Which team interests you?", "select", ("Remote", "Research"))
+    sources = replace(SOURCES, known_terms=("Remote",))
+    reply = agent.Reply((agent.Proposal("k", "Remote", "skills"),))
+    assert agent.judge([question], reply, sources)[0].answer is None
+
+
 @pytest.mark.parametrize("label", ["Why do you want to join us?", "Describe your project"])
 @pytest.mark.parametrize(
     "value",
