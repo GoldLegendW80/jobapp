@@ -2,7 +2,7 @@
 
 Spec: [SPEC-apply.md](../../SPEC-apply.md). Depends on browser ([tasks/browser/todo.md](../browser/todo.md): leases, the live view, the tool layer and its gate capability), documents (`tasks/documents/todo.md` and `SPEC-documents.md`, merged on main: the versions to send and the freeze come from the contract "For the apply module" that D14 writes, `documents.current(db, user_id, posting_id)` and `documents.freeze(db, user_id, version_id, FreezeReason.apply, at)`; the fact check of D2), jobs (`set_status` under `lock_job`, statuses, `never_apply` rules and events), profile (the `identity` and `answers` sections), agents (runner, `model_by_credential`, `token_budget`, the in-process MCP server, the fake model backend) and mail (the gate `mail.gate.send` for applications by e-mail, A14; the canary helper of M1; the fact check rules of M9, both already on main). **Mail's writing side is paused** (M12, M18, M23 and the rest): A14 and A17's e-mail path wait for it, A17 does not wait for A14, and the first end to end slice needs no mail task. Umbrella issue: #69. Review queue: #78. Full auto: #79. Swipe deck that sends the Likes: #74. Onboarding step 6 (application behaviour): #76.
 
-Task ids use the prefix `A`. Branches are `apply/a<n>-<slug>`. Every block's issue is still to create. New code calls a job a **posting** (`posting_id`), as mail does, since Job becomes Opportunity (#73). Revised on 2026-10-14 with the owner's decisions: nothing is built.
+Task ids use the prefix `A`. Branches are `apply/a<n>-<slug>`. Every block's issue is still to create. New code calls a job a **posting** (`posting_id`), as mail does, since Job becomes Opportunity (#73). Revised on 2026-10-21 with the owner's decisions: nothing is built.
 
 ## Decisions
 
@@ -18,6 +18,8 @@ Task ids use the prefix `A`. Branches are `apply/a<n>-<slug>`. Every block's iss
 3. **A rehearsal answered Yes** lands in the review queue, ready for a one click Approve.
 4. **`form_changed` hands over to the generic form agent** by itself in both modes (Review first and Full auto), within the run's token budget and every guardrail (the gate, the caps, the safety ceiling, the check by model before a submit). This answers #343's question.
 5. **Planner default, not asked** (the owner may change it): an approval or a Full auto Like that only the pace per host holds back stays valid, at most 7 days after it was given, and the gate checks everything again before the click (A13a); a Full auto Like stays valid at most 7 days in any case, and only while Full auto stays on.
+
+**Owner answer, taken on 2026-10-21** (issue #464): “no limit.” Likes have no per-click, session or daily cap. Application guardrails remain in force, including fit checks, company caps, pacing, holds and the safety ceiling.
 
 **Defaults decided by the planner (2026-10-14)**, which the owner may change.
 - No model ever clicks Submit. The one click path is `apply/gate.py`, through the browser's `gate_click` capability (B5), after a decision that writes its audit row first.

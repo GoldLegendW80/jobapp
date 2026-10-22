@@ -462,7 +462,7 @@ describe("the wizard", () => {
     });
     // the page asked for never rendered before the move
     expect(
-      screen.queryByRole("heading", { level: 1, name: "Applications" }),
+      screen.queryByRole("heading", { level: 1, name: "Application queue" }),
     ).toBeNull();
     await user.click(
       await screen.findByRole("button", { name: "Skip this step" }),
