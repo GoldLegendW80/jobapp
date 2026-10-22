@@ -10,7 +10,7 @@ gate result on that pull request identify the exact checked head and tree.
 The isolated `apply/spec-completion` branch combines immutable snapshots of #465, #521, #517,
 #516, #470, #598, #583, #588, #589, #590, #591, #592, #595, #600 and #601. Existing approved heads and their source branches are left untouched. Earlier fixes #600 and
 #601 retain their independently reviewed heads. Those approvals do not approve this combined
-tree. This task has not merged main or deployed.
+tree. This task has not merged changes into main or deployed.
 
 Tests use invented `e2e-*@example.org` accounts, local fake ATS sites and fake Gmail. No test
 submits to a real company or sends real mail. Browser verification uses the repository's
@@ -21,7 +21,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 
 | Capability | Implemented behavior | Runtime verification and final gate coverage |
 |---|---|---|
-| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. | Fidelity checkpoint: 5,478 Apply passes. Grounding checkpoints and Apply/Opportunities journeys below. |
+| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. | Fidelity checkpoint: 5,478 Apply passes. The named-group label fix passes all 7,070 Apply tests and seven actual A5/A7 browser tests, including exactly one approved fake submission each for Ashby and Greenhouse. Grounding and final integrated gate evidence are below. |
 | A9: Apply myself | Native document picker ownership, immediate Submit-and-Close recording, ended-session queue/reopen/record, placed-document freezing, no app submit click. | Four new real browser recovery flows, original manual flows, six inherited native cases and distinct incidental-picker race pass. Whole Apply/Browser groups cover final integration. |
 | A10a: retries and person input | Immutable 1,800-second person wait outside active time; same adapter, attempt, earlier fields and steps survive captcha/email-code input. | Whole Apply/browser checkpoint: 7,167 passes, plus three real Redis/private-HTTP cases. Actual captcha/email-code flows pass before a fresh approval and one fake submission. |
 | A10b: sign-in | Watched and later owner-owned handoffs, registered typed callbacks and idempotent queueing; Full auto becomes Review first. | Both fake-site journeys and all 22 backend cases pass. Whole Apply/Browser groups cover final integration. |
@@ -58,7 +58,10 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
   metadata remains available to independent fact checking. Its whole Apply run passed 6,969
   with one inherited canary fixture failure, documented in
   [boundary evidence](../evidence/apply-provenance-boundaries.txt); the final gate covers the
-  corrected fixture and combined source.
+  corrected fixture and combined source. The subsequent quote-ambiguity fix passes all
+  7,092 Apply tests and 1,152 focused cases; ambiguous personal prose supplies only a complete
+  context-preserving copy. Unique quote spans retain genuine statements outside the name. See
+  [quote ambiguity evidence](../../docs/evidence/apply604-quote-ambiguity.md).
 - Letter/rendering: adapter-owned classification, ordinary 5,000 and document-letter 10,000
   codepoint limits, exact shape binding and no truncation; an immutable hour per rendering
   attempt. All 201 real database/API cases pass. Migration tests pass through one `0026` head.
@@ -94,6 +97,13 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
   containing all 21 native ownership checks pass. A continuous retake shares its original
   native/public/API pause deadline rather than renewing it. Ten focused deadline cases and
   the whole browser/affected Apply control suite pass 2,162 cases.
+- Integration with upstream: the latest main changes to short Why-us pronouns and language/
+  country-specific degree options are composed with the stricter provenance and existing
+  field guards. Both acceptance and refusal tables remain, with valid sources in topic tests
+  and separate unsourced-refusal controls. All 7,243 merged Apply tests pass, alongside 898
+  focused A3/A5 checks. The
+  [resolution record](../evidence/apply604-main-reconciliation.md) explains each conflict;
+  the final PR records the merged head and gate.
 - Privacy: all private endpoint families and linked documents have signed-out/cross-person,
   missing equivalence, CSRF, no-store success/error and callback-ownership coverage. The
   Documents/route/cascade checkpoint passes 3,515 with one stale memory assertion subsequently
@@ -138,4 +148,4 @@ Jetson headroom or the 7.4 GiB host acceptance.
 
 The owner provisions production credentials and installs host egress rules with sudo as in
 [mail setup](../../docs/mail-application-setup.md). This task has not read real secret files,
-run production setup, changed host firewall rules, merged main or deployed.
+run production setup, changed host firewall rules, merged changes into main or deployed.
