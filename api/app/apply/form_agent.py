@@ -156,7 +156,7 @@ class FormSession:
             if found.pending == "signin":
                 return None, WALL
             return None, "A step only the person can take is shown. Stop now."
-        if found.root is not None and generic.addressed(" ".join(found.root.words())):
+        if found.root is not None and generic.addressed("\n".join(found.root.words())):
             self.addressed = True
         return found, ""
 
@@ -208,7 +208,7 @@ class FormSession:
         item, problem = await self._field(ref)
         if item is None:
             return problem, True
-        answer = answers.resolve(item.form_field(), self.context)
+        answer = self.adapter.resolve(item, self.context)
         if isinstance(answer, answers.Left):
             return json.dumps(
                 {"label": item.label, "answer": "left", "reason": answer.reason}
@@ -223,7 +223,7 @@ class FormSession:
         item, problem = await self._field(ref)
         if item is None:
             return problem, True
-        answer = answers.resolve(item.form_field(), self.context)
+        answer = self.adapter.resolve(item, self.context)
         filled = await self.adapter.fill(self.tools, item, answer)
         self.outcomes[item.key] = ats_base.Outcome(item, answer, filled)
         if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:

@@ -299,6 +299,27 @@ def _letter_text(db: Session, user_id: uuid.UUID, version_id: uuid.UUID) -> str:
     return "\n\n".join(str(p) for p in paragraphs if isinstance(p, str) and p.strip())
 
 
+def _applied_before(db: Session, user_id: uuid.UUID, company: str, now: datetime) -> bool:
+    """Confirmed submissions at this company, across roles and without another person's history.
+    A rehearsal or an uncertain click cannot establish that the person applied."""
+    key = guardrails.company_key(company)
+    if not key:
+        return False
+    companies = db.scalars(
+        sa.select(Job.company)
+        .join(Application, Application.posting_id == Job.id)
+        .where(
+            Application.user_id == user_id,
+            Job.user_id == user_id,
+            Application.state == State.submitted,
+            Application.dry_run.is_(False),
+            Application.submitted_at <= now,
+        )
+        .distinct()
+    )
+    return any(guardrails.company_key(prior) == key for prior in companies)
+
+
 def _bank(db: Session, user_id: uuid.UUID) -> AnswerBank:
     rows = db.execute(
         sa.select(AnswerBankEntry.question_key, AnswerBankEntry.answer).where(
@@ -455,6 +476,7 @@ def prepare(
             letter_text=letter_text or None,
         ),
         _bank(db, user_id),
+        applied_before=_applied_before(db, user_id, posting.company, now),
     )
     person_rows = list(
         db.scalars(
@@ -952,6 +974,7 @@ async def _drive_generic(
     outlines the submit it designated, and without both the person is needed."""
     if plan.mode is not Mode.review or services.form_agent is None:
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
+    adapter.person_answers = plan.person_answers
     session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
     report, cost = await forms.fill(services.form_agent, session)
     shot = await shots.take(tools)

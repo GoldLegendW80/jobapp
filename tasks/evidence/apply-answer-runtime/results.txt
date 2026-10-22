@@ -1,0 +1,34 @@
+Apply saved-answer execution and reporting, issue #563 / draft PR #604
+2026-10-22, isolated branch apply/person-answer-runtime from 43c9c00a
+
+All accounts and forms are invented local fixtures. No model, company site, account,
+mail provider or actual submission was contacted. No image was built.
+
+RED: tests/apply/test_person_answer_runtime.py, 35 failed and 62 passed in 8.38 s.
+Confirmed VIE motivation fallbacks overrode saved messages; generic form tools and
+run orchestration bypassed saved answers; flattened page text hid direct AI-reader
+addresses; run preparation omitted the person's confirmed company submissions.
+
+GREEN, bounded existing generic/VIE/run/adapter/answer suites plus new regressions:
+1,045 passed in 19.78 s, wrapper apply-person-runtime-neighbours, not docker, n2.
+Final document-letter extension plus existing letter-edit contracts:
+268 passed in 15.50 s, wrapper apply-person-runtime-final, not docker, n2.
+The second check includes exact 10,000-character saved letter typing through the
+whole generic run, preserved document_letter classification and person source.
+
+Saved values are checked before typing and retain exact key/label/kind/options
+binding. Stale shapes are left without typing. Resolver calls do not mutate the
+supplied saved-answer map. Tool results do not expose answer values.
+All existing AI-reader accept/refuse corpus entries pass through actual read_form,
+including direct AI assistants, GPT and LLM paragraphs after unrelated form nodes.
+History is owner-scoped, confirmed submitted, non-rehearsal and no later than the
+preparation time. Company folding and legal-form normalization work across roles.
+Other owners, other companies, uncertain clicks and every non-submitted state do
+not establish a previous application. The person's configured default still applies
+when the app has no confirmed submission. No URL/title duplicate rule is changed.
+
+Ruff check passes; Ruff format check passes for 735 Python files.
+CI planning contracts: 81 tests pass in 62.299 s.
+Journey registry passes: 29 CI specs, 4 excluded, 46 local group specs.
+Full composed API and real browser journeys belong to the final parent gate.
+This scoped implementation checkpoint is not a whole-PR approval.

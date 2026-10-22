@@ -51,6 +51,8 @@ class Vie(Wizard):
         )
 
     def resolve(self, item: base.Field, context: answers.Context):
+        if item.key in self.person_answers:
+            return super().resolve(item, context)
         if item.kind == "text" and base.anchor_key(item.label) in {
             "motivation message",
             "message de motivation",
