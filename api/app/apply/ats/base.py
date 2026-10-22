@@ -239,6 +239,13 @@ def summary_matches(value: object, shown: str) -> bool:
     return isinstance(value, str) and fold(value) == fold(shown)
 
 
+def summary_text(node: Node) -> str:
+    """The value of a named summary row: its inline text and child text, without its label."""
+    return " ".join(
+        [node.text, *(word for child in node.children for word in child.words())]
+    ).strip()
+
+
 UPLOAD_ACTIONS = frozenset(
     {
         "upload file", "upload", "attach", "attach file", "choose file", "choose a file",
