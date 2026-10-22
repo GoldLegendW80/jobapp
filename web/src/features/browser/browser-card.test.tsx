@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -153,7 +154,11 @@ describe("your browser card", () => {
   it("starts the person's own session with the keyboard and the mouse", async () => {
     const calls = fakeServer({ browser: FREE });
     const user = userEvent.setup();
-    const { unmount } = renderWithQuery(<BrowserCard />);
+    const { unmount } = renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     await user.click(
       await screen.findByRole("button", { name: "Look at my browser" }),
     );
@@ -183,7 +188,11 @@ describe("your browser card", () => {
 
   it("an assistant's lease is view only until Take over", async () => {
     const calls = fakeServer({ browser: MINE });
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected();
     expect(view.screen.viewOnly).toBe(true);
     expect(only(calls.tickets as Array<{ viewer: string }>).viewer).toMatch(
@@ -199,7 +208,11 @@ describe("your browser card", () => {
   it("takes over with the same viewer id, types, and gives back", async () => {
     const calls = fakeServer({ browser: MINE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected();
     await user.click(screen.getByRole("button", { name: "Take over" }));
     const ticket = only(calls.tickets as Array<{ viewer: string }>);
@@ -229,7 +242,11 @@ describe("your browser card", () => {
   it("sends no key while the assistant has the browser", async () => {
     fakeServer({ browser: MINE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected();
     await user.type(screen.getByLabelText("Type into your browser"), "x");
     expect(view.screen.keys).toEqual([]);
@@ -238,7 +255,11 @@ describe("your browser card", () => {
   it("offers to reconnect when the live view closes, with a new ticket", async () => {
     const calls = fakeServer({ browser: MINE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected();
     act(() => {
       view.events.disconnect();
@@ -255,7 +276,11 @@ describe("your browser card", () => {
   it("says so when the server turns the view away, and reconnect clears it", async () => {
     fakeServer({ browser: MINE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected();
     act(() => {
       view.events.refused();
@@ -273,7 +298,11 @@ describe("your browser card", () => {
   it("leaving the page while holding the input gives it back as this view", async () => {
     const calls = fakeServer({ browser: MINE });
     const user = userEvent.setup();
-    const { unmount } = renderWithQuery(<BrowserCard />);
+    const { unmount } = renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     await connected();
     await user.click(screen.getByRole("button", { name: "Take over" }));
     const ticket = only(calls.tickets as Array<{ viewer: string }>);
@@ -285,7 +314,11 @@ describe("your browser card", () => {
 
   it("leaving the page without the input gives nothing back", async () => {
     const calls = fakeServer({ browser: MINE });
-    const { unmount } = renderWithQuery(<BrowserCard />);
+    const { unmount } = renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     await connected();
     unmount();
     expect(calls.givebacks).toEqual([]);
@@ -308,7 +341,11 @@ describe("your browser card", () => {
         },
       );
       const disconnect = vi.spyOn(FakeScreen.prototype, "disconnect");
-      const { unmount } = renderWithQuery(<BrowserCard />);
+      const { unmount } = renderWithQuery(
+        <MemoryRouter>
+          <BrowserCard />
+        </MemoryRouter>,
+      );
       await waitFor(() => {
         expect(pending).toHaveLength(1);
       });
@@ -334,7 +371,11 @@ describe("your browser card", () => {
         ),
       ),
     );
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     expect(
       await screen.findByText("You are not using the browser right now."),
     ).toBeInTheDocument();
@@ -344,7 +385,11 @@ describe("your browser card", () => {
   it("closes the session", async () => {
     const calls = fakeServer({ browser: MINE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected();
     await user.click(screen.getByRole("button", { name: "Close my browser" }));
     expect(calls.deletes).toBe(1);
@@ -361,7 +406,11 @@ describe("your browser card", () => {
       },
     });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     await user.click(
       await screen.findByRole("button", { name: "Look at my browser" }),
     );
@@ -375,7 +424,11 @@ describe("your browser card", () => {
 
   it("says when the browser is not available", async () => {
     fakeServer({ browser: { ...FREE, available: false } });
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     expect(
       await screen.findByText("The browser is not available right now."),
     ).toBeInTheDocument();
@@ -386,7 +439,11 @@ describe("your browser card", () => {
 
   it("has no dashes in its copy", async () => {
     fakeServer({ browser: MINE });
-    const { container } = renderWithQuery(<BrowserCard />);
+    const { container } = renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     await connected();
     expect(container.textContent).not.toMatch(/[–—]| - /);
   });

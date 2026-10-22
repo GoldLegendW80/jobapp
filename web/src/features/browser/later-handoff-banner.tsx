@@ -125,6 +125,12 @@ export function LaterHandoffBanner({
           </>
         )}
       </div>
+      <a
+        className="text-sm underline"
+        href={`/account?profile_site=${encodeURIComponent(address)}`}
+      >
+        Complete my profile on this site
+      </a>
     </section>
   );
 }

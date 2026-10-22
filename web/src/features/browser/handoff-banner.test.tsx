@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -289,7 +290,11 @@ describe("HandoffBanner", () => {
 describe("BrowserCard during a hand off", () => {
   it("shows the banner with its live view open, and one live view only", async () => {
     fakeServer({ browser: MINE });
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
 
     const banner = await screen.findByRole("region", {
       name: "Sign in to jobs.example.org",

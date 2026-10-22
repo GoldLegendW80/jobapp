@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, LoaderCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { SiteProfileSlot } from "@/features/apply/site-profile/site-profile-slot";
+
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -151,6 +153,7 @@ export function BrowserCard() {
           </p>
         )}
         <LinkedInCard />
+        <SiteProfileSlot />
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2">
         {lease ? (
