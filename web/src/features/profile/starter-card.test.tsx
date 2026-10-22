@@ -21,7 +21,7 @@ import { renderApp } from "@/test/render";
 import { emptyStarter, server } from "@/test/server";
 
 import type { Board, BrowserSource, Search } from "./api";
-import { STARTER_HELD } from "./starter-card";
+import { STARTER_BUSY, STARTER_HELD } from "./starter-card";
 
 const DASH = /[‒–—―]| - /;
 
@@ -133,6 +133,23 @@ async function open(initial = haraldLike()) {
   renderApp("/profile?tab=search");
   await screen.findByRole("form", { name: "Search" });
   return { user, state, calls };
+}
+
+/** Holds every POST of a starter choice until `release` runs, as a slow link would. */
+function holdPosts() {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.post("*/api/opportunities/starter", async () => {
+      await gate;
+      // Nothing returned: the fake of fakeStarter answers.
+    }),
+  );
+  return () => {
+    release();
+  };
 }
 
 const card = () =>
@@ -301,6 +318,128 @@ describe("the starter list in Search options", () => {
       expect(calls.gets).toBeGreaterThan(gets);
     });
     expect(calls.posts).toEqual([]);
+  });
+
+  it("keeps the Search form read only from the click until it reloads, so no typing is lost", async () => {
+    const { user, state } = await open();
+    const release = holdPosts();
+    const days = () =>
+      within(searchForm()).getByLabelText("Posting age window (days)");
+    await user.click(
+      within(card()).getByRole("button", { name: "Show the list" }),
+    );
+    await user.click(
+      await within(card()).findByRole("checkbox", { name: /Example Robotics/ }),
+    );
+    await user.click(
+      within(card()).getByRole("button", { name: "Add the ticked ones" }),
+    );
+    // The POST is held: the forms wait, and say why.
+    expect(await screen.findByText(STARTER_BUSY)).toBeVisible();
+    expect(screen.getByText(STARTER_BUSY)).toHaveAttribute("role", "status");
+    expect(days()).toBeDisabled();
+    expect(
+      within(searchForm()).getByRole("button", { name: "Save search" }),
+    ).toBeDisabled();
+    // Typing in that window does nothing, so nothing can be dropped by the reload.
+    await user.type(days(), "3");
+    expect(days()).toHaveValue("30");
+
+    release();
+    await waitFor(() => {
+      expect(orgs()).toContain("fake-ok");
+    });
+    await waitFor(() => {
+      expect(days()).toBeEnabled();
+    });
+    expect(screen.queryByText(STARTER_BUSY)).not.toBeInTheDocument();
+    // What is typed now stays, and its save is based on the new revision.
+    await user.clear(days());
+    await user.type(days(), "33");
+    expect(days()).toHaveValue("33");
+    const before = state.revision;
+    await user.click(
+      within(searchForm()).getByRole("button", { name: "Save search" }),
+    );
+    await screen.findByText("Search saved.");
+    const saved = state.saves.at(-1)!;
+    expect(saved.body.base_revision).toBe(before);
+    expect((saved.body.data as Search).days).toBe(33);
+  });
+
+  it("keeps the Preferences card read only from the click until it reloads", async () => {
+    const { user } = await open();
+    const release = holdPosts();
+    const preferences = () => screen.getByRole("form", { name: "Preferences" });
+    const tone = () =>
+      within(preferences()).getByLabelText("Tone of documents");
+    await user.click(
+      within(card()).getByRole("button", { name: "Show the list" }),
+    );
+    await user.click(
+      await within(card()).findByRole("button", { name: "Add all" }),
+    );
+    expect(await screen.findByText(STARTER_BUSY)).toBeVisible();
+    expect(tone()).toBeDisabled();
+    expect(
+      within(preferences()).getByLabelText("Language of documents"),
+    ).toBeDisabled();
+
+    release();
+    await waitFor(() => {
+      expect(orgs()).toContain("fake-ok2");
+    });
+    await waitFor(() => {
+      expect(tone()).toBeEnabled();
+    });
+    const other = Array.from((tone() as HTMLSelectElement).options).find(
+      (option) => !option.selected,
+    )!;
+    await user.selectOptions(tone(), other.value);
+    expect(tone()).toHaveValue(other.value);
+  });
+
+  it("frees the forms when a choice adds no revision, and a later revision keeps what is typed", async () => {
+    const { user } = await open();
+    // A remove the api had already kept: the list answers, the profile does not move.
+    server.use(
+      http.post("*/api/opportunities/starter", () =>
+        HttpResponse.json({ list: LIST, added: [] }),
+      ),
+    );
+    await user.click(
+      within(card()).getByRole("button", { name: "Show the list" }),
+    );
+    await user.click(
+      await within(card()).findByRole("button", {
+        name: "Remove Sample Analytics from the list",
+      }),
+    );
+    expect(
+      await within(card()).findByText("Taken off the list."),
+    ).toBeVisible();
+    const days = () =>
+      within(searchForm()).getByLabelText("Posting age window (days)");
+    await waitFor(() => {
+      expect(days()).toBeEnabled();
+    });
+    await user.clear(days());
+    await user.type(days(), "44");
+    // A later, unrelated revision (a save of the Preferences card) does not remount the forms.
+    const preferences = screen.getByRole("form", { name: "Preferences" });
+    const tone = within(preferences).getByLabelText("Tone of documents");
+    const other = Array.from((tone as HTMLSelectElement).options).find(
+      (option) => !option.selected,
+    )!;
+    await user.selectOptions(tone, other.value);
+    await user.click(
+      within(preferences).getByRole("button", { name: "Save preferences" }),
+    );
+    await screen.findByText("Preferences saved.");
+    expect(days()).toHaveValue("44");
+    expect(
+      within(searchForm()).getByRole("button", { name: "Save search" }),
+    ).toBeEnabled();
   });
 
   it("says what to do when the saved search no longer reads", async () => {

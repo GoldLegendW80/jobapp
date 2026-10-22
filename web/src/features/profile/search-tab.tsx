@@ -37,7 +37,7 @@ import {
 import { BoardsTable } from "./boards-table";
 import { BrowserSourcesCard } from "./browser-sources-card";
 import { PreferencesCard } from "./preferences-card";
-import { StarterCard } from "./starter-card";
+import { STARTER_BUSY, StarterCard } from "./starter-card";
 import { TargetFields } from "./target-fields";
 import { describeSchedule } from "./schedule";
 import {
@@ -86,7 +86,11 @@ export function SearchTab({
   // Bumped once the profile is read again after a starter choice: the forms below remount on
   // it, so their values and the revision their next save is based on include what was added.
   const [generation, setGeneration] = useState(0);
+  // From the click on a starter choice until the forms remount on its revision, the forms are
+  // read only: anything typed in that window would be dropped by the remount.
+  const [choosing, setChoosing] = useState(false);
   const reloadForms = useRef(false);
+  const seen = useRef(profile.revision);
   const onFormsDirty = useCallback(
     (now: boolean) => {
       setDirty(now);
@@ -94,19 +98,27 @@ export function SearchTab({
     },
     [onDirtyChange],
   );
-  const onStarterChanged = useCallback(() => {
+  const onStarterChanged = useCallback(async () => {
     reloadForms.current = true;
-    void client.invalidateQueries({ queryKey: profileKey });
+    const before = seen.current;
+    await client.invalidateQueries({ queryKey: profileKey });
+    // No new revision (a remove the api had already kept, or a read that failed): nothing to
+    // reload, so the forms are editable again and a later revision does not remount them.
+    const now = client.getQueryData<Profile>(profileKey)?.revision;
+    if (seen.current === before && (now === undefined || now === before)) {
+      reloadForms.current = false;
+      setChoosing(false);
+    }
   }, [client]);
   // A new revision: after a starter choice the forms reload; after a save of the search the
   // targets the list is built from may have changed, so the list is read again.
-  const seen = useRef(profile.revision);
   useEffect(() => {
     if (seen.current === profile.revision) return;
     seen.current = profile.revision;
     if (reloadForms.current) {
       reloadForms.current = false;
       setGeneration((n) => n + 1);
+      setChoosing(false);
     }
     void client.invalidateQueries({ queryKey: starterKey });
   }, [client, profile.revision]);
@@ -115,13 +127,19 @@ export function SearchTab({
       <StarterCard
         profile={profile}
         dirty={dirty}
+        onChoosing={setChoosing}
         onChanged={onStarterChanged}
       />
-      <SearchForms
-        key={generation}
-        profile={profile}
-        onDirtyChange={onFormsDirty}
-      />
+      <p role="status" className={choosing ? "text-sm font-medium" : "sr-only"}>
+        {choosing ? STARTER_BUSY : ""}
+      </p>
+      <fieldset disabled={choosing} aria-busy={choosing} className="min-w-0">
+        <SearchForms
+          key={generation}
+          profile={profile}
+          onDirtyChange={onFormsDirty}
+        />
+      </fieldset>
     </div>
   );
 }
