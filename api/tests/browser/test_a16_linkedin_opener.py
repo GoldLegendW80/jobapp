@@ -45,6 +45,11 @@ class Tab:
         self.url = url
         self.after_pace = None
         self.unsafe_after_pace = False
+        self.input_allowed = True
+
+    def require_input(self):
+        if not self.input_allowed:
+            raise actions.PersonInput
 
     async def page(self):
         return self
@@ -143,3 +148,21 @@ def test_private_endpoint_checks_the_lease_token_before_reading_arguments():
         asyncio.run(
             linkedin_open(SimpleNamespace(manager=Manager()), request, {"lease_id": "other"})
         )
+
+
+def test_a_takeover_after_the_final_structural_check_still_prevents_the_opener_click():
+    tab = Tab()
+    calls = []
+    original = tab.button.evaluate
+
+    async def checked(script, args):
+        result = await original(script, args)
+        calls.append(True)
+        if len(calls) == 2:
+            tab.input_allowed = False
+        return result
+
+    tab.button.evaluate = checked
+    with pytest.raises(actions.PersonInput):
+        opened(tab)
+    assert tab.button.clicks == 0

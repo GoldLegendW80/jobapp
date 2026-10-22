@@ -49,6 +49,7 @@ logger = logging.getLogger("app.browser.client")
 
 TIMEOUT_S = 5.0
 START_TIMEOUT_S = 35.0  # browserd's START_S of 30 s, plus a margin
+TAKEOVER_WAIT_S = 15 * 60  # SPEC-browser: Live.agent_turn's bounded person-owned pause.
 TOOL_TIMEOUT_S = 120.0  # a paced browser_type of 200 characters, a 30 s navigation, a screenshot
 # browserd's QUIT_S of 10 s for Chromium, then the trim and the measure of the profile (B7); an
 # end or a removal that takes longer is told again later (browserd then answers it is done).
@@ -250,7 +251,7 @@ class BrowserdClient:
         status, payload = await self._call(
             "POST",
             f"/leases/{lease_id}/linkedin/open",
-            TOOL_TIMEOUT_S,
+            TOOL_TIMEOUT_S + TAKEOVER_WAIT_S,
             {"job_id": job_id},
             headers={"X-Lease-Token": token},
         )
@@ -298,7 +299,11 @@ class BrowserdClient:
         if capability is not None:
             headers["X-Gate-Capability"] = capability
         status, payload = await self._call(
-            "POST", f"/leases/{lease_id}/tools/{name}", TOOL_TIMEOUT_S, args, headers=headers
+            "POST",
+            f"/leases/{lease_id}/tools/{name}",
+            TOOL_TIMEOUT_S + TAKEOVER_WAIT_S,
+            args,
+            headers=headers,
         )
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("ok"), bool):
             return payload

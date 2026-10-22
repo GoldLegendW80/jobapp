@@ -635,11 +635,11 @@ class Leases:
         if lease.state == "starting":
             reason = lease.expired(now)
         else:
-            # browserd decides while it answers, within this copy's bound; this copy's idle
-            # timer only when it cannot be asked, counted from browserd's last sign of the lease.
-            reason = lease.overdue(now)
-            if reason is None:
-                reason, size = await self._gone_in_browserd(lease)
+            # Read browserd before the local ceiling: a verified live takeover banks active
+            # time in both stores. An ordinary active browser still obeys the hard ceiling.
+            reason, size = await self._gone_in_browserd(lease)
+            if reason is None or reason == _CANNOT_ASK:
+                reason = lease.overdue(now) or reason
             if reason is None or reason == _CANNOT_ASK:
                 answer = "held" if reason is None else "unanswered"
                 seen = await r.eval(SIGHT, 1, SEEN + lease.lease_id, answer, now, SEEN_TTL_S)
@@ -647,6 +647,8 @@ class Leases:
                     alive_at = max((float(_text(x) or 0.0) for x in seen), default=0.0)
                     reason = lease.expired(now, alive_at)
         if reason is None:
+            if lease.dumps() != raw:
+                await r.eval(CAS, 1, HOLDER, raw, lease.dumps())
             return lease
         await self._end(r, raw, lease, reason, now, size)
         return None
@@ -731,6 +733,20 @@ class Leases:
             return _CANNOT_ASK, None
         current = found["lease"]
         if current is not None and current.get("lease_id") == lease.lease_id:
+            now = self.clock()
+            if current.get("wait_reason") == "takeover":
+                from app.browser.client import TAKEOVER_WAIT_S
+
+                left = max(0, min(float(current.get("wait_left_s") or 0), TAKEOVER_WAIT_S))
+                deadline = now + left
+                if lease.wait_reason == "takeover" and lease.wait_deadline is not None:
+                    deadline = min(deadline, lease.wait_deadline)
+                lease.wait_person(now, "takeover", "", 0)
+                lease.active_before = float(current.get("active_s") or 0)
+                lease.wait_deadline = deadline
+            elif lease.wait_reason == "takeover" and current.get("state") == "active":
+                lease.active_before = float(current.get("active_s") or 0)
+                lease.resume(now)
             return None, None
         last = found["last_end"]
         if last is not None and last.get("lease_id") == lease.lease_id:
