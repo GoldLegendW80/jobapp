@@ -2,7 +2,9 @@ A18 fresh debug continuation, 2026-10-22
 
 Proof source: composed e1d4904f, branch apply/254-runtime-debug. Later root
 integration changes require the root-owned final composed gate and browser rerun.
-Runtime verification is in progress; no four-flow PASS is claimed in this section yet.
+All four required real-Chromium flows PASS on e1d4904f plus the lock correction.
+Full affected backend verification PASS: 5,278 tests in 220.53 seconds.
+The focused lock correction is committed as 85d0aca1e0b5d46b556b9d5061c0e728b1837179.
 
 Fresh first attempt on composed e1d4904f
 - Command: rtk proxy env E2E_CADDY_URL=http://127.0.0.1:63360
@@ -38,6 +40,69 @@ Lock-lifetime correction
 - Whole API Ruff check passed; format check passed, 714 files. Final runtime and whole
   affected-module verification after this correction remain pending at this checkpoint.
 
+Fresh four-flow acceptance after the lock correction
+- Source: 85d0aca1e0b5d46b556b9d5061c0e728b1837179, based on e1d4904f.
+  API and worker rebuilt after the fix; Caddy and browser are the unchanged e1d4904f
+  build. This proves this source checkpoint, not later root-composed integration.
+- Command: rtk proxy env E2E_CADDY_URL=http://127.0.0.1:63360
+  E2E_ATS_FORMS_URL=http://127.0.0.1:63361 E2E_COMPOSE_PROJECT=apply254
+  COMPOSE_ENV_FILES=/tmp/apply254-fixture.settings caffeinate -i ops/agent-test.sh
+  --name apply-254-debug-fixed --playwright -c e2e/apply-all.config.ts apply-a18.spec.ts
+- Result: 4 passed in 4.6 minutes, one worker, no retries.
+  Account/sign-in/edit/Replace/explicit Save/Skip: 1.3 minutes.
+  Autosave consent, all three saved sections, complete source values including graduation,
+  unchanged old title/phone/email: 1.1 minutes.
+  Workday reopen/Save/readback and LinkedIn opt-in refusal: 1.5 minutes.
+  Chromium post-discovery pointermove race: 45.7 seconds, exact marker with the site's
+  nonempty Employer value preserved, value_differs and no Experience autosave.
+- All four flows assert an empty console/pageerror/unexpected-response collection.
+  Screenshot helper assertions cover desktop/mobile and light/dark without page overflow.
+  The eight existing review/Save images were regenerated; twelve added viewport images
+  cover autosave, the atomic race and LinkedIn refusal. Selected desktop/light race and
+  mobile/dark autosave screenshots were inspected locally. Trace archives stay private.
+
+Full affected backend completion
+- Command: rtk proxy caffeinate -i ops/agent-test.sh --name apply-254-debug-module
+  tests/apply tests/browser/test_b5_actions.py tests/browser/test_a18_empty.py
+  tests/browser/test_b12b_tool.py tests/browser/test_b12a_api.py tests/agents/test_runner.py
+  -m 'not docker' -n 2 -q --tb=short --junitxml=/tmp/apply254-debug-module.xml
+- Result: 5,278 passed in 220.53 s. The throwaway database and Redis were removed
+  by the wrapper; no interrupted or partial suite result is counted as this completion.
+- JUnit verification: test_a10b_signin.py 17 passed; test_a10b_later.py 5 passed,
+  22 combined. The exact apply queue allowlist/cron assertion passed once: seven
+  named jobs including site_profile_run/site_profile_save/prune_apply_screenshots,
+  max_jobs=1, zero result retention, one try, 30-second tick and daily prune schedule.
+- The earlier two A16 ats_of neighbour expectations pass on this composed checkpoint.
+- Remaining acceptance is root-owned: final later-composed integration gate, all Apply
+  journeys and independent review. Real model/site measurement and actual tenant
+  variations remain the owner's Checkpoint A. No real site/account/credential/mail,
+  submission to a company or deployment was used in this continuation.
+
+Cleanup and resource ledger
+- Transferred apply254 stack: docker compose down -v completed. Its containers,
+  networks and pgdata/redisdata/browserprofiles volumes were removed.
+- Removed only apply254-api:review, apply254-worker:review, apply254-caddy:review and
+  apply254-browser:review. The borrowed apply578-renderer:review image remains present,
+  ID sha256:95a287fd6ab2e53c62fc06fa1c08d97346039557bb3951b08626fb6b0e475610.
+- No apply254 or agent-apply-254 containers remain. No command-scoped sleep inhibitor,
+  test wrapper, browser job, watcher or image build remains active. Slot 2 was released.
+- Transferred temporary fixture settings, image override and port JSON were removed
+  without printing their contents. The temporary frontend dependency symlink was removed.
+  The worktree and private JUnit report remain available for root's independent review.
+- Old builder worktrees were read only; approved PRs and main-checkout source were not edited.
+
+Completed static/component checks on the correction
+- rtk proxy pnpm --dir web run typecheck: PASS.
+- rtk proxy pnpm --dir web run lint: PASS, max warnings 0.
+- rtk proxy pnpm --dir web exec vitest run src/features/apply src/features/browser:
+  19 files, 429 passed, 21.14 s.
+- rtk proxy python3 .github/scripts/ci_plan_test.py: 81 passed, 54.619 s.
+- rtk proxy python3 .github/scripts/e2e_groups.py: PASS, 29 CI specs, 4 excluded,
+  42 group-only specs. No CI registry file or dependency was changed.
+- Chrome DevTools MCP is unavailable in this session. Actual Chromium Playwright
+  flows collect console/page errors, failed API responses, screenshots and viewport
+  overflow assertions; retained private traces provide request/response diagnosis.
+
 Root cause of the prior timeout disagreement, diagnosed before retry
 - Private Playwright trace inspection selected only run IDs, state, section state,
   request/response times and API Date headers. Trace archives remain local and uncommitted.
@@ -62,6 +127,8 @@ Root cause of the prior timeout disagreement, diagnosed before retry
   Transferred apply254 services were recreated, including atsforms bound to the fresh
   debug worktree. Borrowed apply578-renderer:review was not rebuilt or retagged.
   Build mutex was released after the successful build.
+
+Historical previous runtime continuation follows, retained for investigation.
 
 A18 fresh runtime continuation, 2026-10-22
 
