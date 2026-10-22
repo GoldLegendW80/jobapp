@@ -125,6 +125,20 @@ recorded separately from unfinished implementation.
   queues a fresh full fill before final approval. Adapter-owned target and field-shape markers
   remain in the approval hash. The isolated builder passed 105 pure cases, nine database
   cases and 355 frontend cases. Its composed browser journeys remain unrun.
+- Composed A15 backend run: 8,435 passed, 19 skipped, with one failure and seven setup
+  errors caused by exact adapter/fixture expectations that predated the added adapters and
+  LinkedIn test setting. Their corrections and the typed/inline summary fixes passed 149
+  pure/Compose and 420 adapter/owned-gate cases. The evidence lists the existing skips.
+  Source `a6ecddef` is integrated as `466ed0c4`; its actual wizard journeys are running.
+- A16 finite source `78a9276a` is integrated as `e1d4904f`, with shared typed and inline
+  summary helpers `5e259507` and `983fa488`. The final focused database suite passed 77
+  cases and pure summary checks passed 19. Six-flow browser acceptance remains pending;
+  the previous run passed consent then found the inline summary parser issue. The source
+  fix is covered by regressions but still requires a rebuilt application journey.
+- A9 recovery source `60103855` and final passive confirmation watch `b8a1a503` are
+  integrated as `015794d6` and `25b80508`. The focused manual/recovery/queue database suite
+  passed 90 cases, with 123 pure browser ownership/action/recovery cases also passing.
+  File chooser ownership and the full 30-minute person-action wait remain unfinished.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
