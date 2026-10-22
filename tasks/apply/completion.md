@@ -3,7 +3,8 @@
 Requested on 2026-10-22: implement the whole apply specification. The contract is
 [SPEC-apply.md](../../SPEC-apply.md), the existing [task plan](todo.md), and the recorded owner
 decisions. This audit supplements that plan; an item is complete only with implementation and
-passing evidence. Tracking issue: #70. Existing approved pull requests remain unchanged.
+passing evidence. Whole-spec tracking issue: #563, under #70. This task makes no writes to
+existing approved pull requests.
 
 ## Integration baseline
 
@@ -31,6 +32,13 @@ an approval of an original snapshot is not an approval of the combined tree.
 | A18a to A18c: complete external profiles | Only initial tables exist | #254, #255, #256: persisted sections, factual fill, protected-field policy, review/save gate and UI | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
+The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
+(manual recovery), #581 (editing a letter answer), #594 (document rendering wait), #587
+(reporting pages addressed to an AI), #585 (unambiguous stored answer mappings), #593 (answer
+filter limits), and #582 (fixture fidelity). Unknown qualifications and visas stay unanswered
+unless the person's stored facts establish them. Human choices and real-site acceptance are
+recorded separately from unfinished implementation.
+
 ## Dependency and ownership decisions
 
 - Sign-in recovery supplies a user-owned, typed callback registry shared with external profile
@@ -55,30 +63,37 @@ an approval of an original snapshot is not an approval of the combined tree.
 - [ ] All apply/browser journeys needed by the completed capabilities run on isolated stacks.
 - [ ] Migration upgrade and downgrade checks pass with one Alembic head.
 - [ ] Independent reviews cover the submission, profile-save and email-send gates.
-- [ ] Approved PR snapshots retain their original heads and GitHub states.
+- [ ] The task's write audit confirms that approved PRs and their source branches were untouched.
 - [ ] Each remaining human step or external configuration requirement is named explicitly.
 
 ## Evidence collected during implementation
 
 - A10b backend, source commit `4f6e0b99`: 6,604 application/browser tests passed against
   throwaway databases and local fakes. Its web slice `0f643afb` passed typecheck and 416 tests
-  in 17 frontend files. The real browser journey still needs to pass.
+  in 17 frontend files. Final follow-up `13adfb29` passed both attended and later sign-in
+  recovery journeys against the local fake, with one explicitly approved fake submission.
+  Its final 22-case backend subset and the composed frontend suite still need to run.
 - A18 schema `41e94c86`: 69 application-start regression tests passed. Core `6a4f7244` passed
   218 focused cases, mostly policy cases. Follow-up `18cbb047` passed 250 cases, including real
   lease DTOs, API boundaries, known-site dialogs, concurrent approval, pause, recovery and the
-  shared token/turn budgets. The browser journey and atomic empty-only autosave proof remain.
+  shared token/turn budgets. Atomic-write/cancellation follow-up `b808cd50` passed 157 focused
+  cases. The whole apply/browser run passed 4,950 cases and found one outdated queue registry
+  assertion; its exact composed assertion is corrected, with a rerun pending. The browser
+  journey and frontend remain in progress.
 - A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
-  passed using a local fake Google service. The send gate, application flow and deployment
-  configuration still require validation together.
+  passed using a local fake Google service. Gate follow-up `5d0b18db` passed 1,251 mail,
+  application and migration tests. It checks the exact recipient, both immutable PDFs,
+  current approval, pauses and uncertainty without an automatic resend. The UI compiles
+  with sign-in recovery. Fake browser flow and deployment configuration remain in progress.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
-- Integration through `301c8836`: whole API lint and formatting passed. Frontend typecheck
-  passed through the earlier `15975106` slice. The CI plan's
+- Integration through `a4dafdab`: whole API lint, frontend typecheck and frontend lint passed.
+  Formatting passed through `301c8836`. The CI plan's
   81 tests and E2E group registration check also passed.
 
 The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
-on A9's recovery follow-ups (#573), A16 and the final cross-capability verification. Existing
+on A9's recovery follow-ups (#573), A15, A16 and the final cross-capability verification. Existing
 approved branches receive no writes from this task. A read-only comparison on 2026-10-22 found
 concurrent updates to #579, #538, #521, #518 and #505 elsewhere; #521's update is a merge of main.
 The original snapshots named above remain the isolated integration baseline until explicitly
