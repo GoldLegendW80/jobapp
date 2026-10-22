@@ -12,12 +12,12 @@ revision and is refused as stale. The unique (user_id, revision) constraint is a
 An import takes the same lock and writes all seven sections at once, one revision each.
 `preferences.onboarding` belongs to the first login wizard (opportunities O5, O5b): only
 `record_onboarding`, `record_onboarding_step` and `record_starter` write it. A save that changes
-a date is refused (ReservedFieldError); a date left out of the save, and the steps passed
-whatever the save holds, keep their stored value (a page loaded before the steps existed, or
-before the last step, still saves). An import keeps the stored value (the dates, the steps passed
-and the starter list's entries handled). A step passed is no revision: it updates `updated_at`
-only, like the photo, so a second tab editing the profile is not sent a 409 by each step of the
-wizard.
+a date or the starter list's entries handled is refused (ReservedFieldError); a key left out of
+the save, and the steps passed whatever the save holds, keep their stored value (a page loaded
+before the steps existed, or before the last step, still saves). An import keeps the stored
+value (the dates, the steps passed and the starter list's entries handled). A step passed is no
+revision: it updates `updated_at` only, like the photo, so a second tab editing the profile is
+not sent a 409 by each step of the wizard.
 The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.

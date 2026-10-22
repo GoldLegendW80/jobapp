@@ -24,12 +24,31 @@ function count(n: number): string {
 }
 
 /**
- * The starter list of the wizard's summary (opportunities O5b): public company boards and the
- * Google Careers and VIE sites, proposed from the roles, industries and places the person gave.
- * Nothing is added until the person chooses: "Add all", or tick some and "Add the ticked ones".
- * "Remove" takes an entry off the list for good. What is added goes to Search options, enabled.
+ * The starter list of the wizard's summary (opportunities O5b) and of Search options (O5c):
+ * public company boards and the Google Careers and VIE sites, proposed from the roles,
+ * industries and places the person gave. Nothing is added until the person chooses: "Add all",
+ * or tick some and "Add the ticked ones". "Remove" takes an entry off the list for good. What is
+ * added goes to Search options, enabled.
+ *
+ * In Search options (`place="search"`) the card around it carries the title, `held` names why
+ * the list cannot change right now (the search has unsaved changes), `onChoosing(true)` runs at
+ * the click and `onChoosing(false)` when the choice changed nothing (or failed), and `onChanged`
+ * runs after every choice that changed the profile, so the page reloads its forms and only then
+ * lets them be edited again.
  */
-export function StarterBoards() {
+export function StarterBoards({
+  place = "wizard",
+  held,
+  onChoosing,
+  onChanged,
+}: {
+  place?: "wizard" | "search";
+  held?: string;
+  onChoosing?: (busy: boolean) => void;
+  onChanged?: () => void | Promise<void>;
+} = {}) {
+  const inSearch = place === "search";
+  const yours = inSearch ? "your search targets" : "your answers";
   const client = useQueryClient();
   const list = useQuery({
     queryKey: starterKey,
@@ -42,6 +61,9 @@ export function StarterBoards() {
 
   const choose = useMutation({
     mutationFn: chooseStarter,
+    onMutate: () => {
+      onChoosing?.(true);
+    },
     onSuccess: (answer, asked) => {
       client.setQueryData<StarterList>(starterKey, answer.list);
       setTicked((old) =>
@@ -50,11 +72,15 @@ export function StarterBoards() {
         ),
       );
       setProblem(null);
+      if (answer.added.length || asked.remove?.length) void onChanged?.();
+      else onChoosing?.(false);
       if (answer.added.length) {
         // The boards are in the search section now: the summary's figures read it again.
         void client.invalidateQueries({ queryKey: profileKey });
         setSaid(
-          `Added ${count(answer.added.length)} to ${WORDING.searchOptions}.`,
+          inSearch
+            ? `Added ${count(answer.added.length)}. They are now under Company boards and Job sites in your browser.`
+            : `Added ${count(answer.added.length)} to ${WORDING.searchOptions}.`,
         );
       } else if (asked.remove?.length) {
         setSaid("Taken off the list.");
@@ -63,6 +89,7 @@ export function StarterBoards() {
       }
     },
     onError: (error) => {
+      onChoosing?.(false);
       setProblem(`That did not work. ${describeError(error)}`);
     },
   });
@@ -83,7 +110,9 @@ export function StarterBoards() {
         <CircleAlert aria-hidden="true" />
         <AlertDescription className="flex flex-col items-start gap-2">
           {unreadable
-            ? `Open ${WORDING.searchOptions} and save them again, then come back to this list.`
+            ? inSearch
+              ? "Your saved search no longer passes the checks. Save it again, then try again."
+              : `Open ${WORDING.searchOptions} and save them again, then come back to this list.`
             : `The list of boards could not load. ${describeError(list.error)}`}
           <Button
             variant="outline"
@@ -101,8 +130,12 @@ export function StarterBoards() {
 
   const entries = list.data.entries;
   const open = entries.filter((entry) => !entry.added);
-  const busy = choose.isPending;
-  const byAddress = (
+  const busy = choose.isPending || held !== undefined;
+  const byAddress = inSearch ? (
+    <p className="text-sm text-muted-foreground">
+      You can add any other company board by its address under Company boards.
+    </p>
+  ) : (
     <p className="text-sm text-muted-foreground">
       You can add any other company board by its address in{" "}
       <Link
@@ -116,14 +149,29 @@ export function StarterBoards() {
   );
 
   return (
+    // In Search options the card around it holds the one visible heading: the region is named
+    // without a second heading, so a screen reader hears one heading for the card.
     <section
-      aria-labelledby={`${id}-title`}
-      className="flex flex-col gap-3 rounded-md border p-3"
+      aria-labelledby={inSearch ? undefined : `${id}-title`}
+      aria-label={inSearch ? "Boards and sites to search" : undefined}
+      className={
+        inSearch
+          ? "flex flex-col gap-3"
+          : "flex flex-col gap-3 rounded-md border p-3"
+      }
       data-testid="starter-boards"
     >
-      <h3 id={`${id}-title`} className="text-base font-semibold">
-        Boards and sites to search
-      </h3>
+      {inSearch ? null : (
+        <h3 id={`${id}-title`} className="text-base font-semibold">
+          Boards and sites to search
+        </h3>
+      )}
+      {inSearch ? (
+        // Always in the page, so the reason is announced when the buttons go disabled.
+        <p className={held ? "text-sm font-medium" : "sr-only"} role="status">
+          {held ?? ""}
+        </p>
+      ) : null}
       {problem ? (
         <Alert variant="destructive" role="alert">
           <CircleAlert aria-hidden="true" />
@@ -134,7 +182,7 @@ export function StarterBoards() {
         <>
           <p className="text-sm">
             {list.data.targets
-              ? "No starter board matches your answers."
+              ? `No starter board matches ${yours}.`
               : "No starter board to propose yet."}
             {list.data.unmatched.length
               ? ` None is listed for ${list.data.unmatched.join(", ")}.`
@@ -145,13 +193,13 @@ export function StarterBoards() {
       ) : (
         <>
           <p className="text-sm text-muted-foreground">
-            From your answers, these public company boards and sites may list
+            From {yours}, these public company boards and sites may list
             postings for you. Nothing is added until you choose.
           </p>
           {entries.some((entry) => entry.kind === "board") ? null : (
             <p className="text-sm">
               {list.data.targets
-                ? "No starter board matches your answers."
+                ? `No starter board matches ${yours}.`
                 : "No starter board to propose yet."}
               {list.data.unmatched.length
                 ? ` None is listed for ${list.data.unmatched.join(", ")}.`
