@@ -902,7 +902,9 @@ async def _answer_left(
         # No credential, or the person's runs are all busy: as a run without the agent.
         return {"agent": "skipped", "questions": len(questions), "reason": reply.stopped}
     verdicts = agent.judge(
-        questions, reply, agent.sources_of(plan.sections, plan.posting_title, plan.posting_company)
+        questions,
+        reply,
+        agent.sources_of(plan.sections, plan.posting_title, plan.posting_company, plan.letter_text),
     )
     cost = {
         "agent": "stopped" if reply.stopped else "ran",

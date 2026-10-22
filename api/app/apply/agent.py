@@ -1,129 +1,41 @@
-"""The answer agent of an application (SPEC-apply, "Answers to standard questions", source 5): the
-questions neither the adapter nor the resolver answered, put to one model call, and what code
-keeps of its answers.
+"""The answer agent's boundaries (SPEC-apply, A5).
 
-This file is the part of the agent that decides, and it is pure (no store, no clock, no model):
+`eligible` asks only unresolved, open job questions in `AGENT_REASONS`, once per key. It leaves
+legal choices, EEO, identity, pay, authorization, employment history, practicalities and closed
+questions with the person. Standard fields and document boxes belong to the resolver;
+`letter_boxes` copies a prepared document, never a model's substitute. `profile_for` sends an
+allowlist of profile sections and answer fields, excluding private practical answers.
 
-- `eligible`: which left fields go to the agent. A closed list: only a field the resolver left
-  because it knows no such question (`not_a_known_question`) or because it is free text written
-  for this company (`free_text_for_the_agent`), of a kind the adapter can type (text, select,
-  combobox with its options), each key once. Then `refusal` fails closed: what the owner keeps
-  for the person stays left whatever a model would say (test_what_the_agent_is_never_asked).
-  The resolver's default for a label it does not know is `not_a_known_question`, so three lines
-  close the door, in any widget, each reading the label through `_plain` (compatibility forms
-  folded, invisible characters and marks dropped, a Cyrillic, Greek or small capital letter drawn
-  like a Latin one read as that letter, as the never apply rules read a title):
-  1. the shape (`not_open`): a question the resolver does not know is asked only when its label
-     reads as an open question or a prompt to write: it opens on why, what, which, how,
-     describe, tell us, explain, share, walk us through, give an example (pourquoi, quel,
-     comment, qu'est-ce, décrivez, parlez-nous, expliquez, partagez; warum, wie, welche,
-     beschreiben; por qué, qué, cuál, cómo, describa), after an optional "please", "briefly" or
-     numbering, or it is a whole prompt noun (Motivation, Cover letter, Additional information,
-     Lettre de motivation). A bare noun phrase ("Work permit", "Pending charges", "Total comp",
-     "Team preference") or a statement stays the person's, whatever its options. A3's free
-     text questions (`free_text_for_the_agent`) were already read as prompts and skip this line;
-  2. the topic (`off_topic`): every question, A3's free text included (issue #317), is asked
-     only when the allowlist of topics reads it (`_on_topic`): a subject of the person's
-     (`_SUBJECT`: a project, experience, skills, motivation, the field, a time they led or
-     disagreed), or an employer word (the company, the role, the team, joining, working here)
-     inside a question of motivation (`_MOTIVATION`: why, what attracts you, what you would
-     bring, what you look for), or a short "Why <name>?". An employer word alone is no topic:
-     "How soon could you join?", "Which office would you join?" and "Team preference" stay the
-     person's; "Why do you want to join us?", "Tell us about a project" and "Share your
-     portfolio" are asked. The name of "Why <name>?" is checked twice: here it must not be a
-     place of the gazetteer or a time ("Why Berlin?", "Why now?": `practical`), and at the judge
-     it must be the posting's company (`off_topic` otherwise: "Why Lisbon?");
-  3. the vocabularies, in any wording, open or not:
-  - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
-    accuracy statement (arbitration, background checks, marketing, data retention, a
-    non-compete, a signature, the terms);
-  - a consent to share, keep or contact (`consent_topic`: data sharing with partners or a group,
-    retention, offers and communications, privacy choices);
-  - pay, wanted or received, in any form (salary, OTE, package, rate, bonus, equity, comp, TC,
-    income, base, budget, how much, range, ballpark, target; Gehalt, salario, sueldo, pretensión);
-  - work authorization and immigration (a visa, sponsorship, a permit, the right to work, a
-    green card, residency, citizenship, a passport, H-1B, OPT; titre de séjour, Arbeitserlaubnis,
-    permiso de trabajo);
-  - a document asked for as text (`document`: the CV or the cover letter): a letter box gets the
-    letter's own text by code (`letter_boxes`, SPEC-apply source 2), a CV box stays the person's;
-  - criminal and employment history (charges, arrests, convictions, offences, a DBS check, a
-    dismissal, being let go, a gap, disciplinary action, a notice period; casier,
-    condamnation, un trou, préavis), and leaving a job in any wording, even one that names the
-    role or the company ("Why did you leave your last role?", "Pourquoi voulez-vous quitter
-    votre poste ?", "Warum wollen Sie wechseln?");
-  - sensitive personal data and where the person lives (`personal`: religion, marital status,
-    a divorce, children, health, medication, accommodation, caste, politics, pronouns, age,
-    family, where the person lives or moved to);
-  - the person's practicalities (`practical`: when they could start or join in any verb, a
-    notice, availability, relocation, remote, hybrid or on site work, an arrangement, hours,
-    weekends, a commute, travel, other applications or offers, a place word (an office, a
-    location, a city, a time zone), working in a place the jobs gazetteer knows ("Why do you
-    want to work in the US?"), and in a question of motivation a capitalised name of the
-    gazetteer anywhere ("Why do you want to join our Berlin team?"));
-  - leaving a job in any verb (exit, move on, step away), looking for a new role, a return to
-    work or a career break, and in a question of motivation the person's own current or last
-    job ("Why do you want to exit your last role?": `history`);
-  - the person's identity or a credential (a password, a social security, tax or ID number, an
-    address, a phone, an e-mail, a name, a signature, a birth date): the agent never receives
-    the identity section, so any value would be invented;
-  - a qualification code cannot prove from the profile (a PhD, a clearance, export control
-    status, fine-tuning, a certification or a licence);
-  - a select whose options speak of work authorization, criminal history or pay ("Citizen",
-    "Permanent resident", "Needs a visa"), whatever its label (`option_topic`);
-  - a yes or no: a `yes_no` field, a select whose options say yes or no, or a label worded as a
-    closed question. Code cannot prove a yes from the profile, and a no can be a false legal
-    statement (sponsorship in a wording the resolver does not know).
-  Never a box (terms are the person's), a file, an EEO topic, never a field a policy or a
-  missing profile value left (age, citizenship, current pay, a years question the profile does
-  not settle).
-- `judge`: what is kept of the agent's reply. The same `refusal` first, so a question that
-  reaches it by another path is still left. Each proposal must name a question it was asked and
-  a source of the person's (`facts`, `experience`, `skills`, `answers`, `motivation`, `letter`):
-  one without is dropped (`no_source`). The source is DECLARED by the model, a string it writes
-  itself, and nothing here proves it: the only check of what is said is `factcheck_rules`
-  below. So the refusals above are the guard of the closed topics, and an answer to an open
-  question the vocabularies miss is the model's own text, its numbers, links, employers and
-  titles excepted. A choice must be one of the field's options exactly
-  (`answers.match_option`); a typed value that is a bare yes or no is dropped (`yes_or_no`), so
-  is one that is a bare negation or a non answer ("None", "N/A", "Not applicable", "No pending
-  charges", "I do not require sponsorship", "Aucun", "Néant": `bare_negation`), and a value that
-  speaks of work authorization, criminal history, how a job ended or pay (`legal_statement`): a
-  missed label cannot be answered "None" or "I hold the right to work" on the person's behalf.
-  A typed value that states sensitive personal data (gender, sexuality, pronouns, disability,
-  health, pregnancy, religion, ethnicity, age, family) is dropped too (`personal_statement`),
-  whatever the question: the model never reads an EEO answer, so such a value is invented or
-  steered by the page. So is a typed practicality (`practical_statement`: "I can start
-  immediately", "I am based in Berlin", "I prefer to work remotely", a notice, travel, a time
-  zone, other offers): the model never reads the profile's answers on these. Each typed value is
-  read through `_plain`, so a Cyrillic letter inside "permit" changes nothing. A dash used
-  as a separator in a typed value is replaced by code first (`undashed`: the owner's rule, no
-  dashes as separators). A typed value then goes through mail M9's `factcheck_rules.check`
-  against the profile: a number, a duration, a link, an employer or a title that the profile
-  does not hold leaves the field (`fact_check`). So a posting that tells the model to add a
-  link changes nothing on the form.
-- `Request` and `Reply`: what the model call receives (the questions as data, the profile's
-  allowlist `profile_for`, the posting, the letter) and gives back. `profile_for` keeps the
-  facts, experience and skills sections and, of `answers`, only `ANSWER_FIELDS` (motivation,
-  stated years, highest degree and its year): never identity, an EEO answer, pay, work
-  authorization, pronouns, a consent or a practicality.
+Question topics are positive anchors: motivation, the job/company/team, experience and technical
+projects. A destination after working/living/joining is unknown unless it names a recognised
+professional field; a qualified team is likewise unknown unless its qualifier names a field.
+This does not depend on a place gazetteer. Technical noun phrases such as Microsoft Office,
+location service and exit strategy retain their ordinary reading. Team preference and Why now
+can ask for job motivation, while their proposed answers still need a supported job claim.
 
-The call itself is an `AnswerAgent`: in the worker, `app.apply.agents.RuntimeAnswerAgent`, the
-`apply_answer` agent of the agents runtime (internal, private_io, model_by_credential, the
-`TOKEN_BUDGET` below, one submit tool). A run without one, or a person without a credential,
-skips the agent: every question it would have asked stays left.
+`judge` repeats the question guards, checks the declared source against PERSON_SOURCES, matches
+choices to options and applies the legal, personal, practical and fact-check guards. A model's
+source label alone establishes nothing. Each typed clause must either match permitted source
+text or have a positive job-claim structure whose content words trace to those sources or the
+job-topic vocabulary. This allows supported technical paraphrases without inventing arbitrary
+new nouns, places or arrangements. Clauses joined by conjunctions are checked separately, so a
+job sentence cannot carry an unsupported second claim. Ambiguous arrangement vocabulary needs
+a complete sourced technical past action; consent and other closed statements stay refused.
+The prepared letter enters these sources through the immutable run context, rather than an
+edited answer. `undashed` applies the owner's separator rule before matching and checking text.
+Fact checking remains independent; Full auto's model check still applies to the resulting text.
 
-Declared open points (test_a5_agent_filters.py holds the families these rules are tested over):
-- a place the gazetteer does not know reaches the model in "Why Lisbon?" (its answer is dropped
-  unless Lisbon is the posting's company) and in "Why do you want to join us in Lisbon?" (its
-  answer is kept unless it states a practicality); "US" inside a question ("our US team") is read
-  as the pronoun, only "the US", "USA" and "United States" as the country;
-- a practicality typed without a first person or a time to come ("Berlin suits me", "Remote,
-  please") is typed;
-- what is refused though it is about the job: an employer word outside a question of motivation
-  ("Team preference" written by A3), "Why now?", a technical word that is also a place or an
-  arrangement word ("Microsoft Office", "a location service", "an exit strategy", "full-time"),
-  a project named like a city ("Phoenix") in a question of motivation, and a label written
-  wholly in Cyrillic or Greek letters.
+The runtime call is an internal, private_io AnswerAgent with TOKEN_BUDGET. Posting and page text
+remain data. No credential or agent means these questions stay left.
+
+Declared open points:
+- Unrecognised professional fields or team qualifiers can leave a valid question with the person.
+- New technical terms and paraphrases outside the positive vocabulary need supporting profile
+  or prepared-letter words. Non-Latin wording without such support is conservative as well.
+- Token provenance and topic structure do not prove the semantic relationship of every
+  paraphrase. The fact check, approval and Full auto model check remain separate checks.
+- Short company questions still need the posting's company at the judge. Existing lexical
+  guards can refuse technical words whose ordinary reading is not recognised here.
 """
 
 import functools
@@ -436,6 +348,22 @@ _WHY_NAME = re.compile(
     r"^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
     r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)(\w+(?:\s+\w+){0,2})\W*$"
 )
+# These positive structures describe work, rather than the person's arrangements. Ambiguous
+# labels can reach the judge, which still requires each proposed claim to trace to sources.
+_FACT_QUESTION = re.compile(
+    r"\b(?:projects?|software|services?|algorithms?|strateg(?:y|ies)|integrations?|systems?"
+    r"|tools?|technolog\w*|microsoft office|projets?|logiciels?)\b"
+)
+_FIELD_TOPIC = re.compile(
+    r"^(?:robotics|ai|artificial intelligence|software|engineering|research|this field"
+    r"|this industry|this sector|this domain|robotique|informatique)\b"
+)
+_TEAM_DETAIL = re.compile(r"\b(?:our|your|notre|votre) (.+?) (?:team|equipe)\b")
+_SHORT_TOPICS = frozenset({"team preference", "why now", "pourquoi maintenant"})
+_TECHNICAL_TEXT = re.compile(
+    r"\bmicrosoft office\b|\blocation services?\b|\bexit strateg(?:y|ies)\b"
+    r"|\bfull-? ?time (?:(?:\w+ )?projects?|algorithms?|software)\b"
+)
 # A document asked for as text: the whole label names the CV or the cover letter (A3's `resume`
 # and `cover_letter` templates, which leave such a text field when there is no letter text), or
 # the label names a cover letter anywhere. Never the model's: a letter box gets the letter's own
@@ -596,9 +524,10 @@ def _plain(text: str) -> str:
 
 
 def _names_where(text: str) -> bool:
-    """A place of the gazetteer where the person would work, live or move to."""
+    """A working/living destination is unknown unless it names an allowed professional field.
+    This depends on the sentence structure, rather than whether a gazetteer knows the place."""
     found = _WHERE.search(text)
-    return bool(found and places_of(found.group(1)))
+    return bool(found and not _FIELD_TOPIC.search(found.group(1)))
 
 
 def _names_a_place(label: str) -> bool:
@@ -615,7 +544,11 @@ def _names_a_place(label: str) -> bool:
 def _named_only(text: str) -> str | None:
     """The name of a "why <name>" question that no subject and no employer word puts on topic,
     else None: the one topic the label alone cannot settle."""
-    if _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)):
+    if (
+        text.strip(" ?.!:") in _SHORT_TOPICS
+        or _SUBJECT.search(text)
+        or (_EMPLOYER.search(text) and _MOTIVATION.search(text))
+    ):
         return None
     found = _WHY_NAME.search(text)
     return found.group(1) if found else None
@@ -629,8 +562,10 @@ def _not_an_employer(text: str) -> bool:
 
 
 def _on_topic(text: str) -> bool:
-    return _named_only(text) is not None or bool(
-        _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text))
+    return (
+        text.strip(" ?.!:") in _SHORT_TOPICS
+        or _named_only(text) is not None
+        or bool(_SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)))
     )
 
 
@@ -707,12 +642,16 @@ def refusal(
     text = _plain(label)
     if not text:
         return "no_label"
+    fact_question = bool(_FACT_QUESTION.search(text))
     for code, refuses in REFUSALS:
-        if refuses(text, kind, options):
+        reading = _TECHNICAL_TEXT.sub("project", text) if code in ("practical", "history") else text
+        if refuses(reading, kind, options):
             return code
-    if _MOTIVATION.search(text) and _names_a_place(label):
-        return "practical"
-    if reason != "free_text_for_the_agent" and not _OPEN.search(text):
+    if _MOTIVATION.search(text) and not fact_question:
+        team = _TEAM_DETAIL.search(text)
+        if _names_a_place(label) or (team and not _FIELD_TOPIC.fullmatch(team.group(1))):
+            return "practical"
+    if reason != "free_text_for_the_agent" and not _OPEN.search(text) and text not in _SHORT_TOPICS:
         return "not_open"
     if not _on_topic(text):
         return "off_topic"
@@ -769,16 +708,18 @@ def profile_for(sections: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def sources_of(
-    sections: Mapping[str, Any], posting_title: str, company: str
+    sections: Mapping[str, Any], posting_title: str, company: str, letter_text: str = ""
 ) -> factcheck_rules.Sources:
     """What an answer may claim: the person's own profile (facts, experience, answers), its
     employers, schools and titles. The posting legitimises its own title and company only."""
-    view = profile_view.build(sections, 0)
+    view = profile_view.build(profile_for(sections), 0)
     own = [body for _, body in view.facts_blocks]
     own += [f"{e.title} {e.organisation} {e.start or ''} {e.end or ''}" for e in view.employers]
     own += [f"{s.degree} {s.school} {s.start or ''} {s.end or ''}" for s in view.schools]
     if view.motivation:
         own.append(view.motivation)
+    if letter_text:
+        own.append(letter_text)
     return factcheck_rules.Sources(
         profile=tuple(text for text in own if text.strip()),
         answers=tuple(view.answers),
@@ -803,6 +744,218 @@ def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
     return sorted({issue.code for issue in factcheck_rules.check(text, sources)})
 
 
+_CLAUSES = re.compile(r"[.!?;\n]+|\b(?:and|but|because|et|mais|car|parce que)\b", re.I)
+_CLAIM_FRAME = re.compile(
+    r"^(?:(?:nonetheless|notably) )?(?:i|we|my work|our work|your mission|your culture)\b"
+    r"|^(?:robotics|robots?|agents?|software|ai|robotique|je|nous)\b"
+)
+_CLAIM_TOPIC = re.compile(
+    r"\b(?:robot\w*|agents?|software|ai|evaluat\w*|build\w*|built|project\w*|projet\w*"
+    r"|engineer\w*|develop\w*|design\w*|integrat\w*|algorith\w*|system\w*|tools?|work|problem\w*)\b"
+)
+# Grammar and neutral motivation words add no personal fact. Content words must belong to a
+# supported job topic or the permitted sources; the model's source label is not proof.
+_CLAIM_GLUE = frozenset(
+    [
+        "i",
+        "we",
+        "my",
+        "our",
+        "your",
+        "the",
+        "a",
+        "an",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "its",
+        "their",
+        "me",
+        "us",
+        "you",
+        "to",
+        "of",
+        "for",
+        "with",
+        "on",
+        "in",
+        "at",
+        "from",
+        "by",
+        "as",
+        "over",
+        "into",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "am",
+        "have",
+        "has",
+        "had",
+        "do",
+        "did",
+        "can",
+        "could",
+        "would",
+        "will",
+        "should",
+        "want",
+        "like",
+        "love",
+        "enjoy",
+        "hope",
+        "need",
+        "bring",
+        "make",
+        "made",
+        "help",
+        "helps",
+        "helped",
+        "learn",
+        "learned",
+        "know",
+        "use",
+        "used",
+        "using",
+        "create",
+        "created",
+        "develop",
+        "developed",
+        "developing",
+        "design",
+        "designed",
+        "fix",
+        "fixed",
+        "improve",
+        "improved",
+        "ship",
+        "ships",
+        "shipping",
+        "work",
+        "working",
+        "worked",
+        "join",
+        "joined",
+        "build",
+        "built",
+        "building",
+        "lead",
+        "led",
+        "evaluate",
+        "evaluated",
+        "evaluation",
+        "because",
+        "and",
+        "but",
+        "so",
+        "what",
+        "which",
+        "how",
+        "where",
+        "more",
+        "most",
+        "real",
+        "hard",
+        "strong",
+        "safe",
+        "safety",
+        "people",
+        "human",
+        "humans",
+        "robots",
+        "robotics",
+        "team",
+        "teams",
+        "agent",
+        "agents",
+        "ai",
+        "software",
+        "operations",
+        "field",
+        "physical",
+        "world",
+        "interested",
+        "interest",
+        "excited",
+        "excites",
+        "nothing",
+        "nonetheless",
+        "notably",
+        "nobody",
+        "before",
+        "about",
+        "through",
+        "reach",
+        "culture",
+        "mission",
+        "je",
+        "nous",
+        "mon",
+        "ma",
+        "mes",
+        "notre",
+        "votre",
+        "le",
+        "la",
+        "les",
+        "un",
+        "une",
+        "des",
+        "du",
+        "de",
+        "aux",
+        "pour",
+        "avec",
+        "dans",
+        "sur",
+        "aime",
+        "aimer",
+        "construire",
+        "developper",
+        "concevoir",
+        "robots",
+        "robotique",
+        "travail",
+        "projet",
+        "projets",
+    ]
+)
+
+
+def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bool = False) -> bool:
+    texts = (
+        *sources.profile,
+        *sources.answers,
+        *sources.known_terms,
+        *sources.participants,
+        *sources.titles,
+        *sources.employers,
+        *sources.schools,
+    )
+    clauses = [answers.option_key(c) for c in _CLAUSES.split(value) if answers.option_key(c)]
+    stored = {answers.option_key(c) for text in texts for c in _CLAUSES.split(undashed(text))}
+    words = {w for text in texts for w in answers.option_key(text).split()}
+    for clause in clauses:
+        if clause in stored:
+            continue
+        if exact:
+            return False
+        if not _CLAIM_FRAME.search(clause) or not _CLAIM_TOPIC.search(clause):
+            return False
+        if any(
+            w not in words and w not in _CLAIM_GLUE and not _SUBJECT.fullmatch(w)
+            for w in clause.split()
+        ):
+            return False
+    return bool(clauses)
+
+
 def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.Sources) -> Verdict:
     key, value = question.key, proposal.value
     if refused := refusal(question.label, question.kind, question.options, question.reason):
@@ -822,6 +975,8 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
             return Verdict(key, None, "no_matching_option")
         if _issues(picked, sources):
             return Verdict(key, None, "fact_check")
+        if not _supported_claims(picked, sources):
+            return Verdict(key, None, "unsupported_claim")
         return Verdict(key, answers.Answer(picked, source, picked), "accepted")
     value = undashed(value)
     if len(value) > VALUE_MAX:
@@ -835,10 +990,25 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         return Verdict(key, None, "legal_statement")
     if _PERSONAL_STATEMENT.search(plain):
         return Verdict(key, None, "personal_statement")
+    if _CONSENT.search(plain):
+        return Verdict(key, None, "legal_statement")
+    supported = _supported_claims(value, sources)
     if _PRACTICAL_STATEMENT.search(plain):
+        return Verdict(key, None, "practical_statement")
+    # Ambiguous arrangement words need an actual technical fact, rather than a new preference
+    # assembled from individually known words. Recognised technical noun phrases retain their
+    # ordinary reading; other overlaps are allowed only as a complete sourced past action.
+    reading = _TECHNICAL_TEXT.sub("project", plain)
+    if _PRACTICAL.search(reading) and not (
+        re.match(r"^(?:i|we) (?:built|developed|designed|created|implemented|led)\b", plain)
+        and _FACT_QUESTION.search(plain)
+        and _supported_claims(value, sources, exact=True)
+    ):
         return Verdict(key, None, "practical_statement")
     if _issues(value, sources):
         return Verdict(key, None, "fact_check")
+    if not supported:
+        return Verdict(key, None, "unsupported_claim")
     return Verdict(key, answers.Answer(value, source), "accepted")
 
 

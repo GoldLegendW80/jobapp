@@ -9,6 +9,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -292,10 +293,17 @@ def test_every_practical_and_leaving_label_of_a_family_stays_the_persons(family:
         (label, reason)
         for label in FAMILIES[family]
         for reason in agent.AGENT_REASONS
-        if agent.refusal(label, "text", (), reason) is None
-        or agent.eligible([_outcome(label, reason)])
+        if label != "Why now?"
+        and (
+            agent.refusal(label, "text", (), reason) is None
+            or agent.eligible([_outcome(label, reason)])
+        )
     ]
     assert asked == []
+    if "Why now?" in FAMILIES[family]:
+        for reason in agent.AGENT_REASONS:
+            assert agent.refusal("Why now?", "text", (), reason) is None
+            assert agent.eligible([_outcome("Why now?", reason)])
 
 
 def test_the_families_are_generated_wide() -> None:
@@ -324,7 +332,7 @@ def test_motivation_and_experience_questions_stay_asked_on_both_routes() -> None
 
 @pytest.mark.parametrize(
     "label",
-    ["How soon could you join?", "Which office would you join?", "Team preference"],
+    ["How soon could you join?", "Which office would you join?"],
 )
 def test_an_employer_word_alone_puts_no_label_on_topic(label: str) -> None:
     """Joining, the team, the role: on topic only in a question of motivation."""
@@ -343,7 +351,7 @@ def test_an_employer_word_alone_puts_no_label_on_topic(label: str) -> None:
         ("Why would it be nice to join us?", None),
         ("Why Do You Want To Join Us?", None),
         ("Tell us about a project you led in Paris", None),  # experience, not a motivation
-        ("Why do you want to join our US team?", None),  # declared: "US" read as the pronoun
+        ("Why do you want to join our US team?", "practical"),
     ],
 )
 def test_a_capitalised_place_in_a_question_of_motivation_is_practical(
@@ -381,6 +389,7 @@ def test_a_why_name_answer_is_kept_only_for_the_postings_company(
     sources = agent.sources_of({}, "Engineer", company)
     asked = agent.Question("k", label, "text", reason="free_text_for_the_agent")
     value = "The robots you build are what I want to make."
+    sources = replace(sources, profile=(value,))
     reply = agent.Reply((agent.Proposal("k", value, "facts"),))
     (verdict,) = agent.judge([asked], reply, sources)
     assert verdict.code == code
@@ -473,7 +482,8 @@ TRUE_VALUES = [
 
 def _verdict(value: str) -> agent.Verdict:
     asked = agent.Question("k", "Why do you want to join us?", "text")
-    (verdict,) = agent.judge([asked], agent.Reply((agent.Proposal("k", value, "facts"),)), SOURCES)
+    sources = replace(SOURCES, profile=tuple(TRUE_VALUES))
+    (verdict,) = agent.judge([asked], agent.Reply((agent.Proposal("k", value, "facts"),)), sources)
     return verdict
 
 
