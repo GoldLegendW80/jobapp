@@ -5,6 +5,9 @@
 .env
 .env.*
 
+# Mac-only OpenSSL workaround: never ship it with the production Compose stack.
+compose.mac.yml
+
 # Database dumps pulled by ./deploy.sh backup --pull: they stay on the Mac
 backups/
 *.dump

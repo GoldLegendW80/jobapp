@@ -155,6 +155,7 @@ REQUIRED = {
 # name, a field of that kind or that path); then the fields a call prints besides its arguments.
 MACROS: dict[str, tuple[tuple[str, str], ...]] = {
     "label": (("key", "key"),),
+    "words": (("text", "text"), ("class", "class")),
     "contact_lines": (("class", "class"),),
     "portrait": (("class", "class"),),
     "header": (("headline", "text"),),

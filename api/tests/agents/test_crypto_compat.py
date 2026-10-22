@@ -8,6 +8,56 @@ plaintext, so a rollback to the previous image reads what the new one wrote.
 
 Nothing here is a secret: the two keys are the SHA-256 of the public labels below, the nonces
 were fixed when the fixture was written, and the plaintexts are made up.
+
+Regenerate from the repository root with the original arm64 base and library version. Only
+the app code and this public fixture are mounted, both read-only. Reuse its synthetic rows and
+fixed nonces, install the old library only in the disposable container, and replace the fixture
+only when generation succeeds. No developer environment or database is used::
+
+    fixture=api/tests/agents/fixtures/credentials_cryptography_46_0_7.json
+    fixture_tmp="$(mktemp)"
+    if docker run --rm --platform linux/arm64 -i \
+        -v "$PWD/api/app:/app/app:ro" -v "$PWD/$fixture:/fixture.json:ro" -w /app \
+        python:3.12.15-slim-trixie sh -c \
+        'python -m pip install --quiet --only-binary=:all: cryptography==46.0.7 >&2 && python -' \
+        >"$fixture_tmp" <<'PY'
+    import hashlib
+    import json
+    import platform
+    import uuid
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import cryptography
+    from cryptography.hazmat.backends.openssl.backend import backend
+    from app.agents import crypto
+
+    document = json.loads(Path("/fixture.json").read_text())
+    written_by = {
+        "cryptography": cryptography.__version__,
+        "openssl": backend.openssl_version_text(),
+        "machine": platform.machine(),
+    }
+    assert written_by == document["written_by"], written_by
+    for row in document["rows"]:
+        key = hashlib.sha256(
+            f"jobapp test fixture key, not a secret: {row['key']}".encode()
+        ).digest()
+        nonce = bytes.fromhex(row["ciphertext_hex"])[:crypto.NONCE_BYTES]
+        with patch.object(crypto.os, "urandom", return_value=nonce):
+            sealed = crypto.Keyring(key).encrypt(
+                row["plaintext"], uuid.UUID(row["user_id"]), row["kind"]
+            )
+        row["ciphertext_hex"] = sealed.ciphertext.hex()
+        row["key_version"] = sealed.key_version
+    print(json.dumps(document, ensure_ascii=False, indent=2))
+    PY
+    then
+        mv "$fixture_tmp" "$fixture"
+    else
+        rm -f "$fixture_tmp"
+        false
+    fi
 """
 
 import hashlib

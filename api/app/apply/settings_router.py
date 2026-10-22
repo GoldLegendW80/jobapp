@@ -7,10 +7,11 @@
   auto card (A13b): the hold in force (`hold_s`, never below the server's minimum `hold_min_s`),
   the rehearsals (`rehearsals`, how many the server asks for, and `rehearsals_done`) and
   `full_auto_since`.
-  PUT changes `mode_after_like`, `paused`, `min_fit` and `hold_s` (never below `APPLY_HOLD_S`:
-  422 `hold_too_short`); anything else is a 422. Turning Full auto on records the time
-  (`full_auto_since`); turning it off sends the person's `held` items to the review queue
-  (`full_auto.release`, each under the gate's locks after the switch is committed).
+  PUT changes `mode_after_like`, `paused`, `min_fit` and `hold_s` (never below the floor,
+  `APPLY_HOLD_S`, at least 900 s: 422 `hold_too_short`); anything else is a 422. Turning Full
+  auto on records the time (`full_auto_since`); turning it off sends the person's `held` items
+  to the review queue (`full_auto.release`, each under the gate's locks after the switch is
+  committed).
 - GET /api/apply/caps: the person's company caps with what each counts now, and `revision`, the
   hash of the list shown. PUT replaces the whole list if `revision` is still the stored one (else
   409 `stale`); 422 `no_company` or `same_company` for a list that cannot be saved.
@@ -153,7 +154,7 @@ def _settings_out(db: Session, user: User) -> SettingsOut:
         min_fit_chosen=values.min_fit_chosen,
         safety_ceiling=values.safety_ceiling,
         hold_s=full_auto.hold_s(values),
-        hold_min_s=int(caps._setting("apply_hold_s")),
+        hold_min_s=caps.hold_floor_s(),
         company_days=values.company_days,
         show_postings_from=values.show_postings_from,
         write_documents_from=values.write_documents_from,
@@ -201,7 +202,7 @@ def change_settings(
 ) -> SettingsOut | JSONResponse:
     """The mode after a Like, the pause switch, the fit threshold and the hold."""
     now = deps.clock(request)
-    if body.hold_s is not None and body.hold_s < request.app.state.settings.apply_hold_s:
+    if body.hold_s is not None and body.hold_s < request.app.state.settings.apply_hold_floor_s:
         return _refusal(422, "hold_too_short")
     caps.save_settings(
         db, user.id, now, paused=body.paused, min_fit=body.min_fit, hold_s=body.hold_s

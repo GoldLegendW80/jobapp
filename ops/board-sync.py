@@ -116,6 +116,10 @@ LANE_MODULE = {
     "lane:captain": "platform",
 }
 IN_FLIGHT = ("Building", "In review", "Fix & re-check", "Approved", "Gating")
+# An issue that holds a whole spec: once one exists, the only cards the board shows.
+SPEC_LABEL = "spec-card"
+# A claim: `ops/card.sh <url> doing` sets it, todo and done remove it.
+CLAIM_LABEL = "building"
 CALL_SECONDS = 60  # one gh api graphql, gh run list or git call
 LOG_SECONDS = 60  # gh run view --log
 DEADLINE_SECONDS = (
@@ -207,7 +211,11 @@ def issue_stage(
         return "Needs you", None
     if "spec" in labels:
         return "Spec", None
-    if issue["number"] in building or prev_status in ("In Progress", "Building"):
+    if (
+        issue["number"] in building
+        or CLAIM_LABEL in labels
+        or prev_status in ("In Progress", "Building")
+    ):
         return "Building", None
     return "Ready", None
 
@@ -255,12 +263,19 @@ def plan(
         if c.get("__typename") in ("Issue", "PullRequest"):
             card[(c["__typename"], c["number"])] = it
 
+    # With spec cards every other card is archived and the items query no longer returns it, so
+    # no stage or module may come from a card's stored fields: only GitHub facts (the claim is
+    # the CLAIM_LABEL label) and --building, and every sync of the same facts gives the same rows.
+    spec_mode = any(
+        SPEC_LABEL in {label["name"] for label in i["labels"]["nodes"]} for i in issues
+    )
     rows = []
     for i in issues:
         labels = {label["name"] for label in i["labels"]["nodes"]}
         item = card.get(("Issue", i["number"]))
-        prev_status = ((item or {}).get("status") or {}).get("name")
-        prev_module = ((item or {}).get("module") or {}).get("name")
+        stored = item if not spec_mode or SPEC_LABEL in labels else None
+        prev_status = ((stored or {}).get("status") or {}).get("name")
+        prev_module = ((stored or {}).get("module") or {}).get("name")
         stage, pr = issue_stage(
             i,
             prs_of.get(i["number"], []),
@@ -303,9 +318,11 @@ def plan(
             if item and not item["isArchived"]:
                 to_archive.append(item["id"])
             continue
-        if not item and p["state"] != "OPEN":
-            continue  # old pull requests never on the board stay off it
         stage = pr_stage(p, gating, live)
+        if not item and p["state"] != "OPEN" and not (spec_mode and stage == "Merged"):
+            continue  # old pull requests never on the board stay off it
+        if spec_mode:
+            item = None  # its card's fields are not facts (see above)
         rows.append(
             {
                 "kind": "pr",
@@ -330,6 +347,49 @@ def plan(
                 "blocked_by": "",
             }
         )
+    return spec_cards(rows, items, to_archive)
+
+
+def spec_cards(
+    rows: list[dict], items: list[dict], to_archive: list[str]
+) -> tuple[list[dict], list[str]]:
+    """One card per spec (owner, 2026-10-21): once an issue carries SPEC_LABEL, the board shows
+    only those issues. Each takes the stage of its module's work: Building while any task of it
+    is in flight, Ready while any is open, Live when all are. Every other row stays in the
+    snapshot with on_board False, and every other card is archived."""
+    specs = [
+        r for r in rows if r["kind"] == "issue" and SPEC_LABEL in r["labels"].split()
+    ]
+    if not specs:
+        return rows, to_archive
+    spec_numbers = {r["number"] for r in specs}
+    for s in specs:
+        if not s["open"]:
+            s["stage"] = "Live"  # a closed spec card is finished, whatever closed it
+        else:
+            work = [
+                r["stage"]
+                for r in rows
+                if r["module"] == s["module"]
+                and r["number"] not in spec_numbers
+                and r["stage"] not in ("Epic", "Live", "Dropped")
+            ]
+            s["stage"] = (
+                "Building"
+                if any(st in IN_FLIGHT or st == "Merged" for st in work)
+                else "Ready"
+                if work
+                else "Live"
+            )
+        s["stage_order"] = ORDER[s["stage"]]
+    for r in rows:
+        r["on_board"] = r in specs
+    to_archive = list(to_archive)
+    for it in items:
+        c = it.get("content") or {}
+        is_spec = c.get("__typename") == "Issue" and c.get("number") in spec_numbers
+        if not it["isArchived"] and not is_spec and it["id"] not in to_archive:
+            to_archive.append(it["id"])
     return rows, to_archive
 
 
@@ -678,7 +738,8 @@ def apply(rows: list[dict], to_archive: list[str], setup: bool) -> None:
     if missing:
         sys.exit(f"the Status field lacks {missing}: run once with --setup")
 
-    # Add the issues that are not on the board yet.
+    # Add the issues that are not on the board yet (with spec cards, only those).
+    rows = [r for r in rows if r.get("on_board", True)]
     for r in rows:
         if not r["item"] and r["kind"] == "issue":
             got = gql(

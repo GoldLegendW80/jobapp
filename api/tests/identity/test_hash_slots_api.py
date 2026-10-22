@@ -232,6 +232,57 @@ def test_a_burst_of_ten_real_sign_ins_all_succeed(
 # --- no slot free: the answer, and no oracle ---------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("email", "password", "status_code", "success"),
+    [
+        ("e2e-queued@example.org", WRONG, 401, False),
+        ("e2e-queued@example.org", PASSWORD, 200, True),
+        ("e2e-unknown-queued@example.org", WRONG, 401, False),
+    ],
+)
+def test_queued_sign_in_keeps_exactly_one_attempt_after_acquiring_a_slot(
+    api: Api,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    email: str,
+    password: str,
+    status_code: int,
+    success: bool,
+) -> None:
+    make_user(factory, email="e2e-queued@example.org")
+    slots = use_slots(monkeypatch, 1, 1, 30.0)
+    queued = threading.Event()
+    acquire = slots._free.acquire
+
+    def observe_wait(blocking: bool = True, timeout: float | None = None) -> bool:
+        if blocking:
+            queued.set()
+        return acquire(blocking=blocking, timeout=timeout)
+
+    monkeypatch.setattr(slots._free, "acquire", observe_wait)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with slots.hold():
+            pending = pool.submit(api.login, email, password)
+            assert queued.wait(timeout=10), "the sign in did not queue for the occupied slot"
+            assert slots.waiting == 1
+            assert not pending.done()
+            with factory() as db:
+                [attempt] = db.scalars(sa.select(LoginAttempt)).all()
+                attempt_id = attempt.id
+                assert attempt.email == email
+                assert attempt.success is False
+        response = pending.result(timeout=10)
+
+    assert response.status_code == status_code, response.text
+    assert (session_cookie(response) is not None) is success
+    with factory() as db:
+        [attempt] = db.scalars(sa.select(LoginAttempt)).all()
+        assert attempt.id == attempt_id
+        assert attempt.email == email
+        assert attempt.success is success
+    assert (slots.held, slots.waiting, slots.refused) == (0, 0, 0)
+
+
 def comparable(response: httpx.Response) -> tuple[int, Any, list[str], str | None]:
     names = sorted(name for name in response.headers if name.lower() != "x-request-id")
     return response.status_code, response.json(), names, response.headers.get("Retry-After")

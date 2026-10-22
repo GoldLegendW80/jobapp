@@ -12,13 +12,16 @@ import httpx
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.jobs import router as jobs_router
 from app.jobs import scoring
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
+from app.jobs.schemas import JobPatchIn, PayIn
 from app.main import create_app
 from app.profile.models import Profile
+from app.profile.schemas import CURRENCIES
 from tests.conftest import make_settings
 from tests.identity.api_helpers import Api, Clock
 from tests.jobs.conftest import NOW
@@ -75,6 +78,34 @@ def stored(factory: sessionmaker[Session], job_id: uuid.UUID) -> Job:
 
 
 # --- PATCH --------------------------------------------------------------------------------------
+
+
+def test_pay_currency_schema_bounds_the_nested_patch_input() -> None:
+    currency = PayIn.model_json_schema()["properties"]["currency"]
+    assert currency["type"] == "string"
+    assert currency["maxLength"] == 3
+    nested = JobPatchIn.model_json_schema()["$defs"]["PayIn"]["properties"]["currency"]
+    assert nested == currency
+
+
+@pytest.mark.parametrize("currency", CURRENCIES)
+def test_pay_currency_accepts_the_profile_allowlist_unchanged(currency: str) -> None:
+    body = JobPatchIn.model_validate(
+        {"pay": {"min": 1, "max": 1, "currency": currency, "period": "year"}}
+    )
+    assert body.pay is not None
+    assert body.pay.currency == currency
+
+
+@pytest.mark.parametrize(
+    "currency",
+    ["", "EU", "EURO", "eur", "Eur", " EUR", "EUR ", "ZZZ", "€", "ＥＵＲ", "EUR\n", "EUR\x00"],
+)
+def test_pay_currency_rejects_invalid_neighbors(currency: str) -> None:
+    with pytest.raises(ValidationError, match="currency"):
+        JobPatchIn.model_validate(
+            {"pay": {"min": 1, "max": 1, "currency": currency, "period": "year"}}
+        )
 
 
 def test_patch_status_writes_an_event_and_fills_applied_on_once(
