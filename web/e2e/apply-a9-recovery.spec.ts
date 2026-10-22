@@ -2,6 +2,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
   clickAtInView,
+  clickInView,
   closeRemoteWindow,
   remoteSpot,
 } from "./apply-a9-helpers";
@@ -34,15 +35,19 @@ async function application(job: string): Promise<Application | undefined> {
   );
   return ((await response.json()) as { items: Application[] }).items[0];
 }
-async function manual(
-  id: string,
-): Promise<{ confirmation_seen: boolean; idle_left_s: number; phase: string }> {
+async function manual(id: string): Promise<{
+  confirmation_seen: boolean;
+  idle_left_s: number;
+  chooser: boolean;
+  phase: string;
+}> {
   const response = await page.request.get(`/api/applications/${id}/manual`);
   expect(response.status()).toBe(200);
   return (await response.json()) as {
     confirmation_seen: boolean;
     idle_left_s: number;
     phase: string;
+    chooser: boolean;
   };
 }
 async function posting(reason: string): Promise<string> {
@@ -174,10 +179,15 @@ test("immediate Close after person Submit performs the final watch and freezes b
   await expect(
     panel.getByText(/Filled \d+ fields? with your details/),
   ).toBeVisible({ timeout: 60_000 });
-  for (const [button, done] of [
-    ["Attach my CV", "Your CV is attached to the form."],
-    ["Attach my letter", "Your letter is attached to the form."],
+  for (const [button, done, selector] of [
+    ["Attach my CV", "Your CV is attached to the form.", "#resume"],
+    ["Attach my letter", "Your letter is attached to the form.", "#letter"],
   ] as const) {
+    // The person names the intended input by opening its chooser in the live view.
+    await clickInView(page, selector);
+    await expect
+      .poll(async () => (await manual(id)).chooser, { timeout: 15_000 })
+      .toBe(true);
     await panel.getByRole("button", { name: button, exact: true }).click();
     await expect(panel.getByText(done, { exact: true })).toBeVisible({
       timeout: 60_000,
