@@ -10,7 +10,9 @@
 #   browser   the service; its egress proxy lets the pages server through although its address
 #             is private (BROWSER_PROXY_ALLOW_PRIVATE, never set in compose.yml)
 #   pages     tests/browser_pages/ served on `egress` alone: what a job site is in the test, on
-#             8000 and 8080, and a UDP listener on 3478 that counts what WebRTC sends it
+#             8000 and 8080, and a UDP listener on 3478 that counts what WebRTC sends it; also
+#             named `elsewhere`, a host the proxy lets through and no lease lists, whose
+#             requests it counts (a navigation off a lease's list never reaches it)
 #   client    on `browsing` alone, where the api and the worker are; it also answers HTTP on 8080
 #             (a port the proxy allows, as Caddy's), which Chromium must not reach: an app
 #             service seen from a hostile page, refused for its address
@@ -25,7 +27,7 @@ services:
       service: browser
     image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
     environment:
-      BROWSER_PROXY_ALLOW_PRIVATE: pages
+      BROWSER_PROXY_ALLOW_PRIVATE: pages,elsewhere
 
   pages:
     image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
@@ -39,7 +41,8 @@ services:
     volumes:
       - ./tests/browser_pages:/pages:ro
     networks:
-      - egress
+      egress:
+        aliases: [elsewhere]
     mem_limit: 128m
 
   client:

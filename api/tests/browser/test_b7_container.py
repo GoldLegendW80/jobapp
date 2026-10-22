@@ -327,7 +327,7 @@ asyncio.run(main())
 
 @pytest.mark.parametrize(
     ("end_with", "failing", "left_by_the_end"),
-    [("stop", "quit", False), ("kill", "killpg", False), ("stop", "quit,kill", True)],
+    [("stop", "quit", False), ("kill", "killpg", False), ("stop", "quit,killuid", True)],
 )
 def test_an_end_whose_helper_raises_leaves_no_browser_for_the_next_lease(
     stack: Stack, end_with: str, failing: str, left_by_the_end: bool
@@ -475,9 +475,9 @@ def press(c, *mods):
         t.XTestFakeKeyEvent(d, m, 0, 0)
     x.XSync(d, 0)
 
-if sys.argv[1] == "focus":
+if sys.argv[1] in ("focus", "save"):
     t.XTestFakeMotionEvent(d, 0, 720, 500, 0)
-    press(code("l")[0], code("Control_L")[0])
+    press(code("l" if sys.argv[1] == "focus" else "s")[0], code("Control_L")[0])
     sys.exit()
 def write(text):
     for ch in text:
@@ -538,6 +538,36 @@ def test_chrome_pages_are_blocked_in_a_persons_session(stack: Stack, purpose: st
             assert f'"{opened} - Chromium"' not in window_titles(stack)
     assert stack.current()["lease"]["purpose"] == purpose
     end(stack)
+
+
+SAVED = """
+import json, os, sys
+folder = f"/leases/{sys.argv[1]}/downloads"
+print(json.dumps(sorted(os.listdir(folder)) if os.path.isdir(folder) else None))
+"""
+
+
+def test_save_page_as_is_off_in_a_persons_session(stack: Stack) -> None:
+    """Ctrl+S in a person's session: with no file dialog (AllowFileSelectionDialogs) Chromium
+    turns "Save page as" off, so no dialog opens to write into a folder the person picks, the
+    profile among them, and nothing is saved. The control: the next keys reach the window."""
+    profile, uid = str(uuid.uuid4()), 20026
+    lease = session(stack, "signin", profile, uid, SITE)["lease_id"]
+    try:
+        wait_title(stack, "Example Portal: signed out")
+        stack.execute("browser", "python", "-c", TYPE, "focus", user="1000")
+        for _ in range(10):
+            window_titles(stack)
+        stack.execute("browser", "python", "-c", TYPE, "save", user="1000")
+        for _ in range(30):
+            assert "Save File" not in window_titles(stack)
+        assert json.loads(stack.python(SAVED, lease, user=str(uid))) == []
+        type_address(stack, "chrome://policy")
+        wait_title(stack, '"Policies - Chromium"')
+        assert "Save File" not in window_titles(stack)
+    finally:
+        if stack.current()["lease"] is not None:
+            end(stack)
 
 
 FLAG_ON = """
@@ -656,18 +686,23 @@ def test_a_saved_test_policy_does_not_survive_a_restart(stack: Stack, purpose: s
     end(stack)
     stack.python(TEST_POLICIES_ON, F, NO_BLOCK, user=str(UID_F))
     assert json.loads(stack.python(TEST_POLICIES_SAVED, F, user=str(UID_F))) is True
-    if purpose == "signin":
-        session(stack, purpose, F, UID_F, SITE)
-        wait_title(stack, "signed in as e2e-browser-f")
-        type_address(stack, "chrome://flags")
-        wait_title(stack, '"chrome://flags/ - Chromium"')
-        assert '"Experiments - Chromium"' not in window_titles(stack)
-    else:
-        stack.lease(F, UID_F, purpose)
-        seen = stack.probe("navigate", "chrome://flags", "20")
-        assert seen["ok"] is False
-        assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
-    end(stack)
+    # The end in a finally: a failed signin case would leave its lease, and the browser busy (409)
+    # for the apply_fill case.
+    try:
+        if purpose == "signin":
+            session(stack, purpose, F, UID_F, SITE)
+            wait_title(stack, "signed in as e2e-browser-f")
+            type_address(stack, "chrome://flags")
+            wait_title(stack, '"chrome://flags/ - Chromium"')
+            assert '"Experiments - Chromium"' not in window_titles(stack)
+        else:
+            stack.lease(F, UID_F, purpose)
+            seen = stack.probe("navigate", "chrome://flags", "20")
+            assert seen["ok"] is False
+            assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
+    finally:
+        if stack.current()["lease"] is not None:
+            end(stack)
     assert json.loads(stack.python(TEST_POLICIES_SAVED, F, user=str(UID_F))) is False
 
 

@@ -29,7 +29,7 @@ import {
  * debugging port in the container; A signs in on the site with the live view's keyboard and
  * closes the session. An assistant's lease of A then reads "Signed in as" with both cookies and
  * the local storage, and so does one after a restart of the browser container (person B's
- * "Forget all logins" in between leaves A's profile alone). A forgets all logins: the profile's
+ * "Forget all logins" in between removes B's own profile and leaves A's alone). A forgets all logins: the profile's
  * directory goes, and the next lease starts on a new directory, under a new uid, signed out.
  * Neither the typed address nor the name typed on the site is in a log of the stack.
  *
@@ -183,7 +183,18 @@ test("the login is in an assistant's lease, and after a restart of the browser",
   expect(first.text).toContain(`Signed in as ${NAME}`);
   expect(first.text).toContain(KEPT);
 
-  // B forgets his own logins: A's profile is not B's to touch.
+  // B gets a profile of his own (an assistant's lease), then forgets his logins: his directory
+  // goes, and A's profile is not B's to touch.
+  startAgentLease(B);
+  let profileB = "";
+  try {
+    profileB = currentLease().lease?.profile_id ?? "";
+  } finally {
+    endLease(B);
+  }
+  expect(profileB).not.toBe("");
+  expect(profileB).not.toBe(profileA);
+  expect(profileOnDisk(profileB)).toBe(true);
   await pageB.goto("/account");
   await pageB.getByRole("button", { name: "Forget all logins" }).click();
   await pageB
@@ -191,6 +202,10 @@ test("the login is in an assistant's lease, and after a restart of the browser",
     .getByRole("button", { name: "Forget all logins" })
     .click();
   await expect(pageB.getByText(FORGOTTEN)).toBeVisible();
+  expect((await browserOf(pageB)).profile.exists).toBe(false);
+  await expect
+    .poll(() => profileOnDisk(profileB), { timeout: 90_000 })
+    .toBe(false);
   expect(profileOnDisk(profileA)).toBe(true);
 
   restartBrowser();

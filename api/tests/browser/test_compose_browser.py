@@ -66,7 +66,7 @@ def browser_test_stack() -> dict[str, Any]:
     assert own["extends"] == {"file": "compose.yml", "service": "browser"}  # --project-directory .
     extra = {k: v for k, v in own.items() if k != "extends"}
     assert set(extra) == {"image", "environment"}, extra
-    assert extra["environment"] == {"BROWSER_PROXY_ALLOW_PRIVATE": "pages"}
+    assert extra["environment"] == {"BROWSER_PROXY_ALLOW_PRIVATE": "pages,elsewhere"}
     base = load("compose.yml")
     service = merge(base["services"]["browser"], extra)
     return {

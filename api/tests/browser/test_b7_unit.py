@@ -418,18 +418,18 @@ def made(kind: Any, proc: Any) -> Any:
 @pytest.mark.parametrize(
     ("kind", "failing", "end", "expected"),
     [
-        (signin.PersonChromium, ("quit",), "stop", ["quit", "kill", "rmtree"]),
-        (signin.PersonChromium, ("killpg",), "stop", ["quit", "killpg", "kill", "rmtree"]),
-        (signin.PersonChromium, ("killpg",), "kill", ["killpg", "kill", "rmtree"]),
-        (chromium.Chromium, ("killpg",), "stop", ["killpg", "kill", "rmtree"]),
-        (chromium.Chromium, ("killpg",), "kill", ["killpg", "kill", "rmtree"]),
+        (signin.PersonChromium, ("quit",), "stop", ["quit", "killuid", "rmtree"]),
+        (signin.PersonChromium, ("killpg",), "stop", ["quit", "killpg", "killuid", "rmtree"]),
+        (signin.PersonChromium, ("killpg",), "kill", ["killpg", "killuid", "rmtree"]),
+        (chromium.Chromium, ("killpg",), "stop", ["killpg", "killuid", "rmtree"]),
+        (chromium.Chromium, ("killpg",), "kill", ["killpg", "killuid", "rmtree"]),
     ],
 )
 def test_an_end_whose_helper_raises_still_reaps_every_process_of_the_uid(
     monkeypatch: pytest.MonkeyPatch, kind: Any, failing: tuple[str, ...], end: str,
     expected: list[str],
 ) -> None:  # fmt: skip
-    """The reap ("kill" of every process left under a profile uid) runs after a helper failed,
+    """The reap ("killuid" of every process left under a profile uid) runs after a helper failed,
     so that Chromium is not on the display in the next lease."""
     monkeypatch.setattr(signin, "QUIT_S", 0)
     monkeypatch.setattr(chromium.c, "CLOSE_S", 0)
@@ -443,11 +443,11 @@ def test_an_end_whose_helper_raises_still_reaps_every_process_of_the_uid(
 
 
 def test_the_end_runs_every_step_when_the_reap_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    helpers = Helpers(monkeypatch, "kill")
+    helpers = Helpers(monkeypatch, "killuid")
     helpers.strays = [{20001: [4242]}]
     browser = made(signin.PersonChromium, ExitedProc(0))
     run(browser.stop())  # the end itself does not raise
-    assert helpers.seen == ["kill", "rmtree"]
+    assert helpers.seen == ["killuid", "rmtree"]
 
 
 def test_the_manager_ends_a_lease_whose_browser_failed_to_stop() -> None:
@@ -483,7 +483,7 @@ def test_every_start_reaps_what_an_earlier_lease_left(monkeypatch: pytest.Monkey
     helpers.strays = [{20002: [77, 78]}, {}]
     browser = made(chromium.Chromium, None)
     run(browser.prepare())
-    assert helpers.seen == ["kill", "prepare"]
+    assert helpers.seen == ["killuid", "prepare"]
 
 
 def test_a_start_is_refused_while_a_process_of_a_profile_uid_survives(
@@ -494,7 +494,7 @@ def test_a_start_is_refused_while_a_process_of_a_profile_uid_survives(
     browser = made(signin.PersonChromium, None)
     with pytest.raises(RuntimeError, match="survived the reap"):
         run(browser.start())
-    assert helpers.seen == ["kill"]  # nothing prepared, nothing started
+    assert helpers.seen == ["killuid"]  # nothing prepared, nothing started
 
 
 def test_a_session_that_exits_at_its_start_is_finished(monkeypatch: pytest.MonkeyPatch) -> None:

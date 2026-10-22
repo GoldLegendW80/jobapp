@@ -726,6 +726,7 @@ root="$(awk '$1 == "docker" && / up / { print $2; exit }' "$STUB_CALLS")"
 after="$(awk '$1 == "pnpm" { on = 1; next } on && $1 == "docker" && (/ logs / || / down /) { print $2 }' "$STUB_CALLS" | sort -u)"
 [[ "$after" == "$root" ]] || fail "the logs and the teardown after Playwright ran from $after, not from the tree root $root"
 [[ "$(awk '$1 == "docker" && / down /' "$STUB_CALLS" | wc -l | tr -d ' ')" == 2 ]] || fail "each stack is taken down once"
+[[ "$(awk '$1 == "docker" && / logs / && /networks-.*\.yml/' "$STUB_CALLS" | wc -l | tr -d ' ')" == 2 ]] || fail "the stack log is not read with the files the stack started with (the browser group's pages)"
 ! grep -q 'no such file' "$logs/stack-sweep.log" || fail "the stack log holds: $(cat "$logs/stack-sweep.log")"
 [[ "$(subnets_up)" == "$NET0 $NET0 " && -z "$(nets_left)" ]] || fail "a stack taken down frees its slot: subnets $(subnets_up), slots left $(nets_left)"
 
