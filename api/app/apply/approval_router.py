@@ -163,6 +163,8 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
             you_answer=row.source is AnswerSource.left,
         )
         for row in gate.rows_of(db, application)
+        if not row.field_key.startswith("designated:shape:")
+        and row.field_key != "designated:incomplete"
     ]
 
 

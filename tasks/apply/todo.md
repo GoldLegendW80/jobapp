@@ -331,7 +331,20 @@ First slice (issue #250, measured on 2026-10-20 on the fake backend): one `apply
 Synthetic Postgres/Redis tests cover exact approval, own-company Full auto, holds and rehearsals, explicit posting recipient confirmation, both fixed PDF bytes, ownership, stale PDF/body refusal, live pause, durable audit, one-use capabilities, uncertain send reconciliation, repaired connection/scope recovery and fair bounded scheduling. The full affected mail/A14/migration run passed 1,251 tests; the subsequent recovery/provider focused run passed 66. The approval UI suite passed 348 tests. The isolated arm64 provider sent a maximum 12 MiB synthetic raw message under its 128 MiB cgroup with zero OOM/restart, while reaching the cap and recording reclaim pressure. Actual test-stack memory and configured limit totals are documented separately. No real Gmail account, company application or deployment was used. Declared parser limits: only an explicit application instruction followed immediately by an address list on the same line; ambiguous surrounding contact addresses are excluded, and a mailto posting without a company website cannot use Full auto.
 
 ### A15
-Nothing yet.
+Implemented against the fake ATS pages only on 2026-10-22. The isolated owned run tests pass
+for Workday, Google Careers and VIE, with one gate click after approval and no model fill.
+The 105 pure cases cover supported addresses and neighbours, ordered replay, sign-in expiry and
+cancellation, payment and profile walls, changed summaries and targets, and an unknown required
+field on an early step with a disabled Next. Answering that field queues a fresh fill against
+the same ordered field structure before a final approval. Internal shape records remain in the
+approval hash and are not shown as candidate answers.
+
+The Workday fake allocates 48 MiB for the browser memory guard. Its actual human paced browser
+duration and screenshots are pending the isolated journey; the shared 15 minute lease maximum
+has not changed. Google reads the unique actual Apply href of the exact posting and binds it in
+the approval hash. Unknown application route shapes and button-only openers need the person;
+no real Google application route or real-site submission has been exercised. Commands and exact
+pending checks are in [the evidence](../evidence/apply-a15/tests.txt).
 
 ### A16
 Nothing yet.

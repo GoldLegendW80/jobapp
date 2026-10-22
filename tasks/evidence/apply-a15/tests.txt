@@ -1,0 +1,41 @@
+Apply A15 synthetic evidence, 2026-10-22
+
+Source contract
+- Workday: exact tenant job identity and canonical same-host Apply manually route.
+- Google Careers: unique actual Apply link from exact job page, same origin, closed application
+  route with a single opaque jobId. Target is stored in approval hash and rechecked in a fresh
+  lease. Unknown/button-only route shapes fail closed. No claim of a real Google journey.
+- VIE: native labelled application panel, CV/letter and own motivation, or a fresh restricted
+  lease for an external company application. Sign-in and incomplete profiles need the person.
+- Deterministic early required fields stop before disabled Next; last person answer queues a
+  fresh fill, validates ordered field shapes and reaches final designation before approval.
+
+Light checks
+- python -m pytest tests/apply/test_a15_addresses.py tests/apply/test_a15_wizards.py -q -n0:
+  105 passed (closed-world address/route neighbours, ordered replay, changed summaries/targets,
+  sign-in cancel/timeout/expiry, payment, profile walls, required early steps and field shapes).
+- ruff check app/apply plus new A15 tests: passed.
+- pnpm --dir web run typecheck: passed.
+- pnpm --dir web exec vitest run src/features/apply: 355 passed, 13 files.
+- python3 .github/scripts/ci_plan_test.py: 81 passed.
+- python3 .github/scripts/e2e_groups.py: passed, apply-a15 automatically registered by prefix.
+- node --check tests/ats_forms/a15/wizard.js: passed.
+
+Owned checks
+- Isolated Postgres/Redis: ops/agent-test.sh --name apply-a15-owned
+  tests/apply/test_a15_owned.py -m 'not docker' -n2 -q: 9 passed in 7.95 seconds.
+  Three deterministic adapters, owner refusal, exactly one gate click, early-step person
+  continuation, marker forgery refusal, competing last-answer writes and Full auto review.
+
+Pending
+- Whole tests/apply and affected browser/agent tests after integration with parallel A14/A16.
+- Final frontend lint and real Playwright apply-a15 journey on isolated fixture stack.
+- Human paced heavy Workday active duration and screenshots; 48 MiB fixture allocation, shared
+  900 second apply lease maximum unchanged. If measured active time exceeds 12 minutes, propose
+  an adapter-specific lease setting from evidence; do not silently raise the shared maximum.
+- Real Checkpoint A and real job-site interaction are person-only and have not been run.
+
+Primary references checked without real account or form interaction:
+https://support.google.com/googlecareers/answer/6095391?hl=en
+https://playwright.dev/python/docs/input#upload-files
+Browserd already handles both native input files and a button-triggered file chooser.

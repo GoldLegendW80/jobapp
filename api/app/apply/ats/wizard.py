@@ -274,15 +274,15 @@ class Wizard(generic.Deterministic):
                 else:
                     report.designated, report.designated_ref = button.name, button.ref
                 return report
+            if any(o.field.required and o.filled.status != "filled" for o in report.outcomes):
+                report.stopped, report.needs_person = "needs_person", "required_left"
+                return report
             if (
                 generic.button_name(button.name) not in NEXT
                 or self.step >= generic.STEPS_MAX
                 or "disabled" in button.attrs
             ):
                 report.stopped = "form_changed"
-                return report
-            if any(o.field.required and o.filled.status != "filled" for o in report.outcomes):
-                report.stopped, report.needs_person = "needs_person", "required_left"
                 return report
             clicked = await tools.click(button.ref, button.name)
             if not clicked.get("ok"):

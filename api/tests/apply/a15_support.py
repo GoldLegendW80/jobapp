@@ -59,6 +59,10 @@ class WizardForm(CustomForm):
             body,
             count=1,
         )
+        if self.step == 0 and any(
+            s.label == "Your project codename" and not s.value for s in self.fields
+        ):
+            body = body.replace('- button "Next" [ref=', '- button "Next" [disabled] [ref=')
         if self.kind == "workday" and self.step == 2 and self._other is None:
             lines = ['    - region "Application summary":']
             for spec in self.fields:
