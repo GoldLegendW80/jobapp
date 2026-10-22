@@ -147,8 +147,11 @@ def test_neutral_motivation_cannot_reverse_an_explicit_preference(
         "I would like to build robots.",
     ],
 )
-def test_neutral_intent_remains_useful_without_a_sourced_opposite(value: str) -> None:
-    verdict = judged("I built robots.", value)
+def test_personal_intent_requires_a_source_even_without_a_sourced_opposite(value: str) -> None:
+    # Reconcile the original neutral-intent controls with no invention: past
+    # achievements do not establish preferences. Preserve each sourced companion.
+    assert judged("I built robots.", value).answer is None
+    verdict = judged(value, value)
     assert verdict.answer is not None, verdict
     assert verdict.answer.value == value
 

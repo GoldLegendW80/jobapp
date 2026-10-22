@@ -610,12 +610,41 @@ def test_what_the_judge_drops_stays_left_for_the_person(
     assert "accepted" not in found.cost["verdicts"]
 
 
+@pytest.mark.parametrize(
+    ("motivation", "accepted"),
+    [
+        ("I want to build agents, and test them, with this team.", True),
+        ("I built agents and tested them.", False),
+        ("I would never like to build agents.", False),
+        ("I wouldn’t ever like to build agents.", False),
+        ("I no longer want to build agents.", False),
+    ],
+)
 def test_a_dash_the_model_writes_is_never_typed(
-    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: Runtime
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    runtime: Runtime,
+    motivation: str,
+    accepted: bool,
 ) -> None:
+    # Keep the recorded output unchanged. The person's own source decides whether
+    # that positive intent is grounded, including through the real runtime sink.
+    profile = profile_service.get_profile(db, person_a.user_id, AT)
+    section = AnswersSection.model_validate(
+        {**full("answers"), "motivation": motivation}
+    ).model_dump(mode="json")
+    profile_service.save_section(db, person_a.user_id, "answers", section, profile.revision, AT)
+    db.commit()
     runtime.give_key(person_a)
     app_id, _ = fill_with(db, factory, person_a, stub, runtime.agent("apply_answer_dash"))
     value = fields(db, app_id)[WHY].value
+    if not accepted:
+        assert value in (None, "")
+        assert fields(db, app_id)[WHY].source.value == "left"
+        assert application(db, app_id).cost["verdicts"].get("unsupported_claim") == 1
+        return
     assert value == "I want to build agents, and test them, with this team."
     assert "—" not in value
     assert "–" not in value

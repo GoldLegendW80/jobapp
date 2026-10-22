@@ -15,12 +15,10 @@ can ask for job motivation, while their proposed answers still need a supported 
 
 `judge` repeats the question guards, checks the declared source against PERSON_SOURCES, matches
 choices to options and applies the legal, personal, practical and fact-check guards. A model's
-source label alone establishes nothing. Each typed clause must either match permitted source
-text or retain the complete factual source sentence under the finite technical action
-equivalences. Separately composed factual clauses need a complete source sentence of their
-own. A positive intent grammar permits technical motivation without asserting an achievement
-or promise; its content words still need source or job-topic vocabulary. Clauses joined by
-conjunctions are checked separately, so intent cannot carry an unsupported second claim.
+source label alone establishes nothing. Every sentence, including personal motivation and
+preference, retains a complete permitted personal source sentence under bounded technical
+predicate equivalences. An achievement does not establish a desire. Unknown paraphrases stay
+left, and conjunctions inside an object or name never establish an action by themselves.
 Ambiguous arrangement vocabulary needs
 a complete sourced technical past action; consent and other closed statements stay refused.
 Locative complements in every claim frame retain their full source clause, including actor,
@@ -758,357 +756,49 @@ def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
     return sorted({issue.code for issue in factcheck_rules.check(text, sources)})
 
 
-_CLAUSES = re.compile(r"[.!?;\n]+|\b(?:and|but|because|et|mais|car|parce que)\b", re.I)
-_SENTENCES = re.compile(r"[.!?;\n]+")
-_CLAIM_FRAME = re.compile(
-    r"^(?:(?:nonetheless|notably) )?(?:i|we|my work|our work|your mission|your culture)\b"
-    r"|^(?:robotics|robots?|agents?|software|ai|robotique|je|nous)\b"
-    r"|^(?:the|this|your) (?:robots?|software|team|role)\b"
+# Quoted names stay one opaque token, including their sentence punctuation. Keep
+# original case until predicate positions have been established: "Test It" is a name.
+_CLAIM_TOKEN = re.compile(
+    r"(?<!\w)'[^'\n]*'|\"[^\"\n]*\"|\u2018[^\u2019\n]*\u2019|\u201c[^\u201d\n]*\u201d"
+    r"|[.!?;\n]+|\w+(?:['\u2019]\w+)*|[^\w\s]"
 )
-_CLAIM_TOPIC = re.compile(
-    r"\b(?:robot\w*|agents?|software|ai|evaluat\w*|build\w*|built|project\w*|projet\w*"
-    r"|engineer\w*|develop\w*|design\w*|integrat\w*|algorith\w*|system\w*|tools?|work|test\w*|problem\w*)\b"
-)
-_COORDINATED_ACTION = re.compile(
-    r"^(?:build|built|design|designed|develop|developed|create|created|improve|improved"
-    r"|test|tested|evaluate|evaluated)\b"
-)
-_COORDINATED_OBJECT = re.compile(
-    r"^(?:agents?|robotics|software|ai|evaluation)(?: work)?"
-    r"(?: to (?:the|this|your|our) team)?$"
-)
-_FIRST_PERSON = re.compile(r"^(i|we)\b")
-_LOCATIVE = re.compile(r"\b(?:in|from|at|near|out of) (?!charge\b|front of\b)")
+_SENTENCE_END = re.compile(r"[.!?;\n]+")
 _RELATION_VERBS = {
     **dict.fromkeys(("build", "develop", "create", "design"), "build"),
     **dict.fromkeys(("built", "developed", "created", "designed"), "built"),
-    **dict.fromkeys(("building", "developing", "creating", "designing"), "building"),
     **dict.fromkeys(("test", "evaluate"), "test"),
     **dict.fromkeys(("tested", "evaluated"), "tested"),
-    **dict.fromkeys(("testing", "evaluating"), "testing"),
 }
-# Grammar and neutral motivation words add no personal fact. Content words must belong to a
-# supported job topic or the permitted sources; the model's source label is not proof.
-_CLAIM_GLUE = frozenset(
-    [
-        "i",
-        "we",
-        "my",
-        "our",
-        "your",
-        "the",
-        "a",
-        "an",
-        "this",
-        "that",
-        "these",
-        "those",
-        "it",
-        "its",
-        "their",
-        "them",
-        "me",
-        "us",
-        "you",
-        "to",
-        "of",
-        "for",
-        "with",
-        "on",
-        "in",
-        "at",
-        "from",
-        "by",
-        "as",
-        "over",
-        "into",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "am",
-        "have",
-        "has",
-        "had",
-        "do",
-        "did",
-        "can",
-        "could",
-        "would",
-        "will",
-        "should",
-        "want",
-        "like",
-        "love",
-        "enjoy",
-        "hope",
-        "need",
-        "bring",
-        "make",
-        "made",
-        "help",
-        "helps",
-        "helped",
-        "learn",
-        "learned",
-        "know",
-        "use",
-        "used",
-        "using",
-        "create",
-        "created",
-        "develop",
-        "developed",
-        "developing",
-        "design",
-        "designed",
-        "fix",
-        "fixed",
-        "improve",
-        "improved",
-        "ship",
-        "ships",
-        "shipping",
-        "work",
-        "working",
-        "worked",
-        "join",
-        "joined",
-        "build",
-        "built",
-        "building",
-        "lead",
-        "led",
-        "evaluate",
-        "evaluated",
-        "evaluation",
-        "test",
-        "tested",
-        "tests",
-        "testing",
-        "because",
-        "and",
-        "but",
-        "so",
-        "what",
-        "which",
-        "how",
-        "where",
-        "more",
-        "most",
-        "real",
-        "hard",
-        "strong",
-        "safe",
-        "safety",
-        "people",
-        "human",
-        "humans",
-        "robots",
-        "robotics",
-        "team",
-        "teams",
-        "role",
-        "roles",
-        "agent",
-        "agents",
-        "ai",
-        "software",
-        "operations",
-        "warehouse",
-        "field",
-        "physical",
-        "world",
-        "kind",
-        "puts",
-        "front",
-        "interested",
-        "interest",
-        "excited",
-        "excites",
-        "nothing",
-        "nonetheless",
-        "notably",
-        "nobody",
-        "before",
-        "about",
-        "through",
-        "reach",
-        "culture",
-        "mission",
-        "je",
-        "nous",
-        "mon",
-        "ma",
-        "mes",
-        "notre",
-        "votre",
-        "le",
-        "la",
-        "les",
-        "un",
-        "une",
-        "des",
-        "du",
-        "de",
-        "aux",
-        "pour",
-        "avec",
-        "dans",
-        "sur",
-        "aime",
-        "aimer",
-        "construire",
-        "developper",
-        "concevoir",
-        "robots",
-        "robotique",
-        "travail",
-        "projet",
-        "projets",
-    ]
+# Only this small, complete nominal grammar can close an object before another
+# predicate. Unknown nouns, lists and names remain opaque, while the main predicate
+# can still map. No conjunction inside an arbitrary object is treated as an action.
+_COORDINATE_NOMINAL = re.compile(
+    r"(?:(?:a|an|the|this|that|these|those) )?"
+    r"(?:(?:robot|robotics|agent|ai|software|design|build|test|evaluation) )?"
+    r"(?:robots?|agents?|software|tools?|systems?|it|them)"
+)
+_PREDICATE_OBJECT_START = frozenset(
+    ("a", "an", "the", "this", "that", "these", "those", "it", "them")
+)
+_COORDINATE_COMPLEMENT = re.compile(
+    r"(?:it|them)(?: (?:in|at|near|from|with|for|by) \w+)?"
+    r"|(?:a|an|the|this|that|these|those) (?:\S+ )*"
+    r"(?:robots?|agents?|software|tools?|systems?|platforms?)"
 )
 
 
-# A new intent can describe a technical topic without asserting an achievement. Its
-# complement is a noun phrase, not another finite personal claim. Unknown syntax stays left.
-_MOTIVATION_ACTIONS = frozenset(
-    [
-        "build",
-        "develop",
-        "design",
-        "create",
-        "improve",
-        "test",
-        "evaluate",
-        "join",
-        "work",
-        "learn",
-        "help",
-        "bring",
-        "reach",
-        "building",
-        "developing",
-        "designing",
-        "creating",
-        "improving",
-        "testing",
-        "evaluating",
-        "joining",
-        "working",
-        "learning",
-        "helping",
-        "bringing",
-    ]
-)
-_MOTIVATION_NOUN_GLUE = frozenset(
-    [
-        "my",
-        "our",
-        "your",
-        "the",
-        "a",
-        "an",
-        "this",
-        "that",
-        "these",
-        "those",
-        "it",
-        "its",
-        "their",
-        "them",
-        "me",
-        "us",
-        "you",
-        "to",
-        "of",
-        "for",
-        "with",
-        "on",
-        "in",
-        "at",
-        "from",
-        "by",
-        "as",
-        "over",
-        "into",
-        "more",
-        "most",
-        "real",
-        "hard",
-        "strong",
-        "safe",
-        "safety",
-        "people",
-        "human",
-        "humans",
-        "robots",
-        "robotics",
-        "team",
-        "teams",
-        "role",
-        "roles",
-        "agent",
-        "agents",
-        "ai",
-        "software",
-        "operations",
-        "warehouse",
-        "field",
-        "physical",
-        "world",
-        "kind",
-        "work",
-        "evaluation",
-        "culture",
-        "mission",
-    ]
-)
-_MOTIVATION_PREFIXES = tuple(
-    tuple(prefix.split())
-    for prefix in (
-        "want to",
-        "hope to",
-        "would like to",
-        "would love to",
-        "like to",
-        "love to",
-        "like",
-        "love",
-        "enjoy",
-        "am interested in",
-        "are interested in",
-    )
-)
-
-
-def _neutral_motivation(clause: str, words: set[str], *, continuing: bool = False) -> bool:
-    parts = clause.split()
-    if parts[:1] in (["i"], ["we"]):
-        parts = parts[1:]
-        if parts[:3] in (["would", "bring", "my"], ["would", "bring", "our"]):
-            parts = parts[2:]
-        else:
-            prefix = next((p for p in _MOTIVATION_PREFIXES if tuple(parts[: len(p)]) == p), None)
-            if prefix is None:
-                return False
-            parts = parts[len(prefix) :]
-            if parts and parts[0] in _MOTIVATION_ACTIONS:
-                parts = parts[1:]
-            elif prefix[-2:] != ("interested", "in"):
-                return False
-    elif continuing and parts and parts[0] in _MOTIVATION_ACTIONS:
-        parts = parts[1:]
-    elif not (continuing and _COORDINATED_OBJECT.fullmatch(clause)):
-        return False
-    return bool(parts) and all(
-        w in _MOTIVATION_NOUN_GLUE
-        or (w not in _CLAIM_GLUE and (w in words or _SUBJECT.fullmatch(w)))
-        for w in parts
-    )
+def _claim_sentences(text: str) -> list[tuple[str, ...]]:
+    sentences, parts = [], []
+    for lexeme in _CLAIM_TOKEN.findall(undashed(text)):
+        if _SENTENCE_END.fullmatch(lexeme):
+            if parts:
+                sentences.append(tuple(parts))
+                parts = []
+        elif lexeme != ",":
+            parts.append(lexeme)
+    if parts:
+        sentences.append(tuple(parts))
+    return sentences
 
 
 def _predicate_at(parts: Sequence[str], start: int = 0) -> int | None:
@@ -1127,184 +817,53 @@ def _predicate_at(parts: Sequence[str], start: int = 0) -> int | None:
         start += 3
     else:
         return None
-    if start < len(parts) and parts[start] in _RELATION_VERBS and not parts[start].endswith("ing"):
-        return start
-    return None
+    return start if start < len(parts) and parts[start] in _RELATION_VERBS else None
 
 
-def _claim_relation(clause: str, subject: str = "") -> tuple[str, ...]:
-    """Canonicalise clear predicates only; ambiguous coordination remains exact-only."""
-    if subject and _COORDINATED_ACTION.match(clause):
-        clause = f"{subject} {clause}"
-    parts = clause.split()
-    first = _predicate_at(parts)
+def _claim_relation(parts: tuple[str, ...], *, exact: bool = False) -> tuple[str, ...]:
+    """Map clear action positions, retaining every object, qualifier and logical word."""
+    normalized = [answers.fold(part) for part in parts]
+    first = None if exact else _predicate_at(normalized)
     if first is None:
-        return tuple(parts)
-    predicates = [first]
-    for index, word in enumerate(parts):
-        if word not in ("and", "but"):
+        return tuple(normalized)
+    normalized[first] = _RELATION_VERBS[normalized[first]]
+    object_start = first + 1
+    for index in range(object_start, len(parts)):
+        if normalized[index] not in ("and", "but"):
             continue
+        if not _COORDINATE_NOMINAL.fullmatch(" ".join(parts[object_start:index])):
+            break
         following = index + 1
-        predicate = _predicate_at(parts, following)
+        predicate = _predicate_at(normalized, following)
         if predicate is None:
-            # A bare "design systems" can be another object of "build". A determiner
-            # or pronoun after the action disambiguates "design the systems"/"test it".
             if (
                 following + 1 >= len(parts)
-                or parts[following] not in _RELATION_VERBS
-                or parts[following].endswith("ing")
-                or parts[following + 1]
-                not in ("a", "an", "the", "this", "that", "these", "those", "it", "them")
+                or normalized[following] not in _RELATION_VERBS
+                or normalized[following + 1] not in _PREDICATE_OBJECT_START
             ):
-                return tuple(parts)
+                break
             predicate = following
-        predicates.append(predicate)
-    for index in predicates:
-        parts[index] = _RELATION_VERBS[parts[index]]
-    return tuple(parts)
-
-
-def _preference(clause: str, subject: str = "") -> tuple[str, bool, tuple[str, ...]] | None:
-    """Read polarity before the neutral-intent fallback, keeping its actor and complement."""
-    parts = clause.split()
-    if parts[:1] not in (["i"], ["we"]):
-        if not subject:
-            return None
-        parts.insert(0, subject)
-    actor, parts = parts[0], parts[1:]
-    if parts[:2] == ["don", "t"]:
-        parts = ["do", "not", *parts[2:]]
-    elif parts[:2] == ["wouldn", "t"]:
-        parts = ["would", "not", *parts[2:]]
-    elif parts[:2] == ["aren", "t"]:
-        parts = ["are", "not", *parts[2:]]
-    if parts[:1] == ["m"]:
-        parts[0] = "am"
-    elif parts[:1] == ["re"]:
-        parts[0] = "are"
-    negative = False
-    if parts[:2] == ["do", "not"]:
-        negative, parts = True, parts[2:]
-    elif parts[:1] == ["never"]:
-        negative, parts = True, parts[1:]
-    elif len(parts) > 1 and parts[0] in ("would", "am", "are") and parts[1] == "not":
-        negative, parts = True, [parts[0], *parts[2:]]
-    if negative and parts[:1] == ["ever"]:
-        parts = parts[1:]
-    prefix = next((p for p in _MOTIVATION_PREFIXES if tuple(parts[: len(p)]) == p), None)
-    if prefix is None:
-        if not subject or not parts or parts[0] not in _MOTIVATION_ACTIONS:
-            return None
-    else:
-        parts = parts[len(prefix) :]
-    if not parts:
-        return None
-    action = parts[0]
-    if action in _MOTIVATION_ACTIONS and action.endswith("ing"):
-        stem = action[:-3]
-        if stem in _MOTIVATION_ACTIONS:
-            action = stem
-        elif f"{stem}e" in _MOTIVATION_ACTIONS:
-            action = f"{stem}e"
-    parts[0] = _RELATION_VERBS.get(action, action)
-    return actor, negative, tuple(parts)
-
-
-def _opposed_preferences(texts: Sequence[str]) -> dict[str, Any]:
-    # A token trie retains qualifier scope without comparing every pair of source clauses.
-    opposed: dict[str, Any] = {}
-    for text in texts:
-        for sentence in _SENTENCES.split(undashed(text)):
-            subject = ""
-            for raw in _CLAUSES.split(sentence):
-                clause = answers.option_key(raw)
-                if actor := _FIRST_PERSON.match(clause):
-                    subject = actor.group(1)
-                if (preference := _preference(clause, subject)) and preference[1]:
-                    node = opposed.setdefault(preference[0], {})
-                    for word in preference[2]:
-                        node = node.setdefault(word, {})
-                    node[""] = True
-    return opposed
-
-
-def _opposed_preference(actor: str, complement: tuple[str, ...], opposed: dict[str, Any]) -> bool:
-    node = opposed.get(actor, {})
-    for word in complement:
-        if "" in node:
-            return True
-        if word not in node:
-            return False
-        node = node[word]
-    # A broader positive intent also cannot establish that a qualified refusal was reversed.
-    return bool(node)
-
-
-def _source_relations(texts: Sequence[str]) -> set[tuple[str, ...]]:
-    # Do not borrow a relation from a fragment split off a coordinated source sentence.
-    return {
-        _claim_relation(answers.option_key(sentence))
-        for text in texts
-        for sentence in _SENTENCES.split(undashed(text))
-        if sentence.strip()
-    }
+        if not parts[predicate].islower() or not _COORDINATE_COMPLEMENT.fullmatch(
+            " ".join(parts[predicate + 1 :])
+        ):
+            break
+        normalized[predicate] = _RELATION_VERBS[normalized[predicate]]
+        object_start = predicate + 1
+    return tuple(normalized)
 
 
 def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bool = False) -> bool:
-    texts = (
-        *sources.profile,
-        *sources.answers,
-        *sources.known_terms,
-        *sources.participants,
-        *sources.titles,
-        *sources.employers,
-        *sources.schools,
+    # Personal facts and preferences have the same provenance requirement. Neither
+    # achievement nouns nor a company, title or skill prove a desire or a relationship.
+    relations = {
+        _claim_relation(sentence, exact=exact)
+        for text in (*sources.profile, *sources.answers)
+        for sentence in _claim_sentences(text)
+    }
+    proposed = _claim_sentences(value)
+    return bool(proposed) and all(
+        _claim_relation(sentence, exact=exact) in relations for sentence in proposed
     )
-    stored = {answers.option_key(c) for text in texts for c in _CLAUSES.split(undashed(text))}
-    words = {w for text in texts for w in answers.option_key(text).split()}
-    relations = _source_relations((*sources.profile, *sources.answers))
-    opposed = _opposed_preferences((*sources.profile, *sources.answers))
-    found = False
-    for sentence in _SENTENCES.split(value):
-        sentence_proven = _claim_relation(answers.option_key(sentence)) in relations
-        subject = ""
-        object_list = False
-        motivation = False
-        for raw in _CLAUSES.split(sentence):
-            clause = answers.option_key(raw)
-            if not clause:
-                continue
-            found = True
-            framed = bool(_CLAIM_FRAME.search(clause) and _CLAIM_TOPIC.search(clause))
-            # A conjunction can retain a first-person subject or continue the object of
-            # "bring my ...". It cannot lend that frame to another independent assertion.
-            object_continuation = object_list and bool(_COORDINATED_OBJECT.fullmatch(clause))
-            coordinated = bool(subject) and (
-                bool(_COORDINATED_ACTION.search(clause)) or object_continuation
-            )
-            proven = sentence_proven or _claim_relation(clause, subject) in relations
-            neutral = _neutral_motivation(clause, words, continuing=motivation)
-            if not proven and neutral and (preference := _preference(clause, subject)):
-                actor, _, complement = preference
-                if _opposed_preference(actor, complement, opposed):
-                    return False
-            if not proven and (_LOCATIVE.search(clause) or not neutral):
-                return False
-            if clause not in stored:
-                if exact or not (framed or coordinated):
-                    return False
-                if any(
-                    w not in words and w not in _CLAIM_GLUE and not _SUBJECT.fullmatch(w)
-                    for w in clause.split()
-                ):
-                    return False
-            if actor := _FIRST_PERSON.match(clause):
-                subject = actor.group(1)
-            motivation = neutral
-            object_list = object_continuation or bool(
-                re.match(r"^(?:i|we) (?:would |can |could )?bring (?:my|our)\b", clause)
-            )
-    return found
 
 
 def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.Sources) -> Verdict:

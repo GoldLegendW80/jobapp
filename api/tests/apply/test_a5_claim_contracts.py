@@ -82,7 +82,13 @@ def test_location_qualification_does_not_depend_on_a_gazetteer(place: str, label
     ],
 )
 def test_grounded_job_facts_and_supported_paraphrases_are_useful(label: str, value: str) -> None:
-    verdict = judged(value, label)
+    sources = SOURCES
+    if value == "I want to build robots.":
+        # Keep the former achievement-only intent control as an explicit refusal
+        # and its companion with the person's actual positive preference source.
+        assert judged(value, label).answer is None
+        sources = replace(SOURCES, profile=(*FACTS, value))
+    verdict = judged(value, label, sources)
     assert verdict.answer is not None, verdict
     assert verdict.answer.value == value
 
@@ -242,9 +248,10 @@ def test_factual_coordination_is_not_invented_from_the_original_topic_words(valu
     ],
 )
 def test_coordinated_job_motivation_preserves_its_subject_and_objects(value: str) -> None:
-    # Intent needs no achievement. A factual companion has an explicit source, while
-    # the preceding table retains its refusal against the original unrelated facts.
-    sources = replace(SOURCES, profile=(*FACTS, value)) if value in COORDINATED_FACTS else SOURCES
+    # Preserve every original intent control: unrelated achievements prove no
+    # desire. The person's complete source supports the genuine positive companion.
+    assert judged(value).answer is None
+    sources = replace(SOURCES, profile=(*FACTS, value))
     verdict = judged(value, sources=sources)
     assert verdict.answer is not None, verdict
     assert verdict.answer.value == agent.undashed(value)
@@ -360,9 +367,9 @@ def test_grounded_technical_locatives_and_coordinated_predicates_remain_useful(
 
 @pytest.mark.parametrize("actor", ["I", "We"])
 def test_a_coordinated_object_list_can_have_more_than_two_nouns(actor) -> None:
-    assert judged(
-        f"{actor} would bring my agent and software and evaluation work to the team."
-    ).answer
+    value = f"{actor} would bring my agent and software and evaluation work to the team."
+    assert judged(value).answer is None
+    assert judged(value, sources=replace(SOURCES, profile=(value,))).answer
 
 
 # Every frame admitted by the claim sink needs the same relational provenance. A
