@@ -88,27 +88,28 @@ figures() {
       printf "   step: %s -> %s\n", from, to; fflush()
     }'
 }
-# failed_at <file>: the step a failed run was in, then the class of the last exception (a dotted
-# name or one ending in Error or Exception, at the start of a line), each `-` when there is none.
+# attempt_mark <n>: the line written to the kept file before each attempt (through figures, so it
+# never reaches the output), where the figures of failed_at start again.
+attempt_mark() { printf '== migrate.sh attempt %s of %s ==\n' "$1" "$ATTEMPTS"; }
+# failed_at <file>: four figures of the last attempt in <file> (the lines after the last attempt
+# mark): the step it was in, the class of its last exception (a dotted name or one ending in Error
+# or Exception, at the start of a line), each `-` when there is none; then `lock` when that last
+# exception line is a lock timeout (SQLSTATE 55P03, psycopg's LockNotAvailable: the upgrade waited
+# on the running release), `-` otherwise; then how many steps it started. Only the last exception
+# line decides the lock timeout, so a migration that printed those words, or a lock timeout caught
+# before another failure, is that other failure.
 failed_at() {
   awk '
-    /Running upgrade / { s = $0; sub(/.*Running upgrade /, "", s); split(s, a, " -> "); from = a[1]; to = a[2]; sub(/,.*/, "", to); if (from == "") from = "base"; step = from " -> " to }
-    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { c = $0; sub(/:.*/, "", c); cls = c }
+    /^== migrate\.sh attempt [0-9]+ of [0-9]+ ==$/ { step = ""; cls = ""; last = ""; n = 0; next }
+    /Running upgrade / { n++; s = $0; sub(/.*Running upgrade /, "", s); split(s, a, " -> "); from = a[1]; to = a[2]; sub(/,.*/, "", to); if (from == "") from = "base"; step = from " -> " to }
+    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { last = $0; c = $0; sub(/:.*/, "", c); cls = c }
     END {
       if (step !~ /^[A-Za-z0-9_]+ -> [A-Za-z0-9_]+$/) step = "-"
       if (cls == "") cls = "-"
       print step; print cls
+      print ((last ~ /LockNotAvailable|55P03|canceling statement due to lock timeout/) ? "lock" : "-")
+      print n + 0
     }' "$1"
-}
-
-# lock_timeout <file> <line>: whether the output from that line on ends on a lock timeout
-# (SQLSTATE 55P03, psycopg's LockNotAvailable): the upgrade waited on the running release. Only
-# the last exception line counts (the one failed_at names), so a migration that printed those
-# words, or a lock timeout caught before another failure, is that other failure.
-lock_timeout() {
-  tail -n "+$2" "$1" | awk '
-    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { last = $0 }
-    END { exit !(last ~ /LockNotAvailable|55P03|canceling statement due to lock timeout/) }'
 }
 
 [[ $# -eq 0 ]] || die "usage: ops/migrate.sh (no argument; settings come from the environment)"
@@ -162,12 +163,15 @@ start=$SECONDS
 attempt=1
 while :; do
   rc=0
-  from=$(($(wc -l <"$LOG") + 1))
+  attempt_mark "$attempt" | figures "$LOG"
   # shellcheck disable=SC2086 # $COMPOSE is a command with its arguments
   timeout -k 20 "$TIMEOUT_S" $COMPOSE run --rm --no-deps -T --name "$NAME" api \
     sh -c 'alembic upgrade head && alembic current' </dev/null 2>&1 | figures "$LOG" || rc="${PIPESTATUS[0]}"
   locked=0
-  if ((rc != 0 && rc != 124 && rc != 137)) && lock_timeout "$LOG" "$from"; then locked=1; fi
+  if ((rc != 0 && rc != 124 && rc != 137)); then
+    { read -r _ && read -r _ && read -r lock; } < <(failed_at "$LOG")
+    [[ "$lock" != lock ]] || locked=1
+  fi
   ((locked == 1 && attempt < ATTEMPTS)) || break
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   info "lock timeout (SQLSTATE 55P03) in attempt $attempt of $ATTEMPTS: the upgrade was rolled back whole; trying again in ${RETRY_WAIT_S}s"
@@ -212,7 +216,7 @@ fi
 revision="$(grep -E '^[A-Za-z0-9_]+ \(head\)$' "$LOG" | tail -n 1 || true)"
 info "revision: ${revision:--}"
 # The steps of the attempt that succeeded: an earlier one rolled back after a lock timeout.
-applied="$(tail -n "+$from" "$LOG" | grep -c 'Running upgrade ' || true)"
+{ read -r _ && read -r _ && read -r _ && read -r applied; } < <(failed_at "$LOG")
 if ((applied > 0)); then
   info "migrations applied: $applied, in $((SECONDS - start))s; the schema is at head and the previous release still serves"
 else
