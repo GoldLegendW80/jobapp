@@ -64,15 +64,17 @@ an approval of an original snapshot is not an approval of the combined tree.
   throwaway databases and local fakes. Its web slice `0f643afb` passed typecheck and 416 tests
   in 17 frontend files. The real browser journey still needs to pass.
 - A18 schema `41e94c86`: 69 application-start regression tests passed. Core `6a4f7244` passed
-  218 focused cases, mostly policy cases. A real browser lease contract mismatch found during
-  integration is being corrected before the browser journey; this is not final runtime proof.
+  218 focused cases, mostly policy cases. Follow-up `18cbb047` passed 250 cases, including real
+  lease DTOs, API boundaries, known-site dialogs, concurrent approval, pause, recovery and the
+  shared token/turn budgets. The browser journey and atomic empty-only autosave proof remain.
 - A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
   passed using a local fake Google service. The send gate, application flow and deployment
   configuration still require validation together.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
-- Integration through `15975106`: frontend typecheck and whole API lint passed. The CI plan's
+- Integration through `301c8836`: whole API lint and formatting passed. Frontend typecheck
+  passed through the earlier `15975106` slice. The CI plan's
   81 tests and E2E group registration check also passed.
 
 The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
