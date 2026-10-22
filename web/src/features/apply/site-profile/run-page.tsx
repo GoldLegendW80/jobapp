@@ -38,7 +38,8 @@ export function SiteProfileRunPage() {
     ),
     refetchInterval: 2000,
   });
-  const update = (run: ProfileRun) => {
+  const update = async (run: ProfileRun) => {
+    await client.cancelQueries({ queryKey: runKey(id) });
     client.setQueryData(runKey(id), run);
   };
   const refresh = () => {

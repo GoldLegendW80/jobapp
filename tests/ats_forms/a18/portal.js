@@ -1,8 +1,8 @@
 const query = new URLSearchParams(location.search);
 const variant = query.get("variant") || "review";
-const signedIn = localStorage.getItem("example-profile-signed-in");
+const signedIn = document.cookie.includes("example_profile_signed_in=yes");
 if (variant === "signin" && !signedIn) { document.querySelector("#signin").style.display = "block"; document.querySelector("#profile").hidden = true; document.querySelector("#password").focus(); }
-document.querySelector("#login").addEventListener("click", () => {localStorage.setItem("example-profile-signed-in", "yes"); document.querySelector("#signin").style.display = "none"; document.querySelector("#profile").hidden = false;});
+document.querySelector("#login").addEventListener("click", () => {document.cookie = "example_profile_signed_in=yes; Path=/; SameSite=Lax"; location.reload();});
 for (const form of document.querySelectorAll("form")) {
  form.noValidate = true;
  const name = form.getAttribute("aria-label");
@@ -25,6 +25,6 @@ for (const form of document.querySelectorAll("form")) {
  }
 }
 
-document.querySelector("#password").addEventListener("keydown", event => {if(event.key === "Enter") document.querySelector("#login").click();});
+document.addEventListener("keydown", event => {if(event.key === "Enter" && document.querySelector("#signin").style.display === "block") document.querySelector("#login").click();});
 
 if(variant === "autosave-race") document.querySelector('[name="name"]').addEventListener("pointerenter", event => {event.target.value="Site added this value";});

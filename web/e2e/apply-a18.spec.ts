@@ -15,7 +15,7 @@ type ProfileRun = {
   }[];
 };
 
-test.describe.configure({ mode: "serial", timeout: 600_000 });
+test.describe.configure({ timeout: 600_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the dedicated stack running");
 const SITE = "http://atsforms:8080/forms/a18/";
 async function read(page: Page, id: string): Promise<ProfileRun> {
@@ -67,7 +67,30 @@ async function signIn(page: Page) {
   await banner.getByRole("button", { name: "Keyboard", exact: true }).click();
   const keyboard = banner.getByLabel("Type into your browser");
   await keyboard.pressSequentially("fixture-word");
+  const pixels = () =>
+    banner.getByTestId("live-screen").evaluate((screen) => {
+      const canvas = screen.querySelector("canvas")!;
+      const bytes = canvas
+        .getContext("2d")!
+        .getImageData(0, 0, canvas.width, canvas.height).data;
+      const samples: number[] = [];
+      for (let index = 0; index < bytes.length; index += 4 * 97)
+        samples.push(
+          bytes[index]! + bytes[index + 1]! * 256 + bytes[index + 2]! * 65536,
+        );
+      return samples;
+    });
+  const before = await pixels();
   await keyboard.press("Enter");
+  await expect
+    .poll(
+      async () => {
+        const after = await pixels();
+        return after.filter((value, index) => value !== before[index]).length;
+      },
+      { timeout: 60000 },
+    )
+    .toBeGreaterThan(20);
   await banner
     .getByRole("button", { name: "I'm signed in", exact: true })
     .click();

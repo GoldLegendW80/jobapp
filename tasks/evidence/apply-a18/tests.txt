@@ -1,0 +1,83 @@
+A18 continuation evidence, 2026-10-22
+
+Status: backend capability and UI are implemented, but A18 runtime acceptance is PENDING.
+No successful four-flow browser result or UI screenshot evidence is claimed.
+No real candidate portal, real user profile, model credential or production stack was used.
+
+Verified checks
+- Whole apply API folder plus runner/browser actions: 4,950 passed, 1 failed in 256.56 s.
+  The failure was the exact queue-function allowlist. This branch updated it for the two
+  profile jobs; parent integration separately adds prune_apply_screenshots.
+- Expanded A18/form-agent regressions: 250 passed.
+- Atomic browser write/cancellation and existing browser action regressions: 134 passed.
+- Focused profile/cancel/queue/browser regressions: 157 passed in 30.80 s.
+- Exact reviewed reference CV Save tests: newer default sends only old approved bytes;
+  missing or tampered approved version sends nothing and clicks nothing. Included in
+  profile tests, 29 passed in 12.18 s.
+- Final profile tests after multi-section autosave correction: 30 passed in 10.73 s.
+- Whole apply/browser Vitest: 421 passed in 23.00 s before final checkbox polling correction.
+  Focused final section-review suite: 4 passed. Typecheck passed; final lint recorded in handback.
+- Whole API Ruff check passed; format check passed, 678 files.
+- ci_plan_test: 81 passed. e2e_groups: passed.
+
+Real Chromium observations and corrected defects
+- Account start and real watched sign-in reached a three-section ready report. No Save
+  occurred before approval. Two completed fixture runs recorded zero model tokens/turns,
+  with a shared ceiling of 820,000 tokens and 30 turns. These used no model credential.
+  Actual model token measurement on a real site remains a human Checkpoint A task.
+- Initial browser query saw no lease and stopped polling, showing the wrong later-sign-in
+  banner. Run page now polls shared browser state throughout active work and uses one view.
+- The invented login had focus/keyboard timing problems. It now uses a cookie-backed login,
+  explicit focus and a visible-canvas-change wait before the person confirms sign-in.
+  The app rechecks the sign-in wall after confirmation rather than treating it as a form.
+- Replace API returned 200 and persisted, but polling could restore the old checkbox prop.
+  Final source keeps local person selection, stable field rows, and aborts stale reads before
+  applying mutation results. This final correction still needs the real first-flow rerun.
+- Real autosave saved its first section, then failed profile_run_failed. Exception-type-only
+  diagnosis showed RefusedError at the next authorisation: first-section finish_state had
+  marked the run done before remaining sections existed. Final source holds filling until
+  discovery finishes and closes readback dialogs before moving on. The new two-dialog
+  autosave regression passes. This final correction still needs real autosave reruns.
+
+Owned continuation stack and private artifacts
+- Worktree: .claude/worktrees/codex-apply-254
+- Branch: apply/254-site-profiles-complete
+- Compose project: apply254, healthy and left running for the next agent.
+- Own tags: apply254-api:review, apply254-worker:review, apply254-caddy:review,
+  apply254-browser:review. Borrowed read-only renderer: apply578-renderer:review.
+- Generated fixture-only settings: /tmp/apply254-fixture.settings. Never print or commit it.
+- Image/env override: /tmp/apply254-images.yml.
+- Public loopback ports only: /tmp/apply254-runtime.json.
+- Latest interrupted first-flow trace/error-context remain in
+  web/test-results/apply-a18-Account-starts-a-d285c-e-and-a-user-edit-save-once/.
+  Keep trace local: it may include synthetic session cookies, so do not commit it.
+- No Playwright or diagnostic process remains running. Compose services are the only
+  continuing processes. The parent controls assignment of heavy slot 2 and image-build mutex.
+- The last built images PRECEDE final local Replace/polling and multi-section autosave fixes.
+  Rebuild own API/worker/Caddy before browser rerun; browser image has final atomic write code.
+
+Continuation commands (all commands start rtk; use this worktree)
+- Obtain image-build mutex from parent/email agent, then:
+  rtk proxy docker compose -p apply254 --env-file /tmp/apply254-fixture.settings -f compose.yml -f compose.mac.yml -f tests/ats-stub.compose.yml -f tests/ats-forms-stub.compose.yml -f /tmp/apply254-images.yml build api worker caddy
+  rtk proxy docker compose -p apply254 --env-file /tmp/apply254-fixture.settings -f compose.yml -f compose.mac.yml -f tests/ats-stub.compose.yml -f tests/ats-forms-stub.compose.yml -f /tmp/apply254-images.yml up -d --no-build --wait api worker caddy
+- Read only /tmp/apply254-runtime.json to populate E2E_CADDY_URL/E2E_ATS_FORMS_URL. Set
+  E2E_COMPOSE_PROJECT=apply254 and COMPOSE_ENV_FILES=/tmp/apply254-fixture.settings, then:
+  rtk proxy ops/agent-test.sh --name apply-254 --playwright -c e2e/apply-all.config.ts apply-a18.spec.ts
+- Four flows: Account/sign-in/edit/Replace/approve/skip/mobile; autosave empty-only;
+  Workday dialog Save/readback plus LinkedIn opt-in refusal; Chromium pacing race preserving
+  a value that the site populates between discovery and atomic write.
+- If first fails, all other flows now run independently with one Playwright worker.
+- Complete mobile/light/dark evidence and inspect console/network when flows pass.
+- Run all apply-group journeys on final integration as required by implementer instructions;
+  only this new file was attempted here, and it has NOT yet passed end to end.
+- Cleanup only after continuation: same Compose recipe down -v, then remove only the four
+  apply254 tags. Never remove/retag borrowed apply578-renderer or another project's images.
+
+Declared unsupported cases for final independent review
+- Known helpers use bounded exact accessible Workday/LinkedIn section labels and fail closed
+  on ambiguous controls. A fake Workday/LinkedIn dialog suite passes, but this does not prove
+  every tenant variation. The real LinkedIn opt-in dialog fill still needs a browser proof.
+- Generic next_step currently refuses navigation; unknown multi-page profile flows need a
+  deliberate continuation review. No model-generated value or script is accepted.
+- Autosave intentionally supports only native text inputs through one atomic empty-check
+  and native setter with input/change events. Other control kinds are left for the person.

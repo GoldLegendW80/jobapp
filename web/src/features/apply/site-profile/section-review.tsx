@@ -59,7 +59,7 @@ function FieldRow({
   field: ProfileField;
   run: ProfileRun;
   section: string;
-  update: (run: ProfileRun) => void;
+  update: (run: ProfileRun) => void | Promise<void>;
   refresh: () => void;
 }) {
   const [draft, setDraft] = useState({
@@ -72,6 +72,12 @@ function FieldRow({
       : field.value == null
         ? ""
         : valueText(field.value);
+  const [replacement, setReplacement] = useState({
+    base: field.replace,
+    value: field.replace,
+  });
+  const replace =
+    replacement.base === field.replace ? replacement.value : field.replace;
   const protectedField =
     !!field.refusal &&
     ["email", "security", "privacy", "consent", "deletion", "control"].includes(
@@ -82,7 +88,10 @@ function FieldRow({
     mutationFn: (changes: { value?: string; replace?: boolean }) =>
       editField(run.id, section, field.field_key, changes),
     onSuccess: update,
-    onError: refresh,
+    onError: () => {
+      setReplacement({ base: field.replace, value: field.replace });
+      refresh();
+    },
   });
   return (
     <tr className="align-top border-b last:border-0">
@@ -148,13 +157,13 @@ function FieldRow({
               <input
                 type="checkbox"
                 aria-label={`Replace ${field.label}`}
-                checked={
-                  save.isPending && save.variables.replace !== undefined
-                    ? save.variables.replace
-                    : field.replace
-                }
+                checked={replace}
                 disabled={save.isPending}
                 onChange={(event) => {
+                  setReplacement({
+                    base: field.replace,
+                    value: event.target.checked,
+                  });
                   save.mutate({ replace: event.target.checked });
                 }}
               />
@@ -179,7 +188,7 @@ export function SectionReview({
 }: {
   run: ProfileRun;
   section: ProfileSection;
-  update: (run: ProfileRun) => void;
+  update: (run: ProfileRun) => void | Promise<void>;
   refresh: () => void;
 }) {
   const [confirm, setConfirm] = useState(false);
@@ -194,7 +203,7 @@ export function SectionReview({
       ),
     onSuccess: (value) => {
       setConfirm(false);
-      update(value);
+      return update(value);
     },
     onError: () => {
       setConfirm(false);

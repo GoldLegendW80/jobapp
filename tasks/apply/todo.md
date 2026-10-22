@@ -340,13 +340,13 @@ Nothing yet.
 Nothing yet.
 
 ### A18a
-Nothing yet. (The tokens per section of a site profile, against the spec's estimate.)
+Implemented for #254 with additive migration 0024. Two real synthetic three-section runs reached `ready` without a credential, recording zero input/output tokens and turns. Generic profiles share 820,000 tokens and 30 turns across the run; known helpers share 30 turns and a 23,000-token allowance per identified section. These are ceilings, not real-model usage measurements. The fake usage tests verify subtraction across sections. Real model/site measurement remains Checkpoint A. Runtime acceptance is pending; see `tasks/evidence/apply-a18/tests.txt`.
 
 ### A18b
-Nothing yet.
+Implemented for #255. The gate has one-use section approval, exact reviewed CV bytes, audit before external action, persisted readback and atomic empty-only autosave. Final profile tests: 30 passed. Real multi-section autosave and Save proof remain pending after fixes found by the Chromium journey; see `tasks/evidence/apply-a18/tests.txt`.
 
 ### A18c
-Nothing yet.
+Implemented for #256. Whole apply/browser Vitest: 421 passed; focused section review: 4 passed after the pending Replace correction. The four real browser flows have not yet passed. Account/sign-in reached review, and the final polling/Replace correction needs a fresh Caddy build and rerun. See `tasks/evidence/apply-a18/tests.txt`.
 
 ### Checkpoint A
 Nothing yet.
