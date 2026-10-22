@@ -53,6 +53,12 @@ class Portal:
             self.saved[label] = text
         return {"ok": True}
 
+    async def type_empty(self, ref, text, element=""):
+        label = list(self.values)[int(ref[1:]) - 2]
+        if self.values[label]:
+            return {"ok": False, "error": "not_empty"}
+        return await self.type(ref, text, element)
+
     async def select_option(self, ref, values, element=""):
         return {"ok": False, "error": "submit" if ref == "e9" else "failed"}
 
@@ -64,6 +70,9 @@ class Portal:
 
     async def box(self, ref, element=""):
         return {"ok": True, "x": 10, "y": 350, "width": 100, "height": 40, "scale": 1}
+
+    async def wait_for(self, **kwargs):
+        return {"ok": True}
 
     async def put_file(self, name, data):
         return {"ok": True}
@@ -80,8 +89,23 @@ class Portal:
 
 
 class Leases:
+    session_max_s = 1800
+
     def __init__(self):
         self.calls = []
+        self.bindings = {}
+
+    async def _pool(self):
+        return self
+
+    async def set(self, key, value, **kwargs):
+        self.bindings[key] = value
+
+    async def get(self, key):
+        return self.bindings.get(key)
+
+    async def delete(self, key):
+        self.bindings.pop(key, None)
 
     async def acquire(self, user, purpose, automation, *, hosts):
         self.calls.append((user, purpose, automation))

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.apply import profile_sources, site_profile
+from app.apply import profile_leases, profile_sources, site_profile
 from app.apply.models import SiteProfileRun, SiteProfileShot, SiteRunState
 from app.apply.profile_schemas import (
     FieldIn,
@@ -22,6 +22,9 @@ from app.apply.profile_schemas import (
     ShotOut,
     StartIn,
 )
+from app.browser.client import BrowserError
+from app.browser.leases import StoreUnavailableError
+from app.browser.router import Store
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
@@ -175,11 +178,14 @@ async def confirm_autosave(run_id: uuid.UUID, request: Request, user: UserDep, d
 
 
 @router.post("/api/site-profiles/{run_id}/cancel", response_model=RunDetail)
-def cancel(run_id: uuid.UUID, request: Request, user: UserDep, db: Db):
+async def cancel(run_id: uuid.UUID, request: Request, user: UserDep, db: Db, store: Store):
     run = owned(db, user.id, run_id)
     run.state, run.updated_at = SiteRunState.cancelled, deps.clock(request)
     for part in site_profile.sections(db, run):
         site_profile.event(part, "cancelled", run.updated_at)
+    db.commit()
+    with contextlib.suppress(BrowserError, StoreUnavailableError):
+        await profile_leases.cancel_bound(store, user.id, run_id)
     return detail(db, run)
 
 

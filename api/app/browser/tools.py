@@ -76,6 +76,12 @@ class LeaseTools:
         args = {"ref": ref, "element": element, "text": text, "submit": submit}
         return await self.call("browser_type", args)
 
+    async def type_empty(self, ref: str, text: str, element: str = "") -> dict[str, Any]:
+        """A paced native text write whose empty check and mutation are atomic in browserd."""
+        return await self.call(
+            "browser_type", {"ref": ref, "element": element, "text": text, "empty_only": True}
+        )
+
     async def select_option(self, ref: str, values: list[str], element: str = "") -> dict[str, Any]:
         return await self.call(
             "browser_select_option", {"ref": ref, "element": element, "values": values}

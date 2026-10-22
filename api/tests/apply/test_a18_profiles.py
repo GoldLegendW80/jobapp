@@ -336,3 +336,75 @@ def test_generic_profile_has_one_aggregate_model_budget(db, factory, person_a):
     assert budgets == [(23_000, 30)]
     assert parts[1].state == "left"
     assert parts[1].error_code == "budget_exhausted"
+
+
+def test_reference_cv_upload_uses_rendered_base_version_bytes(db, factory, person_a):
+    from app.documents import store
+    from app.documents.models import BaseSource, FitResult, Origin
+    from tests.apply.a4_support import Spec
+    from tests.apply.a8b_support import CustomForm
+    from tests.documents.conftest import base_cv
+
+    base = store.create_base(
+        db, person_a.user_id, "Reference", BaseSource.built, at=AT, content=base_cv("alex")
+    )
+    version, _ = store.snapshot(db, person_a.user_id, base.id, Origin.generated, at=AT)
+    pdf = b"%PDF-1.7\nInvented reference CV bytes\n%%EOF"
+    store.attach_pdf(
+        db,
+        person_a.user_id,
+        base.id,
+        version.number,
+        pdf,
+        fit=FitResult.one_page,
+        fit_step=None,
+        pages=1,
+    )
+    db.commit()
+    portal = CustomForm(
+        [[Spec("Full name", "text"), Spec("Resume", "file")]],
+        submit="Save",
+        title="Profile",
+        files=("reference-cv.pdf",),
+    )
+    received = []
+
+    async def put_file(name, data):
+        received.append((name, data))
+        return {"ok": True}
+
+    portal.put_file = put_file
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(services(factory, portal), run_id))
+    assert received == [("reference-cv.pdf", pdf)]
+    _run, _part, rows = section(db, person_a.user_id, run_id)
+    assert next(row for row in rows if row.label == "Resume").source_path == "documents.cv"
+
+
+def test_linkedin_checkpoint_records_seven_day_pause_before_any_write(
+    db, factory, person_a, monkeypatch
+):
+    from app.apply.models import SiteKind
+
+    portal = Portal()
+
+    async def checkpoint():
+        return {
+            "ok": True,
+            "url": "https://www.linkedin.com/checkpoint/challenge",
+            "snapshot": '- heading "Security verification"',
+        }
+
+    portal.snapshot = checkpoint
+    run_id = make(db, person_a.user_id)
+    run = db.get(SiteProfileRun, run_id)
+    run.site_kind = SiteKind.linkedin
+    db.commit()
+    monkeypatch.setattr(site_profile.linkedin_guard, "allowed", lambda *args: True)
+    asyncio.run(site_profile.fill(services(factory, portal), run_id))
+    db.expire_all()
+    assert db.get(SiteProfileRun, run_id).error_code == "linkedin_paused"
+    assert site_profile.linkedin_guard.paused_until(db, person_a.user_id, AT) == AT + timedelta(
+        days=7
+    )
+    assert portal.typed == []

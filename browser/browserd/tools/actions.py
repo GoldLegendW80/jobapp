@@ -338,6 +338,21 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     return await tab.settle(await _here(tab))
 
 
+EMPTY_ONLY_JS = """(element, text) => {
+  const input = element instanceof HTMLInputElement;
+  const textarea = element instanceof HTMLTextAreaElement;
+  if ((!input && !textarea) || element.disabled || element.readOnly ||
+      (input && !['text', 'search', 'tel', 'url', 'email', 'number'].includes(element.type)))
+    return {ok: false, error: 'unsupported_empty_write'};
+  if (element.value !== '') return {ok: false, error: 'not_empty'};
+  const prototype = textarea ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, text);
+  element.dispatchEvent(new Event('input', {bubbles: true}));
+  element.dispatchEvent(new Event('change', {bubbles: true}));
+  return {ok: true};
+}"""
+
+
 async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     text = args.get("text")
     if not isinstance(text, str) or len(text) > policy.TEXT_MAX:
@@ -366,6 +381,17 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             "bad_args",
             "A newline goes into a multi line field only, never a one line one.",
         )
+    if "empty_only" in args and type(args["empty_only"]) is not bool:
+        return failure("bad_args", "empty_only must be a boolean.")
+    if args.get("empty_only"):
+        if tab.request.purpose != "profile_edit" or args.get("submit"):
+            return failure("bad_args", "An empty-only profile write cannot submit.")
+        await tab.pacer.dwell()
+        # Check and setter share one synchronous browser task, with no CDP/await gap.
+        result = await locator.evaluate(EMPTY_ONLY_JS, text)
+        if not result.get("ok"):
+            return refused(str(result.get("error") or "not_empty"))
+        return await tab.settle(await _here(tab))
     await locator.click(timeout=ACTION_S * 1000)
     await locator.fill("", timeout=ACTION_S * 1000)
     page = await tab.page()

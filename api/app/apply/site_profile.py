@@ -16,7 +16,15 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.apply import answers, form_agent, profile_refusals, profile_sites, profile_sources, shots
+from app.apply import (
+    answers,
+    form_agent,
+    profile_leases,
+    profile_refusals,
+    profile_sites,
+    profile_sources,
+    shots,
+)
 from app.apply.ats import base, generic
 from app.apply.models import (
     SiteFieldSource,
@@ -58,6 +66,18 @@ SENTENCES = {
     "protected": "This protected field can only be changed by you on the site.",
     "autosave_confirmation": AUTOSAVE_SENTENCE,
 }
+
+
+def checkpoint_page(shot: dict[str, Any], requested_url: str) -> bool:
+    from app.browser.sources import parse_snapshot as source_snapshot
+    from app.browser.sources.linkedin import wall_by_heading, wall_by_url
+
+    url = str(shot.get("url") or requested_url)
+    return wall_by_url(url, None) == "linkedin_checkpoint" or (
+        url != requested_url
+        and wall_by_heading(source_snapshot(str(shot.get("snapshot") or "")))
+        == "linkedin_checkpoint"
+    )
 
 
 class RefusedError(ValueError):
@@ -375,6 +395,7 @@ class ProfileSession(form_agent.FormSession):
     section_label: str = ""
     rows: dict[str, SiteProfileField] | None = None
     autosave: bool = False
+    alive: Any = None
 
     async def resolve_answer(self, ref: str) -> tuple[str, bool]:
         item, problem = await self._field(ref)
@@ -389,6 +410,8 @@ class ProfileSession(form_agent.FormSession):
         ), False
 
     async def fill_field(self, ref: str) -> tuple[str, bool]:
+        if self.alive is not None and not await self.alive():
+            return "The person cancelled this profile run. Stop now.", True
         item, problem = await self._field(ref)
         if item is None:
             return problem, True
@@ -455,21 +478,14 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
         if acquired.lease is None or not acquired.token:
             await update(SiteRunState.queued, "browser_busy")
             return
+        await profile_leases.bind(services.leases, plan.user_id, run_id, acquired.lease.lease_id)
         tools = services.tools_for(str(plan.user_id), acquired.lease.lease_id, acquired.token)
         if not (await tools.navigate(plan.url)).get("ok"):
             await update(SiteRunState.failed, code="navigation_failed")
             return
         shot = await tools.snapshot()
         text = str(shot.get("snapshot") or "")
-        if plan.linkedin and any(
-            t in base.fold(text)
-            for t in (
-                "security verification",
-                "unusual activity",
-                "checkpoint",
-                "verification de securite",
-            )
-        ):
+        if plan.linkedin and checkpoint_page(shot, plan.url):
 
             def checkpoint(db: Session) -> None:
                 linkedin_guard.record_checkpoint(
@@ -563,6 +579,8 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 rows = []
                 for item in part.fields:
                     answer = profile_sources.resolve(item, plan.context, part.label)
+                    if is_autosave and item.kind != "text":
+                        answer = answers.Left("autosave_unsupported", item.options, item.required)
                     answered = isinstance(answer, answers.Answer)
                     row = SiteProfileField(
                         run_id=run_id,
@@ -633,6 +651,13 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 )
                 continue
             adapter = profile_sites.SectionAdapter(part.key, part.label, plan.site_kind)
+
+            async def alive():
+                def check(db: Session):
+                    return lock(db, plan.user_id, run_id).state is not SiteRunState.cancelled
+
+                return await asyncio.to_thread(_in_db, services, check)
+
             session = ProfileSession(
                 adapter,
                 tools,
@@ -645,6 +670,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 section_label=part.label,
                 rows={r.field_key: r for r in rows},
                 autosave=is_autosave,
+                alive=alive,
             )
             for item in part.fields:
                 found, _ = await adapter.read(tools)
@@ -655,7 +681,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 ran = await agent(session)
                 used_tokens += ran.input_tokens + ran.output_tokens
                 used_turns += ran.turns
-                if ran.stopped in ("turn_limit", "token_budget"):
+                if ran.stopped and ran.stopped not in ("no_credential", "busy"):
                     used_turns = form_agent.MAX_TURNS
 
                 def cost(db: Session, ran=ran, used_turns=used_turns) -> None:
@@ -700,6 +726,8 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                     )
                     if outcome and outcome.filled.status not in ("filled", "left"):
                         row.refusal = outcome.filled.code or "unverified"
+                if session.addressed:
+                    event(section, "page_addressed", services.clock())
                 event(
                     section,
                     "filled",
@@ -723,6 +751,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
     finally:
         if acquired and acquired.lease and not retained:
             await services.leases.release(str(plan.user_id), acquired.lease.lease_id)
+            await profile_leases.clear(services.leases, plan.user_id, run_id)
 
 
 async def site_profile_run(ctx: dict[str, Any], run_id: str) -> None:

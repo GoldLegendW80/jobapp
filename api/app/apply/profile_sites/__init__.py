@@ -97,6 +97,7 @@ class SectionAdapter(base.Adapter):
     def __init__(self, key: str, label: str, kind: str = "generic") -> None:
         super().__init__()
         self.key, self.label, self.kind = key, label, kind
+        self.step = 0
 
     def section(self, root: base.Node) -> Section | None:
         helper = for_kind(self.kind)

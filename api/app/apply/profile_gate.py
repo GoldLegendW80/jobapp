@@ -12,7 +12,15 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.apply import admin, profile_refusals, profile_sites, profile_sources, shots, site_profile
+from app.apply import (
+    admin,
+    profile_leases,
+    profile_refusals,
+    profile_sites,
+    profile_sources,
+    shots,
+    site_profile,
+)
 from app.apply.answers import Answer
 from app.apply.ats import base, generic
 from app.apply.caps_models import ApplySettings
@@ -213,12 +221,21 @@ async def save_section(
             )
             if acquired.lease is None or not acquired.token or not acquired.capability:
                 return  # the tick retries this section, with no authorization consumed
+                await profile_leases.bind(services.leases, user_id, run_id, acquired.lease.lease_id)
             tools = services.tools_for(str(user_id), acquired.lease.lease_id, acquired.token)
             if not (await tools.navigate(url)).get("ok"):
                 await failed("navigation_failed")
                 return
         else:
             tools = held_tools
+        if site_kind == "linkedin" and site_profile.checkpoint_page(await tools.snapshot(), url):
+
+            def checkpoint(db: Session):
+                linkedin_guard.record_checkpoint(db, user_id, services.clock(), origin="profile")
+
+            await asyncio.to_thread(site_profile._in_db, services, checkpoint)
+            await failed("linkedin_paused")
+            return
         if await profile_sites.open_section(tools, site_kind, section, label) is None:
             await failed("section_unreadable")
             return
@@ -341,7 +358,7 @@ async def save_section(
             await failed("paused")
             return
         if autosave:
-            for key, _field_label, kind, value, _current, source, approved in rows:
+            for key, _field_label, kind, value, _current, _source, approved in rows:
                 if not approved:
                     continue
                 enabled, paused = await _switches(services)
@@ -361,12 +378,11 @@ async def save_section(
                 if item is None or item.value or found.pending:
                     await failed("autosave_existing_value", [key])
                     return
-                result = await adapter.fill(
-                    tools,
-                    item,
-                    Answer(value, "documents.cv" if kind == "file" else source or "person"),
-                )
-                if result.status != "filled":
+                if kind != "text" or not hasattr(tools, "type_empty"):
+                    await failed("autosave_unsupported", [key])
+                    return
+                result = await tools.type_empty(item.ref, str(value), item.label)
+                if not result.get("ok"):
                     await failed("value_differs", [key])
                     return
         if not autosave:
@@ -374,6 +390,7 @@ async def save_section(
             if not result.get("ok"):
                 await failed("save_refused")
                 return
+        await tools.wait_for(time=1.0)
         if not (await tools.navigate(url)).get("ok"):
             await failed("save_unknown")
             return
@@ -411,6 +428,7 @@ async def save_section(
     finally:
         if acquired and acquired.lease:
             await services.leases.release(str(user_id), acquired.lease.lease_id)
+            await profile_leases.clear(services.leases, user_id, run_id)
 
 
 async def site_profile_save(ctx: dict[str, Any], run_id: str, section: str, auth_id: str) -> None:
