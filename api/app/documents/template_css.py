@@ -10,8 +10,10 @@ input it does not know: `url(`, an escape outside a string, a comment or a strin
 character outside the ASCII set of the rules below, functions nested deeper than
 FUNCTION_DEPTH, a sheet over SHEET_MAX characters. A sheet it stops on is refused whole. Then
 everything is held to allow lists:
-- the structure: rules and an exact `@page`, no other at-rule, no block inside a block;
-  `@page :first` (page 1's) is read, for the repository's templates, and refused as `page`;
+- the structure: rules and an exact `@page`, no other at-rule, no block inside a block; `@page`
+  holds only `size: A4` and `margin: var(--margin)`, so the page box is the one the render
+  check lays out (design_check); `@page :first` (page 1's) is read, for the repository's
+  templates, and refused as `page`;
 - the selectors: type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
   `:last-child`, the combinators space, `>`, `+`, `~`, a final `::before`, `::after` or
   `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
@@ -33,15 +35,23 @@ everything is held to allow lists:
 - custom properties: set only on `:root` or `html`, once each, to one length, number or
   `#rrggbb` (minimal's `--rail`), and read in their place by `var()`; `var()` reads too a
   density property or `--accent`, which the sheet never sets (the step sets them);
-- the density: each property of DENSITY read, `--body-size` by a `font-size`, `--line-height`
-  by a `line-height`, `--margin` too when `@page` sets a margin;
+- what a box shorter or narrower than its text would let run over its neighbours: a `height`
+  or `min-height` other than `auto` only on the photo (`on_photo`; the class `photo` is the
+  portrait's alone, template_rules), so a flex basis never makes a column item shorter than its
+  text; no `max-height`; a grid row track only
+  sized by its content (`auto`, `min-content`, `max-content`, a positive `fr`); a column track
+  either that or a length of at least TRACK_MIN, `minmax()` of a floor and such a track;
+- the density: each property of DENSITY but `--margin` read (the page's margin is always the
+  step's), `--body-size` by a `font-size`, `--line-height` by a `line-height`;
 - the fonts: a `font-family` starts with a family of the manifest;
 - the contrast: a rule that sets both a text colour and a background holds them at 4.5:1 (WCAG 2
-  AA). A colour on a background another rule sets is the render check's.
+  AA). A colour on a background another rule sets is the render check's;
+- no `!important` on a property of ENFORCED: the app appends ENFORCED_CSS after every sheet
+  (templates.build_html), so no word is wider than its box, whatever box the sheet draws.
 
 Declared open points, left to D25b's render check: a text colour on a background set by another
-rule (the page's white, a band, a column); a box made smaller than its text (`width`, `height`,
-`flex`, a `minmax(0, 1fr)` track), whose text, a `::before` or `::after` too, then runs over its
+rule (the page's white, a band, a column); a line that may not wrap (`white-space: nowrap`)
+in a box narrower than it, whose text, a `::before` or `::after` too, then runs over its
 neighbours, under the background of a later flex or grid item or of a `position: relative` box;
 the vertical padding or border of an inline box, which paints over the line above; a size made
 small or large by nesting `em` sizes; a box pushed off the page by its margins; the one glyph of
@@ -89,6 +99,9 @@ WHITE = "#ffffff"
 MAX_COMPOUNDS = 4
 MAX_CLASSES = 4
 CAPS = {"pt": 850.0, "px": 1134.0, "mm": 300.0, "em": 40.0, "%": 100.0}  # about one A4 height
+TRACK_MIN = {"pt": 56.7, "px": 75.6, "mm": 20.0, "em": 5.0, "%": 10.0}  # a column of a word or two
+ENFORCED = (("overflow-wrap", "anywhere"), ("word-break", "normal"))
+ENFORCED_CSS = "*,*::before,*::after{" + "".join(f"{p}:{v}!important;" for p, v in ENFORCED) + "}"
 PSEUDO_CLASSES = frozenset(("root", "first-child", "last-child"))
 PSEUDO_ELEMENTS = frozenset(("before", "after", "marker"))
 _HEX = re.compile(r"[0-9a-f]{3}|[0-9a-f]{6}")
@@ -560,16 +573,40 @@ def _flex(found: list[Part]) -> bool:
     )
 
 
-def _track(part: Part) -> bool:
+def _sized_by_content(part: Part) -> bool:
+    words = ("auto", "min-content", "max-content")
+    return _within(part, "fr", 0.1, 20) or (part[0] == "kw" and part[1] in words)
+
+
+def _wide(part: Part) -> bool:
+    return (
+        part[0] == "len"
+        and part[2] in TRACK_MIN
+        and _within(part, part[2], TRACK_MIN[part[2]], CAPS[part[2]])
+    )
+
+
+def _column(part: Part) -> bool:
+    """A column track that grows with its text, or one at least TRACK_MIN wide."""
     if part[0] == "minmax":
         inner = [p for p in part[1] if p[0] != "sep"]
-        return len(inner) == 2 and all(p[0] != "minmax" and _track(p) for p in inner)
-    words = ("auto", "min-content", "max-content")
-    return _length(part) or _within(part, "fr", 0, 20) or (part[0] == "kw" and part[1] in words)
+        if len(inner) != 2 or any(p[0] == "minmax" for p in inner):
+            return False
+        low, high = inner
+        floor = _length(low) or (
+            low[0] == "kw" and low[1] in ("auto", "min-content", "max-content")
+        )
+        return floor and _column(high)
+    return _sized_by_content(part) or _wide(part)
 
 
-def _tracks(found: list[Part]) -> bool:
-    return found == [("kw", "none")] or (1 <= len(found) <= 12 and all(map(_track, found)))
+def _tracks(row: bool):
+    track = _sized_by_content if row else _column
+
+    def ok(found: list[Part]) -> bool:
+        return found == [("kw", "none")] or (1 <= len(found) <= 12 and all(map(track, found)))
+
+    return ok
 
 
 def _grid_line(found: list[Part]) -> bool:
@@ -646,9 +683,9 @@ VALUES = {
     "flex-grow": lambda found: len(found) == 1 and _within(found[0], None, 0, 20),
     "flex-shrink": lambda found: len(found) == 1 and _within(found[0], None, 0, 20),
     "order": lambda found: len(found) == 1 and _within(found[0], None, -20, 20),
-    "grid-template-columns": _tracks,
-    "grid-template-rows": _tracks,
-    "grid-auto-rows": _tracks,
+    "grid-template-columns": _tracks(row=False),
+    "grid-template-rows": _tracks(row=True),
+    "grid-auto-rows": _tracks(row=True),
     "grid-auto-flow": _kw("row", "column", "dense"),
     "grid-column": _grid_line,
     "contain": _kw("none", "inline-size"),
@@ -774,15 +811,25 @@ def _target_problem(prop: str, targets: frozenset[str | None]) -> tuple[str, str
     return None
 
 
+def on_photo(selector: Selector) -> bool:
+    """Whether a selector's subject is the photo: an `img`, or the `.photo` class, which only
+    the macro `portrait`'s `img` may hold (template_rules)."""
+    subject = selector.compounds[-1]
+    photo = subject.tag == "img" or (subject.tag is None and "photo" in subject.classes)
+    return selector.element is None and photo
+
+
 def value_problem(
     d: Declaration,
     customs: Mapping[str, Part],
     accent: str,
     names: frozenset[str],
     targets: frozenset[str | None] = frozenset((None,)),
+    photo: bool = False,
 ) -> tuple[str, str] | None:
     """The code and the detail of what is wrong with one declaration of a rule whose selectors
-    match `targets` (see _target_problem), None when nothing."""
+    match `targets` (see _target_problem), None when nothing. `photo`: every selector of the
+    rule has the photo for subject (`on_photo`), the one box a fixed height may hold."""
     if d.prop in DENSITY or d.prop == "--accent":
         return "density_pinned", f"{d.prop} is set by the density step, not by the sheet"
     if d.prop in OVERLAY:
@@ -791,6 +838,8 @@ def value_problem(
         return "property", "a property outside the allowed list"
     if not d.prop.startswith("--") and (wrong := _target_problem(d.prop, targets)):
         return wrong
+    if d.important and d.prop in dict(ENFORCED):
+        return "property", f"{d.prop}: no !important, the app's own rule comes after the sheet"
     try:
         found = parts(d.value, customs, accent)
     except _Bad as bad:
@@ -809,6 +858,8 @@ def value_problem(
         return _CODE.get(d.prop, "property"), f"{d.prop}: a function outside the allowed list"
     if d.prop in SPECIAL:
         return _special(d.prop, found, names)
+    if d.prop in ("height", "min-height") and found != [("kw", "auto")] and not photo:
+        return "property", f"{d.prop}: auto, a length only on the photo (img or .photo)"
     if not VALUES[d.prop](found):
         return "property", f"{d.prop}: a value outside the allowed list"
     return None
@@ -822,9 +873,9 @@ def _page_problem(d: Declaration, customs: Mapping[str, Part], accent: str) -> t
     if d.prop == "size":
         a4 = found in ([("kw", "a4")], [("kw", "a4"), ("kw", "portrait")])
         return None if a4 else ("page", "@page: a size other than A4")
-    if d.prop in ("margin", "margin-top", "margin-right", "margin-bottom", "margin-left"):
-        return None if _lengths(4)(found) else ("page", "@page: a margin of lengths")
-    return "page", "@page: only size and margin"
+    if d.prop == "margin":
+        return None if found == [("var", "--margin")] else ("page", "@page: margin: var(--margin)")
+    return "page", "@page: only size: A4 and margin: var(--margin)"
 
 
 # --- the contrast -------------------------------------------------------------------------------
@@ -911,15 +962,17 @@ def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
             if _custom(found):
                 customs[d.prop] = found[0]
     for rule in rules:
-        if rule.first:
+        if rule.first:  # refused whole, its declarations are not judged one by one
             detail = "@page :first: the repository's templates only"
             problems.append(Problem(file, rule.line, "page", detail))
+            continue
         for d in rule.declarations:
             if rule.selectors is None:
                 wrong = _page_problem(d, customs, accent)
             else:
                 targets = frozenset(s.element for s in rule.selectors)
-                wrong = value_problem(d, customs, accent, names, targets)
+                photo = bool(rule.selectors) and all(map(on_photo, rule.selectors))
+                wrong = value_problem(d, customs, accent, names, targets, photo)
             if wrong:
                 problems.append(Problem(file, d.line, *wrong))
     problems += _density(rules, file)
@@ -934,13 +987,6 @@ def _density(rules: Sequence[Rule], file: str) -> list[Problem]:
         "--section-gap": None,
         "--item-gap": None,
     }
-    page_margin = any(
-        rule.selectors is None and d.prop.startswith("margin")
-        for rule in rules
-        for d in rule.declarations
-    )
-    if page_margin:
-        reads["--margin"] = None
     found: set[tuple[str, str]] = set()
     for rule in rules:
         if rule.selectors is None:

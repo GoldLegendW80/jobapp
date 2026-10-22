@@ -2,7 +2,9 @@
 "API"). Included by `routers.py` before D6's `/api/documents/{document_id}`.
 
 - `GET /api/documents/base-cvs`: the list, oldest first, with source, template, default mark,
-  the date of the last version and the state of the open or last generation.
+  the date of the last version and the state of the open or last generation of its content (a
+  design capture or fix of D25b and D26 is not one: a capture that fails keeps the content, so
+  it never turns a converted CV into "could not be converted").
 - `POST /api/documents/base-cvs {from, name?, copy_of?, language?}`:
   - `from: profile`: a base CV built from the profile (`writer_base.build_from_profile`): the
     skeleton row at once and its generation, started now when the consent and a credential are
@@ -54,6 +56,7 @@ from app.documents.models import (
     Document,
     DocumentGeneration,
     DocumentVersion,
+    GenerationMode,
     GenerationStatus,
     GenerationWait,
     Language,
@@ -132,7 +135,7 @@ class BaseCvOut(BaseModel):
     updated_at: datetime
     last_version_at: datetime | None
     render_state: RenderState
-    generation: GenerationOut | None  # the open one, else the last one
+    generation: GenerationOut | None  # of the content (CONTENT_MODES): the open one, else the last
 
 
 class BaseCvsOut(BaseModel):
@@ -207,12 +210,24 @@ class ConsentIn(BaseModel):
 # --- helpers ------------------------------------------------------------------------------------
 
 
+# The generations that write a base CV's content. A design capture (`template_capture`) or fix
+# (`template_fix`) runs after the conversion on the same document; its state is the Compare
+# view's (D25c), and a capture that fails leaves the content as it was (SPEC, "Design capture of
+# an upload", 6).
+CONTENT_MODES = tuple(
+    mode
+    for mode in GenerationMode
+    if mode not in (GenerationMode.template_capture, GenerationMode.template_fix)
+)
+
+
 def _generation(db: Session, document: Document) -> GenerationOut | None:
     found = db.execute(
         sa.select(DocumentGeneration)
         .where(
             DocumentGeneration.user_id == document.user_id,
             DocumentGeneration.document_id == document.id,
+            DocumentGeneration.mode.in_(CONTENT_MODES),
         )
         .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
         .limit(1)
