@@ -10,6 +10,7 @@
   not one of the caller's jobs; 409 without a saved model credential; 429 when the caller already
   has runs.ACTIVE_PER_USER queued or running; 503 when the server has no CREDENTIALS_KEY or the
   queue (Redis) is down (the run is then failed at once, never left queued).
+  The checks and the start are app/agents/operator.py, shared with the operator's command.
 - GET /api/agents/runs?limit=&before=&job_id=&agent=: the caller's runs, newest first, each with
   its job's company and title (A3, for the job link).
 - GET /api/agents/runs/{id}: one run with its events (at most EVENTS_MAX; the stream replays all).
@@ -29,12 +30,11 @@ alike. The user always comes from the session (default deny, CSRF on every write
 logs an input or an output.
 """
 
-import json
 import uuid
 import weakref
 from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
@@ -42,9 +42,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import queue as queues
 from app import sse
-from app.agents import credentials, definitions, live, runs
+from app.agents import definitions, live, operator, runs
 from app.agents.models import FINAL_STATUSES, AgentRun, RunStatus
 from app.agents.schemas import (
     AgentList,
@@ -55,18 +54,17 @@ from app.agents.schemas import (
     RunJobOut,
     RunList,
     RunOut,
+    run_out,
 )
 from app.db import read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import service as jobs_service
 from app.jobs.models import Job
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 CurrentUser = Annotated[User, Depends(deps.current_user)]
 
-INPUT_MAX_BYTES = 16_384
 LIST_DEFAULT = 30
 LIST_MAX = 100
 EVENTS_MAX = 2000
@@ -118,17 +116,7 @@ def slots_of(request: Request) -> StreamSlots:
 NO_STORE = {"Cache-Control": "no-store"}
 
 NOT_FOUND = "Run not found."
-JOB_NOT_FOUND = "Job not found."
-UNKNOWN_AGENT = "agent: no such agent here."
-TOO_BIG = f"input: at most {INPUT_MAX_BYTES} bytes of JSON."
-NO_CREDENTIAL = "No model credential is saved. Add one on the Account page first."
-NOT_CONFIGURED = "Agents cannot run on this server yet: its CREDENTIALS_KEY is not set."
-TOO_MANY = f"You already have {runs.ACTIVE_PER_USER} runs queued or running. Wait for one to end."
 ENDED = "This run has already ended."
-NEEDS_JOB = "job_id: this agent works on a job; name one."
-CHAT_AGENT = "agent: a chat agent answers in a thread; send a message to the thread instead."
-# Recorded streams are for the fake backend: refused in production, never stored there.
-NO_SCRIPT = "input.script: recorded streams exist only outside production."
 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such run (or not yours)"}}
@@ -141,32 +129,6 @@ def _no_store(response: Response) -> None:
 def sessions_of(request: Request) -> sessionmaker[Session]:
     found: sessionmaker[Session] = request.app.state.sessionmaker
     return found
-
-
-def run_out(row: AgentRun, job: RunJobOut | None = None) -> RunOut:
-    duration = None
-    if row.started_at is not None and row.finished_at is not None:
-        duration = round((row.finished_at - row.started_at).total_seconds(), 3)
-    return RunOut(
-        id=row.id,
-        agent=row.agent,
-        job_id=row.job_id,
-        status=row.status,
-        input=row.input or {},
-        output=row.output,
-        error=row.error,
-        model=row.model,
-        input_tokens=row.input_tokens,
-        output_tokens=row.output_tokens,
-        cost_usd=float(row.cost_usd) if row.cost_usd is not None else None,
-        credential_kind=row.credential_kind,
-        cancel_requested=row.cancel_requested_at is not None,
-        created_at=row.created_at,
-        started_at=row.started_at,
-        finished_at=row.finished_at,
-        duration_s=duration,
-        job=job,
-    )
 
 
 def job_labels(
@@ -224,41 +186,6 @@ def list_agents(user: CurrentUser, request: Request) -> AgentList:
 # --- start --------------------------------------------------------------------------------------
 
 
-def _create(
-    sessions: sessionmaker[Session],
-    user_id: uuid.UUID,
-    agent: definitions.AgentDefinition,
-    job_id: uuid.UUID | None,
-    data: dict[str, Any],
-    now: datetime,
-) -> RunOut:
-    with sessions() as db:
-        if credentials.get(db, user_id) is None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NO_CREDENTIAL)
-        job = jobs_service.get_job(db, user_id, job_id) if job_id is not None else None
-        if job_id is not None and job is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=JOB_NOT_FOUND)
-        label = RunJobOut(id=job.id, company=job.company, title=job.title) if job else None
-        try:
-            row = runs.create_run(db, user_id, agent.name, job_id, data, agent.model, now)
-        except runs.ActiveRunsError:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=TOO_MANY,
-                headers={"Retry-After": "30"},
-            ) from None
-        out = run_out(row, label)
-        db.commit()
-    return out
-
-
-def _fail_queued(sessions: sessionmaker[Session], run_id: uuid.UUID, now: datetime) -> None:
-    with sessions() as db:
-        runs.fail_queued(db, run_id, runs.QUEUE_DOWN, now)
-        db.commit()
-
-
 @router.post(
     "/runs",
     status_code=status.HTTP_202_ACCEPTED,
@@ -275,41 +202,16 @@ def _fail_queued(sessions: sessionmaker[Session], run_id: uuid.UUID, now: dateti
 )
 async def start_run(body: RunIn, user: CurrentUser, request: Request) -> RunOut:
     """Queue a run of `agent` for the caller. Follow it with GET /api/agents/runs/{id}."""
-    try:
-        # An internal agent is unknown here: only its own module starts it (runs.create_run).
-        agent = definitions.startable(body.agent, request.app.state.settings.app_env)
-    except definitions.UnknownAgentError:
-        raise HTTPException(status_code=422, detail=UNKNOWN_AGENT) from None
-    if agent.chat:
-        raise HTTPException(status_code=422, detail=CHAT_AGENT)
-    if len(json.dumps(body.input, ensure_ascii=False).encode()) > INPUT_MAX_BYTES:
-        raise HTTPException(status_code=422, detail=TOO_BIG)
-    try:
-        data = agent.validate_input(body.input)
-    except definitions.InvalidInputError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    if agent.needs_job and body.job_id is None:
-        raise HTTPException(status_code=422, detail=NEEDS_JOB)
-    if "script" in data and request.app.state.settings.app_env == "production":
-        raise HTTPException(status_code=422, detail=NO_SCRIPT)
-    if request.app.state.credentials_keyring is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=NOT_CONFIGURED)
+    env = request.app.state.settings.app_env
+    agent, data = operator.prepare(body.agent, body.job_id, body.input, env)
+    operator.require_configured(request.app.state.credentials_keyring)
     sessions = sessions_of(request)
     started = await run_in_threadpool(
-        _create, sessions, user.id, agent, body.job_id, data, deps.clock(request)
+        operator.create_run, sessions, user.id, agent, body.job_id, data, deps.clock(request)
     )
-    try:
-        await request.app.state.queue.enqueue(
-            "run_agent",
-            str(started.id),
-            queue=queues.AGENTS,
-            job_id=queues.agent_run_job_id(started.id),
-        )
-    except queues.QueueUnavailableError:
-        await run_in_threadpool(_fail_queued, sessions, started.id, deps.clock(request))
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=runs.QUEUE_DOWN
-        ) from None
+    await operator.enqueue(
+        request.app.state.queue, sessions, started.id, lambda: deps.clock(request)
+    )
     return started
 
 

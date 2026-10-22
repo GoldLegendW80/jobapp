@@ -56,6 +56,10 @@
 #                                  turn the cv.json and letter.json the jobs import attached into
 #                                  that account's documents, a sent posting's PDF kept frozen;
 #                                  idempotent, --dry-run prints the counts only (app.documents.cli)
+#   ./deploy.sh ingestion close-run <run-id> [--dry-run]
+#                                  close an ingestion run that cannot move, as the cron does after
+#                                  its last failure; idempotent, --dry-run prints what it would do
+#                                  (app.ingestion.cli)
 #   ./deploy.sh apply pause|resume|status
 #                                  stop (or allow again) every application submission at once:
 #                                  a Redis flag the apply gate reads before its decision and
@@ -879,6 +883,20 @@ cmd_documents() {
   rcompose exec -T api python -m app.documents.cli import-legacy "$2" "${@:3}"
 }
 
+# cmd_ingestion close-run <run-id> [--dry-run]: app.ingestion.cli close-run in the api container.
+cmd_ingestion() {
+  local id='^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+  [[ "${1:-}" == "close-run" && "${2:-}" =~ $id && ($# -eq 2 || ($# -eq 3 && "${3:-}" == "--dry-run")) ]] ||
+    die "usage: ./deploy.sh ingestion close-run <run-id> [--dry-run]"
+  local mode=""
+  [[ $# -eq 3 ]] && mode=" (dry run)"
+  ssh_master
+  require_remote
+  require_deployed
+  step "ingestion close-run on $HOST$mode"
+  rcompose exec -T api python -m app.ingestion.cli close-run "$2" "${@:3}"
+}
+
 # cmd_apply pause|resume|status: the administrator's pause of every submission (apply A6), set
 # through app.apply.admin in the api container on the Jetson.
 cmd_apply() {
@@ -1509,6 +1527,7 @@ main() {
     profile) cmd_profile "$@" ;;
     jobs) cmd_jobs "$@" ;;
     documents) cmd_documents "$@" ;;
+    ingestion) cmd_ingestion "$@" ;;
     runner) cmd_runner "$@" ;;
     -h | --help | help) usage ;;
     *)

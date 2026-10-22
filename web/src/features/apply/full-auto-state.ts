@@ -60,6 +60,23 @@ export function fullAutoSentence(settings: ApplySettings): string {
   );
 }
 
+/**
+ * What Full auto never submits by itself and sends to the review queue instead, with the
+ * person's own threshold, company days and ceiling (api/app/apply/full_auto.py and caps.py).
+ */
+export function waitsForYou(settings: ApplySettings): string[] {
+  return [
+    `a posting whose fit is below ${settings.min_fit}`,
+    "a site Full auto does not handle yet",
+    "a question left, a captcha or a sign in",
+    "a free text answer the app wrote itself, unless the app's own check of it passed",
+    "a term your never apply rules exclude, in the posting's text",
+    "a CV or letter that runs over its page or has a correction to look at",
+    `a second application to the same company within ${days(settings.company_days)}`,
+    `anything past the safety ceiling of ${settings.safety_ceiling} submissions a day`,
+  ];
+}
+
 export const rehearsalsLeft = (settings: ApplySettings) =>
   Math.max(0, settings.rehearsals - settings.rehearsals_done);
 
