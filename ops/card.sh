@@ -68,6 +68,25 @@ later) horizon="Later" ;;
 *) usage_error "unknown horizon '$4' (now, next, later)" ;;
 esac
 
+# The claim lives on the issue itself as the label `building` (ops/board-sync.py reads it): doing
+# sets it, todo and done remove it. A pull request carries no claim, its own state says enough.
+if [[ "$url" == */issues/* ]]; then
+  if [[ "$2" == doing ]]; then
+    gh issue edit "$url" --add-label building >/dev/null
+  else
+    gh issue edit "$url" --remove-label building >/dev/null 2>&1 || true
+  fi
+fi
+# Once spec cards exist (label spec-card, owner 2026-10-21) the board shows only them and
+# ops/board-sync.py keeps every other card archived: the label is the whole claim.
+repo="${url#https://github.com/}"
+repo="${repo%%/issues/*}"
+repo="${repo%%/pull/*}"
+if [[ -n "$(gh issue list --repo "$repo" --label spec-card --state all --limit 1 --json number --jq '.[].number')" ]]; then
+  printf 'card %s: %s (claim label only: the board shows one card per spec)\n' "$url" "$2"
+  exit 0
+fi
+
 # One line per option of each single select field: field name, field id, option name, option id.
 # shellcheck disable=SC2016 # a jq program: $f and $id are jq variables
 FIELDS="$(gh project field-list "$BOARD_NUMBER" --owner "$OWNER" --format json \
