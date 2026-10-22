@@ -139,6 +139,14 @@ recorded separately from unfinished implementation.
   integrated as `015794d6` and `25b80508`. The focused manual/recovery/queue database suite
   passed 90 cases, with 123 pure browser ownership/action/recovery cases also passing.
   File chooser ownership and the full 30-minute person-action wait remain unfinished.
+- A9 chooser/input ownership source `34fe8b86` is integrated as `39baa442`. The app now owns
+  the Attach input turn, binds a chooser to its observation boundary and rechecks ownership
+  after pacing. Three additional database regressions and native Chromium race proof remain
+  pending. A fresh continuation owns the still-unimplemented A10a wait.
+- Fresh A18 diagnosis correlated the retained traces with host power logs: two Idle Sleep
+  periods of 1,034 and 1,070 seconds explain the previous readiness/timeout discrepancy.
+  New browser commands keep the host awake only for the foreground command and retain the
+  same timeouts, durable-state checks and atomic race assertions. Their rerun is in progress.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
