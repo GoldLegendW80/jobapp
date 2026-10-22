@@ -10,13 +10,13 @@
   on the first agent run); 400 when Anthropic refused it (verified_at cleared); 429 with
   Retry-After when Anthropic is busy or rate limiting, or over VERIFY_LIMIT checks per WINDOW_S;
   503 when Anthropic could not be reached; 404 without a credential; 409 when the stored
-  ciphertext cannot be read with this server's keys.
+  ciphertext cannot be read with this server's keys, or holds a value off the shape the save
+  accepts (credentials.shape_error), which is then neither checked nor hidden.
 
 The user always comes from the session (default deny, CSRF on every write, like every /api
 route). No answer, error or log line carries the secret.
 """
 
-from contextlib import nullcontext
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -31,7 +31,7 @@ from app.db import get_session
 from app.identity import deps, throttle
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.logging_config import HIDDEN_MIN, hidden
+from app.logging_config import hidden
 
 router = APIRouter(prefix="/api/me/model-credential", tags=["agents"])
 
@@ -49,6 +49,9 @@ NOT_CONFIGURED = (
 )
 UNREADABLE = (
     "The saved credential cannot be read with this server's encryption key. Paste it again."
+)
+UNUSABLE = (
+    "The saved credential does not have the form of an Anthropic key or token. Paste it again."
 )
 CHANGED = "The credential was replaced while it was checked. Verify it again."
 TOO_MANY_SAVES = "Too many credential changes."
@@ -139,7 +142,7 @@ def delete_credential(user: CurrentUser, db: Db) -> Response:
     responses={
         400: {"model": ErrorOut, "description": "Anthropic refused the credential"},
         **_404,
-        409: {"model": ErrorOut, "description": "The stored ciphertext cannot be read"},
+        409: {"model": ErrorOut, "description": "The stored credential cannot be read or used"},
         **_429,
         **_503,
     },
@@ -157,13 +160,17 @@ def verify_credential(request: Request, user: CurrentUser, db: Db) -> VerifyOut:
     if revealed is None:  # removed in between
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
+    if not credentials.has_shape(revealed.secret):
+        # A row written some other way than the save: what it holds goes nowhere.
+        db.rollback()
+        del revealed
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=UNUSABLE)
     # The re-encryption of a row written by the previous key is kept whatever the check says.
     db.commit()
     checked_kind, checked_at = revealed.row.kind, revealed.row.updated_at
     verifier: Verifier = request.app.state.model_verifier
-    # Out of every log line of the process while the check holds it (the shape alone cannot
-    # hide a stored secret of no known shape). A secret under the minimum cannot be hidden.
-    with hidden(revealed.secret) if len(revealed.secret) >= HIDDEN_MIN else nullcontext():
+    # Out of every log line of the process while the check holds it.
+    with hidden(revealed.secret):
         result = verifier.check(checked_kind, revealed.secret)
     # Drops this function's reference only: Python cannot wipe a str from memory.
     del revealed

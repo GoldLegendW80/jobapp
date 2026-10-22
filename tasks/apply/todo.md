@@ -319,7 +319,7 @@ First slice (A12a, issue #249, measured on 2026-10-19: `likes.py` and `queue_rou
 `api/tests/apply/test_a13_full_auto.py`: 45 tests on a real Postgres, about 25 s with `-n 2` (the order on an injected clock, each Full auto check, rehearsals, the pace, Cancel and the pauses, three races). The whole `tests/apply` folder: 3,712 tests in about 160 s with `-n 2` beside the new ones.
 
 ### A13b
-Measured on 2026-10-20: `web/e2e/apply-a13.spec.ts` alone takes about 6.5 minutes on a Mac stack (three fills, three submit leases of which the rehearsal's stops before the click, a hold of 60 s): the apply stacks run with `APPLY_HOLD_S` 60 and `APPLY_REHEARSALS` 1 (`tests/ats-forms-stub.compose.yml`), so the journey rehearses once. The api reads of the slice (`api/tests/apply/test_a13b_full_auto_web.py`, 8 tests) and the web (`src/features/apply`, 246 Vitest tests) add no model call.
+Measured on 2026-10-21 (issue #522): `web/e2e/apply-a13.spec.ts` alone takes about 10.5 minutes on a Mac stack (five fills, five submit leases of which the three rehearsals' stop before the click, a hold of 60 s): the apply stacks run with the server's three rehearsals and a hold floor of 60 s through `TEST_APPLY_HOLD_S` (`tests/ats-forms-stub.compose.yml`), a setting for tests only that the config refuses in production and without `APPLY_STUB_BASE_URL`; `APPLY_HOLD_S` itself refuses less than 900 s. The api reads of the slice (`api/tests/apply/test_a13b_full_auto_web.py`, 8 tests) and the web (`src/features/apply`, 246 Vitest tests) add no model call.
 
 ### A13c
 Nothing yet. (The tokens of the check by model per item, against the estimate of about 6,500.)

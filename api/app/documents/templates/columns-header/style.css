@@ -41,12 +41,13 @@ li, p { overflow-wrap: anywhere; }
   border-radius: 50%;
 }
 
-/* Three columns of 30 % with gaps of 5 %: a line takes a wider cell when its text needs it and
-   moves to the next row whole; it breaks inside only when it alone is wider than the page. */
+/* Three columns of 30 % with gaps of 5 %: a long line spans two or three cells (`span2`,
+   `span3`, from its length) and moves to the next row whole, so every row lines up on the
+   three columns; it breaks inside only when it alone is wider than the page. */
 .contact {
   list-style: none;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   column-gap: 5%;
   row-gap: 6pt;
   margin-top: 8pt;
@@ -54,13 +55,13 @@ li, p { overflow-wrap: anywhere; }
   color: #3b464d;
 }
 .contact li {
-  flex: 0 1 auto;
-  min-width: 30%;
-  max-width: 100%;
+  min-width: 0;
   overflow-wrap: break-word;
   border-top: 1.5pt solid var(--accent);
   padding-top: 2pt;
 }
+.contact li.span2 { grid-column: span 2; }
+.contact li.span3 { grid-column: span 3; }
 
 .block { margin-top: var(--section-gap); }
 .label {

@@ -16,8 +16,11 @@
 # the head the review approved) merges exactly that commit, and refuses (exit 4) unless the commit
 # is the head of pull request n or in its history, so a push after the approval is never what is
 # checked. Then, in that
-# tree, the FULL set, whatever the batch touches (the path plan of .github/scripts/ci_plan.py
-# narrowed a pull request's run; a batch check does not narrow):
+# tree, the full set of steps below, except the journey groups: those run only when the batch
+# touches them (issue #552; journey_scope below, `ci_plan.py journeys` maps the changed files to
+# groups). Documentation or operations only runs no group, a shared or unknown file runs every
+# group, and so does LOCAL_CHECK_FULL=1 or a base without a PASS record. The other steps always
+# run in full:
 #
 #   api       uv sync, ruff, the whole pytest suite on -n <jobs> with the coverage floor of 95,
 #             the docker marked tests (the parser in its container, their own Postgres), the
@@ -72,6 +75,7 @@
 #
 # Output: one line per step (name, PASS or FAIL, seconds), the last 40 lines of the log of each
 # failed step, the folder that keeps the full logs, then as the last line one of
+#   journeys: scoped, ran <groups>; skipped <groups>      (or: journeys: full (<why>), ran <groups>)
 #   LOCAL CHECK: PASS <tree sha> <seconds>s                       the full set, real steps: the only proof
 #   LOCAL CHECK: PARTIAL PASS <tree sha> <seconds>s, only <jobs>, no record: not a proof for a merge or a deploy
 #   LOCAL CHECK: STUB PASS <tree sha> <seconds>s, stub steps: not a check    (STUB PARTIAL PASS with --only)
@@ -79,7 +83,10 @@
 # A line that begins with exactly "LOCAL CHECK: PASS " is printed only by a run of the full set
 # with the real steps, next to the record it wrote. On a PASS of the full set, a record .local-check/<tree sha>.json in the main checkout: the
 # tree, the base, the merged refs with their commits, the steps and their seconds, the versions of
-# the tools and the date. The tree sha is the key (git rev-parse HEAD^{tree} of what was checked):
+# the tools, the date, and `journeys`: scoped or full (and why), the number of changed files and
+# the sha256 of their list (`changes`), each group that ran and each one skipped, with the reason.
+# A scoped record stands for that change set only: ops/ship.sh recomputes it before it merges.
+# The tree sha is the key (git rev-parse HEAD^{tree} of what was checked):
 # once the pull requests are merged on GitHub in the same order, git rev-parse origin/main^{tree}
 # equals it exactly when what was checked is what is on main. ops/deploy-checked.sh deploys only a
 # commit whose tree has such a record.
@@ -352,12 +359,15 @@ tree_sha="$(git -C "$TREE" rev-parse 'HEAD^{tree}')"
 # base..head was empty there, and only the tip against its first parent was read).
 SCAN_FROM=""
 scan_why="no commit in the last 200 of $BASE has a PASS record: from 50 commits before it"
-while read -r commit tree; do
-  record="$RECORDS/$tree.json"
-  [[ -f "$record" ]] || continue
-  grep -q '"result": "PASS"' "$record" || continue
+has_pass_record() { # has_pass_record <tree sha>: true when a check passed that tree
+  local record="$RECORDS/$1.json"
+  [[ -f "$record" ]] || return 1
+  grep -q '"result": "PASS"' "$record" || return 1
   # A record of stub steps counts for the script's own tests only.
-  if [[ -z "${LOCAL_CHECK_STUB:-}" ]] && ! grep -q '"stub": false' "$record"; then continue; fi
+  [[ -n "${LOCAL_CHECK_STUB:-}" ]] || grep -q '"stub": false' "$record"
+}
+while read -r commit tree; do
+  has_pass_record "$tree" || continue
   SCAN_FROM="$commit"
   scan_why="the newest commit of $BASE whose tree has a PASS record"
   break
@@ -856,6 +866,94 @@ journey_parts() { # journey_parts <group ...>: each group, or its shards <group>
   done
 }
 
+# The journey groups a batch runs (issue #552, owner's decision of 2026-10-21: scope the gate).
+# Only the groups its changed files touch: the files of the merged head against the base, mapped
+# to groups by `ci_plan.py journeys` of the tree (the path rules of CI's plan, then the imports of
+# the api modules and the web features; its header says how). Documentation or operations only
+# runs no group; a shared file, the gate itself or a path no rule names runs every group. Every
+# group runs, whatever changed, when
+# - LOCAL_CHECK_FULL=1 is set;
+# - the base has no PASS record: what the base holds was never checked, so nothing may be skipped
+#   on its account (the scope of a batch is only as good as the check of the main under it);
+# - the tree has no .github/scripts/ci_plan.py, or it fails.
+# Every other step of the set runs in full. $WORK/journey-scope holds one line per group,
+# run|skip<TAB>group<TAB>why; $WORK/journey-meta the scope (scoped or full), why it is full, the
+# number of changed files and the digest of their list. Both go into the record.
+journey_scope() {
+  local groups=() group full="" out rc=0 changed=0 digest="" metadata
+  while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks && journey_groups journeys)
+  # This evidence belongs to every run, including a missing/broken mapper and forced full.
+  # Git -z gives raw pathname bytes: newlines, quoting and invalid UTF8 stay unambiguous.
+  if metadata="$(python3 - "$TREE" "$base_sha" "$head_sha" 2>"$LOGS/journey-changes.log" <<'PY'
+import hashlib
+import os
+import subprocess
+import sys
+
+env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+done = subprocess.run(
+    ["git", "-C", sys.argv[1], "diff", "--name-only", "--no-renames", "-z", *sys.argv[2:]],
+    capture_output=True, check=True, env=env,
+)
+paths = sorted(p for p in done.stdout.split(b"\0") if p)
+print(len(paths), hashlib.sha256(b"".join(p + b"\0" for p in paths)).hexdigest(), sep="\t")
+PY
+)"; then
+    changed="${metadata%%$'\t'*}"
+    digest="${metadata#*$'\t'}"
+  else
+    full="cannot establish the changed-file list"
+    not_run journey-changes "cannot attest the changed-file list ($LOGS/journey-changes.log)"
+  fi
+  if [[ -n "$full" ]]; then
+    : # Uncertain evidence fails the check, and still runs all journey groups.
+  elif [[ "${LOCAL_CHECK_FULL:-}" == 1 ]]; then
+    full="LOCAL_CHECK_FULL=1"
+  elif ! has_pass_record "$(git -C "$TREE" rev-parse "$base_sha^{tree}")"; then
+    full="the base ${base_sha:0:12} has no PASS record"
+  elif [[ ! -f "$TREE/.github/scripts/ci_plan.py" ]]; then
+    full="the tree has no .github/scripts/ci_plan.py"
+  else
+    out="$(for group in "${groups[@]}"; do printf '%s\t%s\n' "$group" "$(journey_specs "$group")"; done |
+      (cd "$TREE" && python3 .github/scripts/ci_plan.py journeys "$base_sha" "$head_sha") 2>"$LOGS/journey-scope.log")" || rc=$?
+    if ((rc != 0)) || [[ "$(head -n 1 <<<"$out")" != $'changed\t'"$changed"$'\t'"$digest" ]] ||
+      [[ "$(grep -cE $'^(run|skip)\t' <<<"$out")" != "${#groups[@]}" ]]; then
+      full="ci_plan.py journeys failed (exit $rc, $LOGS/journey-scope.log)"
+    else
+      grep -E $'^(run|skip)\t' <<<"$out" >"$WORK/journey-scope"
+      if ! grep -q $'^skip\t' "$WORK/journey-scope" && grep -q $'\tevery group, ' "$WORK/journey-scope"; then
+        full="$(awk -F '\t' 'NR == 1 { sub(/^every group, /, "", $3); print $3 }' "$WORK/journey-scope")"
+      fi
+    fi
+  fi
+  if [[ -n "$full" ]]; then
+    for group in "${groups[@]}"; do printf 'run\t%s\tfull: %s\n' "$group" "$full"; done >"$WORK/journey-scope"
+    printf 'full\t%s\t%s\t%s\n' "$full" "$changed" "$digest" >"$WORK/journey-meta"
+  else
+    printf 'scoped\t\t%s\t%s\n' "$changed" "$digest" >"$WORK/journey-meta"
+  fi
+}
+
+scoped_groups() { # scoped_groups <checks|journeys>: the groups of that CI job that this batch runs
+  local group
+  while IFS= read -r group; do
+    if grep -q "^run"$'\t'"$group"$'\t' "$WORK/journey-scope"; then printf '%s\n' "$group"; fi
+  done < <(journey_groups "$1")
+}
+
+journey_line() { # one line: the scope, the groups that run and those skipped
+  local kind full ran skipped
+  kind="$(cut -f 1 "$WORK/journey-meta")"
+  full="$(cut -f 2 "$WORK/journey-meta")"
+  ran="$(awk -F '\t' '$1 == "run" { printf "%s%s", sep, $2; sep = ", " }' "$WORK/journey-scope")"
+  skipped="$(awk -F '\t' '$1 == "skip" { printf "%s%s", sep, $2; sep = ", " }' "$WORK/journey-scope")"
+  if [[ "$kind" == full ]]; then
+    printf 'journeys: full (%s), ran %s\n' "$full" "${ran:-none}"
+  else
+    printf 'journeys: scoped, ran %s; skipped %s\n' "${ran:-none}" "${skipped:-none}"
+  fi
+}
+
 journey_play() ( # journey_play <group> <Playwright arguments>
   # A subshell: the `cd web` stays in it, so s_journey takes its stack down from the tree root.
   # Called below `&&` in s_journey, where errexit is off: the two commands are chained.
@@ -996,9 +1094,9 @@ failed_step() { # failed_step <step>: true when that step ran and failed
 
 lane_journeys() {
   local groups=() group parts=() part running=() why="" again=()
-  if wanted checks; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks); fi
-  if wanted journeys; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups journeys); fi
-  ((${#groups[@]})) || return 0
+  if wanted checks; then while IFS= read -r group; do groups+=("$group"); done < <(scoped_groups checks); fi
+  if wanted journeys; then while IFS= read -r group; do groups+=("$group"); done < <(scoped_groups journeys); fi
+  ((${#groups[@]})) || return 0 # no group: no Chromium either
   while [[ ! -f "$WORK/images.done" || ! -f "$WORK/web.done" ]]; do sleep 1; done
   [[ "$(cat "$WORK/images.done")" == 0 ]] || why="the images were not built"
   [[ "$(cat "$WORK/web.done")" == 0 ]] || why="the web dependencies were not installed"
@@ -1192,17 +1290,21 @@ expected_steps() {
   if wanted api; then
     printf '%s\n' api-install api-services ruff pytest pytest-alone coverage pytest-docker scoring
   fi
-  if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
+  if wanted checks || wanted journeys; then printf '%s\n' web-install images; fi
+  # Chromium is installed for the journey groups only: a batch that runs none needs none.
+  if { wanted checks && [[ -n "$(scoped_groups checks)" ]]; } || { wanted journeys && [[ -n "$(scoped_groups journeys)" ]]; }; then
+    printf '%s\n' chromium
+  fi
   if wanted checks; then
     printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests
     # shellcheck disable=SC2046 # group names are single words
-    journey_parts $(journey_groups checks) | sed 's/^/journeys-/'
+    journey_parts $(scoped_groups checks) | sed 's/^/journeys-/'
     (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
   fi
   if wanted journeys; then
     printf '%s\n' lint typecheck build vitest
     # shellcheck disable=SC2046 # group names are single words
-    journey_parts $(journey_groups journeys) | sed 's/^/journeys-/'
+    journey_parts $(scoped_groups journeys) | sed 's/^/journeys-/'
   fi
 }
 
@@ -1249,6 +1351,9 @@ fi
 say "local check $CHECK_ID: base $BASE ($base_sha), $(wc -l <"$WORK/merges" | tr -d ' ') merged, tree $tree_sha"
 say "logs: $LOGS"
 say "$scan_line"
+journey_scope
+journey_line
+awk -F '\t' '{ printf "  %-5s %-16s %s\n", $1, $2, $3 }' "$WORK/journey-scope"
 if [[ -n "${LOCAL_CHECK_STUB:-}" ]]; then
   stub_plan
 else
@@ -1290,6 +1395,7 @@ if [[ -n "$failed" ]]; then
     tail -n 40 "$LOGS/$name.log"
   done
   printf '\nlogs: %s\ntotal: %ss\n' "$LOGS" "$total"
+  journey_line
   timing total 1 "$total"
   say "LOCAL CHECK: FAIL $tree_sha $failed"
   exit 1
@@ -1325,6 +1431,20 @@ def rows(name):
     return [line.split("\t") for line in (work / name).read_text().splitlines() if line]
 
 
+def journeys():
+    # What ops/ship.sh reads: a scoped record stands for its change set only (`changes`).
+    kind, full, changed, digest = (work / "journey-meta").read_text().rstrip("\n").split("\t")
+    scope = rows("journey-scope")
+    return {
+        "scope": kind,
+        "full_because": full or None,
+        "changed_files": int(changed),
+        "changes": digest or None,
+        "ran": [{"group": g, "why": why} for verdict, g, why in scope if verdict == "run"],
+        "skipped": [{"group": g, "why": why} for verdict, g, why in scope if verdict == "skip"],
+    }
+
+
 record = {
     "result": "PASS",
     "tree": os.environ["TREE_SHA"],
@@ -1338,11 +1458,13 @@ record = {
     "check": sys.argv[3],
     "stub": bool(sys.argv[4]),
     "flaky": (work / "flaky").read_text().split() if (work / "flaky").exists() else [],
+    "journeys": journeys(),
 }
 out.write_text(json.dumps(record, indent=2) + "\n")
 PY
   say "record: $RECORDS/$tree_sha.json"
 fi
 [[ ! -s "$WORK/flaky" ]] || say "flaky: $(tr '\n' ' ' <"$WORK/flaky")"
+journey_line
 timing total 0 "$total"
 say "LOCAL CHECK: ${kind}PASS $tree_sha ${total}s$note"

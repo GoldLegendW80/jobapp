@@ -1,8 +1,8 @@
 """template_rules (task D25a): the checks of a template the design model writes.
 
 The true inputs are the bundled templates: each passes untouched, or is refused only for the
-overlay family (OVERLAY_FAMILY), which the static filter refuses whole since round 3; D21's and
-D22's repository templates are pinned to exactly what they use (REPOSITORY). The
+overlay family (OVERLAY_FAMILY), which the static filter refuses whole since round 3; the
+repository templates that use more are pinned to exactly what they use (REPOSITORY). The
 refusals are classic's files with one change each, from the spec's step 4 and its neighbours: a
 script, an outside address, `@import`, a literal sentence in every place a template can hold one
 (HTML, a Jinja constant, a CSS `content`, an escape), a missing field and a field printed only
@@ -44,15 +44,10 @@ def _bundled():
 # The bundled templates are written by hand and never go through these checks in production;
 # some use what can lay a box over another, which a template from an upload may not.
 OVERLAY_FAMILY = ("it can lay a box over another", "a ::before or ::after holds punctuation only")
-WHOLE = {"banner", "classic", "compact", "grid"}
+WHOLE = {"classic", "compact", "grid"}
 
-# D21's and D22's repository templates need not pass the filter of an upload (decision on #427):
+# The repository's own templates need not pass the filter of an upload (decision on #427):
 # each is pinned to exactly what it uses, its HTML set holding for cv.html.j2 and letter.html.j2.
-_LOOP = {
-    ("construct", "a for over a list field, into one name"),
-    ("construct", "the expression Call"),
-    ("unprinted", "name is not printed, or only under another test"),
-}
 _CUT = ("literal", "markup cut by a Jinja construct")
 _OUTSIDE = ("property", "a property outside the allowed list")
 _SELECTOR = ("selector", "a selector outside the allowed forms")
@@ -62,7 +57,17 @@ _SELECTOR = ("selector", "a selector outside the allowed forms")
 _PAGE = ("page", "@page: margin: var(--margin)")
 _HEIGHT = ("property", "height: auto, a length only on the photo (img or .photo)")
 _MIN_HEIGHT = ("property", "min-height: auto, a length only on the photo (img or .photo)")
-GEOMETRY = {"banner": {_PAGE}, "sidebar": {_PAGE, _MIN_HEIGHT}, "executive": {_HEIGHT}}
+# banner and sidebar are pinned in REPOSITORY below, with the rest of what they use
+GEOMETRY = {"executive": {_HEIGHT}}
+# the helpers of _base/layout.html.j2, which only the repository's templates import
+_LAYOUT = {
+    ("construct", "import only _base/macros.html.j2 as base with context"),
+}
+# the contact lines printed by those helpers only, which an upload may not call
+_LAYOUT_CONTACT = _LAYOUT | {
+    ("construct", "a call of anything but a macro of base"),
+    ("unprinted", "contact[].text is not printed, or only under another test"),
+}
 
 
 def _box(*properties):
@@ -77,9 +82,17 @@ def _over(*properties):
 
 
 REPOSITORY = {
-    "academic": (_LOOP, {_SELECTOR}),
+    "academic": (set(), {_SELECTOR}),
+    # page 1's margin, which the band bleeds into
+    "banner": (
+        set(),
+        {
+            ("page", "@page :first: the repository's templates only"),
+            ("page", "@page: only size: A4 and margin: var(--margin)"),
+        },
+    ),
     "bold": (
-        _LOOP | {("construct", "the expression Compare"), _CUT},
+        {("construct", "the expression Compare"), _CUT},
         {
             _OUTSIDE,
             ("property", "grid-template-columns: a function outside the allowed list"),
@@ -88,24 +101,28 @@ REPOSITORY = {
         | _box("border"),
     ),
     "cards": (
-        _LOOP,
-        {_OUTSIDE, ("property", "margin: a value outside the allowed list")}
+        set(),
+        {("property", "margin: a value outside the allowed list")}
         | _box("border", "border-radius"),
     ),
     "columns-header": (
-        _LOOP,
+        _LAYOUT_CONTACT,
         {("property", "grid-template-columns: a function outside the allowed list")},
     ),
     "elegant": (
-        _LOOP,
+        set(),
         {_OUTSIDE, ("property", "position: static or relative"), _PAGE}
         | _box("border-bottom", "flex")
         | _over("bottom", "grid-row", "left", "right", "top"),
     ),
-    "nordic": (_LOOP, _box("border-top", "width")),
-    "plain": (_LOOP, {_SELECTOR}),
+    "nordic": (set(), _box("border-top", "width")),
+    # a negative margin and `overflow: hidden` clip the rule that would open a row of contact lines
+    "plain": (
+        set(),
+        {_SELECTOR, _OUTSIDE, ("property", "margin: a value outside the allowed list")},
+    ),
     "portrait": (
-        _LOOP
+        _LAYOUT
         | {("construct", "the construct Assign"), _CUT, ("name", "a name that is not a field")},
         {
             _OUTSIDE,
@@ -116,6 +133,8 @@ REPOSITORY = {
         | _box("border", "border-top", "height", "width")
         | _over("grid-row"),
     ),
+    "sidebar": (_LAYOUT_CONTACT, {_PAGE, _MIN_HEIGHT} | _over("grid-area")),
+    "split-right": (_LAYOUT_CONTACT, _over("grid-area") | _box("border-top", "width")),
 }
 
 
@@ -325,6 +344,41 @@ HTML_ACCEPTED = [
 @pytest.mark.parametrize("files", HTML_ACCEPTED)
 def test_the_same_fields_written_another_way_pass(files):
     assert _check(files) == []
+
+
+# sidebar's narrow column helpers each print the contact lines at some lengths only, so a
+# template that calls one alone can drop them all: an upload may call neither
+HEADER = "{{ base.header(content.headline) }}"
+NO_CONTACT = "{{ base.portrait() }}<h1>{{ name }}</h1><p>{{ content.headline }}</p>"
+NARROW_CALLS = [
+    "{{ base.contact_column() }}",
+    '{{ base.contact_column("label") }}',
+    "{{ base.contact_across() }}",
+    '{{ base.contact_across(class="contact across") }}',
+    "{{ base.contact_across() }}{{ base.contact_column() }}",
+]
+
+
+@pytest.mark.parametrize("call", NARROW_CALLS)
+@pytest.mark.parametrize("kind", ["cv", "letter"])
+def test_an_upload_calling_the_narrow_column_contact_helpers_is_refused(kind, call):
+    files = (_cv if kind == "cv" else _letter)(HEADER, NO_CONTACT + call)
+    found = {(p.file, p.code, p.detail) for p in _check(files)}
+    file = f"{kind}.html.j2"
+    assert (file, "construct", "a call of anything but a macro of base") in found
+    unprinted = "contact[].text is not printed, or only under another test"
+    assert (file, "unprinted", unprinted) in found
+
+
+def test_an_upload_importing_the_repository_helpers_is_refused():
+    base = '{% import "_base/macros.html.j2" as base with context %}'
+    files = _cv(HEADER, NO_CONTACT + "{{ layout.contact_across() }}{{ layout.contact_column() }}")
+    layout = '\n{% import "_base/layout.html.j2" as layout with context %}'
+    files["cv.html.j2"] = files["cv.html.j2"].replace(base, base + layout)
+    codes = {(p.code, p.detail) for p in _check(files)}
+    assert ("construct", "import only _base/macros.html.j2 as base with context") in codes
+    assert ("construct", "a call of anything but a macro of base") in codes
+    assert ("unprinted", "contact[].text is not printed, or only under another test") in codes
 
 
 def _css(addition: str, old: str = "", new: str = "") -> dict[str, str]:
@@ -618,6 +672,17 @@ SHEET_REFUSED = [
     (".summary { font-family: serif; }", "font"),
     ('.summary { font-family: sans-serif, "Nunito Sans"; }', "font"),
     ("@pagex { size: A4; }", "structure"),
+    # page 1's rule: `:first` written as CSS reads it, and nothing else
+    ("@page :left { margin: 0; }", "structure"),
+    ("@page : first { margin: 0; }", "structure"),
+    ("@page :first:left { margin: 0; }", "structure"),
+    ("@page .first { margin: 0; }", "structure"),
+    ("@page :first { color: #000000; }", "page"),
+    ("@page :first { size: letter; }", "page"),
+    # page 1's rule holds the repository's templates only, whatever it sets
+    ("@page :first { margin-top: 0; } .x { padding: var(--margin); }", "page"),
+    ("@page:FIRST { size: A4; margin: 0 0 12mm; } .x { padding: var(--margin); }", "page"),
+    (".x { box-decoration-break: auto; }", "property"),
     # selectors outside the allow list
     ("[title] { color: #000000; }", "structure"),
     (".x:not(.y) { color: #000000; }", "selector"),
@@ -657,6 +722,7 @@ SHEET_ACCEPTED = [
     ".a > .b + .c ~ .d { color: #1d232b; }",
     ".x { border: 1px solid #1d232b; } .y { border-bottom: 0; }",
     "@PAGE { size: A4; }",
+    ".x { box-decoration-break: clone; } .y { box-decoration-break: slice; }",
     ".x { grid-template-columns: minmax(0, 1fr) 58mm; grid-column: 1 / -1; }",
     ".x:last-child { color: #1d232b; }",
     ".summary { background: #1f4e79; color: #ffffff; }",
@@ -666,6 +732,13 @@ SHEET_ACCEPTED = [
 @pytest.mark.parametrize("addition", SHEET_ACCEPTED)
 def test_round_two_sheets_written_another_way_pass(addition):
     assert _check(_css(addition)) == []
+
+
+def test_page_one_rule_is_refused_while_the_rest_of_the_sheet_is_still_checked():
+    found = _check(_css("@page :first { margin-top: 0; } .x { position: absolute; }"))
+    pages = [p.detail for p in found if p.code == "page"]
+    assert pages == ["@page :first: the repository's templates only"]
+    assert any(p.code == "property" and p.detail.startswith("position") for p in found)
 
 
 def test_a_sheet_the_tokenizer_stops_on_is_refused_whole_with_one_problem():
