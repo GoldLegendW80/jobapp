@@ -132,7 +132,12 @@ class Wizard(generic.Deterministic):
     def approved(self, rows: Sequence[generic.Row]) -> None:
         super().approved(rows)
         self.expected = [
-            (r.label, r.value)
+            (
+                r.label,
+                ("Yes" if r.value else "No")
+                if getattr(r, "kind", "") == "yes_no" and isinstance(r.value, bool)
+                else r.value,
+            )
             for r in rows
             if r.value is not None and not r.key.startswith(("designated:", "skipped:"))
         ]
@@ -261,7 +266,7 @@ class Wizard(generic.Deterministic):
                     return report
             report.skipped += found.skipped
             self.expected = [
-                (o.field.label, o.answer.value)
+                (o.field.label, o.answer.option or o.answer.value)
                 for o in report.outcomes
                 if isinstance(o.answer, answers.Answer)
             ]

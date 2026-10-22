@@ -317,3 +317,26 @@ def test_known_form_redirect_to_external_signin_never_broadens_the_automated_hos
         assert adapter.job_id == "fixture:1001"
 
     asyncio.run(go())
+
+
+def test_workday_summary_compares_the_displayed_yes_no_choice():
+    from tests.apply.a4_support import Spec
+
+    async def go():
+        form = WizardForm()
+        form.fields.insert(3, Spec("Will you need sponsorship?", "yesno", True))
+        form.groups[0] += 1
+        adapter = Workday(BASE)
+        assert await adapter.open(form, url()) == ""
+        found, code = await adapter.discover(form)
+        assert not code
+        item = next(f for f in found.fields if f.kind == "yes_no")
+        adapter.person_answers = {
+            item.key: generic.PersonAnswer(item.label, item.kind, tuple(item.options), False)
+        }
+        report = await adapter.fill_form(form, context())
+        assert not report.stopped
+        assert report.designated
+        assert form.spec(item.label).value == "No"
+
+    asyncio.run(go())
