@@ -1,3 +1,75 @@
+A18 fresh runtime continuation, 2026-10-22
+
+Runtime acceptance remains PENDING. The latest four-flow run was 1 passed, 3 failed
+(38.0 minutes as reported by Playwright). No complete four-flow proof is claimed.
+No real user data, real portal, Google host, mail, model credential or deployment was used.
+
+Immutable backend correction
+- Source checkpoint 0d2ed47946e5b2a8b5d0afe6065246d9741e7d9b, based on 7f62f2d8.
+- profile_router.edit flushed without committing; the response showed an edit/Replace
+  selection that a fresh request lost. profile_approve_router.skip also lacked a commit.
+- Both routes now commit. Request-boundary regressions went red on edit and Skip.
+- Five request-boundary cases then passed in 7.34 s. They verify a fresh GET of the
+  edited value, Replace and values_hash, approval plus an authorisation hash read in a
+  new DB session, Skip/done, autosave confirmation and Cancel. The Cancel test stubs
+  lease cancellation only; bound lease cancellation has its separate existing coverage.
+
+Latest real-browser result on the rebuilt correction
+- Account/sign-in/edit/Replace/explicit Save/Skip/Cancel: PASS, 1.3 minutes.
+  The fixture received one approved Save, including the edited name and replaced title.
+  Replay approval was refused; Skip persisted. Console/pageerror collection was empty.
+  Eight current-source screenshots are committed: section-review and saved-section,
+  desktop/mobile, light/dark. Their viewport checks passed; selected images were inspected.
+- Autosave: FAIL in an added stronger submission assertion after reaching done with all
+  three sections saved. The test mapped End date to input end, but the fixture names it
+  graduation. That test-only mapping is corrected in this checkpoint and has NOT rerun.
+  Earlier preservation assertions passed before this stronger assertion was added.
+- Workday/LinkedIn refusal: TIMEOUT while the last observed API state was filling.
+  Bounded post-run DB inspection later found both Workday sections ready, without errors.
+- Atomic race: TIMEOUT waiting for autosave consent. It never exercised the corrected
+  race trigger during the latest run. The pointermove/marker correction is NOT verified.
+- The earlier pre-correction run was 2 passed, 2 failed in 6.8 minutes: autosave and
+  Workday Save/readback plus LinkedIn refusal passed, Account exposed the durable edit
+  defect, and the race's old pointerenter trigger fired before discovery. Its stored
+  current_value already contained the site value, so empty-only correctly preserved it
+  and finished done. This was not proof of a pacing race.
+
+Bounded diagnostics, no cause inferred
+- api/worker/browser: running, healthy, OOM false, restart count zero.
+- API started 2026-10-22T11:19:59.200844299Z; worker 11:19:59.067164215Z;
+  browser 10:02:03.440250589Z.
+- Owned idle snapshot: API 0.10% CPU, 156.8 MiB/512 MiB; worker 0.25%,
+  177.6 MiB/1.5 GiB; browser 0.06%, 104.9 MiB/1 GiB. These do not prove a load cause.
+- Workday run 37f84dfb-3d0b-4f8b-9e03-86393e81836d: created 11:22:52.678528 UTC,
+  ready 11:23:39.117224 UTC. Experience ready 11:23:21.213262, education ready
+  11:23:36.720258. Compare these IDs/times with retained trace API poll responses.
+- Race run be0629f3-369c-4c69-8b61-fdf7b69bbdfb: created 11:23:23.801377 UTC,
+  reached needs_person/autosave_confirmation 11:58:43.489446 UTC, no error code.
+- Autosave run e0478541-5b1d-4b71-84de-699c5a3de1cf: done 11:22:48.194219 UTC,
+  all three sections saved with no error. Account run 38287f2a-e66a-4c69-955e-fa9f1d344206:
+  cancelled 11:21:41.938879 UTC after section 1 saved and section 2 skipped.
+- Timing disagreement between worker readiness and browser-observed filling remains
+  unexplained. No general machine stall, OOM or event-loop root cause is established.
+
+Checks in this continuation
+- Focused request-boundary backend: 5 passed, 7.34 s.
+- Whole API Ruff check passed; format check passed, 701 files.
+- Frontend typecheck and lint passed after the screenshot/marker assertions were added.
+  The final string-only end -> graduation correction was not rerun.
+- ci_plan_test: 81 passed. e2e_groups: passed, 29 CI specs, 4 excluded, 40 group-only.
+- Whole Apply plus affected browser/runner run: INTERRUPTED, exit 130, 1,463 passed,
+  2 real failures in 52.98 s before interruption. The failures were old test_a2_guardrails
+  expectations that LinkedIn URLs with gh_jid/ashby_jid should be other; actual linkedin.
+  Root and A16 owner were notified. No whole-module pass is claimed.
+- Final A10b test_a10b_signin.py + test_a10b_later.py (about 22 cases), exact queue/cron
+  assertion in test_a5_run.py, full affected backend completion and Apply/browser Vitest
+  remain pending in a completed run. Prior-builder results below are historical only.
+- Parent owns all Apply-group journeys on the final composed integration.
+
+Owned resources and resume commands: runtime-handoff.txt in this folder.
+
+Historical prior-builder evidence follows, not a final current-tree acceptance result.
+
 A18 continuation evidence, 2026-10-22
 
 Status: backend capability and UI are implemented, but A18 runtime acceptance is PENDING.

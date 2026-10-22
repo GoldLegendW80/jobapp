@@ -27,4 +27,7 @@ for (const form of document.querySelectorAll("form")) {
 
 document.addEventListener("keydown", event => {if(event.key === "Enter" && document.querySelector("#signin").style.display === "block") document.querySelector("#login").click();});
 
-if(variant === "autosave-race") document.querySelector('[name="name"]').addEventListener("pointerenter", event => {event.target.value="Site added this value";});
+if(variant === "autosave-race") document.querySelector('[name="employer"]').addEventListener("pointermove", event => {
+ event.target.value="Site added this value";
+ void fetch("/_stub/submit/site-profile-race", {method:"POST", body:new URLSearchParams({field:"employer",value:event.target.value})});
+}, {once:true});

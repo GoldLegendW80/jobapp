@@ -1,13 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { stub } from "./apply-helpers";
 import { CSRF, caddyUrl, invented, keep, signUp } from "./documents-helpers";
-import { clearAttempts, newContext, watchErrors } from "./stack";
+import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
 type ProfileRun = {
   id: string;
   state: string;
   needs: string | null;
   sections: {
     section: string;
+    label: string;
     state: string;
     values_hash: string;
     error_code: string | null;
@@ -18,6 +19,7 @@ type ProfileRun = {
 test.describe.configure({ timeout: 600_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the dedicated stack running");
 const SITE = "http://atsforms:8080/forms/a18/";
+const shots = makeShots("apply-a18", "a18");
 async function read(page: Page, id: string): Promise<ProfileRun> {
   const response = await page.request.get(`/api/site-profiles/${id}`);
   expect(response.ok()).toBeTruthy();
@@ -170,6 +172,7 @@ test("Account starts a signed-in profile review, selected Replace and a user edi
       "mobile-review.png",
       await page.screenshot({ fullPage: true }),
     );
+    await shots(page, "section-review");
     await card
       .getByRole("button", { name: "Approve section", exact: true })
       .click();
@@ -208,6 +211,7 @@ test("Account starts a signed-in profile review, selected Replace and a user edi
       "saved-section.png",
       await page.screenshot({ fullPage: true }),
     );
+    await shots(page, "saved-section");
     await page
       .getByRole("button", { name: "Cancel profile run", exact: true })
       .click();
@@ -224,6 +228,7 @@ test("autosave asks first and preserves every existing site value", async ({
   const person = invented("a18-autosave");
   const context = await newContext(browser);
   const page = await context.newPage();
+  const errors = watchErrors(page);
   try {
     await stub.reset();
     await signUp(page, person);
@@ -239,8 +244,38 @@ test("autosave asks first and preserves every existing site value", async ({
     await expect
       .poll(async () => (await read(page, run.id)).state, { timeout: 180000 })
       .toBe("done");
+    const current = await read(page, run.id);
+    expect(current.sections.map((part) => part.state)).toEqual([
+      "saved",
+      "saved",
+      "saved",
+    ]);
     const submissions = await stub.submissions();
-    expect(submissions.length).toBeGreaterThan(0);
+    const fieldNames: Record<string, string> = {
+      "Full name": "name",
+      Employer: "employer",
+      "Start date": "start",
+      Degree: "degree",
+      "End date": "graduation",
+      School: "school",
+    };
+    for (const part of current.sections.slice(0, 2)) {
+      const expected = Object.fromEntries(
+        part.fields
+          .filter((field) => fieldNames[field.label] && field.value)
+          .map((field) => [fieldNames[field.label]!, String(field.value)]),
+      );
+      expect(Object.keys(expected).length).toBeGreaterThan(0);
+      expect(
+        submissions.some(
+          (record) =>
+            record.fields.section === part.label &&
+            Object.entries(expected).every(
+              ([name, value]) => record.fields[name] === value,
+            ),
+        ),
+      ).toBe(true);
+    }
     for (const record of submissions) {
       if (record.fields.section === "Experience 1")
         expect(record.fields.title).toBe("Site's old title");
@@ -254,6 +289,8 @@ test("autosave asks first and preserves every existing site value", async ({
       "autosave-report.png",
       await page.screenshot({ fullPage: true }),
     );
+    await shots(page, "autosave-report");
+    expect(errors).toEqual([]);
   } finally {
     await context.close();
     clearAttempts([person.email]);
@@ -266,6 +303,7 @@ test("Workday-style pages reopen for Save readback and LinkedIn needs the person
   const person = invented("a18-known");
   const context = await newContext(browser);
   const page = await context.newPage();
+  const errors = watchErrors(page, [[409, /\/api\/site-profiles$/]]);
   try {
     await stub.reset();
     await signUp(page, person);
@@ -311,6 +349,8 @@ test("Workday-style pages reopen for Save readback and LinkedIn needs the person
       "linkedin-refusal.png",
       await page.screenshot({ fullPage: true }),
     );
+    await shots(page, "linkedin-refusal");
+    expect(errors).toEqual([]);
   } finally {
     await context.close();
     clearAttempts([person.email]);
@@ -323,6 +363,7 @@ test("a real Chromium value populated during pacing survives an autosave race", 
   const person = invented("a18-race");
   const context = await newContext(browser);
   const page = await context.newPage();
+  const errors = watchErrors(page);
   try {
     await stub.reset();
     await signUp(page, person);
@@ -339,6 +380,11 @@ test("a real Chromium value populated during pacing survives an autosave race", 
     expect(current.sections[0]!.error_code).toBe("value_differs");
     const saved = await stub.submissions();
     expect(
+      saved
+        .filter((record) => record.org === "site-profile-race")
+        .map((record) => record.fields),
+    ).toEqual([{ field: "employer", value: "Site added this value" }]);
+    expect(
       saved.filter((record) => record.fields.section === "Experience 1"),
     ).toEqual([]);
     keep(
@@ -346,6 +392,8 @@ test("a real Chromium value populated during pacing survives an autosave race", 
       "autosave-race-kept.png",
       await page.screenshot({ fullPage: true }),
     );
+    await shots(page, "autosave-race-kept");
+    expect(errors).toEqual([]);
   } finally {
     await context.close();
     clearAttempts([person.email]);
