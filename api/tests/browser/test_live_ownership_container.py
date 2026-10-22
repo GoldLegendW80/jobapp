@@ -190,6 +190,10 @@ async def main():
         browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port()}")
         context = browser.contexts[0]
         page = context.pages[0]
+        # Create the second fixture tab before installing any per-lease page listeners.
+        # A blank tab created later would be closed by the production off-list listener.
+        other = await context.new_page()
+        await other.goto("http://pages:8080/b5/form.html?second=1")
 
         async def start(request, lease_id):
             return Attached(browser)
@@ -262,11 +266,6 @@ async def main():
             await manager.release(lease.lease_id, "test_done")
             checks += 1
 
-        # Open a real second tab at the fixture, without a transient off-list blank tab.
-        async with context.expect_page() as opened:
-            await page.evaluate("window.open('http://pages:8080/b5/form.html?second=1')")
-        other = await opened.value
-        await other.wait_for_load_state()
         for action in ("select", "close", "list"):
             for give_back in (False, True):
                 manager, lease, svc, call = await setup()
