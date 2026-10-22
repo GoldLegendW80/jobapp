@@ -5,6 +5,12 @@ The owner's request of 2026-10-22 implements [SPEC-apply.md](../../SPEC-apply.md
 This ledger records implementation and separate test checkpoints. The final review and batch
 gate result on that pull request identify the exact checked head and tree.
 
+Implementation is still in progress. The capability audit found that the default worker did
+not construct the generic form agent and its custom-site journey was permanently skipped.
+Known-ATS `form_changed` also did not hand over automatically in both modes. Separate slices
+are completing that wiring, model-free approved replay and the original-budget fallback.
+The existing pure generic-run tests did not establish default-worker execution.
+
 ## Integration boundary
 
 The isolated `apply/spec-completion` branch combines immutable snapshots of #465, #521, #517,
@@ -21,7 +27,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 
 | Capability | Implemented behavior | Runtime verification and final gate coverage |
 |---|---|---|
-| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. | Fidelity checkpoint: 5,478 Apply passes. The named-group label fix passes all 7,070 Apply tests and seven actual A5/A7 browser tests, including exactly one approved fake submission each for Ashby and Greenhouse. Grounding and final integrated gate evidence are below. |
+| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Default generic-worker wiring and known-ATS fallback remain in progress. | Fidelity checkpoint: 5,478 Apply passes. The named-group label fix passes all 7,070 Apply tests and seven actual A5/A7 browser tests, including exactly one approved fake submission each for Ashby and Greenhouse. Generic default-worker and fallback execution need their own actual journeys and independent review. |
 | A9: Apply myself | Native document picker ownership, immediate Submit-and-Close recording, ended-session queue/reopen/record, placed-document freezing, no app submit click. | Four new real browser recovery flows, original manual flows, six inherited native cases and distinct incidental-picker race pass. Whole Apply/Browser groups cover final integration. |
 | A10a: retries and person input | Immutable 1,800-second person wait outside active time; same adapter, attempt, earlier fields and steps survive captcha/email-code input. | Whole Apply/browser checkpoint: 7,167 passes, plus three real Redis/private-HTTP cases. Actual captcha/email-code flows pass before a fresh approval and one fake submission. |
 | A10b: sign-in | Watched and later owner-owned handoffs, registered typed callbacks and idempotent queueing; Full auto becomes Review first. | Both fake-site journeys and all 22 backend cases pass. Whole Apply/Browser groups cover final integration. |
@@ -123,6 +129,34 @@ limits are under [tasks/evidence](../evidence), including
 [gate ownership](../evidence/apply-gate-ownership.txt).
 
 ## Final acceptance record
+
+The first combined gate checked head `73ee000f99468a48f31cac7fcca03e306e9841d4`,
+tree `058ea99230024b0491068aa7fa13738a2b58f81a`, and was deliberately interrupted
+after confirmed failures (exit 130). It is not a passing acceptance record. The API phase
+reported 26,521 passes, 57 existing skips and three outdated ingestion/Compose assertions.
+Those assertions now reflect the existing generic transport allowance and optional mail
+network/service configuration. The mail journey's obsolete client contract and A1's removed
+form assertion are also corrected. Docker/coverage/component phases had not completed.
+
+All six A16 journeys and the two-user A17 journey passed in that run; A17 made exactly one
+approved fake submission and refused cross-person/signed-out private reads. Required A16
+screenshots included unsettled/loading views, so they still need recapture and inspection.
+The new screenshot helper passes two actual Chromium cases and its old-helper mutation fails
+both. Profile approval's unsaved/pending edit fix passes 406 component and independent cases.
+
+Independent source review also found final expiry/pause checks preceding blocking locks or
+the last commit. Fixes and a second recheck exposed paced-approval and last-commit edge cases;
+the latest fix passes 252 real-Postgres/Redis regression cases. Its broader Apply/mail run
+reported 8,739 passes and five lifecycle-fixture failures caused by repeated injected state
+mutations; those fixtures and the full rerun are still in progress.
+
+Two composed A18 cases hit the unchanged browser memory guard at 923/941 MiB. Idle cgroup
+measurements retained substantial active file cache even after Chromium exited. Functional
+acceptance will use a fixed partition with a fresh stack per Apply file, keeping all four A18
+cases together and preserving browser restart/cookie checks. The exact Playwright partition
+must prove every test is collected once with no new skips. This isolation does not establish
+long-lived production capacity or resolve the observed memory pressure; the guard formula,
+service caps and host target remain unchanged.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
