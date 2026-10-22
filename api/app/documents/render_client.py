@@ -42,8 +42,12 @@ another thread.
 """
 
 import asyncio
+import base64
+import binascii
 import io
+import json
 import logging
+import math
 import re
 import threading
 import time
@@ -191,6 +195,171 @@ async def _call(
     if not pages.isdigit() or not pdf.startswith(b"%PDF-"):
         raise RenderError("render_failed")
     return bytes(pdf), int(pages)
+
+
+# --- the visibility check of a template a model wrote (D25b, renderer/server.py: POST /check) ---
+
+CHECK_MAX_ANSWER = 32 * 1024 * 1024
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_CHECK_KEYS = frozenset(("width", "height", "shown", "scale", "found", "before", "after"))
+
+
+@dataclass(frozen=True)
+class Seen:
+    """One occurrence of a needle: the font size of its element in CSS pixels, and per glyph
+    `(x, y, width, height, own)`, `own` True when nothing lies over the glyph's centre."""
+
+    size: float
+    glyphs: tuple[tuple[float, float, float, float, bool], ...]
+
+
+@dataclass(frozen=True)
+class Checked:
+    """What the renderer measured: the page laid out at `width` CSS pixels, its lowest text at
+    `height`, the top `shown` measured and photographed at `scale` device pixels each; per
+    needle its occurrences; the PNG of the page, and of the page with the needles transparent."""
+
+    width: int
+    height: int
+    shown: int
+    scale: int
+    found: tuple[tuple[Seen, ...], ...]
+    before: bytes
+    after: bytes
+
+
+def _number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise RenderError("render_failed")
+    return float(value)
+
+
+def _seen(value: object, needle: str) -> Seen:
+    if not isinstance(value, list) or len(value) != 2 or not isinstance(value[1], list):
+        raise RenderError("render_failed")
+    if len(value[1]) > len(needle):
+        raise RenderError("render_failed")
+    glyphs = []
+    for glyph in value[1]:
+        if not isinstance(glyph, list) or len(glyph) != 5:
+            raise RenderError("render_failed")
+        x, y, w, h, own = (_number(part) for part in glyph)
+        glyphs.append((x, y, w, h, own == 1))
+    return Seen(_number(value[0]), tuple(glyphs))
+
+
+def _png(value: object) -> bytes:
+    try:
+        data = base64.b64decode(str(value), validate=True)
+    except (binascii.Error, ValueError):
+        raise RenderError("render_failed") from None
+    if not data.startswith(PNG_MAGIC):
+        raise RenderError("render_failed")
+    return data
+
+
+def read_checked(raw: bytes, needles: tuple[str, ...], width: int) -> Checked:
+    """The renderer's answer to a check, every value checked; RenderError otherwise."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise RenderError("render_failed") from None
+    if not isinstance(data, dict) or set(data) != _CHECK_KEYS:
+        raise RenderError("render_failed")
+    found = data["found"]
+    if not isinstance(found, list) or len(found) != len(needles):
+        raise RenderError("render_failed")
+    sizes = [data["width"], data["height"] + 1, data["shown"], data["scale"]]
+    if not all(type(value) is int and value >= 1 for value in sizes) or data["width"] != width:
+        raise RenderError("render_failed")
+    if data["scale"] > 4:
+        raise RenderError("render_failed")
+    occurrences = []
+    for needle, seen in zip(needles, found, strict=True):
+        if not isinstance(seen, list):
+            raise RenderError("render_failed")
+        occurrences.append(tuple(_seen(one, needle) for one in seen))
+    return Checked(
+        width=width,
+        height=data["height"],
+        shown=data["shown"],
+        scale=data["scale"],
+        found=tuple(occurrences),
+        before=_png(data["before"]),
+        after=_png(data["after"]),
+    )
+
+
+async def check(
+    html: str,
+    needles: tuple[str, ...],
+    width: int,
+    name: str,
+    *,
+    timeout_s: float | None = None,
+    at_once: int | None = None,
+    host: str | None = None,
+    port: int | None = None,
+) -> Checked:
+    """Lay `html` out at `width` CSS pixels and measure where each needle shows (renderer
+    POST /check). One line of log: sizes, outcome and duration."""
+    timeout_s = timeout_s if timeout_s is not None else _setting("documents_render_timeout_s")
+    at_once = at_once if at_once is not None else _setting("documents_renders_at_once")
+    body = json.dumps({"html": html, "needles": list(needles), "width": width, "name": name})
+    data = body.encode("utf-8")
+    started = time.monotonic()
+    outcome, size = "ok", 0
+    try:
+        if len(data) > MAX_HTML:
+            raise RenderError("too_large")
+        async with _gate(at_once):
+            raw = await _exchange(
+                "/check", data, "application/json", host or HOST, port or PORT,
+                timeout_s + MARGIN_S, CHECK_MAX_ANSWER,
+            )  # fmt: skip
+        size = len(raw)
+        return await asyncio.to_thread(read_checked, raw, needles, width)
+    except RenderError as error:
+        outcome = error.code
+        raise
+    finally:
+        logger.info(
+            "documents.render.check",
+            extra={
+                "html_bytes": len(data),
+                "answer_bytes": size,
+                "outcome": outcome,
+                "ms": int((time.monotonic() - started) * 1000),
+            },
+        )
+
+
+async def _exchange(
+    path: str, data: bytes, kind: str, host: str, port: int, timeout_s: float, most: int
+) -> bytes:
+    timeouts = httpx.Timeout(timeout_s, connect=CONNECT_TIMEOUT_S)
+    try:
+        async with (
+            asyncio.timeout(timeout_s),
+            httpx.AsyncClient(timeout=timeouts, trust_env=False) as client,
+            client.stream(
+                "POST", f"http://{host}:{port}{path}", content=data, headers={"Content-Type": kind}
+            ) as response,
+        ):
+            if response.status_code != 200:
+                raise RenderError(REFUSALS.get(response.status_code, "render_failed"))
+            found = bytearray()
+            async for chunk in response.aiter_bytes():
+                found += chunk
+                if len(found) > most:
+                    raise RenderError("too_large")
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+        raise RenderError("renderer_unavailable") from None
+    except (TimeoutError, httpx.TimeoutException):
+        raise RenderError("timeout") from None
+    except httpx.HTTPError:
+        raise RenderError("renderer_unavailable") from None
+    return bytes(found)
 
 
 def _check(pdf: bytes, said: int, html: str) -> int:

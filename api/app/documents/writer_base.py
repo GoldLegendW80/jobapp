@@ -670,5 +670,8 @@ def start_ready(
             break
         except ValueError:
             continue  # started by another call meanwhile
+    else:
+        # The design captures waiting behind them (D25b), once no conversion holds a run slot.
+        started += design_capture.start_ready(db, user_id, at=at, settings=settings)
     db.flush()
     return started
