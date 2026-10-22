@@ -221,7 +221,7 @@ async def save_section(
             )
             if acquired.lease is None or not acquired.token or not acquired.capability:
                 return  # the tick retries this section, with no authorization consumed
-                await profile_leases.bind(services.leases, user_id, run_id, acquired.lease.lease_id)
+            await profile_leases.bind(services.leases, user_id, run_id, acquired.lease.lease_id)
             tools = services.tools_for(str(user_id), acquired.lease.lease_id, acquired.token)
             if not (await tools.navigate(url)).get("ok"):
                 await failed("navigation_failed")

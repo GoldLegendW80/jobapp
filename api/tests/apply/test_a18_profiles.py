@@ -98,6 +98,33 @@ def test_save_once_with_hash_and_owned_approval(db, factory, person_a, person_b,
     assert run.state is SiteRunState.done
 
 
+def test_save_lease_is_bound_to_owned_run_until_release(db, factory, person_a, monkeypatch):
+    from app.apply import profile_leases
+
+    portal = Portal()
+    run_id = make(db, person_a.user_id)
+    env = services(factory, portal)
+    asyncio.run(site_profile.fill(env, run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    key, auth_id = part.section, auth.id
+    db.commit()
+
+    async def save(tools, ref, capability, element=""):
+        assert (
+            env.leases.bindings[profile_leases.key(person_a.user_id, run_id)]
+            == "test-profile-lease"
+        )
+        return await portal.save(tools, ref, capability, element)
+
+    monkeypatch.setattr(profile_gate, "gate_click", save)
+    asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    assert profile_leases.key(person_a.user_id, run_id) not in env.leases.bindings
+    assert portal.clicks == 1
+
+
 def test_autosave_requires_consent_and_fills_empty_only(db, factory, person_a):
     portal = Portal(autosave=True)
     run_id = make(db, person_a.user_id)
