@@ -1,0 +1,34 @@
+Apply completion, inherited mail M1 journey contract repair
+Base: 73ee000f99468a48f31cac7fcca03e306e9841d4
+
+Observed failure
+The full composed gate's mail group passed 16 tests and failed mail-m1's
+API-container smoke test on both attempts:
+AttributeError: 'GoogleClient' object has no attribute 'get_profile'
+That test also called the removed direct list_messages method. Production now
+keeps OAuth access-token refresh in GoogleClient and routes Gmail reads through
+the account-bound GmailMcp client and the actual sidecar.
+
+Repair
+The journey sends only the fake grant through stdin. Its container script builds
+an in-memory MailAccount with a fresh UUID and a fresh ephemeral Keyring, seals
+the grant with TOKEN_KIND and that owner, then calls connection_profile and
+GmailMcp.list_messages in one async scenario. The clients supply their own identity
+headers. No database row, credential, identity header or transport is forged.
+The running fake stack's Settings supply the OAuth, sidecar and fake Gmail URLs.
+No production API is changed or restored.
+
+Assertions retained and strengthened
+The exact fake endpoint remains http://gmailstub:8098/gmail/v1/users/me.
+The profile must be e2e-alice@example.org and the only returned message ID must
+remain m-mistral-1. Fake getProfile and messages.list must return 200, and the
+observed messages.list query must include from:ashbyhq.com. The API, worker and
+Gmail MCP sidecar logs must exclude the refresh-token canary.
+
+Verification at handoff
+Embedded Python AST syntax and source-level contract inspection passed.
+git diff --check passed.
+CI plan: 81 tests passed. E2E registry: all 79 specs accounted for.
+Runtime, TypeScript typecheck, lint and the full mail group are deferred while
+the orchestrator's full integration gate owns the shared machine. This record
+does not claim a runtime pass for the repaired journey.
