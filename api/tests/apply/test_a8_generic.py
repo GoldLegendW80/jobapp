@@ -258,7 +258,8 @@ def test_the_form_agent_is_internal_private_and_bounded() -> None:
     assert not found.live
     assert found.max_turns == 30
     assert found.tools == (
-        "read_form", "resolve_answer", "fill_field", "next_step", "designate_submit"
+        "read_form", "resolve_answer", "fill_field", "next_step", "designate_submit",
+        "browser_request_signin",
     )  # fmt: skip
     assert form_agent.TOKEN_BUDGET == 2 * 410_000
     assert not {"browser_click", "gate_click", "send_email", "browser_navigate"} & set(found.tools)

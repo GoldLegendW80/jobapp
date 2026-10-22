@@ -24,6 +24,7 @@ import secrets
 import uuid
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -229,8 +230,8 @@ def test_the_person_signs_in_without_cdp_and_the_agent_reads_the_cookie(
     assert answer["error"] == "waiting_person", answer
     assert 0 < answer["left_s"] <= 1800
     lease = stack.current()["lease"]
-    assert (lease["state"], lease["wait_reason"], lease["wait_site"]) == (
-        "waiting_person", "signin", "Example Jobs",
+    assert (lease["state"], lease["wait_reason"], lease["wait_host"]) == (
+        "waiting_person", "signin", urlsplit(PAGES).hostname,
     )  # fmt: skip
 
     # The person's Chromium: the noted address with its query, and nothing to attach to.

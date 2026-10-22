@@ -8,6 +8,7 @@ only.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
@@ -95,6 +96,19 @@ def test_wait_counts_against_neither_the_maximum_nor_the_idle_timer() -> None:
     assert lease.expired(now) is None
     assert lease.active_s(now) == 840
     assert lease.state == "active"
+
+
+def test_a_lease_stored_with_the_older_wait_site_still_loads() -> None:
+    lease = apply_lease()
+    lease.wait_person(0.0, "signin", "jobs.example.org", SESSION_MAX_S)
+    stored = json.loads(lease.dumps())
+    stored["wait_site"] = stored.pop("wait_host")
+    loaded = Lease.loads(json.dumps(stored))
+    assert (loaded.state, loaded.wait_host, loaded.lease_id) == (
+        "waiting_person",
+        None,
+        lease.lease_id,
+    )
 
 
 @pytest.mark.parametrize(

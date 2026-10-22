@@ -1,5 +1,6 @@
 """The five tools of the form agent (app/apply/form_agent.py), registered with
-`app.agents.tools.register` (worker only: this module imports the Claude Agent SDK).
+`app.agents.tools.register` (worker only: this module imports the Claude Agent SDK), and the
+run's lease lent to browser B12b's sign in tool (app/browser/signin_tool.py).
 
 Each takes a ref of the page at most, never a value, an id of a person or an application: what
 it acts on is the session of the run it is bound to (`Scope.run_id`), which `RuntimeFormAgent`
@@ -15,6 +16,7 @@ from claude_agent_sdk import SdkMcpTool, tool
 
 from app.agents import tools as app_tools
 from app.apply import form_agent
+from app.browser import signin_tool
 
 NO_FORM = "This run has no form. Stop now."
 REF = {
@@ -58,5 +60,16 @@ def _factory(name: str) -> app_tools.Factory:
     return make
 
 
+def _hold(scope: app_tools.Scope) -> signin_tool.Hold | None:
+    session = form_agent.session_of(scope.run_id)
+    if session is None:
+        return None
+    return signin_tool.Hold(
+        session.tools, session.signin_budget, session.signin_wall, session.signin_ended
+    )
+
+
 for _name in form_agent.TOOLS:
-    app_tools.register(_name, _factory(_name))
+    if _name != form_agent.SIGNIN:
+        app_tools.register(_name, _factory(_name))
+signin_tool.hold(_hold)

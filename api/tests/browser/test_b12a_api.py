@@ -58,6 +58,7 @@ factory = identity.factory
 __all__ = ["engine", "factory", "migrated_url", "no_removals", "redis_url"]
 
 HOST = "jobs.example.org"
+STEERED = "Google"  # the site a hostile page told the model to name
 FORM = f"https://{HOST}/apply/42?step=2"
 A, B = str(uuid.uuid4()), str(uuid.uuid4())
 
@@ -251,7 +252,7 @@ def test_a_wait_of_25_minutes_on_a_15_minute_lease_then_4_minutes_of_work(world:
             outcome.text() == 'The person signed in; the page is now "Signed in as e2e-browser-a".'
         )
         assert len(waited) == 25
-        assert waited[0].wait_site == "Example Portal"
+        assert waited[0].wait_host == HOST
         assert [c.request.automation for c in started] == [True, False, True]
         assert started[1].request.address == FORM
         mine = (await world.store.current(A)).lease
@@ -458,7 +459,7 @@ def test_redis_restarted_during_the_wait_keeps_the_same_deadline(world: World) -
         assert seen == [seen[0], seen[0]]
         lease = (await world.store.current(A)).lease
         assert lease.state == "waiting_person"
-        assert lease.wait_site == "Example Portal"
+        assert lease.wait_host == HOST
 
     run(world, go)
 
@@ -589,9 +590,9 @@ def waiting(api: Api, app: FastAPI, browserd: FakeBrowserd, user_id: uuid.UUID) 
         assert got.token is not None
         watch(browserd, got.lease.lease_id)
         tools = LeaseTools(store, store.client, str(user_id), got.lease.lease_id, got.token)
-        answer = await tools.ask_signin("Example Portal", "")
-        assert answer["error"] == "waiting_person"
-        await store.wait_person(str(user_id), got.lease.lease_id, "signin", "Example Portal")
+        # A page steered the model to name another site; the worker's own call, cut at once.
+        outcome = await request_signin(tools, STEERED, "x", budget_s=0)
+        assert outcome.code == "turn_ended"
 
     api.client.portal.call(go)  # type: ignore[union-attr]
     assert len(started) == 2
@@ -603,10 +604,10 @@ def test_done_restarts_chromium_with_cdp_and_resumes_the_lease(
 ) -> None:
     started = waiting(api, app, browserd, user_a[0])
     shown = api.get("/api/browser", token=user_a[1]).json()["lease"]
-    assert (shown["state"], shown["wait_reason"], shown["wait_site"]) == (
+    assert (shown["state"], shown["wait_reason"], shown["wait_host"]) == (
         "waiting_person",
         "signin",
-        "Example Portal",
+        HOST,
     )
     assert shown["wait_minutes_left"] == SESSION_MAX_S // 60
     clock.advance(10 * 60 + 1)
@@ -619,6 +620,18 @@ def test_done_restarts_chromium_with_cdp_and_resumes_the_lease(
     assert (shown["state"], shown["wait_minutes_left"]) == ("active", None)
     assert api.post("/api/browser/handoff/done", token=user_a[1]).status_code == 204  # twice
     assert len(started) == 3  # one restart
+
+
+def test_the_banner_host_is_the_tabs_never_the_site_the_model_names(
+    api: Api, app: FastAPI, browserd: FakeBrowserd, user_a: tuple[uuid.UUID, str]
+) -> None:
+    waiting(api, app, browserd, user_a[0])
+    seen = api.get("/api/browser", token=user_a[1])
+    assert seen.json()["lease"]["wait_host"] == HOST
+    assert "wait_site" not in seen.json()["lease"]
+    assert STEERED not in seen.text
+    public = browserd.manager.current().public(browserd.manager.clock())
+    assert (public["wait_host"], "wait_site" in public) == (HOST, False)
 
 
 def test_cancel_releases_the_lease(
@@ -645,7 +658,7 @@ def test_b_can_neither_see_nor_end_as_hand_off(
     seen = api.get("/api/browser", token=user_b[1])
     assert seen.json()["lease"] is None
     assert seen.json()["holder"] == "other"
-    assert "Example Portal" not in seen.text
+    assert HOST not in seen.text
     for action in ("done", "cancel"):
         answer = api.post(f"/api/browser/handoff/{action}", token=user_b[1])
         assert (answer.status_code, answer.json()["detail"]) == (404, NO_HANDOFF)
