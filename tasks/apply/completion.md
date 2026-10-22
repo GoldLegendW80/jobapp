@@ -147,6 +147,22 @@ recorded separately from unfinished implementation.
   periods of 1,034 and 1,070 seconds explain the previous readiness/timeout discrepancy.
   New browser commands keep the host awake only for the foreground command and retain the
   same timeouts, durable-state checks and atomic race assertions. Their rerun is in progress.
+- A15 browser evidence `4bb524cc` is integrated as `b4a558a3`: all five serial tests passed
+  in 6.6 minutes, covering four flows with exactly one approved fake submission each.
+  Eight inspected handoff/submission screenshots are retained; review screenshots remain
+  for the final composed run. The 48 MiB Workday fixture peaked at 454,807,552 browser bytes
+  under its 1 GiB cap, without OOM or restart. This is fixture evidence, not a real-site or
+  Jetson measurement. Its owned stack and images were removed.
+- A18 read-lock fix `85d0aca1` is integrated as `1d6cda5a`. Three real-Postgres NOWAIT
+  regressions first reproduced retained locks in profile detail, image and refusal paths;
+  the complete eight-case route file then passed. Completed reads now release their
+  transactions before returning. All async profile writers were checked for a commit before
+  queue/browser awaits. The four-flow runtime rerun remains required.
+- A10a fixed person wait `8403f579` is integrated as `e0696d76`. Private lease-owned waits
+  pause the active/idle clocks for at most 1,800 seconds with an immutable deadline, retain
+  the same adapter and prior report across wizard continuation, and remain distinct from
+  sign-in. Pure/browser/wizard checks passed 618 cases, with 19 banner cases also passing.
+  Database, email-code detection and native/browser acceptance continue.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
