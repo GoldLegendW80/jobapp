@@ -27,8 +27,16 @@ class Tools:
     Three repeated uncompleted walls stop the run rather than starting an unlimited wait.
     """
 
-    def __init__(self, tools: Any, url: str, *, request: Request | None = None) -> None:
+    def __init__(
+        self,
+        tools: Any,
+        url: str,
+        *,
+        request: Request | None = None,
+        pending: Callable[[str], str] | None = None,
+    ) -> None:
         self._tools, self.host, self.request = tools, urlsplit(url).hostname or "", request
+        self.pending = pending or base.Adapter().pending_step
         self.outcome: Outcome | None = None
         self.keep_lease = False
         self.attempts = 0
@@ -37,13 +45,35 @@ class Tools:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._tools, name)
 
+    async def recover_signin(self) -> str:
+        """Known-site form navigation met a redirect outside the automated host list.
+
+        Only hand off on the restored original host. Browserd keeps the existing allow list;
+        the person follows SSO in their human session and code reopens the exact job afterwards.
+        """
+        shot = await self._tools.snapshot()
+        if not shot.get("ok") or urlsplit(str(shot.get("url") or "")).hostname != self.host:
+            return "signin"
+        if self.attempts >= 3:
+            return "signin"
+        self.attempts += 1
+        if self.request is None and not hasattr(self._tools, "ask_signin"):
+            self.outcome = Outcome("nobody_watching")
+        else:
+            self.outcome = await (self.request or request_signin)(
+                self._tools, self.host, "This application needs you to sign in."
+            )
+        self.keep_lease = self.outcome.code == "turn_ended"
+        self.blocked = None
+        return "" if self.outcome.code == "signed_in" else "signin"
+
     async def snapshot(self) -> dict[str, Any]:
         if self.blocked is not None:
             return self.blocked
         shot = await self._tools.snapshot()
         while (
             shot.get("ok")
-            and base.Adapter().pending_step(str(shot.get("snapshot") or "")) == "signin"
+            and self.pending(str(shot.get("snapshot") or "")) == "signin"
             and (self.outcome is None or self.outcome.code == "signed_in")
             and self.attempts < 3
         ):

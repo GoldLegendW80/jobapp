@@ -39,7 +39,7 @@ CHECKPOINT = (
 )
 
 
-class Report:
+class Report(generic.DeterministicReport):
     """Marker mixed into the existing FormReport, never supplied by a model or API body."""
 
 
@@ -80,7 +80,7 @@ def company_site(snapshot: str, url: str, stub_base: str | None) -> str | None:
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
-class LinkedIn(generic.Generic):
+class LinkedIn(generic.Deterministic):
     name = "linkedin"
     hosts = ("linkedin.com", "www.linkedin.com")
 

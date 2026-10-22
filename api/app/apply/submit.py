@@ -565,7 +565,7 @@ def _stop_of(code: str, step: str = "") -> Stop:
         return Stop(State.needs_person, "linkedin_paused", "linkedin_paused")
     if code == "needs_person":
         return Stop(State.needs_person, "needs_person", step or "needs_person")
-    if code in ats_base.PENDING_STEPS:
+    if code in (*ats_base.PENDING_STEPS, run.failures.PAYMENT, "profile_incomplete"):
         return Stop(State.needs_person, "needs_person", code)
     if code == "posting_closed":
         return Stop(State.posting_closed, code)
@@ -599,7 +599,10 @@ async def refill(
         return _stop_of(code, found.pending if found is not None else "")
     done: set[str] = set()
     for _ in range(2):
-        for item in [f for f in found.fields if f.key not in done]:
+        pending = [f for f in found.fields if f.key not in done]
+        if isinstance(adapter, generic.Deterministic):
+            pending.sort(key=lambda field: field.kind != "file")
+        for item in pending:
             done.add(item.key)
             row = approved.get(item.key)
             if row is None:
@@ -656,8 +659,9 @@ async def ready_to_click(services: Services, plan: Plan, tools: run.RunTools) ->
         step = await _refilled(adapter, tools, rows)
         if isinstance(step, Stop):
             return step
-        if await generic.advance(adapter, tools, step):  # type: ignore[arg-type]
-            return Stop(State.ready, "form_changed")
+        code = await generic.advance(adapter, tools, step)  # type: ignore[arg-type]
+        if code:
+            return _stop_of(code)
     rows = stages[-1]
     checked = await _refilled(adapter, tools, rows)
     if isinstance(checked, Stop):

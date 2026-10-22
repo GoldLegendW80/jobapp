@@ -267,6 +267,14 @@ class Generic(Adapter):
         return found, code
 
 
+class DeterministicReport:
+    """Designation metadata produced by code for a known site."""
+
+
+class Deterministic(Generic):
+    """Known site with ordered steps, filled without the form or answer model."""
+
+
 def _rekey(item: Any, key: str) -> Any:
     return replace(item, key=key)
 
@@ -340,7 +348,12 @@ async def advance(adapter: Generic, tools: Tools, found: Discovery) -> str:
         return "form_changed"
     result = await tools.click(found.submit_refs[0], adapter.steps[adapter.step])
     if not result.get("ok"):
-        return str(result.get("error") or "failed")
+        code = str(result.get("error") or "failed")
+        return (
+            "signin"
+            if code == "host_not_allowed" and getattr(adapter, "review_only", False)
+            else code
+        )
     adapter.step += 1
     return ""
 

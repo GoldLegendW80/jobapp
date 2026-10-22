@@ -88,7 +88,6 @@ from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
-from app.apply.ats.linkedin import LinkedIn, Report
 from app.apply.bank import AnswerBank
 from app.apply.models import (
     AnswerBankEntry,
@@ -391,6 +390,12 @@ def prepare(
         _end(db, application, State.blocked, code, now)
         return "blocked"
 
+    known_adapter = adapter_for(
+        application.form_url, stub_base=caps._setting("apply_stub_base_url")
+    )
+    if application.mode is Mode.full_auto and getattr(known_adapter, "review_only", False):
+        full_auto.hand_over(db, application, "unsupported_source", now)
+
     current = documents.current(db, user_id, posting.id)
     if current.cv.version is None and current.cv.coming is None and not manual:
         _end(db, application, State.blocked, "no_documents", now)
@@ -572,6 +577,8 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
         ]
         for i, name in enumerate(report.steps, start=1):
             marks.append((f"{generic.STEP_KEY}{i}", f"Step {i}: the button to the next step", name))
+        if getattr(report, "target", ""):
+            marks.append(("designated:target", "Application link from the job page", report.target))
         rows += [
             ApplicationAnswer(
                 application_id=application.id,
@@ -580,7 +587,9 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 label=label,
                 kind="designated",
                 value=name,
-                source=AnswerSource.identity if isinstance(report, Report) else AnswerSource.agent,
+                source=AnswerSource.identity
+                if isinstance(report, generic.DeterministicReport)
+                else AnswerSource.agent,
                 required=False,
                 approved=False,
             )
@@ -917,7 +926,7 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
             return await _drive_generic(services, plan, adapter, tools)
     else:
         code = await adapter.open(tools, plan.form_url)
-        if code == "company_site" and isinstance(adapter, LinkedIn):
+        if code == "company_site" and isinstance(adapter, generic.Deterministic):
             return Result(State.queued, company_url=adapter.company_url)
         if code:
             state, needs, error = _stopped(code)
@@ -934,7 +943,7 @@ async def _fill_on_page(
         return await _payment_asked(tools)
     report = await adapter.fill_form(tools, plan.context)
     cost: dict[str, Any] = {"agent": "not_run"}
-    if not report.stopped and not isinstance(adapter, LinkedIn):
+    if not report.stopped and not isinstance(adapter, generic.Deterministic):
         cost = await _answer_left(services, plan, adapter, tools, report)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
@@ -942,7 +951,7 @@ async def _fill_on_page(
         needs = _needs(report)
         state, error = (State.needs_person if needs else State.ready), None
     shot = await shots.take(tools)
-    if isinstance(adapter, LinkedIn) and getattr(report, "designated_ref", ""):
+    if isinstance(adapter, generic.Deterministic) and getattr(report, "designated_ref", ""):
         lit = await generic.highlighted(tools, report.designated_ref, shot)
         if lit is None:
             state, needs = State.needs_person, "submit_not_highlighted"
@@ -1127,7 +1136,15 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
         from app.apply.linkedin import watched
 
-        tools = _Watched(watched(services, plan, signin.Tools(lease_tools, plan.form_url)))
+        tools = _Watched(
+            watched(
+                services,
+                plan,
+                signin.Tools(
+                    lease_tools, plan.form_url, pending=adapter.pending_step if adapter else None
+                ),
+            )
+        )
         result = await _guarded(_drive(services, plan, tools), tools)
         if result.company_url:
             await services.leases.release(user, lease_id, "company_site")
