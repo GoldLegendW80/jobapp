@@ -28,6 +28,8 @@ async def main() -> None:
                 port=9400,
                 access_log=False,
                 log_level="warning",
+                limit_concurrency=16,
+                timeout_keep_alive=5,
             )
         ).serve()
     finally:

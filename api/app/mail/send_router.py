@@ -94,6 +94,12 @@ def application_email(
     )
     if application is None:
         raise HTTPException(404, "No such email application.")
+    apply_email.recover(
+        db,
+        application,
+        deps.clock(request),
+        configured=bool(request.app.state.settings.mail_send_key),
+    )
     gate.expire_pending(db, user.id, deps.clock(request))
     draft = db.scalar(
         sa.select(MailDraft).where(

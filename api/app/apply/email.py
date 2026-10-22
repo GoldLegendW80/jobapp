@@ -80,6 +80,31 @@ def account_code(db: Session, user_id: uuid.UUID) -> str | None:
     return None if SCOPE_SEND in account.scopes else "no_send_scope"
 
 
+def recover(db: Session, application: Application, now: datetime, *, configured: bool) -> bool:
+    from app.mail.locks import lock_send
+
+    if application.ats != "email" or application.state is not State.needs_person:
+        return False
+    if application.needs not in {
+        "not_connected",
+        "no_send_scope",
+        "needs_reconnect",
+        "mail_send_unavailable",
+    }:
+        return False
+    if account_code(db, application.user_id) or not configured:
+        return False
+    lock_send(db, application.user_id)
+    application, _ = gate.lock(db, application.user_id, application.id)
+    draft = db.scalar(sa.select(MailDraft).where(MailDraft.application_id == application.id))
+    if draft is None or draft.status != "draft":
+        return False
+    states.move(application, State.ready, now)
+    application.needs = application.error_code = None
+    gate._event(db, application, "person_done", now, needs="email_connection")
+    return True
+
+
 def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> str:
     plan = run.prepare(db, application_id, now)
     if isinstance(plan, str):

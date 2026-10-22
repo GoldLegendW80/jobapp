@@ -214,14 +214,22 @@ def _enqueue_submit(request: Request, application_id: uuid.UUID) -> None:
 @router.get(
     "/api/applications/{application_id}/approval", response_model=ApprovalView, responses=_404
 )
-def read_approval(application_id: str, user: CurrentUser, db: Db) -> ApprovalView:
+def read_approval(application_id: str, request: Request, user: CurrentUser, db: Db) -> ApprovalView:
     """What an approval of this application covers, and the hash to send back."""
     application = _application(db, user, application_id)
     email_check = None
     if application.ats == "email":
+        from app.apply import email as apply_email
         from app.mail import gate as mail_gate
         from app.mail.draft_models import MailDraft
 
+        if apply_email.recover(
+            db,
+            application,
+            deps.clock(request),
+            configured=bool(request.app.state.settings.mail_send_key),
+        ):
+            db.commit()
         values = {row.field_key: row for row in gate.rows_of(db, application)}
         body = values.get("email_body")
         recipient = values.get("email_to")

@@ -56,6 +56,7 @@ def test_mcp_transport_send_and_replay(fake, clock, sleeps) -> None:
         async with app.router.lifespan_context(app):
             profile = await client.get_profile(account)
             assert profile["emailAddress"] == ALICE
+            assert len(fake.calls_of("getProfile")) == 1
             raw = b"To: e2e-recipient@example.org\r\nSubject: Application\r\n\r\nHello"
             key = send_key.mint(SECRET, uuid4(), user, ALICE, uuid4(), None, "hash", raw, NOW)
             args = {"send_key": key, "raw": base64.urlsafe_b64encode(raw).decode()}

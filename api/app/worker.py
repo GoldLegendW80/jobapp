@@ -724,7 +724,13 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     from app.apply.models import Application
 
     with sessions_of(ctx)() as db:
-        email_ids = set(db.scalars(sa.select(Application.id).where(Application.ats == "email")))
+        email_ids = set(
+            db.scalars(
+                sa.select(Application.id).where(
+                    Application.ats == "email", Application.id.in_(approved)
+                )
+            )
+        )
     approved = [item for item in approved if item not in email_ids or item in deciding]
     queued = 0
     for application_id in due:

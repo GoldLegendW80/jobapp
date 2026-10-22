@@ -1,5 +1,6 @@
 """Account-bound Gmail tools. Only the send gate can mint their one-use send capability."""
 
+import asyncio
 import base64
 import contextvars
 import hashlib
@@ -51,7 +52,9 @@ class Service:
         self.budget, self.agent_budget = Budget(clock, 3000), Budget(clock, 1000)
         self.checked: dict[str, tuple[str, float]] = {}
 
-    async def client(self, headers: dict[str, str]) -> tuple[AccessGoogle, Grant]:
+    async def client(
+        self, headers: dict[str, str], *, fresh: bool = False
+    ) -> tuple[AccessGoogle, Grant]:
         uid, address = headers.get("x-jobapp-user", ""), headers.get("x-jobapp-address", "")
         token = headers.get("authorization", "").removeprefix("Bearer ")
         try:
@@ -65,11 +68,12 @@ class Service:
         grant = Grant(uid, "")
         fingerprint = hashlib.sha256(token.encode()).hexdigest()
         cached = self.checked.get(fingerprint)
-        if cached is None or self.clock() >= cached[1]:
+        if fresh or cached is None or self.clock() >= cached[1]:
             with log.hide(token, address):
                 profile = await client.get_profile(grant)
             self.checked[fingerprint] = profile.email.casefold(), self.clock() + 60
             cached = self.checked[fingerprint]
+            client.checked_profile = profile
         if cached[0] != address.casefold():
             raise PermissionError("not_connected")
         # Expired entries contain no token and are pruned on every call.
@@ -80,7 +84,15 @@ class Service:
         self, name: str, args: dict[str, Any], headers: dict[str, str]
     ) -> dict[str, Any]:
         try:
-            client, grant = await self.client(headers)
+            client, grant = await self.client(headers, fresh=name == "get_profile")
+            if name == "get_profile":
+                profile = client.checked_profile
+                return {
+                    "emailAddress": profile.email,
+                    "messagesTotal": profile.messages_total,
+                    "threadsTotal": profile.threads_total,
+                    "historyId": profile.history_id,
+                }
             calls = {
                 "get_profile": ("getProfile", "/profile", []),
                 "list_messages": (
@@ -290,6 +302,7 @@ def build_app(service: Service) -> Any:
     class Headers:
         def __init__(self, app: Any) -> None:
             self.app = app
+            self.request_slot = asyncio.Semaphore(1)
 
         async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
             if scope["type"] != "http":
@@ -299,7 +312,12 @@ def build_app(service: Service) -> Any:
             context = _headers.set(headers)
             try:
                 with log.hide(headers.get("authorization"), headers.get("x-jobapp-address")):
-                    await self.app(scope, receive, send)
+                    if scope.get("path") == "/healthz":
+                        await self.app(scope, receive, send)
+                    else:
+                        # Bound MIME/JSON copies before MCP starts reading a request body.
+                        async with self.request_slot:
+                            await self.app(scope, receive, send)
             finally:
                 _headers.reset(context)
 

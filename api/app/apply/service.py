@@ -134,6 +134,8 @@ def start(
     from app.apply.email import addresses
 
     email_application = bool(addresses(posting))
+    if email_application and mode is Mode.manual:
+        raise RefusedError(guardrails.Refusal("email_manual"))
     form_url = (posting.url or "").strip()
     read_as = guardrails.unstub(form_url, stub_base)
     key = f"email:{posting.id}" if email_application else guardrails.canonical_key(read_as)

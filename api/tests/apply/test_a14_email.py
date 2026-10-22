@@ -7,6 +7,7 @@ import hashlib
 import uuid
 from datetime import timedelta
 from email import message_from_bytes
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -14,19 +15,19 @@ import sqlalchemy as sa
 
 from app.agents.crypto import Keyring
 from app.apply import email, full_auto, gate, service
-from app.apply.models import Application, ApplicationAnswer, Mode, State
+from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, Mode, State
 from app.config import Settings
 from app.documents import freeze as documents
 from app.documents.models import DocumentVersion
 from app.gmailmcp.server import Service, build_app
 from app.jobs.models import Job
+from app.mail import dispatch, reconciling
 from app.mail import gate as mail_gate
-from app.mail import reconciling
 from app.mail.draft_models import MailDraft, MailSend
 from app.mail.google import SCOPE_READONLY, SCOPE_SEND, GoogleClient
 from app.mail.mcp_client import GmailMcp
 from app.mail.models import TOKEN_KIND, AccountStatus, MailAccount, MailThread
-from tests.apply.conftest import AT
+from tests.apply.conftest import AT, add_posting
 from tests.apply.test_a13_full_auto import turn_on
 from tests.mail import canary
 from tests.mail.fake_gmail import FakeGoogle
@@ -441,6 +442,133 @@ def test_worker_refuses_signing_key():
                 mail_send_key=SECRET,
             )
         )
+
+
+@pytest.mark.parametrize("missing_scope", [False, True])
+def test_connecting_or_granting_scope_recovers_same_application(db, person_a, missing_scope):
+    fake = FakeGoogle()
+    fake.seed("alice")
+    if missing_scope:
+        connect(db, person_a, fake, send_scope=False)
+    application = prepare(db, person_a)
+    assert application.state is State.needs_person
+    if missing_scope:
+        db.get(MailAccount, person_a.user_id).scopes = [SCOPE_READONLY, SCOPE_SEND]
+    else:
+        connect(db, person_a, fake)
+    db.commit()
+    assert email.recover(db, application, AT, configured=True)
+    db.commit()
+    assert application.state is State.ready
+    assert approve(db, application).kind == "person_approval"
+
+
+def test_manual_email_has_explicit_early_refusal_without_browser_or_send(db, person_a):
+    posting = db.get(Job, person_a.posting_id)
+    posting.url = "mailto:e2e-jobs@example.org"
+    db.commit()
+    with pytest.raises(service.RefusedError) as refused:
+        service.start(db, person_a.user_id, posting.id, Mode.manual, False, now=AT)
+    assert refused.value.refusal.code == "email_manual"
+    assert db.scalar(sa.select(sa.func.count()).select_from(Application)) == 0
+
+
+def test_dispatch_excludes_future_holds_and_rotates_blocked_due_items(
+    db, factory, person_a, monkeypatch
+):
+    approved = set()
+    for index in range(12):
+        posting_id, _ = add_posting(db, person_a.user_id, f"https://example.org/role/{index}")
+        row = Application(
+            id=uuid.uuid4(),
+            user_id=person_a.user_id,
+            posting_id=posting_id,
+            mode=Mode.review,
+            dry_run=False,
+            state=State.held if index < 6 else State.approved,
+            ats="email",
+            form_url="mailto:e2e-jobs@example.org",
+            canonical_key=f"email:{posting_id}",
+            created_at=AT,
+            updated_at=AT,
+        )
+        db.add(row)
+        db.flush()
+        if index < 6:
+            db.add(
+                ApplicationEvent(
+                    application_id=row.id,
+                    user_id=person_a.user_id,
+                    at=AT,
+                    kind="decision",
+                    data={"outcome": "held", "until": (AT + timedelta(hours=1)).isoformat()},
+                )
+            )
+        else:
+            approved.add(row.id)
+    db.commit()
+    seen = set()
+
+    async def blocked(app, wanted):
+        seen.add(wanted)
+
+    monkeypatch.setattr(dispatch, "application", blocked)
+    monkeypatch.setattr(dispatch, "client", lambda app: None)
+    current = [AT + timedelta(seconds=1)]
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            sessionmaker=factory,
+            clock=lambda: current[0],
+            settings=SimpleNamespace(mail_send_key=SECRET),
+        )
+    )
+
+    async def scenario():
+        assert await dispatch.once(app) == 5
+        current[0] += timedelta(seconds=15)
+        assert await dispatch.once(app) == 5
+
+    asyncio.run(scenario())
+    assert seen == approved
+
+
+def test_unknown_reconciliation_rotates_past_unresolved_first_batch(db, factory, person_a):
+    fake = FakeGoogle()
+    fake.seed("alice")
+    connect(db, person_a, fake)
+    headers = {f"<e2e-{i}@example.org>" for i in range(6)}
+    for header in headers:
+        db.add(
+            MailSend(
+                id=uuid.uuid4(),
+                user_id=person_a.user_id,
+                authorisation_kind="user_click",
+                authorised_at=AT,
+                content_hash="synthetic",
+                recipients_count=1,
+                new_recipients=True,
+                result="unknown",
+                message_id_header=header,
+                at=AT - timedelta(seconds=1),
+                updated_at=AT - timedelta(seconds=1),
+            )
+        )
+    db.commit()
+    queries = set()
+
+    class Missing:
+        async def list_messages(self, account, *, q, max_results):
+            queries.add(q.removeprefix("in:sent rfc822msgid:"))
+            return {"messages": []}
+
+    async def scenario():
+        await reconciling.reconcile(factory, person_a.user_id, Missing(), AT)
+        await reconciling.reconcile(
+            factory, person_a.user_id, Missing(), AT + timedelta(seconds=15)
+        )
+
+    asyncio.run(scenario())
+    assert headers <= queries
 
 
 @pytest.mark.parametrize("rehearsal", [False, True])

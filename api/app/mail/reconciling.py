@@ -28,7 +28,7 @@ async def reconcile(
                     MailSend.result == "unknown",
                     MailSend.resolved_by.is_(None),
                 )
-                .order_by(MailSend.at)
+                .order_by(MailSend.updated_at, MailSend.id)
                 .limit(5)
             )
         )
@@ -42,6 +42,8 @@ async def reconcile(
             return 0
         found = 0
         for row in rows:
+            row.updated_at = now
+            db.commit()
             try:
                 query = (
                     f"in:sent rfc822msgid:{row.message_id_header}"

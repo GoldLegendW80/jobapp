@@ -92,6 +92,10 @@ RULES_UNREADABLE = (
     "tab of your profile and save it again."
 )
 SENTENCES = {
+    "email_manual": (
+        "This posting accepts email applications. Send it from your mail app, "
+        "or choose Review first to prepare and review the email here."
+    ),
     "never_apply_role": NEVER_APPLY_REFUSED,
     "rules_unreadable": RULES_UNREADABLE,
     "no_address": "This posting has no address to apply on. Add its link first.",
