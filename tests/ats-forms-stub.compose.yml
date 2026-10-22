@@ -67,6 +67,7 @@ services:
   api:
     environment:
       APPLY_STUB_BASE_URL: http://atsforms:8080
+      TEST_FAST_TIMERS: "true"
       TEST_APPLY_HOLD_S: "60"
       TEST_APPLY_LINKEDIN_MIN_INTERVAL_S: "60"
 
