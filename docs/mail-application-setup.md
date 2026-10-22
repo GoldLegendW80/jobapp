@@ -84,10 +84,11 @@ passed in 9 seconds. Deployment contracts passed 175 checks, the local allocator
 firewall's 14 static/fake checks passed; its Docker iptables namespace section still requires
 the combined gate, and no host firewall install or real deployment was performed.
 
-Acceptance remains open for one concrete consistency follow-up. The unknown-send panel reuses
-the application's existing “It was submitted” action. It confirms the application, but currently
-leaves its linked MailSend/draft unknown; the mail-specific resolve route and Sent reconciliation
-update both. The follow-up must make manual application confirmation and MailSend/draft resolution
-atomic and idempotent, with a regression for the actual UI action. This has no automatic resend
-path, and the successful fake browser send/transport evidence above remains valid. A14 is not
-fully accepted until that follow-up and the independent review are complete.
+The shared “It was submitted” action now resolves the exact owned application, active MailSend
+and draft atomically. Source `4bd8d680` (integrated as `5b2b91c8`) passed 25 real-database cases,
+including fresh requests through both confirmation routes, repeated requests, later
+reconciliation, mismatched bindings and provider/user races in both orders. Repeating an
+equivalent email confirmation does not add another event or freeze; the provider result is
+preserved. It makes no send request. The earlier successful fake browser send/transport
+evidence remains valid. Final combined regression, firewall namespace proof and independent
+review remain before A14 acceptance.
