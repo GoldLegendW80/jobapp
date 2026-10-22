@@ -1,238 +1,108 @@
 # Apply specification completion
 
-Requested on 2026-10-22: implement the whole apply specification. The contract is
-[SPEC-apply.md](../../SPEC-apply.md), the existing [task plan](todo.md), and the recorded owner
-decisions. This audit supplements that plan; an item is complete only with implementation and
-passing evidence. Whole-spec tracking issue: #563, under #70. This task makes no writes to
-existing approved pull requests.
+Requested on 2026-10-22: implement the whole [SPEC-apply.md](../../SPEC-apply.md).
+Tracking issue: #563, under #70. Implementation is assembled in draft
+[PR #604](https://github.com/GoldLegendW80/jobapp/pull/604), branch `apply/spec-completion`.
+The draft is not ready to merge or deploy: the combined gate and independent reviews remain.
 
-## Integration baseline
+## Integration boundary
 
-The separate `apply/spec-completion` branch combines immutable snapshots of existing pull
-requests #465, #521, #517, #516, #470, #598, #583, #588, #589, #590, #591, #592, #595, #600 and
-#601. Their source branches and GitHub states are not changed. This makes their dependencies
-available for development without merging anything into main or deploying it.
+The isolated branch combines immutable snapshots of #465, #521, #517, #516, #470, #598,
+#583, #588, #589, #590, #591, #592, #595, #600 and #601. This task makes no writes to those
+source branches or existing approved pull requests. Their approval does not approve this
+combined tree. Main has not been merged or deployed by this task.
 
-The integration preserves both sides of the A9/A10a live-view and interrupted-run changes and
-the A13c model-check services and worker. The combined tree requires fresh regression checks;
-an approval of an original snapshot is not an approval of the combined tree.
+Tests use invented `e2e-*@example.org` accounts, local fake ATS sites and fake Gmail.
+No test submits to a real company or sends real mail. Browser verification uses the
+repository's Playwright tooling because Chrome DevTools MCP is unavailable in this session.
+At most two heavy test jobs run together; the final gate needs a quiet machine.
 
 ## Capability and evidence checklist
 
-| Capability | Existing implementation | Completion work | Evidence required |
-|---|---|---|---|
-| A1 to A8: forms, answers, fill, approval, reports, base adapters | Main plus existing apply snapshots | Audit interactions and refusal paths; fix specification gaps | Complete apply tests and fake ATS journeys |
-| A9: Apply myself | Recovery, chooser and manual close/reopen journeys pass | Final composed regression and independent review | Manual journey, no app submit click, isolation |
-| A10a: retries and needs you | HTTP rules, bounded waits and captcha/email-code journeys pass | Final composed regression and independent review | Injected-clock failure, timer and recovery tests |
-| A10b: sign-in recovery | Backend, UI and fake-site journeys integrated | Finish composed regression checks | Fake login walls, idempotent resume, Full auto becomes review |
-| A11 to A13c: caps, Like queue and Full auto | Main plus #591, #598, #470 | Verify composed decision, hold, rehearsals, model check, pauses and final rechecks | Counted fake submissions, clock/cap tests and journeys |
-| A14: email applications | Draft, gate, provider, UI and infrastructure integrated | Finish shared confirmation consistency, privacy and independent review | Fake Gmail only, immutable attachments, no duplicate send |
-| A15: Workday, Google Careers and VIE | Five fake-site browser tests pass | Final composed regression and review screenshots | Fake multi-step applications; Full auto hands over to review |
-| A16: LinkedIn Easy Apply | Source checkpoint integrated, acceptance pending | #253: opted-in modal flow, company-site fallback and LinkedIn pacing | Fake modal, consent revocation/checkpoint, cap and isolation tests |
-| A18a to A18c: complete external profiles | Backend, UI, schema and four fake-site browser flows pass | Finish backend regression, independent review and final composed checks | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
-| A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
+| Capability | Implemented behavior and collected evidence | Remaining verification |
+|---|---|---|
+| A1 to A8: forms, answers, approval and reports | Ashby button/JSON groups, Greenhouse JSON/numeric IDs, chooser uploads, server-owned submission evidence. All 5,478 Apply tests passed at the fidelity checkpoint. | Resolve fresh independent answer audit findings; final API and Apply/Opportunities journeys. |
+| A9: Apply myself | Four new real browser recovery flows pass, including immediate Submit-and-Close, document freezes, ended-session queue/reopen/record and no app click. Six inherited native cases and the distinct incidental-picker race pass. | Final composed regression and gate review. |
+| A10a: retries and person input | Immutable 1,800-second person wait outside the active clock; captcha and email-code browser flows retain the attempt, earlier fields and wizard steps, then require fresh approval. Whole Apply/browser checkpoint: 7,167 passed, plus three real Redis/private-HTTP cases. | Final composed regression. |
+| A10b: sign-in | Attended and later fake-site journeys pass; all 22 backend cases pass, including typed owner-bound callbacks and Full auto returning to review. | Final composed regression and ownership review. |
+| A11 to A13c: caps, queue and Full auto | Gate, holds, rehearsals, model check, pauses and decision/submission rechecks are integrated. | Independent gate audit and counted submissions on final images. |
+| A14: email | One fake Gmail message with both PDFs and seven connection journeys pass. Shared application confirmation now atomically resolves the application, MailSend and draft; 25 real database race/idempotence cases pass. Whole mail plus A14: 1,267 passed. | Final combined run and independent send-gate review. |
+| A15: Workday, Google Careers, VIE | Five real browser tests pass in 6.6 minutes; four flows each submit once after approval. Early required answers cause a fresh complete fill. Eight handoff/submission screenshots inspected. | Final composed regression and review screenshots; VIE saved-answer audit fix. |
+| A16: LinkedIn | Opt-in, private opener, modal, company fallback and pacing source integrated. Eleven native cases pass. Consent, review and three rehearsals followed by held Full auto pass. | Corrected fourth flow plus checkpoint/console flows and all six on final images. |
+| A17: privacy and retention | Seven retention cases; owner/cascade route coverage; six complete private canary workflows; 42 privileged-boundary AST cases; 16 actual Docker firewall namespace checks. | New two-user browser journey and final independent privacy review. |
+| A18: external profiles | Four real Chromium flows pass in 4.6 minutes; 5,278 affected backend cases and 429 frontend cases pass. One-use Save approvals, exact CV pin, explicit Replace, autosave consent and durable edits/Skip; eight real-Postgres route/lock cases. Twenty screenshots inspected. | Final composed regression and independent Save-gate review. |
 
-Shared exclusion/duplicate matching is implemented. A15, A18 and recovery fixture journeys
-pass. Three of LinkedIn's six flows passed; the remainder awaits the final composed run.
-Current source work covers the answer and fake-ATS follow-ups, request-schema bounds, shared
-email confirmation and final privacy proof. Letter editing passes its real database/API
-checks; its visible browser proof and the final independent reviews remain.
+## Shared completion work
 
-The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
-(manual recovery), #581 (editing a letter answer), #594 (document rendering wait), #587
-(reporting pages addressed to an AI), #585 (unambiguous stored answer mappings), #593 (answer
-filter limits), and #582 (fixture fidelity). Unknown qualifications and visas stay unanswered
-unless the person's stored facts establish them. Human choices and real-site acceptance are
-recorded separately from unfinished implementation.
+- Exclusion and duplicate matching: fold case before removing accents, hidden controls,
+  Unicode letters, IDNA and canonical fixed points. All seven new real-database cases and
+  1,085 pure/property cases pass. The Jobs/Apply checkpoint passed 6,280 with 15 existing
+  personal-source skips; corrected manual fixtures then passed all 113 affected cases.
+- Document-letter editing: adapter-owned classification, ordinary 5,000 and letter 10,000
+  limits, no truncation/control normalization, exact field-shape binding and displayed limits.
+  Approved rendering waits retain one immutable hour per attempt. All 201 real database/API
+  cases pass; all migration cases pass through the single `0026` head. The five new visible
+  editor journeys still need to run.
+- Request limits: six new request schemas have explicit bounds, without registry exceptions
+  or larger body classes. All 45 related identity/body-limit/schema boundary cases pass,
+  including worst escaped bodies and the one-byte-over limit.
+- Answer integration checkpoint `080d04c6`: 10,310 Apply/agents/browser/mail cases passed,
+  19 existing opt-in cases skipped, and one mail setup umask case failed. There were no Apply
+  failures. The subsequent setup fix passes all 21 setup cases and all 1,267 mail/A14 cases.
+- Grounded locative and coordinated claims follow-up `74d31e09`: 2,182 affected cases pass.
+  Independent review subsequently found nominal locative claims could still borrow company
+  words as personal facts. It also found VIE/generic execution bypassed saved person values,
+  generic snapshot joining lost AI-reader warnings, and previous-application history was not
+  populated. These concrete findings are being fixed before final combined verification.
+- A17 routes: all registered private endpoint families and linked document representations
+  are exercised for owner access, signed-out refusal, cross-person/missing equivalence, CSRF,
+  no-store success/error behavior and typed callback ownership. The broad checkpoint passed
+  13,132 and exposed 21 compatible Documents cache-header expectations plus one old memory
+  accounting assertion. Preserving valid existing no-store directives fixes the compatibility
+  issue; the Documents/route/cascade rerun passed 3,515 with only that old accounting assertion.
+- The Compose accounting test now explicitly preserves the existing 5,248 MiB core total and
+  adds the optional 128 MiB mail provider. All 24 renderer/Compose cases pass. No memory limit
+  or global target changed: with mail the declared total is 5,376 MiB, 256 MiB above the
+  unchanged 5 GiB target. Physical Jetson acceptance is outstanding.
+- Mail setup now assigns exact modes independently of the operator's umask, rejects unsafe
+  existing directories before credential creation and closes descriptors on failure. All 21
+  setup tests pass, plus 175 deployment contracts. Two permission-neighbor tests detect a
+  deliberately inverted traversal condition; committed source was restored afterwards.
+- The A17 canary suite passes all 48 focused cases: six actual worker-backed workflows and
+  42 AST boundary cases. It captures real queue result/event metadata and logs without leaking
+  the canaries. The actual firewall harness passes 16 checks for independent mail/browser
+  coexistence, drift repair and uninstall; pinned shellcheck passes.
 
-## Dependency and ownership decisions
-
-- Sign-in recovery supplies a user-owned, typed callback registry shared with external profile
-  completion. A callback cannot name another user's run or an arbitrary queue job.
-- Profile completion needs persisted addresses, section states, locators and audit metadata
-  that migration 0017 did not create. An additive migration is required despite the original
-  plan's "no migration" estimate. PR #591 supplies revision 0023; profile completion takes
-  0024, and required mail send storage follows as 0025.
-- The worker prepares email drafts; the process allowed to hold the mail send key owns the
-  actual send gate. An uncertain provider result never causes an automatic resend.
-- Testing uses invented `e2e-*@example.org` accounts and local fake sites/providers. At most
-  two heavy test jobs run at once. Browser verification uses the repository's Playwright
-  tooling because Chrome DevTools MCP is not configured in this session.
-- Real-site Checkpoint A remains a human acceptance step after a checked deployment. It is
-  not simulated by a fixture and is not claimed as completed by implementation tests.
+Detailed slice evidence is retained under [tasks/evidence](../evidence), including
+[recovery](../evidence/apply-recovery-runtime), [external profiles](../evidence/apply-a18),
+[A17 boundaries](../evidence/apply-a17/boundaries.txt) and
+[A17 routes](../evidence/apply-a17/routes.txt). Checkpoint counts are separate runs; they are
+not a claim that the final combined tree has passed.
 
 ## Final verification
 
-- [ ] All capabilities above have implementation, including their provider dependencies.
-- [ ] The complete affected API modules pass, with fixture-only skips identified.
-- [ ] Frontend typecheck, lint, component tests and build pass.
-- [ ] All apply/browser journeys needed by the completed capabilities run on isolated stacks.
-- [ ] Migration upgrade and downgrade checks pass with one Alembic head.
-- [ ] Independent reviews cover the submission, profile-save and email-send gates.
-- [ ] The task's write audit confirms that approved PRs and their source branches were untouched.
-- [ ] Each remaining human step or external configuration requirement is named explicitly.
+- [ ] Resolve all independent audit blockers and complete every implementation capability.
+- [ ] Complete affected API suites pass, with fixture-only skips identified.
+- [ ] Frontend typecheck, lint, component tests and production build pass.
+- [ ] Required Apply, Browser, Opportunities and mail journeys run on final composed images.
+- [ ] Inspect the required final review, handoff and submission screenshots.
+- [ ] Migration upgrade/downgrade checks pass with one Alembic head.
+- [ ] Independent reviews cover application Submit, external-profile Save and email Send.
+- [ ] Final write audit confirms this task did not modify approved PRs or their branches.
+- [ ] Each owner acceptance or external configuration step is named explicitly.
 
-## Evidence collected during implementation
+## Owner acceptance and deployment prerequisites
 
-- A10b backend, source commit `4f6e0b99`: 6,604 application/browser tests passed against
-  throwaway databases and local fakes. Its web slice `0f643afb` passed typecheck and 416 tests
-  in 17 frontend files. Final follow-up `13adfb29` passed both attended and later sign-in
-  recovery journeys against the local fake, with one explicitly approved fake submission.
-  Its final 22-case backend subset and the composed frontend suite still need to run.
-- A18 schema `41e94c86`: 69 application-start regression tests passed. Core `6a4f7244` passed
-  218 focused cases, mostly policy cases. Follow-up `18cbb047` passed 250 cases, including real
-  lease DTOs, API boundaries, known-site dialogs, concurrent approval, pause, recovery and the
-  shared token/turn budgets. Atomic-write/cancellation follow-up `b808cd50` passed 157 focused
-  cases. The whole apply/browser run passed 4,950 cases and found one outdated queue registry
-  assertion; its exact composed assertion is corrected, with a rerun pending. CV pinning
-  `354a9f5f` uses the exact reviewed version and PDF digest: a newer default cannot substitute
-  its bytes, and a missing or changed version prevents upload and Save. Final profile tests
-  passed 30 cases. Browser testing found and fixed a stale Replace checkbox and premature
-  completion after the first autosave section (`2d20cf64`, `466c7a5f`). All four real browser
-  flows still require a passing rerun by the fresh continuation agent. Fresh-request tests found
-  that Edit and Skip returned success without a database commit. The thin fix `0d2ed479`
-  (integrated as `7e4f8edc`) passed five durability cases, including the exact persisted values
-  hash and section authorisation; browser and whole-module reruns continue. The dedicated
-  [A18 evidence](../evidence/apply-a18/tests.txt) records the remaining proof and stack recipe.
-  The continuation's final browser run passed the complete Account/sign-in/edit/Save/Skip
-  journey but left three failures. Its broad backend run was interrupted after 1,463 passes
-  and two real LinkedIn classification assertion failures; it is not whole-module proof.
-  The committed [runtime handoff](../evidence/apply-a18/runtime-handoff.txt) preserves exact
-  run IDs, timing discrepancies and pending fixture assertions for a fresh debugger.
-- A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
-  passed using a local fake Google service. Gate follow-up `5d0b18db` passed 1,251 mail,
-  application and migration tests. It checks the exact recipient, both immutable PDFs,
-  current approval, pauses and uncertainty without an automatic resend. The final A14 fake
-  browser journey passed with one message and both PDFs, and seven existing Gmail connection
-  journeys passed. A broad application/mail/migration run passed 5,808 cases and exposed two
-  compatibility failures, both fixed with a 310-case affected rerun. Final combined suites
-  remain. The shared "It was submitted" action still needs atomic, idempotent resolution of
-  the linked application, MailSend and draft; the mail-specific resolver already updates all
-  three. Independent review and Docker firewall namespace checks also remain.
-- Mail infrastructure `a03dbfd2` passed 175 deployment contract checks, 52 allocator checks,
-  pinned shellcheck and 81 CI plan checks. The normal Apply journey topology now supplies
-  both fake Gmail and fake ATS services. A 12 MiB synthetic provider send succeeded at its
-  128 MiB cap with zero OOM events or restarts, but memory reached the cap with 292 pressure
-  events. This demonstrates the bounded test workload, not spare headroom or Jetson acceptance.
-- A16 source `558e5c01` is integrated as `874a1722`, with both email and LinkedIn retained in
-  Full auto's source registry. The private Easy Apply opener is unavailable to models;
-  ordinary submit detection is unchanged. Checkpoint and pinned-button follow-up `ff575c9c`
-  is integrated as `4a07e410`; eleven native Chromium refusal/opener cases passed. Finite
-  pacing and the external manual alternative `b848d029` are integrated as `1ea2a9dc`: production
-  requires at least 600 seconds between LinkedIn submissions and at most 15 a day. Forty-two
-  configuration and 55 frontend cases passed. Modal journey acceptance continues.
-- A15 source `b6248171` and shared wizard continuation `24390c4a` are integrated as
-  `0137366a` and `0ff76c1c`. An early required answer prevents Next, and an exact person edit
-  queues a fresh full fill before final approval. Adapter-owned target and field-shape markers
-  remain in the approval hash. The isolated builder passed 105 pure cases, nine database
-  cases and 355 frontend cases. Its composed browser journeys remain unrun.
-- Composed A15 backend run: 8,435 passed, 19 skipped, with one failure and seven setup
-  errors caused by exact adapter/fixture expectations that predated the added adapters and
-  LinkedIn test setting. Their corrections and the typed/inline summary fixes passed 149
-  pure/Compose and 420 adapter/owned-gate cases. The evidence lists the existing skips.
-  Source `a6ecddef` is integrated as `466ed0c4`; its actual wizard journeys are running.
-- A16 finite source `78a9276a` is integrated as `e1d4904f`, with shared typed and inline
-  summary helpers `5e259507` and `983fa488`. The final focused database suite passed 77
-  cases and pure summary checks passed 19. Six-flow browser acceptance remains pending;
-  the previous run passed consent then found the inline summary parser issue. The source
-  fix is covered by regressions but still requires a rebuilt application journey.
-- A9 recovery source `60103855` and final passive confirmation watch `b8a1a503` are
-  integrated as `015794d6` and `25b80508`. The focused manual/recovery/queue database suite
-  passed 90 cases, with 123 pure browser ownership/action/recovery cases also passing.
-  File chooser ownership and the full 30-minute person-action wait remain unfinished.
-- A9 chooser/input ownership source `34fe8b86` is integrated as `39baa442`. The app now owns
-  the Attach input turn, binds a chooser to its observation boundary and rechecks ownership
-  after pacing. Three additional database regressions and native Chromium race proof remain
-  pending. A fresh continuation owns the still-unimplemented A10a wait.
-- Fresh A18 diagnosis correlated the retained traces with host power logs: two Idle Sleep
-  periods of 1,034 and 1,070 seconds explain the previous readiness/timeout discrepancy.
-  New browser commands keep the host awake only for the foreground command and retain the
-  same timeouts, durable-state checks and atomic race assertions. Their rerun is in progress.
-- A15 browser evidence `4bb524cc` is integrated as `b4a558a3`: all five serial tests passed
-  in 6.6 minutes, covering four flows with exactly one approved fake submission each.
-  Eight inspected handoff/submission screenshots are retained; review screenshots remain
-  for the final composed run. The 48 MiB Workday fixture peaked at 454,807,552 browser bytes
-  under its 1 GiB cap, without OOM or restart. This is fixture evidence, not a real-site or
-  Jetson measurement. Its owned stack and images were removed.
-- A18 read-lock fix `85d0aca1` is integrated as `1d6cda5a`. Three real-Postgres NOWAIT
-  regressions first reproduced retained locks in profile detail, image and refusal paths;
-  the complete eight-case route file then passed. Completed reads now release their
-  transactions before returning. All async profile writers were checked for a commit before
-  queue/browser awaits. The four-flow runtime rerun remains required.
-- A10a fixed person wait `8403f579` is integrated as `e0696d76`. Private lease-owned waits
-  pause the active/idle clocks for at most 1,800 seconds with an immutable deadline, retain
-  the same adapter and prior report across wizard continuation, and remain distinct from
-  sign-in. Pure/browser/wizard checks passed 618 cases, with 19 banner cases also passing.
-  Database, email-code detection and native/browser acceptance continue.
-- A18 final evidence `fd6674d1` is integrated as `a648592a`: four actual Chromium flows
-  passed, 5,278 affected backend cases passed (including all 22 A10b cases and the exact
-  seven-job/two-cron queue assertion), and 429 frontend cases passed with typecheck/lint.
-  Twenty inspected screenshots are retained. Its owned stack, four tags and temporary
-  settings were removed; the borrowed renderer was preserved.
-- A10a follow-up `18f01b7b` and final evidence `24f0c565` are integrated as `f1e21489` and
-  `3b773b39`. The whole Apply/browser run passed 7,167 cases, then three additional real
-  Redis/private-HTTP cases passed. Six distinct native cases passed, including paced-input
-  takeover and same-tab captcha value retention. The fresh runtime continuation owns the
-  remaining UI journeys and incidental chooser race, with only its browser test image
-  transferred from the builder.
-- A2 source `acd0c580`, `3035910d` and `f81c9181` is integrated as `ef253b8d`, `739bde8d`
-  and `771ee1c3`. All seven new real-database duplicate/warning cases failed before the fix
-  and passed after. The Jobs/Apply run passed 6,280 cases with 15 existing personal-source
-  skips and three stale manual fixtures from before `18f01b7b`; applying that exact existing
-  correction locally made all 113 manual/start cases pass. Shared Unicode/canonical/cap
-  checks passed 1,085 cases. Its worktree is clean and test services removed; final independent
-  review and the complete composed run remain.
-- The composed captcha journey found that the server allowed person input while its live
-  viewer remained read-only. Source `4c9d38cf` is integrated as `25f86202`: job and Account
-  viewers now use the server-owned waiting state and remount when ownership changes. The
-  frontend suite passed 438 cases, with 32 final focused cases, typecheck and lint passing.
-  The actual recovery journey rerun remains required. A native incidental-chooser regression
-  passed with a separate picker opened during the paced Attach approach; the app refused the
-  changed chooser without uploading either file. These results do not replace the pending
-  immediate Submit-and-Close and ended-session queue journeys.
-- The composed Apply/body-limit/migration run at `1f6cdf6e` passed 5,421 cases, with three
-  failures and one setup error. Two failures dispatched manual test cases through the review
-  helper; the setup error omitted an imported fixture. Mechanical test fix `8ccd167b` then
-  passed all 201 real database/API letter and render-wait cases, including both manual modes,
-  second edits, forged classification, control characters and escaped multibyte bodies.
-  All migration cases passed with one `0026` head, upgrade/downgrade and matching metadata.
-  The remaining body-limit assertion identified six new unbounded request schemas. Source
-  `fcad617a`, integrated as `a6d0301f`, adds explicit bounds without registry exceptions or
-  larger body classes. Its new API boundary cases await their corrected error-shape rerun.
-- Recovery's actual captcha and email-code journeys both passed through person input,
-  same-attempt continuation, retained earlier fields/steps and one freshly approved fake
-  submission. Four manual recovery tests passed, including immediate person Submit-and-Close,
-  both document freezes, no app click, and an ended session returning to the queue for reopen
-  or explicit recording. Final evidence cleanup and the complete composed run remain.
-- A1 fidelity source `eeecebad` is integrated as `446aa8c5`: Ashby JSON/button groups,
-  chooser-backed uploads and ignored Autofill; Greenhouse numeric question ids and JSON;
-  server-owned sessions, observed inputs/dwell and replay refusal. Eleven new cases failed
-  before the source fix, then 526 focused cases and all 5,478 Apply backend cases passed.
-  The required whole Apply and Opportunities browser groups remain for the final stack.
-- Answer/report sources `b8394192`, `337deea2`, `e01036c8` and `1dc69d76` are integrated as
-  `1f6cdf6e`, `5551fac5`, `08299507` and `e55b9471`. These cover direct AI-reader addresses,
-  explicit stored question mappings and grounded claim structures. The latest pinned
-  Apply/agents run passed 6,925 cases with 19 existing opt-in skips and five failures;
-  purpose/directive grammar and the remaining runtime integration cases still need fixes.
-  An earlier combined run with the preceding answer source passed 8,666 cases and failed
-  239; that fanout must be checked again on the final source rather than assumed resolved.
-- A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
-  image kinds, posting deletion and the privileged-click import boundary. The final route,
-  account-deletion and mode-canary suite must run after all features are integrated.
-- Integration checks through `0ff76c1c`: whole API lint and formatting passed on 711 files,
-  frontend typecheck passed, all 81 CI plan cases passed, and E2E group registration passed.
-  Frontend lint last passed before the latest mail and wizard slices; the final composed checks
-  remain required.
-- Integration through `9ae55749`: API lint and formatting passed on 712 files, and frontend
-  lint passed. These static checks do not replace the pending combined regression journeys.
+Real-site Checkpoint A remains the owner's step after a checked deployment: choose a real
+Ashby/Greenhouse role, observe and approve it, and inspect its screenshots and frozen documents.
+Real sign-ins, real profile-save acceptance and Full auto's live acceptance also remain human
+steps. Local fakes do not satisfy these physical/site acceptance criteria.
 
-The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
-on the recovery journeys, A16, the filed follow-ups and final cross-capability verification. Existing
-approved branches receive no writes from this task. A read-only comparison on 2026-10-22 found
-concurrent updates to #579, #538, #521, #518 and #505 elsewhere; #521's update is a merge of main.
-The original snapshots named above remain the isolated integration baseline until explicitly
-reconciled and retested.
+The maximum 12 MiB synthetic mail send completed at the 128 MiB provider cap with no OOM or
+restart, but reached the cap and recorded 292 pressure events. The bounded fake Workday run
+peaked at 454,807,552 browser bytes under its 1 GiB cap. These measurements establish those
+fixture workloads only; neither establishes Jetson headroom or the 7.4 GiB host acceptance.
 
-Read-only board refresh on 2026-10-22: 12 cards Building, 0 In review, 4 Fix & re-check and 24
-Approved across the project. No board changes were applied. The last fetch confirms
-`origin/main` (`e369e41d`) is already an ancestor of this integration branch.
+The owner must provision production credentials and install host egress rules with sudo as
+specified in [mail setup](../../docs/mail-application-setup.md). This task has not read real
+secret files, run production setup, changed host firewall rules, merged main or deployed.
