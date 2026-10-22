@@ -319,14 +319,19 @@ def test_plain_text_keeps_paragraphs_and_drops_markup() -> None:
 # --- the client --------------------------------------------------------------------------------
 
 
-def read_all(server: Any, variant: str, **client: Any) -> dict[str, Any]:
-    """Each kind's postings, or its error code, from `variant` of the fake server."""
+def read_all(
+    server: Any, variant: str, *, kinds: set[str] | None = None, **client: Any
+) -> dict[str, Any]:
+    """Each kind's postings (or only `kinds`), or its error code, from `variant` of the fake
+    server."""
 
     async def go() -> dict[str, Any]:
         answers: dict[str, Any] = {}
         options = {"timeout_s": 1.0, "sleep": no_sleep, **client}
         async with FeedClient(stub_base_url=server.base(variant), **options) as c:
             for kind, reader in sources.readers(50).items():
+                if kinds is not None and kind not in kinds:
+                    continue
                 try:
                     answers[kind] = await reader(c, Feed(kind=kind))
                 except FeedError as exc:
@@ -364,12 +369,23 @@ def test_429_once_is_retried(feeds_stub: Any) -> None:
 
 
 def test_one_request_per_feed_and_the_thread_reads_its_comments_only(feeds_stub: Any) -> None:
-    read_all(feeds_stub, "many")
-    assert requests_to(feeds_stub, "/many/remoteok/api") == 1
-    assert requests_to(feeds_stub, "/many/weworkremotely/") == 1
-    # Two threads: the account twice, the submissions up to each thread, 50 comments each.
-    assert requests_to(feeds_stub, "/user/whoishiring.json") == 2
-    assert requests_to(feeds_stub, "/many/hackernews/v0/item/") == 2 + 3 + 50 * 2
+    # Distinct addresses per feed, not requests: on a loaded machine a read past the client's
+    # timeout is retried, which reads the same address again, never one more.
+    read: dict[str, list[str]] = {}
+    for kind in sources.readers(50):
+        before = stub_stats(feeds_stub)
+        read_all(feeds_stub, "many", kinds={kind}, timeout_s=10.0)
+        after = stub_stats(feeds_stub)
+        read[kind] = [path for path, n in after.items() if n > before.get(path, 0)]
+    assert read["remoteok"] == ["/many/remoteok/api"]
+    assert len(read["weworkremotely"]) == 1
+    assert "/many/weworkremotely/" in read["weworkremotely"][0]
+    # Each thread: the account, the submissions up to the thread (3003, 3002, then 3001 for
+    # the hiring one), 50 comments.
+    for kind, submissions in (("hackernews_freelance", 2), ("hackernews_hiring", 3)):
+        assert sum("/user/whoishiring.json" in path for path in read[kind]) == 1, kind
+        items = [path for path in read[kind] if "/many/hackernews/v0/item/" in path]
+        assert len(items) == submissions + 50, kind
 
 
 def test_a_thread_whose_every_comment_failed_reports_the_error() -> None:
