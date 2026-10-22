@@ -343,7 +343,7 @@ def test_an_employer_word_alone_puts_no_label_on_topic(label: str) -> None:
         ("Why would it be nice to join us?", None),
         ("Why Do You Want To Join Us?", None),
         ("Tell us about a project you led in Paris", None),  # experience, not a motivation
-        ("Why do you want to join our US team?", None),  # declared: "US" read as the pronoun
+        ("Why do you want to join our US team?", "practical"),  # "US" in capitals: the country
     ],
 )
 def test_a_capitalised_place_in_a_question_of_motivation_is_practical(
@@ -351,6 +351,90 @@ def test_a_capitalised_place_in_a_question_of_motivation_is_practical(
 ) -> None:
     for reason in agent.AGENT_REASONS:
         assert agent.refusal(label, "text", (), reason) == code
+
+
+# --- "us": only the whole short "Why us?" is asked, never a compound label ---------------------
+
+# Review of PR #592: each of these was off_topic on main and reached the model while "us" was an
+# employer word. A second closed question never rides on the pronoun.
+US_COMPOUND = [
+    "Why us and are you over 18?",
+    "Why us? Are you at least 21?",
+    "Why us, and do you own a car?",
+    "Why us, and do you smoke?",
+    "Why us and do you have a degree?",
+    "Why us and who referred you?",
+    "What could you bring to us and when did you graduate?",
+    "What would you bring to us and your GPA?",
+    "What do you know about us and do you speak German fluently?",
+    "What do you know about us?",
+    "What could you bring to us?",
+]
+
+# Neighbours: refused by a vocabulary or off topic, never asked.
+US_COMPOUND_NEIGHBOURS = [
+    "What do you like about us?",
+    "Why us; do you hold a driving licence?",
+    "Pourquoi nous et avez-vous le permis ?",
+    "Warum uns und wann können Sie anfangen?",
+]
+
+US_SHORT = [
+    "Why us?",
+    "Why us ?",
+    "why us",
+    "WHY US",
+    "Why Us?",
+    "1. Why us?",
+    "Why us, please?",
+    "Please, why us?",
+    "Why us exactly?",
+    "Why us, then?",
+    "Pourquoi nous ?",
+    "Warum uns?",
+    "¿Por qué nosotros?",
+]
+
+
+@pytest.mark.parametrize("label", US_COMPOUND)
+def test_a_compound_label_with_us_stays_off_topic(label: str) -> None:
+    for reason in agent.AGENT_REASONS:
+        assert agent.refusal(label, "text", (), reason) == "off_topic"
+        assert agent.eligible([_outcome(label, reason)]) == []
+
+
+@pytest.mark.parametrize("label", US_COMPOUND_NEIGHBOURS)
+def test_a_neighbour_compound_label_with_us_is_never_asked(label: str) -> None:
+    for reason in agent.AGENT_REASONS:
+        assert agent.refusal(label, "text", (), reason) is not None
+        assert agent.eligible([_outcome(label, reason)]) == []
+
+
+@pytest.mark.parametrize("label", US_SHORT)
+def test_the_short_why_us_is_asked_and_judged_as_the_company(label: str) -> None:
+    expected = "practical" if label == "WHY US" else None  # all capitals: read as the country
+    for reason in agent.AGENT_REASONS:
+        assert agent.refusal(label, "text", (), reason) == expected
+    if expected is None:
+        sources = agent.sources_of({}, "Engineer", "Acme Robotics")
+        asked = agent.Question("k", label, "text", reason="free_text_for_the_agent")
+        value = "The robots you build are what I want to make."
+        reply = agent.Reply((agent.Proposal("k", value, "facts"),))
+        (verdict,) = agent.judge([asked], reply, sources)
+        assert verdict.code == "accepted"
+
+
+@pytest.mark.parametrize("label", ["Why US?", "Why the US?", "Why the USA?", "Why us or them?"])
+def test_the_country_us_stays_practical(label: str) -> None:
+    assert agent.refusal(label, "text", (), "free_text_for_the_agent") == "practical"
+
+
+def test_why_us_without_a_company_is_dropped_at_the_judge() -> None:
+    sources = agent.sources_of({}, "Engineer", "")
+    asked = agent.Question("k", "Why us?", "text", reason="free_text_for_the_agent")
+    reply = agent.Reply((agent.Proposal("k", "The robots you build.", "facts"),))
+    (verdict,) = agent.judge([asked], reply, sources)
+    assert verdict.code == "off_topic"
 
 
 # --- "why <name>": the posting's company, checked at the judge --------------------------------
@@ -369,8 +453,9 @@ def test_a_capitalised_place_in_a_question_of_motivation_is_practical(
         ("Why Porto Alegre?", "Acme Robotics", "off_topic"),
         ("Why Acme Robotics?", "", "off_topic"),
         ("Why Globex?", "Acme Robotics", "off_topic"),
-        # on topic by its words, not by the name ("example" is a subject word)
+        # the pronoun alone is the posting's company
         ("Why us?", "Acme Robotics", "accepted"),
+        # on topic by its words, not by the name ("example" is a subject word)
         ("Why this role?", "Acme Robotics", "accepted"),
         ("Why Example Robotics?", "Acme Robotics", "accepted"),
     ],

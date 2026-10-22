@@ -32,7 +32,9 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
      person's; "Why do you want to join us?", "Tell us about a project" and "Share your
      portfolio" are asked. The name of "Why <name>?" is checked twice: here it must not be a
      place of the gazetteer or a time ("Why Berlin?", "Why now?": `practical`), and at the judge
-     it must be the posting's company (`off_topic` otherwise: "Why Lisbon?");
+     it must be the posting's company (`off_topic` otherwise: "Why Lisbon?"). "us" is no
+     employer word: only the whole short "Why us?" (`_US_ONLY`) is asked, as the company, so
+     "Why us and are you over 18?" or "What do you know about us?" stay the person's;
   3. the vocabularies, in any wording, open or not:
   - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
     accuracy statement (arbitration, background checks, marketing, data retention, a
@@ -115,8 +117,9 @@ skips the agent: every question it would have asked stays left.
 Declared open points (test_a5_agent_filters.py holds the families these rules are tested over):
 - a place the gazetteer does not know reaches the model in "Why Lisbon?" (its answer is dropped
   unless Lisbon is the posting's company) and in "Why do you want to join us in Lisbon?" (its
-  answer is kept unless it states a practicality); "US" inside a question ("our US team") is read
-  as the pronoun, only "the US", "USA" and "United States" as the country;
+  answer is kept unless it states a practicality); "US" in capitals inside a question of
+  motivation is read as the country ("our US team", `practical`), and so is a label written
+  wholly in capitals ("WHY US?");
 - a practicality typed without a first person or a time to come ("Berlin suits me", "Remote,
   please") is typed;
 - what is refused though it is about the job: an employer word outside a question of motivation
@@ -418,7 +421,6 @@ _EMPLOYER = re.compile(
     r"\b(?:work (?:here|for|with|at)|join\w*|rejoindre|compan\w+|role|position|team|this job"
     r"|opportunity|ideal|environment|fit|work(?:ing)? in|hir(?:e|ing)|here|entreprise|poste"
     r"|equipe|empresa|puesto|equipo|unternehmen|stelle|bei uns|trabajar (?:aqui|con|en))\b"
-    r"|(?<!\bthe )\bus\b"
 )
 _MOTIVATION = re.compile(
     r"\b(?:why|pourquoi|warum|wieso|weshalb|por ?que)\b"
@@ -430,6 +432,16 @@ _MOTIVATION = re.compile(
     r"|\bhow (?:would|will|could|can|do) you (?:contribute|fit|add)\b"
     r"|\bqu'est-ce qui\b|\ben quoi\b|\bwas (?:reizt|motiviert|begeistert|interessiert)\b"
     r"|\bque (?:te|le) (?:atrae|motiva|interesa)\b"
+)
+# The name of a short "Why us?" (`_WHY_NAME`): the pronoun alone, after a few polite words, is the
+# posting's company and never a place. Only the whole label: "Why us and are you over 18?" is
+# no short why, so a second closed question never rides on the pronoun.
+_POLITE = r"(?:please|exactly|really|specifically|then)"
+_US_ONLY = re.compile(rf"^(?:{_POLITE}\s+)?(?:us|nous|uns|nosotros)(?:\s+{_POLITE})?$")
+# The same short why read on the whole label, commas allowed ("Please, why us?", "Why us, then?").
+_WHY_US = re.compile(
+    rf"^[\W\d_]*(?:{_POLITE}\W+)?(?:why|pourquoi|warum|por ?que)\W+(?:{_POLITE}\W+)?"
+    rf"(us|nous|uns|nosotros)(?:\W+{_POLITE})?\W*$"
 )
 # "Why <Company>?": a short why that is not a verb, the name in group 1 (`_named_only`).
 _WHY_NAME = re.compile(
@@ -603,11 +615,12 @@ def _names_where(text: str) -> bool:
 
 def _names_a_place(label: str) -> bool:
     """A capitalised name of the gazetteer anywhere in a label ("Why do you want to join our
-    Berlin team?"). Only capitalised words are read, so "nice" or "us" in a sentence is no place."""
+    Berlin team?"). Only capitalised words are read, so "nice" or "us" in a sentence is no place;
+    "US" in capitals is the country ("Why do you want to join our US team?")."""
     names = [
         word
         for word in re.findall(r"[^\W_]+", _visible(label))
-        if word[0].isupper() and word.lower() != "us"
+        if word[0].isupper() and word not in ("us", "Us")
     ]
     return bool(names) and bool(places_of(_plain(" ".join(names))))
 
@@ -617,15 +630,17 @@ def _named_only(text: str) -> str | None:
     else None: the one topic the label alone cannot settle."""
     if _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)):
         return None
-    found = _WHY_NAME.search(text)
+    found = _WHY_US.search(text) or _WHY_NAME.search(text)
     return found.group(1) if found else None
 
 
 def _not_an_employer(text: str) -> bool:
     """A "why <name>" whose name is a place of the gazetteer or a time or a move ("Why Berlin?",
-    "Why the US?", "Why now?"). "Why us?" never gets here: "us" is an employer word."""
+    "Why the US?", "Why now?"). The pronoun alone ("Why us?", `_US_ONLY`) is the company."""
     name = _named_only(text)
-    return name is not None and bool(places_of(name) or _NOT_A_NAME.search(name))
+    if name is None or _US_ONLY.match(name):
+        return False
+    return bool(places_of(name) or _NOT_A_NAME.search(name))
 
 
 def _on_topic(text: str) -> bool:
@@ -636,7 +651,10 @@ def _on_topic(text: str) -> bool:
 
 def _names_the_company(name: str, participants: Sequence[str]) -> bool:
     """The name of a "why <name>" question is the posting's company: each of its words is one of
-    the company's, or the name glued is the company glued ("Why ExampleRobotics?")."""
+    the company's, or the name glued is the company glued ("Why ExampleRobotics?"). The pronoun
+    alone ("Why us?") names the posting's company whatever it is called, if there is one."""
+    if _US_ONLY.match(name):
+        return any(_plain(company) for company in participants)
     words = set(name.split()) - {"the", "a", "an"}
     for company in participants:
         folded = _plain(company)
