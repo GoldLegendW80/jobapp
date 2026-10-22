@@ -425,8 +425,10 @@ def test_profile_save_refreshes_after_run_and_authorisation_locks(
             original_scalar = Session.scalar
 
             def scalar(session, query, *args, **kwargs):
+                descriptions = getattr(query, "column_descriptions", ())
                 if (
-                    query.column_descriptions[0].get("entity") is Authorisation
+                    descriptions
+                    and descriptions[0].get("entity") is Authorisation
                     and query._for_update_arg is not None
                 ):
                     calls[0] += 1
