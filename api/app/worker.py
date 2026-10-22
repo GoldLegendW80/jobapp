@@ -825,7 +825,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         else Settings.model_fields["browser_session_max_s"].default
     )
     # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
-    fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
+    fill_timeout_s = table["apply_fill"] + session_max_s + 1800 + APPLY_JOB_MARGIN_S
     submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
     manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
     return QueueSpec(

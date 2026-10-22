@@ -1,0 +1,31 @@
+A10a person wait continuation, source from 39baa442
+
+Injected-clock regression RED before fix: repeated captcha wait changed deadline
+3040 to4540. Later Workday captcha RED before fix: resumed report lost prior
+identity answers and failed final summary as form_changed.
+
+Browserd private apply_fill/token-owned begin/read/resume has a fixed1800s
+allowance per lease, outside active900s and idle300s. API mirror/readback and
+Redis-loss reconstruction retain browserd's remaining deadline independently of
+the SignIn session setting. Polls use passive snapshots. Person input is held
+until same-lease resume, cancellation or expiry. No model timer tool added.
+SignIn Done/Cancel rejects Apply waits, including stale completed handoff state.
+Known-wizard continuation retains the adapter, prior outcomes, ordered steps,
+job target, current step and prior shape markers. Required-answer continuation
+still queues a fresh full fill under the existing partial-wizard contract.
+
+PASS618: test_a10a_wait_pure, browserd_unit, b12a_unit, b4_live_unit,
+a9_browserd, b5_actions, a15_wizards, a15_addresses and worker fill-timeout unit.
+Command: api/.venv/bin/python -m pytest [listed files] -q --tb=short,
+using main's installed interpreter, own worktree source, require_escalated for
+localhost fake listeners only. No Docker or external sites used for this pass.
+PASS19: web/src/features/browser/handoff-banner.test.tsx.
+PASS: pnpm --dir web run typecheck.
+PASS: ruff check app tests ../browser/browserd; format check736files.
+PASS: e2e_groups.py registry. CI plan running at first source checkpoint.
+
+Pending: focused real Postgres/Redis A10a/run/known-wizard proof, native Chromium
+captcha and inherited A9 chooser/takeover proof, A9 final3DB regressions,
+whole Apply/browser checks, independent composed review and final runtime.
+No image built or stack started before first source checkpoint. Root granted
+heavy slot1 after source checks. No deployment or real account/site/mail used.

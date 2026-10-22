@@ -284,6 +284,35 @@ class PersonAnswer:
 class Deterministic(Generic):
     """Known site with ordered steps, filled without the form or answer model."""
 
+    def _fill_report(self, factory):
+        report = getattr(self, "_waiting_report", None)
+        self._waiting_report = None
+        if report is None:
+            return factory()
+        # Refill only this page; earlier pages remain the exact approval/replay record.
+        prefix = f"s{self.step + 1}/"
+        report.outcomes = [
+            o
+            for o in report.outcomes
+            if (
+                not o.field.key.startswith(prefix)
+                if self.step
+                else re.match(r"s[0-9]+/", o.field.key)
+            )
+        ]
+        report.stopped = report.needs_person = ""
+        report.designated = report.designated_ref = ""
+        return report
+
+    def _completed_report(self, report):
+        if report.stopped == "needs_person" and report.needs_person in {
+            "captcha",
+            "email_code",
+            "forbidden",
+        }:
+            self._waiting_report = report
+        return report
+
     async def discover(self, tools: Tools, known: frozenset[str] = frozenset()):
         found, code = await super().discover(tools, known)
         if found is not None and not code:

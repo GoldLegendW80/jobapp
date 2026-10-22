@@ -36,7 +36,7 @@ import re
 import secrets
 from typing import Any
 
-from browserd.leases import MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
+from browserd.leases import APPLY_WAIT_S, APPLY_WAITS, MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
 from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
@@ -79,9 +79,17 @@ def _lock(lease: Lease) -> asyncio.Lock:
     return LOCKS.setdefault(lease.lease_id, asyncio.Lock())
 
 
-async def _run(svc: Any, lease_id: str, token: str, work: Any, *, touch: bool = True) -> Any:
+async def _run(
+    svc: Any,
+    lease_id: str,
+    token: str,
+    work: Any,
+    *,
+    touch: bool = True,
+    passive_wait: bool = False,
+) -> Any:
     try:
-        return await svc.manager.call(lease_id, token, work, touch=touch)
+        return await svc.manager.call(lease_id, token, work, touch=touch, passive_wait=passive_wait)
     except LeaseEnded as exc:
         raise LeaseError(410, "lease_ended", reason=exc.reason) from None
 
@@ -110,7 +118,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         pacer=PACER,
         gate=capability is not None,
         lease_tag=lease_id[:8],
-        input_allowed=lambda: not manual or lease.app_turn,
+        input_allowed=lambda: not lease.person_input and (not manual or lease.app_turn),
     )
 
     async def work() -> dict[str, Any]:
@@ -128,8 +136,54 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
                 return actions.failure("page_error", "The page did not let this action finish.")
 
-    passive = manual and name == "browser_snapshot" and args.get("passive") is True
-    return 200, await _run(svc, lease_id, token, work, touch=not passive)
+    passive = name == "browser_snapshot" and args.get("passive") is True
+    wait_read = (
+        passive and lease.request.purpose == "apply_fill" and lease.wait_reason in APPLY_WAITS
+    )
+    passive = passive and (manual or wait_read)
+    return 200, await _run(svc, lease_id, token, work, touch=not passive, passive_wait=wait_read)
+
+
+async def apply_wait(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """Private Apply code path. No duration, arbitrary tool, or sign-in handoff is accepted."""
+    lease_id, action = match["lease_id"], match["action"]
+    lease = svc.manager.check_token(lease_id, req.headers.get("x-lease-token", ""))
+    if lease.request.purpose != "apply_fill" or not lease.request.automation:
+        raise LeaseError(403, "wrong_purpose")
+    body = req.json()
+    expected = {"reason"} if action == "begin" else set()
+    if not isinstance(body, dict) or set(body) != expected:
+        raise LeaseError(400, "bad_args")
+    if action == "begin" and (
+        not isinstance(body["reason"], str) or body["reason"] not in APPLY_WAITS
+    ):
+        raise LeaseError(400, "bad_args")
+    async with _lock(lease):
+        if svc.manager.current() is not lease:
+            raise LeaseError(410, "lease_ended")
+        now = svc.manager.clock()
+        if reason := lease.expired(now):
+            await svc.manager.release(lease_id, reason)
+            raise LeaseError(410, "lease_ended", reason=reason)
+        if action == "begin":
+            if lease.state == "waiting_person" and lease.wait_reason not in APPLY_WAITS:
+                raise LeaseError(409, "waiting_person")
+            # One immutable allowance for the lease, including repeated interruptions.
+            deadline = lease.scratch.setdefault("apply_wait_deadline", now + APPLY_WAIT_S)
+            if now >= deadline:
+                await svc.manager.release(lease_id, "person_timeout")
+                raise LeaseError(410, "lease_ended", reason="person_timeout")
+            lease.wait_person(now, body["reason"], "", deadline - now)
+            lease.person_input = True
+        elif lease.state != "waiting_person" or lease.wait_reason not in APPLY_WAITS:
+            raise LeaseError(409, "not_waiting")
+        elif action == "resume":
+            lease.person_input = False
+            from browserd.live import live_of
+
+            live_of(svc).give_back(lease_id)
+            lease.resume(now)
+        return 200, {"lease": lease.public(now)}
 
 
 async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
@@ -188,6 +242,8 @@ async def linkedin_open(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, 
 
 # (method, pattern, handler, body_max): browserd/app.py makes its Route of each.
 ROUTES = [
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/apply-wait/(?P<action>begin|read|resume)"),
+     apply_wait, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/linkedin/open"), linkedin_open, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/tools/(?P<name>[a-z_]{{1,48}})"), call_tool,
      64 * 1024),

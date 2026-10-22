@@ -237,12 +237,12 @@ class Wizard(generic.Deterministic):
         class WizardReport(FormReport, generic.DeterministicReport):
             pass
 
-        report = WizardReport()
+        report = self._fill_report(WizardReport)
         for _ in range(generic.STEPS_MAX + 1):
             found, code = await self.discover(tools)
             if found is None or code:
                 report.stopped, report.needs_person = code, found.pending if found else ""
-                return report
+                return self._completed_report(report)
             done: set[str] = set()
             for _ in range(2):
                 for item in sorted(
@@ -260,11 +260,11 @@ class Wizard(generic.Deterministic):
                             else filled.code
                         )
                         report.needs_person = filled.code
-                        return report
+                        return self._completed_report(report)
                 found, code = await self.discover(tools, frozenset(done))
                 if found is None or code:
                     report.stopped, report.needs_person = code, found.pending if found else ""
-                    return report
+                    return self._completed_report(report)
                 if all(f.key in done for f in found.fields):
                     break
             # A later upload/parser must not silently replace an earlier answer.
@@ -281,7 +281,7 @@ class Wizard(generic.Deterministic):
                 )
                 if not same:
                     report.stopped = "form_changed"
-                    return report
+                    return self._completed_report(report)
             report.skipped += found.skipped
             self.expected = [
                 (
@@ -299,24 +299,24 @@ class Wizard(generic.Deterministic):
                     report.stopped = "form_changed"
                 else:
                     report.designated, report.designated_ref = button.name, button.ref
-                return report
+                return self._completed_report(report)
             if any(o.field.required and o.filled.status != "filled" for o in report.outcomes):
                 report.stopped, report.needs_person = "needs_person", "required_left"
-                return report
+                return self._completed_report(report)
             if (
                 generic.button_name(button.name) not in NEXT
                 or self.step >= generic.STEPS_MAX
                 or "disabled" in button.attrs
             ):
                 report.stopped = "form_changed"
-                return report
+                return self._completed_report(report)
             clicked = await tools.click(button.ref, button.name)
             if not clicked.get("ok"):
                 code = str(clicked.get("error") or "form_changed")
                 report.stopped = "needs_person" if code == "host_not_allowed" else code
                 report.needs_person = "signin" if code == "host_not_allowed" else ""
-                return report
+                return self._completed_report(report)
             report.steps.append(button.name)
             self.step += 1
         report.stopped = "form_changed"
-        return report
+        return self._completed_report(report)

@@ -540,6 +540,31 @@ class Leases:
     async def resume(self, user_id: str, lease_id: str) -> Lease | None:
         return await self._update(user_id, lease_id, lambda lease, now: lease.resume(now))
 
+    async def apply_wait(self, user_id: str, lease_id: str, found: dict[str, Any]) -> Lease | None:
+        """Mirror the private browser-owned Apply wait, with no refresh on readback."""
+
+        def sync(lease: Lease, now: float) -> None:
+            if lease.purpose != "apply_fill" or found.get("lease_id") != lease_id:
+                raise BrowserError("refused")
+            if found.get("state") == "active":
+                lease.resume(now)
+            elif found.get("wait_reason") in {"captcha", "email_code", "forbidden"}:
+                left = max(0, min(float(found.get("wait_left_s") or 0), 1800))
+                deadline = now + left
+                if lease.state == "waiting_person" and lease.wait_deadline is not None:
+                    deadline = min(deadline, lease.wait_deadline)
+                lease.active_before = float(found.get("active_s") or 0)
+                lease.state, lease.wait_reason, lease.wait_host = (
+                    "waiting_person",
+                    found["wait_reason"],
+                    "",
+                )
+                lease.wait_deadline = deadline
+            else:
+                raise BrowserError("refused")
+
+        return await self._update(user_id, lease_id, sync)
+
     # --- inside ----------------------------------------------------------------------------------
 
     async def _start(
@@ -665,7 +690,17 @@ class Leases:
                         now,
                         str(found.get("wait_reason") or "signin"),
                         host[:HOST_MAX] if isinstance(host, str) else "",
-                        max(0, min(left, self.session_max_s)),
+                        max(
+                            0,
+                            min(
+                                left,
+                                1800
+                                if lease.purpose == "apply_fill"
+                                and found.get("wait_reason")
+                                in {"captcha", "email_code", "forbidden"}
+                                else self.session_max_s,
+                            ),
+                        ),
                     )
                 if await r.set(HOLDER, lease.dumps(), nx=True):
                     logger.info("browser lease taken back from browserd: purpose=%s", lease.purpose)

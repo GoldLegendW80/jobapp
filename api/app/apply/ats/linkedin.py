@@ -285,12 +285,12 @@ class LinkedIn(generic.Deterministic):
         class ModalReport(FormReport, Report):
             pass
 
-        report = ModalReport()
+        report = self._fill_report(ModalReport)
         for _ in range(generic.STEPS_MAX + 1):
             found, code = await self.discover(tools)
             if found is None or code:
                 report.stopped, report.needs_person = code, found.pending if found else ""
-                return report
+                return self._completed_report(report)
             done = set()
             for _ in range(2):
                 for item in [f for f in found.fields if f.key not in done]:
@@ -309,11 +309,11 @@ class LinkedIn(generic.Deterministic):
                             else filled.code
                         )
                         report.needs_person = filled.code
-                        return report
+                        return self._completed_report(report)
                 found, code = await self.discover(tools, frozenset(done))
                 if found is None or code:
                     report.stopped, report.needs_person = code, found.pending if found else ""
-                    return report
+                    return self._completed_report(report)
                 if all(f.key in done for f in found.fields):
                     break
             report.skipped += found.skipped
@@ -325,17 +325,17 @@ class LinkedIn(generic.Deterministic):
                     report.stopped = "form_changed"
                 else:
                     report.designated, report.designated_ref = button.name, button.ref
-                return report
+                return self._completed_report(report)
             if generic.button_name(button.name) not in NEXT or self.step >= generic.STEPS_MAX:
                 report.stopped = "form_changed"
-                return report
+                return self._completed_report(report)
             # A left required answer must not be advanced through a site's validation.
             if any(o.field.required and o.filled.status != "filled" for o in report.outcomes):
                 report.stopped, report.needs_person = "needs_person", "required_left"
-                return report
+                return self._completed_report(report)
             if not (await tools.click(button.ref, button.name)).get("ok"):
                 report.stopped = "form_changed"
-                return report
+                return self._completed_report(report)
             report.steps.append(button.name)
             self.expected = [
                 (o.field.label, base.summary_answer(o.answer.value, o.field.kind))
@@ -344,4 +344,4 @@ class LinkedIn(generic.Deterministic):
             ]
             self.step += 1
         report.stopped = "form_changed"
-        return report
+        return self._completed_report(report)

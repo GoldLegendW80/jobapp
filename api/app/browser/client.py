@@ -258,6 +258,23 @@ class BrowserdClient:
             return payload
         raise self._tool_failure(status, payload)
 
+    async def apply_wait(
+        self, lease_id: str, token: str, action: str, reason: str | None = None
+    ) -> dict[str, Any]:
+        """Code-owned Apply wait, absent from the model tool API."""
+        if action not in {"begin", "read", "resume"}:
+            raise ValueError(action)
+        status, payload = await self._call(
+            "POST",
+            f"/leases/{lease_id}/apply-wait/{action}",
+            TIMEOUT_S,
+            {"reason": reason} if action == "begin" else {},
+            headers={"X-Lease-Token": token},
+        )
+        if status == 200 and isinstance(payload, dict):
+            return payload
+        raise self._tool_failure(status, payload)
+
     async def put_file(self, lease_id: str, token: str, name: str, data: bytes) -> dict[str, Any]:
         # The name goes into the path: one browserd accepts, checked here too, so a "../x.pdf"
         # never becomes another route once the path is normalised.

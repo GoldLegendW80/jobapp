@@ -57,6 +57,19 @@ class LeaseTools:
         await self._held()
         return await self.client.linkedin_open(self.lease_id, self._token, job_id)
 
+    async def _apply_wait(self, action: str, reason: str | None = None) -> dict[str, Any]:
+        await self._held()
+        answer = await self.client.apply_wait(self.lease_id, self._token, action, reason)
+        lease = answer.get("lease")
+        if not isinstance(lease, dict):
+            raise BrowserError("unavailable")
+        if await self.leases.apply_wait(self.user_id, self.lease_id, lease) is None:
+            raise BrowserError("ended")
+        return lease
+
+    async def _person_snapshot(self) -> dict[str, Any]:
+        return await self._call("browser_snapshot", {"passive": True})
+
     async def _call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._held()
         return await self.client.tool(self.lease_id, self._token, name, args)

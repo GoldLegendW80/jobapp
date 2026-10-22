@@ -944,12 +944,14 @@ async def _drive_generic(
     return Result(state, needs=needs, report=report, shot=shot, cost=cost)
 
 
-async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
+async def _drive(
+    services: Services, plan: Plan, tools: RunTools, adapter: ats_base.Adapter | None = None
+) -> Result:
     for name, data in plan.pdfs.items():
         put = await tools.put_file(name, data)
         if not put.get("ok"):
             return Result(State.failed, error=str(put.get("error") or "put_file_failed"))
-    adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
+    adapter = adapter or adapter_for(plan.form_url, stub_base=services.stub_base)
     if adapter is None:
         opened = await tools.navigate(plan.form_url)
         if not opened.get("ok"):
@@ -985,7 +987,8 @@ async def _fill_on_page(
         if plan.person_target and getattr(adapter, "target", "") != plan.person_target:
             return Result(State.needs_person, needs="form_changed", shot=await shots.take(tools))
         adapter.person_answers, adapter.person_shapes = plan.person_answers, plan.person_shapes
-        adapter.seen_shapes = {}
+        if getattr(adapter, "_waiting_report", None) is None:
+            adapter.seen_shapes = {}
     report = await adapter.fill_form(tools, plan.context)
     if isinstance(adapter, generic.Deterministic):
         report.shapes = adapter.seen_shapes
@@ -1059,6 +1062,7 @@ async def _wait_for_person(
     tools: _Watched,
     started: datetime,
     reason: str,
+    report: ats_base.Report | None = None,
 ) -> str:
     """Review first, a step on the page (`failures.WAIT_ON_PAGE`): the lease is kept while the
     person takes the step in the live view, at most `needs_person_wait_s` by the clock. Once the
@@ -1066,8 +1070,16 @@ async def _wait_for_person(
     app (answered, rejected, cancelled) or the time is up, the run ends and the application keeps
     its state."""
     application_id = plan.application_id
+    if isinstance(adapter, generic.Deterministic) and isinstance(
+        report, generic.DeterministicReport
+    ):
+        adapter._waiting_report = report
     wait_s = services.needs_person_wait_s or failures.needs_person_wait_s()
-    deadline = services.clock() + timedelta(seconds=wait_s)
+    try:
+        waiting = await tools._apply_wait("begin", reason)
+    except BrowserError:
+        return State.needs_person.value
+    deadline = services.clock() + timedelta(seconds=min(wait_s, waiting["wait_left_s"]))
     written = State.needs_person.value
 
     def db(step: Callable[[Session], Any]) -> Awaitable[Any]:
@@ -1082,16 +1094,28 @@ async def _wait_for_person(
         if not await db(partial(still_needs, application_id=application_id, reason=reason)):
             return "person_acted"
         try:
-            shot = await tools.snapshot()
+            waiting = await tools._apply_wait("read")
+            if not waiting.get("wait_left_s"):
+                return written
+            shot = await tools._person_snapshot()
         except BrowserError:
             return written  # the lease ended (its maximum, browserd gone): the item waits
         page = str(shot.get("snapshot") or "")
         if not shot.get("ok") or adapter.pending_step(page) == reason:
             continue
         if reason == "forbidden":
-            found, code = await adapter.discover(tools)
+
+            class Passive:
+                async def snapshot(self):
+                    return await tools._person_snapshot()
+
+            found, code = await adapter.discover(Passive())
             if found is None or code:
                 continue
+        try:
+            await tools._apply_wait("resume")
+        except BrowserError:
+            return written
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
             return "person_acted"
@@ -1118,6 +1142,14 @@ async def _wait_for_person(
         if written != State.needs_person.value or result.needs not in failures.WAIT_ON_PAGE:
             return written
         reason = result.needs
+        if isinstance(adapter, generic.Deterministic) and isinstance(
+            result.report, generic.DeterministicReport
+        ):
+            adapter._waiting_report = result.report
+        try:
+            await tools._apply_wait("begin", reason)
+        except BrowserError:
+            return written
 
 
 async def fill(services: Services, application_id: uuid.UUID) -> str:
@@ -1192,7 +1224,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
                 ),
             )
         )
-        result = await _guarded(_drive(services, plan, tools), tools)
+        result = await _guarded(_drive(services, plan, tools, adapter), tools)
         if result.company_url:
             await services.leases.release(user, lease_id, "company_site")
         try:
@@ -1211,10 +1243,13 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             and plan.mode is Mode.review
             and result.needs in failures.WAIT_ON_PAGE
             and adapter is not None
-            and not isinstance(adapter, generic.Generic)
+            and (
+                not isinstance(adapter, generic.Generic)
+                or isinstance(adapter, generic.Deterministic)
+            )
         ):
             written = await _wait_for_person(
-                services, plan, adapter, tools, started, str(result.needs)
+                services, plan, adapter, tools, started, str(result.needs), result.report
             )
     except asyncio.CancelledError:
         # docker stop, or the job's timeout: the application never stays `filling`.

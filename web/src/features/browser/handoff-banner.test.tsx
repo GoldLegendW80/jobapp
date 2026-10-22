@@ -124,6 +124,14 @@ describe("handoffOf", () => {
       { ...MINE, lease: { ...WAITING, wait_reason: "captcha" } },
     ],
     [
+      "an email code wait",
+      { ...MINE, lease: { ...WAITING, wait_reason: "email_code" } },
+    ],
+    [
+      "a forbidden page wait",
+      { ...MINE, lease: { ...WAITING, wait_reason: "forbidden" } },
+    ],
+    [
       "a deadline passed",
       { ...MINE, lease: { ...WAITING, wait_minutes_left: 0 } },
     ],

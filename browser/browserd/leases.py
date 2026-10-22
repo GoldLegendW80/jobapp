@@ -45,6 +45,8 @@ from browserd.tools import policy
 T = TypeVar("T")
 log = logging.getLogger("browserd")
 Clock = Callable[[], float]
+APPLY_WAITS = frozenset({"captcha", "email_code", "forbidden"})
+APPLY_WAIT_S = 1800
 
 LANGUAGE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
 TIMEZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
@@ -178,6 +180,8 @@ class Lease:
         self.last_input = now
 
     def wait_person(self, now: float, reason: str, host: str, deadline_s: int) -> None:
+        if self.state == "waiting_person" and self.wait_reason in APPLY_WAITS:
+            return
         if self.state == "active":
             self.active_before = self.active_s(now)
         self.state, self.wait_reason, self.wait_host = "waiting_person", reason, host
@@ -320,7 +324,13 @@ class Manager:
         return lease
 
     async def call(
-        self, lease_id: str, token: str, work: Callable[[], Awaitable[T]], *, touch: bool = True
+        self,
+        lease_id: str,
+        token: str,
+        work: Callable[[], Awaitable[T]],
+        *,
+        touch: bool = True,
+        passive_wait: bool = False,
     ) -> T:
         """Runs one tool call on the lease (B5's tools go through here): it counts as input
         unless `touch` is False (Apply myself's watch, A9), and a lease that ends while it runs
@@ -328,7 +338,13 @@ class Manager:
         lease = self.check_token(lease_id, token)
         if not lease.request.automation:
             raise LeaseError(409, "person_session")
-        if lease.state != "active":
+        waiting_read = (
+            passive_wait
+            and not touch
+            and lease.request.purpose == "apply_fill"
+            and lease.wait_reason in APPLY_WAITS
+        )
+        if lease.state != "active" and not waiting_read:
             raise LeaseError(409, "waiting_person")
         if touch:
             lease.touch(self.clock())
