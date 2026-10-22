@@ -74,6 +74,28 @@ function render() {
     const link = document.createElement("a"); link.textContent = "Apply on company site";
     link.href = "/greenhouse/northwind-labs/jobs/4012348"; mount.append(link); return;
   }
+  // A later-step challenge is cleared only by the person's live-view input. The solved flag
+  // survives the approved replay; neither the code nor a captcha response enters form answers.
+  if (kind === "workday" && step === 1 && ["captcha", "email_code"].includes(variant)
+      && !localStorage.getItem(storage + ":person-cleared")) {
+    const challenge = document.createElement("section");
+    challenge.setAttribute("aria-label", "Person verification");
+    if (variant === "captcha") {
+      challenge.innerHTML = '<label><input id="person-challenge" type="checkbox">I am not a robot</label>';
+    } else {
+      challenge.innerHTML = '<label for="person-challenge">Verification code</label><input id="person-challenge" autocomplete="off">';
+    }
+    const proceed = document.createElement("button"); proceed.type = "button";
+    proceed.id = "person-continue"; proceed.textContent = "Verify and continue";
+    proceed.onclick = () => {
+      const field = challenge.querySelector("input");
+      if (variant === "captcha" ? field.checked : field.value === "482615") {
+        field.value = ""; localStorage.setItem(storage + ":person-cleared", "yes"); render();
+      }
+    };
+    challenge.append(proceed); mount.append(challenge);
+    return;
+  }
   const form = document.createElement("form"); form.setAttribute("aria-label", "Application");
   form.noValidate = true; mount.append(form);
   if (kind !== "workday" || step === 0) {
