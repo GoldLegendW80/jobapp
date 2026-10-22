@@ -11,6 +11,7 @@ import { defineConfig, devices } from "@playwright/test";
  *   opportunities-o3   the pay and work mode a posting states, kept after an edit (task O3)
  *   opportunities-o4   seniority, industries, pay and preferences, the bonus a rescore adds (task O4)
  *   opportunities-o5   the first login wizard: a new member's seven steps, Back, a reload, the card (task O5)
+ *   opportunities-o5b  the starter list of boards and sites on the wizard's summary (task O5b)
  *
  * A task of the module adds its spec as opportunities-o<n>.spec.ts and it runs here: the local
  * check (ops/local-check.sh, group opportunities) names this config, not the specs, and
