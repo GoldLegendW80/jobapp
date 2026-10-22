@@ -78,6 +78,10 @@ class OffList(Exception):  # noqa: N818  a control-flow signal, not an error
     answers host_not_allowed, whatever the tool had done or read."""
 
 
+class PersonInput(Exception):  # noqa: N818  a control-flow signal
+    """The person took back input during a paced action."""
+
+
 @dataclass
 class State:
     """What the tools keep for one lease (Lease.scratch): the placed documents and the tab."""
@@ -88,8 +92,7 @@ class State:
     blocked: list[str] = field(default_factory=list)
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
-    # The app's own click on an Attach button is waiting for its chooser: that one is not kept.
-    opening: bool = False
+    chooser_id: int = 0
 
     def end(self) -> None:
         """The lease ended: its documents and its tab are dropped at once, not when the old
@@ -110,6 +113,11 @@ class Tab:
     pacer: pacing.Pacer
     gate: bool = False
     lease_tag: str = ""
+    input_allowed: Callable[[], bool] | None = None
+
+    def require_input(self) -> None:
+        if self.input_allowed is not None and not self.input_allowed():
+            raise PersonInput
 
     @property
     def hosts(self) -> tuple[str, ...]:
@@ -170,8 +178,8 @@ class Tab:
         return context
 
     def _chosen(self, chooser: Any) -> None:
-        if not self.state.opening:
-            self.state.chooser = chooser
+        self.state.chooser = chooser
+        self.state.chooser_id += 1
 
     async def page(self) -> Any:
         context = await self.guard()
@@ -241,9 +249,12 @@ class Tab:
     async def approach(self, locator: Any) -> None:
         """The paced way to an element: dwell, scroll into view, hover, a short pause."""
         await self.pacer.dwell()
+        self.require_input()
         await locator.scroll_into_view_if_needed(timeout=ACTION_S * 1000)
+        self.require_input()
         await locator.hover(timeout=ACTION_S * 1000)
         await self.pacer.hover()
+        self.require_input()
 
 
 async def stop_loading(frame: Any) -> None:
@@ -262,6 +273,8 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
     except OffList:
         log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
         return await tab.settle(refused("host_not_allowed"))
+    except PersonInput:
+        return failure("person_input", "Refused: the person holds the input.")
     return await tab.settle(result) if result.get("ok") else result
 
 
@@ -285,7 +298,11 @@ async def title(page: Any) -> str:
 
 
 def _chooser(tab: Tab) -> dict[str, Any]:
-    return {"chooser": True} if tab.state.chooser is not None else {}
+    return (
+        {"chooser": True, "chooser_id": tab.state.chooser_id}
+        if tab.state.chooser is not None
+        else {}
+    )
 
 
 async def _here(tab: Tab) -> dict[str, Any]:
@@ -330,6 +347,7 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     no = tab.judge(await tab.facts(locator, point=True), "click", "browser_click")
     if no:
         return no
+    tab.require_input()
     await locator.click(
         button=button,
         click_count=2 if args.get("doubleClick") else 1,
@@ -387,19 +405,24 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         if tab.request.purpose != "profile_edit" or args.get("submit"):
             return failure("bad_args", "An empty-only profile write cannot submit.")
         await tab.pacer.dwell()
+        tab.require_input()
         # Check and setter share one synchronous browser task, with no CDP/await gap.
         result = await locator.evaluate(EMPTY_ONLY_JS, text)
         if not result.get("ok"):
             return refused(str(result.get("error") or "not_empty"))
         return await tab.settle(await _here(tab))
+    tab.require_input()
     await locator.click(timeout=ACTION_S * 1000)
+    tab.require_input()
     await locator.fill("", timeout=ACTION_S * 1000)
     page = await tab.page()
     if len(text) >= pacing.PASTE_FROM:
         await tab.pacer.dwell()
+        tab.require_input()
         await page.keyboard.insert_text(text)
     else:
         for char, delay in zip(text, tab.pacer.key_delays_s(len(text)), strict=True):
+            tab.require_input()
             if char in ("\n", " "):
                 # Inserted, no key pressed: a newline is no Enter, and a space no Space on a
                 # button the page moved the focus to.
@@ -408,6 +431,7 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
                 await page.keyboard.type(char)
             await tab.pacer.sleep(delay)
     if args.get("submit"):
+        tab.require_input()
         await page.keyboard.press("Enter")
     return await tab.settle(await _here(tab))
 
@@ -425,6 +449,7 @@ async def select_option(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if no:
         return no
     await tab.approach(locator)
+    tab.require_input()
     chosen = await locator.select_option(values, timeout=ACTION_S * 1000)
     return await tab.settle({**await _here(tab), "selected": chosen})
 
@@ -440,6 +465,7 @@ async def check(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     no = tab.judge(await tab.facts(locator, point=True), "check", "browser_check")
     if no:
         return no
+    tab.require_input()
     await locator.set_checked(checked, timeout=ACTION_S * 1000)
     return await tab.settle(await _here(tab))
 
@@ -457,11 +483,22 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     ]
     if not args.get("ref") and tab.request.purpose == "apply_manual":
         # A9: no element names the answer to the file chooser the person opened.
-        chooser, tab.state.chooser = tab.state.chooser, None
+        chooser = tab.state.chooser
         if chooser is None:
             return failure("no_chooser", "No file chooser is open.")
+        if type(args.get("chooser_id")) is not int or args["chooser_id"] != tab.state.chooser_id:
+            return failure(
+                "chooser_changed", "The file chooser changed. Choose the document again."
+            )
         await tab.pacer.dwell()
+        tab.require_input()
+        if tab.state.chooser is not chooser:
+            return failure(
+                "chooser_changed", "The file chooser changed. Choose the document again."
+            )
         await chooser.set_files(payloads, timeout=ACTION_S * 1000)
+        if tab.state.chooser is chooser:
+            tab.state.chooser = None
         return await tab.settle({**await _here(tab), "uploaded": names})
     locator, gone = await tab.element(args)
     if gone:
@@ -469,6 +506,7 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     facts = await tab.facts(locator)
     if isinstance(facts, dict) and facts.get("tag") == "input" and facts.get("type") == "file":
         await tab.pacer.dwell()
+        tab.require_input()
         await locator.set_input_files(payloads, timeout=ACTION_S * 1000)
         return await tab.settle({**await _here(tab), "uploaded": names})
     # A button that opens the file chooser (an Attach button): clicked as any click is.
@@ -477,16 +515,21 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if no:
         return no
     page = await tab.page()
-    tab.state.opening = True
-    try:
-        async with page.expect_file_chooser(timeout=ACTION_S * 1000) as chooser:
-            await locator.click(timeout=ACTION_S * 1000)
-        opened = await chooser.value
-    finally:
-        tab.state.opening = False
+    tab.require_input()
+    if tab.state.chooser is not None:
+        return failure(
+            "chooser_changed", "A file chooser is already open. Choose its document first."
+        )
+    async with page.expect_file_chooser(timeout=ACTION_S * 1000) as chooser:
+        tab.require_input()
+        await locator.click(timeout=ACTION_S * 1000)
+    opened = await chooser.value
+    tab.require_input()
+    if tab.request.purpose == "apply_manual" and tab.state.chooser is not opened:
+        return failure("chooser_changed", "The file chooser changed. Choose the document again.")
+    await opened.set_files(payloads, timeout=ACTION_S * 1000)
     if tab.state.chooser is opened:
         tab.state.chooser = None
-    await opened.set_files(payloads, timeout=ACTION_S * 1000)
     return await tab.settle({**await _here(tab), "uploaded": names})
 
 
@@ -507,6 +550,7 @@ async def press_key(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             if no:
                 return no
     await tab.pacer.dwell()
+    tab.require_input()
     await page.keyboard.press(" " if key == "Space" else key)
     return await tab.settle(await _here(tab))
 

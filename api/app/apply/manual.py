@@ -171,6 +171,7 @@ class Live:
     placed: dict[str, str] = field(default_factory=dict)  # kind -> file name on the lease
     seen: bool = False  # the page showed a confirmation
     chooser: bool = False  # a file chooser the person opened waits for a document
+    chooser_id: int | None = None
     idle_left_s: int | None = None
     busy: str | None = None
     last: dict[str, str] = field(default_factory=dict)  # the last command and its outcome
@@ -284,7 +285,13 @@ def _sent(db: Session, application: Application, posting: Any, now: datetime, by
 
 
 def close(
-    db: Session, application_id: uuid.UUID, code: str, now: datetime, *, seen: bool = False
+    db: Session,
+    application_id: uuid.UUID,
+    code: str,
+    now: datetime,
+    *,
+    seen: bool = False,
+    ended_only: bool = False,
 ) -> str:
     """The session's end (module docstring, step 5): an application still `filling` is
     `submitted` when a confirmation was seen (`seen`, or its event), else `queued` with `needs`
@@ -297,10 +304,16 @@ def close(
     application, posting = gate.lock(db, user_id, application_id)
     if application.state is not State.filling:
         return application.state.value
+    if ended_only and application.needs != ENDED:
+        return application.state.value
     run._event(db, application, "ended", now, code=code)
     if seen or _confirmed(db, application):
         _sent(db, application, posting, now, "confirmation")
         return State.submitted.value
+    if close_requested(db, application_id):
+        states.move(application, State.cancelled, now)
+        application.needs, application.error_code = None, "closed"
+        return State.cancelled.value
     states.move(application, State.queued, now)
     application.needs = ENDED
     application.error_code = None
@@ -379,7 +392,10 @@ async def recover_ended(fill: run.Services, ids: list[uuid.UUID]) -> int:
                 or application.state is not State.filling
             ):
                 return False
-            return close(db, wanted, application.error_code or "ended", fill.clock()) != "filling"
+            return (
+                close(db, wanted, application.error_code or "ended", fill.clock(), ended_only=True)
+                != "filling"
+            )
 
         try:
             count += await asyncio.to_thread(run._in_db, fill.sessions, step)
@@ -460,13 +476,30 @@ def _ok(result: dict[str, Any]) -> str:
 
 
 async def _attach(
+    services: Services,
+    tools: run.RunTools,
+    reader: ats_base.Adapter,
+    plan: run.Plan,
+    s: Live,
+    command: str,
+) -> str:
+    try:
+        await services.browser.live_input(s.lease_id, None)
+        return await _attach_owned(tools, reader, plan, s, command)
+    finally:
+        await _give_back(services, s)
+
+
+async def _attach_owned(
     tools: run.RunTools, reader: ats_base.Adapter, plan: run.Plan, s: Live, command: str
 ) -> str:
     kind, name = DOCUMENT_OF[command]
     if kind not in s.placed:
         return "no_document"
     if s.chooser:
-        code = _ok(await tools.call("browser_file_upload", {"paths": [name]}))  # type: ignore[attr-defined]
+        code = _ok(
+            await tools.call("browser_file_upload", {"paths": [name], "chooser_id": s.chooser_id})
+        )  # type: ignore[attr-defined]
         s.chooser = False
         return code or "attached"
     found, code = await reader.read(tools)
@@ -491,8 +524,8 @@ async def _fill_details(
     plan: run.Plan,
     s: Live,
 ) -> str:
-    await services.browser.live_input(s.lease_id, None)
     try:
+        await services.browser.live_input(s.lease_id, None)
         found, code = await reader.read(tools)
         if found is None:
             return code or "unreadable"
@@ -537,6 +570,7 @@ async def _watch(
                 run._in_db, fill.sessions, lambda db: saw(db, s.application_id, fill.clock())
             )
         s.chooser = bool(shot.get("chooser"))
+        s.chooser_id = shot.get("chooser_id") if type(shot.get("chooser_id")) is int else None
     lease = (await services.browser.current()).get("lease") or {}
     if lease.get("lease_id") != s.lease_id:
         raise BrowserError("ended")
@@ -565,7 +599,7 @@ async def _loop(
             if command == "fill_details":
                 outcome = await _fill_details(services, tools, reader, plan, s)
             else:
-                outcome = await _attach(tools, reader, plan, s, command)
+                outcome = await _attach(services, tools, reader, plan, s, command)
             s.busy, s.last = None, {"action": command, "outcome": outcome}
             await asyncio.to_thread(
                 run._in_db,

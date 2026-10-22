@@ -20,8 +20,9 @@ api's `client.gate_click` is its only sender (api/app/browser/client.py).
 
 Apply myself (A9): `browser_snapshot` with `{"passive": true}` on an `apply_manual` lease is the
 app's watch of the page the person fills; it does not count as activity (Manager.call). Outside
-the app's turn (`app_turn`, a "Fill my details") only PERSON_TIME's tools run there: a click, a
-key or a typed value is refused `person_input`, so a Take over during the fill stops it.
+the app's turn (`app_turn`, filling details or attaching a document) only PERSON_TIME's tools
+run there. Input ownership is checked again after pacing, so Take over stops an action already
+waiting to click or type. A chooser upload names the boundary returned by the passive watch.
 
 Calls on one lease run one at a time, through `Manager.call` (the lease's idle timer and its end
 cancel them).
@@ -44,9 +45,9 @@ LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 LOCKS: dict[str, asyncio.Lock] = {}
 PACER = pacing.Pacer()
 # What the app may do on an `apply_manual` lease while the person holds the input: read, open the
-# form, answer a file chooser or a file input with a document of the lease.
+# form or inspect its controls. Attaching a document claims the app's input turn.
 PERSON_TIME = frozenset({
-    "browser_snapshot", "browser_navigate", "browser_file_upload", "browser_box",
+    "browser_snapshot", "browser_navigate", "browser_box",
     "browser_take_screenshot", "browser_wait_for",
 })  # fmt: skip
 
@@ -109,6 +110,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         pacer=PACER,
         gate=capability is not None,
         lease_tag=lease_id[:8],
+        input_allowed=lambda: not manual or lease.app_turn,
     )
 
     async def work() -> dict[str, Any]:

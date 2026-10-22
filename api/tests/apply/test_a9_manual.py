@@ -58,11 +58,18 @@ class ManualForm(RunForm):
             self._log("watch", passive=args.get("passive"))
             if self.sent:
                 return {"ok": True, "url": self.url, "snapshot": CONFIRMED}
-            return {"ok": True, "url": self.url, "snapshot": self.render(), "chooser": self.chooser}
+            return {
+                "ok": True,
+                "url": self.url,
+                "snapshot": self.render(),
+                "chooser": self.chooser,
+                "chooser_id": 1 if self.chooser else None,
+            }
         if name == "browser_file_upload" and "ref" not in args:
             self._log("chooser", paths=args["paths"])
             if not self.chooser:
                 return {"ok": False, "error": "no_chooser"}
+            assert args.get("chooser_id") == 1
             self.chooser = False
             self.answered.append(list(args["paths"]))
             return {"ok": True}
@@ -524,6 +531,43 @@ def test_submit_then_immediate_close_gets_one_final_page_watch(
         assert len([e for e in events(db, app_id) if e.kind == "recorded"]) == 1
     else:
         assert status(db, person_a) is not JobStatus.applied
+
+
+@pytest.mark.parametrize("seen", [True, False])
+def test_worker_death_keeps_the_durable_close_request_and_a_known_confirmation(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    seen: bool,
+) -> None:
+    app_id = start_manual(db, person_a)
+    with factory() as s:
+        assert isinstance(run.prepare(s, app_id, AT, manual=True), run.Plan)
+        s.commit()
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        if seen:
+            manual.saw(s, app_id, AT)
+        manual.cancel(s, person_a.user_id, app_id, AT, final_watch=True)
+        s.commit()
+    with factory() as s:
+        assert manual.reset_interrupted(s, AT) == 1
+        s.commit()
+    assert application(db, app_id).state is (State.submitted if seen else State.cancelled)
+
+
+def test_a_recovery_read_cannot_close_a_new_live_attempt(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+) -> None:
+    app_id = start_manual(db, person_a)
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        # The old marker was cleared when the new session began. Recheck under the gate lock.
+        assert manual.close(s, app_id, "interrupted", AT, ended_only=True) == "filling"
+        s.commit()
+    assert application(db, app_id).state is State.filling
 
 
 def test_the_watch_reads_the_state_while_the_posting_is_locked(

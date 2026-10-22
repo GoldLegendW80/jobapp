@@ -103,18 +103,23 @@ def test_a_chooser_the_person_opens_is_answered_with_the_document_named(stack: S
         assert lease.put("letter.pdf")["status"] == 200
         assert lease.tool("browser_navigate", url=FORM)["ok"]
         assert lease.watch().get("chooser") is None
+        lease.turn(None)
         nothing = lease.tool("browser_file_upload", paths=["letter.pdf"])
         assert nothing["error"] == "no_chooser"
+        lease.turn(str(uuid.uuid4()))
 
         lease.person_clicks("#attach")
         for _ in range(60):  # each look is a docker exec round trip, no sleep
-            if lease.watch().get("chooser"):
+            if (watched := lease.watch()).get("chooser"):
                 break
         else:
             raise AssertionError("the watch never saw the file chooser")
         assert "Open File" not in window_titles(stack)  # intercepted: no dialog over a folder
 
-        done = lease.tool("browser_file_upload", paths=["letter.pdf"])
+        lease.turn(None)
+        done = lease.tool(
+            "browser_file_upload", paths=["letter.pdf"], chooser_id=watched["chooser_id"]
+        )
         assert done["ok"], done
         assert done["uploaded"] == ["letter.pdf"]
         assert f"letter.pdf:{len(PDF_OF)}" in lease.snapshot()
@@ -165,6 +170,7 @@ def test_the_chooser_the_apps_attach_click_opens_is_not_kept_for_the_next_docume
         assert lease.put("letter.pdf", letter)["status"] == 200
         assert lease.tool("browser_navigate", url=FORM)["ok"]
         attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        lease.turn(None)
         done = lease.tool("browser_file_upload", ref=attach, paths=["letter.pdf"])
         assert done["ok"], done
         assert "chooser" not in done
@@ -174,5 +180,32 @@ def test_the_chooser_the_apps_attach_click_opens_is_not_kept_for_the_next_docume
         page = lease.snapshot()
         assert f"letter.pdf:{len(letter)}" in page
         assert "cv.pdf" not in page
+    finally:
+        lease.end()
+
+
+def test_an_already_open_chooser_is_not_consumed_by_an_app_attach_button(stack: Stack) -> None:
+    lease = ManualLease(stack)
+    try:
+        assert lease.put("cv.pdf")["status"] == 200
+        assert lease.put("letter.pdf")["status"] == 200
+        assert lease.tool("browser_navigate", url=FORM)["ok"]
+        attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        lease.person_clicks("#attach")
+        for _ in range(60):
+            if (before := lease.watch()).get("chooser"):
+                break
+        else:
+            raise AssertionError("the person's chooser never opened")
+        lease.turn(None)
+        rejected = lease.tool("browser_file_upload", ref=attach, paths=["cv.pdf"])
+        assert rejected["error"] == "chooser_changed"
+        assert lease.watch()["chooser_id"] == before["chooser_id"]
+        accepted = lease.tool(
+            "browser_file_upload", paths=["letter.pdf"], chooser_id=before["chooser_id"]
+        )
+        assert accepted["ok"]
+        assert "cv.pdf" not in lease.snapshot()
+        assert f"letter.pdf:{len(PDF_OF)}" in lease.snapshot()
     finally:
         lease.end()
