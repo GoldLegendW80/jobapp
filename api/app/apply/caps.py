@@ -61,6 +61,7 @@ import json
 import unicodedata
 import uuid
 import zoneinfo
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
@@ -646,12 +647,18 @@ def next_slot(db: Session, application: Application, now: datetime) -> datetime 
     return max(waits, default=None)
 
 
-def reserve(db: Session, application: Application, now: datetime) -> datetime | None:
+def reserve(
+    db: Session,
+    application: Application,
+    now: datetime,
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> datetime | None:
     """`next_slot` under the host's transaction lock: None means the caller's click event, written
     in this transaction, takes the slot; another person's reserve waits for this commit. A lock
     still held at the transaction's `lock_timeout` keeps the time the application's wait shows
     while it is ahead (one `waiting` event per wait, not one per tick), else an interval from
-    now."""
+    now. An injected clock samples the time after the lock wait for the pacing calculation."""
     host = host_of(application.ats, application.form_url)
     key = f"apply_pace:{host}"
     try:
@@ -660,8 +667,10 @@ def reserve(db: Session, application: Application, now: datetime) -> datetime | 
     except DBAPIError as exc:
         if not jobs_service.is_lock_timeout(exc):
             raise
+        now = clock() if clock else now
         shown = _shown(db, application)
         return shown if shown is not None and shown > now else now + pace_of(host).interval
+    now = clock() if clock else now
     return next_slot(db, application, now)
 
 

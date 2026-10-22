@@ -522,6 +522,14 @@ async def _call_send(
         State.submitted,
     }:
         return {"result": "unknown"}
+    until = None
+    if application and not code:
+        until = caps.reserve(db, application, now, clock=clock)
+        # The shared host lock can wait after the person's locks. Recheck validity
+        # under it before recording a click, even when the host is now paced.
+        now = clock() if clock else now
+        if refused := submit.recheck(db, application, posting, now):
+            code, stop = refused.code, refused
     if code:
         if application and application.mail_send_id == row.id:
             draft.status, draft.updated_at = "draft", now
@@ -543,7 +551,7 @@ async def _call_send(
         row.result, row.refusal_code, row.updated_at = "failed", code, now
         db.commit()
         return {"result": "not_sent", "code": code}
-    if application and (until := caps.reserve(db, application, now)) is not None:
+    if application and until is not None:
         run._wait(db, application, "host_pace", now, until=until.isoformat())
         draft.status, draft.updated_at = "draft", now
         application.mail_send_id = None
