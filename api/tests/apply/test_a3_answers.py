@@ -587,7 +587,7 @@ def test_the_option_vocabularies_never_share_an_option() -> None:
         ("Intermediate level", (None, "intermediate")),
         ("Basic (C2)", None),
         ("B2 / C1", None),
-        ("Professional working", None),
+        ("Professional working", (None, "professional_working")),
         ("", None),
     ],
 )
