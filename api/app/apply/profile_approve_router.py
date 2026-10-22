@@ -28,7 +28,7 @@ async def approve(
 
         raise HTTPException(404, "No such profile section.") from None
     except site_profile.RefusedError as exc:
-        return refusal(exc)
+        return refusal(exc, db)
     db.commit()
     with contextlib.suppress(QueueUnavailableError):
         await request.app.state.queue.enqueue(
@@ -55,7 +55,7 @@ def skip(run_id: uuid.UUID, section: str, request: Request, user: UserDep, db: D
         site_profile.SiteRunState.ready,
         site_profile.SiteRunState.done,
     ) or part.state not in ("ready", "left"):
-        return refusal(site_profile.RefusedError("not_ready"))
+        return refusal(site_profile.RefusedError("not_ready"), db)
     part.state = "skipped"
     site_profile.event(part, "skipped", deps.clock(request))
     site_profile.finish_state(db, run, deps.clock(request))

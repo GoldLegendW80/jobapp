@@ -1,13 +1,21 @@
 """Real create_app request boundaries, owned field edits and screenshot isolation."""
 
 import asyncio
+import hashlib
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import sqlalchemy as sa
 
-from app.apply import profile_leases, site_profile
-from app.apply.models import Authorisation, SiteProfileRun, SiteRunState
+from app.apply import profile_leases, profile_router, site_profile
+from app.apply.models import (
+    Authorisation,
+    SiteProfileRun,
+    SiteProfileShot,
+    SiteRunState,
+    SiteShotKind,
+)
 from app.profile import service as profiles
 from tests.apply.a18_support import Portal, services
 from tests.apply.conftest import AT
@@ -15,6 +23,49 @@ from tests.apply.test_start import USER_A, USER_B, a, api, app, b, engine, facto
 from tests.profile.conftest import full
 
 __all__ = ["a", "api", "app", "b", "engine", "factory", "migrated_url"]
+
+
+@pytest.mark.parametrize("response", ["detail", "screenshot", "refusal"])
+def test_profile_read_releases_its_lock_before_request_cleanup(factory, a, response):
+    jpeg = b"\xff\xd8\xff" + bytes(range(64))
+    with factory() as db:
+        run = site_profile.start(db, a, "https://portal.example/profile", now=AT)
+        run_id, shot_id = run.id, uuid.uuid4()
+        db.add(
+            SiteProfileShot(
+                id=shot_id,
+                run_id=run_id,
+                user_id=a,
+                section="1",
+                kind=SiteShotKind.before,
+                jpeg=jpeg,
+                sha256=hashlib.sha256(jpeg).digest(),
+                created_at=AT,
+            )
+        )
+        db.commit()
+    with factory() as reader:
+        user = SimpleNamespace(id=a)
+        if response == "detail":
+            result = profile_router.get(run_id, user, reader)
+            assert result.id == run_id
+        elif response == "screenshot":
+            result = profile_router.image(run_id, "1", shot_id, user, reader)
+            assert result.body == jpeg
+        else:
+            result = asyncio.run(
+                profile_router.confirm_autosave(run_id, SimpleNamespace(), user, reader)
+            )
+            assert result.status_code == 409
+        # FastAPI's session dependency has not closed yet. A simultaneous decision
+        # must still acquire the same run immediately, without waiting for cleanup.
+        with factory() as writer:
+            locked = writer.scalar(
+                sa.select(SiteProfileRun)
+                .where(SiteProfileRun.id == run_id, SiteProfileRun.user_id == a)
+                .with_for_update(nowait=True)
+            )
+            assert locked.id == run_id
 
 
 def test_site_profile_request_types_and_ownership(api, app, factory, a, b, monkeypatch):

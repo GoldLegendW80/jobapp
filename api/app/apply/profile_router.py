@@ -48,7 +48,8 @@ def owned(db: Session, user_id: uuid.UUID, run_id: uuid.UUID) -> SiteProfileRun:
         raise HTTPException(404, "No such profile run.") from None
 
 
-def refusal(exc: site_profile.RefusedError) -> JSONResponse:
+def refusal(exc: site_profile.RefusedError, db: Session) -> JSONResponse:
+    db.rollback()
     return JSONResponse(
         {"code": exc.code, "detail": str(exc)},
         status_code=409,
@@ -84,7 +85,11 @@ def detail(db: Session, run: SiteProfileRun) -> RunDetail:
                 events=section.events,
             )
         )
-    return RunDetail(**RunOut.model_validate(run).model_dump(), sections=parts)
+    result = RunDetail(**RunOut.model_validate(run).model_dump(), sections=parts)
+    # Materialize the owned snapshot before releasing its row lock. An async
+    # decision must not block the event loop waiting for this request's cleanup.
+    db.rollback()
+    return result
 
 
 async def enqueue(request: Request, run_id: uuid.UUID) -> None:
@@ -106,7 +111,7 @@ async def start(body: StartIn, request: Request, user: UserDep, db: Db):
             stub_base=request.app.state.settings.apply_stub_base_url,
         )
     except site_profile.RefusedError as exc:
-        return refusal(exc)
+        return refusal(exc, db)
     db.commit()
     await enqueue(request, run.id)
     return detail(db, run)
@@ -160,7 +165,7 @@ def edit(
     except site_profile.NotFoundError:
         raise HTTPException(404, "No such profile field.") from None
     except site_profile.RefusedError as exc:
-        return refusal(exc)
+        return refusal(exc, db)
     db.commit()
     return detail(db, owned(db, user.id, run_id))
 
@@ -169,7 +174,7 @@ def edit(
 async def confirm_autosave(run_id: uuid.UUID, request: Request, user: UserDep, db: Db):
     run = owned(db, user.id, run_id)
     if run.state is not SiteRunState.needs_person or run.needs != "autosave_confirmation":
-        return refusal(site_profile.RefusedError("not_ready"))
+        return refusal(site_profile.RefusedError("not_ready"), db)
     run.autosave_confirmed, run.state, run.needs = True, SiteRunState.queued, None
     run.updated_at = deps.clock(request)
     db.commit()
@@ -200,9 +205,11 @@ def image(run_id: uuid.UUID, section: str, shot_id: uuid.UUID, user: UserDep, db
             SiteProfileShot.section == section,
         )
     )
-    if jpeg is None:
+    content = bytes(jpeg) if jpeg is not None else None
+    db.rollback()
+    if content is None:
         raise HTTPException(404, "No such screenshot.")
-    return Response(bytes(jpeg), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 if importlib.util.find_spec("app.browser.later_handoff") is not None:

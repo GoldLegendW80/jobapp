@@ -1,3 +1,68 @@
+A18 fresh debug continuation, 2026-10-22
+
+Proof source: composed e1d4904f, branch apply/254-runtime-debug. Later root
+integration changes require the root-owned final composed gate and browser rerun.
+Runtime verification is in progress; no four-flow PASS is claimed in this section yet.
+
+Fresh first attempt on composed e1d4904f
+- Command: rtk proxy env E2E_CADDY_URL=http://127.0.0.1:63360
+  E2E_ATS_FORMS_URL=http://127.0.0.1:63361 E2E_COMPOSE_PROJECT=apply254
+  COMPOSE_ENV_FILES=/tmp/apply254-fixture.settings caffeinate -i ops/agent-test.sh
+  --name apply-254-debug --playwright -c e2e/apply-all.config.ts apply-a18.spec.ts
+- Result: 3 passed, 1 failed in 7.0 minutes. Account/sign-in/edit/Replace/Save/Skip
+  passed in 1.4 minutes; Workday Save/readback and LinkedIn opt-in refusal passed in
+  1.6 minutes; Chromium post-discovery pacing race passed in 50.3 seconds with the
+  exact site-profile-race marker, preserved site value and no Experience autosave.
+- Autosave failed because confirm-autosave waited on a retained database row lock.
+  Fresh run 552c9556-5c4e-4524-9ee9-5057374ff956 remained needs_person.
+  Browser POST at 12:33:23.615 UTC aborted after 5002.403 ms; Caddy recorded 499.
+  API at 12:33:38.669 UTC logged only retryable database error, SQLSTATE 57014.
+  Repeated fresh GETs returned the durable needs_person state. This is a product
+  lock-lifetime defect, separate from the prior host sleep, and is not waived.
+- Deterministic real-Postgres regression calls detail/screenshot/refusal handlers, retains the
+  read session as it is before dependency cleanup, and acquires the same row from a
+  second session with FOR UPDATE NOWAIT. Both cases failed with LockNotAvailable
+  before the fix (2 failed in 17.96 s); no sleep or elapsed-time assertion is used.
+  The refused-decision variant also failed independently before the fix (1 failed, 5.48 s).
+
+Lock-lifetime correction
+- The response helper materializes the owned detail while holding the existing row lock,
+  then rolls back its read transaction before returning. Screenshot bytes follow the same
+  order. Refused decisions also release their read transaction before returning.
+- Writes retain their existing explicit commit before queue or browser awaits. The edit
+  response's second owned detail read is covered by the same release helper. No owner
+  predicates, reviewed hashes, one-use authorization, CV version or Save guard was changed.
+- Red: detail/screenshot NOWAIT variants, 2 failures in 17.96 s; refused confirmation
+  NOWAIT variant, 1 failure in 5.48 s. Green: whole test_a18_routes.py, 8 passed in 9.52 s.
+  Commands used ops/agent-test.sh with -m 'not docker' -n 2, under foreground caffeinate -i.
+- Whole API Ruff check passed; format check passed, 714 files. Final runtime and whole
+  affected-module verification after this correction remain pending at this checkpoint.
+
+Root cause of the prior timeout disagreement, diagnosed before retry
+- Private Playwright trace inspection selected only run IDs, state, section state,
+  request/response times and API Date headers. Trace archives remain local and uncommitted.
+- Workday run 37f84dfb-3d0b-4f8b-9e03-86393e81836d: POST at 11:22:52.669 UTC,
+  DB creation 11:22:52.678528. Final poll began 11:23:18.130 UTC, monotonic
+  179338.809 ms, and returned filling in 14.742 ms. The poll assertion ended at
+  monotonic 1211496.140 ms, about 1032 seconds after its last request. There were
+  no intervening poll requests. Earlier polls completed in tens of milliseconds.
+- Race run be0629f3-369c-4c69-8b61-fdf7b69bbdfb: POST client timestamp
+  11:40:35.122 UTC, API Date 11:23:22 UTC and DB creation 11:23:23.801377 UTC.
+  This demonstrates that the test host and Docker VM clocks diverged across the gap.
+- Read-only pmset -g log correlates the exact interval in Europe/Paris (+0200):
+  13:23:16, Entering Sleep, Idle Sleep, 1034 seconds;
+  13:40:30, DarkWake; 13:40:32, Entering Sleep, 1070 seconds;
+  13:58:22, DarkWake; 13:58:41, Sleep; 14:04:27, user-activity Wake.
+  Host sleep explains both the missing Workday polling interval and the race wait.
+  Healthy containers and the earlier CPU samples alone were insufficient evidence.
+- New acceptance uses foreground command-scoped caffeinate -i around agent-test.sh.
+  It exits with the test wrapper. No browser timeout, API state, conflict assertion,
+  atomic empty-only write or durability guarantee was relaxed.
+- All four owned images rebuilt from e1d4904f: apply254-api/worker/caddy/browser:review.
+  Transferred apply254 services were recreated, including atsforms bound to the fresh
+  debug worktree. Borrowed apply578-renderer:review was not rebuilt or retagged.
+  Build mutex was released after the successful build.
+
 A18 fresh runtime continuation, 2026-10-22
 
 Runtime acceptance remains PENDING. The latest four-flow run was 1 passed, 3 failed
