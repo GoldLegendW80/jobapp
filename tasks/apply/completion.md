@@ -1,108 +1,141 @@
 # Apply specification completion
 
-Requested on 2026-10-22: implement the whole [SPEC-apply.md](../../SPEC-apply.md).
-Tracking issue: #563, under #70. Implementation is assembled in draft
-[PR #604](https://github.com/GoldLegendW80/jobapp/pull/604), branch `apply/spec-completion`.
-The draft is not ready to merge or deploy: the combined gate and independent reviews remain.
+The owner's request of 2026-10-22 implements [SPEC-apply.md](../../SPEC-apply.md), tracked by
+#563 under #70, in [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604).
+This ledger records implementation and separate test checkpoints. The final review and batch
+gate result on that pull request identify the exact checked head and tree.
 
 ## Integration boundary
 
-The isolated branch combines immutable snapshots of #465, #521, #517, #516, #470, #598,
-#583, #588, #589, #590, #591, #592, #595, #600 and #601. This task makes no writes to those
-source branches or existing approved pull requests. Their approval does not approve this
-combined tree. Main has not been merged or deployed by this task.
+The isolated `apply/spec-completion` branch combines immutable snapshots of #465, #521, #517,
+#516, #470, #598, #583, #588, #589, #590, #591, #592, #595, #600 and #601. Existing approved heads and their source branches are left untouched. Earlier fixes #600 and
+#601 retain their independently reviewed heads. Those approvals do not approve this combined
+tree. This task has not merged main or deployed.
 
-Tests use invented `e2e-*@example.org` accounts, local fake ATS sites and fake Gmail.
-No test submits to a real company or sends real mail. Browser verification uses the
-repository's Playwright tooling because Chrome DevTools MCP is unavailable in this session.
-At most two heavy test jobs run together; the final gate needs a quiet machine.
+Tests use invented `e2e-*@example.org` accounts, local fake ATS sites and fake Gmail. No test
+submits to a real company or sends real mail. Browser verification uses the repository's
+Playwright tooling because Chrome DevTools MCP is unavailable in this session. At most two
+heavy jobs run together; the final batch gate runs on a quiet machine.
 
-## Capability and evidence checklist
+## Capabilities and verification
 
-| Capability | Implemented behavior and collected evidence | Remaining verification |
+| Capability | Implemented behavior | Runtime verification and final gate coverage |
 |---|---|---|
-| A1 to A8: forms, answers, approval and reports | Ashby button/JSON groups, Greenhouse JSON/numeric IDs, chooser uploads, server-owned submission evidence. All 5,478 Apply tests passed at the fidelity checkpoint. | Resolve fresh independent answer audit findings; final API and Apply/Opportunities journeys. |
-| A9: Apply myself | Four new real browser recovery flows pass, including immediate Submit-and-Close, document freezes, ended-session queue/reopen/record and no app click. Six inherited native cases and the distinct incidental-picker race pass. | Final composed regression and gate review. |
-| A10a: retries and person input | Immutable 1,800-second person wait outside the active clock; captcha and email-code browser flows retain the attempt, earlier fields and wizard steps, then require fresh approval. Whole Apply/browser checkpoint: 7,167 passed, plus three real Redis/private-HTTP cases. | Final composed regression. |
-| A10b: sign-in | Attended and later fake-site journeys pass; all 22 backend cases pass, including typed owner-bound callbacks and Full auto returning to review. | Final composed regression and ownership review. |
-| A11 to A13c: caps, queue and Full auto | Gate, holds, rehearsals, model check, pauses and decision/submission rechecks are integrated. | Independent gate audit and counted submissions on final images. |
-| A14: email | One fake Gmail message with both PDFs and seven connection journeys pass. Shared application confirmation now atomically resolves the application, MailSend and draft; 25 real database race/idempotence cases pass. Whole mail plus A14: 1,267 passed. | Final combined run and independent send-gate review. |
-| A15: Workday, Google Careers, VIE | Five real browser tests pass in 6.6 minutes; four flows each submit once after approval. Early required answers cause a fresh complete fill. Eight handoff/submission screenshots inspected. | Final composed regression and review screenshots; VIE saved-answer audit fix. |
-| A16: LinkedIn | Opt-in, private opener, modal, company fallback and pacing source integrated. Eleven native cases pass. Consent, review and three rehearsals followed by held Full auto pass. | Corrected fourth flow plus checkpoint/console flows and all six on final images. |
-| A17: privacy and retention | Seven retention cases; owner/cascade route coverage; six complete private canary workflows; 42 privileged-boundary AST cases; 16 actual Docker firewall namespace checks. | New two-user browser journey and final independent privacy review. |
-| A18: external profiles | Four real Chromium flows pass in 4.6 minutes; 5,278 affected backend cases and 429 frontend cases pass. One-use Save approvals, exact CV pin, explicit Replace, autosave consent and durable edits/Skip; eight real-Postgres route/lock cases. Twenty screenshots inspected. | Final composed regression and independent Save-gate review. |
+| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. | Fidelity checkpoint: 5,478 Apply passes. Grounding checkpoints and Apply/Opportunities journeys below. |
+| A9: Apply myself | Native document picker ownership, immediate Submit-and-Close recording, ended-session queue/reopen/record, placed-document freezing, no app submit click. | Four new real browser recovery flows, original manual flows, six inherited native cases and distinct incidental-picker race pass. Whole Apply/Browser groups cover final integration. |
+| A10a: retries and person input | Immutable 1,800-second person wait outside active time; same adapter, attempt, earlier fields and steps survive captcha/email-code input. | Whole Apply/browser checkpoint: 7,167 passes, plus three real Redis/private-HTTP cases. Actual captcha/email-code flows pass before a fresh approval and one fake submission. |
+| A10b: sign-in | Watched and later owner-owned handoffs, registered typed callbacks and idempotent queueing; Full auto becomes Review first. | Both fake-site journeys and all 22 backend cases pass. Whole Apply/Browser groups cover final integration. |
+| A11 to A13c: caps, queue and Full auto | Holds, rehearsals, fit/caps/pacing, pauses, model check and repeated final guards. | Injected-clock and counted fake-send/submit tests; whole Apply group includes actual holds and rehearsals. |
+| A14: email | Immutable two-PDF mail, exact recipient and approval, code-owned send authority, coherent local stops/unknowns and shared confirmation. | Fake Gmail sends exactly one message with both PDFs; seven connection journeys pass. Lifecycle and final pacing checkpoints below. |
+| A15: Workday, Google Careers, VIE | Ordered review-only wizards; early required edits trigger a fresh fill; VIE reuses exact person messages. | Five real browser tests pass in 6.6 minutes, with four approved fake submissions. Final Apply group also captures review screens. |
+| A16: LinkedIn | Recorded opt-in, private pinned opener, modal replay, company-site fallback, production pacing of at least 600 seconds and at most 15 a day. | Eleven opener/refusal native cases pass. Consent, review and three rehearsals followed by held Full auto pass. Final Apply group runs all six flows, including corrected recovery/checkpoint cases. |
+| A17: privacy and retention | Owner-bound routes/callbacks, private no-store errors, deletion cascades, temporary image and mail-audit retention, privileged boundary checks and private worker IO. | Six actual canary workflows, 42 AST cases, real firewall namespace checks and registered-route/deletion tests. Final Apply group includes the two-user journey. |
+| A18: external profiles | Exact reviewed CV pin, section hash/one-use Save, explicit Replace, autosave consent and atomic empty-only writes, durable edits/Skip. | Four real Chromium flows pass in 4.6 minutes; 5,278 affected backend and 429 frontend cases pass. Eight real-Postgres route/lock cases and 20 inspected screenshots. |
 
-## Shared completion work
+## Shared contracts and checkpoint evidence
 
-- Exclusion and duplicate matching: fold case before removing accents, hidden controls,
-  Unicode letters, IDNA and canonical fixed points. All seven new real-database cases and
-  1,085 pure/property cases pass. The Jobs/Apply checkpoint passed 6,280 with 15 existing
-  personal-source skips; corrected manual fixtures then passed all 113 affected cases.
-- Document-letter editing: adapter-owned classification, ordinary 5,000 and letter 10,000
-  limits, no truncation/control normalization, exact field-shape binding and displayed limits.
-  Approved rendering waits retain one immutable hour per attempt. All 201 real database/API
-  cases pass; all migration cases pass through the single `0026` head. The five new visible
-  editor journeys still need to run.
-- Request limits: six new request schemas have explicit bounds, without registry exceptions
-  or larger body classes. All 45 related identity/body-limit/schema boundary cases pass,
-  including worst escaped bodies and the one-byte-over limit.
-- Answer integration checkpoint `080d04c6`: 10,310 Apply/agents/browser/mail cases passed,
-  19 existing opt-in cases skipped, and one mail setup umask case failed. There were no Apply
-  failures. The subsequent setup fix passes all 21 setup cases and all 1,267 mail/A14 cases.
-- Grounded locative and coordinated claims follow-up `74d31e09`: 2,182 affected cases pass.
-  Independent review subsequently found nominal locative claims could still borrow company
-  words as personal facts. It also found VIE/generic execution bypassed saved person values,
-  generic snapshot joining lost AI-reader warnings, and previous-application history was not
-  populated. These concrete findings are being fixed before final combined verification.
-- A17 routes: all registered private endpoint families and linked document representations
-  are exercised for owner access, signed-out refusal, cross-person/missing equivalence, CSRF,
-  no-store success/error behavior and typed callback ownership. The broad checkpoint passed
-  13,132 and exposed 21 compatible Documents cache-header expectations plus one old memory
-  accounting assertion. Preserving valid existing no-store directives fixes the compatibility
-  issue; the Documents/route/cascade rerun passed 3,515 with only that old accounting assertion.
-- The Compose accounting test now explicitly preserves the existing 5,248 MiB core total and
-  adds the optional 128 MiB mail provider. All 24 renderer/Compose cases pass. No memory limit
-  or global target changed: with mail the declared total is 5,376 MiB, 256 MiB above the
-  unchanged 5 GiB target. Physical Jetson acceptance is outstanding.
-- Mail setup now assigns exact modes independently of the operator's umask, rejects unsafe
-  existing directories before credential creation and closes descriptors on failure. All 21
-  setup tests pass, plus 175 deployment contracts. Two permission-neighbor tests detect a
-  deliberately inverted traversal condition; committed source was restored afterwards.
-- The A17 canary suite passes all 48 focused cases: six actual worker-backed workflows and
-  42 AST boundary cases. It captures real queue result/event metadata and logs without leaking
-  the canaries. The actual firewall harness passes 16 checks for independent mail/browser
-  coexistence, drift repair and uninstall; pinned shellcheck passes.
+- Exclusion/duplicates: Unicode folding, hidden controls, IDNA and canonical fixed points;
+  all seven new real-database cases and 1,085 pure/property cases pass. The Jobs/Apply
+  checkpoint passed 6,280 with 15 existing personal-source skips; corrected manual fixtures
+  then passed all 113 affected cases.
+- Person answers: generic and VIE execution use the exact saved value before typing or a
+  model call, including a 10,000-character document letter. Changed field shape remains empty
+  with `person_answer_changed`. Related checkpoints pass 1,045 and 268 cases. An independent
+  pure complete-run probe preserves the full letter, performs zero gate clicks and does not
+  expose its text through model tool responses.
+- Reports/history: generic page parsing retains node boundaries for direct AI-reader
+  warnings. Confirmed prior submissions are queried across roles and time for the owner and
+  company; another person's history and rehearsed/uncertain attempts cannot establish Yes.
+- Free text: each personal factual or preference sentence needs complete permitted source
+  provenance. Finite technical action equivalences apply only to clear predicates; object
+  names and noun lists remain intact. An achievement does not establish personal intent.
+  Unrecognised paraphrases stay with the person. Original unsourced intent controls are
+  refusal tests with genuine sourced positive companions; shared recorded streams are
+  unchanged. Final grounding checkpoint: 1,915 focused passes and 66 original factual/
+  coordinated review controls with supported companions. See
+  [source provenance evidence](../../docs/evidence/apply604-source-provenance.md). The quote/
+  metadata follow-up adds 332 passing boundary cases and 440 clean independent probes; typed
+  metadata remains available to independent fact checking. Its whole Apply run passed 6,969
+  with one inherited canary fixture failure, documented in
+  [boundary evidence](../evidence/apply-provenance-boundaries.txt); the final gate covers the
+  corrected fixture and combined source.
+- Letter/rendering: adapter-owned classification, ordinary 5,000 and document-letter 10,000
+  codepoint limits, exact shape binding and no truncation; an immutable hour per rendering
+  attempt. All 201 real database/API cases pass. Migration tests pass through one `0026` head.
+  The final Apply group runs the five visible editor/render-wait tests.
+- Request boundaries: six request schemas have explicit bounds, with no registry exceptions
+  or larger body classes. All 45 identity/body/schema cases pass, including escaped maxima
+  and one-byte-over refusal. Email subjects additionally use 998 codepoints and reject CR/LF
+  before mutation; the server-derived `max_chars` and client/editor agree. Legacy invalid
+  content returns typed 422 at approval and remains editable.
+- Email lifecycle: a whole Apply/mail checkpoint passes 7,191. Subsequent whole mail/A14
+  passes 1,324 after atomic local-stop settlement, and 132 final A14 recovery cases pass after
+  missing-draft recovery. The frontend passes 379 Apply cases and 13 typed-error queue cases.
+  Recovery checks exact owner, posting, active send id and email ATS under locks. An uncertain
+  attempt retains its spent authority and cannot automatically mint or send again.
+- Final email pacing: 14 real-Postgres overlap/clock cases and the whole 1,346 mail/A14 suite
+  pass. Final host reservation and click share a transaction. A paced non-send atomically
+  resets its audit/draft/binding while retaining valid approval, mode and hold for later retry.
+  Provider calls retain the mail lock; final time checks follow blocking owner/apply locks.
+  The host-lock follow-up samples pacing time and rechecks authorization after acquisition;
+  all 1,358 mail/A14 tests and 164 final lock/cap cases pass. See
+  [host-lock expiry evidence](../../docs/evidence/apply604-host-expiry.md).
+- Document/takeover gates: current document versions are rechecked for both modes before
+  lease acquisition and click. All 21 focused document/outcome cases pass. Live ownership
+  and its generation guard stop old paced input; Give back supplies a fresh page snapshot.
+  A definite refused click returns to fresh approval without freezing files or claiming an
+  uncertain submission. Profile Save cannot replay its spent approval. The final whole
+  browser/affected gate checkpoint passes 2,221 cases.
+- Navigation/clocks: navigation checks after dwell, awaited focus and immediately before
+  `goto`; tab select/close check before mutation. Passive lists and manual navigation keep
+  their allowed paths. Aggregate transport, queue and generic-form allowances include the
+  specified 900-second Take over wait; active browser, token and turn limits stay unchanged.
+  Whole browser/affected generic checkpoint: 3,273 passes. Exact-source Chromium: two tests
+  containing all 21 native ownership checks pass. A continuous retake shares its original
+  native/public/API pause deadline rather than renewing it. Ten focused deadline cases and
+  the whole browser/affected Apply control suite pass 2,162 cases.
+- Privacy: all private endpoint families and linked documents have signed-out/cross-person,
+  missing equivalence, CSRF, no-store success/error and callback-ownership coverage. The
+  Documents/route/cascade checkpoint passes 3,515 with one stale memory assertion subsequently
+  corrected. The canary/boundary suite passes all 48 cases: six complete worker workflows and
+  42 AST alias cases. The actual Docker firewall namespace harness passes 16 coexistence,
+  repair and uninstall checks; pinned shellcheck passes.
+- Mail setup: exact file/directory modes independent of umask, refusal of unsafe existing
+  directories before credentials, deterministic descriptor cleanup. All 21 setup cases and
+  1,267 mail/A14 cases pass; 175 deployment contracts pass. Both relevant permission-neighbor
+  tests detect a deliberately inverted condition, and committed source was restored.
 
-Detailed slice evidence is retained under [tasks/evidence](../evidence), including
-[recovery](../evidence/apply-recovery-runtime), [external profiles](../evidence/apply-a18),
-[A17 boundaries](../evidence/apply-a17/boundaries.txt) and
-[A17 routes](../evidence/apply-a17/routes.txt). Checkpoint counts are separate runs; they are
-not a claim that the final combined tree has passed.
+These counts are separate checkpoints, not a summed final result. Detailed commands and
+limits are under [tasks/evidence](../evidence), including
+[A17 boundaries](../evidence/apply-a17/boundaries.txt),
+[A17 routes](../evidence/apply-a17/routes.txt),
+[mail lifecycle](../evidence/apply-mail-lifecycle.txt) and
+[gate ownership](../evidence/apply-gate-ownership.txt).
 
-## Final verification
+## Final acceptance record
 
-- [ ] Resolve all independent audit blockers and complete every implementation capability.
-- [ ] Complete affected API suites pass, with fixture-only skips identified.
-- [ ] Frontend typecheck, lint, component tests and production build pass.
-- [ ] Required Apply, Browser, Opportunities and mail journeys run on final composed images.
-- [ ] Inspect the required final review, handoff and submission screenshots.
-- [ ] Migration upgrade/downgrade checks pass with one Alembic head.
-- [ ] Independent reviews cover application Submit, external-profile Save and email Send.
-- [ ] Final write audit confirms this task did not modify approved PRs or their branches.
-- [ ] Each owner acceptance or external configuration step is named explicitly.
+Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
+The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
+lint, components and production build, migration upgrade/downgrade with one head, script and
+secret checks, and the scoped Apply/Browser/Opportunities/mail journeys. Review includes the
+required desktop/mobile light/dark evidence and a write audit of protected source branches.
+The pull request records the final result, fixture-only skips, any retry/failure and the exact
+head/tree. No source-snapshot approval substitutes for that combined review.
 
 ## Owner acceptance and deployment prerequisites
 
 Real-site Checkpoint A remains the owner's step after a checked deployment: choose a real
-Ashby/Greenhouse role, observe and approve it, and inspect its screenshots and frozen documents.
+Ashby/Greenhouse role, observe and approve it, and inspect screenshots and frozen documents.
 Real sign-ins, real profile-save acceptance and Full auto's live acceptance also remain human
 steps. Local fakes do not satisfy these physical/site acceptance criteria.
 
-The maximum 12 MiB synthetic mail send completed at the 128 MiB provider cap with no OOM or
-restart, but reached the cap and recorded 292 pressure events. The bounded fake Workday run
-peaked at 454,807,552 browser bytes under its 1 GiB cap. These measurements establish those
-fixture workloads only; neither establishes Jetson headroom or the 7.4 GiB host acceptance.
+The existing core limits total 5,248 MiB; optional mail adds 128 MiB, for 5,376 MiB, 256 MiB above
+the unchanged 5 GiB target. All 24 corrected renderer/Compose accounting cases pass. No memory
+limit or target changed. The maximum 12 MiB synthetic mail send completed at the provider cap
+with no OOM/restart but 292 pressure events. Fake Workday peaked at 454,807,552 browser bytes
+under its 1 GiB cap. These measurements establish those workloads only, with no claim of
+Jetson headroom or the 7.4 GiB host acceptance.
 
-The owner must provision production credentials and install host egress rules with sudo as
-specified in [mail setup](../../docs/mail-application-setup.md). This task has not read real
-secret files, run production setup, changed host firewall rules, merged main or deployed.
+The owner provisions production credentials and installs host egress rules with sudo as in
+[mail setup](../../docs/mail-application-setup.md). This task has not read real secret files,
+run production setup, changed host firewall rules, merged main or deployed.

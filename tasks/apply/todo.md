@@ -310,8 +310,10 @@ Recovery follow-ups implemented on the isolated completion branch on 2026-10-22:
 ended-session recovery, independent startup transactions, visible held sessions, a final passive
 confirmation watch before close, and Attach input/chooser ownership. The focused manual suite
 passed 90 cases; the final three regressions passed in the 7,167-case Apply/browser run. Native
-Chromium proves stale chooser refusal and takeover during paced input. Actual UI recovery and
-the incidental chooser race during Attach remain with the fresh runtime continuation.
+Chromium proves stale chooser refusal and takeover during paced input. The actual three
+original manual flows and four recovery flows pass, including immediate Submit and Close,
+ended-session queue/reopen/record and cross-person refusals. A distinct native case proves the
+incidental chooser race during Attach. Final integrated gate evidence is recorded on #604.
 
 ### A10a
 The retries, person wait and payment detector call no model (0 tokens). A retry is one more
@@ -321,8 +323,9 @@ immutable deadline, restores the exact mirror after Redis loss and preserves the
 earlier answers and ordered steps through a later wizard captcha or email-code step. Sign-in
 keeps its separate handoff. The 429 retry, 403 Needs you and 410 closed rules remain as #560.
 The whole Apply/browser run passed 7,167 cases, three additional real Redis/private-HTTP cases
-passed, and six distinct native Chromium cases passed. The actual `apply-a10a.spec.ts` UI
-journey is being added and must pass before completion. Exact commands and limits are in
+passed, and six distinct native Chromium cases passed. Actual captcha and email-code
+journeys preserve earlier fields and steps, then require a fresh approval before exactly one
+fake submission. Final integrated gate evidence is recorded on #604. Exact commands and limits are in
 [the person-wait evidence](../evidence/apply-person-wait/tests.txt).
 
 ### A10b
@@ -368,14 +371,20 @@ pending checks are in [the evidence](../evidence/apply-a15/tests.txt).
 Implemented behind the recorded LinkedIn opt-in with the private, pinned Easy Apply opener,
 strict modal summaries, exact replay, company-site fallback and production pace of at least
 600 seconds and at most 15 a day. Native opener/refusal checks passed 11 cases; the final
-focused backend suite passed 77. The six-flow application browser acceptance is pending with
-a fresh runtime continuation. See [the implementation notes](../../docs/apply-linkedin.md)
+focused backend suite passed 77. Actual consent, Review first and three rehearsals followed
+by held Full auto pass. The remaining corrected recovery, company-site fallback, checkpoint
+and console flows are part of the final six-flow integrated gate, whose result is recorded on
+#604. See [the implementation notes](../../docs/apply-linkedin.md)
 and [the evidence](../evidence/apply-a16/tests.txt).
 
 ### A17
-Temporary screenshot retention and its private click boundary passed seven focused tests.
-Full route isolation, deletion/canary proof, shared email confirmation consistency and the
-independent final gate reviews remain. See [the completion checklist](completion.md).
+Temporary screenshot retention and its private click boundary pass seven focused tests.
+Route and linked-document tests cover signed-out and cross-person refusals, CSRF, private
+no-store successes/errors, callback ownership and deletion cascades. All 48 boundary cases
+pass, including six worker-backed canary flows and 42 AST alias cases. Shared email
+confirmation passes 25 real-database race/idempotence cases. The actual Docker firewall
+namespace harness passes 16 checks. The two-user UI journey and independent final review
+are part of the integrated acceptance recorded on #604. See [the completion checklist](completion.md).
 
 ### A18a
 Implemented for #254 with additive migration 0024. Two real synthetic three-section runs reached `ready` without a credential, recording zero input/output tokens and turns. Generic profiles share 820,000 tokens and 30 turns across the run; known helpers share 30 turns and a 23,000-token allowance per identified section. These are ceilings, not real-model usage measurements. The fake usage tests verify subtraction across sections. Real model/site measurement remains Checkpoint A. All four fake-site Chromium flows passed in 4.6 minutes; the affected backend suite passed 5,278 cases. See `tasks/evidence/apply-a18/tests.txt`.
