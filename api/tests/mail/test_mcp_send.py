@@ -67,5 +67,11 @@ def test_mcp_transport_send_and_replay(fake, clock, sleeps) -> None:
             assert len(fake.sent) == 1
             account.email = BOB
             assert (await client.get_profile(account))["error"] == "not_connected"
+            account.email = ALICE
+            provider.budget.limit = provider.budget.used(str(user))
+            limited = send_key.mint(SECRET, uuid4(), user, ALICE, uuid4(), None, "hash", raw, NOW)
+            refused = await client.call(account, "send_message", {**args, "send_key": limited})
+            assert refused == {"result": "not_sent", "code": "gmail_quota"}
+            assert len(fake.sent) == 1
 
     asyncio.run(scenario())

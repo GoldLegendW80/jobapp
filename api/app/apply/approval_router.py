@@ -385,7 +385,7 @@ def set_answer(
     except jobs_service.JobBusyError:
         db.rollback()
         return _refusal("busy")
-    return read_approval(application_id, user, db)
+    return read_approval(application_id, request, user, db)
 
 
 def _person(

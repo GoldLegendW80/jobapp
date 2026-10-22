@@ -658,10 +658,14 @@ async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
     from app.apply import run as apply_run
     from app.apply.models import Application
 
-    with sessions_of(ctx)() as db:
+    given = ctx.get("apply_services")
+    sessions = given.sessions if given is not None else sessions_of(ctx)
+    with sessions() as db:
         application = db.get(Application, uuid.UUID(application_id))
         if application and application.ats == "email":
-            apply_email.prepare(db, application.id, clock_of(ctx)())
+            apply_email.prepare(
+                db, application.id, (given.clock if given is not None else clock_of(ctx))()
+            )
             db.commit()
             return
     await apply_run.fill(apply_services(ctx), uuid.UUID(application_id))

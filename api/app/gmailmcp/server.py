@@ -169,6 +169,7 @@ class Service:
                 self.now(),
             )
             client, grant = await self.client(headers)
+            self.budget.spend(grant.user_id, 100)
             # Atomic and durable across provider restarts, BEFORE the irreversible call.
             accepted = await self.redis.set(
                 f"mailmcp:send:{payload['send_id']}", "1", nx=True, ex=600
@@ -187,7 +188,6 @@ class Service:
         except Exception:
             return {"result": "not_sent", "code": "mail_server_down"}
         try:
-            self.budget.spend(grant.user_id, 100)
             body: dict[str, Any] = {"raw": raw}
             if thread_id:
                 body["threadId"] = thread_id

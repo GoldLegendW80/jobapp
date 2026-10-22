@@ -228,6 +228,8 @@ def _decide(
     now: datetime,
     settings: Settings,
     switches: apply_gate.Switches,
+    *,
+    available: bool = True,
 ) -> tuple[MailSend, MailDraft | None, MailAccount | None, bytes | None]:
     locks.lock_send(db, auth.user_id)
     account = db.scalar(
@@ -309,6 +311,7 @@ def _decide(
     code = code or ("not_open" if draft.status != "draft" else None)
     code = code or ("draft_changed" if drafts.content_hash(draft) != auth.content_hash else None)
     code = code or application_email.account_code(db, auth.user_id)
+    code = code or ("mail_send_unavailable" if not available else None)
     if not code and (
         not settings.mail_send_key or len(settings.mail_send_key.get_secret_value()) < 32
     ):
@@ -491,7 +494,9 @@ async def send(
     clock: Callable[[], datetime] | None = None,
 ) -> MailSend:
     with sessions() as db:
-        row, draft, account, raw = _decide(db, auth, now, settings, switches)
+        row, draft, account, raw = _decide(
+            db, auth, now, settings, switches, available=mcp is not None
+        )
         db.commit()  # irreversible boundary: another connection sees pending before Gmail.
         if draft is None:
             return row

@@ -28,12 +28,13 @@ from app.mail.google import SCOPE_READONLY, SCOPE_SEND, GoogleClient
 from app.mail.mcp_client import GmailMcp
 from app.mail.models import TOKEN_KIND, AccountStatus, MailAccount, MailThread
 from tests.apply.conftest import AT, add_posting
-from tests.apply.test_a13_full_auto import turn_on
+from tests.apply.test_a13_full_auto import api, stub, turn_on
 from tests.mail import canary
 from tests.mail.fake_gmail import FakeGoogle
 from tests.mail.test_mcp_send import Keys
 
 SECRET = "synthetic-mail-send-key-" * 3
+__all__ = ["api", "stub"]
 
 
 @pytest.fixture(autouse=True)
@@ -442,6 +443,51 @@ def test_worker_refuses_signing_key():
                 mail_send_key=SECRET,
             )
         )
+
+
+def test_missing_api_provider_configuration_is_needs_person_without_pending_send(
+    db, factory, person_a
+):
+    fake = FakeGoogle()
+    fake.seed("alice")
+    ring = connect(db, person_a, fake)
+    application = prepare(db, person_a)
+    auth = approve(db, application)
+    settings, _, _ = provider(fake, ring)
+    row = asyncio.run(
+        mail_gate.send(
+            factory,
+            auth,
+            AT,
+            settings=settings,
+            mcp=None,
+            switches=gate.Switches(enabled=True, paused=False),
+        )
+    )
+    assert (row.result, row.refusal_code) == ("refused", "mail_send_unavailable")
+    db.expire_all()
+    assert db.get(Application, application.id).state is State.needs_person
+    assert not fake.sent
+
+
+def test_private_email_gets_and_errors_are_never_cached(api, db, person_a, person_b):
+    application = prepare(db, person_a)
+    draft = db.scalar(sa.select(MailDraft).where(MailDraft.application_id == application.id))
+    db.commit()
+    token_a, token_b = api.login_token(person_a.email), api.login_token(person_b.email)
+    for path in (f"/api/applications/{application.id}/email", f"/api/mail/drafts/{draft.id}"):
+        own = api.get(path, token=token_a)
+        assert own.status_code == 200
+        assert own.headers["cache-control"] == "no-store"
+        other = api.get(path, token=token_b)
+        assert other.status_code == 404
+        assert other.headers["cache-control"] == "no-store"
+    denied = api.post(f"/api/mail/drafts/{draft.id}/send", token=token_a, csrf=False, json={})
+    assert denied.status_code == 403
+    assert denied.headers["cache-control"] == "no-store"
+    invalid = api.post(f"/api/mail/drafts/{draft.id}/send", token=token_a, json={})
+    assert invalid.status_code == 422
+    assert invalid.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize("missing_scope", [False, True])

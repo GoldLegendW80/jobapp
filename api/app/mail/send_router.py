@@ -107,7 +107,16 @@ def application_email(
         )
     )
     if draft is None:
-        raise HTTPException(404, "The email is still being prepared.")
+        return {
+            "id": str(application.id),
+            "status": "preparing",
+            "to": [],
+            "subject": "",
+            "body": "",
+            "send_id": None,
+            "message": None,
+            "issues": [],
+        }
     if application.state in {State.ready, State.approved, State.held} and draft.status == "draft":
         with suppress(ValueError):
             apply_email.sync_draft(db, application, draft, deps.clock(request))

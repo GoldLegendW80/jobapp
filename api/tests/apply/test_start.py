@@ -309,7 +309,7 @@ def test_the_live_application_of_the_posting(db: Session, a: uuid.UUID) -> None:
     assert start(db, a, job).application.id != first.id
 
 
-@pytest.mark.parametrize("url", ["", "mailto:jobs@example.org", "javascript:void(0)", "/careers/1"])
+@pytest.mark.parametrize("url", ["", "javascript:void(0)", "/careers/1"])
 def test_no_form_address(db: Session, a: uuid.UUID, url: str) -> None:
     job = posting(db, a)
     db.execute(
@@ -318,6 +318,19 @@ def test_no_form_address(db: Session, a: uuid.UUID, url: str) -> None:
     db.commit()
     for mode in Mode:
         assert refused(db, a, job, mode) == "no_address"
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+def test_mailto_posting_starts_an_email_application(db: Session, a: uuid.UUID, mode: Mode) -> None:
+    job = posting(db, a)
+    db.execute(
+        sa.text("UPDATE jobs SET url = :url WHERE id = :j"),
+        {"url": "mailto:e2e-jobs@example.org", "j": job},
+    )
+    db.commit()
+    application = start(db, a, job, mode).application
+    assert application.ats == "email"
+    assert application.form_url == "mailto:e2e-jobs@example.org"
 
 
 def test_a_rehearsal_is_never_manual(db: Session, a: uuid.UUID) -> None:
