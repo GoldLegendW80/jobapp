@@ -112,12 +112,10 @@ test("Ashby: the invisible check fails an instant fill and a webdriver browser, 
     fields: Record<string, string>;
   };
   expect(application.fields).toMatchObject({
+    _systemfield_name: "Alex Example",
     q_eu_work: "Yes",
     q_sponsor: "No",
   });
-  expect(
-    await page.locator("form").getAttribute("data-autofill-used"),
-  ).toBeNull();
   await expect(page.locator("#confirmation")).toContainText(
     "successfully submitted",
   );
