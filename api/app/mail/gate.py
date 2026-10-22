@@ -17,7 +17,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.apply import caps, full_auto, states, submit
+from app.apply import caps, full_auto, run, states, submit
 from app.apply import email as application_email
 from app.apply import gate as apply_gate
 from app.apply.models import Application, Mode, State
@@ -436,7 +436,8 @@ def _decide(
             apply_gate._event(db, application, "rehearsed", now)
             row.refusal_code = "dry_run"
             return row, None, None, None
-        if caps.reserve(db, application, now):
+        if (until := caps.reserve(db, application, now)) is not None:
+            run._wait(db, application, "host_pace", now, until=until.isoformat())
             row.refusal_code = "paced"
             return row, None, None, None
         application.mail_send_id = row.id
@@ -495,7 +496,6 @@ async def _call_send(
     fresh_switches = (
         await switches_for() if switches_for else apply_gate.Switches(enabled=True, paused=False)
     )
-    now = clock() if clock else now
     code = apply_gate.switch_code(fresh_switches)
     locks.lock_send(db, row.user_id)
     db.expire_all()
@@ -505,6 +505,7 @@ async def _call_send(
     application, stop = None, None
     if draft.application_id:
         application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
+        now = clock() if clock else now
         if application.state not in states.DECIDED or application.mail_send_id != row.id:
             code = code or "not_open"
         elif (spent := submit._spent(db, application)) is None or spent.id != authorisation_id:
@@ -513,6 +514,8 @@ async def _call_send(
             code = code or "stale"
         elif refused := submit.recheck(db, application, posting, now):
             code, stop = code or refused.code, refused
+    else:
+        now = clock() if clock else now
     if application and application.state in {
         State.submitting,
         State.submit_unknown,
@@ -540,6 +543,13 @@ async def _call_send(
         row.result, row.refusal_code, row.updated_at = "failed", code, now
         db.commit()
         return {"result": "not_sent", "code": code}
+    if application and (until := caps.reserve(db, application, now)) is not None:
+        run._wait(db, application, "host_pace", now, until=until.isoformat())
+        draft.status, draft.updated_at = "draft", now
+        application.mail_send_id = None
+        row.result, row.refusal_code, row.updated_at = "failed", "paced", now
+        db.commit()
+        return {"result": "not_sent", "code": "paced"}
     thread_id = db.get(MailThread, draft.thread_id).gmail_thread_id if draft.thread_id else None
     if application:
         states.move(application, State.submitting, now)
