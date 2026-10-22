@@ -48,51 +48,42 @@ const valueText = (value: unknown) =>
     : typeof value === "string"
       ? value
       : JSON.stringify(value);
+const editText = (value: unknown) =>
+  value == null || value === "" ? "" : valueText(value);
+const canEditField = (field: ProfileField) =>
+  field.kind !== "file" &&
+  !(
+    field.refusal &&
+    ["email", "security", "privacy", "consent", "deletion", "control"].includes(
+      field.refusal,
+    )
+  );
 
 function FieldRow({
   field,
   run,
-  section,
-  update,
-  refresh,
+  value,
+  replace,
+  pending,
+  error,
+  onChange,
+  onSave,
+  onUndo,
+  onReplace,
 }: {
   field: ProfileField;
   run: ProfileRun;
-  section: string;
-  update: (run: ProfileRun) => void | Promise<void>;
-  refresh: () => void;
+  value: string;
+  replace: boolean;
+  pending: boolean;
+  error: Error | null;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  onUndo: () => void;
+  onReplace: (replace: boolean) => void;
 }) {
-  const [draft, setDraft] = useState({
-    base: field.value,
-    value: valueText(field.value) === "Empty" ? "" : valueText(field.value),
-  });
-  const value =
-    draft.base === field.value
-      ? draft.value
-      : field.value == null
-        ? ""
-        : valueText(field.value);
-  const [replacement, setReplacement] = useState({
-    base: field.replace,
-    value: field.replace,
-  });
-  const replace =
-    replacement.base === field.replace ? replacement.value : field.replace;
-  const protectedField =
-    !!field.refusal &&
-    ["email", "security", "privacy", "consent", "deletion", "control"].includes(
-      field.refusal,
-    );
-  const mutable = !protectedField && field.kind !== "file" && !run.autosave;
-  const save = useMutation({
-    mutationFn: (changes: { value?: string; replace?: boolean }) =>
-      editField(run.id, section, field.field_key, changes),
-    onSuccess: update,
-    onError: () => {
-      setReplacement({ base: field.replace, value: field.replace });
-      refresh();
-    },
-  });
+  const mutable = canEditField(field) && !run.autosave;
+  const dirty = value !== editText(field.value);
   return (
     <tr className="align-top border-b last:border-0">
       <th scope="row" className="p-3 text-left font-medium min-w-36">
@@ -112,22 +103,30 @@ function FieldRow({
             <Textarea
               aria-label={`Edit ${field.label}`}
               value={value}
-              disabled={save.isPending}
+              disabled={pending}
               onChange={(event) => {
-                setDraft({ base: field.value, value: event.target.value });
+                onChange(event.target.value);
               }}
               rows={2}
             />
             <Button
               size="sm"
               variant="outline"
-              disabled={save.isPending || value === valueText(field.value)}
-              onClick={() => {
-                save.mutate({ value });
-              }}
+              disabled={pending || !dirty}
+              onClick={onSave}
             >
               Keep edit
             </Button>
+            {dirty && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={pending}
+                onClick={onUndo}
+              >
+                Undo
+              </Button>
+            )}
           </div>
         ) : (
           <span className="break-words">{valueText(field.value)}</span>
@@ -137,9 +136,9 @@ function FieldRow({
             {refusals[field.refusal] ?? "This field is left for you to review."}
           </p>
         )}
-        {save.error && (
+        {error && (
           <p role="alert" className="text-sm text-destructive">
-            {errorDetail(save.error) ?? describeError(save.error)}
+            {errorDetail(error) ?? describeError(error)}
           </p>
         )}
       </td>
@@ -158,13 +157,9 @@ function FieldRow({
                 type="checkbox"
                 aria-label={`Replace ${field.label}`}
                 checked={replace}
-                disabled={save.isPending}
+                disabled={pending}
                 onChange={(event) => {
-                  setReplacement({
-                    base: field.replace,
-                    value: event.target.checked,
-                  });
-                  save.mutate({ replace: event.target.checked });
+                  onReplace(event.target.checked);
                 }}
               />
               Replace
@@ -191,7 +186,62 @@ export function SectionReview({
   update: (run: ProfileRun) => void | Promise<void>;
   refresh: () => void;
 }) {
-  const [confirm, setConfirm] = useState(false);
+  return (
+    <SectionReviewContent
+      key={`${run.id}:${section.section}`}
+      run={run}
+      section={section}
+      update={update}
+      refresh={refresh}
+    />
+  );
+}
+
+function SectionReviewContent({
+  run,
+  section,
+  update,
+  refresh,
+}: {
+  run: ProfileRun;
+  section: ProfileSection;
+  update: (run: ProfileRun) => void | Promise<void>;
+  refresh: () => void;
+}) {
+  const [confirm, setConfirm] = useState<string | null>(null);
+  if (confirm !== null && confirm !== section.values_hash) setConfirm(null);
+  const [drafts, setDrafts] = useState<
+    Record<string, { base: string; value: string }>
+  >({});
+  const currentDrafts = Object.fromEntries(
+    Object.entries(drafts).filter(([key, draft]) =>
+      section.fields.some(
+        (field) =>
+          field.field_key === key && editText(field.value) === draft.base,
+      ),
+    ),
+  );
+  if (Object.keys(currentDrafts).length !== Object.keys(drafts).length) {
+    // A changed server value acknowledges or supersedes only that field's draft.
+    setDrafts(currentDrafts);
+  }
+  const fieldValue = (field: ProfileField) => {
+    const draft = drafts[field.field_key];
+    return draft?.base === editText(field.value)
+      ? draft.value
+      : editText(field.value);
+  };
+  const edit = useMutation({
+    mutationFn: ({
+      field,
+      changes,
+    }: {
+      field: string;
+      changes: { value?: string; replace?: boolean };
+    }) => editField(run.id, section.section, field, changes),
+    onSuccess: update,
+    onError: refresh,
+  });
   const save = useMutation({
     mutationFn: (operation: "approve" | "skip") =>
       action(
@@ -202,15 +252,31 @@ export function SectionReview({
           : undefined,
       ),
     onSuccess: (value) => {
-      setConfirm(false);
+      setConfirm(null);
       return update(value);
     },
     onError: () => {
-      setConfirm(false);
+      setConfirm(null);
       refresh();
     },
   });
   const editable = section.state === "ready" && run.state === "ready";
+  const unsaved =
+    editable &&
+    !run.autosave &&
+    section.fields.some(
+      (field) =>
+        canEditField(field) && fieldValue(field) !== editText(field.value),
+    );
+  const approvalBlocked =
+    !editable || !!section.error_code || unsaved || edit.isPending;
+  const saveField = (
+    field: ProfileField,
+    changes: { value?: string; replace?: boolean },
+  ) => {
+    setConfirm(null);
+    edit.mutate({ field: field.field_key, changes });
+  };
   return (
     <Card aria-labelledby={`profile-section-${section.section}`}>
       <CardHeader>
@@ -289,9 +355,36 @@ export function SectionReview({
                   key={field.field_key}
                   field={field}
                   run={editable ? run : { ...run, autosave: true }}
-                  section={section.section}
-                  update={update}
-                  refresh={refresh}
+                  value={fieldValue(field)}
+                  replace={
+                    edit.isPending && edit.variables.field === field.field_key
+                      ? (edit.variables.changes.replace ?? field.replace)
+                      : field.replace
+                  }
+                  pending={edit.isPending || save.isPending}
+                  error={
+                    edit.variables?.field === field.field_key
+                      ? edit.error
+                      : null
+                  }
+                  onChange={(value) => {
+                    setConfirm(null);
+                    setDrafts((current) => ({
+                      ...current,
+                      [field.field_key]: { base: editText(field.value), value },
+                    }));
+                  }}
+                  onSave={() => saveField(field, { value: fieldValue(field) })}
+                  onUndo={() => {
+                    setConfirm(null);
+                    setDrafts((current) => {
+                      const next = { ...current };
+                      delete next[field.field_key];
+                      return next;
+                    });
+                    if (edit.variables?.field === field.field_key) edit.reset();
+                  }}
+                  onReplace={(replace) => saveField(field, { replace })}
                 />
               ))}
             </tbody>
@@ -305,29 +398,41 @@ export function SectionReview({
           </p>
         )}
         {editable && (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              disabled={save.isPending || !!section.error_code}
-              onClick={() => {
-                setConfirm(true);
-              }}
-            >
-              Approve section
-            </Button>
-            <Button
-              variant="outline"
-              disabled={save.isPending}
-              onClick={() => {
-                save.mutate("skip");
-              }}
-            >
-              Skip section
-            </Button>
+          <div className="space-y-2">
+            {unsaved && (
+              <p role="status" className="text-sm text-muted-foreground">
+                Keep or undo your edits before approving this section.
+              </p>
+            )}
+            {edit.isPending && (
+              <p role="status" className="text-sm text-muted-foreground">
+                Waiting for your field changes to be saved.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                disabled={save.isPending || approvalBlocked}
+                onClick={() => {
+                  if (!approvalBlocked) setConfirm(section.values_hash);
+                }}
+              >
+                Approve section
+              </Button>
+              <Button
+                variant="outline"
+                disabled={save.isPending || edit.isPending}
+                onClick={() => {
+                  save.mutate("skip");
+                }}
+              >
+                Skip section
+              </Button>
+            </div>
           </div>
         )}
         <ConfirmDialog
           ask={
-            confirm
+            confirm === section.values_hash && !approvalBlocked
               ? {
                   title: `Save ${section.label}?`,
                   sentence: `Save the selected fields in ${section.label} on ${run.host}? Values on the site are replaced only where you chose Replace.`,
@@ -337,10 +442,16 @@ export function SectionReview({
           }
           pending={save.isPending}
           onCancel={() => {
-            setConfirm(false);
+            setConfirm(null);
           }}
           onConfirm={() => {
-            save.mutate("approve");
+            if (
+              !save.isPending &&
+              !approvalBlocked &&
+              confirm === section.values_hash
+            ) {
+              save.mutate("approve");
+            }
           }}
         />
       </CardContent>
