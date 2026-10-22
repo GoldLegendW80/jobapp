@@ -38,8 +38,9 @@ Declared open points:
   or prepared-letter words. Non-Latin wording without such support is conservative as well.
 - Factual paraphrases outside the finite action equivalences and rearranged coordinated
   sentences stay left. This intentionally prefers explicit source wording to inference.
-- Intent complements use a conservative noun-phrase grammar; unfamiliar wording stays left.
-  Fact checking, approval and the Full auto model check remain separate checks.
+- Typed employment and education metadata only support independent fact checking. Complete
+  personal assertions require profile prose, answers or the prepared letter. Incomplete quoted
+  spans prove no assertion. Approval and the Full auto model check remain separate checks.
 - Short company questions still need the posting's company at the judge. Existing lexical
   guards can refuse technical words whose ordinary reading is not recognised here.
 """
@@ -48,7 +49,7 @@ import functools
 import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from app.apply import answers, guardrails, terms
@@ -719,20 +720,27 @@ def profile_for(sections: Mapping[str, Any]) -> dict[str, Any]:
     return kept
 
 
+@dataclass(frozen=True, slots=True)
+class AnswerSources(factcheck_rules.Sources):
+    # Typed titles, organisations and dates can support the independent fact
+    # checker, but are not sentences asserting a personal achievement or desire.
+    metadata: tuple[str, ...] = ()
+
+
 def sources_of(
     sections: Mapping[str, Any], posting_title: str, company: str, letter_text: str = ""
-) -> factcheck_rules.Sources:
-    """What an answer may claim: the person's own profile (facts, experience, answers), its
-    employers, schools and titles. The posting legitimises its own title and company only."""
+) -> AnswerSources:
+    """Personal prose and independent typed facts, retaining their distinct provenance.
+    The posting legitimises its own title and company only."""
     view = profile_view.build(profile_for(sections), 0)
     own = [body for _, body in view.facts_blocks]
-    own += [f"{e.title} {e.organisation} {e.start or ''} {e.end or ''}" for e in view.employers]
-    own += [f"{s.degree} {s.school} {s.start or ''} {s.end or ''}" for s in view.schools]
+    metadata = [f"{e.title} {e.organisation} {e.start or ''} {e.end or ''}" for e in view.employers]
+    metadata += [f"{s.degree} {s.school} {s.start or ''} {s.end or ''}" for s in view.schools]
     if view.motivation:
         own.append(view.motivation)
     if letter_text:
         own.append(letter_text)
-    return factcheck_rules.Sources(
+    return AnswerSources(
         profile=tuple(text for text in own if text.strip()),
         answers=tuple(view.answers),
         employers=tuple(e.organisation for e in view.employers),
@@ -740,6 +748,7 @@ def sources_of(
         titles=(*(e.title for e in view.employers), posting_title),
         participants=(company,) if company else (),
         known_terms=tuple(view.skills_terms),
+        metadata=tuple(metadata),
     )
 
 
@@ -753,15 +762,14 @@ def undashed(text: str) -> str:
 
 
 def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
+    if isinstance(sources, AnswerSources):
+        sources = replace(sources, profile=(*sources.profile, *sources.metadata))
     return sorted({issue.code for issue in factcheck_rules.check(text, sources)})
 
 
-# Quoted names stay one opaque token, including their sentence punctuation. Keep
-# original case until predicate positions have been established: "Test It" is a name.
-_CLAIM_TOKEN = re.compile(
-    r"(?<!\w)'[^'\n]*'|\"[^\"\n]*\"|\u2018[^\u2019\n]*\u2019|\u201c[^\u201d\n]*\u201d"
-    r"|[.!?;\n]+|\w+(?:['\u2019]\w+)*|[^\w\s]"
-)
+# Keep original case until predicate positions are established: "Test It" is a name.
+_CLAIM_TOKEN = re.compile(r"[.!?;\n]+|\w+(?:['\u2019]\w+)*|[^\w\s]")
+_QUOTE_ENDS = {"'": "'", '"': '"', "\u2018": "\u2019", "\u201c": "\u201d"}
 _SENTENCE_END = re.compile(r"[.!?;\n]+")
 _RELATION_VERBS = {
     **dict.fromkeys(("build", "develop", "create", "design"), "build"),
@@ -788,8 +796,27 @@ _COORDINATE_COMPLEMENT = re.compile(
 
 
 def _claim_sentences(text: str) -> list[tuple[str, ...]]:
+    text = undashed(text)
     sentences, parts = [], []
-    for lexeme in _CLAIM_TOKEN.findall(undashed(text)):
+    tokens = iter(_CLAIM_TOKEN.finditer(text))
+    for token in tokens:
+        lexeme = token.group()
+        apostrophe = (
+            lexeme in ("'", "\u2019")
+            and token.start() > 0
+            and (text[token.start() - 1].isalnum() or text[token.start() - 1] == "_")
+        )
+        if lexeme in _QUOTE_ENDS and not apostrophe:
+            # Consume each token once, including line breaks and word apostrophes.
+            # An incomplete quoted span proves no personal sentence.
+            for closing in tokens:
+                if closing.group() == _QUOTE_ENDS[lexeme]:
+                    lexeme = text[token.start() : closing.end()]
+                    break
+            else:
+                return []
+        elif lexeme in ("\u2019", "\u201d") and not apostrophe:
+            return []
         if _SENTENCE_END.fullmatch(lexeme):
             if parts:
                 sentences.append(tuple(parts))
