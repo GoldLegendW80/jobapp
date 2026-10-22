@@ -491,6 +491,41 @@ def test_closing_after_a_confirmation_records_it(
     assert_recorded_by_the_confirmation(db, person_a, app_id)
 
 
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_submit_then_immediate_close_gets_one_final_page_watch(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    confirmed: bool,
+) -> None:
+    app_id = start_manual(db, person_a)
+    form = manual_ashby()
+
+    def close_immediately() -> None:
+        form.sent = confirmed
+        with factory() as s:
+            manual.cancel(s, person_a.user_id, app_id, AT, final_watch=True)
+            s.commit()
+
+    channel = FakeChannel([None, close_immediately])
+    # No periodic watch is due between the person's submit and close request.
+    ticks = iter(i / 100 for i in range(1000))
+    result = asyncio.run(
+        manual.session(
+            manual_services(factory, form, channel, stub=stub),
+            app_id,
+            monotonic=lambda: next(ticks),
+        )
+    )
+    assert result == ("submitted" if confirmed else "cancelled")
+    if confirmed:
+        assert_recorded_by_the_confirmation(db, person_a, app_id)
+        assert len([e for e in events(db, app_id) if e.kind == "recorded"]) == 1
+    else:
+        assert status(db, person_a) is not JobStatus.applied
+
+
 def test_the_watch_reads_the_state_while_the_posting_is_locked(
     db: Session, factory: sessionmaker[Session], person_a: Person
 ) -> None:

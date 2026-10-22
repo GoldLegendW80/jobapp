@@ -406,7 +406,12 @@ def record(
 
 
 def cancel(
-    db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    application_id: uuid.UUID,
+    now: datetime,
+    *,
+    final_watch: bool = False,
 ) -> Application:
     """The person closes the session without recording it: `cancelled` (the session sees it
     and ends its lease), or `submitted` by `confirmation` once the page showed the site's
@@ -414,6 +419,11 @@ def cancel(
     application, posting = gate.lock(db, user_id, application_id)
     if application.mode is not Mode.manual:
         raise gate.RefusedError("not_manual")
+    if final_watch and application.state is State.filling and application.needs != ENDED:
+        # The worker owns the page and must read it once more before this decision. The
+        # request is durable, so a Redis restart cannot lose a person's Close.
+        run._event(db, application, "manual_close_requested", now, attempt=application.attempt)
+        return application
     if application.state in OPEN and _confirmed(db, application):
         _sent(db, application, posting, now, "confirmation")
     elif application.state in OPEN:
@@ -422,6 +432,24 @@ def cancel(
         application.needs = None
         run._event(db, application, "ended", now, code="closed")
     return application
+
+
+def close_requested(db: Session, application_id: uuid.UUID) -> bool:
+    application = db.get(Application, application_id)
+    return (
+        application is not None
+        and db.execute(
+            sa.select(ApplicationEvent.id)
+            .where(
+                ApplicationEvent.application_id == application_id,
+                ApplicationEvent.user_id == application.user_id,
+                ApplicationEvent.kind == "manual_close_requested",
+                ApplicationEvent.data["attempt"].as_integer() == application.attempt,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 # --- the browser steps ---------------------------------------------------------------------------
@@ -551,6 +579,19 @@ async def _loop(
         )
         if not still:
             return ""
+        requested = await asyncio.to_thread(
+            run._in_db, fill.sessions, lambda db: close_requested(db, plan.application_id)
+        )
+        if requested:
+            # A submit followed immediately by Close can land between two periodic watches.
+            # A disappeared browser proves no success; only the explicit Close is applied.
+            with contextlib.suppress(BrowserError):
+                await _watch(services, tools, reader, s)
+            return await asyncio.to_thread(
+                run._in_db,
+                fill.sessions,
+                lambda db: cancel(db, plan.user_id, plan.application_id, fill.clock()).state.value,
+            )
         if monotonic() - watched >= WATCH_S:
             watched = monotonic()
             await _watch(services, tools, reader, s)
