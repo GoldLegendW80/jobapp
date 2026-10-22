@@ -225,6 +225,20 @@ def page_text(snapshot: str) -> str:
 # --- fields ------------------------------------------------------------------------------------
 
 YES_NO = ({"yes", "no"}, {"oui", "non"})
+
+
+def summary_answer(value: object, kind: str) -> object:
+    """A discovered yes/no's canonical option remains a typed boolean for summary comparison."""
+    return (value == "Yes") if kind == "yes_no" and value in ("Yes", "No") else value
+
+
+def summary_matches(value: object, shown: str) -> bool:
+    """Compare typed answers with a summary, including the yes/no vocabulary we discover."""
+    if isinstance(value, bool):
+        return fold(shown) in ({"yes", "oui"} if value else {"no", "non"})
+    return isinstance(value, str) and fold(value) == fold(shown)
+
+
 UPLOAD_ACTIONS = frozenset(
     {
         "upload file", "upload", "attach", "attach file", "choose file", "choose a file",
