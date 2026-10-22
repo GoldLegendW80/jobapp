@@ -22,8 +22,8 @@ an approval of an original snapshot is not an approval of the combined tree.
 | Capability | Existing implementation | Completion work | Evidence required |
 |---|---|---|---|
 | A1 to A8: forms, answers, fill, approval, reports, base adapters | Main plus existing apply snapshots | Audit interactions and refusal paths; fix specification gaps | Complete apply tests and fake ATS journeys |
-| A9: Apply myself | #517 plus recovery and chooser source integrated | Finish native and composed manual/session regression checks | Manual journey, no app submit click, isolation |
-| A10a: retries and needs you | HTTP rules and bounded wait source integrated | Complete email-code, clock, native and composed recovery verification | Injected-clock failure, timer and recovery tests |
+| A9: Apply myself | Recovery, chooser and manual close/reopen journeys pass | Final composed regression and independent review | Manual journey, no app submit click, isolation |
+| A10a: retries and needs you | HTTP rules, bounded waits and captcha/email-code journeys pass | Final composed regression and independent review | Injected-clock failure, timer and recovery tests |
 | A10b: sign-in recovery | Backend, UI and fake-site journeys integrated | Finish composed regression checks | Fake login walls, idempotent resume, Full auto becomes review |
 | A11 to A13c: caps, Like queue and Full auto | Main plus #591, #598, #470 | Verify composed decision, hold, rehearsals, model check, pauses and final rechecks | Counted fake submissions, clock/cap tests and journeys |
 | A14: email applications | Draft, gate, provider, UI and infrastructure integrated | Finish shared confirmation consistency, privacy and independent review | Fake Gmail only, immutable attachments, no duplicate send |
@@ -32,10 +32,11 @@ an approval of an original snapshot is not an approval of the combined tree.
 | A18a to A18c: complete external profiles | Backend, UI, schema and four fake-site browser flows pass | Finish backend regression, independent review and final composed checks | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
-Shared exclusion/duplicate matching is implemented. A15 and A18 fixture journeys pass, and
-A18's affected backend run passed 5,278 cases. Current runtime work covers LinkedIn's six-flow
-acceptance and manual/person-action recovery. The filed answer, document-edit and fake-ATS
-follow-ups, shared email confirmation, final privacy proof and independent reviews remain.
+Shared exclusion/duplicate matching is implemented. A15, A18 and recovery fixture journeys
+pass. Three of LinkedIn's six flows passed; the remainder awaits the final composed run.
+Current source work covers the answer and fake-ATS follow-ups, request-schema bounds, shared
+email confirmation and final privacy proof. Letter editing passes its real database/API
+checks; its visible browser proof and the final independent reviews remain.
 
 The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
 (manual recovery), #581 (editing a letter answer), #594 (document rendering wait), #587
@@ -189,6 +190,19 @@ recorded separately from unfinished implementation.
   passed with a separate picker opened during the paced Attach approach; the app refused the
   changed chooser without uploading either file. These results do not replace the pending
   immediate Submit-and-Close and ended-session queue journeys.
+- The composed Apply/body-limit/migration run at `1f6cdf6e` passed 5,421 cases, with three
+  failures and one setup error. Two failures dispatched manual test cases through the review
+  helper; the setup error omitted an imported fixture. Mechanical test fix `8ccd167b` then
+  passed all 201 real database/API letter and render-wait cases, including both manual modes,
+  second edits, forged classification, control characters and escaped multibyte bodies.
+  All migration cases passed with one `0026` head, upgrade/downgrade and matching metadata.
+  The remaining body-limit assertion identifies six new unbounded request schemas; those
+  contracts need inspection and correction before the complete run can pass.
+- Recovery's actual captcha and email-code journeys both passed through person input,
+  same-attempt continuation, retained earlier fields/steps and one freshly approved fake
+  submission. Four manual recovery tests passed, including immediate person Submit-and-Close,
+  both document freezes, no app click, and an ended session returning to the queue for reopen
+  or explicit recording. Final evidence cleanup and the complete composed run remain.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
