@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker, undefer
 from app.agents import credentials
 from app.agents.models import CredentialKind
 from app.documents import (
+    base_router,
     consent,
     design_capture,
     design_check,
@@ -36,6 +37,8 @@ from app.documents import photo as photos
 from app.documents import templates as template_system
 from app.documents.models import (
     BaseSource,
+    Document,
+    DocumentGeneration,
     DocumentUserTemplate,
     GenerationMode,
     GenerationStatus,
@@ -62,7 +65,7 @@ from tests.documents.canary import find, marker
 from tests.documents.conftest import load
 from tests.documents.render_support import FakeRenderer
 from tests.documents.store_support import AT, USER_A, USER_B, db, engine, factory, migrated_url
-from tests.documents.test_writer_base_upload import DOCX, add_upload
+from tests.documents.test_writer_base_upload import DOCX, MORGAN, _morgan_converts, add_upload
 from tests.documents.writer_support import (
     Person,
     document_row,
@@ -319,6 +322,33 @@ def test_the_file_without_its_bytes_fails_the_capture_at_once_and_keeps_classic(
     assert (generation.status, generation.error) == (GenerationStatus.failed, "binding_gone")
     assert services.asked == []
     assert document_row(who.factory, base).template_slug == "classic"
+
+
+def test_a_capture_that_fails_after_the_conversion_leaves_the_cv_converted(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    """The journeys' path (documents-d24, opportunities-o5): the conversion's final hook starts
+    the capture for real, the upload has no bytes left (ingestion drops them with the text), so
+    a `template_capture` generation fails at once. The base CV's listing still reports its
+    conversion, done: before the fix it reported the newer failed capture, and the upload panel
+    said "Your CV could not be converted"."""
+    document_id, generation_id = _morgan_converts(factory, migrated_url, MORGAN)
+    assert generation_row(factory, generation_id).status is GenerationStatus.done
+    with factory() as db:
+        modes = dict(
+            db.execute(
+                sa.select(DocumentGeneration.mode, DocumentGeneration.status).where(
+                    DocumentGeneration.document_id == document_id
+                )
+            ).all()
+        )
+        listed = base_router._out(db, db.get(Document, document_id))
+    assert modes[GenerationMode.template_capture] is GenerationStatus.failed  # the hook ran
+    assert listed.generation is not None
+    assert (listed.generation.id, listed.generation.status) == (
+        generation_id,
+        GenerationStatus.done,
+    )
 
 
 def test_bytes_gone_during_the_run_fail_it_as_gone(
