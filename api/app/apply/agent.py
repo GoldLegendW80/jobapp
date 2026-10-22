@@ -39,8 +39,9 @@ Declared open points:
 - Factual paraphrases outside the finite action equivalences and rearranged coordinated
   sentences stay left. This intentionally prefers explicit source wording to inference.
 - Typed employment and education metadata only support independent fact checking. Complete
-  personal assertions require profile prose, answers or the prepared letter. Incomplete quoted
-  spans prove no assertion. Approval and the Full auto model check remain separate checks.
+  personal assertions require profile prose, answers or the prepared letter. Incomplete or
+  ambiguous quoted spans prove no extracted assertion. Complete personal source copies retain
+  their context. Approval and the Full auto model check remain separate checks.
 - Short company questions still need the posting's company at the judge. Existing lexical
   guards can refuse technical words whose ordinary reading is not recognised here.
 """
@@ -770,6 +771,7 @@ def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
 # Keep original case until predicate positions are established: "Test It" is a name.
 _CLAIM_TOKEN = re.compile(r"[.!?;\n]+|\w+(?:['\u2019]\w+)*|[^\w\s]")
 _QUOTE_ENDS = {"'": "'", '"': '"', "\u2018": "\u2019", "\u201c": "\u201d"}
+_QUOTE_MARKS = frozenset((*_QUOTE_ENDS, *_QUOTE_ENDS.values()))
 _SENTENCE_END = re.compile(r"[.!?;\n]+")
 _RELATION_VERBS = {
     **dict.fromkeys(("build", "develop", "create", "design"), "build"),
@@ -795,28 +797,83 @@ _COORDINATE_COMPLEMENT = re.compile(
 )
 
 
+def _word_apostrophe(text: str, token: re.Match[str]) -> bool:
+    return (
+        token.group() in ("'", "\u2019")
+        and token.start() > 0
+        and (text[token.start() - 1].isalnum() or text[token.start() - 1] == "_")
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _QuotedSpan:
+    start: int
+    end: int
+    previous: "_QuotedSpan | None"
+
+
+def _claim_quotes(text: str) -> list[tuple[int, int]] | None:
+    # A word-final quote may instead be a possessive apostrophe. Count complete
+    # interpretations, saturating at two, with only outside plus four quote states.
+    # Persistent span links retain the unique parse without copying its history.
+    paths: dict[str, tuple[int, int, _QuotedSpan | None]] = {"": (1, 0, None)}
+    for token in _CLAIM_TOKEN.finditer(text):
+        lexeme = token.group()
+        if lexeme not in _QUOTE_MARKS:
+            continue
+        apostrophe = _word_apostrophe(text, token)
+        following: dict[str, tuple[int, int, _QuotedSpan | None]] = {}
+        for closing, (count, start, spans) in paths.items():
+            if closing:
+                if lexeme != closing:
+                    options = ((closing, start, spans),)
+                else:
+                    options = (("", 0, _QuotedSpan(start, token.end(), spans)),)
+                    if apostrophe:
+                        options += ((closing, start, spans),)
+            elif apostrophe:
+                options = (("", start, spans),)
+            elif lexeme in _QUOTE_ENDS:
+                options = ((_QUOTE_ENDS[lexeme], token.start(), spans),)
+            else:
+                options = ()
+            for state, opened, history in options:
+                prior = following.get(state)
+                ways = min(2, count + (prior[0] if prior else 0))
+                following[state] = (ways, opened, history)
+        paths = following
+        if not paths:
+            return None
+    complete = paths.get("")
+    if complete is None or complete[0] != 1:
+        # Ambiguous sources support whole copies, but cannot supply fragments.
+        return None
+    result = []
+    span = complete[2]
+    while span is not None:
+        result.append((span.start, span.end))
+        span = span.previous
+    result.reverse()
+    return result
+
+
 def _claim_sentences(text: str) -> list[tuple[str, ...]]:
     text = undashed(text)
+    quoted = _claim_quotes(text)
+    if quoted is None:
+        return []
+    quotes = iter(quoted)
+    quote = next(quotes, None)
     sentences, parts = [], []
     tokens = iter(_CLAIM_TOKEN.finditer(text))
     for token in tokens:
         lexeme = token.group()
-        apostrophe = (
-            lexeme in ("'", "\u2019")
-            and token.start() > 0
-            and (text[token.start() - 1].isalnum() or text[token.start() - 1] == "_")
-        )
-        if lexeme in _QUOTE_ENDS and not apostrophe:
-            # Consume each token once, including line breaks and word apostrophes.
-            # An incomplete quoted span proves no personal sentence.
+        if quote is not None and token.start() == quote[0]:
             for closing in tokens:
-                if closing.group() == _QUOTE_ENDS[lexeme]:
-                    lexeme = text[token.start() : closing.end()]
+                if closing.end() == quote[1]:
                     break
-            else:
-                return []
-        elif lexeme in ("\u2019", "\u201d") and not apostrophe:
-            return []
+            lexeme = text[quote[0] : quote[1]]
+            quote = next(quotes, None)
         if _SENTENCE_END.fullmatch(lexeme):
             if parts:
                 sentences.append(tuple(parts))
@@ -882,9 +939,13 @@ def _claim_relation(parts: tuple[str, ...], *, exact: bool = False) -> tuple[str
 def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bool = False) -> bool:
     # Personal facts and preferences have the same provenance requirement. Neither
     # achievement nouns nor a company, title or skill prove a desire or a relationship.
+    personal = (*sources.profile, *sources.answers)
+    complete = undashed(value).strip()
+    if complete and any(complete == undashed(text).strip() for text in personal):
+        return True
     relations = {
         _claim_relation(sentence, exact=exact)
-        for text in (*sources.profile, *sources.answers)
+        for text in personal
         for sentence in _claim_sentences(text)
     }
     proposed = _claim_sentences(value)

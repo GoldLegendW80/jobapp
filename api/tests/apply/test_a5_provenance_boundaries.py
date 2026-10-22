@@ -90,6 +90,91 @@ def test_a_trailing_word_apostrophe_is_preserved(apostrophe):
     assert judged(source, sources).answer
 
 
+@pytest.mark.parametrize("quote", ["'{}'", '"{}"', "‘{}’", "“{}”"])
+@pytest.mark.parametrize(
+    "name_start", ["robots' tools", "robots’ tools", "Someone's robots", "Someone’s robots"]
+)
+@pytest.mark.parametrize("claim", CLAIMS)
+def test_competing_quote_and_possessive_readings_cannot_prove_an_inner_claim(
+    quote, name_start, claim
+):
+    source = f"I built a tool called {quote.format(f'{name_start}.\n{claim}\nAgain')}."
+    sources = replace(agent.sources_of({}, "Engineer", "Example Robotics"), profile=(source,))
+    assert judged(claim, sources).answer is None
+    # Keeping all of the person's words does not reinterpret the ambiguous span.
+    assert judged(source, sources).answer
+    assert judged(source.replace("Again", "Elsewhere"), sources).answer is None
+    assert judged(claim, replace(sources, profile=(source, claim))).answer
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "I built robots' tools.",
+        "I built robots’ tools.",
+        "I built someone's tools.",
+        "I built someone’s tools.",
+        "I don't want to build robots.",
+        "I don’t want to build robots.",
+        "I built a tool called 'Robots'.",
+        "I built a tool called ‘Robots’.",
+        'I built a tool called "Robots".',
+        "I built a tool called “Robots”.",
+    ],
+)
+def test_ordinary_apostrophes_and_clear_quoted_names_keep_their_complete_source(source):
+    sources = replace(agent.sources_of({}, "Engineer", "Example Robotics"), profile=(source,))
+    assert judged(source, sources).answer
+    if source.startswith("I built"):
+        assert judged(source.replace("I built", "I developed", 1), sources).answer
+
+
+@pytest.mark.parametrize("quote", ["'{}'", "‘{}’"])
+@pytest.mark.parametrize("separator", [" ", "\n", "\r\n", "\r"])
+def test_an_ambiguous_quote_cannot_supply_any_shorter_personal_sentence(quote, separator):
+    name = f"robots{quote[-1]} tools.{separator}I want to build robots.{separator}Again"
+    source = f"I built a tool called {quote.format(name)}."
+    sources = replace(agent.sources_of({}, "Engineer", "Example Robotics"), profile=(source,))
+    assert judged("I want to build robots.", sources).answer is None
+    assert (
+        judged("I built a tool called " + quote.format("robots") + " tools.", sources).answer
+        is None
+    )
+    assert judged(source, sources).answer
+
+
+@pytest.mark.parametrize("quote", ["'{}'", "‘{}’"])
+def test_unique_quote_interpretation_uses_the_late_closer(quote):
+    name = f"robots{quote[-1]} tools.\nI want to build robots.\nAgain."
+    outside = "I tested software."
+    source = f"I built a tool called {quote.format(name)}.\n{outside}"
+    sources = replace(agent.sources_of({}, "Engineer", "Example Robotics"), profile=(source,))
+    assert judged("I want to build robots.", sources).answer is None
+    assert judged(outside, sources).answer
+    assert judged(source, sources).answer
+
+
+@pytest.mark.parametrize(
+    "unit", ["I built robots' tools. ", "'robots' tools. I want to build robots. Again'. "]
+)
+def test_quote_interpretation_visits_each_token_at_most_twice(monkeypatch, unit):
+    # The largest facts body keeps cost linear even for repeated ambiguous spans.
+    source = (unit * (FACTS_MAX_BYTES // len(unit))).rstrip()
+    original = agent._CLAIM_TOKEN
+    visited = 0
+
+    class CountedTokens:
+        def finditer(self, text):
+            nonlocal visited
+            for token in original.finditer(text):
+                visited += 1
+                yield token
+
+    monkeypatch.setattr(agent, "_CLAIM_TOKEN", CountedTokens())
+    agent._claim_sentences(source)
+    assert visited <= 2 * sum(1 for _ in original.finditer(source))
+
+
 def metadata_sections(field, value):
     employer = {
         "key": "robotics",
