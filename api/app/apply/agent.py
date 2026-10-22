@@ -1111,11 +1111,133 @@ def _neutral_motivation(clause: str, words: set[str], *, continuing: bool = Fals
     )
 
 
+def _predicate_at(parts: Sequence[str], start: int = 0) -> int | None:
+    """Recognise a direct finite predicate, including a bounded nominal relative frame."""
+    if parts[start : start + 1] in (["notably"], ["nonetheless"]):
+        start += 1
+    if parts[start : start + 1] in (["i"], ["we"]):
+        start += 1
+    elif parts[start : start + 2] in (["my", "work"], ["our", "work"]):
+        start += 2
+    elif (
+        parts[start : start + 1] == ["the"]
+        and parts[start + 1 : start + 2] in (["robot"], ["robots"], ["software"], ["agents"])
+        and parts[start + 2 : start + 3] in (["i"], ["we"])
+    ):
+        start += 3
+    else:
+        return None
+    if start < len(parts) and parts[start] in _RELATION_VERBS and not parts[start].endswith("ing"):
+        return start
+    return None
+
+
 def _claim_relation(clause: str, subject: str = "") -> tuple[str, ...]:
-    """Keep the entire frame, changing only the finite technical action equivalences."""
+    """Canonicalise clear predicates only; ambiguous coordination remains exact-only."""
     if subject and _COORDINATED_ACTION.match(clause):
         clause = f"{subject} {clause}"
-    return tuple(_RELATION_VERBS.get(word, word) for word in clause.split())
+    parts = clause.split()
+    first = _predicate_at(parts)
+    if first is None:
+        return tuple(parts)
+    predicates = [first]
+    for index, word in enumerate(parts):
+        if word not in ("and", "but"):
+            continue
+        following = index + 1
+        predicate = _predicate_at(parts, following)
+        if predicate is None:
+            # A bare "design systems" can be another object of "build". A determiner
+            # or pronoun after the action disambiguates "design the systems"/"test it".
+            if (
+                following + 1 >= len(parts)
+                or parts[following] not in _RELATION_VERBS
+                or parts[following].endswith("ing")
+                or parts[following + 1]
+                not in ("a", "an", "the", "this", "that", "these", "those", "it", "them")
+            ):
+                return tuple(parts)
+            predicate = following
+        predicates.append(predicate)
+    for index in predicates:
+        parts[index] = _RELATION_VERBS[parts[index]]
+    return tuple(parts)
+
+
+def _preference(clause: str, subject: str = "") -> tuple[str, bool, tuple[str, ...]] | None:
+    """Read polarity before the neutral-intent fallback, keeping its actor and complement."""
+    parts = clause.split()
+    if parts[:1] not in (["i"], ["we"]):
+        if not subject:
+            return None
+        parts.insert(0, subject)
+    actor, parts = parts[0], parts[1:]
+    if parts[:2] == ["don", "t"]:
+        parts = ["do", "not", *parts[2:]]
+    elif parts[:2] == ["wouldn", "t"]:
+        parts = ["would", "not", *parts[2:]]
+    elif parts[:2] == ["aren", "t"]:
+        parts = ["are", "not", *parts[2:]]
+    if parts[:1] == ["m"]:
+        parts[0] = "am"
+    elif parts[:1] == ["re"]:
+        parts[0] = "are"
+    negative = False
+    if parts[:2] == ["do", "not"]:
+        negative, parts = True, parts[2:]
+    elif parts[:1] == ["never"]:
+        negative, parts = True, parts[1:]
+    elif len(parts) > 1 and parts[0] in ("would", "am", "are") and parts[1] == "not":
+        negative, parts = True, [parts[0], *parts[2:]]
+    if negative and parts[:1] == ["ever"]:
+        parts = parts[1:]
+    prefix = next((p for p in _MOTIVATION_PREFIXES if tuple(parts[: len(p)]) == p), None)
+    if prefix is None:
+        if not subject or not parts or parts[0] not in _MOTIVATION_ACTIONS:
+            return None
+    else:
+        parts = parts[len(prefix) :]
+    if not parts:
+        return None
+    action = parts[0]
+    if action in _MOTIVATION_ACTIONS and action.endswith("ing"):
+        stem = action[:-3]
+        if stem in _MOTIVATION_ACTIONS:
+            action = stem
+        elif f"{stem}e" in _MOTIVATION_ACTIONS:
+            action = f"{stem}e"
+    parts[0] = _RELATION_VERBS.get(action, action)
+    return actor, negative, tuple(parts)
+
+
+def _opposed_preferences(texts: Sequence[str]) -> dict[str, Any]:
+    # A token trie retains qualifier scope without comparing every pair of source clauses.
+    opposed: dict[str, Any] = {}
+    for text in texts:
+        for sentence in _SENTENCES.split(undashed(text)):
+            subject = ""
+            for raw in _CLAUSES.split(sentence):
+                clause = answers.option_key(raw)
+                if actor := _FIRST_PERSON.match(clause):
+                    subject = actor.group(1)
+                if (preference := _preference(clause, subject)) and preference[1]:
+                    node = opposed.setdefault(preference[0], {})
+                    for word in preference[2]:
+                        node = node.setdefault(word, {})
+                    node[""] = True
+    return opposed
+
+
+def _opposed_preference(actor: str, complement: tuple[str, ...], opposed: dict[str, Any]) -> bool:
+    node = opposed.get(actor, {})
+    for word in complement:
+        if "" in node:
+            return True
+        if word not in node:
+            return False
+        node = node[word]
+    # A broader positive intent also cannot establish that a qualified refusal was reversed.
+    return bool(node)
 
 
 def _source_relations(texts: Sequence[str]) -> set[tuple[str, ...]]:
@@ -1141,6 +1263,7 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
     stored = {answers.option_key(c) for text in texts for c in _CLAUSES.split(undashed(text))}
     words = {w for text in texts for w in answers.option_key(text).split()}
     relations = _source_relations((*sources.profile, *sources.answers))
+    opposed = _opposed_preferences((*sources.profile, *sources.answers))
     found = False
     for sentence in _SENTENCES.split(value):
         sentence_proven = _claim_relation(answers.option_key(sentence)) in relations
@@ -1161,6 +1284,10 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
             )
             proven = sentence_proven or _claim_relation(clause, subject) in relations
             neutral = _neutral_motivation(clause, words, continuing=motivation)
+            if not proven and neutral and (preference := _preference(clause, subject)):
+                actor, _, complement = preference
+                if _opposed_preference(actor, complement, opposed):
+                    return False
             if not proven and (_LOCATIVE.search(clause) or not neutral):
                 return False
             if clause not in stored:
