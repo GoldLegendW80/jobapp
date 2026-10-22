@@ -24,6 +24,7 @@ from app.apply.answers import (
     LEVEL_WORDS,
     NEED_OPTION_TEXTS,
     NO_OPTION_TEXTS,
+    OPTION_LEVEL_WORDS,
     YES_OPTION_TEXTS,
     Answer,
     Context,
@@ -2863,6 +2864,9 @@ CONTEXTS.update(
         "p4_amsterdam": lambda: Context(USER, _probe4(), Posting.at("Amsterdam, Netherlands")),
         "p4_masters": lambda: Context(USER, _p4(highest_degree="Master's degree"), None),
         "p4_licence": lambda: Context(USER, _p4(highest_degree="Licence"), None),
+        "p4_bac": lambda: Context(USER, _p4(highest_degree="Baccalauréat"), None),
+        "p4_bac_short": lambda: Context(USER, _p4(highest_degree="Bac"), None),
+        "p4_bac_highschool": lambda: Context(USER, _p4(highest_degree="High school diploma"), None),
         "p4_phd": lambda: Context(USER, _p4(highest_degree="PhD"), None),
         "p4_mba": lambda: Context(USER, _p4(highest_degree="MBA"), None),
         "p4_bac5": lambda: Context(USER, _p4(highest_degree="Bac+5"), None),
@@ -2895,6 +2899,20 @@ GREENHOUSE = (
 )
 BAC = ("Bac", "Bac+2", "Licence (Bac+3)", "Master (Bac+5)", "Doctorat (Bac+8)")
 BAC_SCALE = ("Bac", "Bac+2", "Bac+3", "Bac+5", "Bac+8")
+QUEBEC = (
+    "Diplôme d'études secondaires",
+    "Diplôme d'études collégiales",
+    "Baccalauréat",
+    "Maîtrise",
+    "Doctorat",
+)
+HIGH_BACHELOR_MASTER = ("High school diploma", "Bachelor's degree", "Master's degree")
+LINKEDIN_LEVELS = (
+    "Limited working proficiency",
+    "Professional working proficiency",
+    "Full professional proficiency",
+    "Native or bilingual proficiency",
+)
 LEVELS3 = ("Bachelor's", "Master's", "PhD")
 PRO = (
     "English - Basic",
@@ -2975,13 +2993,60 @@ ROUND7: list[Case] = [
     ),
     G("deg msc bare scale", "Niveau d'études", "select", BAC_SCALE, origin="trap7"),
     G("deg stored scale", "Niveau d'études", "select", BAC, "p4_bac5", origin="trap7"),
+    # a name whose level depends on the country picks only an option of its own name
     G(
         "deg licence bachelor",
         "Highest degree",
         "select",
         ("Bachelor's degree", "Master's degree"),
         "p4_licence",
-        "Bachelor's degree",
+        origin="trap7",
+    ),
+    G(
+        "deg licence bachelor only",
+        "Highest degree",
+        "select",
+        ("High school", "Bachelor's degree"),
+        "p4_licence",
+        origin="trap7",
+    ),
+    G("deg licence bac", "Niveau d'études", "select", BAC, "p4_licence", "Licence (Bac+3)"),
+    G("deg bac greenhouse", "Highest level", "select", GREENHOUSE, "p4_bac", origin="trap7"),
+    G(
+        "deg bac short greenhouse",
+        "Highest level",
+        "select",
+        GREENHOUSE,
+        "p4_bac_short",
+        origin="trap7",
+    ),
+    G(
+        "deg bac english list",
+        "Highest degree",
+        "select",
+        HIGH_BACHELOR_MASTER,
+        "p4_bac",
+        origin="trap7",
+    ),
+    G(
+        "deg bac short english list",
+        "Highest degree",
+        "select",
+        HIGH_BACHELOR_MASTER,
+        "p4_bac_short",
+        origin="trap7",
+    ),
+    G("deg bac france", "Niveau d'études", "select", BAC, "p4_bac", "Bac"),
+    G("deg bac short france", "Niveau d'études", "select", BAC, "p4_bac_short", "Bac"),
+    G("deg bac quebec", "Niveau d'études", "select", QUEBEC, "p4_bac", "Baccalauréat"),
+    G("deg bac short quebec", "Niveau d'études", "select", QUEBEC, "p4_bac_short", "Baccalauréat"),
+    G(
+        "deg high school never bac",
+        "Niveau d'études",
+        "select",
+        ("Bac", "Licence", "Master"),
+        "p4_bac_highschool",
+        origin="trap7",
     ),
     G(
         "deg phd doctorat",
@@ -3355,26 +3420,29 @@ ROUND7: list[Case] = [
         origin="trap7",
     ),
     G("consent box", "I consent to a background check", "checkbox", origin="trap7"),
-    # Professional states its own band; a stored C1 does not establish this separate label.
+    # Professional denotes fluent only in an option; storing the word does not prove fluency.
     G(
         "pro review",
         "Your languages",
         "multi",
         PRO,
+        expected=("English - Professional", "French - Native"),
         origin="review4",
     ),
-    G("pro english level", "English level", "select", PRO_SCALE),
+    G("pro english level", "English level", "select", PRO_SCALE, expected="Professional"),
     G(
         "pro french words",
         "Niveau d'anglais",
         "select",
         ("Débutant", "Intermédiaire", "Professionnel", "Bilingue"),
+        expected="Professionnel",
     ),
     G(
         "pro proficiency",
         "Languages",
         "multi",
         ("English (Professional proficiency)", "French (Native)"),
+        expected=("English (Professional proficiency)", "French (Native)"),
     ),
     G(
         "pro stored",
@@ -3389,12 +3457,14 @@ ROUND7: list[Case] = [
         "English level",
         "select",
         ("A2", "B2", "Professional"),
+        expected="Professional",
     ),
     G(
         "pro grade agrees",
         "English level",
         "select",
         ("Professional (C1)", "Native (C2)"),
+        expected="Professional (C1)",
     ),
     G("pro b2 intermediate", "English level", "select", PRO_SCALE, "p4_b2", "Intermediate"),
     G(
@@ -3402,7 +3472,6 @@ ROUND7: list[Case] = [
         "English level",
         "select",
         ("Basic", "Intermediate", "Professional", "Fluent", "Native"),
-        expected="Fluent",
         origin="trap7",
     ),
     G(
@@ -3451,6 +3520,47 @@ ROUND7: list[Case] = [
         "English level",
         "select",
         ("Professional (B2)", "Native"),
+        origin="trap7",
+    ),
+    # a stored Professional is read only as itself, never as the fluent band
+    G(
+        "pro stored scale fluent",
+        "English level",
+        "select",
+        ("Basic", "Intermediate", "Fluent", "Native"),
+        "p4_pro",
+        origin="trap7",
+    ),
+    G(
+        "pro stored advanced",
+        "English level",
+        "select",
+        ("Beginner", "Advanced", "Native"),
+        "p4_pro",
+        origin="trap7",
+    ),
+    G(
+        "pro stored linkedin",
+        "English level",
+        "select",
+        LINKEDIN_LEVELS,
+        "p4_pro",
+        origin="trap7",
+    ),
+    G(
+        "pro stored multi",
+        "Your languages",
+        "multi",
+        PRO,
+        "p4_pro",
+        ("English - Professional", "French - Native"),
+    ),
+    G(
+        "pro stored multi fluent",
+        "Your languages",
+        "multi",
+        ("English - Fluent", "English - Native", "French - Native"),
+        "p4_pro",
         origin="trap7",
     ),
     G(
@@ -3639,7 +3749,8 @@ def test_round7_a_degree_reads_as_its_level_rank_and_name(text: str, expected: o
     assert degree_of(text) == expected
 
 
-def test_round7_no_two_vocabularies_share_an_option() -> None:
+@pytest.mark.parametrize("option", [False, True])
+def test_round7_no_two_vocabularies_share_an_option(option: bool) -> None:
     seen: dict[str, str] = {}
     vocabularies = [("yes", YES_OPTION_TEXTS), ("no", NO_OPTION_TEXTS)]
     vocabularies += list(AUTHORISATION_OPTION_TEXTS.items())
@@ -3648,7 +3759,18 @@ def test_round7_no_two_vocabularies_share_an_option() -> None:
     vocabularies += [(f"degree {name}", texts) for name, (_, texts) in DEGREE_TEXTS.items()]
     vocabularies += list(DEGREE_LEVEL_TEXTS.items())
     vocabularies += [(f"scale {level}", (text,)) for level, text in DEGREE_SCALE_TEXTS.items()]
-    vocabularies += [(f"band {band}", words) for band, words in LEVEL_WORDS.items()]
+    # Option wording and the person's wording are separate namespaces: Professional is
+    # its own stored band but denotes fluent only when the site offers it as an option.
+    option_words = {option_key(word) for words in OPTION_LEVEL_WORDS.values() for word in words}
+    vocabularies += [
+        (
+            f"band {band}",
+            tuple(word for word in words if not option or option_key(word) not in option_words),
+        )
+        for band, words in LEVEL_WORDS.items()
+    ]
+    if option:
+        vocabularies += [(f"band {band}", words) for band, words in OPTION_LEVEL_WORDS.items()]
     for name, texts in vocabularies:
         for text in texts:
             key = option_key(text)

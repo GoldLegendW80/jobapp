@@ -543,6 +543,9 @@ NEED_OPTIONS = _by_answer(NEED_OPTION_TEXTS)
 # else one naming its level, never a narrower one ("Master's degree" never picks "MSc", it may
 # be an MA). Rank 2, the French count of years after the baccalaureate, only confirms a name
 # beside it ("Master (Bac+5)"): a bare "Bac+3" is never picked, a 4 year bachelor may be Bac+4.
+# A name whose level depends on the country (`LOCAL_DEGREES`) picks only an option of its own
+# name, never a level: a Quebec baccalauréat is a bachelor's degree, a French one ends school, and
+# a Belgian licence before Bologna was a master's.
 DEGREE_TEXTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "Baccalauréat": ("secondary", ("Baccalauréat", "Bac")),
     "Licence": ("bachelor", ("Licence",)),
@@ -555,6 +558,7 @@ DEGREE_TEXTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "MBA": ("master", ("MBA", "M.B.A.", "Master of Business Administration")),
     "PhD": ("doctorate", ("PhD", "Ph.D.", "DPhil", "D.Phil.", "Doctor of Philosophy")),
 }
+LOCAL_DEGREES = frozenset({"Baccalauréat", "Licence"})
 DEGREE_LEVEL_TEXTS: dict[str, tuple[str, ...]] = {
     "secondary": ("High school", "High school diploma", "Secondary school", "Secondary education"),
     "associate": ("Associate degree", "Associate's degree", "Associates degree", "Associate's"),
@@ -1090,29 +1094,43 @@ LEVEL_WORDS: dict[str, tuple[str, ...]] = {
         "bilingue",
     ),
 }
+# Words read as a band only in an option: "Professional" in a list of levels sits where fluent
+# does, but a person who stored "Professional" said no more than that, so it is never read as
+# fluent on the person's side (it picks only an option that reads the same).
+OPTION_LEVEL_WORDS: dict[str, tuple[str, ...]] = {
+    "fluent": ("professional", "professionnel", "professionnelle"),
+}
 _BAND_OF = {option_key(word): band for band, words in LEVEL_WORDS.items() for word in words}
+_OPTION_BAND_OF = {
+    **_BAND_OF,
+    **{option_key(word): band for band, words in OPTION_LEVEL_WORDS.items() for word in words},
+}
 _LEVEL_FILLER = re.compile(r"\b(?:proficiency|level|niveau|speaker|cefr|cecrl)\b")
 
 
-def language_level(text: str | None) -> tuple[str | None, str] | None:
+def language_level(text: str | None, *, option: bool = False) -> tuple[str | None, str] | None:
     """A level as (CEFR grade or None, band): "C1" reads ("c1", "fluent"), "Advanced (C1)"
     ("c1", "fluent"), "Langue maternelle" (None, "native"). None when it is not a level or its
-    words disagree ("Basic (C2)")."""
+    words disagree ("Basic (C2)"). An option also reads `OPTION_LEVEL_WORDS`."""
     words = _LEVEL_FILLER.sub(" ", option_key(text))
     grades = re.findall(r"\b[abc][12]\b", words)
     rest = re.sub(r"\s+", " ", re.sub(r"\b[abc][12]\b", " ", words)).strip()
     if len(grades) > 1 or (not grades and not rest):
         return None
     grade = grades[0] if grades else None
-    band = _BAND_OF.get(rest) if rest else CEFR_BAND[grade]  # type: ignore[index]
+    bands = _OPTION_BAND_OF if option else _BAND_OF
+    band = bands.get(rest) if rest else CEFR_BAND[grade]  # type: ignore[index]
     if band is None or (grade is not None and CEFR_BAND[grade] != band):
         return None
     return grade, band
 
 
-def _level_holds(
-    option: tuple[str | None, str] | None, person: tuple[str | None, str] | None
-) -> bool:
+def _level_holds(option_text: str, stored: str | None) -> bool:
+    """Whether an option's level is the stored one: the same text, else the same grade (an
+    option naming one) or the same band."""
+    if option_key(stored) and option_key(option_text) == option_key(stored):
+        return True
+    option, person = language_level(option_text, option=True), language_level(stored)
     if option is None or person is None:
         return False
     return option[0] == person[0] if option[0] is not None else option[1] == person[1]
@@ -1139,7 +1157,7 @@ def _language_picks(options: tuple[str, ...], spoken: list[Any]) -> list[str] | 
     """The options for the languages the person speaks, each at the person's level when the
     option states one. None when a spoken language the options name has no option, or more than
     one, at the person's level: never two levels of one language, never a level not held."""
-    levels = {_language_key(lang.name): language_level(lang.level) for lang in spoken}
+    levels = {_language_key(lang.name): lang.level for lang in spoken}
     named: dict[str, list[str]] = {}
     for option in options:
         read = _language_option(option)
@@ -1147,7 +1165,7 @@ def _language_picks(options: tuple[str, ...], spoken: list[Any]) -> list[str] | 
             continue
         language, level = read
         chosen = named.setdefault(language, [])
-        if not level or _level_holds(language_level(level), levels[language]):
+        if not level or _level_holds(level, levels[language]):
             chosen.append(option)
     if any(len(chosen) != 1 for chosen in named.values()):
         return None
@@ -1188,12 +1206,11 @@ def _language_level(field: FormField, ctx: Context, s: Sections, m: re.Match[str
     if not lang.level:
         return _left(field, "no_language_level")
     if field.kind in _CHOICES and field.options and field.kind != "yes_no":
-        person = language_level(lang.level)
         hits = []
         for option in field.options:
             read = _language_option(option)
             level = read[1] if read is not None and read[0] == want else option
-            if _level_holds(language_level(level), person):
+            if _level_holds(level, lang.level):
                 hits.append(option)
         if len(hits) != 1:
             return _left(field, "no_matching_option")
@@ -1781,7 +1798,8 @@ def _degree_field(text: str | None) -> tuple[tuple[str, int, str], str] | None:
 
 def _degree_option(stored: str, options: tuple[str, ...]) -> str | None:
     """The option for a stored degree: the one that reads the same, else the one of its own
-    rank and name, else the one naming its level (`DEGREE_TEXTS`); one of each, or none."""
+    rank and name, else the one naming its level (`DEGREE_TEXTS`); one of each, or none. A
+    `LOCAL_DEGREES` name stops at its own name."""
     picked = match_option(stored, options)
     have = degree_of(stored)
     if picked is not None or have is None:
@@ -1790,7 +1808,7 @@ def _degree_option(stored: str, options: tuple[str, ...]) -> str | None:
     # An option with a field is narrower than the stored degree. Only the exact match above
     # can select it; sharing a degree title does not establish another academic discipline.
     read = [(o, degree_of(o)) for o in options if _degree_field(o) is None]
-    for wanted in range(rank, 2):
+    for wanted in range(rank, rank + 1 if name in LOCAL_DEGREES else 2):
         hits = [
             o
             for o, r in read
