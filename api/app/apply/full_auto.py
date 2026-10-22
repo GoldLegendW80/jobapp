@@ -45,9 +45,8 @@ fact check (`agent.judge` keeps only what passes it): `checks` lets it go on onl
 `passed` for the current answers hash, so submit services without a checker still send it to
 the queue (`model_check_not_run`).
 
-Declared open points (each toward the review queue):
-- a submit element the generic form agent designated (#343's hand over on `form_changed`) goes to
-  the queue as well (`agent_designated`): no person saw the highlighted screenshot;
+The generic agent may replace a changed known ATS form only with its code-owned strategy
+binding. Unknown sites and unbound agent designations still go to the review queue.
 - any field left, optional ones and widgets the app cannot fill included, goes to the queue.
 """
 
@@ -60,7 +59,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.apply import caps, guardrails, model_check, service, states
+from app.apply import caps, fallback, guardrails, model_check, service, states
 from app.apply.caps_models import ApplySettings, LikeMode
 from app.apply.models import (
     AnswerSource,
@@ -228,15 +227,20 @@ def checks(
     values = caps.settings_of(db, application.user_id)
     if posting.fit is None or posting.fit < values.min_fit:
         return "below_min_fit"
-    rows = db.execute(
-        sa.select(ApplicationAnswer.kind, ApplicationAnswer.source).where(
-            ApplicationAnswer.application_id == application.id,
-            ApplicationAnswer.user_id == application.user_id,
+    answers = list(
+        db.scalars(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == application.user_id,
+            )
         )
-    ).all()
+    )
+    rows = [(row.kind, row.source) for row in answers]
     if any(source is AnswerSource.left for _, source in rows):
         return "fields_left"
-    if any(source is AnswerSource.agent and kind == DESIGNATED for kind, source in rows):
+    if any(source is AnswerSource.agent and kind == DESIGNATED for kind, source in rows) and (
+        fallback.binding(answers, application.form_url, application.ats) is None
+    ):
         return "agent_designated"
     if _captcha_seen(db, application):
         return "captcha_seen"

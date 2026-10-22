@@ -172,7 +172,7 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
         )
         for row in gate.rows_of(db, application)
         if not row.field_key.startswith("designated:shape:")
-        and row.field_key != "designated:incomplete"
+        and row.field_key not in {"designated:incomplete", "designated:strategy"}
     ]
 
 

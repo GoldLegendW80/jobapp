@@ -77,6 +77,7 @@ from app.apply import (
     agent,
     caps,
     failures,
+    fallback,
     full_auto,
     guardrails,
     model_check,
@@ -182,6 +183,8 @@ class Plan:
     person_answers: dict[str, generic.PersonAnswer] = field(default_factory=dict, repr=False)
     person_shapes: dict[str, str] = field(default_factory=dict, repr=False)
     person_target: str = field(default="", repr=False)
+    fallback_used: bool = False
+    form_deadline: float | None = None
 
 
 @dataclass
@@ -193,6 +196,7 @@ class Result:
     shot: bytes | None = field(default=None, repr=False)
     cost: dict[str, Any] = field(default_factory=dict)
     company_url: str | None = None
+    strategy: dict[str, Any] | None = None
 
 
 class _Watched:
@@ -585,12 +589,14 @@ def _value(answer: Answer | Left, status: str) -> Any:
     return list(value) if isinstance(value, tuple) else value
 
 
-def _answer_rows(application: Application, report: ats_base.Report) -> list[ApplicationAnswer]:
+def _answer_rows(
+    application: Application, report: ats_base.Report, strategy: dict[str, Any] | None = None
+) -> list[ApplicationAnswer]:
     rows: list[ApplicationAnswer] = []
     seen: set[str] = set()
     for outcome in report.outcomes:
         item = outcome.field
-        if item.key in seen:
+        if item.key in seen or item.key.startswith("designated:"):
             continue
         seen.add(item.key)
         rows.append(
@@ -670,6 +676,20 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
             )
             for key, label, name in marks
         ]
+    if strategy is not None:
+        rows.append(
+            ApplicationAnswer(
+                application_id=application.id,
+                user_id=application.user_id,
+                field_key=fallback.KEY,
+                label="Application form",
+                kind="designated",
+                value=strategy,
+                source=AnswerSource.identity,
+                required=False,
+                approved=False,
+            )
+        )
     return rows
 
 
@@ -729,9 +749,9 @@ def finish(
             ApplicationAnswer.user_id == application.user_id,
         )
     )
-    rows = _answer_rows(application, result.report)
+    rows = _answer_rows(application, result.report, result.strategy)
     for row in rows:
-        if row.field_key in theirs and not row.field_key.startswith("skipped:"):
+        if row.field_key in theirs and not row.field_key.startswith(("skipped:", "designated:")):
             old = theirs[row.field_key]
             # A reused key on a changed form must not transfer the old field's allowance.
             same_shape = (row.label, row.kind, row.options) == (old.label, old.kind, old.options)
@@ -967,20 +987,83 @@ async def _type(
 
 
 async def _drive_generic(
-    services: Services, plan: Plan, adapter: generic.Generic, tools: RunTools
+    services: Services,
+    plan: Plan,
+    adapter: generic.Generic,
+    tools: RunTools,
+    *,
+    strategy: dict[str, Any] | None = None,
+    previous_cost: dict[str, Any] | None = None,
+    previous_report: ats_base.Report | None = None,
 ) -> Result:
-    """The generic strategy (A8): Review first only, so Full auto hands the form to the person
-    (`no_adapter`, as before the strategy existed). The form agent fills; the "before" screenshot
-    outlines the submit it designated, and without both the person is needed."""
-    if plan.mode is not Mode.review or services.form_agent is None:
+    """Unknown forms require Review first. A code-bound known ATS fallback keeps its mode,
+    remaining token allowance, original lease and every gate check."""
+    if (plan.mode is not Mode.review and strategy is None) or services.form_agent is None:
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
     adapter.person_answers = plan.person_answers
     session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
-    report, cost = await forms.fill(services.form_agent, session)
+    if strategy is not None:
+        before = previous_cost or {}
+        used = int(before.get("input_tokens", 0)) + int(before.get("output_tokens", 0))
+        session.token_budget = max(0, agent.TOKEN_BUDGET - used)
+        if before.get("stopped") == "token_budget":
+            session.token_budget = 0
+        session.clock = lambda: services.clock().timestamp()
+        session.deadline = plan.form_deadline
+        adapter.person_shapes = plan.person_shapes
+        remaining = max(0.0, (session.deadline or session.clock()) - session.clock())
+        if not session.token_budget or not remaining:
+            return Result(State.needs_person, needs="form_changed", cost=before)
+        if previous_report is not None:
+            session.steps = list(getattr(previous_report, "steps", ()))
+            session.closed = [
+                outcome
+                for outcome in previous_report.outcomes
+                if generic._step_of(outcome.field) < adapter.step
+            ]
+            if adapter.step:
+                session.skipped = list(previous_report.skipped)
+            # Keep known progress only where the current page has the exact same field.
+            # Refill it by code, so a model may skip an already filled field safely.
+            found, code = await adapter.read(tools)
+            if found is None or code or found.pending:
+                state, needs, error = _stopped(
+                    code or "needs_person", found.pending if found else ""
+                )
+                return Result(state, needs=needs, error=error, cost=before)
+            current = {item.key: item for item in found.fields}
+            for outcome in previous_report.outcomes:
+                item = current.get(outcome.field.key)
+                old = outcome.field
+                if (
+                    item is not None
+                    and isinstance(outcome.answer, Answer)
+                    and outcome.filled.status in FILLED
+                    and (item.label, item.kind, item.options, item.required)
+                    == (old.label, old.kind, old.options, old.required)
+                ):
+                    filled = await adapter.fill(tools, item, outcome.answer)
+                    if filled.status not in FILLED:
+                        state, needs, error = _stopped(filled.code)
+                        return Result(state, needs=needs, error=error, cost=before)
+                    session.outcomes[item.key] = ats_base.Outcome(item, outcome.answer, filled)
+        try:
+            async with asyncio.timeout(remaining):
+                report, cost = await forms.fill(services.form_agent, session)
+        except TimeoutError:
+            return Result(State.needs_person, needs="form_changed", cost=before)
+        cost["input_tokens"] = int(before.get("input_tokens", 0)) + cost.get("input_tokens", 0)
+        cost["output_tokens"] = int(before.get("output_tokens", 0)) + cost.get("output_tokens", 0)
+        cost["fallback"] = strategy["vendor"]
+        report.shapes = adapter.shapes
+    else:
+        report, cost = await forms.fill(services.form_agent, session)
     shot = await shots.take(tools)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
-        return Result(state, needs=needs, error=error, report=report, shot=shot, cost=cost)
+        return Result(
+            state, needs=needs, error=error, report=report, shot=shot, cost=cost, strategy=strategy
+        )
     needs = _needs(report)
     if not report.designated:
         needs = "submit_not_designated"
@@ -989,12 +1072,64 @@ async def _drive_generic(
     else:
         shot = lit
     state = State.needs_person if needs else State.ready
-    return Result(state, needs=needs, report=report, shot=shot, cost=cost)
+    return Result(state, needs=needs, report=report, shot=shot, cost=cost, strategy=strategy)
+
+
+async def _known_fallback(
+    services: Services,
+    plan: Plan,
+    adapter: ats_base.Adapter,
+    tools: RunTools,
+    report: ats_base.Report | None = None,
+    cost: dict[str, Any] | None = None,
+) -> Result:
+    """One attempt only, on the already open page. A changed submit readback never calls this."""
+    stopped = Result(
+        State.needs_person,
+        needs="form_changed",
+        report=report or ats_base.Report(),
+        cost=cost or {},
+    )
+    if plan.fallback_used:
+        return stopped
+    plan.fallback_used = True
+    shot = await tools.snapshot()
+    if _card_asked(shot):
+        return await _payment_asked(tools)
+    if not shot.get("ok"):
+        return stopped
+    if pending := adapter.pending_step(str(shot.get("snapshot") or "")):
+        return Result(State.needs_person, needs=pending, shot=await shots.take(tools))
+    target = fallback.target(adapter, plan.form_url, str(shot.get("url") or ""))
+    if target is None:
+        return stopped
+    prepared = fallback.Generic(services.stub_base, known=adapter)
+    prepared.step = len(getattr(report, "steps", ()))
+    if prepared.step:
+        # The replay starts at the original form and follows the recorded earlier Nexts.
+        target = adapter.form_url(plan.form_url)
+        prepared.shapes = {
+            key: value
+            for key, value in getattr(adapter, "seen_shapes", {}).items()
+            if int(key) < prepared.step
+        }
+    strategy = {"version": 1, "vendor": adapter.name, "form_url": plan.form_url, "target": target}
+    return await _drive_generic(
+        services,
+        plan,
+        prepared,
+        tools,
+        strategy=strategy,
+        previous_cost=cost,
+        previous_report=report,
+    )
 
 
 async def _drive(
     services: Services, plan: Plan, tools: RunTools, adapter: ats_base.Adapter | None = None
 ) -> Result:
+    if plan.form_deadline is None:
+        plan.form_deadline = services.clock().timestamp() + forms.APPLY_FORM.wall_time_s
     for name, data in plan.pdfs.items():
         put = await tools.put_file(name, data)
         if not put.get("ok"):
@@ -1018,6 +1153,8 @@ async def _drive(
         code = await adapter.open(tools, plan.form_url)
         if code == "company_site" and isinstance(adapter, generic.Deterministic):
             return Result(State.queued, company_url=adapter.company_url)
+        if code == "form_changed":
+            return await _known_fallback(services, plan, adapter, tools)
         if code:
             state, needs, error = _stopped(code)
             return Result(state, needs=needs, error=error, shot=await shots.take(tools))
@@ -1044,6 +1181,8 @@ async def _fill_on_page(
     cost: dict[str, Any] = {"agent": "not_run"}
     if not report.stopped and not isinstance(adapter, generic.Deterministic):
         cost = await _answer_left(services, plan, adapter, tools, report)
+    if report.stopped == "form_changed":
+        return await _known_fallback(services, plan, adapter, tools, report, cost)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
     else:

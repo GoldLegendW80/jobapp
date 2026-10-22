@@ -451,7 +451,8 @@ class RuntimeFormAgent:
             raise
         if isinstance(created, str):
             return Ran(stopped=created)
-        session.deadline = session.clock() + APPLY_FORM.wall_time_s
+        if session.deadline is None:
+            session.deadline = session.clock() + APPLY_FORM.wall_time_s
         with _LOCK:
             _KEYS.add(key)
             _SESSIONS[created] = session

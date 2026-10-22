@@ -89,7 +89,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, full_auto, gate, guardrails, model_check, run, shots, states
+from app.apply import caps, fallback, full_auto, gate, guardrails, model_check, run, shots, states
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
@@ -619,6 +619,18 @@ def _stop_of(code: str, step: str = "") -> Stop:
 
 async def _open(services: Services, plan: Plan, tools: run.RunTools) -> ats_base.Adapter | Stop:
     adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
+    if any(row.key == fallback.KEY for row in plan.rows):
+        bound = fallback.binding(plan.rows, plan.form_url, adapter.name if adapter else "")
+        if bound is None or fallback.target(adapter, plan.form_url, bound["target"]) is None:
+            return Stop(State.ready, "form_changed")
+        prepared = fallback.Generic(services.stub_base, known=adapter)
+        code = await prepared.visit(tools, bound["target"])
+        if code:
+            return _stop_of(code)
+        shot = await tools.snapshot()
+        if str(shot.get("url") or "") != bound["target"]:
+            return Stop(State.ready, "form_changed")
+        return prepared
     if adapter is None:
         opened = await tools.navigate(plan.form_url)
         if not opened.get("ok"):
