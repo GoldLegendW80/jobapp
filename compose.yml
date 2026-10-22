@@ -40,6 +40,9 @@
 #   the stack to 5120m. The browser's 1024m is B1's measure (a Workday stand in with 3 tabs
 #   peaked at 499 MiB in the cgroup, 807 MiB of PSS), so its memory guard closes a tab at about
 #   920 MiB. (SPEC-platform.md, SPEC-documents.md "Rendering on the Jetson", SPEC-browser.md.)
+#   The optional mail profile adds a separately limited 128m provider: 5376m total, 256m above
+#   the unchanged 5120m target. These declared limits do not prove physical Jetson capacity;
+#   docs/mail-application-setup.md records the fixture measurement and pending acceptance.
 
 name: jobapp
 
