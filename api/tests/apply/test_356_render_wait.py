@@ -35,10 +35,16 @@ RENDERING = {"needs": "documents:rendering", "attempt": 0}
 SECOND = timedelta(seconds=1)
 
 
-def ask(factory: sessionmaker[Session], application_id: uuid.UUID, now: datetime) -> object:
+def ask(
+    factory: sessionmaker[Session],
+    application_id: uuid.UUID,
+    now: datetime,
+    *,
+    manual: bool = False,
+) -> object:
     """One ask of the tick: steps 1 and 2 of the fill in their own transaction."""
     with factory() as session:
-        out = run.prepare(session, application_id, now)
+        out = run.prepare(session, application_id, now, manual=manual)
         session.commit()
     return out
 
@@ -310,15 +316,16 @@ def test_an_approved_render_that_never_ends_fails_the_application_at_the_bound(
     app_id = started(db, person_a)
     db.execute(sa.update(Application).where(Application.id == app_id).values(mode=mode))
     second_version(db, person_a, Kind.cv, state)
-    assert ask(factory, app_id, AT) == "waiting_documents"
-    assert ask(factory, app_id, AT + bound - SECOND) == "waiting_documents"
+    is_manual = mode is Mode.manual
+    assert ask(factory, app_id, AT, manual=is_manual) == "waiting_documents"
+    assert ask(factory, app_id, AT + bound - SECOND, manual=is_manual) == "waiting_documents"
     assert application(db, app_id).state is State.queued
     assert waits(db, app_id) == [({**RENDERING, "document": "cv"}, AT)]
 
-    assert ask(factory, app_id, AT + bound) == "failed"
+    assert ask(factory, app_id, AT + bound, manual=is_manual) == "failed"
     ended(db, app_id)
     # Ended: the tick asks no more, nothing was chosen, nothing was placed.
-    assert ask(factory, app_id, AT + bound + SECOND) == "not_queued"
+    assert ask(factory, app_id, AT + bound + SECOND, manual=is_manual) == "not_queued"
     assert app_id not in run.due(db)
 
 

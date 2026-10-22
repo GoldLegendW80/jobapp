@@ -21,11 +21,11 @@ from app.apply.models import Application, ApplicationAnswer, State
 from app.body_limit import limit_for
 from tests.apply.a8_support import COMMENTS
 from tests.apply.conftest import AT, Person
-from tests.apply.test_a6_gate import _password, api_app
+from tests.apply.test_a6_gate import _password, api_app, stub
 from tests.apply.test_a8_lever import ready
 from tests.identity.api_helpers import Api
 
-__all__ = ["api_app"]
+__all__ = ["api_app", "stub"]
 
 
 @pytest.mark.parametrize("codepoint", range(160))
