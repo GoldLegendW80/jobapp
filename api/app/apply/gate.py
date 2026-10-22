@@ -153,6 +153,13 @@ def switch_code(switches: Switches) -> str | None:
     return "paused" if switches.paused else None
 
 
+async def _click(tools: Any, ref: str, capability: str, element: str) -> dict[str, Any]:
+    """The application gate's privileged browser click, wired only into code's submit lease."""
+    from app.browser.tools import gate_click
+
+    return await gate_click(tools, ref, capability, element)
+
+
 @dataclass(frozen=True)
 class Decision:
     passed: bool

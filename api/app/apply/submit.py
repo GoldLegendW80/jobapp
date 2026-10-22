@@ -131,7 +131,6 @@ def from_fill(base: run.Services, settings: Any, redis: Any) -> Services:
     """The worker's submit services: the fill's (sessions, clock, leases, tools), browser B5's
     `gate_click`, the administrator's pause on this worker's Redis and the setting."""
     from app.apply import admin
-    from app.browser.tools import gate_click
 
     async def paused() -> bool:
         return await admin.paused(redis)
@@ -141,7 +140,7 @@ def from_fill(base: run.Services, settings: Any, redis: Any) -> Services:
         clock=base.clock,
         leases=base.leases,
         tools_for=base.tools_for,
-        click=gate_click,  # type: ignore[arg-type]
+        click=gate._click,
         paused=paused,
         enabled=settings.apply_submit_enabled,
         stub_base=base.stub_base,

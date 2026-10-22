@@ -45,6 +45,24 @@ export function PrivacyPage() {
       <Section id="stored" title="Where it is stored">
         <p>{WHERE_STORED}</p>
       </Section>
+      <Section id="applications" title="Applications and site profiles">
+        <p>
+          Applications keep the answers, events, document versions and
+          screenshots used for that application. The before and after
+          screenshots stay with the posting. Temporary step and error
+          screenshots are removed after the configured retention period, 30 days
+          by default. Deleting a posting removes its applications and their
+          screenshots.
+        </p>
+        <p>
+          Completing a profile on another site keeps the fields, sources, review
+          decisions and screenshots in this app. Before and after screenshots
+          stay with the run; temporary step screenshots follow the same
+          retention period. Deleting the account removes these runs and
+          application data. Changes already saved on another site remain on that
+          site.
+        </p>
+      </Section>
       <Section id="assistant" title="The assistant">
         <p>{ASSISTANT}</p>
       </Section>

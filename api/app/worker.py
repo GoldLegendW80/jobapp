@@ -764,6 +764,21 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
     return count
 
 
+async def prune_apply_screenshots(ctx: dict[str, Any]) -> int:
+    """Daily A17 retention: counts only, no screenshot bytes in logs or job results."""
+    from app.apply import privacy
+    from app.apply import run as apply_run
+
+    now = clock_of(ctx)()
+    days = ctx["settings"].apply_step_shots_keep_days
+
+    def step(db: Session) -> int:
+        removed = privacy.prune(db, now, keep_days=days)
+        return removed.applications + removed.site_profiles
+
+    return await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
+
+
 def apply_queue(settings: Settings | None = None) -> QueueSpec:
     from app.browser.leases import LEASE_MAX_S, lease_max_table
 
@@ -793,6 +808,13 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
             ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
             func(
+                prune_apply_screenshots,
+                name="prune_apply_screenshots",
+                timeout=60,
+                max_tries=1,
+                keep_result=0,
+            ),
+            func(
                 apply_manual,
                 name="apply_manual",
                 timeout=manual_timeout_s,
@@ -807,7 +829,16 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 second=APPLY_TICK_SECONDS,
                 timeout=60,
                 keep_result=0,
-            )
+            ),
+            cron(
+                prune_apply_screenshots,
+                name="cron:prune_apply_screenshots",
+                hour=3,
+                minute=17,
+                second=0,
+                timeout=60,
+                keep_result=0,
+            ),
         ],
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
