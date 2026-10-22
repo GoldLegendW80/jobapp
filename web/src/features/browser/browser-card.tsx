@@ -19,6 +19,7 @@ import {
   browserQueryKey,
   endSession,
   getBrowser,
+  personOwnsInput,
   startSession,
   type Browser,
   type QueuePlace,
@@ -132,7 +133,10 @@ export function BrowserCard() {
             Your browser is starting.
           </p>
         ) : handoff ? null : lease ? (
-          <LiveBrowser key={lease.id} person={!lease.automation} />
+          <LiveBrowser
+            key={`${lease.id}:${personOwnsInput(lease)}`}
+            person={personOwnsInput(lease)}
+          />
         ) : place ? (
           <p role="status" className="text-sm text-muted-foreground">
             {waitText(place)}

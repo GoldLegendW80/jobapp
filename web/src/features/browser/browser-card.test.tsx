@@ -205,6 +205,30 @@ describe("your browser card", () => {
     ).toBeInTheDocument();
   });
 
+  it.each(["captcha", "email_code", "forbidden"])(
+    "opens a server-owned %s wait with live input",
+    async (reason) => {
+      const calls = fakeServer({
+        browser: {
+          ...MINE,
+          lease: { ...LEASE, state: "waiting_person", wait_reason: reason },
+        },
+      });
+      renderWithQuery(
+        <MemoryRouter>
+          <BrowserCard />
+        </MemoryRouter>,
+      );
+      const view = await connected();
+      expect(view.screen.viewOnly).toBe(false);
+      expect(
+        screen.getByRole("button", { name: "Keyboard" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+      expect(calls.takeovers).toEqual([]);
+    },
+  );
+
   it("takes over with the same viewer id, types, and gives back", async () => {
     const calls = fakeServer({ browser: MINE });
     const user = userEvent.setup();

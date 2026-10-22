@@ -65,7 +65,8 @@ export function NeedsPerson({
   );
 }
 
-const WAITS = "The assistant waits for you. Take over to finish this step.";
+const WAITS =
+  "The assistant waits for you. Complete this step in the live view.";
 
 /** The live view while the run waits for the person on the page, and words once it stopped. */
 function OnPageSlot({ events }: { events?: readonly ApplicationEvent[] }) {

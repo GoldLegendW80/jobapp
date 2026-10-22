@@ -4,6 +4,7 @@ import { LoaderCircle } from "lucide-react";
 import {
   browserQueryKey,
   getBrowser,
+  personOwnsInput,
   type Browser,
 } from "@/features/browser/browser-api";
 import { LiveBrowser } from "@/features/browser/live-browser";
@@ -63,9 +64,18 @@ export function LiveViewSlot({
     if (lease.state === "waiting_person" && lease.wait_reason === "signin") {
       return <HandoffBanner liveOpen />;
     }
+    const person = personOwnsInput(lease);
     return (
       <div data-testid="live-view-slot">
-        <LiveBrowser key={lease.id} status={status} />
+        <LiveBrowser
+          key={`${lease.id}:${person}`}
+          person={person}
+          status={
+            person
+              ? "You have the keyboard and the mouse. Complete this step in the live view."
+              : status
+          }
+        />
       </div>
     );
   }

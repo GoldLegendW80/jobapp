@@ -37,12 +37,12 @@ export function needOf(application: Application): Need {
     case "captcha":
       return {
         title: "A captcha needs you",
-        what: "Take over in the live view, solve the captcha, then give back. The assistant goes on by itself. If you do not come in time, the application waits here.",
+        what: "Solve the captcha in the live view. The assistant goes on by itself. If you do not come in time, the application waits here.",
       };
     case "email_code":
       return {
         title: "An e-mail code needs you",
-        what: "The site sent you a code by e-mail. Take over in the live view, type it, then give back.",
+        what: "The site sent you a code by e-mail. Type it in the live view. The assistant goes on by itself.",
       };
     case "required_left":
       return {
