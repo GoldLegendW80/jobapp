@@ -21,7 +21,7 @@ class FieldIn(BaseModel):
 
 class ApproveIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    values_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    values_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class FieldOut(BaseModel):

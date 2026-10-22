@@ -27,8 +27,13 @@ CurrentUser = Annotated[User, Depends(deps.current_user)]
 class SendIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content_hash: str = Field(min_length=64, max_length=64)
-    confirmed_new_recipients: list[str] = Field(default_factory=list, max_length=20)
-    acknowledged_issues: list[str] = Field(default_factory=list, max_length=1000)
+    confirmed_new_recipients: list[Annotated[str, Field(max_length=254)]] = Field(
+        default_factory=list, max_length=20
+    )
+    # IDs contain a fact-check rule code and two offsets into the 100000-character body.
+    acknowledged_issues: list[Annotated[str, Field(max_length=64)]] = Field(
+        default_factory=list, max_length=1000
+    )
 
 
 class ResolveIn(BaseModel):

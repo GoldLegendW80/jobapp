@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/browser/handoff/later", tags=["browser"])
 
 class Reference(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    module: str = Field(pattern=r"^[a-z_]{1,40}$")
+    module: str = Field(min_length=1, max_length=40, pattern=r"^[a-z_]{1,40}$")
     ref: uuid.UUID
 
 

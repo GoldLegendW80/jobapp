@@ -71,7 +71,10 @@ class ApproveIn(BaseModel):
 
     answers_hash: str = Field(min_length=gate.HASH_HEX, max_length=gate.HASH_HEX)
     confirmed_email_recipient: str | None = Field(default=None, max_length=254)
-    acknowledged_email_issues: list[str] = Field(default_factory=list, max_length=1000)
+    # IDs contain a fact-check rule code and two offsets into the 100000-character body.
+    acknowledged_email_issues: list[Annotated[str, Field(max_length=64)]] = Field(
+        default_factory=list, max_length=1000
+    )
 
 
 class AnswerIn(BaseModel):
