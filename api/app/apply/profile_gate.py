@@ -6,6 +6,7 @@ leaves an explicit uncertain section requiring a new review, never an automatic 
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -96,6 +97,8 @@ def consume(
     now: datetime,
     enabled: bool,
     paused: bool,
+    *,
+    clock: Callable[[], datetime] | None = None,
 ) -> tuple[Any, Any, list[Any]]:
     run = site_profile.lock(db, user_id, run_id)
     part = site_profile.section_of(db, run, section)
@@ -109,6 +112,7 @@ def consume(
         )
         .with_for_update()
     )
+    now = clock() if clock else now
     code = switch_code(db, user_id, enabled, paused)
     if code is None and (
         auth is None
@@ -127,6 +131,9 @@ def consume(
         and not linkedin_guard.allowed(db, user_id, now)
     ):
         code = "linkedin_off"
+    now = clock() if clock else now
+    if code is None and auth.expires_at <= now:
+        code = "invalid_authorisation"
     if code:
         site_profile.event(part, "refused", now, code=code)
         part.state, part.error_code = "ready", code
@@ -334,44 +341,75 @@ async def save_section(
 
         def decision(db: Session):
             _run, part, _selected = consume(
-                db, user_id, run_id, section, auth_id, services.clock(), enabled, paused
+                db,
+                user_id,
+                run_id,
+                section,
+                auth_id,
+                services.clock(),
+                enabled,
+                paused,
+                clock=services.clock,
             )
             return part.state == "saving"
 
         if not await asyncio.to_thread(site_profile._in_db, services, decision):
             return
-        # Recheck immediately after the committed audit, before the one external act.
-        enabled, paused = await _switches(services)
-        if not enabled or paused:
-            await failed("paused")
-            return
 
         def still_allowed(db: Session):
             run = site_profile.lock(db, user_id, run_id)
-            return (
-                run.state is not SiteRunState.cancelled
-                and switch_code(db, user_id, enabled, paused) is None
-                and (
-                    run.site_kind is not SiteKind.linkedin
-                    or linkedin_guard.allowed(db, user_id, services.clock())
+            part = site_profile.section_of(db, run, section)
+            current = site_profile.fields(db, run, section)
+            auth = db.scalar(
+                sa.select(Authorisation)
+                .where(
+                    Authorisation.id == auth_id,
+                    Authorisation.user_id == user_id,
+                    Authorisation.site_run_id == run_id,
                 )
+                .with_for_update()
             )
+            now = services.clock()
+            code = switch_code(db, user_id, enabled, paused)
+            if code is None and (
+                auth is None
+                or auth.kind is not AuthorisationKind.profile_section
+                or auth.used_at is None
+                or auth.expires_at <= now
+            ):
+                code = "invalid_authorisation"
+            if code is None and (run.state is not SiteRunState.saving or part.state != "saving"):
+                code = "not_ready"
+            if code is None and auth.answers_hash != profile_sources.value_hash(part, current):
+                code = "stale"
+            if (
+                code is None
+                and run.site_kind is SiteKind.linkedin
+                and not linkedin_guard.allowed(db, user_id, now)
+            ):
+                code = "linkedin_off"
+            return code, auth.expires_at if auth else None
 
-        if not await asyncio.to_thread(site_profile._in_db, services, still_allowed):
-            await failed("paused")
-            return
+        async def authorised() -> bool:
+            nonlocal enabled, paused
+            enabled, paused = await _switches(services)
+            code, deadline = await asyncio.to_thread(site_profile._in_db, services, still_allowed)
+            # The database locks above may wait. Read the live pause after that wait,
+            # then sample the deadline at the boundary of the external act.
+            enabled, paused = await _switches(services)
+            if not enabled or paused:
+                code = "paused"
+            elif code is None and (deadline is None or deadline <= services.clock()):
+                code = "invalid_authorisation"
+            if code:
+                await failed(code)
+                return False
+            return True
+
         if autosave:
             for key, _field_label, kind, value, _current, _source, approved in rows:
                 if not approved:
                     continue
-                enabled, paused = await _switches(services)
-                if (
-                    not enabled
-                    or paused
-                    or not await asyncio.to_thread(site_profile._in_db, services, still_allowed)
-                ):
-                    await failed("paused")
-                    return
                 found, _ = await adapter.read(tools)
                 item = (
                     next((f for f in found.fields if site_profile.key_of(f) == key), None)
@@ -384,11 +422,15 @@ async def save_section(
                 if kind != "text" or not hasattr(tools, "type_empty"):
                     await failed("autosave_unsupported", [key])
                     return
+                if not await authorised():
+                    return
                 result = await tools.type_empty(item.ref, str(value), item.label)
                 if not result.get("ok"):
                     await failed("value_differs", [key])
                     return
         if not autosave:
+            if not await authorised():
+                return
             result = await gate_click(tools, target.ref, acquired.capability, target.name)
             if not result.get("ok"):
                 await failed("save_refused")

@@ -491,11 +491,18 @@ async def _call_send(
     authorisation_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     db.commit()
+
+    async def live_switches() -> apply_gate.Switches:
+        if switches_for is None:
+            return apply_gate.Switches(enabled=True, paused=False)
+        try:
+            return await switches_for()
+        except Exception:
+            return apply_gate.Switches(enabled=True, paused=True)
+
     # Re-read cancellation, the live pauses, caps, Like validity and exact approval after MIME
     # reads, immediately before the capability leaves the API process.
-    fresh_switches = (
-        await switches_for() if switches_for else apply_gate.Switches(enabled=True, paused=False)
-    )
+    fresh_switches = await live_switches()
     code = apply_gate.switch_code(fresh_switches)
     locks.lock_send(db, row.user_id)
     db.expire_all()
@@ -530,11 +537,27 @@ async def _call_send(
         now = clock() if clock else now
         if refused := submit.recheck(db, application, posting, now):
             code, stop = refused.code, refused
-    if code:
+    fresh_switches = await live_switches()
+    code = apply_gate.switch_code(fresh_switches) or code
+    now = clock() if clock else now
+    if application and not code and (refused := submit.recheck(db, application, posting, now)):
+        code, stop = refused.code, refused
+
+    def local_stop(code: str, stop: Any = None) -> dict[str, Any]:
         if application and application.mail_send_id == row.id:
             draft.status, draft.updated_at = "draft", now
             application.mail_send_id = None
-            if application.state in states.DECIDED:
+            if application.state is State.submitting:
+                # No capability has been minted and the provider has not been called.
+                # Keep the committed click audit as conservative pacing history.
+                submit._stop(
+                    db,
+                    application,
+                    submit.Stop(State.ready, code),
+                    now,
+                    click_refused=True,
+                )
+            elif application.state in states.DECIDED:
                 if code in {"not_connected", "needs_reconnect", "no_send_scope"}:
                     stop = submit.Stop(State.needs_person, code, code)
                 elif application.mode is Mode.full_auto:
@@ -551,6 +574,9 @@ async def _call_send(
         row.result, row.refusal_code, row.updated_at = "failed", code, now
         db.commit()
         return {"result": "not_sent", "code": code}
+
+    if code:
+        return local_stop(code, stop)
     if application and until is not None:
         run._wait(db, application, "host_pace", now, until=until.isoformat())
         draft.status, draft.updated_at = "draft", now
@@ -569,6 +595,32 @@ async def _call_send(
         # the provider; uncertainty remains conservative once submitting was committed.
         if application_email.account_code(db, row.user_id):
             return {"result": "unknown"}
+        application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
+        if row.result != "pending":
+            return {"result": row.result}
+    # This send lock can itself wait after the submitting commit. A pause or expiry
+    # before minting is still a proven local non-send, settled in one transaction.
+    fresh_switches = await live_switches()
+    code = apply_gate.switch_code(fresh_switches)
+    now = clock() if clock else now
+    if application and (
+        application.state is not State.submitting or application.mail_send_id != row.id
+    ):
+        code = code or "not_open"
+    if application and not code:
+        spent = submit._spent(db, application)
+        if (
+            spent is None
+            or spent.id != authorisation_id
+            or full_auto.expired(application, spent, now)
+        ):
+            code = "authorisation_expired"
+        elif apply_gate.current_hash(db, application) != bytes(application.answers_hash or b""):
+            code = "stale"
+        elif refused := submit.recheck(db, application, posting, now):
+            code = refused.code
+    if code:
+        return local_stop(code)
     key = send_key.mint(
         settings.mail_send_key.get_secret_value(),
         row.id,

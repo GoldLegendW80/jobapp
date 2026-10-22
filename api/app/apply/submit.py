@@ -361,7 +361,16 @@ def wait(db: Session, application_id: uuid.UUID, needs: str, now: datetime, **da
         run._wait(db, found[0], needs, now, **data)
 
 
-def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: Read) -> str:
+def arm(
+    db: Session,
+    plan: Plan,
+    now: datetime,
+    switches: gate.Switches,
+    read: Read,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    switches_for: Callable[[], gate.Switches] | None = None,
+) -> str:
     """Step 5, before the click, under the gate's locks: still the decision `plan` was read from
     (`_bound`, else `superseded`: nothing written, no click, the next job refills with what was
     approved), the screenshot, the kill switches, the gate's checks again (`recheck`), then
@@ -371,11 +380,14 @@ def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: R
     if found is None:
         return "superseded"
     application, posting = found
+    now = clock() if clock else now
     if read.shot is not None:
         shot = shots.store(db, application, ShotKind.before, read.shot, now)
         gate._event(db, application, "screenshot", now, kind="before", id=str(shot.id))
     else:
         gate._event(db, application, "screenshot_failed", now)
+    switches = switches_for() if switches_for else switches
+    now = clock() if clock else now
     if (code := gate.switch_code(switches)) and application.mode is Mode.full_auto:
         _stop(db, application, Stop(State.ready, code), now)
         return State.ready.value
@@ -391,7 +403,17 @@ def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: R
         states.move(application, State.rehearsed, now)
         gate._event(db, application, "rehearsed", now)
         return "rehearsed"
-    if (until := caps.reserve(db, application, now)) is not None:
+    until = caps.reserve(db, application, now, clock=clock)
+    switches = switches_for() if switches_for else switches
+    now = clock() if clock else now
+    if code := gate.switch_code(switches):
+        target = State.ready if application.mode is Mode.full_auto else State.cancelled
+        _stop(db, application, Stop(target, code), now)
+        return target.value
+    if refused := recheck(db, application, posting, now):
+        _stop(db, application, refused, now)
+        return refused.state.value
+    if until is not None:
         run._wait(db, application, "host_pace", now, until=until.isoformat())
         return "paced"
     states.move(application, State.submitting, now)
@@ -743,12 +765,48 @@ async def _record_click(
 
 async def _after_arm(
     services: Services,
-    application_id: uuid.UUID,
+    plan: Plan,
     read: Read,
     tools: run.RunTools,
     capability: str,
 ) -> str:
     """The click and its outcome; the application is `submitting` (committed)."""
+    application_id = plan.application_id
+    loop = asyncio.get_running_loop()
+
+    def before_click(db: Session) -> str | None:
+        found = _locked(db, application_id)
+        if found is None or found[0].state is not State.submitting:
+            return "superseded"
+        application, posting = found
+        spent = _spent(db, application)
+        try:
+            paused = asyncio.run_coroutine_threadsafe(services.paused(), loop).result()
+        except Exception:
+            paused = True
+        now = services.clock()
+        code = gate.switch_code(gate.Switches(enabled=services.enabled, paused=paused))
+        if code is None and (
+            spent is None
+            or spent.id != plan.authorisation_id
+            or full_auto.expired(application, spent, now)
+        ):
+            code = "authorisation_expired"
+        if code is None and (
+            bytes(application.answers_hash or b"") != plan.answers_hash
+            or application.dry_run != plan.dry_run
+            or gate.current_hash(db, application) != plan.answers_hash
+        ):
+            code = "stale"
+        if code is None and (refused := recheck(db, application, posting, now)):
+            code = refused.code
+        if code:
+            _stop(db, application, Stop(State.ready, code), now, click_refused=True)
+            return State.ready.value
+        return None
+
+    if stopped := await asyncio.to_thread(_in_db, services.sessions, before_click):
+        return stopped
     clicked = services.clock()
     code: str | None = None
     after: bytes | None = None
@@ -806,15 +864,29 @@ async def _drive(
             lambda db: stopped(db, plan, stop, services.clock()),
         )
     switches = gate.Switches(enabled=services.enabled, paused=await services.paused())
+    loop = asyncio.get_running_loop()
+
+    def fresh_switches() -> gate.Switches:
+        paused = asyncio.run_coroutine_threadsafe(services.paused(), loop).result()
+        return gate.Switches(enabled=services.enabled, paused=paused)
+
     written = await asyncio.to_thread(
         _in_db,
         services.sessions,
-        lambda db: arm(db, plan, services.clock(), switches, read),
+        lambda db: arm(
+            db,
+            plan,
+            services.clock(),
+            switches,
+            read,
+            clock=services.clock,
+            switches_for=fresh_switches,
+        ),
     )
     if written != "submitting" or capability is None:
         return written
     armed.append(True)
-    return await _after_arm(services, plan.application_id, read, tools, capability)
+    return await _after_arm(services, plan, read, tools, capability)
 
 
 async def _decide(services: Services, application_id: uuid.UUID) -> str:
