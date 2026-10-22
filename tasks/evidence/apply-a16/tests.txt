@@ -1,7 +1,9 @@
 Apply A16 finite source checkpoint, 2026-10-22
 
-Status: source and focused checks complete; six-flow application-browser acceptance remains
-pending. No live LinkedIn posting visited and no real application submitted.
+Status: source and focused checks complete; fresh application-browser acceptance passed the
+first three of six tests. Test four reached the correct person-answer/fresh-fill ready state,
+then failed on a stale Resume text locator. That assertion is corrected; its browser rerun and
+tests five and six remain pending. No live LinkedIn posting visited or real application submitted.
 
 Passed checks:
 - Private browser boundary/detector/action checks: 394 passed.
@@ -40,16 +42,39 @@ Runtime attempts, without a green six-flow claim:
    Fresh journey passed the external-link consent check, then advanced Next and Review and
    stopped form_changed before Follow or final designation. Its final named summary group
    used inline text, which row.words()[1:] dropped. The fixed shared summary_text helper
-   reads inline and child values; focused mutation checks pass. This fix has NOT yet been
-   rebuilt or exercised by the six-flow journey.
+   reads inline and child values; focused mutation checks passed. At that source checkpoint,
+   the fix had not yet been rebuilt or exercised by the six-flow journey.
 
-Last runtime ledger: zero LinkedIn submissions, no follow_company submitted.
-The retained stack is apply253, all 11 services healthy at handoff. No active build, browser
-journey or throwaway DB test remains. Heavy slot2 was released to root. Detailed nonsecret
-recipe and exact image/source checkpoint: /tmp/jobapp-apply-a16-runtime-handoff.md.
+Fresh continuation, production source 771ee1c3:
+- Rebuilt own API, worker, Caddy and browser; migrated the own DB from 0024 to 0025; rebound
+  atsforms to codex-apply-253-runtime/tests. No production source change was needed.
+- Exact six-test journey: 3 passed, 1 failed, 2 did not run in 11.9 minutes.
+  Consent/no application: passed in 5.3 seconds. Review approval and one submission without
+  follow_company: passed in 1.4 minutes. Three confirmed rehearsals sent nothing, then a real
+  Full auto hold and exactly one click after its deadline: passed in 8.9 minutes.
+- Test four: the unknown required answer was left, the person entered 0, a fresh fill reached
+  ready with the required Resume row showing cv.pdf, final Submit designation and approval
+  button present. The stale exact Resume locator missed the displayed Resume (required).
+  The journey now scopes the Fields filled list to that row and checks its exact cv.pdf value.
+  Its final approval/submission, later sign-in/company fallback, checkpoint and console checks
+  have not completed. The source still defines exactly six tests.
+- An earlier manual monitor interrupted a valid held dry-run rehearsal. The stored trace then
+  showed rehearsed with no click. That was a monitor mistake, not an application defect.
+- Review and held desktop/mobile light/dark screenshots, eight PNGs, were inspected. Their
+  runtime overflow assertions passed. No checkpoint screenshot exists from this continuation.
+- Final synthetic ledger: two LinkedIn submissions, zero follow_company fields; current
+  person's DB has two click events, four ready items and two submitted, no queued/held work.
+- Follow-up source checks: TypeScript and full frontend lint passed; Apply and browser Vitest
+  431 passed in 31.74s. CI plan 81 passed in 43.64s;
+  e2e_groups passed. No application behavior, hold, pace or timeout was changed.
 
-Remaining acceptance: rebuild API/worker from the final source after shared A15 summary
-integration, run web/e2e/apply-a16.spec.ts, inspect normal/phone light/dark screenshots, verify
-Review once, rehearsals then held Full auto once, early required person continuation and final
-approval, sign-in/company fallback/checkpoint, marketing decline in counted submissions, and
-obtain the independent final security review. Clean only transferred apply253 resources later.
+Current runtime manifests:
+api ae5c356456f8ba1cde3b45d15a414a9603c125f5220f6f77867b38f55cf26b7b
+worker e8fb57854cf7676c3c76dc8376c41d38857d1b33aaca1d64eb36e7cecf531f13
+caddy 7335aaa46f26352c182649a73ff3abb5a5ba56b5a6b84a5e2d624f03632be9b0
+browser afd4d3c39812d19a423f2054016136662d913f9bd9fcb31f5563da8af9287094
+
+Remaining acceptance: rerun all six on the final composed A1 fixture images as part of the
+whole Apply journey group, inspect the checkpoint four-view screenshot set, and obtain root's
+independent final security review. The current retained apply253 stack is reusable; its exact
+finite handoff is /tmp/apply253-runtime-brief.md. Clean only transferred own resources later.

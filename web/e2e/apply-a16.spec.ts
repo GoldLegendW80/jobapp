@@ -316,9 +316,11 @@ test("unknown questions and expired sign-in go to review, company links use thei
         .poll(async () => (await latest(id)).state, { timeout: FILL })
         .toBe("ready");
       await page.reload();
-      await expect(
-        page.getByText("Resume", { exact: true }).first(),
-      ).toBeVisible();
+      const resume = page
+        .getByRole("list", { name: "Fields filled" })
+        .getByRole("listitem")
+        .filter({ hasText: "Resume (required)" });
+      await expect(resume.getByText("cv.pdf", { exact: true })).toBeVisible();
       expect(await accepted()).toHaveLength(2);
       await page
         .getByRole("button", { name: "Approve and submit", exact: true })
