@@ -27,9 +27,9 @@ an approval of an original snapshot is not an approval of the combined tree.
 | A10b: sign-in recovery | Missing | #578: attended and unattended handoff, later callback, expired sessions and lease survival | Fake login walls, idempotent resume, Full auto becomes review |
 | A11 to A13c: caps, Like queue and Full auto | Main plus #591, #598, #470 | Verify composed decision, hold, rehearsals, model check, pauses and final rechecks | Counted fake submissions, clock/cap tests and journeys |
 | A14: email applications | Missing; required mail send components also missing | #251: draft, exact authorisation, provider boundary, send gate, uncertainty resolution and UI | Fake Gmail only, immutable attachments, no duplicate send |
-| A15: Workday, Google Careers and VIE | Missing | #252: bounded wizards, sign-in resume, labelled controls and file choosers | Fake multi-step applications; Full auto hands over to review |
+| A15: Workday, Google Careers and VIE | Source integrated; acceptance pending | #252: bounded wizards, sign-in resume, labelled controls and file choosers | Fake multi-step applications; Full auto hands over to review |
 | A16: LinkedIn Easy Apply | Source checkpoint integrated, acceptance pending | #253: opted-in modal flow, company-site fallback and LinkedIn pacing | Fake modal, consent revocation/checkpoint, cap and isolation tests |
-| A18a to A18c: complete external profiles | Only initial tables exist | #254, #255, #256: persisted sections, factual fill, protected-field policy, review/save gate and UI | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
+| A18a to A18c: complete external profiles | Backend, UI and additive schema integrated; acceptance pending | #254, #255, #256: persisted sections, factual fill, protected-field policy, review/save gate and UI | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
 The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
@@ -83,7 +83,10 @@ recorded separately from unfinished implementation.
   its bytes, and a missing or changed version prevents upload and Save. Final profile tests
   passed 30 cases. Browser testing found and fixed a stale Replace checkbox and premature
   completion after the first autosave section (`2d20cf64`, `466c7a5f`). All four real browser
-  flows still require a passing rerun by the fresh continuation agent. The dedicated
+  flows still require a passing rerun by the fresh continuation agent. Fresh-request tests found
+  that Edit and Skip returned success without a database commit. The thin fix `0d2ed479`
+  (integrated as `7e4f8edc`) passed five durability cases, including the exact persisted values
+  hash and section authorisation; browser and whole-module reruns continue. The dedicated
   [A18 evidence](../evidence/apply-a18/tests.txt) records the remaining proof and stack recipe.
 - A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
   passed using a local fake Google service. Gate follow-up `5d0b18db` passed 1,251 mail,
@@ -102,14 +105,23 @@ recorded separately from unfinished implementation.
   events. This demonstrates the bounded test workload, not spare headroom or Jetson acceptance.
 - A16 source `558e5c01` is integrated as `874a1722`, with both email and LinkedIn retained in
   Full auto's source registry. The private Easy Apply opener is unavailable to models;
-  ordinary submit detection is unchanged. Database, native-browser and modal acceptance
-  checks continue, with checkpoint/replaced-button follow-ups still to integrate.
+  ordinary submit detection is unchanged. Checkpoint and pinned-button follow-up `ff575c9c`
+  is integrated as `4a07e410`; eleven native Chromium refusal/opener cases passed. Finite
+  pacing and the external manual alternative `b848d029` are integrated as `1ea2a9dc`: production
+  requires at least 600 seconds between LinkedIn submissions and at most 15 a day. Forty-two
+  configuration and 55 frontend cases passed. Modal journey acceptance continues.
+- A15 source `b6248171` and shared wizard continuation `24390c4a` are integrated as
+  `0137366a` and `0ff76c1c`. An early required answer prevents Next, and an exact person edit
+  queues a fresh full fill before final approval. Adapter-owned target and field-shape markers
+  remain in the approval hash. The isolated builder passed 105 pure cases, nine database
+  cases and 355 frontend cases. Its composed browser journeys remain unrun.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
-- Integration through `18cc3bbf`: whole API lint, frontend typecheck and frontend lint passed.
-  Formatting passed on all 700 API files before the latest mail infrastructure slice. The CI plan's
-  81 tests and E2E group registration check also passed.
+- Integration checks through `0ff76c1c`: whole API lint and formatting passed on 711 files,
+  frontend typecheck passed, all 81 CI plan cases passed, and E2E group registration passed.
+  Frontend lint last passed before the latest mail and wizard slices; the final composed checks
+  remain required.
 
 The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
 on A9's recovery follow-ups (#573), A15, A16 and the final cross-capability verification. Existing
