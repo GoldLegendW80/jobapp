@@ -16,13 +16,16 @@ can ask for job motivation, while their proposed answers still need a supported 
 `judge` repeats the question guards, checks the declared source against PERSON_SOURCES, matches
 choices to options and applies the legal, personal, practical and fact-check guards. A model's
 source label alone establishes nothing. Each typed clause must either match permitted source
-text or have a positive job-claim structure whose content words trace to those sources or the
-job-topic vocabulary. This allows supported technical paraphrases without inventing arbitrary
-new nouns, places or arrangements. Clauses joined by conjunctions are checked separately, so a
-job sentence cannot carry an unsupported second claim. Ambiguous arrangement vocabulary needs
+text or retain the complete factual source sentence under the finite technical action
+equivalences. Separately composed factual clauses need a complete source sentence of their
+own. A positive intent grammar permits technical motivation without asserting an achievement
+or promise; its content words still need source or job-topic vocabulary. Clauses joined by
+conjunctions are checked separately, so intent cannot carry an unsupported second claim.
+Ambiguous arrangement vocabulary needs
 a complete sourced technical past action; consent and other closed statements stay refused.
-Locative complements in a person's claim retain their source actor, predicate, object and
-preposition. Entity or skill words alone do not establish that relationship. Coordinated
+Locative complements in every claim frame retain their full source clause, including actor,
+predicate, object and preposition. Entity or skill words alone do not establish that
+relationship, even when they happen to contain the whole proposed clause. Coordinated
 predicates retain their subject, and coordinated objects retain their list context.
 The prepared letter enters these sources through the immutable run context, rather than an
 edited answer. `undashed` applies the owner's separator rule before matching and checking text.
@@ -35,8 +38,10 @@ Declared open points:
 - Unrecognised professional fields or team qualifiers can leave a valid question with the person.
 - New technical terms and paraphrases outside the positive vocabulary need supporting profile
   or prepared-letter words. Non-Latin wording without such support is conservative as well.
-- Token provenance and topic structure do not prove the semantic relationship of every
-  paraphrase. The fact check, approval and Full auto model check remain separate checks.
+- Factual paraphrases outside the finite action equivalences and rearranged coordinated
+  sentences stay left. This intentionally prefers explicit source wording to inference.
+- Intent complements use a conservative noun-phrase grammar; unfamiliar wording stays left.
+  Fact checking, approval and the Full auto model check remain separate checks.
 - Short company questions still need the posting's company at the judge. Existing lexical
   guards can refuse technical words whose ordinary reading is not recognised here.
 """
@@ -775,9 +780,9 @@ _COORDINATED_OBJECT = re.compile(
 _FIRST_PERSON = re.compile(r"^(i|we)\b")
 _LOCATIVE = re.compile(r"\b(?:in|from|at|near|out of) (?!charge\b|front of\b)")
 _RELATION_VERBS = {
-    **dict.fromkeys(("build", "develop", "create"), "build"),
-    **dict.fromkeys(("built", "developed", "created"), "built"),
-    **dict.fromkeys(("building", "developing", "creating"), "building"),
+    **dict.fromkeys(("build", "develop", "create", "design"), "build"),
+    **dict.fromkeys(("built", "developed", "created", "designed"), "built"),
+    **dict.fromkeys(("building", "developing", "creating", "designing"), "building"),
     **dict.fromkeys(("test", "evaluate"), "test"),
     **dict.fromkeys(("tested", "evaluated"), "tested"),
     **dict.fromkeys(("testing", "evaluating"), "testing"),
@@ -968,31 +973,159 @@ _CLAIM_GLUE = frozenset(
 )
 
 
-def _claim_relation(clause: str, subject: str = "") -> tuple[str, ...] | None:
-    if not _FIRST_PERSON.match(clause):
-        if not subject or not _COORDINATED_ACTION.match(clause):
-            return None
+# A new intent can describe a technical topic without asserting an achievement. Its
+# complement is a noun phrase, not another finite personal claim. Unknown syntax stays left.
+_MOTIVATION_ACTIONS = frozenset(
+    [
+        "build",
+        "develop",
+        "design",
+        "create",
+        "improve",
+        "test",
+        "evaluate",
+        "join",
+        "work",
+        "learn",
+        "help",
+        "bring",
+        "reach",
+        "building",
+        "developing",
+        "designing",
+        "creating",
+        "improving",
+        "testing",
+        "evaluating",
+        "joining",
+        "working",
+        "learning",
+        "helping",
+        "bringing",
+    ]
+)
+_MOTIVATION_NOUN_GLUE = frozenset(
+    [
+        "my",
+        "our",
+        "your",
+        "the",
+        "a",
+        "an",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "its",
+        "their",
+        "them",
+        "me",
+        "us",
+        "you",
+        "to",
+        "of",
+        "for",
+        "with",
+        "on",
+        "in",
+        "at",
+        "from",
+        "by",
+        "as",
+        "over",
+        "into",
+        "more",
+        "most",
+        "real",
+        "hard",
+        "strong",
+        "safe",
+        "safety",
+        "people",
+        "human",
+        "humans",
+        "robots",
+        "robotics",
+        "team",
+        "teams",
+        "role",
+        "roles",
+        "agent",
+        "agents",
+        "ai",
+        "software",
+        "operations",
+        "warehouse",
+        "field",
+        "physical",
+        "world",
+        "kind",
+        "work",
+        "evaluation",
+        "culture",
+        "mission",
+    ]
+)
+_MOTIVATION_PREFIXES = tuple(
+    tuple(prefix.split())
+    for prefix in (
+        "want to",
+        "hope to",
+        "would like to",
+        "would love to",
+        "like to",
+        "love to",
+        "like",
+        "love",
+        "enjoy",
+        "am interested in",
+        "are interested in",
+    )
+)
+
+
+def _neutral_motivation(clause: str, words: set[str], *, continuing: bool = False) -> bool:
+    parts = clause.split()
+    if parts[:1] in (["i"], ["we"]):
+        parts = parts[1:]
+        if parts[:3] in (["would", "bring", "my"], ["would", "bring", "our"]):
+            parts = parts[2:]
+        else:
+            prefix = next((p for p in _MOTIVATION_PREFIXES if tuple(parts[: len(p)]) == p), None)
+            if prefix is None:
+                return False
+            parts = parts[len(prefix) :]
+            if parts and parts[0] in _MOTIVATION_ACTIONS:
+                parts = parts[1:]
+            elif prefix[-2:] != ("interested", "in"):
+                return False
+    elif continuing and parts and parts[0] in _MOTIVATION_ACTIONS:
+        parts = parts[1:]
+    elif not (continuing and _COORDINATED_OBJECT.fullmatch(clause)):
+        return False
+    return bool(parts) and all(
+        w in _MOTIVATION_NOUN_GLUE
+        or (w not in _CLAIM_GLUE and (w in words or _SUBJECT.fullmatch(w)))
+        for w in parts
+    )
+
+
+def _claim_relation(clause: str, subject: str = "") -> tuple[str, ...]:
+    """Keep the entire frame, changing only the finite technical action equivalences."""
+    if subject and _COORDINATED_ACTION.match(clause):
         clause = f"{subject} {clause}"
-    words = clause.split()
-    for index, word in enumerate(words[1:], 1):
-        if word in _RELATION_VERBS:
-            words[index] = _RELATION_VERBS[word]
-            break
-    return tuple(words)
+    return tuple(_RELATION_VERBS.get(word, word) for word in clause.split())
 
 
 def _source_relations(texts: Sequence[str]) -> set[tuple[str, ...]]:
-    relations = set()
-    for text in texts:
-        for sentence in _SENTENCES.split(undashed(text)):
-            subject = ""
-            for raw in _CLAUSES.split(sentence):
-                clause = answers.option_key(raw)
-                if actor := _FIRST_PERSON.match(clause):
-                    subject = actor.group(1)
-                if relation := _claim_relation(clause, subject):
-                    relations.add(relation)
-    return relations
+    # Do not borrow a relation from a fragment split off a coordinated source sentence.
+    return {
+        _claim_relation(answers.option_key(sentence))
+        for text in texts
+        for sentence in _SENTENCES.split(undashed(text))
+        if sentence.strip()
+    }
 
 
 def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bool = False) -> bool:
@@ -1010,8 +1143,10 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
     relations = _source_relations((*sources.profile, *sources.answers))
     found = False
     for sentence in _SENTENCES.split(value):
+        sentence_proven = _claim_relation(answers.option_key(sentence)) in relations
         subject = ""
         object_list = False
+        motivation = False
         for raw in _CLAUSES.split(sentence):
             clause = answers.option_key(raw)
             if not clause:
@@ -1024,14 +1159,12 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
             coordinated = bool(subject) and (
                 bool(_COORDINATED_ACTION.search(clause)) or object_continuation
             )
+            proven = sentence_proven or _claim_relation(clause, subject) in relations
+            neutral = _neutral_motivation(clause, words, continuing=motivation)
+            if not proven and (_LOCATIVE.search(clause) or not neutral):
+                return False
             if clause not in stored:
                 if exact or not (framed or coordinated):
-                    return False
-                if (
-                    _LOCATIVE.search(clause)
-                    and (relation := _claim_relation(clause, subject))
-                    and relation not in relations
-                ):
                     return False
                 if any(
                     w not in words and w not in _CLAIM_GLUE and not _SUBJECT.fullmatch(w)
@@ -1040,6 +1173,7 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
                     return False
             if actor := _FIRST_PERSON.match(clause):
                 subject = actor.group(1)
+            motivation = neutral
             object_list = object_continuation or bool(
                 re.match(r"^(?:i|we) (?:would |can |could )?bring (?:my|our)\b", clause)
             )

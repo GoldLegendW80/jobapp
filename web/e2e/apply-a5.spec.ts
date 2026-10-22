@@ -60,6 +60,11 @@ async function documentsReady(id: string): Promise<boolean> {
 
 test.beforeAll(async ({ browser }) => {
   person = invented("a5");
+  // The recorded stream's factual statements have explicit source motivation.
+  const profile = person.profile as {
+    sections: { answers: { motivation: string } };
+  };
+  profile.sections.answers.motivation = ANSWERED;
   context = await newContext(browser);
   page = await context.newPage();
   errors = watchErrors(page);

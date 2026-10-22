@@ -194,6 +194,27 @@ def test_a_source_does_not_authorize_closed_topics(value: str, label: str) -> No
     assert judged(value, label, sources=replace(SOURCES, profile=(value,))).answer is None
 
 
+COORDINATED_FACTS = (
+    "The robots this team builds are the kind of work I want to do.",
+    "This role puts agents in front of real operations.",
+    "I build agents and evaluate them.",
+    "I build software and improve it.",
+    "I build agents and design tools for them.",
+    "I build agents and develop tools for them.",
+    "I build agents and create tools for them.",
+    "I build agents and test the software.",
+    "We build agents and test them.",
+    "We build software and improve it.",
+    "The software this team builds is work I want to do.",
+    "This team builds robots for real operations.",
+)
+
+
+@pytest.mark.parametrize("value", COORDINATED_FACTS)
+def test_factual_coordination_is_not_invented_from_the_original_topic_words(value: str) -> None:
+    assert judged(value).answer is None
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -221,7 +242,10 @@ def test_a_source_does_not_authorize_closed_topics(value: str, label: str) -> No
     ],
 )
 def test_coordinated_job_motivation_preserves_its_subject_and_objects(value: str) -> None:
-    verdict = judged(value)
+    # Intent needs no achievement. A factual companion has an explicit source, while
+    # the preceding table retains its refusal against the original unrelated facts.
+    sources = replace(SOURCES, profile=(*FACTS, value)) if value in COORDINATED_FACTS else SOURCES
+    verdict = judged(value, sources=sources)
     assert verdict.answer is not None, verdict
     assert verdict.answer.value == agent.undashed(value)
 
@@ -339,3 +363,180 @@ def test_a_coordinated_object_list_can_have_more_than_two_nouns(actor) -> None:
     assert judged(
         f"{actor} would bring my agent and software and evaluation work to the team."
     ).answer
+
+
+# Every frame admitted by the claim sink needs the same relational provenance. A
+# company, project or skill can lend a word, but cannot lend a personal location.
+NOMINAL_LOCATIVE_FRAMES = [
+    "My work is {preposition} Modelport.",
+    "Our work is {preposition} Modelport.",
+    "My work builds robots {preposition} Modelport.",
+    "Our work builds agents {preposition} Modelport.",
+    "The robots I built are {preposition} Modelport.",
+    "The software we built is {preposition} Modelport.",
+    "Robots are {preposition} Modelport.",
+    "Agents are {preposition} Modelport.",
+]
+LOCATIVE_PREPOSITIONS = ["in", "at", "near", "from", "out of"]
+
+
+@pytest.mark.parametrize("frame", NOMINAL_LOCATIVE_FRAMES)
+@pytest.mark.parametrize("preposition", LOCATIVE_PREPOSITIONS)
+@pytest.mark.parametrize("entity", ["company", "project", "skill"])
+def test_nominal_locatives_cannot_borrow_a_location_from_an_entity(
+    frame: str, preposition: str, entity: str
+) -> None:
+    fields = {
+        "company": {"participants": ("Modelport Robotics",)},
+        "project": {"profile": ("I built the Modelport project for robots and agents.",)},
+        "skill": {"known_terms": ("Modelport",)},
+    }
+    sources = replace(SOURCES, **fields[entity])
+    verdict = judged(frame.format(preposition=preposition), "Describe a project", sources)
+    assert verdict.answer is None, verdict
+
+
+@pytest.mark.parametrize("frame", NOMINAL_LOCATIVE_FRAMES)
+@pytest.mark.parametrize("preposition", LOCATIVE_PREPOSITIONS)
+def test_exact_sourced_nominal_locatives_remain_untouched(frame: str, preposition: str) -> None:
+    value = frame.format(preposition=preposition)
+    sources = replace(SOURCES, profile=(value,), employers=("Modelport",))
+    verdict = judged(value, "Describe a project", sources)
+    assert verdict.answer is not None, verdict
+    assert verdict.answer.value == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Our work is in the Example simulation.",
+        "My work was in the Example simulation.",
+        "My work will be in the Example simulation.",
+        "My work can be in the Example simulation.",
+        "My work is not in the Example simulation.",
+        "My work is near the Example simulation.",
+        "My work builds robots in the Example simulation.",
+        "My work is in the Example simulation and robots are near the Example simulation.",
+        "The robots we built are in the Example simulation.",
+        "The robots I built were in the Example simulation.",
+        "The robots I built will be in the Example simulation.",
+        "The robots I built can be in the Example simulation.",
+        "The robots I built are not in the Example simulation.",
+        "The robots I built are near the Example simulation.",
+        "The robots I tested are in the Example simulation.",
+        "The agents I built are in the Example simulation.",
+    ],
+)
+def test_nominal_location_relations_retain_actor_tense_modality_negation_and_object(
+    value: str,
+) -> None:
+    sources = replace(
+        SOURCES,
+        profile=(
+            "My work is in the Example simulation.",
+            "The robots I built are in the Example simulation.",
+        ),
+    )
+    assert judged(value, "Describe a project", sources).answer is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "My work is in Lisbon.",
+        "My work builds robots in Lisbon.",
+        "The robots I built are in Lisbon.",
+    ],
+)
+def test_review_nominal_location_regressions(value: str) -> None:
+    sources = replace(
+        agent.sources_of({}, "Engineer", "Lisbon Robotics"), profile=("I built robots.",)
+    )
+    assert judged(value, "Describe a project", sources).answer is None
+
+
+@pytest.mark.parametrize("frame", NOMINAL_LOCATIVE_FRAMES)
+@pytest.mark.parametrize("field", ["participants", "known_terms", "employers", "titles"])
+def test_even_a_complete_entity_name_is_not_a_personal_locative_source(
+    frame: str, field: str
+) -> None:
+    value = frame.format(preposition="in")
+    sources = replace(SOURCES, **{field: (value,)})
+    assert judged(value, "Describe a project", sources).answer is None
+
+
+@pytest.mark.parametrize("preposition", LOCATIVE_PREPOSITIONS)
+@pytest.mark.parametrize(
+    ("source", "value"),
+    [
+        (
+            "My work built robots {preposition} the Example simulation.",
+            "My work developed robots {preposition} the Example simulation.",
+        ),
+        (
+            "The robots I built are {preposition} the Example simulation.",
+            "The robots I developed are {preposition} the Example simulation.",
+        ),
+        (
+            "Our work tested agents {preposition} the Example simulation.",
+            "Our work evaluated agents {preposition} the Example simulation.",
+        ),
+        (
+            "The software we tested is {preposition} the Example simulation.",
+            "The software we evaluated is {preposition} the Example simulation.",
+        ),
+    ],
+)
+def test_nominal_relations_allow_the_same_bounded_technical_paraphrases(
+    source: str, value: str, preposition: str
+) -> None:
+    source = source.format(preposition=preposition)
+    value = value.format(preposition=preposition)
+    verdict = judged(value, "Describe a project", replace(SOURCES, profile=(source,)))
+    assert verdict.answer is not None, verdict
+    assert verdict.answer.value == value
+
+
+FACTUAL_OBJECTS = ["robots", "agents", "software", "evaluation tools", "robotics tools", "AI tools"]
+
+
+@pytest.mark.parametrize("object_", FACTUAL_OBJECTS)
+@pytest.mark.parametrize(
+    ("source", "value"),
+    [
+        ("I did not build {}.", "I built {}."),
+        ("I plan to build {}.", "I built {}."),
+        ("We built {}.", "I built {}."),
+        ("I built {}.", "I will build {}."),
+        ("I evaluated {}.", "I built {}."),
+        ("I built {}.", "We developed {}."),
+        ("I will build {}.", "I built {}."),
+        ("I built {}.", "I did not build {}."),
+    ],
+)
+def test_factual_provenance_preserves_actor_tense_negation_and_achievement(
+    source: str, value: str, object_: str
+) -> None:
+    sources = replace(SOURCES, profile=(source.format(object_),))
+    assert judged(value.format(object_), "Describe a project", sources).answer is None
+
+
+@pytest.mark.parametrize("object_", FACTUAL_OBJECTS)
+@pytest.mark.parametrize(
+    ("source", "value"),
+    [
+        ("I built {}.", "I developed {}."),
+        ("I built {}.", "I designed {}."),
+        ("I built {}.", "I created {}."),
+        ("We evaluated {}.", "We tested {}."),
+    ],
+)
+def test_supported_factual_action_paraphrases_remain_untouched(
+    source: str, value: str, object_: str
+) -> None:
+    value = value.format(object_)
+    verdict = judged(
+        value, "Describe a project", replace(SOURCES, profile=(source.format(object_),))
+    )
+    assert verdict.answer is not None, verdict
+    assert verdict.answer.value == value
