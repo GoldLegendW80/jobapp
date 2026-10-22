@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { jobsKey } from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
+import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
 import { cn } from "@/lib/utils";
 
 import {
@@ -248,6 +249,13 @@ export function QueueCard({
       </header>
 
       <p className="text-sm">{statusLine(item)}</p>
+      {item.state === "needs_person" && item.needs === "signin" ? (
+        <LaterHandoffBanner
+          module="application"
+          refId={item.id}
+          address={item.form_url}
+        />
+      ) : null}
       {reason ? (
         <Alert>
           <TriangleAlert aria-hidden="true" />
