@@ -32,6 +32,11 @@ an approval of an original snapshot is not an approval of the combined tree.
 | A18a to A18c: complete external profiles | Backend, UI and additive schema integrated; acceptance pending | #254, #255, #256: persisted sections, factual fill, protected-field policy, review/save gate and UI | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
+Current development streams: manual/session recovery and the bounded person-action wait;
+Workday/Google Careers/VIE acceptance; LinkedIn modal acceptance. External-profile runtime
+acceptance needs a fresh debugging pass from the preserved diagnostic handoff. The filed
+answer, exclusion and fake-ATS follow-ups, final privacy proof and independent reviews follow.
+
 The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
 (manual recovery), #581 (editing a letter answer), #594 (document rendering wait), #587
 (reporting pages addressed to an AI), #585 (unambiguous stored answer mappings), #593 (answer
@@ -88,6 +93,11 @@ recorded separately from unfinished implementation.
   (integrated as `7e4f8edc`) passed five durability cases, including the exact persisted values
   hash and section authorisation; browser and whole-module reruns continue. The dedicated
   [A18 evidence](../evidence/apply-a18/tests.txt) records the remaining proof and stack recipe.
+  The continuation's final browser run passed the complete Account/sign-in/edit/Save/Skip
+  journey but left three failures. Its broad backend run was interrupted after 1,463 passes
+  and two real LinkedIn classification assertion failures; it is not whole-module proof.
+  The committed [runtime handoff](../evidence/apply-a18/runtime-handoff.txt) preserves exact
+  run IDs, timing discrepancies and pending fixture assertions for a fresh debugger.
 - A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
   passed using a local fake Google service. Gate follow-up `5d0b18db` passed 1,251 mail,
   application and migration tests. It checks the exact recipient, both immutable PDFs,
@@ -122,6 +132,8 @@ recorded separately from unfinished implementation.
   frontend typecheck passed, all 81 CI plan cases passed, and E2E group registration passed.
   Frontend lint last passed before the latest mail and wizard slices; the final composed checks
   remain required.
+- Integration through `9ae55749`: API lint and formatting passed on 712 files, and frontend
+  lint passed. These static checks do not replace the pending combined regression journeys.
 
 The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
 on A9's recovery follow-ups (#573), A15, A16 and the final cross-capability verification. Existing
