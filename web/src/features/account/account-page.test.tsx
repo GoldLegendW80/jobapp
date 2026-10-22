@@ -336,6 +336,28 @@ describe("change password card", () => {
     });
   });
 
+  it("shows the busy API sentence once above the password fields", async () => {
+    const detail = "The server is busy. Try again in a moment.";
+    const { calls } = account({
+      user: { ...admin, email: "e2e-busy-account@example.org" },
+      password: () =>
+        HttpResponse.json(
+          { detail },
+          { status: 503, headers: { "Retry-After": "2" } },
+        ),
+    });
+    const { user } = await openAccount();
+    await fillPassword(user);
+    await submitPassword(user);
+    const form = within(passwordForm());
+
+    expect((await form.findByRole("alert")).textContent).toBe(detail);
+    expect(form.getByLabelText("Current password")).toHaveValue(CURRENT);
+    expect(form.getByLabelText("New password")).toHaveValue(NEXT);
+    expect(form.getByRole("button", { name: "Change password" })).toBeEnabled();
+    expect(calls.password).toHaveLength(1);
+  });
+
   it("shows any other failure above the fields", async () => {
     account({
       password: () =>
