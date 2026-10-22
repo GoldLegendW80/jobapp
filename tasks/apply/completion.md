@@ -57,3 +57,27 @@ an approval of an original snapshot is not an approval of the combined tree.
 - [ ] Independent reviews cover the submission, profile-save and email-send gates.
 - [ ] Approved PR snapshots retain their original heads and GitHub states.
 - [ ] Each remaining human step or external configuration requirement is named explicitly.
+
+## Evidence collected during implementation
+
+- A10b backend, source commit `4f6e0b99`: 6,604 application/browser tests passed against
+  throwaway databases and local fakes. Its web slice `0f643afb` passed typecheck and 416 tests
+  in 17 frontend files. The real browser journey still needs to pass.
+- A18 schema `41e94c86`: 69 application-start regression tests passed. Core `6a4f7244` passed
+  218 focused cases, mostly policy cases. A real browser lease contract mismatch found during
+  integration is being corrected before the browser journey; this is not final runtime proof.
+- A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
+  passed using a local fake Google service. The send gate, application flow and deployment
+  configuration still require validation together.
+- A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
+  image kinds, posting deletion and the privileged-click import boundary. The final route,
+  account-deletion and mode-canary suite must run after all features are integrated.
+- Integration through `15975106`: frontend typecheck and whole API lint passed. The CI plan's
+  81 tests and E2E group registration check also passed.
+
+The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
+on A9's recovery follow-ups (#573), A16 and the final cross-capability verification. Existing
+approved branches receive no writes from this task. A read-only comparison on 2026-10-22 found
+concurrent updates to #579, #538, #521, #518 and #505 elsewhere; #521's update is a merge of main.
+The original snapshots named above remain the isolated integration baseline until explicitly
+reconciled and retested.
