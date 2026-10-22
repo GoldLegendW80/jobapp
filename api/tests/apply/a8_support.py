@@ -1,7 +1,8 @@
 """Fakes for apply A8: the fake Lever form of tests/ats_forms/a8/ modelled over A4's FakeForm and
 A6's SubmitForm, for tests with no browser, no model and no company. Once the CV is uploaded,
 Lever's resume parse writes values that are not the person's into the name, e-mail, phone and
-current company (after `parse_after` more snapshots); its questions are native selects; its
+current company (after `parse_after` more snapshots, in one render or over several `renders`
+`gap` snapshots apart); its questions are native selects; its
 "Additional information" box is named by its placeholder only; `hcaptcha` shows hCaptcha's
 checkbox in its frame. Every call is recorded, the gate's click included."""
 
@@ -36,30 +37,48 @@ class LeverForm(SubmitForm):
         parse_after: int = 0,
         hcaptcha: bool = False,
         parse: dict[str, str] | None = None,
+        renders: tuple[tuple[str, ...], ...] | None = None,
+        gap: int = 1,
         **kw: Any,
     ) -> None:
         super().__init__(*args, **kw)
         self.parse_after = parse_after
         self.hcaptcha = hcaptcha
         self.parse = dict(PARSED if parse is None else parse)
+        self.renders = renders if renders is not None else (tuple(self.parse),)
+        self.gap = gap
         self._parse_in: int | None = None
+        self._render = 0
         self.parses = 0
+        self.cleared: list[str] = []  # the labels of the text fields typed empty, in order
 
     async def upload(self, ref: str, names: list[str], element: str = "") -> dict[str, Any]:
         target = self._target(ref)
         result = await super().upload(ref, names, element)
         resume = target is not None and target[1] >= 0 and target[0] == "file"
         if result.get("ok") and resume and self.fields[target[1]].label == "Resume/CV":
-            self._parse_in = self.parse_after
+            self._parse_in, self._render = self.parse_after, 0
         return result
+
+    async def type(
+        self, ref: str, text: str, element: str = "", submit: bool = False
+    ) -> dict[str, Any]:
+        target = self._target(ref)
+        if not text and target is not None and target[0] == "input":
+            self.cleared.append(self.fields[target[1]].label)
+        return await super().type(ref, text, element, submit)
 
     async def snapshot(self) -> dict[str, Any]:
         if self._parse_in is not None:
             if self._parse_in <= 0:
                 for spec in self.fields:
-                    if spec.label in self.parse:
+                    if spec.label in self.renders[self._render] and spec.label in self.parse:
                         spec.value = self.parse[spec.label]
-                self._parse_in, self.parses = None, self.parses + 1
+                self._render += 1
+                if self._render < len(self.renders):
+                    self._parse_in = self.gap - 1
+                else:
+                    self._parse_in, self.parses = None, self.parses + 1
             else:
                 self._parse_in -= 1
         return await super().snapshot()
