@@ -334,7 +334,9 @@ def test_bounded_decision_bodies_fit_the_class_and_validate_before_any_decision(
     assert response.status_code == 404, response.text[:300]
     invalid = api.post(path, token=token, json={**body, field: too_long})
     assert invalid.status_code == 422, invalid.text[:300]
-    assert invalid.json()["detail"][0]["loc"][:2] == ["body", field]
+    assert invalid.json()["detail"].startswith(field + ":") or invalid.json()["detail"].startswith(
+        field + ".0:"
+    )
     oversized = api.post(
         path,
         token=token,
