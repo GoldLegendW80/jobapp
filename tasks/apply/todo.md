@@ -306,11 +306,27 @@ First slice (the Lever adapter, issue #245, measured on 2026-10-15 on the modell
 ### A9
 First slice (issue #246, 2026-10-21): the backend and browserd's side, no model call in any step (0 tokens). The session watches the page every 3 s with a snapshot that does not count as activity, so the 5 minute idle timeout of BROWSER_IDLE_S still ends a session nobody uses; the panel warns from 60 s before it. The second slice, in the same pull request (#517): the web panel (`manual-panel.tsx`, one line of `apply-section.tsx`) and the journey `apply-a9.spec.ts`.
 
+Recovery follow-ups implemented on the isolated completion branch on 2026-10-22: durable
+ended-session recovery, independent startup transactions, visible held sessions, a final passive
+confirmation watch before close, and Attach input/chooser ownership. The focused manual suite
+passed 90 cases; the final three regressions passed in the 7,167-case Apply/browser run. Native
+Chromium proves stale chooser refusal and takeover during paced input. Actual UI recovery and
+the incidental chooser race during Attach remain with the fresh runtime continuation.
+
 ### A10a
-First slice (issue #247, 2026-10-21): the retries, the wait for the person and a payment page call no model (0 tokens). A retry is one more fill (its tokens as A5's); the wait polls the page with one snapshot every 5 s (`failures.WAIT_POLL_S`), so at most 360 snapshots over APPLY_NEEDS_PERSON_WAIT_S; the payment check adds at most two snapshots per fill, one before anything is typed and one after the fill. The payment table holds 19 card labels and 20 neighbours kept apart (an e-mail "Security code", an identity card number, a gift card); a page of 20,000 fields is read in one pass. Gap in browserd: only the sign in hand off suspends a lease's timers (`waiting_person`), so the wait for a captcha or an e-mail code runs on the lease's active time (15 minutes for `apply_fill`) instead of the spec's 30 minutes outside it; a browser task adds a `waiting_person` for these two steps. Left: the journey `apply-a10a.spec.ts` with the fake captcha that stays solved on a reload (A10a does not close before it runs once on its own stack), and the rules after #343's hand over to the form agent. The 429 retry, 403 Needs you and 410 closed rules are implemented with A10b (#560).
+The retries, person wait and payment detector call no model (0 tokens). A retry is one more
+fill (its tokens as A5's); person waits use passive snapshots every 5 seconds, at most 360 in
+1,800 seconds. The private lease-owned wait now suspends active and idle clocks with an
+immutable deadline, restores the exact mirror after Redis loss and preserves the adapter,
+earlier answers and ordered steps through a later wizard captcha or email-code step. Sign-in
+keeps its separate handoff. The 429 retry, 403 Needs you and 410 closed rules remain as #560.
+The whole Apply/browser run passed 7,167 cases, three additional real Redis/private-HTTP cases
+passed, and six distinct native Chromium cases passed. The actual `apply-a10a.spec.ts` UI
+journey is being added and must pass before completion. Exact commands and limits are in
+[the person-wait evidence](../evidence/apply-person-wait/tests.txt).
 
 ### A10b
-Implemented on 2026-10-22 (#578). The sign in wrapper and the registered later callback call no model (0 tokens). The browser handoff polls every 2 seconds while waiting, and a resumed wall is re-read at its current page; three repeated walls stop this fill safely. A later session carries only the authenticated user, registered module, UUID reference and lease id in Redis. Its owned callback moves waiting work to queued once, and Full auto stays Review first. The module regression run passed 6,604 apply and browser tests before the final four regression cases were added. The 22-case focused backend rerun is pending in the integration batch. The watched and later fake Greenhouse browser journeys passed, with 16 desktop/mobile light/dark captures under tasks/evidence/apply-a10b/; tests.txt records the exact runs and remaining validation.
+Implemented on 2026-10-22 (#578). The sign in wrapper and the registered later callback call no model (0 tokens). The browser handoff polls every 2 seconds while waiting, and a resumed wall is re-read at its current page; three repeated walls stop this fill safely. A later session carries only the authenticated user, registered module, UUID reference and lease id in Redis. Its owned callback moves waiting work to queued once, and Full auto stays Review first. The module regression run passed 6,604 apply and browser tests before the final four regression cases were added. The final 22-case focused backend rerun passed in A18's 5,278-case affected suite. The watched and later fake Greenhouse browser journeys passed, with 16 desktop/mobile light/dark captures under tasks/evidence/apply-a10b/; tests.txt records the exact runs and remaining validation.
 
 ### A11
 First slice (issue #248, measured on 2026-10-15: caps, pace, settings API; the page is the second slice). The caps and the pace call no model (0 tokens). `caps.check` reads the person's settings row, the profile's search options and the person's caps (at most three queries), then the person's applications clicked in the longest window when a cap names the company or in Full auto (four), and the posting when the caller has not loaded it (five; the gate and the submit lease have loaded it), as `test_what_the_check_reads` counts. The pace reads every person's `click` events of the last 24 hours on every ATS, through the partial index `ix_application_events_click_at` (migration 0023), and keeps those of the application's host (at most each host's daily count). The company key table holds 46 spellings of one company (on 2026-10-19 a Cyrillic E moved there from the neighbours, with 3 more letters drawn like Latin ones, since the key folds as the never apply rules now do), 9 neighbours with keys of their own and 13 more pairs and empty cases. Since 2026-10-21 (issue #362) a cap also names a company when the key of one name is the key of a leading run of the other's words, so "Example Robotics Paris" answers to a cap on "Example Robotics": 50 rows (31 named, 19 apart), 6 ATS organisations, and a property over 1,000 generated pairs (it never refuses less than the exact key did). The A11 tests (238) run in about 33 s in one process (2026-10-21). The pace's property test plays 300 attempts at random times over the injected clock: no two clicks closer than 180 s, never more than 20 in any 24 hours.
@@ -349,19 +365,29 @@ no real Google application route or real-site submission has been exercised. Com
 pending checks are in [the evidence](../evidence/apply-a15/tests.txt).
 
 ### A16
-Nothing yet.
+Implemented behind the recorded LinkedIn opt-in with the private, pinned Easy Apply opener,
+strict modal summaries, exact replay, company-site fallback and production pace of at least
+600 seconds and at most 15 a day. Native opener/refusal checks passed 11 cases; the final
+focused backend suite passed 77. The six-flow application browser acceptance is pending with
+a fresh runtime continuation. See [the implementation notes](../../docs/apply-linkedin.md)
+and [the evidence](../evidence/apply-a16/tests.txt).
 
 ### A17
-Nothing yet.
+Temporary screenshot retention and its private click boundary passed seven focused tests.
+Full route isolation, deletion/canary proof, shared email confirmation consistency and the
+independent final gate reviews remain. See [the completion checklist](completion.md).
 
 ### A18a
-Implemented for #254 with additive migration 0024. Two real synthetic three-section runs reached `ready` without a credential, recording zero input/output tokens and turns. Generic profiles share 820,000 tokens and 30 turns across the run; known helpers share 30 turns and a 23,000-token allowance per identified section. These are ceilings, not real-model usage measurements. The fake usage tests verify subtraction across sections. Real model/site measurement remains Checkpoint A. Runtime acceptance is pending; see `tasks/evidence/apply-a18/tests.txt`.
+Implemented for #254 with additive migration 0024. Two real synthetic three-section runs reached `ready` without a credential, recording zero input/output tokens and turns. Generic profiles share 820,000 tokens and 30 turns across the run; known helpers share 30 turns and a 23,000-token allowance per identified section. These are ceilings, not real-model usage measurements. The fake usage tests verify subtraction across sections. Real model/site measurement remains Checkpoint A. All four fake-site Chromium flows passed in 4.6 minutes; the affected backend suite passed 5,278 cases. See `tasks/evidence/apply-a18/tests.txt`.
 
 ### A18b
-Implemented for #255. The gate has one-use section approval, exact reviewed CV bytes, audit before external action, persisted readback and atomic empty-only autosave. Final profile tests: 30 passed. Real multi-section autosave and Save proof remain pending after fixes found by the Chromium journey; see `tasks/evidence/apply-a18/tests.txt`.
+Implemented for #255. The gate has one-use section approval, exact reviewed CV bytes, audit before external action, persisted readback and atomic empty-only autosave. Final profile tests: 30 passed. Actual Chromium proved multi-section autosave, reviewed Save and preservation of a value populated during pacing. Fresh-request durability and Postgres lock regressions cover Edit, Skip and read-transaction release. See `tasks/evidence/apply-a18/tests.txt`.
 
 ### A18c
-Implemented for #256. Whole apply/browser Vitest: 421 passed; focused section review: 4 passed after the pending Replace correction. The four real browser flows have not yet passed. Account/sign-in reached review, and the final polling/Replace correction needs a fresh Caddy build and rerun. See `tasks/evidence/apply-a18/tests.txt`.
+Implemented for #256. Whole Apply/browser Vitest: 429 passed, with typecheck and lint passing.
+All four actual fake-site browser flows passed, including Account/sign-in, edited values and
+Replace, explicit Save/Skip, autosave consent, known-site readback and the atomic race. Twenty
+inspected desktop/mobile light/dark screenshots are retained. See `tasks/evidence/apply-a18/tests.txt`.
 
 ### Checkpoint A
 Nothing yet.
