@@ -247,3 +247,35 @@ asyncio.run(main())
         assert "Not submitted" in lease.snapshot()
     finally:
         lease.end()
+
+
+def test_an_incidental_chooser_during_the_app_attach_click_uploads_neither_document(
+    stack: Stack,
+) -> None:
+    lease = ManualLease(stack)
+    try:
+        assert lease.put("cv.pdf")["status"] == 200
+        assert lease.put("letter.pdf")["status"] == 200
+        assert lease.tool("browser_navigate", url=FORM + "?chooser_race=1")["ok"]
+        attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        assert lease.watch().get("chooser") is None
+        lease.person_clicks("#first_name")  # Fresh native activation, before app approach.
+        lease.turn(None)
+        rejected = lease.tool("browser_file_upload", ref=attach, paths=["cv.pdf"])
+        assert rejected.get("error") == "chooser_changed", rejected
+        waiting = lease.watch()
+        assert waiting.get("chooser")
+        untouched = lease.snapshot()
+        assert "cv.pdf" not in untouched
+        assert "letter.pdf" not in untouched
+        resolved = lease.tool(
+            "browser_file_upload", paths=["letter.pdf"], chooser_id=waiting["chooser_id"]
+        )
+        assert resolved["ok"]
+        assert lease.watch().get("chooser") is None
+        final = lease.snapshot()
+        assert "cv.pdf" not in final
+        assert f"letter.pdf:{len(PDF_OF)}" in final
+        assert "Not submitted" in final
+    finally:
+        lease.end()
