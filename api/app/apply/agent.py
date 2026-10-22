@@ -358,6 +358,9 @@ _FIELD_TOPIC = re.compile(
     r"^(?:robotics|ai|artificial intelligence|software|engineering|research|this field"
     r"|this industry|this sector|this domain|robotique|informatique)\b"
 )
+_PURPOSE_ACTION = r"(?:build|design|develop|create|improve|reach)"
+_PURPOSE = re.compile(rf"^{_PURPOSE_ACTION}\b")
+_WORK_PURPOSE = re.compile(rf"\bwork to {_PURPOSE_ACTION}\b")
 _TEAM_DETAIL = re.compile(r"\b(?:our|your|notre|votre) (.+?) (?:team|equipe)\b")
 _SHORT_TOPICS = frozenset({"team preference", "why now", "pourquoi maintenant"})
 _TECHNICAL_TEXT = re.compile(
@@ -527,6 +530,8 @@ def _names_where(text: str) -> bool:
     """A working/living destination is unknown unless it names an allowed professional field.
     This depends on the sentence structure, rather than whether a gazetteer knows the place."""
     found = _WHERE.search(text)
+    if found and text[: found.start(1)].endswith(" to ") and _PURPOSE.search(found.group(1)):
+        return False
     return bool(found and not _FIELD_TOPIC.search(found.group(1)))
 
 
@@ -565,6 +570,7 @@ def _on_topic(text: str) -> bool:
     return (
         text.strip(" ?.!:") in _SHORT_TOPICS
         or _named_only(text) is not None
+        or bool(_WORK_PURPOSE.search(text))
         or bool(_SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)))
     )
 

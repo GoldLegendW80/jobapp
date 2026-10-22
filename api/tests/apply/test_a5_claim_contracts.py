@@ -135,6 +135,15 @@ def test_ordinary_technical_paraphrases_use_the_actual_source_words(object_: str
     assert judged(f"I developed a {object_}.", "Describe a project", sources).answer is not None
 
 
+@pytest.mark.parametrize("verb", ["build", "design", "develop", "create", "improve", "reach"])
+def test_work_to_an_action_is_purpose_rather_than_a_destination(verb: str) -> None:
+    value = f"I want my work to {verb} robots."
+    sources = replace(SOURCES, profile=(value,))
+    assert judged(value, sources=sources).answer is not None
+    assert agent.refusal(f"Why do you want your work to {verb} robots?", "text") is None
+    assert judged(value, "Why do you want to work in Unknownville?", sources).answer is None
+
+
 def test_letter_trace_comes_from_the_prepared_document() -> None:
     value = "I built a scheduling algorithm for robots."
     assert (

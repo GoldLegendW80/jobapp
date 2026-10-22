@@ -186,16 +186,24 @@ async def marked(tools: Tools, ref: str, name: str = "") -> bool:
 
 _READER = (
     r"(?:ai(?: (?:assistants?|agents?|models?|tools?|systems?))?|artificial intelligence|"
-    r"(?:large )?language models?|llms?|automated assistants?|"
+    r"(?:large )?language models?|automated assistants?|"
     r"assistants? ia|agents? ia|intelligence artificielle)"
 )
-_BOUNDARY = r"(?:^|[.!?\n]\s*)"
+_READER_KIND = rf"(?:{_READER}|llms?)"
+# Newlines remain boundaries, so whitespace after one must not consume further boundaries.
+_BOUNDARY = r"(?:^|[.!?\n][ \t]*)"
+_DIRECTIVE = (
+    r"(?:please )?(?:ignore|disregard|answer|write|include|add|send|stop|follow|read|"
+    r"you (?:must|should)|ignorez|repondez|ecrivez|incluez|envoyez|suivez)\b"
+)
 AI_READER = re.compile(
-    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:an? |un |une )?{_READER}\s*[,.:;!?]"
-    rf"|(?:{_BOUNDARY}|\b(?:note|message|instructions?|consignes?) "
-    rf"(?:to|for|pour|a) )(?:les |aux )?{_READER}\s*[,:]"
-    rf"|\b{_READER} reading this (?:page|form) (?:must|should)\b"
-    rf"|{_BOUNDARY}(?:les )?{_READER} doivent "
+    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:an? |un |une )?{_READER_KIND}\s*[,.:;!?]"
+    rf"|{_BOUNDARY}(?:les |aux )?{_READER}\s*[,:]"
+    rf"|\b(?:note|message|instructions?|consignes?) (?:to|for|pour|a) "
+    rf"(?:les |aux )?{_READER_KIND}\s*[,:]"
+    rf"|{_BOUNDARY}llms?\s*[,:]\s*{_DIRECTIVE}"
+    rf"|\b{_READER_KIND} reading this (?:page|form) (?:must|should)\b"
+    rf"|{_BOUNDARY}(?:les )?{_READER_KIND} doivent "
     r"(?:ignorer|repondre|inclure|ecrire|envoyer|suivre)\b"
 )
 # A model's own name is also a person's (a recruiter named Claude): only an address counts.
