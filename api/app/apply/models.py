@@ -411,6 +411,10 @@ class SiteProfileRun(Base):
         default=SiteRunState.queued,
         server_default=SiteRunState.queued.value,
     )
+    url: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
+    needs: Mapped[str | None] = mapped_column(sa.Text)
+    error_code: Mapped[str | None] = mapped_column(sa.Text)
+    autosave_confirmed: Mapped[bool] = _flag()
     autosave: Mapped[bool] = _flag()
     cost: Mapped[dict[str, Any]] = _object()
     created_at: Mapped[datetime] = _now()
@@ -431,6 +435,12 @@ class SiteProfileField(Base):
     field_key: Mapped[str] = mapped_column(sa.Text, primary_key=True)
     label: Mapped[str] = mapped_column(sa.Text, nullable=False)
     kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    source_path: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
+    required: Mapped[bool] = _flag()
+    refusal: Mapped[str | None] = mapped_column(sa.Text)
+    options: Mapped[list[str]] = mapped_column(
+        pg.JSONB, nullable=False, default=list, server_default="[]"
+    )
     value: Mapped[Any] = mapped_column(pg.JSONB, nullable=True)
     current_value: Mapped[Any] = mapped_column(pg.JSONB, nullable=True)
     source: Mapped[SiteFieldSource] = mapped_column(SITE_FIELD_SOURCE_ENUM, nullable=False)
@@ -455,3 +465,31 @@ class SiteProfileShot(Base):
     jpeg: Mapped[bytes] = mapped_column(pg.BYTEA, nullable=False, deferred=True)
     sha256: Mapped[bytes] = mapped_column(pg.BYTEA, nullable=False)
     created_at: Mapped[datetime] = _now()
+
+
+class SiteProfileSection(Base):
+    """A resumable section. Events contain codes, ids and counts, never field values."""
+
+    __tablename__ = "site_profile_sections"
+    __table_args__ = (
+        _owned_by("site_profile_sections", "run_id", "site_profile_runs"),
+        sa.CheckConstraint(
+            "state IN ('ready', 'approved', 'saving', 'saved', 'skipped', 'left')",
+            name="valid_state",
+        ),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = _user_fk()
+    section: Mapped[str] = mapped_column(sa.Text, primary_key=True)
+    position: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    label: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    save_name: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
+    state: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, default="ready", server_default="ready"
+    )
+    error_code: Mapped[str | None] = mapped_column(sa.Text)
+    events: Mapped[list[dict[str, Any]]] = mapped_column(
+        pg.JSONB, nullable=False, default=list, server_default="[]"
+    )
+    updated_at: Mapped[datetime] = _now()
