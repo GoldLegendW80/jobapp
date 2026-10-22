@@ -22,10 +22,40 @@ localhost fake listeners only. No Docker or external sites used for this pass.
 PASS19: web/src/features/browser/handoff-banner.test.tsx.
 PASS: pnpm --dir web run typecheck.
 PASS: ruff check app tests ../browser/browserd; format check736files.
-PASS: e2e_groups.py registry. CI plan running at first source checkpoint.
+PASS: e2e_groups.py registry and CI plan81tests.
 
-Pending: focused real Postgres/Redis A10a/run/known-wizard proof, native Chromium
-captcha and inherited A9 chooser/takeover proof, A9 final3DB regressions,
-whole Apply/browser checks, independent composed review and final runtime.
+Follow-up source: reuse Greenhouse's exact code-label rule for Deterministic
+known wizards, with existing sign-in/captcha priority. Workday and LinkedIn
+later-step captcha/email_code preserve earlier answers and ordered replay.
+Private wait/read checks now call Leases.current to restore Redis state before
+checking the exact owner/purpose; ordinary model tool ownership is unchanged.
+
+PASS129: new wizard/captcha/code pure tests plus A15 wizard/address cases.
+PASS63: final A10a pure and unchanged B12a handoff unit checks, including both
+SignIn Done and Cancel refusing every Apply wait reason.
+First focused database batch:1233passed and3 inherited A9 tests failed because
+they refreshed unflushed begin state under autoflush=False. Their setup now
+commits the worker's begin transaction before close, and flushes the same-tx
+marker recheck. Assertions are retained; whole-module rerun in progress.
+Native Chromium:5passed in84.25s (all4 inherited A9 chooser/app-turn cases and
+new private captcha wait/person X click/passive read/resume/submit refusal).
+Native paced takeover:1passed in17.10s. Initial probe used200characters, the
+existing PASTE_FROM threshold; corrected to199 to exercise per-character
+checks. The test observes partial typing before takeover and stable text after.
+The new captcha native test gained an additional same-tab value-retention
+assertion after that5case pass; this final assertion still needs a rerun.
+
+Owned image retained for root's runtime continuation:
+jobapp-browser:apply-person-wait-247
+Built only browserd from the checkpoint source; fake-page fixtures mount from
+the running checkout. Both native fixture stacks and all their volumes were
+removed by their finally paths. Image build mutex released to root after build.
+
+Pending at follow-up source checkpoint: whole Apply/browser not-docker batch
+on slot1, then the actual Redis/private-HTTP restart test added after its
+collection. The whole batch includes4 persisted later-step wizard waits and
+the3 corrected A9 recovery fixtures. Actual Playwright A9/A10a/later-step
+captcha/email-code UI/API journeys, a native incidental-chooser race during an
+app Attach, independent composed review and final runtime remain required.
 No image built or stack started before first source checkpoint. Root granted
 heavy slot1 after source checks. No deployment or real account/site/mail used.

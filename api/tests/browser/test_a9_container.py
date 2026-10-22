@@ -11,6 +11,7 @@ test_browser_container.py (built under a tag of its own unless BROWSER_TEST_IMAG
 
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -207,5 +208,42 @@ def test_an_already_open_chooser_is_not_consumed_by_an_app_attach_button(stack: 
         assert accepted["ok"]
         assert "cv.pdf" not in lease.snapshot()
         assert f"letter.pdf:{len(PDF_OF)}" in lease.snapshot()
+    finally:
+        lease.end()
+
+
+def test_take_over_stops_real_chromium_typing_already_in_progress(stack: Stack) -> None:
+    lease = ManualLease(stack)
+    value = "A" * 199  # Below PASTE_FROM: exercise the paced per-character input checks.
+    read = """
+import asyncio
+from browserd import probe
+from playwright.async_api import async_playwright
+async def main():
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{probe.cdp_port()}")
+        print(await browser.contexts[0].pages[0].locator('#first_name').input_value())
+asyncio.run(main())
+"""
+    try:
+        assert lease.tool("browser_navigate", url=FORM)["ok"]
+        name = ref(lease.snapshot(), "textbox", "First name")
+        lease.turn(None)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            typing = pool.submit(lease.tool, "browser_type", ref=name, text=value)
+            for _ in range(60):
+                current = stack.python(read).strip()
+                if current:
+                    break
+            else:
+                raise AssertionError("typing never reached the native input")
+            assert len(current) < len(value)
+            lease.turn(str(uuid.uuid4()))
+            assert typing.result(timeout=120)["error"] == "person_input"
+        stopped = stack.python(read).strip()
+        assert stopped.startswith(current)
+        assert len(stopped) < len(value)
+        assert stack.python(read).strip() == stopped
+        assert "Not submitted" in lease.snapshot()
     finally:
         lease.end()

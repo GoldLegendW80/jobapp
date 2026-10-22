@@ -546,8 +546,10 @@ def test_worker_death_keeps_the_durable_close_request_and_a_known_confirmation(
         s.commit()
     with factory() as s:
         assert manual.begin(s, app_id, AT)
+        s.commit()
         if seen:
             manual.saw(s, app_id, AT)
+            s.commit()
         manual.cancel(s, person_a.user_id, app_id, AT, final_watch=True)
         s.commit()
     with factory() as s:
@@ -564,6 +566,7 @@ def test_a_recovery_read_cannot_close_a_new_live_attempt(
     app_id = start_manual(db, person_a)
     with factory() as s:
         assert manual.begin(s, app_id, AT)
+        s.flush()
         # The old marker was cleared when the new session began. Recheck under the gate lock.
         assert manual.close(s, app_id, "interrupted", AT, ended_only=True) == "filling"
         s.commit()

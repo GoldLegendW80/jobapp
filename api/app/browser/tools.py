@@ -58,7 +58,7 @@ class LeaseTools:
         return await self.client.linkedin_open(self.lease_id, self._token, job_id)
 
     async def _apply_wait(self, action: str, reason: str | None = None) -> dict[str, Any]:
-        await self._held()
+        await self._owned_apply()
         answer = await self.client.apply_wait(self.lease_id, self._token, action, reason)
         lease = answer.get("lease")
         if not isinstance(lease, dict):
@@ -68,7 +68,18 @@ class LeaseTools:
         return lease
 
     async def _person_snapshot(self) -> dict[str, Any]:
-        return await self._call("browser_snapshot", {"passive": True})
+        await self._owned_apply()
+        return await self.client.tool(
+            self.lease_id, self._token, "browser_snapshot", {"passive": True}
+        )
+
+    async def _owned_apply(self) -> None:
+        # current() restores a lost Redis mirror from browserd before checking ownership.
+        lease = (await self.leases.current(self.user_id)).lease
+        if lease is None or lease.lease_id != self.lease_id:
+            raise BrowserError("ended")
+        if lease.purpose != "apply_fill":
+            raise BrowserError("refused")
 
     async def _call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._held()

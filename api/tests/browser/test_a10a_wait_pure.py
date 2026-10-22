@@ -15,32 +15,45 @@ from browserd.leases import LeaseError
 from tests.browser.test_browserd_unit import Clock, manager, request, run
 
 
-def test_later_wizard_captcha_keeps_prior_answers_and_ordered_steps() -> None:
+@pytest.mark.parametrize("kind", ["workday", "linkedin"])
+@pytest.mark.parametrize("reason", ["captcha", "email_code"])
+def test_later_wizard_captcha_keeps_prior_answers_and_ordered_steps(kind, reason) -> None:
     from app.apply.ats import generic
+    from app.apply.ats.linkedin import LinkedIn
     from app.apply.ats.workday import Workday
     from tests.apply.a15_support import BASE, WizardForm, url
+    from tests.apply.a16_support import URL, LinkedInForm
     from tests.apply.test_a15_wizards import context, rows
 
     async def go() -> None:
-        form, adapter = WizardForm(), Workday(BASE)
+        form, adapter, address = (
+            (WizardForm(), Workday(BASE), url())
+            if kind == "workday"
+            else (LinkedInForm(), LinkedIn(), URL)
+        )
         click = form.click
 
         async def challenge(ref, element=""):
             result = await click(ref, element)
             if form.step == 1:
-                form.extras = [("checkbox", "I'm not a robot")]
+                form.extras = [
+                    ("checkbox", "I'm not a robot")
+                    if reason == "captcha"
+                    else ("textbox", "Verification code")
+                ]
             return result
 
         form.click = challenge
-        assert await adapter.open(form, url()) == ""
+        await form.put_file("cv.pdf", b"%PDF-synthetic")
+        assert await adapter.open(form, address) == ""
         first = await adapter.fill_form(form, context())
-        assert first.needs_person == "captcha"
+        assert first.needs_person == reason
         assert first.steps == ["Next"]
         original = [o.field.key for o in first.outcomes]
         form.extras, form.click = [], click
         final = await adapter.fill_form(form, context())
         assert not final.stopped
-        assert final.steps == ["Next", "Next"]
+        assert final.steps == (["Next", "Next"] if kind == "workday" else ["Next", "Review"])
         assert [o.field.key for o in final.outcomes][: len(original)] == original
         approved = rows(final)
         replay = generic.configured(adapter, approved)
@@ -92,11 +105,12 @@ def test_private_wait_has_fixed_time_person_input_passive_reads_and_active_remai
         assert lease.last_input == last_input
         # A stale sign-in handoff must not accept this wait's Done or Cancel.
         lease.scratch[handoff.KEY] = SimpleNamespace(done=True)
-        route = next(r for r in app.ROUTES if r.pattern.pattern.endswith("handoff/done"))
-        with pytest.raises(LeaseError, match="not_waiting"):
-            await route.handler(
-                svc, None, route.pattern.fullmatch(f"/leases/{lease.lease_id}/handoff/done")
-            )
+        for action in ("done", "cancel"):
+            route = next(r for r in app.ROUTES if r.pattern.pattern.endswith(f"handoff/{action}"))
+            with pytest.raises(LeaseError, match="not_waiting"):
+                await route.handler(
+                    svc, None, route.pattern.fullmatch(f"/leases/{lease.lease_id}/handoff/{action}")
+                )
         await waiting_route(svc, lease.lease_id, token, "resume")
         assert lease.state == "active"
         assert not lease.person_input

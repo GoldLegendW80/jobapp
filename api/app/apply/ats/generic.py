@@ -284,6 +284,13 @@ class PersonAnswer:
 class Deterministic(Generic):
     """Known site with ordered steps, filled without the form or answer model."""
 
+    def pending_at(self, root: Node) -> str:
+        from app.apply.ats.greenhouse import email_code
+
+        return super().pending_at(root) or (
+            "email_code" if email_code(root, self.submit_names) else ""
+        )
+
     def _fill_report(self, factory):
         report = getattr(self, "_waiting_report", None)
         self._waiting_report = None
