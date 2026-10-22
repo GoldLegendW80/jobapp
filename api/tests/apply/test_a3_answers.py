@@ -588,8 +588,25 @@ def test_the_option_vocabularies_never_share_an_option() -> None:
         ("Basic (C2)", None),
         ("B2 / C1", None),
         ("Professional working", None),
+        ("Professional", None),
+        ("Professionnelle", None),
         ("", None),
     ],
 )
 def test_a_level_reads_as_a_grade_and_a_band(level: str, expected: object) -> None:
     assert language_level(level) == expected
+
+
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        ("Professional", (None, "fluent")),
+        ("Professionnel", (None, "fluent")),
+        ("Professional (C1)", ("c1", "fluent")),
+        ("Professional (B2)", None),
+        ("Fluent", (None, "fluent")),
+        ("Professional working", None),
+    ],
+)
+def test_an_option_also_reads_professional_as_fluent(level: str, expected: object) -> None:
+    assert language_level(level, option=True) == expected
