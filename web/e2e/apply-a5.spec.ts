@@ -34,7 +34,8 @@ test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 const WHY = "Why Example Robotics?";
 /** What the recorded stream `apply_answer` submits for the first question it is asked. */
 const ANSWERED =
-  "The robots this team builds are the kind of work I want to do, and this role puts agents in front of real operations.";
+  "The robots this team builds are the kind of work I want to do, and this role puts agents in front of real operations. " +
+  "I would bring my agent and evaluation work to the team.";
 const EDITED = "I want to build agents for robots that leave the lab.";
 /** The fake forms server as the stack's browser reaches it (tests/ats-forms-stub.compose.yml). */
 const STACK_FORMS = "http://atsforms:8080";
