@@ -191,7 +191,7 @@ describe("the review queue page", () => {
       const ready = await screen.findByRole("article", {
         name: /Robotics Engineer 1/,
       });
-      const answer = within(ready).getByRole("textbox", {
+      const answer = await within(ready).findByRole("textbox", {
         name: "Answer for Why Example Robotics?",
       });
       await user.type(answer, "I build agents.");

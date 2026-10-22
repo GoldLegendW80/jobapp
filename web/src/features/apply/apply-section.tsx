@@ -45,6 +45,7 @@ import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot } from "./live-view-slot";
 import { ManualPanel } from "./manual-panel";
 import { NeedsPerson } from "./needs-person";
+import { HandoffBanner } from "@/features/browser/handoff-banner";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
 import { ShotView } from "./shot-view";
@@ -345,6 +346,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
+          {phase === "filling" ? <HandoffBanner /> : null}
           <NeedsPerson
             application={application}
             job={job}

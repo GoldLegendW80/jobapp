@@ -56,7 +56,7 @@ function leaseOf(purpose: string, startedAt = LEASE_START) {
           automation: true,
           state: "active",
           wait_reason: null,
-          wait_site: null,
+          wait_host: null,
           wait_deadline: null,
           started_at: startedAt,
           active_s: 30,
