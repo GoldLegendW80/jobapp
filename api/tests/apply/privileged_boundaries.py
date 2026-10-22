@@ -34,6 +34,10 @@ class Scan(ast.NodeVisitor):
         if isinstance(node, ast.JoinedStr):
             return "".join(self.value(v) for v in node.values)
         if isinstance(node, ast.Call):
+            if self.value(node.func) in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
+                return f"{self.value(node.args[0])}.{self.value(node.args[1])}"
+            if self.value(node.func) == "functools.partial" and node.args:
+                return self.value(node.args[0])
             return self.value(node.func)
         return ""
 
@@ -75,7 +79,9 @@ class Scan(ast.NodeVisitor):
         self.scopes.append(node.name)
         # Parameters shadow imports in their lexical scope.
         args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
-        self.names.append({arg.arg: arg.arg for arg in args})
+        self.names.append(
+            {arg.arg: self.value(arg.annotation) if arg.annotation else arg.arg for arg in args}
+        )
         for item in node.body:
             self.visit(item)
         self.names.pop()
@@ -85,6 +91,7 @@ class Scan(ast.NodeVisitor):
         self.visit_FunctionDef(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.names[-1][node.name] = f"{self.module}.{node.name}"
         self.scopes.append(node.name)
         self.names.append({})
         self.generic_visit(node)
@@ -106,6 +113,8 @@ class Scan(ast.NodeVisitor):
             ("app.agents.", "app.documents.")
         ):
             kind = "mail"
+        if name.startswith("app.gmailmcp.") and name.endswith((".send", ".send_message")):
+            kind = "provider"
         if any("/messages/send" in value for value in values):
             kind = "provider"
         if kind:
@@ -115,7 +124,15 @@ class Scan(ast.NodeVisitor):
 
 def scan(source: str, module: str) -> list[Call]:
     visitor = Scan(module)
-    visitor.visit(ast.parse(source))
+    tree = ast.parse(source)
+    # Module globals are available when a function runs, including imports declared after it.
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            visitor.visit(node)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                visitor.bind(target, node.value)
+    visitor.visit(tree)
     return visitor.calls
 
 
@@ -126,4 +143,7 @@ def permitted(call: Call) -> bool:
         )
     if call.kind == "mail":
         return call.module == "app.mail.gate"
-    return call.module == "app.gmailmcp.server" and call.scope == "Service.send"
+    return call.module == "app.gmailmcp.server" and call.scope in {
+        "Service.send",
+        "build_app.send_message",
+    }

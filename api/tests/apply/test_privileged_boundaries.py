@@ -33,6 +33,13 @@ from tests.apply.privileged_boundaries import permitted, scan
         "send = provider.send_message; send(raw)",
         "client._send('POST', f'{base}/messages/send', body=raw)",
         "post = client.post; endpoint = '/messages/send'; post(endpoint, data=raw)",
+        "click = getattr(client, 'gate_click'); click(a, b, c)",
+        "from functools import partial as p; click = p(client.gate_click, a); click(b, c)",
+        "def run():\n    click(a, b, c)\nfrom app.browser.tools import gate_click as click",
+        "from app.gmailmcp.server import Service as Provider; "
+        "client = Provider(); send = client.send; send(key, raw)",
+        "from app.gmailmcp.server import Service as Provider\n"
+        "def run(client: Provider):\n    send = client.send\n    send(key, raw)",
     ],
 )
 def test_forbidden_sample_callers_are_detected(source):
