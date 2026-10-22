@@ -43,3 +43,23 @@ containers each have NanoCpus 1000000000 and Memory 0 (the existing agent-test
 configuration), with OOMKilled false and RestartCount 0. They were removed by the
 wrapper. No app service memory setting, cap, budget, timeout, retry, renderer image,
 approved source branch, production service, credential or external account changed.
+
+## Whole-suite integration follow-up
+
+The first whole Apply/mail plus the three composed contract files finished with 8,739
+passes and five failures in 559.92 seconds. All five were in test_a14_lifecycle:
+Review/Full auto cancel and company-cap variants of
+`test_local_stop_after_mime_never_becomes_a_provider_refusal`, and
+`test_new_approval_during_mime_supersedes_the_old_send_authority`.
+Their live pause callbacks also injected database events. Repeating a pause read repeated
+those events while the final locks were held: the cancel assertions failed, the cap row
+was inserted again, or a second reapproval waited on those locks. The production pause
+reader correctly failed closed, so the tests saw paused instead of their intended code.
+The injected event now happens once. The callback still answers each subsequent live
+switch read, and both tests additionally require at least two switch reads. All original
+refusal, zero-mint/provider, atomic audit, one-use and superseding-authority assertions
+remain. Production mail is unchanged.
+
+The corrected lifecycle file, all 72 new boundary cases and the requested ingestion
+worker/parser/renderer contract files passed together: 179 tests in 63.23 seconds, through
+ops/agent-test.sh with -n 2 and not docker. A full repeat is pending at this checkpoint.

@@ -151,6 +151,7 @@ def test_local_stop_after_mime_never_becomes_a_provider_refusal(
     application, auth, when, (settings, app, mcp) = approved_email(db, person_a, fake, mode)
     minted = []
     switch_errors = []
+    switch_reads = []
     original_call = mail_gate._call_send
 
     async def traced_call(*args, **kwargs):
@@ -170,6 +171,11 @@ def test_local_stop_after_mime_never_becomes_a_provider_refusal(
     monkeypatch.setattr(mail_gate.send_key, "mint", lambda *args: minted.append(args))
 
     async def switches():
+        switch_reads.append(None)
+        # The pause reader is called again under the final locks. The injected event
+        # happens once; subsequent reads observe it without mutating it a second time.
+        if len(switch_reads) > 1:
+            return gate.Switches(enabled=case != "disabled", paused=case == "pause")
         with factory() as other:
             current = other.get(Application, application.id)
             assert current.state in {State.approved, State.held}
@@ -257,6 +263,7 @@ def test_local_stop_after_mime_never_becomes_a_provider_refusal(
 
     row = asyncio.run(scenario())
     assert not switch_errors
+    assert len(switch_reads) >= 2
     assert row.result == "failed"
     assert row.refusal_code == code
     assert minted == []
@@ -479,8 +486,12 @@ def test_new_approval_during_mime_supersedes_the_old_send_authority(db, factory,
     fake.seed("alice")
     application, auth, when, (settings, app, mcp) = approved_email(db, person_a, fake, Mode.review)
     newer = []
+    switch_reads = []
 
     async def reapprove():
+        switch_reads.append(None)
+        if newer:
+            return gate.Switches(enabled=True, paused=False)
         with factory() as other:
             current = other.get(Application, application.id)
             gate.set_answer(
@@ -521,6 +532,7 @@ def test_new_approval_during_mime_supersedes_the_old_send_authority(db, factory,
     result = asyncio.run(scenario())
     assert result.result == "failed"
     assert result.refusal_code == "not_authorised"
+    assert len(switch_reads) >= 2
     assert fake.sent == []
     db.expire_all()
     assert db.get(Application, application.id).state is State.ready
