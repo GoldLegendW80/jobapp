@@ -32,11 +32,10 @@ an approval of an original snapshot is not an approval of the combined tree.
 | A18a to A18c: complete external profiles | Backend, UI, schema and four fake-site browser flows pass | Finish backend regression, independent review and final composed checks | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
-Current development streams: manual/session recovery, bounded person-action waits and shared
-exclusion/duplicate matching. A15 and A18 fixture journeys now pass; A18's full backend run is
-in progress. LinkedIn's six-flow acceptance and the recovery journeys remain. The filed answer,
-document-edit and fake-ATS follow-ups, shared email confirmation, final privacy proof and
-independent reviews also remain.
+Shared exclusion/duplicate matching is implemented. A15 and A18 fixture journeys pass, and
+A18's affected backend run passed 5,278 cases. Current runtime work covers LinkedIn's six-flow
+acceptance and manual/person-action recovery. The filed answer, document-edit and fake-ATS
+follow-ups, shared email confirmation, final privacy proof and independent reviews remain.
 
 The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
 (manual recovery), #581 (editing a letter answer), #594 (document rendering wait), #587
@@ -182,6 +181,14 @@ recorded separately from unfinished implementation.
   correction locally made all 113 manual/start cases pass. Shared Unicode/canonical/cap
   checks passed 1,085 cases. Its worktree is clean and test services removed; final independent
   review and the complete composed run remain.
+- The composed captcha journey found that the server allowed person input while its live
+  viewer remained read-only. Source `4c9d38cf` is integrated as `25f86202`: job and Account
+  viewers now use the server-owned waiting state and remount when ownership changes. The
+  frontend suite passed 438 cases, with 32 final focused cases, typecheck and lint passing.
+  The actual recovery journey rerun remains required. A native incidental-chooser regression
+  passed with a separate picker opened during the paced Attach approach; the app refused the
+  changed chooser without uploading either file. These results do not replace the pending
+  immediate Submit-and-Close and ended-session queue journeys.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
@@ -193,12 +200,12 @@ recorded separately from unfinished implementation.
   lint passed. These static checks do not replace the pending combined regression journeys.
 
 The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
-on A9's recovery follow-ups (#573), A15, A16 and the final cross-capability verification. Existing
+on the recovery journeys, A16, the filed follow-ups and final cross-capability verification. Existing
 approved branches receive no writes from this task. A read-only comparison on 2026-10-22 found
 concurrent updates to #579, #538, #521, #518 and #505 elsewhere; #521's update is a merge of main.
 The original snapshots named above remain the isolated integration baseline until explicitly
 reconciled and retested.
 
-Read-only board refresh on 2026-10-22: 10 cards Building, 1 In review, 2 Fix & re-check and 25
-Approved across the project. No board changes were applied. A fresh fetch confirms current
+Read-only board refresh on 2026-10-22: 12 cards Building, 0 In review, 4 Fix & re-check and 24
+Approved across the project. No board changes were applied. The last fetch confirms
 `origin/main` (`e369e41d`) is already an ancestor of this integration branch.
