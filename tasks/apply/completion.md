@@ -164,6 +164,24 @@ recorded separately from unfinished implementation.
   the same adapter and prior report across wizard continuation, and remain distinct from
   sign-in. Pure/browser/wizard checks passed 618 cases, with 19 banner cases also passing.
   Database, email-code detection and native/browser acceptance continue.
+- A18 final evidence `fd6674d1` is integrated as `a648592a`: four actual Chromium flows
+  passed, 5,278 affected backend cases passed (including all 22 A10b cases and the exact
+  seven-job/two-cron queue assertion), and 429 frontend cases passed with typecheck/lint.
+  Twenty inspected screenshots are retained. Its owned stack, four tags and temporary
+  settings were removed; the borrowed renderer was preserved.
+- A10a follow-up `18f01b7b` and final evidence `24f0c565` are integrated as `f1e21489` and
+  `3b773b39`. The whole Apply/browser run passed 7,167 cases, then three additional real
+  Redis/private-HTTP cases passed. Six distinct native cases passed, including paced-input
+  takeover and same-tab captcha value retention. The fresh runtime continuation owns the
+  remaining UI journeys and incidental chooser race, with only its browser test image
+  transferred from the builder.
+- A2 source `acd0c580`, `3035910d` and `f81c9181` is integrated as `ef253b8d`, `739bde8d`
+  and `771ee1c3`. All seven new real-database duplicate/warning cases failed before the fix
+  and passed after. The Jobs/Apply run passed 6,280 cases with 15 existing personal-source
+  skips and three stale manual fixtures from before `18f01b7b`; applying that exact existing
+  correction locally made all 113 manual/start cases pass. Shared Unicode/canonical/cap
+  checks passed 1,085 cases. Its worktree is clean and test services removed; final independent
+  review and the complete composed run remain.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
