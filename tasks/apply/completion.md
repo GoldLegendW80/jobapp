@@ -22,20 +22,21 @@ an approval of an original snapshot is not an approval of the combined tree.
 | Capability | Existing implementation | Completion work | Evidence required |
 |---|---|---|---|
 | A1 to A8: forms, answers, fill, approval, reports, base adapters | Main plus existing apply snapshots | Audit interactions and refusal paths; fix specification gaps | Complete apply tests and fake ATS journeys |
-| A9: Apply myself | #517 snapshot | Check manual/session recovery and file chooser follow ups | Manual journey, no app submit click, isolation |
-| A10a: retries and needs you | #516 snapshot | Owner's HTTP rules and the full 30-minute captcha/email-code wait outside active lease time | Injected-clock failure, timer and recovery tests |
-| A10b: sign-in recovery | Missing | #578: attended and unattended handoff, later callback, expired sessions and lease survival | Fake login walls, idempotent resume, Full auto becomes review |
+| A9: Apply myself | #517 plus recovery and chooser source integrated | Finish native and composed manual/session regression checks | Manual journey, no app submit click, isolation |
+| A10a: retries and needs you | HTTP rules and bounded wait source integrated | Complete email-code, clock, native and composed recovery verification | Injected-clock failure, timer and recovery tests |
+| A10b: sign-in recovery | Backend, UI and fake-site journeys integrated | Finish composed regression checks | Fake login walls, idempotent resume, Full auto becomes review |
 | A11 to A13c: caps, Like queue and Full auto | Main plus #591, #598, #470 | Verify composed decision, hold, rehearsals, model check, pauses and final rechecks | Counted fake submissions, clock/cap tests and journeys |
-| A14: email applications | Missing; required mail send components also missing | #251: draft, exact authorisation, provider boundary, send gate, uncertainty resolution and UI | Fake Gmail only, immutable attachments, no duplicate send |
-| A15: Workday, Google Careers and VIE | Source integrated; acceptance pending | #252: bounded wizards, sign-in resume, labelled controls and file choosers | Fake multi-step applications; Full auto hands over to review |
+| A14: email applications | Draft, gate, provider, UI and infrastructure integrated | Finish shared confirmation consistency, privacy and independent review | Fake Gmail only, immutable attachments, no duplicate send |
+| A15: Workday, Google Careers and VIE | Five fake-site browser tests pass | Final composed regression and review screenshots | Fake multi-step applications; Full auto hands over to review |
 | A16: LinkedIn Easy Apply | Source checkpoint integrated, acceptance pending | #253: opted-in modal flow, company-site fallback and LinkedIn pacing | Fake modal, consent revocation/checkpoint, cap and isolation tests |
-| A18a to A18c: complete external profiles | Backend, UI and additive schema integrated; acceptance pending | #254, #255, #256: persisted sections, factual fill, protected-field policy, review/save gate and UI | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
+| A18a to A18c: complete external profiles | Backend, UI, schema and four fake-site browser flows pass | Finish backend regression, independent review and final composed checks | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
-Current development streams: manual/session recovery and the bounded person-action wait;
-Workday/Google Careers/VIE acceptance; LinkedIn modal acceptance. External-profile runtime
-acceptance needs a fresh debugging pass from the preserved diagnostic handoff. The filed
-answer, exclusion and fake-ATS follow-ups, final privacy proof and independent reviews follow.
+Current development streams: manual/session recovery, bounded person-action waits and shared
+exclusion/duplicate matching. A15 and A18 fixture journeys now pass; A18's full backend run is
+in progress. LinkedIn's six-flow acceptance and the recovery journeys remain. The filed answer,
+document-edit and fake-ATS follow-ups, shared email confirmation, final privacy proof and
+independent reviews also remain.
 
 The audit also covers filed follow-ups: #335 (shared exclusion and duplicate matching), #573
 (manual recovery), #581 (editing a letter answer), #594 (document rendering wait), #587
