@@ -729,9 +729,9 @@ def test_the_item_kept_for_one_value_is_the_first_in_document_order() -> None:
             )
         )
     order = {str(first): 0, str(second): 1}
-    groups, left_out = merge._variants(rows, {}, order)
+    groups, left_out, refused = merge._variants(rows, {}, order)
     ((variant,),) = (list(one.values()) for one in groups.values())
-    assert (variant.item.value, left_out) == (["CDI", "Stage"], 0)
+    assert (variant.item.value, left_out, refused) == (["CDI", "Stage"], 0, 0)
     assert [one["document_id"] for one in variant.citations] == [str(first), str(second)]
 
 
