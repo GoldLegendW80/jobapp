@@ -12,11 +12,12 @@ Source contract
 
 Light checks
 - python -m pytest tests/apply/test_a15_addresses.py tests/apply/test_a15_wizards.py -q -n0:
-  105 passed (closed-world address/route neighbours, ordered replay, changed summaries/targets,
+  106 passed before typed/inline summary follow-ups (closed-world address/route neighbours,
+  ordered replay, changed summaries/targets,
   sign-in cancel/timeout/expiry, payment, profile walls, required early steps and field shapes).
 - ruff check app/apply plus new A15 tests: passed.
 - pnpm --dir web run typecheck: passed.
-- pnpm --dir web exec vitest run src/features/apply: 355 passed, 13 files.
+- pnpm --dir web exec vitest run src/features/apply: 356 passed, 13 files after integration.
 - python3 .github/scripts/ci_plan_test.py: 81 passed.
 - python3 .github/scripts/e2e_groups.py: passed, apply-a15 automatically registered by prefix.
 - node --check tests/ats_forms/a15/wizard.js: passed.
@@ -27,9 +28,20 @@ Owned checks
   Three deterministic adapters, owner refusal, exactly one gate click, early-step person
   continuation, marker forgery refusal, competing last-answer writes and Full auto review.
 
+Broad and affected checks
+- ops/agent-test.sh --name apply-a15-whole tests/apply tests/browser tests/agents
+  -m 'not docker' -n2 -q: 8,435 passed, 19 skipped, one failed and seven setup errors in
+  538.27 seconds. The failure was a stale exact adapter list; the errors were stale exact
+  browser fixture environment expectations after A16 added its explicit local fixture setting.
+  Both assertions were updated to the exact new contract, retaining production environment checks.
+- Follow-up owned/adapter check: 420 passed in 8.29 seconds.
+- Follow-up pure A15, typed/inline summary and browser Compose check: 149 passed in 1.40 seconds.
+- The 19 skips are 15 existing real CLI/local-stub opt-in tests (JOBAPP_REAL_CLI_STUB unset) and
+  four existing live Anthropic credential tests. No skip was added. Docker-marked tests were
+  explicitly excluded by the command's marker expression; the real browser journey is separate.
+
 Pending
-- Whole tests/apply and affected browser/agent tests after integration with parallel A14/A16.
-- Final frontend lint and real Playwright apply-a15 journey on isolated fixture stack.
+- Real Playwright apply-a15 journey on isolated fixture stack. Final frontend lint passed.
 - Human paced heavy Workday active duration and screenshots; 48 MiB fixture allocation, shared
   900 second apply lease maximum unchanged. If measured active time exceeds 12 minutes, propose
   an adapter-specific lease setting from evidence; do not silently raise the shared maximum.

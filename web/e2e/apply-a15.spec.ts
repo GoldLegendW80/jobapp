@@ -203,20 +203,35 @@ test("heavy Workday account handoff and ordered wizard submit once after approva
     .getByRole("button", { name: "Apply (Review first)", exact: true })
     .click();
   await signIn(false);
+  const activeSamples: number[] = [];
   await expect
-    .poll(async () => (await app(job)).state, { timeout: 300_000 })
+    .poll(
+      async () => {
+        const current = await page.request.get("/api/browser/sessions/current");
+        if (current.ok()) {
+          const view = (await current.json()) as {
+            lease: { purpose: string; active_s: number } | null;
+          };
+          if (view.lease?.purpose === "apply_fill")
+            activeSamples.push(view.lease.active_s);
+        }
+        return (await app(job)).state;
+      },
+      { timeout: 300_000 },
+    )
     .toBe("ready");
   const upperBoundSeconds = (Date.now() - began) / 1000;
   await testInfo.attach("workday-human-paced-duration", {
     body: JSON.stringify({
       wall_seconds_including_handoff: upperBoundSeconds,
+      sampled_active_seconds: activeSamples,
       heavy_fixture_mib: 48,
       lease_max_unchanged_s: 900,
     }),
     contentType: "application/json",
   });
   console.log(
-    `A15 Workday human paced duration including handoff: ${upperBoundSeconds}s`,
+    `A15 Workday active samples: ${activeSamples.join(",")}; wall including handoff: ${upperBoundSeconds}s`,
   );
   expect((await stub.submissions()).length).toBe(before);
   await shots(page, "workday-review");

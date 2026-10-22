@@ -340,3 +340,84 @@ def test_workday_summary_compares_the_displayed_yes_no_choice():
         assert form.spec(item.label).value == "No"
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("person_override", [True, False])
+def test_french_no_choice_replays_from_normal_and_person_boolean_answers(person_override):
+    from dataclasses import replace
+
+    from tests.apply.a4_support import Spec
+
+    label = "Will you now or in the future require visa sponsorship?"
+
+    def form():
+        page = WizardForm(french=True)
+        page.fields.insert(3, Spec(label, "yesno", True))
+        page.groups[0] += 1
+        return page
+
+    async def go():
+        first = form()
+        adapter = Workday(BASE)
+        assert await adapter.open(first, url()) == ""
+        found, code = await adapter.discover(first)
+        assert not code
+        item = next(f for f in found.fields if f.kind == "yes_no")
+        if person_override:
+            adapter.person_answers = {
+                item.key: generic.PersonAnswer(item.label, item.kind, tuple(item.options), False)
+            }
+        own = replace(context(), posting=answers.Posting.at("Paris, France"))
+        report = await adapter.fill_form(first, own)
+        assert not report.stopped
+        approved = rows(report)
+        if person_override:
+            approved = [
+                replace(row, value=False, source="person") if row.key == item.key else row
+                for row in approved
+            ]
+        fresh, opened = form(), Workday(BASE)
+        assert await opened.open(fresh, url()) == ""
+        replay = generic.configured(opened, approved)
+        for stage in generic.stages(replay, approved):
+            checked = await submit._refilled(replay, fresh, stage)
+            assert isinstance(checked, base.Discovery), checked
+            if replay.step < len(replay.steps):
+                assert await generic.advance(replay, fresh, checked) == ""
+        assert await generic.recheck(replay, fresh, checked) == ""
+        for changed in ("Yes", "Maybe"):
+            fresh.spec(label).value = changed
+            found, code = await replay.discover(fresh)
+            assert not code
+            assert await generic.recheck(replay, fresh, found) == "form_changed"
+        assert not fresh.gate_clicks
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("shape", ["inline", "nested", "mixed"])
+def test_summary_value_shapes_preserve_the_exact_typed_multiset(shape):
+    def group(label, value, inline):
+        body = f": {value}" if inline else f":\n    - generic: {value}"
+        return f'  - group "{label}"{body}'
+
+    adapter = Workday()
+    adapter.expected = [("First name", "Alex"), ("Sponsorship", False)]
+    snapshot = '- region "Application summary":\n' + group("First name", "Alex", shape != "nested")
+    snapshot += "\n" + group("Sponsorship", "Non", shape == "inline")
+    root = base.parse_snapshot(snapshot)
+    assert not adapter.summary_problem(root)
+    assert adapter.summary_problem(base.parse_snapshot(snapshot.replace("Non", "Oui")))
+    assert adapter.summary_problem(
+        base.parse_snapshot(snapshot + "\n" + group("First name", "Alex", True))
+    )
+    missing = '- region "Application summary":\n' + group("Sponsorship", "Non", True)
+    assert adapter.summary_problem(base.parse_snapshot(missing))
+
+
+def test_summary_duplicate_labels_keep_boolean_and_text_provenance():
+    adapter = Workday()
+    adapter.expected = [("Answer", False), ("Answer", "No")]
+    snapshot = '- region "Application summary":\n  - group "Answer": No\n  - group "Answer": Non'
+    assert not adapter.summary_problem(base.parse_snapshot(snapshot))
+    assert adapter.summary_problem(base.parse_snapshot(snapshot.replace("Non", "Oui")))

@@ -11,7 +11,7 @@ BASE = "http://atsforms:8080"
 
 
 class WizardForm(CustomForm):
-    def __init__(self, *, kind="workday", wall="", variant="", **kwargs):
+    def __init__(self, *, kind="workday", wall="", variant="", french=False, **kwargs):
         steps = [
             [
                 Spec("First name", "text", True),
@@ -27,7 +27,7 @@ class WizardForm(CustomForm):
             steps[0].append(Spec("Motivation message", "text", True))
         super().__init__(steps, **kwargs)
         self.files = ("cv.pdf", "letter.pdf")
-        self.kind, self.wall, self.variant = kind, wall, variant
+        self.kind, self.wall, self.variant, self.french = kind, wall, variant, french
         self.history = []
         self.parsed = False
         self.expired = False
@@ -69,6 +69,8 @@ class WizardForm(CustomForm):
                 if not spec.value:
                     continue
                 value = "Changed answer" if self.variant == "summary" else spec.value
+                if self.french and spec.kind == "yesno":
+                    value = {"No": "Non", "Yes": "Oui"}.get(value, value)
                 lines += [
                     f"      - group {json.dumps(spec.label)}:",
                     f"        - generic: {json.dumps(value)}",
@@ -76,6 +78,10 @@ class WizardForm(CustomForm):
             body = body.replace(
                 '    - button "Submit application"',
                 "\n".join(lines) + '\n    - button "Submit application"',
+            )
+        if self.french:
+            body = body.replace('button "Yes"', 'button "Oui"').replace(
+                'button "No"', 'button "Non"'
             )
         return body
 

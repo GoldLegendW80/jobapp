@@ -7,6 +7,7 @@ Only ordinary guarded clicks advance a step; the gate owns the final submission.
 
 import json
 import re
+from collections import Counter
 from collections.abc import Sequence
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
@@ -132,12 +133,7 @@ class Wizard(generic.Deterministic):
     def approved(self, rows: Sequence[generic.Row]) -> None:
         super().approved(rows)
         self.expected = [
-            (
-                r.label,
-                ("Yes" if r.value else "No")
-                if getattr(r, "kind", "") == "yes_no" and isinstance(r.value, bool)
-                else r.value,
-            )
+            (r.label, base.summary_answer(r.value, getattr(r, "kind", "")))
             for r in rows
             if r.value is not None and not r.key.startswith(("designated:", "skipped:"))
         ]
@@ -154,12 +150,34 @@ class Wizard(generic.Deterministic):
         if len(summaries) != 1:
             return True
         shown = [
-            (base.fold(n.name), base.fold(" ".join(n.words()[1:])))
+            (base.fold(n.name), base.fold(base.summary_text(n)))
             for n in summaries[0].children
             if n.role == "group" and n.name
         ]
-        expected = [(base.fold(k), base.fold(str(v))) for k, v in self.expected]
-        return sorted(shown) != sorted(expected)
+        expected = [(base.fold(k), v) for k, v in self.expected]
+        remaining = Counter(shown)
+        # Exact text consumes its own row first; a boolean cannot take that row's place.
+        for label, value in expected:
+            if isinstance(value, bool):
+                continue
+            if not isinstance(value, str) or remaining[(label, base.fold(value))] < 1:
+                return True
+            remaining[(label, base.fold(value))] -= 1
+        for label, value in expected:
+            if not isinstance(value, bool):
+                continue
+            candidate = next(
+                (
+                    text
+                    for text in ("yes", "oui", "no", "non")
+                    if remaining[(label, text)] and base.summary_matches(value, text)
+                ),
+                None,
+            )
+            if candidate is None:
+                return True
+            remaining[(label, candidate)] -= 1
+        return any(remaining.values())
 
     def check_designation(self, root: base.Node, ref: str) -> str:
         final = [
@@ -266,7 +284,10 @@ class Wizard(generic.Deterministic):
                     return report
             report.skipped += found.skipped
             self.expected = [
-                (o.field.label, o.answer.option or o.answer.value)
+                (
+                    o.field.label,
+                    base.summary_answer(o.answer.option or o.answer.value, o.field.kind),
+                )
                 for o in report.outcomes
                 if isinstance(o.answer, answers.Answer)
             ]

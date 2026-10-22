@@ -5,7 +5,7 @@ const variant = query.get("variant") || (kind === "workday" ? "signin" : "");
 const job = query.get("job") || "1001";
 const mount = document.querySelector("#application");
 const storage = `a15:${kind}:${job}`;
-const values = JSON.parse(sessionStorage.getItem(storage) || "{}");
+const values = JSON.parse(localStorage.getItem(storage) || "{}");
 const uploads = {};
 let step = Number(query.get("step") || 0);
 const signed = () => document.cookie.includes(`a15_${kind}=signed`);
@@ -14,7 +14,7 @@ if (kind === "workday") {
   window.fixtureMemory = new Uint8Array(48 * 1024 * 1024);
   window.fixtureMemory.fill(17);
 }
-function persist() { sessionStorage.setItem(storage, JSON.stringify(values)); }
+function persist() { localStorage.setItem(storage, JSON.stringify(values)); }
 function label(text, input) {
   const group = document.createElement("div"); group.className = "field";
   const label = document.createElement("label"); label.htmlFor = input.id; label.textContent = text;
@@ -106,8 +106,8 @@ function render() {
     if (!form.reportValidity()) return;
     step += 1; const address = new URL(location.href); address.searchParams.set("step", String(step));
     history.replaceState(null, "", address);
-    if (variant === "expire" && step === 1 && !sessionStorage.getItem(storage + ":expired")) {
-      sessionStorage.setItem(storage + ":expired", "yes");
+    if (variant === "expire" && step === 1 && !localStorage.getItem(storage + ":expired")) {
+      localStorage.setItem(storage + ":expired", "yes");
       document.cookie = `a15_${kind}=; Path=/; Max-Age=0`; login(); return;
     }
     render();
