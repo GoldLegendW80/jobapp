@@ -179,7 +179,8 @@ def parameters(case, owner):
 
 def private(response, code):
     assert response.status_code == code, response.text
-    assert response.headers.get("cache-control") == "no-store", (code, response.headers)
+    directives = response.headers.get("cache-control", "").lower().split(",")
+    assert "no-store" in {part.strip() for part in directives}, (code, response.headers)
 
 
 @pytest.mark.parametrize(

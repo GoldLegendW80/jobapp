@@ -1,0 +1,94 @@
+Apply A17 registered-route isolation and deletion, issue 257, whole Apply 563
+Date: 2026-10-22
+Initial source checkpoint: af995aa66b2806f95bf006662fa515a0248360ab
+Final cache-compatibility source is the commit containing this record.
+Dependency checkpoint: 080d04c617d315c631230b18e84ee2f7ed5e20b2
+
+Scope
+The proof enumerates registered FastAPI route contexts. Its explicit table must equal
+all Apply endpoints plus mail.send_router and browser.later_router endpoints: 45 routes.
+Five linked Documents cases supplement this table:editor read/save, version read,
+PDF bytes and preview PNG ownership. A new registered scoped route fails table parity.
+Bodies validate against the registered FastAPI body field before request assertions.
+Signed-out requests return 401, authenticated mutations without CSRF return 403,
+foreign objects and missing objects return identical 404 bodies. Collection/settings
+exceptions name their authenticated owner semantics in the table.
+Query-filtered applications exclude foreign posting IDs. Owner reads return exact
+JPEG/PDF bytes and the application's exact draft/send IDs. Cross-parent screenshots
+are rejected. Both application and site-profile sign-in callbacks reject B-on-A,
+even copied lease metadata, while the owner's repeated completion queues once.
+Private successes and 401/403/404/405/422/500 responses carry no-store.
+
+Deletion
+Real Postgres at migration head includes 0024 sections, 0025 mail and 0026 answer metadata.
+Each owner has committed answers, events, shots, authorisations, site-profile sections,
+fields and shots, a mail draft/send, document versions and a frozen PDF.
+SQL DELETE exercises database cascades. Fresh sessions assert every affected table,
+with exact B counts and IDs preserved. Posting deletion removes application content,
+drafts and frozen posting document versions; independent site profiles survive with
+their profile authorisation. SPEC-mail's minimal send audit survives content deletion
+for its separate 365-day retention. Account deletion removes that audit too.
+Screenshot pruning preserves the frozen documents before either deletion.
+
+Reproduction and correction
+Initial capped RED: /tmp/jobapp-apply257-routes-red.log
+rtk proxy caffeinate -i ops/agent-test.sh --name apply257-routes-red tests/apply/test_a17_routes.py tests/apply/test_a17_deletion.py -m 'not docker' -n 2 -q --maxfail=3
+Result: 6 failed, 1 passed. Real 401 responses on Apply collection/detail/start/cancel
+had no Cache-Control. The first diagnostic run also exposed a test body-field
+introspection assumption, corrected to FastAPI's validate method before GREEN.
+The complete diagnostic baseline is /tmp/jobapp-apply257-routes-baseline.log.
+The source correction adds a response middleware and the same policy to the outer
+500 handler, covering Apply, site profiles, later sign-in and linked document routes.
+
+Focused verification
+rtk proxy caffeinate -i ops/agent-test.sh --name apply257-routes-green tests/apply/test_a17_routes.py tests/apply/test_a17_deletion.py -m 'not docker' -n 2 -q
+Result: 56 passed in 16.60s. Log: /tmp/jobapp-apply257-routes-green.log
+rtk proxy caffeinate -i ops/agent-test.sh --name apply257-routes-proof tests/apply/test_a17_routes.py tests/apply/test_a17_deletion.py -m 'not docker' -n 2 -q
+Result: 58 passed in 21.74s after adding exact owner views and validation/500 cases.
+Log: /tmp/jobapp-apply257-routes-proof.log
+The final copied-lease callback neighbour is included in the frozen whole-suite run.
+
+Whole affected suite, source frozen at the checkpoint above
+rtk proxy caffeinate -i ops/agent-test.sh --name apply257-routes-full tests/apply tests/mail tests/browser tests/identity tests/documents -m 'not docker' -n 2 -q
+Result: 13132 passed, 22 failed in 634.19s.
+Log: /tmp/jobapp-apply257-routes-full.log
+All Apply, mail, browser and identity tests passed. Twenty-one Documents assertions
+exposed the middleware replacing an existing compatible 'private, no-store' header.
+The follow-up preserves an existing no-store directive and tests that directive's
+semantics instead of demanding one spelling. The remaining failure is unrelated:
+test_compose_renderer.py::test_the_memory_of_compose_yml_stays_within_the_budget,
+expected 5248 MiB but Compose now totals 5376 MiB. No Compose source changed here.
+
+Follow-up verification, source frozen after cache-directive preservation
+rtk proxy caffeinate -i ops/agent-test.sh --name apply257-routes-documents tests/documents tests/apply/test_a17_routes.py tests/apply/test_a17_deletion.py -m 'not docker' -n 2 -q
+Result: 3515 passed, 1 failed in 199.54s.
+Log: /tmp/jobapp-apply257-routes-documents.log
+All 58 route/deletion cases pass, including the copied-lease callback neighbour.
+All 21 compatible-cache-header regressions are resolved. The sole remaining failure
+is the unchanged Compose memory assertion described above, owned by integration.
+The wrapper finished and removed its throwaway services; heavy slot 1 is released.
+
+Static checks
+rtk proxy api/.venv/bin/ruff check api/app api/tests
+Result: clean. New-file import ordering was corrected before committing.
+rtk proxy api/.venv/bin/ruff format --check api/app api/tests
+Result: 731 files already formatted.
+rtk proxy python3 .github/scripts/ci_plan_test.py
+Result: 81 tests passed in 41.819s; final staged-file check passed in 46.451s.
+rtk proxy python3 .github/scripts/e2e_groups.py
+Result: 29 CI specs, 4 excluded with reasons, 45 local-check-only specs.
+Local checkpoints use normal hook configuration with no bypass.
+No migrations or frontend changes in this slice.
+
+Fakes and resource boundaries
+Only invented e2e-*@example.org users and fake job/profile addresses. Authentication,
+CSRF, registered handlers and ownership queries are real. The external lease transport
+is fake; application/database ownership helpers are not replaced. No provider send,
+real Google/ATS, real account/data, environment-file access, deployment or image build.
+All DB suites use the capped wrapper, -n 2 and foreground caffeinate, on heavy slot 1.
+Throwaway Postgres and Redis are removed by the wrapper. No test/build service remains.
+Worktree, its ignored copied virtualenv and local logs remain for review.
+
+Remaining A17 scope belongs to separate work: runtime canary logs/queue privacy,
+the application-wide privileged-boundary scanner and the two-user UI journey.
+This bounded proof does not claim whole A17 completion or human Jetson acceptance.

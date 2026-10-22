@@ -36,7 +36,10 @@ async def no_store(
 ) -> Response:
     """Include refusals made before router dependencies, such as session and CSRF failures."""
     response = await call_next(request)
-    if private_path(request.url.path):
+    directives = {
+        part.strip().lower() for part in response.headers.get("Cache-Control", "").split(",")
+    }
+    if private_path(request.url.path) and "no-store" not in directives:
         response.headers["Cache-Control"] = "no-store"
     return response
 
