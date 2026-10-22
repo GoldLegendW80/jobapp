@@ -793,6 +793,21 @@ class BrowserSource(_Section):
         return self
 
 
+FeedKind = Literal["remoteok", "weworkremotely", "hackernews_freelance", "hackernews_hiring"]
+FEEDS_MAX = 10
+
+
+class Feed(_Section):
+    """A freelance and project feed the sweep reads after the boards (opportunities O7,
+    app/opportunities/sources): a public API or feed whose terms allow it. `terms` are optional
+    include terms on top of the person's title terms: when set, a title must also match one.
+    Off until the person turns it on."""
+
+    kind: FeedKind
+    terms: TermList = Field(default_factory=TermList)
+    enabled: bool = False
+
+
 # What the person aims for (opportunities O4). Seniority, industries and company types add a
 # small bonus to the fit (app.jobs.scoring.bonus) and never filter anything; compensation is
 # stored for the person and the forms, and changes no score.
@@ -868,6 +883,8 @@ class SearchSection(_Section):
         default_factory=list
     )
     compensation: Compensation = Field(default_factory=lambda: Compensation())
+    # Opportunities O7: the freelance and project feeds, one entry per kind.
+    feeds: Annotated[list[Feed], Field(max_length=FEEDS_MAX)] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -912,6 +929,11 @@ class SearchSection(_Section):
         if sum(source.kind == "linkedin" for source in value) > 1:
             raise ValueError("at most one linkedin source")
         return value
+
+    @field_validator("feeds")
+    @classmethod
+    def _one_feed_per_kind(cls, value: list[Feed]) -> list[Feed]:
+        return _unique(value, lambda feed: feed.kind, "feed (same kind)")
 
 
 # --- answers ------------------------------------------------------------------------------------
