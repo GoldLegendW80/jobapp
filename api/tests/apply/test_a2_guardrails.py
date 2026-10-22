@@ -234,7 +234,11 @@ def test_an_unrecognised_ats_address_is_compared_as_an_address(url: str) -> None
         ("https://notlever.co/a", "other"),
         ("mailto:jobs@example.org", "other"),
         ("https://www.linkedin.com/jobs/view/1?gh_jid=1", "linkedin"),
-        (f"https://fr.linkedin.com/jobs/view/1?ashby_jid={ASHBY}", "linkedin"),
+        (f"https://fr.linkedin.com/jobs/view/1?ashby_jid={ASHBY}", "other"),
+        ("https://www.linkedin.com/in/person?gh_jid=1", "other"),
+        ("http://www.linkedin.com/jobs/view/1?gh_jid=1", "other"),
+        ("https://user@www.linkedin.com/jobs/view/1?gh_jid=1", "other"),
+        ("https://www.linkedin.com/jobs/view/1#apply", "other"),
     ],
 )
 def test_ats_of(url: str, ats: str) -> None:

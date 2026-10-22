@@ -182,7 +182,12 @@ class LinkedIn(generic.Deterministic):
     def approved(self, rows: Sequence[generic.Row]) -> None:
         super().approved(rows)
         self.expected = [
-            (r.label, r.value) for r in rows if not r.key.startswith(("designated:", "skipped:"))
+            (
+                r.label,
+                base.summary_answer(r.value, r.kind),
+            )
+            for r in rows
+            if not r.key.startswith(("designated:", "skipped:"))
         ]
 
     def summary_problem(self, root: base.Node) -> bool:
@@ -200,10 +205,8 @@ class LinkedIn(generic.Deterministic):
                 values = [
                     v for label, v in self.expected if base.fold(label) == base.fold(row.name)
                 ]
-                shown = base.fold(" ".join(row.words(skip=None)[1:]))
-                if not values or not all(
-                    isinstance(v, str) and base.fold(v) == shown for v in values
-                ):
+                shown = base.fold(base.summary_text(row))
+                if not values or not all(base.summary_matches(value, shown) for value in values):
                     return True
         return False
 
@@ -335,7 +338,7 @@ class LinkedIn(generic.Deterministic):
                 return report
             report.steps.append(button.name)
             self.expected = [
-                (o.field.label, o.answer.value)
+                (o.field.label, base.summary_answer(o.answer.value, o.field.kind))
                 for o in report.outcomes
                 if isinstance(o.answer, answers.Answer)
             ]

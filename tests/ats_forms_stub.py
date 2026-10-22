@@ -871,6 +871,8 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
             if path == "/ashby/_locations":
                 typed = (query.get("q") or [""])[0].lower()
                 return self._json(200, [x for x in LOCATIONS if typed in x.lower()])
+            if re.fullmatch(r"/linkedin/jobs/view/[0-9]{1,24}/?", path):
+                return self._static("a16/modal.html")
             if path.startswith("/forms/"):
                 return self._static(path[len("/forms/") :])
             found_page = self._form_page(path, query)

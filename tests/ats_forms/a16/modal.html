@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Example Robotics, Easy Apply fixture</title>
+<link rel="stylesheet" href="/forms/a1/forms.css">
+<main><h1>Applied AI Engineer at Example Robotics</h1>
+<div id="entry"><button type="button" id="open">Easy Apply</button></div>
+<dialog aria-label="Apply to Example Robotics" id="modal">
+  <form id="application" action="/_stub/submit/linkedin" method="post" enctype="multipart/form-data">
+    <section id="identity"><h2>Contact information</h2>
+      <label>First name *<input name="first_name" required></label>
+      <label>Last name *<input name="last_name" required></label>
+      <label>Email *<input name="email" type="email" required></label>
+      <button type="button" id="next">Next</button>
+    </section>
+    <section id="documents" hidden><h2>Documents</h2>
+      <div class="field">
+        <label for="resume">Resume *</label>
+        <input id="resume" name="resume" type="file" accept="application/pdf" required>
+        <span id="resume-name"></span>
+      </div>
+      <div id="unknown"></div><button type="button" id="review">Review</button>
+    </section>
+    <section id="summary" hidden><h2>Review your application</h2>
+      <div role="region" aria-label="Application summary" id="summary-values"></div>
+      <label><input type="checkbox" name="follow_company" checked>Follow this company</label>
+      <button type="submit">Submit application</button>
+    </section>
+  </form>
+</dialog></main>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search), variant = q.get('variant') || 'plain';
+  const entry = document.getElementById('entry'), dialog = document.getElementById('modal');
+  const identity = document.getElementById('identity'), documents = document.getElementById('documents');
+  const summary = document.getElementById('summary'), form = document.getElementById('application');
+  if (variant === 'checkpoint') {
+    document.querySelector('main').innerHTML = '<h1>Unusual activity</h1><p>Security verification required.</p>';
+    return;
+  }
+  if (variant === 'company') {
+    entry.innerHTML = '<a href="/greenhouse/northwind-labs/jobs/4012345--plain">Apply on company site</a>';
+    return;
+  }
+  if (variant === 'signin' && !document.cookie.includes('a16_signed=yes')) {
+    document.querySelector('main').innerHTML = '<h1>Sign in</h1><label>Email<input type="email"></label>' +
+      '<label>Password<input type="password"></label><button type="button" id="signin">Sign in</button>';
+    document.getElementById('signin').onclick = () => {
+      document.cookie = 'a16_signed=yes; path=/; SameSite=Lax'; location.reload();
+    };
+    return;
+  }
+  if (variant === 'unknown') {
+    document.getElementById('next').insertAdjacentHTML('beforebegin',
+      '<label>How many moon landings have you completed? *<input name="moon_landings" required></label>');
+  }
+  const next = document.getElementById('next');
+  const validateIdentity = () => { next.disabled = ![...identity.querySelectorAll('input')].every(input => input.checkValidity()); };
+  identity.oninput = validateIdentity;
+  validateIdentity();
+  form.elements.resume.onchange = () => {
+    document.getElementById('resume-name').textContent = form.elements.resume.files[0]?.name || '';
+  };
+  document.getElementById('open').onclick = () => { entry.hidden = true; dialog.showModal(); };
+  document.getElementById('next').onclick = () => { identity.hidden = true; documents.hidden = false; };
+  document.getElementById('review').onclick = () => {
+    documents.hidden = true; summary.hidden = false;
+    const rows = document.getElementById('summary-values');
+    for (const [name, label] of [['first_name','First name'],['last_name','Last name'],['email','Email']]) {
+      const row = document.createElement('div'); row.setAttribute('role','group'); row.setAttribute('aria-label',label);
+      row.textContent = variant === 'changed' ? 'Changed after your approval' : form.elements[name].value;
+      rows.append(row);
+    }
+  };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    // Browsers validate hidden required fields too; all approved values are retained in this form.
+    const data = new FormData(form);
+    const response = await fetch(form.action, { method:'POST', body:data });
+    if (response.ok) {
+      dialog.close(); document.querySelector('main').innerHTML = '<h1>Application submitted</h1>' +
+        '<p>Thank you for applying to Example Robotics.</p>';
+    }
+  };
+})();
+</script></html>

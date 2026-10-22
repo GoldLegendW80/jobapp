@@ -1,0 +1,55 @@
+Apply A16 finite source checkpoint, 2026-10-22
+
+Status: source and focused checks complete; six-flow application-browser acceptance remains
+pending. No live LinkedIn posting visited and no real application submitted.
+
+Passed checks:
+- Private browser boundary/detector/action checks: 394 passed.
+- Existing Generic designation/recognition checks: 58 passed.
+- Native pinned Chromium opener/final gate: 11 passed in 101.43 seconds.
+  Ordinary browser_click refuses Easy Apply and final Submit; private opener only opens modal.
+  Wrong token/job/purpose/host, form ownership, nested controls, overlay, duplicate/stale
+  button, URL changed during pacing, and node replacement refuse. The final gate counts once.
+- Config: 42 passed, including minimum 600-second interval and maximum 15/24h.
+- Frontend Apply section: 55 passed. Off-consent external link starts no application.
+- TypeScript typecheck and focused ESLint passed.
+- A16, A2 guardrails complete file: 944 passed before the extra normal-French case was added.
+- English/French normal and person False replay, changed-summary refusal and copy context:
+  13 passed in 10.83 seconds.
+- Final A16, typed summary and B10 guard focused database suite: 77 passed in 21.81 seconds.
+- Shared typed summary, inline/nested summary and adapter mutation checks: 19 passed.
+
+The early-required test stops on the first modal page before disabled Next, persists an
+immutable incomplete marker, and queues a fresh fill after the person's last required answer.
+The resumed fill reaches the remaining document page and final designation; approval then
+counts one final click. Person False on a later yes/no page and French Non are covered in
+fresh replay, including refusal of a late Oui. Canonical normal No is normalized only for a
+typed yes_no row; text/select No remains exact text.
+
+ATS invariant: exact supported HTTPS linkedin.com/www.linkedin.com numeric job URLs classify
+as LinkedIn even if a query contains gh_jid/ashby_jid. Unsupported fr, non-job paths, HTTP,
+credentials or fragments remain other. The separate consent host check still catches case,
+trailing dots, Unicode dots, percent-escaped dots and LinkedIn subdomain aliases.
+
+Runtime attempts, without a green six-flow claim:
+1. External-link consent check passed. Review stopped required_left because the fake upload
+   did not expose its selected filename. The verifier was kept strict.
+2. The first fixture correction placed a filename outside the nearest label ancestor and
+   still failed; corrected to A1's separate label/input/filename layout.
+3. Pinned browserd Chromium directly proved the filename in the correct field group.
+   Fresh journey passed the external-link consent check, then advanced Next and Review and
+   stopped form_changed before Follow or final designation. Its final named summary group
+   used inline text, which row.words()[1:] dropped. The fixed shared summary_text helper
+   reads inline and child values; focused mutation checks pass. This fix has NOT yet been
+   rebuilt or exercised by the six-flow journey.
+
+Last runtime ledger: zero LinkedIn submissions, no follow_company submitted.
+The retained stack is apply253, all 11 services healthy at handoff. No active build, browser
+journey or throwaway DB test remains. Heavy slot2 was released to root. Detailed nonsecret
+recipe and exact image/source checkpoint: /tmp/jobapp-apply-a16-runtime-handoff.md.
+
+Remaining acceptance: rebuild API/worker from the final source after shared A15 summary
+integration, run web/e2e/apply-a16.spec.ts, inspect normal/phone light/dark screenshots, verify
+Review once, rehearsals then held Full auto once, early required person continuation and final
+approval, sign-in/company fallback/checkpoint, marketing decline in counted submissions, and
+obtain the independent final security review. Clean only transferred apply253 resources later.

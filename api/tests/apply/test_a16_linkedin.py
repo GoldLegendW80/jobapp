@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.apply import caps, gate, guardrails, linkedin
-from app.apply.ats import adapter_for, generic
+from app.apply.ats import adapter_for, base, generic
 from app.apply.ats.linkedin import LinkedIn
 from app.apply.models import AnswerSource, Mode, State
 from app.jobs.models import Job
@@ -69,8 +69,10 @@ def test_replay_keeps_job_context_and_has_independent_mutable_state():
     original = LinkedIn()
     original.job_id = "4100000001"
     rows = [
-        SimpleNamespace(key=generic.SUBMIT_KEY, value="Submit application", label="Submit"),
-        SimpleNamespace(key="first name", value="Synthetic", label="First name"),
+        SimpleNamespace(
+            key=generic.SUBMIT_KEY, value="Submit application", label="Submit", kind="metadata"
+        ),
+        SimpleNamespace(key="first name", value="Synthetic", label="First name", kind="text"),
     ]
     first = generic.configured(original, rows)
     second = generic.configured(original, rows)
@@ -150,6 +152,170 @@ def test_unknown_required_question_stays_left_in_review(db, factory, person_a, s
     assert (found.mode, found.needs) == (Mode.review, "required_left")
     assert form.fields[-2].value == ""
     assert form.gate_clicks == []
+
+
+def test_unknown_early_question_stops_before_disabled_next_then_person_can_finish():
+    async def go():
+        form, adapter = LinkedInForm(unknown_early=True), LinkedIn()
+        await form.put_file("cv.pdf", b"%PDF-synthetic")
+        assert await adapter.open(form, URL) == ""
+        report = await adapter.fill_form(form, context())
+        assert (report.stopped, report.needs_person) == ("needs_person", "required_left")
+        assert form.step == 0
+        assert report.steps == []
+        assert not report.designated
+        assert not any(call == "click" for call, _ in form.calls)
+        unknown = next(
+            o.field for o in report.outcomes if o.field.label.startswith("How many moon")
+        )
+        fresh, resumed = LinkedInForm(unknown_early=True), LinkedIn()
+        await fresh.put_file("cv.pdf", b"%PDF-synthetic")
+        resumed.person_answers = {
+            unknown.key: generic.PersonAnswer(
+                unknown.label, unknown.kind, tuple(unknown.options), "0"
+            )
+        }
+        resumed.person_shapes = adapter.seen_shapes
+        assert await resumed.open(fresh, URL) == ""
+        complete = await resumed.fill_form(fresh, context())
+        assert complete.stopped == ""
+        assert complete.designated == "Submit application"
+        assert complete.steps == ["Next", "Review"]
+        assert not fresh.gate_clicks
+
+    asyncio.run(go())
+
+
+def test_partial_modal_person_answer_queues_fresh_fill_before_final_approval(
+    db, factory, person_a, stub
+):
+    switch(factory, person_a)
+    app_id = start(db, person_a, Mode.full_auto)
+    first = LinkedInForm(unknown_early=True)
+    assert fill(services(factory, first, stub_base=stub), app_id) == "needs_person"
+    app = application(db, app_id)
+    rows = gate.rows_of(db, app)
+    marker = next(row for row in rows if row.field_key == "designated:incomplete")
+    assert marker.value == "true"
+    assert marker.source is AnswerSource.identity
+    assert not any(row.field_key == generic.SUBMIT_KEY for row in rows)
+    assert first.step == 0
+    assert not first.gate_clicks
+    with pytest.raises(gate.InvalidAnswerError):
+        gate.set_answer(db, person_a.user_id, app_id, marker.field_key, "false", AT)
+    db.rollback()
+    unknown = next(
+        row
+        for row in gate.rows_of(db, application(db, app_id))
+        if row.label.startswith("How many moon")
+    )
+    changed = gate.set_answer(db, person_a.user_id, app_id, unknown.field_key, "0", AT)
+    assert changed.state is State.queued
+    assert changed.mode is Mode.review
+    db.commit()
+    fresh = LinkedInForm(unknown_early=True)
+    assert fill(services(factory, fresh, stub_base=stub), app_id) == "ready"
+    completed = gate.rows_of(db, application(db, app_id))
+    assert (
+        next(row for row in completed if row.field_key == generic.SUBMIT_KEY).source
+        is AnswerSource.identity
+    )
+    assert not any(row.field_key == "designated:incomplete" for row in completed)
+    assert (
+        next(row for row in completed if row.label.startswith("How many moon")).source
+        is AnswerSource.person
+    )
+    assert not fresh.gate_clicks
+    approve(factory, person_a, app_id)
+    last = LinkedInForm(unknown_early=True)
+    assert run_submit(submit_services(factory, last, stub), app_id) == "submitted"
+    assert len(last.gate_clicks) == 1
+
+
+@pytest.mark.parametrize(("french", "changed"), [(False, False), (True, False), (True, True)])
+def test_person_false_on_later_step_matches_english_or_french_summary_on_replay(
+    db, factory, person_a, stub, french, changed
+):
+    switch(factory, person_a)
+    app_id = start(db, person_a)
+    assert (
+        fill(services(factory, LinkedInForm(yes_no=True, french=french), stub_base=stub), app_id)
+        == "needs_person"
+    )
+    unknown = next(row for row in gate.rows_of(db, application(db, app_id)) if row.kind == "yes_no")
+    gate.set_answer(db, person_a.user_id, app_id, unknown.field_key, False, AT)
+    db.commit()
+    assert (
+        fill(services(factory, LinkedInForm(yes_no=True, french=french), stub_base=stub), app_id)
+        == "ready"
+    )
+    approved = next(
+        row for row in gate.rows_of(db, application(db, app_id)) if row.kind == "yes_no"
+    )
+    assert approved.value is False
+    assert approved.source is AnswerSource.person
+    approve(factory, person_a, app_id)
+    fresh = LinkedInForm(yes_no=True, french=french, changed_boolean=changed)
+    assert run_submit(submit_services(factory, fresh, stub), app_id) == (
+        "ready" if changed else "submitted"
+    )
+    assert len(fresh.gate_clicks) == (0 if changed else 1)
+    if changed:
+        assert application(db, app_id).error_code == "form_changed"
+
+
+def test_normal_french_false_canonical_option_is_replayed_as_non(db, factory, person_a, stub):
+    switch(factory, person_a)
+    app_id = start(db, person_a)
+    assert (
+        fill(
+            services(
+                factory, LinkedInForm(yes_no=True, french=True, known_boolean=True), stub_base=stub
+            ),
+            app_id,
+        )
+        == "ready"
+    )
+    row = next(row for row in gate.rows_of(db, application(db, app_id)) if row.kind == "yes_no")
+    assert row.value == "No"
+    approve(factory, person_a, app_id)
+    fresh = LinkedInForm(yes_no=True, french=True, known_boolean=True)
+    assert run_submit(submit_services(factory, fresh, stub), app_id) == "submitted"
+    assert len(fresh.gate_clicks) == 1
+
+
+@pytest.mark.parametrize(
+    ("value", "shown", "match"),
+    [
+        (False, "No", True),
+        (False, "Non", True),
+        (False, "Oui", False),
+        (True, "Oui", True),
+        (True, "Non", False),
+        (False, "False", False),
+        ("No", "Non", False),
+        ("Example Cedar", "example cedar", True),
+    ],
+)
+def test_typed_summary_comparison_keeps_boolean_and_text_answers_distinct(value, shown, match):
+    assert base.summary_matches(value, shown) is match
+
+
+@pytest.mark.parametrize("inline", [True, False])
+@pytest.mark.parametrize("changed", [True, False])
+def test_summary_reads_inline_group_text_and_nested_text_and_refuses_late_mutation(inline, changed):
+    value = "Changed" if changed else "Example Cedar"
+    row = (
+        f'      - group "First name": {value}'
+        if inline
+        else f'      - group "First name":\n        - text: {value}'
+    )
+    root = base.parse_snapshot(
+        '- dialog "Apply to Example Robotics":\n  - region "Application summary":\n' + row
+    )
+    adapter = LinkedIn()
+    adapter.expected = [("First name", "Example Cedar")]
+    assert adapter.summary_problem(root) is changed
 
 
 @pytest.mark.parametrize("revocation", ["switch", "version"])

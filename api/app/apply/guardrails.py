@@ -253,13 +253,11 @@ def ats_of(url: str) -> str:
     found = _host(url)
     if found is None:
         return "other"
-    host, segments, query = found
+    host, _segments, query = found
     if _on(host, "linkedin.com"):
-        return (
-            "linkedin"
-            if len(segments) == 3 and segments[:2] == ["jobs", "view"] and _number(segments[2])
-            else "other"
-        )
+        from app.apply.ats.linkedin import LinkedIn
+
+        return "linkedin" if LinkedIn().form_url(url) is not None else "other"
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
         if _on(host, domain):
             return ats
