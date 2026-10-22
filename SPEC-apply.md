@@ -1,6 +1,6 @@
 # Spec: apply
 
-Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on `agents`, `documents`, `browser`, `jobs`, `profile`, and on `mail` for applications by e-mail. Umbrella issue: #69; the review queue after a Like is #78, Full auto is #79. Plan: [tasks/apply/todo.md](tasks/apply/todo.md). Intent: `docs/intent/swipe-onboarding-opportunities.md` of the job workspace (decisions of 2026-10-10). The owner's decisions of 2026-10-14 are taken (below); nothing is built.
+Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on `agents`, `documents`, `browser`, `jobs`, `profile`, and on `mail` for applications by e-mail. Umbrella issue: #69; the review queue after a Like is #78, Full auto is #79. Plan: [tasks/apply/todo.md](tasks/apply/todo.md). Intent: `docs/intent/swipe-onboarding-opportunities.md` of the job workspace (decisions of 2026-10-10). The owner's decisions of 2026-10-14 are taken below. Implementation and verification progress is tracked in [the completion checklist](tasks/apply/completion.md).
 
 ## Objective
 
