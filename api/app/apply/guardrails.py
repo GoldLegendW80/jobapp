@@ -22,7 +22,8 @@ so it refuses as a match would (`rules_unreadable`).
 - `same_form`: another posting of the person has a live application, or an applied status, on the
   same canonical form address (`canonical_key`; a second partial unique index holds the first);
 - `same_address`: as `same_form`, for an applied posting whose address is an ordinary one (a `url:`
-  key, often one careers page for many roles), so Apply myself can show it as a warning;
+  key, often one careers page for many roles), so Apply myself can show it as a warning alongside
+  `same_role` when both hold;
 - `same_role`: another posting of the person, at the same company and with the same normalised
   title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
   way), or has an applied status with its `applied_on` in the last 180 days, counted from `now`:
@@ -40,7 +41,10 @@ jobs(.eu).lever.co/<org>/<id>. A path is read only on the ATS's own domain or a 
 ("notashbyhq.com" is an ordinary address).
 Any other address is `url:` and the jobs module's normalised address (`slug.url_key`: http and
 https alike, host lowercase without www, no fragment, no trailing slash, no tracking parameter).
-An address that is not http or https has no form (`None`).
+Hosts are read through IDNA, including full width dots, and legacy stored `url:` keys are read
+through the current canonical rules. LinkedIn job aliases share duplicate identity, including
+http/https as ordinary URL keys already did; its adapter and consent still inspect the original
+address. An address that is not http or https has no form (`None`).
 
 Declared open points (what these rules still miss, each toward applying):
 - a never apply term in another language than the rule's ("sécurité" for "security") or a
@@ -58,8 +62,7 @@ Declared open points (what these rules still miss, each toward applying):
   title that adds a city in parentheses: only accents, case, punctuation and gender markers
   ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
 - a form shown under an address the three ATS patterns do not cover (a company page that embeds
-  Ashby without `ashby_jid`): it is compared as an address. A live application started on a boards
-  API address before these were keyed keeps its `url:` key.
+  Ashby without `ashby_jid`): it is compared as an address.
 """
 
 import re
@@ -126,6 +129,7 @@ WARNINGS = {
 class Refusal:
     code: str
     application_id: uuid.UUID | None = None
+    also: tuple[str, ...] = ()
 
     @property
     def sentence(self) -> str:
@@ -411,16 +415,20 @@ def duplicates(
     if status is JobStatus.closed:
         return Refusal("posting_closed")
 
-    other = db.execute(
-        sa.select(Application.id)
-        .where(
+    key = current_key(key)
+    stored = db.execute(
+        sa.select(Application.id, Application.canonical_key).where(
             Application.user_id == user_id,
             Application.posting_id != posting.id,
-            Application.canonical_key == key,
             Application.state.not_in(ENDED),
+            # Legacy URL keys can name today's ATS or IDNA-normalised address key.
+            sa.or_(Application.canonical_key == key, Application.canonical_key.startswith("url:")),
         )
-        .limit(1)
-    ).scalar_one_or_none()
+    ).yield_per(100)
+    try:
+        other = next((found for found, old_key in stored if current_key(old_key) == key), None)
+    finally:
+        stored.close()
     if other is not None:
         return Refusal("same_form", other)
 
@@ -432,9 +440,9 @@ def duplicates(
             Job.status.in_(APPLIED_STATUSES),
         )
     ).all()
-    for _, _, url, _ in applied:
-        if url is not None and canonical_key(url) == key:
-            return Refusal("same_address" if key.startswith("url:") else "same_form")
+    same_address = any(url is not None and canonical_key(url) == key for _, _, url, _ in applied)
+    if same_address and not key.startswith("url:"):
+        return Refusal("same_form")
     clicked = db.execute(
         sa.select(Job.company, Job.title)
         .join(Application, Application.posting_id == Job.id)
@@ -452,7 +460,10 @@ def duplicates(
         if applied_on is None or applied_on >= since.date()
     ]
     role = (company_key(posting.company), title_key(posting.title))
-    if any((company_key(c), title_key(t)) == role for c, t in recent):
+    same_role = any((company_key(c), title_key(t)) == role for c, t in recent)
+    if same_address:
+        return Refusal("same_address", also=("same_role",) if same_role else ())
+    if same_role:
         return Refusal("same_role")
     if status is JobStatus.skipped:
         return Refusal("passed")

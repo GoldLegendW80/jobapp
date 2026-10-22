@@ -53,3 +53,23 @@ def test_large_hidden_control_runs_keep_the_exclusion(size: int) -> None:
     rule = NeverApplyRule.parse("Excluded roles: analyst")
     assert rule.matches("Example Robotics", "x" * size + " Ana" + "\x1f" * size + "lyst")
     assert not rule.matches("Example Robotics", "x" * size + " Ana ly st")
+
+
+@pytest.mark.parametrize("size", [50_000, 100_000, 200_000])
+def test_character_inspection_has_a_linear_budget(
+    size: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule = NeverApplyRule.parse("Excluded roles: analyst")
+    text = "x" * size + " Ana" + "\x1f" * size + "lyst"
+    category = unicodedata.category
+    inspected = 0
+
+    def count(char: str) -> str:
+        nonlocal inspected
+        inspected += 1
+        return category(char)
+
+    monkeypatch.setattr(unicodedata, "category", count)
+    assert matching_rule([rule], text) is rule
+    # A deterministic character-visit budget, independent of the host's clock or load.
+    assert 0 < inspected <= 2 * len(text)

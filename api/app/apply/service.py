@@ -145,6 +145,8 @@ def start(
     refusal = guardrails.duplicates(db, user_id, posting, key, now)
     if refusal is not None:
         _refuse(refusal.code, mode, warnings, refusal.application_id)
+        for code in refusal.also:
+            _refuse(code, mode, warnings)
 
     application = Application(
         id=uuid.uuid4(),
