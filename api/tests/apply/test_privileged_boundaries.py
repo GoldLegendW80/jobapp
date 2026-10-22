@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.apply.privileged_boundaries import permitted, scan
+from tests.apply.privileged_boundaries import permitted, scan, scan_package
 
 
 @pytest.mark.parametrize(
@@ -77,12 +77,30 @@ def test_browser_wrapper_exception_is_scoped_to_its_declaration():
     assert all(not permitted(call) for call in scan(rogue, "app.browser.tools"))
 
 
+def test_reexported_import_aliases_and_tool_names_are_followed_across_modules():
+    calls = scan_package(
+        {
+            "app.bridge": "from app.browser.tools import gate_click as action\n"
+            "TOOL = 'send_message'",
+            "app.bridge2": "from .bridge import action as save, TOOL as SEND",
+            "app.rogue": "from . import bridge2 as b; invoke = b.save; invoke(a, r, c); "
+            "mcp.call(account, b.SEND, args)",
+        }
+    )
+    assert [call.kind for call in calls] == ["click", "mail"]
+    assert all(not permitted(call) for call in calls)
+
+
 def test_all_application_privileged_calls_stay_inside_their_gates():
     root = Path(__file__).resolve().parents[2] / "app"
-    calls = []
+    sources = {}
     for path in sorted(root.rglob("*.py")):
-        module = "app." + ".".join(path.relative_to(root).with_suffix("").parts)
-        calls.extend(scan(path.read_text(), module))
+        parts = path.relative_to(root).with_suffix("").parts
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        module = ".".join(("app", *parts))
+        sources[module] = path.read_text()
+    calls = scan_package(sources)
     assert not [call for call in calls if not permitted(call)]
     assert {call.module for call in calls if call.kind == "click"} == {
         "app.apply.gate",

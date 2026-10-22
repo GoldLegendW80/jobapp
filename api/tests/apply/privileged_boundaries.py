@@ -18,17 +18,34 @@ class Call:
 
 
 class Scan(ast.NodeVisitor):
-    def __init__(self, module: str):
+    def __init__(self, module: str, exports: dict[str, str] | None = None):
         self.module = module
         self.scopes: list[str] = []
         self.names: list[dict[str, str]] = [{}]
         self.calls: list[Call] = []
+        self.exports = exports or {}
+
+    def resolve(self, name: str) -> str:
+        seen = set()
+        while name not in seen:
+            seen.add(name)
+            parts = name.split(".")
+            for count in range(len(parts), 0, -1):
+                prefix = ".".join(parts[:count])
+                if prefix in self.exports:
+                    name = ".".join([self.exports[prefix], *parts[count:]])
+                    break
+            else:
+                return name
+        return name
 
     def value(self, node: ast.AST) -> str:
         if isinstance(node, ast.Name):
-            return next((s[node.id] for s in reversed(self.names) if node.id in s), node.id)
+            return self.resolve(
+                next((s[node.id] for s in reversed(self.names) if node.id in s), node.id)
+            )
         if isinstance(node, ast.Attribute):
-            return f"{self.value(node.value)}.{node.attr}"
+            return self.resolve(f"{self.value(node.value)}.{node.attr}")
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
         if isinstance(node, ast.JoinedStr):
@@ -122,9 +139,7 @@ class Scan(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def scan(source: str, module: str) -> list[Call]:
-    visitor = Scan(module)
-    tree = ast.parse(source)
+def globals_of(visitor: Scan, tree: ast.Module) -> None:
     # Module globals are available when a function runs, including imports declared after it.
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -132,8 +147,23 @@ def scan(source: str, module: str) -> list[Call]:
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 visitor.bind(target, node.value)
+
+
+def scan(source: str, module: str, exports: dict[str, str] | None = None) -> list[Call]:
+    visitor = Scan(module, exports)
+    tree = ast.parse(source)
+    globals_of(visitor, tree)
     visitor.visit(tree)
     return visitor.calls
+
+
+def scan_package(sources: dict[str, str]) -> list[Call]:
+    exports = {}
+    for module, source in sources.items():
+        visitor = Scan(module)
+        globals_of(visitor, ast.parse(source))
+        exports.update({f"{module}.{name}": value for name, value in visitor.names[0].items()})
+    return [call for module, source in sources.items() for call in scan(source, module, exports)]
 
 
 def permitted(call: Call) -> bool:

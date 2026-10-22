@@ -18,7 +18,7 @@ from arq.constants import job_key_prefix
 from arq.jobs import Job
 
 from app import queue, worker
-from app.apply import gate, profile_gate, profile_sources, service, site_profile
+from app.apply import form_agent, gate, profile_gate, profile_sources, service, site_profile
 from app.apply.models import (
     ApplicationAnswer,
     ApplicationEvent,
@@ -74,16 +74,21 @@ class QueueProof:
         self.job_id = f"a17:{name}:{uuid.uuid4()}"
 
         async def execute():
+            base = (
+                worker.agents_queue()
+                if name == "apply_decide"
+                else worker.apply_queue(self.settings)
+            )
             api_queue = queue.Queue(self.settings.redis_url.get_secret_value())
             try:
-                assert await api_queue.enqueue(name, *args, queue=queue.APPLY, job_id=self.job_id)
+                assert await api_queue.enqueue(name, *args, queue=base.name, job_id=self.job_id)
                 self.observe()
-                functions = worker.apply_queue(self.settings).functions
+                functions = base.functions
                 selected = next(f for f in functions if f.name == name)
                 assert selected.keep_result_s == 0
                 # Inspect a real arq result even though production intentionally discards it.
                 spec = dataclasses.replace(
-                    worker.apply_queue(self.settings),
+                    base,
                     functions=(dataclasses.replace(selected, keep_result_s=3600),),
                     cron_jobs=(),
                 )
@@ -96,7 +101,7 @@ class QueueProof:
                 self.observe()
                 pool = await api_queue.pool()
                 result = await Job(
-                    self.job_id, pool, _queue_name=queue.APPLY, _deserializer=queue.deserialize
+                    self.job_id, pool, _queue_name=base.name, _deserializer=queue.deserialize
                 ).result_info()
                 assert result is not None
                 assert result.success
@@ -121,8 +126,9 @@ def proof(migrated_url, redis_url, forms_base_url, caplog, capfd):
     try:
         yield checked
         captured = capfd.readouterr()
-        assert caplog.records, "the journey must capture executed worker logs"
-        no_leak(markers, logs=caplog.records, client=client, values=[captured.out, captured.err])
+        records = caplog.get_records("call")
+        assert records, "the journey must capture executed worker logs"
+        no_leak(markers, logs=records, client=client, values=[captured.out, captured.err])
     finally:
         client.close()
         flush_redis(redis_url)
@@ -257,12 +263,22 @@ def test_profile_fill_approval_and_save_keep_private_bytes_out_of_worker_sinks(
         db, person_a.user_id, "https://portal.example.org/profile", now=AT
     ).id
     db.commit()
-    proof.run({"site_profile_services": env}, "site_profile_run", str(run_id))
+
+    async def fake_agent(session):
+        return form_agent.Ran()
+
+    proof.run(
+        {"site_profile_services": env, "site_profile_agent": fake_agent},
+        "site_profile_run",
+        str(run_id),
+    )
     run = site_profile.lock(db, person_a.user_id, run_id)
     part = site_profile.sections(db, run)[0]
     fields = site_profile.fields(db, run, part.section)
     assert next(row.value for row in fields if row.label == "Full name") == name
-    assert db.scalar(sa.select(SiteProfileShot.jpeg)).endswith(image.encode())
+    assert part.state == "ready", part.error_code
+    # The Save outline re-encodes this JPEG; the private source image itself is watched too.
+    assert db.scalar(sa.select(SiteProfileShot.jpeg)) is not None
     auth = profile_gate.authorise_section(
         db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, fields), AT
     )
@@ -291,7 +307,8 @@ def test_explicit_email_approval_and_fake_provider_capture_no_private_logs(
     fake.seed("alice")
     ring = connect(db, person_a, fake)
     application = prepare(db, person_a)
-    body = proof.markers[0]
+    body = proof.markers[0].translate(str.maketrans("0123456789", "ghijklmnop"))
+    proof.markers.append(body)
     proof.run({"sessions": factory, "clock": lambda: AT}, "apply_fill", str(application.id))
     gate.set_answer(db, person_a.user_id, application.id, "email_body", body, AT)
     approval = gate.authorise_approval(
@@ -316,7 +333,7 @@ def test_explicit_email_approval_and_fake_provider_capture_no_private_logs(
                 mcp=mcp,
                 switches=gate.Switches(enabled=True, paused=False),
             )
-            assert row.result == "sent"
+            assert row.result == "sent", row.refusal_code
 
     asyncio.run(send())
     assert len(fake.sent) == 1
