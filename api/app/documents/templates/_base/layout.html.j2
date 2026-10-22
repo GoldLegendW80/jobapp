@@ -1,0 +1,46 @@
+{#- Helpers of the repository's own templates, outside the macros a template from an upload may
+    call (template_rules.MACROS). Import them with
+      {% import "_base/layout.html.j2" as layout with context %} -#}
+
+{% import "_base/macros.html.j2" as base with context %}
+
+{#- The first letter of a word with its accents (combining marks after it), past any sign. -#}
+{% macro first_letter(word) %}{% set ns = namespace(out="", done=false) %}{% for ch in word if not ns.done %}{% if ns.out and "\u0300" <= ch <= "\u036f" %}{% set ns.out = ns.out ~ ch %}{% elif ns.out %}{% set ns.done = true %}{% elif ch.isalpha() %}{% set ns.out = ch %}{% endif %}{% endfor %}{{ ns.out | upper }}{% endmacro %}
+
+{#- The initials of a name: the first letters of its first and last words that hold a letter. -#}
+{% macro initials(text) %}{% set ns = namespace(first="", last="") %}{% for part in text.split() %}{% set letter = first_letter(part) %}{% if letter and not ns.first %}{% set ns.first = letter %}{% elif letter %}{% set ns.last = letter %}{% endif %}{% endfor %}{{ ns.first }}{{ ns.last }}{% endmacro %}
+
+{#- The contact lines in a grid of three columns: each line spans one cell up to `cell`
+    characters, two up to `pair`, else the row (class `span1`, `span2`, `span3`). -#}
+{% macro contact_cells(cell, pair) %}
+{% if contact %}
+<ul class="contact">
+{% for line in contact %}
+{% set size = line.text | length %}
+<li class="span{{ 3 if size > pair else 2 if size > cell else 1 }}">{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endmacro %}
+
+{#- The contact lines of a narrow column (`sidebar`, `split-right`), each kept whole: under a
+    heading of class `heading`, set smaller past 25 characters (a letter's larger body: 23), and
+    not printed past 31 (28), where `contact_across` prints them in a row under the headline.
+    Only the pair prints every line, so neither is a macro an upload may call. -#}
+{% macro contact_column(heading="label") %}
+{% set small, wide = (25, 31) if kind == "cv" else (23, 28) %}
+{% set longest = contact | map(attribute="text") | map("length") | max if contact else 0 %}
+{% if contact and longest <= wide %}
+<section class="block">
+<h2 class="{{ heading }}">{{ base.label("contact") }}</h2>
+{{ base.contact_lines("contact small" if longest > small else "contact") }}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro contact_across(class="contact across") %}
+{% set wide = 31 if kind == "cv" else 28 %}
+{% if contact and contact | map(attribute="text") | map("length") | max > wide %}
+{{ base.contact_lines(class) }}
+{% endif %}
+{% endmacro %}

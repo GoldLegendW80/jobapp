@@ -50,7 +50,20 @@ run() {
   [[ "$got" == "$want" ]] || fail "$* exited $got, expected $want: $(head -c 400 "$WORK/out")"
 }
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
-out_lacks() { ! grep -q -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -- "$1" "$WORK/out" | head -c 400)"; }
+out_lacks() { ! grep -Fq -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -F -- "$1" "$WORK/out" | head -c 400)"; }
+
+step "literal privacy assertions"
+# This filename used to match the planted IP as a regex through its 1021T203 fragment.
+printf '%s\n' 'alembic upgrade head failed (exit 1; the whole output is on this machine in migrate-20261021T203102Z-3194.log)' >"$WORK/out"
+out_lacks "10.1.2.3"
+ok "a redacted failure with the reported migration timestamp holds no planted address"
+for leak in rowvalue parameters DETAIL 10.1.2.3 "already exists" Traceback CANARYPASSWORD postgresql e2e-leak; do
+  printf 'planted value: %s\n' "$leak" >"$WORK/out"
+  if (out_lacks "$leak") >"$WORK/privacy-assertion" 2>&1; then
+    fail "the privacy assertion accepted the planted value '$leak'"
+  fi
+done
+ok "literal planted addresses, row values, SQL details and credentials are refused"
 
 step "shellcheck"
 SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
@@ -141,6 +154,12 @@ for args in "apply" "apply stop" "apply pause extra"; do
   out_has "usage: ./deploy.sh apply pause|resume|status"
 done
 ok "apply takes exactly pause, resume or status, before any network call"
+for args in "ingestion" "ingestion close-run" "ingestion close-run not-a-run-id" "ingestion close-run 3fa85f64-5717-4562-b3fc-2c963f66afa6 --apply" "ingestion close 3fa85f64-5717-4562-b3fc-2c963f66afa6" "ingestion close-run 3fa85f64-5717-4562-b3fc-2c963f66afa6x"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 ./deploy.sh $args
+  out_has "usage: ./deploy.sh ingestion close-run <run-id>"
+done
+ok "ingestion takes close-run, one run id and at most --dry-run, before any network call"
 for args in "admin" "admin create" "admin list x@y.z" "admin create a@b.c extra" "admin delete a@b.c"; do
   # shellcheck disable=SC2086 # word splitting wanted
   run 1 nohost ./deploy.sh $args
@@ -415,6 +434,11 @@ case "$cmd" in
     echo "Imported 0 CVs and 0 letters from 0 postings with legacy files."
     exit "${FAKE_CLI_EXIT:-0}"
     ;;
+  *"exec -T api python -m app.ingestion.cli close-run"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    echo "Run 3fa85f64-5717-4562-b3fc-2c963f66afa6 closed: failed, 2 planned steps cancelled."
+    exit "${FAKE_CLI_EXIT:-0}"
+    ;;
   *"exec -T api python -m app.identity.cli"*)
     echo "$cmd" >>"$FAKE_CALLS"
     echo "Setup link for zoe@example.org, valid 7 days, single use:"
@@ -642,6 +666,20 @@ grep -qF -- "--dry-run" "$WORK/calls" && fail "a run sent --dry-run: $(cat "$WOR
 grep -q "Imported 0 CVs" "$WORK/stdout" || fail "the CLI's summary is not shown: $(cat "$WORK/stdout")"
 run_split 1 fake FAKE_CLI_EXIT=1 ./deploy.sh documents import-legacy zoe@example.org
 ok "documents import-legacy runs app.documents.cli import-legacy in the api container, --dry-run passed on, exit code passed through"
+RUN_ID="3fa85f64-5717-4562-b3fc-2c963f66afa6"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh ingestion close-run "$RUN_ID" --dry-run
+grep -qF -- "exec -T api python -m app.ingestion.cli close-run $RUN_ID --dry-run" "$WORK/calls" ||
+  fail "close-run --dry-run remote command: $(cat "$WORK/calls")"
+grep -q "(dry run)" "$WORK/stdout" "$WORK/stderr" || fail "the dry run is not announced"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh ingestion close-run "$RUN_ID"
+grep -qF -- "exec -T api python -m app.ingestion.cli close-run $RUN_ID" "$WORK/calls" ||
+  fail "close-run remote command: $(cat "$WORK/calls")"
+grep -qF -- "--dry-run" "$WORK/calls" && fail "a close sent --dry-run: $(cat "$WORK/calls")"
+grep -q "closed: failed" "$WORK/stdout" || fail "the CLI's summary is not shown: $(cat "$WORK/stdout")"
+run_split 1 fake FAKE_CLI_EXIT=1 ./deploy.sh ingestion close-run "$RUN_ID"
+ok "ingestion close-run runs app.ingestion.cli close-run in the api container, --dry-run passed on, exit code passed through"
 : >"$WORK/calls"
 run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/empty-folder" ./deploy.sh jobs import zoe@example.org
 grep -q "is not a folder (set JOBAPP_SOURCE_DIR" "$WORK/stderr" || fail "missing source: $(cat "$WORK/stderr")"

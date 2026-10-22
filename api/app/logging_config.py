@@ -19,6 +19,8 @@ text of the exception and of the stack. It replaces two things:
 The formatter looks at the finished line once more, for a value the filter could not walk (an
 object that only shows its text when it is encoded). What stays out of reach is what `scrub` of
 app/agents/runner.py names too: a credential cut somewhere else than at its end, or rewritten.
+Out of reach in particular (issue #155): upper case, whitespace inside the key (what follows it),
+the key without its head, base64 of the key or of `user:key`, hex, another dash.
 """
 
 import json
@@ -201,10 +203,12 @@ class SafeStreamHandler(logging.StreamHandler):  # type: ignore[type-arg]
 
 
 def configure_logging(level: str = "info") -> None:
-    """Route the root, uvicorn and sqlalchemy loggers through one JSON handler on stdout.
+    """Replace root handlers with a filtered JSON handler and route uvicorn through it.
 
-    Every other logger of the process ends there too (the SDK, httpx, arq, anything that
-    propagates), and the handler's filter takes the credentials out of all of them."""
+    Other loggers reach this handler when they propagate to root without handlers of their
+    own. Keep SQLAlchemy echo disabled and start the worker through `python -m app.worker`:
+    SQLAlchemy echo and the arq CLI install their own handlers outside this configuration.
+    """
     handler = SafeStreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     handler.addFilter(SecretFilter())

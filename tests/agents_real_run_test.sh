@@ -14,12 +14,16 @@
 # before any ssh call when an evidence file it would write exists; an account that is not an
 # admin with a subscription credential is refused before
 # any start; the message text, a token shaped value and the text of a log message are counted and
-# never printed; a short message is not a false failure; a start that gives no answer is reported
+# never printed; a short message is not a false failure; a start goes through
+# python -m app.agents.cli start with the owner's address and the message on stdin only, and the
+# role and credential kind for the check in its transaction; a refusal there fails the call; a
+# start that gives no answer is reported
 # as unknown, not as refused; the remote Python's stderr stays out of the log; the same kind
 # twice keeps both sets of samples, and metrics.json holds both runs with their memory figures
 # as JSON numbers under a decimal comma locale; metrics that do not read as JSON fail the call; a
-# proposal decided meanwhile fails the call; tests/e2e_jobs_jetson.sh runs the specs of its journey
-# (edit by default, or view) and refuses any other argument before any call.
+# proposal decided meanwhile fails the call; WAIT_S that is not a whole number is refused;
+# tests/e2e_jobs_jetson.sh runs the specs of its journey (edit by default, or view) and refuses
+# any other argument before any call.
 # Needs jq.
 set -euo pipefail
 
@@ -135,14 +139,18 @@ case "$cmd" in
         ;;
     esac
     ;;
-  *"exec -T api python"*) # the start of a run
-    cat >/dev/null
+  *"exec -T api python -m app.agents.cli start "*) # the start of a run: what came on stdin is kept
+    cat >"$STUB_STATE/start.stdin"
     case "${STUB_START:-ok}" in
       ok)
         bump starts
         printf '{"http": 202, "run_id": "%s", "enqueued": true}\n' "$STUB_RUN"
         ;;
       drop) exit 255 ;; # the connection dropped: no answer
+      refused)
+        printf '{"http": 403, "detail": "This account may not start a run here: wrong role or credential kind."}\n'
+        exit 1
+        ;;
       crash)
         printf 'Traceback (most recent call last):\n  input_value=%s\n' "$STUB_PRIVATE" >&2
         printf '{"http": 500, "error_class": "ValidationError"}\n'
@@ -243,8 +251,15 @@ script() {
     STUB_RUN="$RUN" STUB_PRIVATE="$PRIVATE" IDLE_S=0 POLL_S=0 OWNER=e2e-owner@example.org "$@" \
     "$SCRIPT" "$JOB"
 }
-DEFAULT_FRAGMENT="e two strongest poin" # 20 characters of the default MESSAGE, from its 14th
-grep -q -F -- "$DEFAULT_FRAGMENT" "$SCRIPT" || fail "the default MESSAGE of the script changed: update DEFAULT_FRAGMENT"
+# The fragment the script looks for in the logs, taken from the script: its default MESSAGE, cut
+# where the script cuts it.
+# shellcheck disable=SC2016 # the $ are the script's text, matched as written
+DEFAULT_MESSAGE="$(sed -n 's/^MESSAGE="\${MESSAGE:-\(.*\)}"$/\1/p' "$SCRIPT")"
+# shellcheck disable=SC2016 # the same
+CUT="$(sed -n 's/.*fragment="\${MESSAGE:\([0-9]*\):\([0-9]*\)}".*/\1 \2/p' "$SCRIPT")"
+[[ -n "$DEFAULT_MESSAGE" && "$CUT" =~ ^[0-9]+\ [0-9]+$ ]] || fail "the default MESSAGE or its cut is not found in $SCRIPT"
+DEFAULT_FRAGMENT="${DEFAULT_MESSAGE:${CUT% *}:${CUT#* }}"
+[[ "$DEFAULT_FRAGMENT" == "two strongest points" ]] || fail "the fragment of the default MESSAGE is '$DEFAULT_FRAGMENT'"
 
 # bash 3.2 (macOS) runs the inherited EXIT trap when a background job ends, which removed the script's
 # temporary directory under it whenever the sampler ended first (a failure under load only). The
@@ -457,6 +472,7 @@ out_has "refused, nothing was started"
 out_has "$COMMITTED/run.log"
 out_has "$COMMITTED/metrics.json"
 out_has "$COMMITTED/memory-triage.tsv"
+out_has "Give this run a new LABEL, or delete those files."
 [[ "$(calls)" == 0 ]] || fail "the refusal came after $(calls) ssh calls"
 unchanged "the refused real run"
 ok "REAL_RUN=1 with the committed run.log, metrics.json and samples: refused, 0 ssh calls, evidence unchanged"
@@ -474,6 +490,23 @@ out_has "memory-new-chat.tsv"
 [[ "$(calls)" == 0 ]] || fail "the refusal came after $(calls) ssh calls"
 [[ ! -e "$WORK/only-samples/run-new.log" ]] || fail "a refused run wrote a log"
 ok "a samples file alone is enough to refuse, and no log is written"
+reset
+E="$WORK/refused-start"
+run 1 script REAL_RUN=1 RUNS=triage LABEL=again EVIDENCE="$E" STUB_START=refused
+out_has "FAIL: refused: This account may not start a run here"
+[[ -s "$E/run-again.log" ]] || fail "a run refused at its start left no run.log"
+reset
+run 1 script REAL_RUN=1 RUNS=triage LABEL=again EVIDENCE="$E"
+out_has "or delete those files"
+[[ "$(calls)" == 0 ]] || fail "the refusal came after $(calls) ssh calls"
+ok "a run refused at its start keeps its log, and the same LABEL is then refused with the hint to delete the files"
+for wait in 1.5 -1 abc " 9" 9s; do
+  reset
+  run 1 script WAIT_S="$wait"
+  out_has "IDLE_S, POLL_S and WAIT_S are whole seconds"
+  [[ "$(calls)" == 0 ]] || fail "WAIT_S=$wait reached the Jetson"
+done
+ok "WAIT_S that is not a whole number (1.5, -1, abc, \" 9\", 9s) is refused before any ssh call"
 
 step "B2: only an admin account with a subscription credential gets a run"
 reset
@@ -502,7 +535,7 @@ out_has "log lines holding a token shaped value (prefix sk-ant-): 0"
 out_lacks "$DEFAULT_FRAGMENT"
 ok "the fragment of the message is not printed"
 reset
-run 1 script STUB_LOG_EXTRA="prompt: What are th$DEFAULT_FRAGMENT""ts of my profile"
+run 1 script STUB_LOG_EXTRA="prompt: What are the $DEFAULT_FRAGMENT of my profile"
 out_has "log lines holding a fragment of the message (20 characters, not printed): 1"
 out_has "FAIL"
 out_lacks "$DEFAULT_FRAGMENT"
@@ -550,6 +583,13 @@ out_has "app.agents.runner: (message not printed)"
 out_lacks "$PRIVATE"
 out_lacks "$DEFAULT_FRAGMENT"
 [[ "$(starts)" == 2 ]] || fail "expected 2 starts, got $(starts)"
+start_call="$(grep -F 'exec -T api python' "$CALLS" | tail -n 1)"
+[[ "$start_call" == *"python -m app.agents.cli start chat $JOB --role admin --credential-kind claude_subscription" ]] ||
+  fail "the start is not python -m app.agents.cli start with the role and credential kind: $start_call"
+[[ "$start_call" != *"@"* ]] || fail "the owner's address is on the command line of the start"
+[[ "$(jq -r '.owner' "$STATE/start.stdin")" == "e2e-owner@example.org" ]] || fail "the owner's address did not come on stdin"
+[[ "$(jq -r '.message' "$STATE/start.stdin")" == "$DEFAULT_MESSAGE" ]] || fail "the message did not come on stdin whole"
+ok "the start is python -m app.agents.cli start, role and credential kind in its arguments, the address and the message on stdin only"
 for f in run.log metrics.json memory-chat.tsv memory-chat-2.tsv; do
   [[ -s "$E/$f" ]] || fail "$f is missing or empty"
 done
