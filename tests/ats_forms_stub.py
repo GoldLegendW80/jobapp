@@ -919,6 +919,15 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                 if missing:
                     return missing
                 variant = job.partition("--")[2]
+                if variant == "signin":
+                    cookie = "a10b_" + re.sub(
+                        r"[^a-z0-9]", "_", path, flags=re.IGNORECASE
+                    )
+                    if cookie + "=signed" not in self.headers.get("Cookie", "").split(
+                        "; "
+                    ):
+                        return 200, (FORMS_DIR / "a10b" / "login.html").read_text()
+                    variant = "plain"
                 if variant == "slow":
                     stub.sleep(stub.slow_seconds)
                 return 200, form_page(

@@ -7,6 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
+from redis.exceptions import RedisError
 
 from app import queue
 from app.browser import later_handoff as later
@@ -58,9 +59,19 @@ def _signed_in(request: Request, user_id: uuid.UUID, body: Reference) -> bool:
 
 async def _binding(store: Store, user: str, body: Reference) -> dict:
     redis = await pool(store)
-    raw = await redis.get(later.PREFIX + user)
-    binding = json.loads(raw) if raw else None
-    if not binding or binding.get("module") != body.module or binding.get("ref") != str(body.ref):
+    try:
+        raw = await redis.get(later.PREFIX + user)
+    except RedisError:
+        raise HTTPException(503, "The browser is not available right now.") from None
+    try:
+        binding = json.loads(raw) if raw else None
+    except (ValueError, TypeError):
+        binding = None
+    if (
+        not isinstance(binding, dict)
+        or binding.get("module") != body.module
+        or binding.get("ref") != str(body.ref)
+    ):
         raise HTTPException(404, "No sign in is waiting for you.")
     return binding
 
@@ -97,7 +108,7 @@ async def start(
         )
         response.status_code = 201
         return SessionOut(lease=_lease_out(got.lease, store.clock()), queue=None)
-    except (BrowserError, StoreUnavailableError):
+    except (BrowserError, StoreUnavailableError, RedisError):
         raise HTTPException(503, "The browser is not available right now.") from None
 
 
@@ -140,7 +151,7 @@ async def _end(
                 json.dumps({**binding, "done": True}),
                 ex=store.session_max_s,
             )
-    except (BrowserError, StoreUnavailableError, queue.QueueUnavailableError):
+    except (BrowserError, StoreUnavailableError, RedisError, queue.QueueUnavailableError):
         raise HTTPException(503, "The browser is not available right now.") from None
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 

@@ -11,7 +11,7 @@ import type { Application, ApplicationEvent } from "./apply-api";
 import { queueKey } from "./queue-api";
 
 /** The steps the person takes in the live view while the assistant waits (api failures.WAIT_ON_PAGE). */
-export const ON_PAGE = new Set(["captcha", "email_code"]);
+export const ON_PAGE = new Set(["captcha", "email_code", "forbidden"]);
 
 export const PAYMENT_SENTENCE =
   "This site asked for a payment. Applications are free; this may not be a genuine posting.";

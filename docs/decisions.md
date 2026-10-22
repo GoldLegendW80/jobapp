@@ -236,3 +236,7 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
 - 2026-10-21 (#528): a skipped (passed) posting is refused with `passed` at start, at the
   decision and at both submission rechecks, in Review first and Full auto. Apply myself only
   warns; the other duplicate refusals still apply. Undo the Pass before asking the app to apply.
+
+- 2026-10-21 (#560): before an apply click, a 429 is a passing fault retried after 600 then
+  3,600 seconds, then failed. A 403 is not retried: it waits as Needs you with the page in the
+  live view. A step detected on that page still wins over the status.

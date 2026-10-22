@@ -947,13 +947,13 @@ async def _checked(result: Result, tools: _Watched) -> Result:
     frame on the page after the fill asks for payment, whatever state the fill reached."""
     if result.needs in _ON_PAGE:
         return result
-    if result.state is not State.ready and tools.status in (404, 410):
+    if tools.status == 410 or (result.state is not State.ready and tools.status == 404):
         return replace(result, state=State.posting_closed, needs=None, error="posting_closed")
     if result.state is not State.ready and tools.status is not None and tools.status >= 500:
         return replace(result, state=State.failed, needs=None, error=failures.HTTP_5XX)
-    if result.state is not State.ready and tools.status == 429:
+    if tools.status == 429:
         return replace(result, state=State.failed, needs=None, error=failures.HTTP_429)
-    if result.state is not State.ready and tools.status == 403:
+    if tools.status == 403:
         return replace(result, state=State.needs_person, needs="forbidden", error=None)
     if result.state is State.posting_closed or result.error in failures.RETRYABLE:
         return result
@@ -1013,6 +1013,10 @@ async def _wait_for_person(
         page = str(shot.get("snapshot") or "")
         if not shot.get("ok") or adapter.pending_step(page) == reason:
             continue
+        if reason == "forbidden":
+            found, code = await adapter.discover(tools)
+            if found is None or code:
+                continue
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
             return "person_acted"

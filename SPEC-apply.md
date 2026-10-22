@@ -132,9 +132,10 @@ A refusal in Full auto moves the application to the review queue with the reason
 ## Failures and retries
 
 - Before the click: a timeout, a 5xx page, a browser crash: up to 2 retries, after 10 and 60 minutes, then `failed`. A missing selector of an adapter during the fill (`form_changed`): the generic form agent takes over by itself in both modes (owner, 2026-10-19), within the run's token budget and every guardrail; in Full auto the item is submitted only when every Full auto check passes, the check by model included, else it goes to the review queue. The submit lease's read back keeps its own rule (no model, back to `ready`).
+- Owner decision of 2026-10-21 (#560): a 429 is retried by the same rule; a 403 is not retried and waits as `needs_person: forbidden`, with the page in the live view. A detected captcha, sign in, e-mail code or payment step takes precedence over the HTTP status.
 - `needs_person` (a captcha, a sign in or sign up wall, which is the hand off of SPEC-browser, a left field, an e-mail code with no mail connected): the person is told on the job page and in the queue, the live view opens on the tab; after 30 minutes without them the lease ends and the application waits in the queue.
 - After the click: a confirmation (the adapter's patterns, `stage.py`'s `SUCCESS` as the base) is `submitted`; the form's errors are `refused_by_site` (the fields named, nothing resubmitted; in Review first the person fixes and approves again); no answer in 60 s is `submit_unknown` (the sent versions are frozen too, see guardrail 6).
-- A posting that answers "no longer accepting applications" or 404: `posting_closed`, and a proposal to move the posting to `closed`.
+- A posting that answers "no longer accepting applications", 404 or 410: `posting_closed`, and a proposal to move the posting to `closed`.
 
 ## Cost per application
 

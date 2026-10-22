@@ -7,6 +7,7 @@ import {
   type Browser,
 } from "@/features/browser/browser-api";
 import { LiveBrowser } from "@/features/browser/live-browser";
+import { HandoffBanner } from "@/features/browser/handoff-banner";
 
 // How often the slot reads whether the assistant holds the browser (it ends, or starts).
 const LEASE_POLL_MS = 3_000;
@@ -59,6 +60,9 @@ export function LiveViewSlot({
   });
   const lease = applicationLease(query.data, leaseOf);
   if (lease) {
+    if (lease.state === "waiting_person" && lease.wait_reason === "signin") {
+      return <HandoffBanner liveOpen />;
+    }
     return (
       <div data-testid="live-view-slot">
         <LiveBrowser key={lease.id} status={status} />

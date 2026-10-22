@@ -38,7 +38,7 @@ export function AppShell() {
           </Link>
           <nav
             aria-label="Main"
-            className="flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
+            className="relative flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
           >
             <NavLink to="/jobs" className={navLink}>
               Jobs

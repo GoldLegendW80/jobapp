@@ -362,6 +362,20 @@ describe("the review", () => {
 });
 
 describe("the destructive buttons", () => {
+  it("waits for sign in before showing a login wall as a filled form", async () => {
+    fakeApply({
+      application: fakeApplication("needs_person", { needs: "signin" }),
+      answers: [leftAnswer("password", "Password", { required: false })],
+    });
+    const { section } = await openSection();
+    await within(section).findByRole("button", {
+      name: "Open the live view to sign in",
+    });
+    expect(
+      within(section).queryByRole("list", { name: "Fields filled" }),
+    ).toBeNull();
+  });
+
   it.each([
     [
       "ready",
