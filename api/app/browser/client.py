@@ -29,9 +29,10 @@ Every failure is a BrowserError whose `code` is one of CODES, never browserd's t
     ended         a tool call on a lease that is no longer the current one (404, 410)
     waiting_person  a tool call while the lease waits for the person to sign in (409, B12a)
 
-Timeouts are TIMEOUT_S (5 s) for every call but the start, which waits for Chromium to answer on
-CDP: browserd gives it START_S (30 s, browser/browserd/config.py) and the client a few seconds
-more, so a slow start (a stale profile lock) is not mistaken for a dead service. The lease token
+Control calls use TIMEOUT_S (5 s); startup, shutdown and handoff have their bounded operation
+allowances. Tool calls and the private opener allow TOOL_TIMEOUT_S for their native work plus
+TAKEOVER_WAIT_S for the person's specified live input pause. Startup waits for CDP: browserd
+allows START_S (30 s) and the client a small margin for a slow profile lock. The lease token
 is returned to the caller and goes nowhere else: it is not logged, and app/browser/leases.py does
 not store it. One log line per call: the route, the status and the duration.
 """
