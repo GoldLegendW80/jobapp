@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Syntax check of a dotenv file before docker compose reads it (issue #18).
+# Syntax and deployment policy check of a dotenv file before docker compose reads it.
 #
 #   ops/env_check.sh <file> [label]     exit 0 when every line is valid, 1 otherwise, 2 unreadable
 #
@@ -24,6 +24,8 @@
 # A trailing carriage return (a file saved with CRLF) is ignored, as compose ignores it.
 # It is stricter than compose on purpose: no `export `, no spaces around = or before the key, no
 # multi-line quoted value, and no $NAME reference (a .env of secrets needs no interpolation).
+# OPENSSL_armcap is refused even when empty: it belongs in the Mac Compose overrides only,
+# while the Jetson keeps OpenSSL's CPU detection and hardware AES (issue #36).
 #
 # Each invalid line is reported as "<label>: line N: invalid (<reason>)" on stderr. Neither the
 # value nor the rest of the line is ever printed: a .env holds secrets, and a broken line may be
@@ -49,6 +51,10 @@ env_line_problem() {
   value="${line#*=}"
   if [[ ! "$key" =~ $ENV_KEY_RE ]]; then
     printf 'the name before = is not a variable name (letters, digits, _; no spaces)'
+    return 0
+  fi
+  if [[ "$key" == OPENSSL_armcap ]]; then
+    printf 'OPENSSL_armcap is only for Mac development; remove this key'
     return 0
   fi
   case "$value" in
@@ -99,7 +105,7 @@ check_env_file() {
     fi
   done <"$file"
   if ((bad > 0)); then
-    printf '%s: %d invalid line(s); docker compose would refuse this file\n' "$label" "$bad" >&2
+    printf '%s: %d invalid line(s); fix this file before deploying\n' "$label" "$bad" >&2
     return 1
   fi
   return 0
