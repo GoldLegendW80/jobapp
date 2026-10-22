@@ -62,7 +62,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import credentials, definitions, runs
 from app.agents.failures import TOKEN_LIMIT, TURN_LIMIT
-from app.agents.models import CredentialKind, RunStatus
+from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.apply import agents as answer_agents
 from app.apply import answers
 from app.apply.ats import base as ats_base
@@ -107,6 +107,7 @@ class FormInput(BaseModel):
 
     request: str = Field(pattern=r"^[0-9a-f]{32}$")
     token_budget: int = Field(ge=0)
+    turn_budget: int = Field(default=MAX_TURNS, ge=1, le=MAX_TURNS)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
 
@@ -130,6 +131,7 @@ class FormSession:
     context: answers.Context
     user_id: str
     token_budget: int = TOKEN_BUDGET
+    turn_budget: int = MAX_TURNS
     outcomes: dict[str, ats_base.Outcome] = field(default_factory=dict)
     closed: list[ats_base.Outcome] = field(default_factory=list)  # fields of earlier steps
     skipped: list[ats_base.Skipped] = field(default_factory=list)
@@ -344,6 +346,7 @@ class Ran:
     input_tokens: int = 0
     output_tokens: int = 0
     stopped: str = ""  # "", no_credential, busy, token_budget, turn_limit, cancelled, error
+    turns: int = 0
 
 
 FormAgent = Callable[[FormSession], Awaitable[Ran]]
@@ -411,13 +414,18 @@ class RuntimeFormAgent:
     script: str | None = None
 
     async def __call__(self, session: FormSession) -> Ran:
+        if session.token_budget <= 0 or session.turn_budget <= 0:
+            return Ran(stopped="token_budget" if session.token_budget <= 0 else "turn_limit")
         from app.agents import runner  # the SDK: the worker's image only
 
         context = self.context()
         key = secrets.token_hex(16)
         user_id = uuid.UUID(session.user_id)
         data = FormInput(
-            request=key, token_budget=session.token_budget, script=self.script
+            request=key,
+            token_budget=session.token_budget,
+            turn_budget=session.turn_budget,
+            script=self.script,
         ).model_dump(exclude_none=True)
 
         def create(db: Session) -> uuid.UUID | str:
@@ -458,7 +466,13 @@ class RuntimeFormAgent:
         ended = await asyncio.to_thread(
             answer_agents._in_db, context.sessions, lambda db: answer_agents._ended(db, created)
         )
-        return Ran(ended.input_tokens, ended.output_tokens, _stopped(ended))
+
+        def measured(db: Session) -> int:
+            run = db.get(AgentRun, created)
+            return int((run.output or {}).get("turns", 0)) if run else 0
+
+        turns = await asyncio.to_thread(answer_agents._in_db, context.sessions, measured)
+        return Ran(ended.input_tokens, ended.output_tokens, _stopped(ended), turns)
 
 
 async def fill(agent: FormAgent, session: FormSession) -> tuple[FormReport, dict[str, Any]]:

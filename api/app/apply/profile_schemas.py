@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,7 +15,7 @@ class StartIn(BaseModel):
 
 class FieldIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    value: str | bool | None = Field(default=None, max_length=10000)
+    value: Annotated[str, Field(max_length=10000)] | bool | None = None
     replace: bool | None = None
 
 

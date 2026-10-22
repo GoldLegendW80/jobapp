@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.apply import admin, profile_refusals, profile_sites, profile_sources, shots, site_profile
 from app.apply.answers import Answer
-from app.apply.ats import generic
+from app.apply.ats import base, generic
 from app.apply.caps_models import ApplySettings
 from app.apply.models import Authorisation, AuthorisationKind, SiteKind, SiteRunState, SiteShotKind
 from app.browser import linkedin_guard
@@ -164,6 +164,7 @@ async def save_section(
             run.user_id,
             run.url,
             run.host,
+            run.site_kind.value,
             run.autosave,
             part.label,
             part.save_name,
@@ -177,7 +178,7 @@ async def save_section(
     plan = await asyncio.to_thread(site_profile._in_db, services, load)
     if plan is None:
         return
-    user_id, url, host, autosave, label, save_name, rows = plan
+    user_id, url, host, site_kind, autosave, label, save_name, rows = plan
     acquired = None
 
     async def failed(code: str, changed: list[str] | None = None) -> None:
@@ -212,13 +213,39 @@ async def save_section(
             )
             if acquired.lease is None or not acquired.token or not acquired.capability:
                 return  # the tick retries this section, with no authorization consumed
-            tools = services.tools_for(str(user_id), acquired.lease.id, acquired.token)
+            tools = services.tools_for(str(user_id), acquired.lease.lease_id, acquired.token)
             if not (await tools.navigate(url)).get("ok"):
                 await failed("navigation_failed")
                 return
         else:
             tools = held_tools
-        adapter = profile_sites.SectionAdapter(section, label)
+        if await profile_sites.open_section(tools, site_kind, section, label) is None:
+            await failed("section_unreadable")
+            return
+        adapter = profile_sites.SectionAdapter(section, label, site_kind)
+        initial, _ = await adapter.read(tools)
+        if (
+            initial is None
+            or initial.pending
+            or {site_profile.key_of(f) for f in initial.fields} != {r[0] for r in rows}
+        ):
+            await failed("form_changed")
+            return
+        if any(f.kind == "checkbox" and f.checked for f in initial.fields):
+            await failed("legal_commitment")
+            return
+        if any(
+            term in base.fold(" ".join(initial.root.words()))
+            for term in (
+                "credit card",
+                "payment required",
+                "pay to continue",
+                "carte bancaire",
+                "paiement requis",
+            )
+        ):
+            await failed("payment_requested")
+            return
         for key, _field_label, kind, value, current, source, approved in rows:
             if not approved:
                 continue
@@ -347,6 +374,12 @@ async def save_section(
             if not result.get("ok"):
                 await failed("save_refused")
                 return
+        if not (await tools.navigate(url)).get("ok"):
+            await failed("save_unknown")
+            return
+        if await profile_sites.open_section(tools, site_kind, section, label) is None:
+            await failed("readback_section_missing")
+            return
         found, _ = await adapter.read(tools)
         changed = [
             key
@@ -377,7 +410,7 @@ async def save_section(
         await failed("save_unknown")
     finally:
         if acquired and acquired.lease:
-            await services.leases.release(str(user_id), acquired.lease.id)
+            await services.leases.release(str(user_id), acquired.lease.lease_id)
 
 
 async def site_profile_save(ctx: dict[str, Any], run_id: str, section: str, auth_id: str) -> None:

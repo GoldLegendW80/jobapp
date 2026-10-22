@@ -94,15 +94,79 @@ def autosave(root: base.Node) -> bool:
 class SectionAdapter(base.Adapter):
     submit_names = SAVE_NAMES
 
-    def __init__(self, key: str, label: str) -> None:
+    def __init__(self, key: str, label: str, kind: str = "generic") -> None:
         super().__init__()
-        self.key, self.label = key, label
+        self.key, self.label, self.kind = key, label, kind
 
-    def scope(self, root: base.Node) -> base.Node | None:
-        found = next(
+    def section(self, root: base.Node) -> Section | None:
+        helper = for_kind(self.kind)
+        if helper:
+            from .known import active
+
+            entry = next((e for e in helper.ENTRIES if e.key == self.key), None)
+            node = active(root, entry) if entry else None
+            if node is not None:
+                return Section(
+                    entry.key, entry.label, node, base.discover_fields(node, SAVE_NAMES).fields
+                )
+        return next(
             (s for s in sections(root) if s.key == self.key and s.label == self.label), None
         )
+
+    def scope(self, root: base.Node) -> base.Node | None:
+        found = self.section(root)
         return found.node if found else None
+
+
+def for_kind(kind: str):
+    if kind == "linkedin":
+        from . import linkedin
+
+        return linkedin
+    if kind == "workday":
+        from . import workday
+
+        return workday
+    return None
+
+
+async def catalogue(tools, kind: str) -> list[Section]:
+    root = base.parse_snapshot(str((await tools.snapshot()).get("snapshot") or ""))
+    helper = for_kind(kind)
+    if helper:
+        from .known import available
+
+        entries = available(root, helper.ENTRIES)
+        if entries:
+            return [Section(e.key, e.label, root, []) for e in entries]
+    return sections(root)
+
+
+async def open_section(tools, kind: str, key: str, label: str) -> Section | None:
+    helper = for_kind(kind)
+    if helper:
+        from .known import open_entry
+
+        entry = next((e for e in helper.ENTRIES if e.key == key), None)
+        if entry:
+            node = await open_entry(tools, entry)
+            return (
+                Section(key, label, node, base.discover_fields(node, SAVE_NAMES).fields)
+                if node
+                else None
+            )
+    root = base.parse_snapshot(str((await tools.snapshot()).get("snapshot") or ""))
+    return next((s for s in sections(root) if s.key == key and s.label == label), None)
+
+
+async def close_section(tools, kind: str, key: str) -> bool:
+    helper = for_kind(kind)
+    if helper:
+        from .known import close_entry
+
+        entry = next((e for e in helper.ENTRIES if e.key == key), None)
+        return await close_entry(tools, entry) if entry else True
+    return True
 
 
 def for_host(host: str):
@@ -124,4 +188,6 @@ def kind(url: str, stub_base: str | None = None) -> str:
         return helper.KIND
     if stub_base and url.startswith(stub_base.rstrip("/") + "/forms/a18/linkedin"):
         return "linkedin"
+    if stub_base and url.startswith(stub_base.rstrip("/") + "/forms/a18/workday"):
+        return "workday"
     return "generic"

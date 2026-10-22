@@ -145,3 +145,194 @@ def test_gate_expiry_pause_and_readback(db, factory, person_a, monkeypatch, faul
     _, part, _ = section(db, person_a.user_id, run_id)
     assert part.state == "ready"
     assert portal.clicks == (1 if fault == "readback" else 0)
+
+
+def test_concurrent_approve_creates_one_authorisation(db, factory, person_a):
+    from concurrent.futures import ThreadPoolExecutor
+
+    portal = Portal()
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(services(factory, portal), run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    key, digest = part.section, profile_sources.value_hash(part, rows)
+    db.commit()
+
+    def approve():
+        with factory() as session:
+            try:
+                profile_gate.authorise_section(session, person_a.user_id, run_id, key, digest, AT)
+                session.commit()
+                return "approved"
+            except site_profile.RefusedError:
+                session.rollback()
+                return "refused"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: approve(), range(2)))
+    assert results.count("approved") == 1
+    assert results.count("refused") == 1
+
+
+def test_replace_selects_only_that_field_and_user_edit_changes_hash(
+    db, factory, person_a, monkeypatch
+):
+    portal = Portal()
+    env = services(factory, portal)
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(env, run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    phone = next(r for r in rows if r.label == "Phone")
+    old_hash = profile_sources.value_hash(part, rows)
+    site_profile.edit(
+        db, person_a.user_id, run_id, part.section, phone.field_key, {"replace": True}, AT
+    )
+    db.flush()
+    rows = site_profile.fields(db, _run, part.section)
+    assert profile_sources.value_hash(part, rows) != old_hash
+    assert [r.label for r in rows if r.replace] == ["Phone"]
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    auth_id, key = auth.id, part.section
+    db.commit()
+    monkeypatch.setattr(profile_gate, "gate_click", portal.save)
+    asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    assert portal.saved["Phone"] != "+33 1 00 00 00 00"
+    assert portal.saved["Email"] == "e2e-site@example.org"
+
+
+def test_pause_after_audit_prevents_click(db, factory, person_a, monkeypatch):
+    portal = Portal()
+    env = services(factory, portal)
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(env, run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    auth_id, key = auth.id, part.section
+    db.commit()
+    calls = 0
+
+    async def switches():
+        nonlocal calls
+        calls += 1
+        return True, calls >= 3
+
+    env.profile_switches = switches
+    monkeypatch.setattr(profile_gate, "gate_click", portal.save)
+    asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    assert portal.clicks == 0
+    db.expire_all()
+    assert db.get(Authorisation, auth_id).used_at is not None
+
+
+def test_designation_outside_section_is_refused():
+    from app.apply import profile_sites
+    from app.apply.ats.base import parse_snapshot
+
+    root = parse_snapshot(
+        '- form "Experience":\n  - textbox "Job title" [ref=e2]\n'
+        '  - button "Save" [ref=e3]\n- button "Save" [ref=e4]'
+    )
+    part = profile_sites.sections(root)[0]
+    _target, code = profile_sites.save(part, "e4")
+    assert code == "outside_section"
+
+
+def test_profile_tools_cannot_click_save(db, factory, person_a):
+    portal = Portal()
+    result = asyncio.run(portal.click("e9", "Save"))
+    assert result["error"] == "submit"
+    assert portal.clicks == 0
+
+
+def test_startup_recovery_keeps_consumed_save_uncertain(db, person_a):
+    run_id = make(db, person_a.user_id)
+    run = db.get(SiteProfileRun, run_id)
+    run.state = SiteRunState.filling
+    db.commit()
+    assert site_profile.reset_interrupted(db, AT) == 1
+    assert run.state is SiteRunState.failed
+    assert run.error_code == "fill_interrupted"
+
+
+def test_startup_recovery_never_replays_consumed_authorisation(db, factory, person_a):
+    portal = Portal()
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(services(factory, portal), run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    run, part, _rows = profile_gate.consume(
+        db, person_a.user_id, run_id, part.section, auth.id, AT, True, False
+    )
+    db.commit()
+    assert site_profile.reset_interrupted(db, AT) == 1
+    assert run.state is SiteRunState.ready
+    assert part.state == "ready"
+    assert part.error_code == "save_unknown"
+    assert auth.used_at is not None
+    assert portal.clicks == 0
+
+
+@pytest.mark.parametrize("kind", ["workday", "linkedin"])
+def test_known_site_opens_and_reopens_stable_section_dialog(
+    db, factory, person_a, monkeypatch, kind
+):
+    from app.apply.models import SiteKind
+    from tests.apply.a18_support import DialogPortal
+
+    portal = DialogPortal(kind)
+    env = services(factory, portal)
+    run_id = make(db, person_a.user_id)
+    run = db.get(SiteProfileRun, run_id)
+    run.site_kind = SiteKind(kind)
+    db.commit()
+    monkeypatch.setattr(site_profile.linkedin_guard, "allowed", lambda *args: True)
+    asyncio.run(site_profile.fill(env, run_id))
+    run, part, rows = section(db, person_a.user_id, run_id)
+    assert run.state is SiteRunState.ready, run.error_code
+    assert part.section == "experience"
+    assert [s.section for s in site_profile.sections(db, run)] == ["experience", "education"]
+    assert portal.records["experience"]["Job title"] == ""
+    assert portal.opened is None
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    auth_id, key = auth.id, part.section
+    db.commit()
+    monkeypatch.setattr(profile_gate, "gate_click", portal.save)
+    asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    _run, part, _rows = section(db, person_a.user_id, run_id)
+    assert part.state == "saved", part.error_code
+    assert portal.records["experience"]["Job title"]
+    assert portal.clicks == 1
+    assert all(name in (*portal.names.values(), "Close") for name in portal.control_clicks)
+
+
+def test_generic_profile_has_one_aggregate_model_budget(db, factory, person_a):
+    from app.apply import form_agent
+    from app.apply.models import SiteKind
+    from tests.apply.a18_support import DialogPortal
+
+    portal = DialogPortal("workday")
+    env = services(factory, portal)
+    run_id = make(db, person_a.user_id)
+    run = db.get(SiteProfileRun, run_id)
+    run.site_kind = SiteKind.workday
+    db.commit()
+    budgets = []
+
+    async def agent(session):
+        budgets.append((session.token_budget, session.turn_budget))
+        return form_agent.Ran(input_tokens=23_000, turns=30)
+
+    asyncio.run(site_profile.fill(env, run_id, agent))
+    run = site_profile.lock(db, person_a.user_id, run_id)
+    db.expire_all()
+    parts = site_profile.sections(db, run)
+    assert budgets == [(23_000, 30)]
+    assert parts[1].state == "left"
+    assert parts[1].error_code == "budget_exhausted"

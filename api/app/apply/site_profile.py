@@ -212,8 +212,25 @@ def edit(
         raise RefusedError("protected")
     if "value" in changes:
         value = changes["value"]
-        if row.kind == "file" or (row.options and value not in row.options) or value is None:
+        valid_type = (
+            isinstance(value, str)
+            if row.kind in ("text", "select", "combobox")
+            else isinstance(value, (str, bool))
+            if row.kind == "yes_no"
+            else False
+        )
+        if (
+            not valid_type
+            or row.kind == "file"
+            or (row.options and value not in row.options)
+            or value is None
+        ):
             raise RefusedError("protected")
+        if isinstance(value, str):
+            profile = profiles.get_profile(db, user_id, now)
+            context = answers.Context(user_id, profiles.sections_view(profile))
+            if not profile_sources.factual(value, context):
+                raise RefusedError("factcheck")
         row.value, row.source, row.source_path, row.refusal = (
             value,
             SiteFieldSource.person,
@@ -295,6 +312,7 @@ class Plan:
     url: str
     host: str
     linkedin: bool
+    site_kind: str
     confirmed: bool
     context: answers.Context
     cv: bytes | None
@@ -328,6 +346,7 @@ def prepare(db: Session, run_id: uuid.UUID, now: datetime) -> Plan | None:
         run.url,
         run.host,
         run.site_kind is SiteKind.linkedin,
+        run.site_kind.value,
         run.autosave_confirmed,
         context,
         cv,
@@ -391,11 +410,7 @@ class ProfileSession(form_agent.FormSession):
 
     async def designate_submit(self, ref: str) -> tuple[str, bool]:
         shot = await self.tools.snapshot()
-        candidates = profile_sites.sections(base.parse_snapshot(str(shot.get("snapshot") or "")))
-        section = next(
-            (s for s in candidates if s.key == self.adapter.key and s.label == self.section_label),
-            None,
-        )
+        section = self.adapter.section(base.parse_snapshot(str(shot.get("snapshot") or "")))
         node, code = profile_sites.save(section, ref) if section else (None, "section_missing")
         if node is None or code or not await generic.marked(self.tools, ref, node.name):
             return "The Save is not safely inside this section.", True
@@ -440,7 +455,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
         if acquired.lease is None or not acquired.token:
             await update(SiteRunState.queued, "browser_busy")
             return
-        tools = services.tools_for(str(plan.user_id), acquired.lease.id, acquired.token)
+        tools = services.tools_for(str(plan.user_id), acquired.lease.lease_id, acquired.token)
         if not (await tools.navigate(plan.url)).get("ok"):
             await update(SiteRunState.failed, code="navigation_failed")
             return
@@ -479,7 +494,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                         str(plan.user_id),
                         "site_profile",
                         run_id,
-                        acquired.lease.id,
+                        acquired.lease.lease_id,
                     )
                     retained = True
                 return
@@ -489,9 +504,19 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
         elif pending:
             await update(SiteRunState.needs_person, pending)
             return
-        root = base.parse_snapshot(text)
-        parts = profile_sites.sections(root)
-        is_autosave = profile_sites.autosave(root)
+        parts = await profile_sites.catalogue(tools, plan.site_kind)
+        is_autosave = False
+        for descriptor in parts:
+            opened = await profile_sites.open_section(
+                tools, plan.site_kind, descriptor.key, descriptor.label
+            )
+            if opened is None:
+                await update(SiteRunState.failed, code="section_unreadable")
+                return
+            is_autosave = is_autosave or profile_sites.autosave(opened.node)
+            if not await profile_sites.close_section(tools, plan.site_kind, descriptor.key):
+                await update(SiteRunState.failed, code="section_could_not_close")
+                return
         if is_autosave and not plan.confirmed:
             await update(SiteRunState.needs_person, "autosave_confirmation")
             return
@@ -500,9 +525,21 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
             return
         if plan.cv is not None:
             await tools.put_file("reference-cv.pdf", plan.cv)
-        for part in parts:
+        token_ceiling = (
+            form_agent.TOKEN_BUDGET if plan.site_kind == "generic" else 23_000 * len(parts)
+        )
+        used_tokens, used_turns = 0, 0
+        for part_position, descriptor in enumerate(parts, 1):
+            part = await profile_sites.open_section(
+                tools, plan.site_kind, descriptor.key, descriptor.label
+            )
+            if part is None:
+                await update(SiteRunState.failed, code="section_unreadable")
+                return
 
-            def persist(db: Session, part=part) -> list[SiteProfileField]:
+            def persist(
+                db: Session, part=part, part_position=part_position
+            ) -> list[SiteProfileField]:
                 run = lock(db, plan.user_id, run_id)
                 if run.state is SiteRunState.cancelled:
                     return []
@@ -515,7 +552,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                     run_id=run_id,
                     user_id=plan.user_id,
                     section=part.key,
-                    position=int(part.key),
+                    position=part_position,
                     label=part.label,
                     save_name=save.name if save else "",
                     state="ready",
@@ -535,7 +572,9 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                         label=item.label,
                         kind=item.kind,
                         value=answer.value if answered else None,
-                        current_value=item.value or None,
+                        current_value=(
+                            item.checked if item.kind == "checkbox" else item.value or None
+                        ),
                         source=source_of(answer.source) if answered else SiteFieldSource.left,
                         source_path=answer.source if answered else "",
                         required=item.required,
@@ -553,6 +592,17 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
 
             rows = await asyncio.to_thread(_in_db, services, persist)
             if not rows:
+                continue
+            if used_tokens >= token_ceiling or used_turns >= form_agent.MAX_TURNS:
+
+                def budget_left(db: Session, key=part.key):
+                    run = lock(db, plan.user_id, run_id)
+                    section = section_of(db, run, key)
+                    section.state, section.error_code = "left", "budget_exhausted"
+                    event(section, "left", services.clock(), code="budget_exhausted")
+
+                await asyncio.to_thread(_in_db, services, budget_left)
+                await profile_sites.close_section(tools, plan.site_kind, part.key)
                 continue
             if is_autosave:
                 from app.apply import profile_gate
@@ -582,12 +632,16 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                     services, run_id, part.key, auth_id, held_tools=tools
                 )
                 continue
-            adapter = profile_sites.SectionAdapter(part.key, part.label)
+            adapter = profile_sites.SectionAdapter(part.key, part.label, plan.site_kind)
             session = ProfileSession(
                 adapter,
                 tools,
                 plan.context,
                 str(plan.user_id),
+                token_budget=min(token_ceiling - used_tokens, 23_000)
+                if plan.site_kind != "generic"
+                else token_ceiling - used_tokens,
+                turn_budget=form_agent.MAX_TURNS - used_turns,
                 section_label=part.label,
                 rows={r.field_key: r for r in rows},
                 autosave=is_autosave,
@@ -599,24 +653,24 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                     await session.fill_field(current.ref)
             if agent:
                 ran = await agent(session)
+                used_tokens += ran.input_tokens + ran.output_tokens
+                used_turns += ran.turns
+                if ran.stopped in ("turn_limit", "token_budget"):
+                    used_turns = form_agent.MAX_TURNS
 
-                def cost(db: Session, ran=ran) -> None:
+                def cost(db: Session, ran=ran, used_turns=used_turns) -> None:
                     run = lock(db, plan.user_id, run_id)
                     run.cost = {
                         "input_tokens": int(run.cost.get("input_tokens", 0)) + ran.input_tokens,
                         "output_tokens": int(run.cost.get("output_tokens", 0)) + ran.output_tokens,
-                        "token_budget": form_agent.TOKEN_BUDGET,
+                        "token_budget": token_ceiling,
+                        "turns": used_turns,
                         "turn_cap": form_agent.MAX_TURNS,
                     }
 
                 await asyncio.to_thread(_in_db, services, cost)
             latest = await tools.snapshot()
-            current_parts = profile_sites.sections(
-                base.parse_snapshot(str(latest.get("snapshot") or ""))
-            )
-            current_part = next(
-                (s for s in current_parts if s.key == part.key and s.label == part.label), None
-            )
+            current_part = adapter.section(base.parse_snapshot(str(latest.get("snapshot") or "")))
             save, _ = (
                 profile_sites.save(current_part) if current_part else (None, "section_missing")
             )
@@ -655,6 +709,9 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 )
 
             await asyncio.to_thread(_in_db, services, ready)
+            if not await profile_sites.close_section(tools, plan.site_kind, part.key):
+                await update(SiteRunState.failed, code="section_could_not_close")
+                return
 
         def end(db: Session) -> None:
             run = lock(db, plan.user_id, run_id)
@@ -665,7 +722,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
         await update(SiteRunState.failed, code="profile_run_failed")
     finally:
         if acquired and acquired.lease and not retained:
-            await services.leases.release(str(plan.user_id), acquired.lease.id)
+            await services.leases.release(str(plan.user_id), acquired.lease.lease_id)
 
 
 async def site_profile_run(ctx: dict[str, Any], run_id: str) -> None:
@@ -681,6 +738,32 @@ async def site_profile_run(ctx: dict[str, Any], run_id: str) -> None:
 
 def job_id(run_id: Any) -> str:
     return f"site-profile:{run_id}"
+
+
+def reset_interrupted(db: Session, now: datetime) -> int:
+    """Called only before the serial apply worker starts accepting jobs.
+
+    A consumed Save may have reached the site. Its section needs explicit review, and
+    its authorization remains consumed. This recovery never touches a browser lease.
+    """
+    runs = list(
+        db.scalars(
+            sa.select(SiteProfileRun)
+            .where(SiteProfileRun.state.in_((SiteRunState.filling, SiteRunState.saving)))
+            .with_for_update()
+        )
+    )
+    for run in runs:
+        if run.state is SiteRunState.filling:
+            run.state, run.needs, run.error_code = SiteRunState.failed, None, "fill_interrupted"
+        else:
+            run.state, run.needs, run.error_code = SiteRunState.ready, None, "save_unknown"
+            for part in sections(db, run):
+                if part.state == "saving":
+                    part.state, part.error_code = "ready", "save_unknown"
+                    event(part, "save_interrupted", now)
+        run.updated_at = now
+    return len(runs)
 
 
 async def tick(ctx: dict[str, Any]) -> int:
@@ -717,6 +800,10 @@ async def tick(ctx: dict[str, Any]) -> int:
             )
             if auth:
                 saves.append((run.id, part.section, auth.id))
+            else:
+                part.state, part.error_code = "ready", "approval_expired"
+                event(part, "refused", clock_of(ctx)(), code="approval_expired")
+                finish_state(db, run, clock_of(ctx)())
         return fills, saves
 
     fills, saves = await asyncio.to_thread(transaction, sessions_of(ctx), due)
