@@ -170,9 +170,16 @@ async def linkedin_open(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, 
 
     async def work() -> dict[str, Any]:
         async with _lock(lease):
-            return await linkedin.open_modal(
-                tab, body["job_id"], svc.manager.config.linkedin_stub_base_url
-            )
+            try:
+                result = await linkedin.open_modal(
+                    tab, body["job_id"], svc.manager.config.linkedin_stub_base_url
+                )
+            except actions.OffList:
+                return await tab.settle(actions.refused("host_not_allowed"))
+            except Exception:
+                # A detached element during approach is a refusal, never a replacement click.
+                result = actions.refused("linkedin_opener_refused")
+            return await tab.settle(result)
 
     return 200, await _run(svc, lease_id, token, work)
 

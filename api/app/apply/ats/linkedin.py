@@ -132,6 +132,8 @@ class LinkedIn(generic.Generic):
 
             async def snapshot(self):
                 shot = await tools.snapshot()
+                if adapter.pending_step(str(shot.get("snapshot") or "")):
+                    return shot
                 if adapter.job_id and adapter.job_of(str(shot.get("url") or "")) != adapter.job_id:
                     return {"ok": False, "error": "form_changed"}
                 return shot
@@ -148,7 +150,9 @@ class LinkedIn(generic.Generic):
         return dialogs[0] if len(dialogs) == 1 else None
 
     def pending_at(self, root: base.Node) -> str:
-        text = base.fold(" ".join(root.words()))
+        text = base.fold(
+            " ".join(" ".join(n.words()) for n in root.walk() if n.role in ("heading", "alert"))
+        )
         if any(word in text for word in CHECKPOINT):
             return "linkedin_paused"
         return super().pending_at(root)
@@ -235,7 +239,10 @@ class LinkedIn(generic.Generic):
         if match is None or not hasattr(tools, "linkedin_open"):
             return "form_changed"
         result = await tools.linkedin_open(match[1])
-        return "" if result.get("ok") else str(result.get("error") or "form_changed")
+        if result.get("ok"):
+            return ""
+        code = str(result.get("error") or "form_changed")
+        return "form_changed" if code == "linkedin_opener_refused" else code
 
     @staticmethod
     def optional_follow(item: base.Field) -> bool:

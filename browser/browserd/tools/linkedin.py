@@ -17,7 +17,7 @@ JOB = re.compile(r"[0-9]{1,24}")
 # Fresh before and after the human approach. Check the native element and click point, not
 # merely its accessible label: a form-associated button, overlay or nested control refuses.
 OPENER_JS = """(e, selectors) => {
-  if (e.ownerDocument.defaultView !== e.ownerDocument.defaultView.top ||
+  if (!e.isConnected || e.ownerDocument.defaultView !== e.ownerDocument.defaultView.top ||
       e.tagName !== 'BUTTON' || e.type !== 'button' || e.form || e.closest('form') ||
       e.disabled || e.getAttribute('aria-disabled') === 'true' ||
       !['Easy Apply', 'Candidature simplifiée'].includes(
@@ -54,19 +54,27 @@ async def open_modal(tab: Any, job_id: str, fixture_base: str = "") -> dict[str,
         return actions.refused("linkedin_opener_refused")
     page = await tab.page()
 
-    async def valid(button: Any) -> bool:
+    candidate = page.get_by_role("button", name=NAMES, exact=True)
+    if await candidate.count() != 1:
+        return actions.refused("linkedin_opener_refused")
+    # Pin the actual element. A role locator could otherwise retarget a replacement button
+    # after the facts check, whereas a detached handle can never click its replacement.
+    button = await candidate.element_handle()
+    if button is None:
+        return actions.refused("linkedin_opener_refused")
+
+    async def valid() -> bool:
         return (
             job_matches(page.url, job_id, fixture_base)
             and page.main_frame.url == page.url
-            and await button.count() == 1
+            and await candidate.count() == 1
             and await button.evaluate(OPENER_JS, list(tab.request.submit_selectors)) is True
         )
 
-    button = page.get_by_role("button", name=NAMES, exact=True)
-    if not await valid(button):
+    if not await valid():
         return actions.refused("linkedin_opener_refused")
     await tab.approach(button)
-    if not await valid(button):
+    if not await valid():
         return actions.refused("linkedin_opener_refused")
     await button.click(timeout=actions.ACTION_S * 1000)
     return await tab.settle({"ok": True})

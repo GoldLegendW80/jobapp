@@ -197,7 +197,9 @@ class Read:
 
 def _stop(db: Session, application: Application, stop: Stop, now: datetime) -> None:
     states.move(application, stop.state, now)
-    application.error_code = stop.code if stop.state is not State.needs_person else None
+    application.error_code = stop.code
+    if stop.state is State.needs_person and stop.code != "linkedin_paused":
+        application.error_code = None
     application.needs = stop.needs
     gate._event(db, application, "submit_stopped", now, state=stop.state.value, code=stop.code)
     if stop.state in (State.ready, State.needs_person):
@@ -559,6 +561,8 @@ def difference(found: ats_base.Discovery, rows: list[Row]) -> str:
 
 
 def _stop_of(code: str, step: str = "") -> Stop:
+    if code == "linkedin_paused" or (code == "needs_person" and step == "linkedin_paused"):
+        return Stop(State.needs_person, "linkedin_paused", "linkedin_paused")
     if code == "needs_person":
         return Stop(State.needs_person, "needs_person", step or "needs_person")
     if code in ats_base.PENDING_STEPS:

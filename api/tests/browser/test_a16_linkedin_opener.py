@@ -27,6 +27,9 @@ class Button:
     async def count(self):
         return self.counted
 
+    async def element_handle(self):
+        return self
+
     async def evaluate(self, script, args):
         assert script == linkedin.OPENER_JS
         return self.safe

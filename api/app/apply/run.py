@@ -122,7 +122,7 @@ FILLED = frozenset({"filled", "unverified"})
 INTERRUPTED = "interrupted"
 DUE_LIMIT = 200
 # A step the person takes on the page: what the page shows wins over its HTTP status.
-_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT})
+_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT, "linkedin_paused"})
 
 
 class RunTools(ats_base.Tools, Protocol):
@@ -783,7 +783,13 @@ def _stopped(code: str, step: str = "") -> tuple[State, str | None, str | None]:
     if code == "posting_closed":
         return State.posting_closed, None, code
     if code == "needs_person":
-        return State.needs_person, step or code, None
+        return (
+            State.needs_person,
+            step or code,
+            "linkedin_paused" if step == "linkedin_paused" else None,
+        )
+    if code == "linkedin_paused":
+        return State.needs_person, code, code
     if code in ("form_changed", "no_adapter", "snapshot_cut", *ats_base.PENDING_STEPS):
         return State.needs_person, code, None
     return State.failed, None, code or "failed"
