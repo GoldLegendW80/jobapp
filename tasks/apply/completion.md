@@ -28,7 +28,7 @@ an approval of an original snapshot is not an approval of the combined tree.
 | A11 to A13c: caps, Like queue and Full auto | Main plus #591, #598, #470 | Verify composed decision, hold, rehearsals, model check, pauses and final rechecks | Counted fake submissions, clock/cap tests and journeys |
 | A14: email applications | Missing; required mail send components also missing | #251: draft, exact authorisation, provider boundary, send gate, uncertainty resolution and UI | Fake Gmail only, immutable attachments, no duplicate send |
 | A15: Workday, Google Careers and VIE | Missing | #252: bounded wizards, sign-in resume, labelled controls and file choosers | Fake multi-step applications; Full auto hands over to review |
-| A16: LinkedIn Easy Apply | Missing | #253: opted-in modal flow, company-site fallback and LinkedIn pacing | Fake modal, consent revocation/checkpoint, cap and isolation tests |
+| A16: LinkedIn Easy Apply | Source checkpoint integrated, acceptance pending | #253: opted-in modal flow, company-site fallback and LinkedIn pacing | Fake modal, consent revocation/checkpoint, cap and isolation tests |
 | A18a to A18c: complete external profiles | Only initial tables exist | #254, #255, #256: persisted sections, factual fill, protected-field policy, review/save gate and UI | Fake portal, one-use hash approvals, current values/Replace, autosave consent |
 | A17: privacy and retention | Storage ownership/cascades exist; final proof missing | #257: prune temporary screenshots, route isolation, privacy text and click/send boundary proof | Two-user route suite, account/posting deletion, retention boundaries and canaries |
 
@@ -78,18 +78,37 @@ recorded separately from unfinished implementation.
   lease DTOs, API boundaries, known-site dialogs, concurrent approval, pause, recovery and the
   shared token/turn budgets. Atomic-write/cancellation follow-up `b808cd50` passed 157 focused
   cases. The whole apply/browser run passed 4,950 cases and found one outdated queue registry
-  assertion; its exact composed assertion is corrected, with a rerun pending. The browser
-  journey and frontend remain in progress.
+  assertion; its exact composed assertion is corrected, with a rerun pending. CV pinning
+  `354a9f5f` uses the exact reviewed version and PDF digest: a newer default cannot substitute
+  its bytes, and a missing or changed version prevents upload and Save. Final profile tests
+  passed 30 cases. Browser testing found and fixed a stale Replace checkbox and premature
+  completion after the first autosave section (`2d20cf64`, `466c7a5f`). All four real browser
+  flows still require a passing rerun by the fresh continuation agent. The dedicated
+  [A18 evidence](../evidence/apply-a18/tests.txt) records the remaining proof and stack recipe.
 - A14 provider `06d24153`: 82 existing Google/key cases and the focused MCP transport case
   passed using a local fake Google service. Gate follow-up `5d0b18db` passed 1,251 mail,
   application and migration tests. It checks the exact recipient, both immutable PDFs,
-  current approval, pauses and uncertainty without an automatic resend. The UI compiles
-  with sign-in recovery. Fake browser flow and deployment configuration remain in progress.
+  current approval, pauses and uncertainty without an automatic resend. The final A14 fake
+  browser journey passed with one message and both PDFs, and seven existing Gmail connection
+  journeys passed. A broad application/mail/migration run passed 5,808 cases and exposed two
+  compatibility failures, both fixed with a 310-case affected rerun. Final combined suites
+  remain. The shared "It was submitted" action still needs atomic, idempotent resolution of
+  the linked application, MailSend and draft; the mail-specific resolver already updates all
+  three. Independent review and Docker firewall namespace checks also remain.
+- Mail infrastructure `a03dbfd2` passed 175 deployment contract checks, 52 allocator checks,
+  pinned shellcheck and 81 CI plan checks. The normal Apply journey topology now supplies
+  both fake Gmail and fake ATS services. A 12 MiB synthetic provider send succeeded at its
+  128 MiB cap with zero OOM events or restarts, but memory reached the cap with 292 pressure
+  events. This demonstrates the bounded test workload, not spare headroom or Jetson acceptance.
+- A16 source `558e5c01` is integrated as `874a1722`, with both email and LinkedIn retained in
+  Full auto's source registry. The private Easy Apply opener is unavailable to models;
+  ordinary submit detection is unchanged. Database, native-browser and modal acceptance
+  checks continue, with checkpoint/replaced-button follow-ups still to integrate.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
-- Integration through `a4dafdab`: whole API lint, frontend typecheck and frontend lint passed.
-  Formatting passed through `301c8836`. The CI plan's
+- Integration through `18cc3bbf`: whole API lint, frontend typecheck and frontend lint passed.
+  Formatting passed on all 700 API files before the latest mail infrastructure slice. The CI plan's
   81 tests and E2E group registration check also passed.
 
 The new draft is [PR #604](https://github.com/GoldLegendW80/jobapp/pull/604). Work also remains
@@ -98,3 +117,7 @@ approved branches receive no writes from this task. A read-only comparison on 20
 concurrent updates to #579, #538, #521, #518 and #505 elsewhere; #521's update is a merge of main.
 The original snapshots named above remain the isolated integration baseline until explicitly
 reconciled and retested.
+
+Read-only board refresh on 2026-10-22: 10 cards Building, 1 In review, 2 Fix & re-check and 25
+Approved across the project. No board changes were applied. A fresh fetch confirms current
+`origin/main` (`e369e41d`) is already an ancestor of this integration branch.
