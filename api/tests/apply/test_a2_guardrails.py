@@ -802,3 +802,17 @@ def test_random_walks_never_submit_without_the_gate_or_in_a_rehearsal(start: Sta
             if i + 1 < len(path):
                 assert path[i + 1] in CLICK_OUTCOMES, path
     assert clicked > 0  # the walks with the gate do reach the click
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Applied AI Engi\u00adneer (H/F)",
+        "Applied AI Engi\x1fneer (m/w/d)",
+        "Applied AI Еngineer",  # Cyrillic capital E
+        "Applied AI Εngineer",  # Greek capital E
+        "Ａｐｐｌｉｅｄ AI Engineer Ｈ／Ｆ",
+    ],
+)
+def test_issue335_title_keys_use_the_shared_exclusion_fold(title: str) -> None:
+    assert title_key(title) == title_key("Applied AI Engineer")
