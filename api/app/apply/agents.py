@@ -366,3 +366,4 @@ if importlib.util.find_spec("claude_agent_sdk") is not None:
     from app.apply import answer_tools as _tools  # noqa: F401
 
 from app.apply import form_agent as _form_agent  # noqa: E402, F401  (A8's agent)
+from app.apply import model_check as _model_check  # noqa: E402, F401  (A13c's agent)

@@ -89,6 +89,11 @@ def apply_submit_job_id(application_id: object) -> str:
     return f"apply-submit:{application_id}"
 
 
+def apply_decide_job_id(application_id: object) -> str:
+    """One decision of a `ready` Full auto item at a time (apply A13c), on the agents queue."""
+    return f"apply-decide:{application_id}"
+
+
 class Queue:
     """The api's handle on the queues: one pool, made on first use."""
 

@@ -5,6 +5,7 @@ fake form's `gate_click`; no browser, no model, no company."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -98,6 +99,12 @@ def filled(
     return app_id
 
 
+def run_job(svc: submit.Services, app_id: uuid.UUID) -> str:
+    """The job the tick queues: the decision of a `ready` Full auto item, else the submit lease."""
+    code = asyncio.run(submit.decision(svc, app_id))
+    return run_submit(svc, app_id) if code == "not_undecided" else code
+
+
 def job(
     factory: sessionmaker[Session],
     stub: str,
@@ -111,7 +118,7 @@ def job(
     form = form or submit_ashby()
     svc = submit_services(factory, form, stub, **rest)
     svc.clock = at(when)
-    return run_submit(svc, app_id), form
+    return run_job(svc, app_id), form
 
 
 def held(
@@ -315,7 +322,7 @@ CHECKS = [
     ("below_min_fit", lambda db, p, a: _fit(db, p, 79)),
     ("below_min_fit", lambda db, p, a: _fit(db, p, None)),
     ("fields_left", _left),
-    ("agent_text", _agent_text),
+    ("model_check_not_run", _agent_text),
     ("agent_designated", _designated),
     ("captcha_seen", _captcha),
     ("unsupported_source", _source),

@@ -67,7 +67,7 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, caps, failures, full_auto, guardrails, shots, states
+from app.apply import agent, caps, failures, full_auto, guardrails, model_check, shots, states
 from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
@@ -142,6 +142,7 @@ class Services:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     retry_delays_s: tuple[int, ...] | None = None  # None: APPLY_RETRY_DELAYS_S
     needs_person_wait_s: int | None = None  # None: APPLY_NEEDS_PERSON_WAIT_S
+    check: model_check.Checker | None = None  # the check by model before a Full auto decision
 
     def delays(self) -> tuple[int, ...]:
         return self.retry_delays_s if self.retry_delays_s is not None else failures.retry_delays()
