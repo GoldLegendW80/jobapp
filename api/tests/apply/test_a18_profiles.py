@@ -147,6 +147,42 @@ def test_autosave_requires_consent_and_fills_empty_only(db, factory, person_a):
     assert any(e["kind"] == "save_decision" for e in part.events)
 
 
+def test_autosave_does_not_finish_before_all_sections_are_discovered(db, factory, person_a):
+    from app.apply.models import SiteKind
+    from tests.apply.a18_support import DialogPortal
+
+    class AutoDialog(DialogPortal):
+        def __init__(self):
+            super().__init__("workday")
+            self.autosave = True
+
+        async def snapshot(self):
+            shot = await super().snapshot()
+            shot["snapshot"] = shot["snapshot"].replace(
+                '  - button "Save" [ref=e9]',
+                "  - paragraph: Changes are saved automatically",
+            )
+            return shot
+
+        async def type_empty(self, ref, text, element=""):
+            result = await super().type_empty(ref, text, element)
+            self.records[self.opened] = dict(self.values)
+            return result
+
+    portal = AutoDialog()
+    run_id = make(db, person_a.user_id, confirmed=True)
+    run = db.get(SiteProfileRun, run_id)
+    run.site_kind = SiteKind.workday
+    db.commit()
+    asyncio.run(site_profile.fill(services(factory, portal), run_id))
+    db.expire_all()
+    run = db.get(SiteProfileRun, run_id)
+    parts = site_profile.sections(db, run)
+    assert run.state is SiteRunState.done, run.error_code
+    assert len(parts) == 2
+    assert [part.state for part in parts] == ["saved", "saved"]
+
+
 @pytest.mark.parametrize("fault", ["expired", "paused", "readback"])
 def test_gate_expiry_pause_and_readback(db, factory, person_a, monkeypatch, fault):
     portal = Portal(changed=fault == "readback")

@@ -202,7 +202,10 @@ async def save_section(
             for row in site_profile.fields(db, run, section):
                 if changed and row.field_key in changed:
                     row.refusal = "value_differs"
-            site_profile.finish_state(db, run, services.clock())
+            if held_tools is None:
+                site_profile.finish_state(db, run, services.clock())
+            else:
+                run.state = SiteRunState.filling
 
         await asyncio.to_thread(site_profile._in_db, services, step)
 
@@ -420,7 +423,10 @@ async def save_section(
             site_profile.store_shot(db, run, section, SiteShotKind.after, jpeg, services.clock())
             part.state, part.error_code = "saved", None
             site_profile.event(part, "saved", services.clock(), fields=sum(r[-1] for r in rows))
-            site_profile.finish_state(db, run, services.clock())
+            if held_tools is None:
+                site_profile.finish_state(db, run, services.clock())
+            elif run.state is not SiteRunState.cancelled:
+                run.state = SiteRunState.filling
 
         await asyncio.to_thread(site_profile._in_db, services, saved)
     except Exception:

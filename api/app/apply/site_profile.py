@@ -685,6 +685,9 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 await profile_gate.save_section(
                     services, run_id, part.key, auth_id, held_tools=tools
                 )
+                if not await profile_sites.close_section(tools, plan.site_kind, part.key):
+                    await update(SiteRunState.failed, code="section_could_not_close")
+                    return
                 continue
             adapter = profile_sites.SectionAdapter(part.key, part.label, plan.site_kind)
 
