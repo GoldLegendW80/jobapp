@@ -130,6 +130,7 @@ class Wizard(generic.Deterministic):
         )
 
     def approved(self, rows: Sequence[generic.Row]) -> None:
+        super().approved(rows)
         self.expected = [
             (r.label, r.value)
             for r in rows
@@ -205,7 +206,7 @@ class Wizard(generic.Deterministic):
         return code
 
     def resolve(self, item: base.Field, context: answers.Context):
-        return answers.resolve(item.form_field(), context)
+        return super().resolve(item, context)
 
     async def fill_form(self, tools: base.Tools, context: answers.Context) -> base.Report:
         from app.apply.form_agent import FormReport

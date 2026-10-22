@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.apply import admin, gate, model_check, service, shots
-from app.apply.models import AnswerSource, Application, ApplicationAnswer
+from app.apply.models import AnswerSource, Application, ApplicationAnswer, State
 from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
 from app.db import get_session
 from app.identity import deps
@@ -191,6 +191,23 @@ async def _paused(request: Request) -> bool:
     except Exception:  # Redis down: fail closed
         return True
     return await admin.paused(pool)
+
+
+def _enqueue_fill(request: Request, application_id: uuid.UUID) -> None:
+    """A partial wizard resumes from the original job; the tick retries an unavailable queue."""
+
+    async def enqueue() -> bool:
+        return await request.app.state.queue.enqueue(
+            "apply_fill",
+            str(application_id),
+            queue=queues.APPLY,
+            job_id=queues.apply_fill_job_id(application_id),
+        )
+
+    try:
+        anyio.from_thread.run(enqueue)
+    except queues.QueueUnavailableError:
+        logger.warning("apply.fill_enqueue_failed", extra={"application_id": str(application_id)})
 
 
 def _enqueue_submit(request: Request, application_id: uuid.UUID) -> None:
@@ -370,8 +387,12 @@ def set_answer(
     """The person's own answer to one field; any approval of the form before it is void."""
     wanted = _uuid_or_404(application_id)
     try:
-        gate.set_answer(db, user.id, wanted, field_key, body.value, deps.clock(request))
+        application = gate.set_answer(
+            db, user.id, wanted, field_key, body.value, deps.clock(request)
+        )
         db.commit()
+        if application.state is State.queued:
+            _enqueue_fill(request, wanted)
     except gate.NotFoundError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION) from None

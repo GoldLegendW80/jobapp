@@ -46,6 +46,7 @@ name right after a heading, whose words the read joins with no stop, is not.
 """
 
 import io
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from copy import copy
@@ -54,6 +55,7 @@ from typing import Any, Protocol
 
 from PIL import Image, ImageDraw
 
+from app.apply import answers
 from app.apply.ats.base import (
     Adapter,
     Discovery,
@@ -271,8 +273,49 @@ class DeterministicReport:
     """Designation metadata produced by code for a known site."""
 
 
+@dataclass(frozen=True)
+class PersonAnswer:
+    label: str
+    kind: str
+    options: tuple[str, ...]
+    value: str | bool
+
+
 class Deterministic(Generic):
     """Known site with ordered steps, filled without the form or answer model."""
+
+    async def discover(self, tools: Tools, known: frozenset[str] = frozenset()):
+        found, code = await super().discover(tools, known)
+        if found is not None and not code:
+            shape = json.dumps(
+                [[f.key, f.label, f.kind, list(f.options), f.required] for f in found.fields],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            self.seen_shapes = {**getattr(self, "seen_shapes", {}), str(self.step): shape}
+            expected = getattr(self, "person_shapes", {}).get(str(self.step))
+            if expected is not None and expected != shape:
+                return found, "form_changed"
+        return found, code
+
+    def approved(self, rows: Sequence["Row"]) -> None:
+        self.seen_shapes = {}
+        self.person_shapes = {
+            r.key.removeprefix("designated:shape:"): r.value
+            for r in rows
+            if r.key.startswith("designated:shape:")
+        }
+
+    def resolve(self, item, context: answers.Context):
+        own = getattr(self, "person_answers", {}).get(item.key)
+        if own is None:
+            return answers.resolve(item.form_field(), context)
+        if (own.label, own.kind, own.options) != (item.label, item.kind, tuple(item.options)):
+            return answers.Left("person_answer_changed", required=item.required)
+        if item.kind == "yes_no":
+            option = "Yes" if own.value is True else "No"
+            return answers.Answer(own.value, "person", option=option)
+        return answers.Answer(own.value, "person")
 
 
 def _rekey(item: Any, key: str) -> Any:

@@ -179,6 +179,9 @@ class Plan:
     letter_text: str
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
     mode: Mode = Mode.review
+    person_answers: dict[str, generic.PersonAnswer] = field(default_factory=dict, repr=False)
+    person_shapes: dict[str, str] = field(default_factory=dict, repr=False)
+    person_target: str = field(default="", repr=False)
 
 
 @dataclass
@@ -446,6 +449,14 @@ def prepare(
         ),
         _bank(db, user_id),
     )
+    person_rows = list(
+        db.scalars(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == user_id,
+            )
+        )
+    )
     return Plan(
         user_id=user_id,
         application_id=application.id,
@@ -458,6 +469,19 @@ def prepare(
         letter_text=letter_text,
         pdfs=pdfs,
         mode=application.mode,
+        person_answers={
+            r.field_key: generic.PersonAnswer(r.label, r.kind, tuple(r.options or ()), r.value)
+            for r in person_rows
+            if r.source is AnswerSource.person
+        },
+        person_shapes={
+            r.field_key.removeprefix("designated:shape:"): r.value
+            for r in person_rows
+            if r.field_key.startswith("designated:shape:")
+        },
+        person_target=next(
+            (r.value for r in person_rows if r.field_key == "designated:target"), ""
+        ),
     )
 
 
@@ -518,6 +542,7 @@ def _source(answer: Answer | Left, status: str) -> AnswerSource:
         "identity": AnswerSource.identity,
         "documents": AnswerSource.document,
         "bank": AnswerSource.bank,
+        "person": AnswerSource.person,
         "agent": AnswerSource.agent,
     }.get(head, AnswerSource.answers)  # answers.*, terms.*: the person's profile and rules
 
@@ -571,12 +596,27 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 approved=False,
             )
         )
-    if isinstance(report, forms.FormReport) and report.designated:
-        marks = [
-            (generic.SUBMIT_KEY, "Submit button, clicked after your approval", report.designated)
-        ]
+    if isinstance(report, forms.FormReport):
+        marks = []
+        if report.designated:
+            marks.append(
+                (
+                    generic.SUBMIT_KEY,
+                    "Submit button, clicked after your approval",
+                    report.designated,
+                )
+            )
+        elif (
+            isinstance(report, generic.DeterministicReport)
+            and report.needs_person == "required_left"
+        ):
+            marks.append(("designated:incomplete", "More application steps remain", "true"))
         for i, name in enumerate(report.steps, start=1):
             marks.append((f"{generic.STEP_KEY}{i}", f"Step {i}: the button to the next step", name))
+        for step, shape in getattr(report, "shapes", {}).items():
+            marks.append(
+                (f"designated:shape:{step}", f"Step {int(step) + 1}: field structure", shape)
+            )
         if getattr(report, "target", ""):
             marks.append(("designated:target", "Application link from the job page", report.target))
         rows += [
@@ -941,7 +981,14 @@ async def _fill_on_page(
     that asks for a card ends here, before anything is typed."""
     if _card_asked(await tools.snapshot()):
         return await _payment_asked(tools)
+    if isinstance(adapter, generic.Deterministic):
+        if plan.person_target and getattr(adapter, "target", "") != plan.person_target:
+            return Result(State.needs_person, needs="form_changed", shot=await shots.take(tools))
+        adapter.person_answers, adapter.person_shapes = plan.person_answers, plan.person_shapes
+        adapter.seen_shapes = {}
     report = await adapter.fill_form(tools, plan.context)
+    if isinstance(adapter, generic.Deterministic):
+        report.shapes = adapter.seen_shapes
     cost: dict[str, Any] = {"agent": "not_run"}
     if not report.stopped and not isinstance(adapter, generic.Deterministic):
         cost = await _answer_left(services, plan, adapter, tools, report)

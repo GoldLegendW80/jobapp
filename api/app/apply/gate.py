@@ -711,7 +711,14 @@ def set_answer(
         # of them is answered, so the form is complete and waits for the approval like any
         # other. A required file is never answered here and keeps it waiting; a skipped widget
         # is never required (run._answer_rows), so it never held it.
-        states.move(application, State.ready, now)
+        incomplete = db.scalar(
+            sa.select(ApplicationAnswer.field_key).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == user_id,
+                ApplicationAnswer.field_key == "designated:incomplete",
+            )
+        )
+        states.move(application, State.queued if incomplete else State.ready, now)
         application.needs = None
     application.updated_at = now
     _event(db, application, "answer_set", now, field_key=field_key)

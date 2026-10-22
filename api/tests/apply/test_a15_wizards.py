@@ -213,3 +213,107 @@ def test_google_changed_apply_target_invalidates_the_approval():
         assert (await replay.discover(form))[1] == "form_changed"
 
     asyncio.run(go())
+
+
+def test_unknown_required_early_step_stops_once_then_person_answer_reaches_final_designation():
+    from tests.apply.a4_support import Spec
+
+    async def go():
+        form = WizardForm()
+        form.fields.insert(3, Spec("Your project codename", "text", True))
+        form.groups[0] += 1
+        adapter = Workday(BASE)
+        assert await adapter.open(form, url()) == ""
+        report = await adapter.fill_form(form, context())
+        assert (report.stopped, report.needs_person) == ("needs_person", "required_left")
+        assert form.step == 0
+        assert report.steps == []
+        assert not report.designated
+        assert not any(call == "click" for call, _ in form.calls)
+        assert len(report.outcomes) == 4
+        report.shapes = adapter.seen_shapes
+        partial = rows(report)
+        assert next(r.value for r in partial if r.key == "designated:incomplete") == "true"
+        assert not any(r.key == "designated:submit" for r in partial)
+        unknown = next(o.field for o in report.outcomes if o.field.label == "Your project codename")
+        fresh = WizardForm()
+        fresh.fields.insert(3, Spec("Your project codename", "text", True))
+        fresh.groups[0] += 1
+        resumed = Workday(BASE)
+        resumed.person_answers = {
+            unknown.key: generic.PersonAnswer(
+                unknown.label, unknown.kind, tuple(unknown.options), "Example Cedar"
+            )
+        }
+        resumed.person_shapes = adapter.seen_shapes
+        assert await resumed.open(fresh, url()) == ""
+        complete = await resumed.fill_form(fresh, context())
+        assert not complete.stopped
+        assert complete.designated == "Submit application"
+        assert fresh.spec("Your project codename").value == "Example Cedar"
+        assert not fresh.gate_clicks
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("change", ["reorder", "delete", "kind", "label", "required", "options"])
+def test_person_continuation_refuses_changed_or_reordered_field_shapes(change):
+    async def go():
+        form = WizardForm()
+        adapter = Workday(BASE)
+        assert await adapter.open(form, url()) == ""
+        _found, code = await adapter.discover(form)
+        assert not code
+        original = adapter.seen_shapes
+        if change == "reorder":
+            form.fields[0], form.fields[1] = form.fields[1], form.fields[0]
+        elif change == "delete":
+            form.fields.pop(0)
+            form.groups[0] -= 1
+        elif change == "kind":
+            form.fields[0].kind = "checkbox"
+        elif change == "label":
+            form.fields[0].label = "Changed name"
+        elif change == "required":
+            form.fields[0].required = False
+        else:
+            form.fields[0].kind, form.fields[0].options = "select", ("Other",)
+        adapter.person_shapes = original
+        assert (await adapter.discover(form))[1] == "form_changed"
+        assert not form.acted()
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("code", ["signed_in", "nobody_watching", "signin_cancelled"])
+def test_known_form_redirect_to_external_signin_never_broadens_the_automated_host(code):
+    async def go():
+        form = WizardForm()
+        original_navigate = form.navigate
+        attempts = []
+        signed = False
+
+        async def navigate(target):
+            attempts.append(target)
+            if "apply=manual" in target and not signed:
+                return {"ok": False, "error": "host_not_allowed", "url": form.url}
+            return await original_navigate(target)
+
+        form.navigate = navigate
+        asked = []
+
+        async def ask(tools, host, reason):
+            nonlocal signed
+            asked.append(host)
+            signed = code == "signed_in"
+            return Outcome(code)
+
+        adapter = Workday(BASE)
+        tools = signin.Tools(form, url(), request=ask, pending=adapter.pending_step)
+        result = await adapter.open(tools, url())
+        assert result == ("" if code == "signed_in" else "signin")
+        assert asked == ["atsforms"]
+        assert all(target.startswith(url()) for target in attempts)
+        assert adapter.job_id == "fixture:1001"
+
+    asyncio.run(go())

@@ -180,6 +180,7 @@ class LinkedIn(generic.Deterministic):
         )
 
     def approved(self, rows: Sequence[generic.Row]) -> None:
+        super().approved(rows)
         self.expected = [
             (r.label, r.value) for r in rows if not r.key.startswith(("designated:", "skipped:"))
         ]
@@ -294,7 +295,7 @@ class LinkedIn(generic.Deterministic):
                     answer = (
                         answers.Answer(False, "identity.linkedin_follow_declined")
                         if self.optional_follow(item)
-                        else answers.resolve(item.form_field(), context)
+                        else self.resolve(item, context)
                     )
                     filled = await self.fill(tools, item, answer)
                     report.outcomes.append(base.Outcome(item, answer, filled))
