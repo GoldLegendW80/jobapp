@@ -195,8 +195,15 @@ class Read:
 # --- the database steps ------------------------------------------------------------------------
 
 
-def _stop(db: Session, application: Application, stop: Stop, now: datetime) -> None:
-    states.move(application, stop.state, now)
+def _stop(
+    db: Session,
+    application: Application,
+    stop: Stop,
+    now: datetime,
+    *,
+    click_refused: bool = False,
+) -> None:
+    states.move(application, stop.state, now, click_refused=click_refused)
     application.error_code = stop.code
     if stop.state is State.needs_person and stop.code != "linkedin_paused":
         application.error_code = None
@@ -238,8 +245,9 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
     """The gate's checks that can change after its decision, again (the caller holds the gate's
     locks): the approval still valid (`full_auto.expired`, else `ready`,
     `authorisation_expired`), never apply, LinkedIn's guard on a form on LinkedIn (a pause that
-    started since), duplicates (this application excluded), the caps, and in Full auto
-    `full_auto.recheck`. A refusal ends as `decide`'s does, `blocked` with its code
+    started since), duplicates (this application excluded), the caps, the current document
+    versions in both modes, and in Full auto `full_auto.recheck`. A refusal ends as `decide`'s
+    does, `blocked` with its code
     (`posting_closed` for a closed posting), except that a code `decide` keeps at `ready` goes
     back to `ready`: an approved application never waits on it."""
     spent = _spent(db, application)
@@ -256,6 +264,8 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
             db, application.user_id, posting, application.canonical_key, now, exclude=application.id
         )
         code = duplicate.code if duplicate is not None else caps.check(db, application, now)
+    if code is None:
+        code = gate.documents_code(db, application)
     if code is None and application.mode is Mode.full_auto:
         code = full_auto.recheck(db, application, posting, now)
     if code is None:
@@ -744,6 +754,23 @@ async def _after_arm(
     after: bytes | None = None
     try:
         result = await services.click(tools, read.submit_ref, capability, "Submit")
+        if not result.get("ok") and result.get("error") in ("person_input", "person_used"):
+            # browserd refused before its external act. The person may have edited the page,
+            # so return to a fresh approval, with no sent-version freeze or uncertain outcome.
+            def taken(db: Session) -> str:
+                found = run._locked(db, application_id)
+                if found is None or found[0].state is not State.submitting:
+                    return "superseded"
+                _stop(
+                    db,
+                    found[0],
+                    Stop(State.ready, "form_changed"),
+                    services.clock(),
+                    click_refused=True,
+                )
+                return State.ready.value
+
+            return await asyncio.to_thread(_in_db, services.sessions, taken)
         if not result.get("ok"):
             code = f"click_{result.get('error') or 'failed'}"
         state, errors = await outcome(services, read.adapter, tools, clicked)

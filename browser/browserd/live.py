@@ -409,6 +409,12 @@ class Live:
             raise LeaseError(404, "no_such_lease")
         if self.person(lease_id):
             raise LeaseError(409, "person_session")
+        lease = self.manager.current()
+        if lease is None:
+            raise LeaseError(404, "no_such_lease")
+        lease.scratch["input_epoch"] = lease.scratch.get("input_epoch", 0) + 1
+        if lease.state == "active":
+            lease.wait_person(self.manager.clock(), "takeover", "", TAKEOVER_S)
         self.input_lease, self.input_viewer = lease_id, viewer
         self.input_until = self.manager.clock() + TAKEOVER_S
         self.absent_since = None
@@ -422,6 +428,13 @@ class Live:
             return
         if viewer is not None and viewer != self.input_viewer:
             return
+        lease = self.manager.current()
+        if (
+            lease is not None
+            and lease.lease_id == self.input_lease
+            and lease.wait_reason == "takeover"
+        ):
+            lease.resume(self.manager.clock())
         self.input_lease = self.input_viewer = None
         self.absent_since = None
         self.given_back.set()

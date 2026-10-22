@@ -24,6 +24,10 @@ the app's turn (`app_turn`, filling details or attaching a document) only PERSON
 run there. Input ownership is checked again after pacing, so Take over stops an action already
 waiting to click or type. A chooser upload names the boundary returned by the passive watch.
 
+Ordinary live Take over pauses tool calls until Give back or expiry. The first call then
+returns person_used with the new page rather than executing its old action. Every paced input,
+including a gate click or private opener, also checks the live owner and takeover generation.
+
 Calls on one lease run one at a time, through `Manager.call` (the lease's idle timer and its end
 cancel them).
 """
@@ -94,6 +98,45 @@ async def _run(
         raise LeaseError(410, "lease_ended", reason=exc.reason) from None
 
 
+def _tab(svc: Any, lease: Lease, *, gate: bool = False) -> actions.Tab:
+    from browserd.live import live_of
+
+    live = live_of(svc)
+    epoch = lease.scratch.get("input_epoch", 0)
+    return actions.Tab(
+        request=lease.request,
+        state=state_of(lease),
+        browser=svc.manager.browser,
+        pacer=PACER,
+        gate=gate,
+        lease_tag=lease.lease_id[:8],
+        input_allowed=lambda: (
+            svc.manager.current() is lease
+            and not lease.person_input
+            and live.holder(lease.lease_id) is None
+            and lease.scratch.get("input_epoch", 0) == epoch
+            and (lease.request.purpose != MANUAL_PURPOSE or lease.app_turn)
+        ),
+    )
+
+
+async def _turn(svc: Any, lease: Lease, tab: actions.Tab) -> dict[str, Any] | None:
+    from browserd.live import live_of
+
+    if lease.request.purpose == MANUAL_PURPOSE or lease.wait_reason in APPLY_WAITS:
+        return None
+    if await live_of(svc).agent_turn(lease.lease_id) is None:
+        return None
+    # The caller must inspect the new page before retrying. In particular, an old Submit or
+    # Save cannot resume after the person may have changed its approved fields.
+    page = await actions.run(tab, "browser_snapshot", {})
+    title = str(page.get("title") or "the current page")
+    return {
+        **actions.failure("person_used", f"The person used the browser; the page is now {title}."),
+        "page": page,
+    }
+
+
 async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
     name, lease_id = match["name"], match["lease_id"]
     if name not in actions.TOOLS:
@@ -111,18 +154,12 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         if name != "browser_click" or not good:
             raise LeaseError(403, "bad_capability")
     manual = lease.request.purpose == MANUAL_PURPOSE
-    tab = actions.Tab(
-        request=lease.request,
-        state=state_of(lease),
-        browser=svc.manager.browser,
-        pacer=PACER,
-        gate=capability is not None,
-        lease_tag=lease_id[:8],
-        input_allowed=lambda: not lease.person_input and (not manual or lease.app_turn),
-    )
+    tab = _tab(svc, lease, gate=capability is not None)
 
     async def work() -> dict[str, Any]:
         async with _lock(lease):
+            if taken := await _turn(svc, lease, tab):
+                return taken
             if manual and not lease.app_turn and name not in PERSON_TIME:
                 log.info("lease %s: %s refused: person_input", lease_id[:8], name)
                 return actions.failure("person_input", "Refused: the person holds the input.")
@@ -220,18 +257,21 @@ async def linkedin_open(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, 
         raise LeaseError(400, "bad_args")
     if not linkedin.JOB.fullmatch(body["job_id"]):
         raise LeaseError(400, "bad_args")
-    tab = actions.Tab(
-        lease.request, state_of(lease), svc.manager.browser, PACER, lease_tag=lease_id[:8]
-    )
+    tab = _tab(svc, lease)
 
     async def work() -> dict[str, Any]:
         async with _lock(lease):
+            if taken := await _turn(svc, lease, tab):
+                return taken
             try:
+                tab.require_input()
                 result = await linkedin.open_modal(
                     tab, body["job_id"], svc.manager.config.linkedin_stub_base_url
                 )
             except actions.OffList:
                 return await tab.settle(actions.refused("host_not_allowed"))
+            except actions.PersonInput:
+                return actions.failure("person_input", "Refused: the person holds the input.")
             except Exception:
                 # A detached element during approach is a refusal, never a replacement click.
                 result = actions.refused("linkedin_opener_refused")

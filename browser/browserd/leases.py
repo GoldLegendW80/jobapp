@@ -206,6 +206,8 @@ class Lease:
     def expired(self, now: float) -> str | None:
         """Why the lease must end now, or None."""
         if self.state == "waiting_person":
+            if self.wait_reason == "takeover":
+                return None  # Live.tick gives input back when the takeover allowance ends.
             if self.wait_deadline is None or now < self.wait_deadline:
                 return None
             return "signin_timeout" if self.wait_reason == "signin" else "person_timeout"
@@ -344,7 +346,7 @@ class Manager:
             and lease.request.purpose == "apply_fill"
             and lease.wait_reason in APPLY_WAITS
         )
-        if lease.state != "active" and not waiting_read:
+        if lease.state != "active" and lease.wait_reason != "takeover" and not waiting_read:
             raise LeaseError(409, "waiting_person")
         if touch:
             lease.touch(self.clock())

@@ -76,5 +76,6 @@ async def open_modal(tab: Any, job_id: str, fixture_base: str = "") -> dict[str,
     await tab.approach(button)
     if not await valid():
         return actions.refused("linkedin_opener_refused")
+    tab.require_input()
     await button.click(timeout=actions.ACTION_S * 1000)
     return await tab.settle({"ok": True})
