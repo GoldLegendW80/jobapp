@@ -8,7 +8,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from app.agents.models import CredentialKind, ProposalDecider, ProposalStatus, RunStatus
+from app.agents.models import (
+    AgentMessage,
+    AgentRun,
+    AgentThread,
+    CredentialKind,
+    MessageRole,
+    ProposalDecider,
+    ProposalStatus,
+    RunStatus,
+)
 
 # Generous bound for the body itself; the format check (credentials.clean_secret) is stricter.
 SECRET_BODY_MAX = 4096
@@ -244,3 +253,54 @@ class ThreadBusyOut(BaseModel):
 
     detail: str
     active_run_id: uuid.UUID | None = None
+
+
+# --- rows to bodies ---------------------------------------------------------------------------
+
+
+def run_out(row: AgentRun, job: RunJobOut | None = None) -> RunOut:
+    duration = None
+    if row.started_at is not None and row.finished_at is not None:
+        duration = round((row.finished_at - row.started_at).total_seconds(), 3)
+    return RunOut(
+        id=row.id,
+        agent=row.agent,
+        job_id=row.job_id,
+        status=row.status,
+        input=row.input or {},
+        output=row.output,
+        error=row.error,
+        model=row.model,
+        input_tokens=row.input_tokens,
+        output_tokens=row.output_tokens,
+        cost_usd=float(row.cost_usd) if row.cost_usd is not None else None,
+        credential_kind=row.credential_kind,
+        cancel_requested=row.cancel_requested_at is not None,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        duration_s=duration,
+        job=job,
+    )
+
+
+def thread_out(row: AgentThread) -> ThreadOut:
+    return ThreadOut(
+        id=row.id,
+        job_id=row.job_id,
+        title=row.title,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def message_out(row: AgentMessage, run: AgentRun | None) -> MessageOut:
+    return MessageOut(
+        id=row.id,
+        role=MessageRole(row.role).value,
+        text=str((row.content or {}).get("text", "")),
+        run_id=row.run_id,
+        run_status=run.status if run is not None else None,
+        error=run.error if run is not None and row.role is MessageRole.user else None,
+        at=row.at,
+    )

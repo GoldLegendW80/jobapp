@@ -776,6 +776,46 @@ describe("other states", () => {
 });
 
 describe("Full auto's hold on the job page", () => {
+  it("offers Cancel, and nothing to approve, while the app still decides on a Full auto item", async () => {
+    const api = fakeApply({
+      application: fakeApplication("ready", { mode: "full_auto" }),
+      answers: filled().slice(0, 2),
+    });
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByText(
+        /Full auto: filled. The app checks it now/,
+      ),
+    ).toBeInTheDocument();
+    for (const name of ["Approve and submit", "Reject"]) {
+      expect(within(section).queryByRole("button", { name })).toBeNull();
+    }
+    expect(within(section).queryByRole("timer")).toBeNull();
+    const cancels = within(section).getAllByRole("button", {
+      name: "Cancel application",
+    });
+    expect(cancels).toHaveLength(1);
+    await user.click(cancels[0]!);
+    expect(api.decisions).toEqual([]);
+    await confirm(user, "Cancel the application");
+    await waitFor(() => {
+      expect(api.decisions).toEqual(["cancel"]);
+    });
+    expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("offers Reject, not Cancel, on a Review first form waiting for the approval", async () => {
+    fakeApply({
+      application: fakeApplication("ready"),
+      answers: filled().slice(0, 2),
+    });
+    const { section } = await openSection();
+    await within(section).findByRole("button", { name: "Reject" });
+    expect(
+      within(section).queryByRole("button", { name: "Cancel application" }),
+    ).toBeNull();
+  });
+
   it("counts the hold down on the server's clock, with one Cancel that stops it", async () => {
     const api = fakeApply({
       application: fakeApplication("held", { mode: "full_auto" }),

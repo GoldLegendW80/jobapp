@@ -1,7 +1,9 @@
-/* banner: DM Sans, a coloured band across the full width of the page (the page margin is 0 and
-   --margin becomes the padding of the band and of the content), one column below. The density
-   comes from the step on :root. */
-@page { size: A4; margin: 0; }
+/* banner: DM Sans, a coloured band across the full width of the page (the page has no side
+   margin and none at the top of page 1; --margin becomes the padding of the band and the side
+   padding of the content), one column below. The density comes from the step on :root. */
+/* the step's top and bottom margin stay on every page break, so page 2 starts inside the frame */
+@page { size: A4; margin-left: 0; margin-right: 0; }
+@page :first { margin-top: 0; }
 * { box-sizing: border-box; }
 html {
   font-family: "DM Sans", sans-serif;
@@ -54,7 +56,7 @@ li, p { overflow-wrap: anywhere; }
   font-size: 0.92em;
 }
 
-.content { padding: var(--section-gap) var(--margin) var(--margin); }
+.content { padding: var(--section-gap) var(--margin) 0; }
 .block { margin-bottom: var(--section-gap); }
 .block:last-child { margin-bottom: 0; }
 .label {
@@ -122,3 +124,6 @@ li, p { overflow-wrap: anywhere; }
 .paragraph { text-align: justify; white-space: pre-line; }
 .closing { margin-top: var(--section-gap); }
 .signature { font-weight: 700; margin-top: var(--section-gap); }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }

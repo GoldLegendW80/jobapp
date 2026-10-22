@@ -147,3 +147,6 @@ li, p { overflow-wrap: anywhere; }
   color: var(--accent);
   margin-top: var(--section-gap);
 }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }

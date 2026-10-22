@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Tests of the two helper scripts of the development workflow: ops/dev-setup.sh (what a new
-# laptop needs, read only) and ops/card.sh (a card on the project board). Every tool they call is
-# a fake on a PATH that holds nothing else but a few system utilities, and writes what it was
-# asked into a log: nothing is installed, pulled, signed in, connected or sent.
+# Tests of the helper scripts of the development workflow: ops/dev-setup.sh (what a new laptop
+# needs, read only), ops/card.sh (a card on the project board) and, at the end, the stage rules of
+# ops/board-sync.py (tests/board_sync_test.py, fixtures only). Every tool they call is a fake on a
+# PATH that holds nothing else but a few system utilities, and writes what it was asked into a
+# log: nothing is installed, pulled, signed in, connected or sent.
 #
 #   tests/dev_setup_test.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHON="$(command -v python3)" # before PATH holds only the fakes
 WORK="$(mktemp -d)"
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
@@ -65,6 +67,14 @@ case "$1 $2" in
   [[ -n "${FAKE_GH_NO_SCOPES:-}" ]] || echo "  - Token scopes: ${FAKE_GH_SCOPES-'gist', 'project', 'read:org', 'repo', 'workflow'}"
   ;;
 "project item-add") echo "PVTI_fakeitem" ;;
+"project field-list")
+  # What gh prints for the --jq of card.sh: field, field id, option, option id, tab separated.
+  {
+    printf 'Status\tSF_status\t%s\n' "Needs you" "Ready" "Building" "In review" "Fix & re-check" "Live"
+    printf 'Module\tSF_module\t%s\n' opportunities platform apply
+    printf 'Horizon\tSF_horizon\t%s\n' Now Next Later
+  } | awk -F'\t' -v drop="${FAKE_GH_NO_OPTION:-}" '$3 != drop { printf "%s\t%s\t%s\t%08x\n", $1, $2, $3, NR }'
+  ;;
 esac
 exit 0
 EOF
@@ -90,8 +100,32 @@ echo "${FAKE_NODE_VERSION:-v22.12.0}"
 EOF
 fake pnpm <<'EOF'
 #!/usr/bin/env bash
-printf 'pnpm %s (in %s, switch %s, on fail %s)\n' "$*" "$PWD" "${npm_config_manage_package_manager_versions:-on}" "${pnpm_config_pm_on_fail:-download}" >>"$CALLS"
-echo "${FAKE_PNPM_VERSION:-9.15.9}"
+printf 'pnpm %s (in %s, switch %s, on fail %s, network %s, auto pin %s, latest %s, no compile cache %s)\n' "$*" "$PWD" "${npm_config_manage_package_manager_versions:-on}" "${pnpm_config_pm_on_fail:-download}" "${COREPACK_ENABLE_NETWORK:-on}" "${COREPACK_ENABLE_AUTO_PIN:-on}" "${COREPACK_DEFAULT_TO_LATEST:-on}" "${NODE_DISABLE_COMPILE_CACHE:-0}" >>"$CALLS"
+# A Corepack shim cannot answer with an empty cache when downloads are disabled.
+if [[ -n "${FAKE_COREPACK_EMPTY:-}" ]]; then
+  [[ "${COREPACK_ENABLE_NETWORK:-}" == 0 ]] || printf 'DOWNLOAD attempted\n' >>"$CALLS"
+  echo 'Network access disabled by the environment: pnpm-10.13.1.tgz' >&2
+  exit 1
+fi
+# A hostile boundary models runtime provisioning before non-version command handlers.
+# pnpm 10's config get follows this path despite Corepack guards; keep 11 version-only too.
+if [[ "$*" != --version && -n "${FAKE_PNPM_USERCONFIG:-}" ]] &&
+  grep -qE '^(use-node-version=|useNodeVersion: )' "$FAKE_PNPM_USERCONFIG"; then
+  mkdir -p "$PNPM_HOME/nodejs"
+  printf 'DOWNLOAD Node runtime attempted\n' >>"$CALLS"
+fi
+if [[ "$1 $2" == 'config get' ]]; then
+  # A query in a pinned project can switch versions before it reads the requested setting.
+  [[ "$PWD" == / && "${COREPACK_ENABLE_NETWORK:-}" == 0 ]] || printf 'DOWNLOAD attempted\n' >>"$CALLS"
+  [[ -z "${FAKE_PNPM_CONFIG_FAILS:-}" ]] || exit 1
+  case "$3" in
+  manage-package-manager-versions) echo "${FAKE_PNPM_MANAGE:-undefined}" ;;
+  pm-on-fail) echo "${FAKE_PNPM_ON_FAIL:-undefined}" ;;
+  *) exit 1 ;;
+  esac
+else
+  echo "${FAKE_PNPM_VERSION-9.15.9}"
+fi
 EOF
 fake python3 <<'EOF'
 #!/usr/bin/env bash
@@ -122,7 +156,7 @@ EOF
 export CALLS
 export PATH="$BIN:$SYS"
 unset FAKE_GH_SIGNED_OUT FAKE_GH_NO_SCOPES FAKE_GH_SCOPES FAKE_DOCKER_DOWN FAKE_SC_LOCAL FAKE_SC_UNREACHABLE \
-  FAKE_NODE_VERSION FAKE_PNPM_VERSION FAKE_PYTHON_VERSION FAKE_SSH_NO_ALIAS FAKE_SSH_FAILS \
+  FAKE_NODE_VERSION FAKE_PNPM_VERSION FAKE_PNPM_MANAGE FAKE_PNPM_ON_FAIL FAKE_PNPM_CONFIG_FAILS FAKE_PNPM_USERCONFIG FAKE_COREPACK_EMPTY FAKE_PYTHON_VERSION FAKE_SSH_NO_ALIAS FAKE_SSH_FAILS \
   DEV_SETUP_JETSON_ALIAS
 export DEV_SETUP_MIN_FREE_GIB=0
 
@@ -157,7 +191,7 @@ misses() { # misses <n>: exactly n MISS lines and the matching last line
 calls_lack() { if grep -qE -- "$1" "$CALLS"; then fail "a call matches '$1': $(cat "$CALLS")"; fi; }
 # The one pnpm call: its version, from / (no packageManager above) with both version switches off.
 pnpm_asked_from_root() {
-  local want='pnpm --version (in /, switch false, on fail ignore)' others
+  local want='pnpm --version (in /, switch false, on fail ignore, network 0, auto pin 0, latest 0, no compile cache 1)' others
   grep -qxF "$want" "$CALLS" || fail "pnpm --version not asked from / with the switches off: $(cat "$CALLS")"
   others="$(grep '^pnpm ' "$CALLS" | grep -vxF "$want" || true)"
   [[ -z "$others" ]] || fail "another pnpm call: $others"
@@ -281,17 +315,74 @@ for v in 8.15.9 7.33.0; do
   out_has "fix: npm install -g pnpm@9.15.9"
   out_lacks "corepack"
 done
-FAKE_PNPM_VERSION=9.0.1 run 0
-out_has "ok    pnpm 9.0.1 (web/package.json pins 9.15.9)"
+for v in 9.0.1 9.1.0 9.1.9; do
+  FAKE_PNPM_VERSION="$v" run 1
+  misses 1
+  out_has "MISS  pnpm $v, web/package.json pins 9.15.9"
+  out_has "pnpm 9.2.0 or newer is needed for a different 9.x pin"
+done
+FAKE_PNPM_VERSION=9.2.0 run 0
+out_has "ok    pnpm 9.2.0 (web/package.json pins 9.15.9)"
+# Invented user runtime settings must not trigger pnpm's pre-handler provisioning path.
+for v in 10.0.0 10.17.1 11.0.0 11.2.0; do
+  if [[ "$v" == 10.* ]]; then
+    printf 'use-node-version=22.12.0\n' >"$WORK/node-config"
+  else
+    printf 'useNodeVersion: 22.12.0\n' >"$WORK/node-config"
+  fi
+  FAKE_PNPM_VERSION="$v" FAKE_PNPM_USERCONFIG="$WORK/node-config" PNPM_HOME="$WORK/pnpm-home" run 0
+  [[ ! -e "$WORK/pnpm-home" ]] || fail "pnpm $v created a runtime cache during the read-only check"
+  calls_lack '^DOWNLOAD'
+  pnpm_asked_from_root
+done
+ok "pnpm 10 and 11 with user Node runtime settings: only the version probe, no runtime cache or download attempt"
 for v in 10.0.0 10.17.1 11.2.0; do
   FAKE_PNPM_VERSION="$v" run 0
-  out_has "ok    pnpm $v, runs the pinned 9.15.9 itself (packageManager of web/package.json)"
+  out_has "WARN  pnpm $v, version switching could not be checked for the 9.15.9 pin"
+  out_lacks "runs the pinned"
+  out_lacks "ok    pnpm $v"
+  calls_lack '^DOWNLOAD'
+  pnpm_asked_from_root
 done
-ok "pnpm: the pinned major passes, 10 or later runs the 9.15.9 pin itself and passes, an older major is a MISS fixed with npm"
+ok "pnpm: 9.x below 9.2 is a MISS, compatible 9.x passes, newer majors warn about project settings"
+
+for setting in undefined true false unprinted-config-value; do
+  FAKE_PNPM_VERSION=10.17.1 FAKE_PNPM_MANAGE="$setting" run 0
+  out_has "WARN  pnpm 10.17.1, version switching could not be checked"
+  out_has "check managePackageManagerVersions=true (the default) and any user or web project overrides"
+  out_lacks "unprinted-config-value"
+  pnpm_asked_from_root
+done
+for setting in undefined download ignore warn error false; do
+  FAKE_PNPM_VERSION=11.2.0 FAKE_PNPM_ON_FAIL="$setting" run 0
+  out_has "WARN  pnpm 11.2.0, version switching could not be checked"
+  out_has "check pmOnFail=download (the default) and any user or web project overrides"
+  pnpm_asked_from_root
+done
+FAKE_PNPM_VERSION=10.17.1 FAKE_PNPM_CONFIG_FAILS=1 run 0
+out_has "WARN  pnpm 10.17.1, version switching could not be checked"
+pnpm_asked_from_root
+FAKE_PNPM_VERSION=12.0.0 run 0
+out_has "WARN  pnpm 12.0.0, version switching could not be checked"
+pnpm_asked_from_root
+ok "pnpm: default, enabled and disabled user switching stay unverified with a setting reminder; unavailable config commands and future majors warn without a query"
+
+FAKE_COREPACK_EMPTY=1 run 1
+misses 1
+out_has "pnpm is installed but its version could not be read with downloads disabled"
+out_lacks "Network access disabled"
+calls_lack '^DOWNLOAD'
+FAKE_PNPM_VERSION='' run 1
+misses 1
+out_has "pnpm is installed but its version could not be read with downloads disabled"
+ok "an empty Corepack cache and an unreadable version report a MISS without downloading or leaking the probe error"
 
 pin_pnpm() { # pin_pnpm <version>: the packageManager of the throwaway web/package.json
   printf '{\n  "name": "web",\n  "packageManager": "pnpm@%s",\n  "engines": {\n    "node": ">=22.12.0"\n  }\n}\n' "$1" >"$REPO/web/package.json"
 }
+pin_pnpm 9.1.0
+FAKE_PNPM_VERSION=9.1.0 run 0
+out_has "ok    pnpm 9.1.0 (web/package.json pins 9.1.0)"
 pin_pnpm 8.15.9
 FAKE_PNPM_VERSION=9.15.9 run 1
 misses 1
@@ -302,7 +393,7 @@ FAKE_PNPM_VERSION=10.17.1 run 1
 misses 1
 out_has "fix: npm install -g pnpm@11.1.0"
 pin_pnpm 9.15.9
-ok "pnpm above the pinned major passes only from 10 on (9 over an 8 pin is a MISS), and under the pin is a MISS (10 under 11)"
+ok "pnpm above the pinned major warns only from 10 on (9 over an 8 pin is a MISS), and under the pin is a MISS (10 under 11)"
 
 mv "$BIN/pnpm" "$WORK/pnpm.saved"
 run 1
@@ -402,16 +493,34 @@ done
 ok "card.sh: a wrong count, status, module, horizon or url exits 64 before any gh call"
 
 card 0 "$URL" doing platform now
+grep -qF "gh project field-list 1 --owner GoldLegendW80 --format json --jq" "$CALLS" || fail "field-list: $(cat "$CALLS")"
+[[ "$(grep -c "project field-list" "$CALLS")" == 1 ]] || fail "more than one field-list: $(cat "$CALLS")"
 grep -qF "gh project item-add 1 --owner GoldLegendW80 --url $URL --format json --jq .id" "$CALLS" || fail "item-add: $(cat "$CALLS")"
-for pair in "PVTSSF_lAHOA9eVYc4BmeB8zhlG8_A --single-select-option-id 47fc9ee4" \
-  "PVTSSF_lAHOA9eVYc4BmeB8zhlG9Os --single-select-option-id 2b39a4a2" \
-  "PVTSSF_lAHOA9eVYc4BmeB8zhlG9O0 --single-select-option-id ff3c9fd9"; do
+# The fake's option ids count its lines in hex: Building 00000003, platform 00000008, Now 0000000a.
+for pair in "SF_status --single-select-option-id 00000003" "SF_module --single-select-option-id 00000008" \
+  "SF_horizon --single-select-option-id 0000000a"; do
   grep -qF -- "--project-id PVT_kwHOA9eVYc4BmeB8 --id PVTI_fakeitem --field-id $pair" "$CALLS" || fail "no edit '$pair': $(cat "$CALLS")"
 done
-card 0 "https://github.com/GoldLegendW80/jobapp/pull/323" "done" 23d87376 later
-grep -qF -- "--single-select-option-id 98236657" "$CALLS" || fail "done: $(cat "$CALLS")"
-grep -qF -- "--single-select-option-id 23d87376" "$CALLS" || fail "apply by id: $(cat "$CALLS")"
-grep -qF -- "--single-select-option-id a62bd178" "$CALLS" || fail "later: $(cat "$CALLS")"
-ok "card.sh: adds the item to project 1 and sets Status, Module (by name or option id) and Horizon"
+card 0 "https://github.com/GoldLegendW80/jobapp/pull/323" "done" 00000009 later
+grep -qF -- "--field-id SF_status --single-select-option-id 00000006" "$CALLS" || fail "done is Live: $(cat "$CALLS")"
+grep -qF -- "--field-id SF_module --single-select-option-id 00000009" "$CALLS" || fail "apply by id: $(cat "$CALLS")"
+grep -qF -- "--field-id SF_horizon --single-select-option-id 0000000c" "$CALLS" || fail "later: $(cat "$CALLS")"
+card 0 "$URL" todo opportunities next
+grep -qF -- "--field-id SF_status --single-select-option-id 00000002" "$CALLS" || fail "todo is Ready: $(cat "$CALLS")"
+grep -qF -- "--field-id SF_module --single-select-option-id 00000007" "$CALLS" || fail "opportunities: $(cat "$CALLS")"
+ok "card.sh: looks the ids up by name in one field-list call, todo Ready, doing Building, done Live, opportunities, a module by option id"
+
+for missing in Building platform; do
+  FAKE_GH_NO_OPTION="$missing" card 1 "$URL" doing platform now
+  grep -qF "has no option $missing" "$WORK/out" || fail "missing $missing: $(cat "$WORK/out")"
+  ! grep -qF "item-add" "$CALLS" || fail "card.sh added an item without the option $missing: $(cat "$CALLS")"
+done
+card 1 "$URL" doing deadbeef now
+grep -qF "has no option deadbeef" "$WORK/out" || fail "unknown option id: $(cat "$WORK/out")"
+ok "card.sh: an option the board lacks (a name or an id) exits 1 before the card is touched"
+
+# The stage rules of ops/board-sync.py, on fixtures: no network, no gh.
+"$PYTHON" "$ROOT/tests/board_sync_test.py" >"$WORK/board" 2>&1 || fail "tests/board_sync_test.py: $(tail -n 30 "$WORK/board")"
+ok "board-sync: $(grep -o 'Ran [0-9]* tests' "$WORK/board") of tests/board_sync_test.py passed"
 
 echo "dev_setup_test: $passed passed"

@@ -8,6 +8,11 @@ in the job folder that holds this repository (it is not part of the repository).
 
 1. A task of `tasks/todo.md` or of a module's `tasks/<module>/todo.md` gets its own branch from `main`, named `<module>/<task-id>-<slug>`,
    for example `jobs/j4-rescore`, `platform/7-ci` or `profile/p5-import-preview`.
+   The agent that starts the task puts its card in Building with
+   `ops/card.sh <issue url> doing <module> now`. Every other move on the board (one column per
+   step: Needs you, Paused, Blocked (kept in the field, no card is put there), Spec, Ready, Building, In review, Fix & re-check, Approved,
+   Gating, Merged, Live, Dropped, Epic) is made by `ops/board-sync.py` from GitHub facts, never
+   by hand (docs/agents/orchestration.md, The board).
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat(jobs): ...`,
    `fix(identity): ...`, `ci: ...`, `docs: ...`) and end with the agent's attribution line:
 
@@ -23,8 +28,9 @@ in the job folder that holds this repository (it is not part of the repository).
    requests meant an hour of waiting). The checks are the ones CI ran, and they run once per
    batch, natively on the Mac, by `ops/local-check.sh` (step 6). The author runs what the change
    touches before pushing (Locally before pushing, below) and says in the pull request what was
-   run. The batch check always runs the full set, whatever the batch touches, which is the steps
-   of the three jobs of `.github/workflows/ci.yml`:
+   run. The batch check runs the steps of the three jobs of `.github/workflows/ci.yml`, all of
+   them on every batch except the e2e groups, which run only when the batch touches them
+   (below, "Only the journey groups a batch touches"):
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
    percent, the docker marked tests, the scoring timing test), `checks` (pre-commit, the secret
    scan of every commit the batch brings, shellcheck, the `tests/*_test.sh` scripts and the
@@ -47,7 +53,53 @@ in the job folder that holds this repository (it is not part of the repository).
    stacks in `JOURNEY_SHARDS` of that script (`apply:2` today): its Playwright shards are the
    steps `journeys-<group>.1`, `journeys-<group>.2`. A journey step that fails runs once more on
    a fresh stack (`journeys-<group>-again`, `journeys-<group>.1-again`); passing then, it counts as passed and is listed under
-   `flaky` (issue #433). Every step of `ci.yml`
+   `flaky` (issue #433).
+
+   Only the journey groups a batch touches (the owner's decision of 2026-10-21, issue #552). The
+   journey groups were most of a gate's time (about 6000 s of stacks for every batch), so a batch
+   runs only the groups its changed files touch, the files of the merged tree against the main it
+   starts from. `python3 .github/scripts/ci_plan.py journeys` decides, from the tree it checks:
+   documentation, task notes, Claude Code configuration, operations scripts and shell tests run
+   no group; every change under `api/app/` runs every group, including assets, new modules and
+   deleted paths. Python imports and registration dependencies are not inferred. A web feature
+   (`web/src/features/<feature>/`) runs its groups (`AREA_GROUPS`) and those of every feature
+   that imports the file, read from the imports file by file; a spec or a group config runs its
+   own group; anything shared or unknown runs every group: identity, auth, jobs, profile, agents
+   and the shell pages that every journey goes through, `web/src/lib/` and
+   the components, migrations, lockfiles, Dockerfiles, compose files, the e2e helpers and
+   configs, `ops/local-check.sh`, `ops/ship.sh`, the mapping itself, and any path no rule names.
+   Every group also runs when `LOCAL_CHECK_FULL=1` is set (`LOCAL_CHECK_FULL=1 ops/ship.sh ...`
+   passes it to the gate) and when the base has no PASS record: a batch skips a group only on
+   the strength of a check of the main under it, so after a merge by hand that skipped the gate,
+   the next batch runs in full. Ruff, pytest, the coverage floor, the docker marked tests,
+   pre-commit, the secret scan, shellcheck, the shell tests, eslint, tsc, the build and Vitest
+   run in full every time. The check prints `journeys: scoped, ran <groups>; skipped <groups>`
+   (or `journeys: full (<why>), ran <groups>`) and one line per group with its reason, before the
+   steps and again above its last line; the record holds the same under `journeys`, with the
+   number of changed files and the sha256 of their raw pathname bytes, sorted with a NUL after
+   each path. Git's `-z` output preserves newlines and quoting throughout that calculation.
+   The metadata is computed independently of mapping, including forced full, unchecked bases
+   and missing or failed mappers. If the change list itself cannot be established, every group
+   runs and the check fails without a PASS record. `ops/ship.sh` prints the scope in its summary
+   (`journeys:`) and checks both count and digest against base and head before any merge, for
+   full and scoped records. A new web feature gets its line in `AREA_GROUPS` (`ci_plan_test.py`
+   fails without one); until then its files run every group.
+
+   Web dependencies include TypeScript side-effect, multiline, type-only, re-export and literal
+   dynamic imports, including literal template targets and JSON assets. Deleted source paths and renames
+   run every group: the base can hold consumers the head no longer contains. Unreadable sources,
+   decode, parse or traversal errors, unresolved local modules and computed or unsupported
+   imports also run every group. The reader is deliberately conservative, with no full
+   TypeScript parser: template interpolation and ambiguous syntax force full. Runtime test data
+   mounted by the gate's compose files or read by journeys has explicit group rules. Worker registration providers and
+   their dependencies run every group because callbacks can affect modules that do not import them.
+   API changes deliberately run all journeys. Conservative JSX slash handling also causes full
+   fallback for current web source changes. The synthetic web fixtures demonstrate narrower
+   supported cases.
+   The first real gate of this change must use `LOCAL_CHECK_FULL=1`; fixture results are not a
+   genuine scoped PASS, and no real scoped PASS has been established yet.
+
+   Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in
    `LANES`, with a condition on that unit's plan output, anything else in `SUPPORT`.
    `ci_plan_test.py` fails on a step that is in no list, on a check that does not follow its
@@ -154,8 +206,11 @@ in the job folder that holds this repository (it is not part of the repository).
    of the batch during the ship stops the run before anything is merged (`SHIP: FAIL the head of
    #n moved while shipping`), so the next run selects it again once it is approved again.
    It merges only when main and every head are still what the PASS record lists (`gh pr merge
-   --repo <owner/repo> --match-head-commit`), and moves the issues the merged pull requests
-   close to Done on the board right after the merges. Then it pulls the main checkout (which
+   --repo <owner/repo> --match-head-commit`), and keeps the board current with
+   `ops/board-sync.py --apply` at the start of the gate (the batch shows as Gating), right after
+   the merges and after the deploy, plus once on the way out of a run that stopped before the
+   merges, so its batch leaves Gating (each sync is killed after `SHIP_SYNC_SECONDS`, 300 by
+   default; a failed or killed sync prints one line, never fails the ship). Then it pulls the main checkout (which
    must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
    Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
    `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,

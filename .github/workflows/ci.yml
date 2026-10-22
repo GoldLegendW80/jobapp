@@ -474,6 +474,7 @@ jobs:
         run: tests/browser_egress_test.sh
       # Issue #324: the new laptop checker (ops/dev-setup.sh, read only) and the board helper
       # (ops/card.sh) against fake tools: what each missing piece reports, nothing installed or sent.
+      # Issue #500: it also runs tests/board_sync_test.py, the stage rules of ops/board-sync.py.
       - name: tests/dev_setup_test.sh
         id: dev_setup_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
