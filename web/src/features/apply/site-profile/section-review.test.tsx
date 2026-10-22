@@ -100,7 +100,11 @@ function show(run = fixture(), refresh = vi.fn()) {
       <Harness />
     </QueryClientProvider>,
   );
-  return (value: ProfileRun) => act(() => replaceRun(value));
+  return (value: ProfileRun) => {
+    act(() => {
+      replaceRun(value);
+    });
+  };
 }
 
 function editedRun(run: ProfileRun, key: string, changes: object) {

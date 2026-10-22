@@ -374,17 +374,23 @@ function SectionReviewContent({
                       [field.field_key]: { base: editText(field.value), value },
                     }));
                   }}
-                  onSave={() => saveField(field, { value: fieldValue(field) })}
+                  onSave={() => {
+                    saveField(field, { value: fieldValue(field) });
+                  }}
                   onUndo={() => {
                     setConfirm(null);
                     setDrafts((current) => {
-                      const next = { ...current };
-                      delete next[field.field_key];
-                      return next;
+                      return Object.fromEntries(
+                        Object.entries(current).filter(
+                          ([key]) => key !== field.field_key,
+                        ),
+                      );
                     });
                     if (edit.variables?.field === field.field_key) edit.reset();
                   }}
-                  onReplace={(replace) => saveField(field, { replace })}
+                  onReplace={(replace) => {
+                    saveField(field, { replace });
+                  }}
                 />
               ))}
             </tbody>
