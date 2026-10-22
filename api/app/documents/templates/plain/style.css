@@ -31,11 +31,14 @@ li, p { overflow-wrap: anywhere; }
   flex-wrap: wrap;
   row-gap: 1pt;
   margin-top: 3pt;
+  overflow: hidden;
 }
-.contact li { overflow-wrap: break-word; max-width: 100%; }
-.contact li + li {
+/* each line's rule stands 6.5 pt left of the line's box: the list clips it at a row's start */
+.contact li {
+  overflow-wrap: break-word;
+  max-width: 100%;
   border-left: 0.5pt solid #000000;
-  margin-left: 6pt;
+  margin: 0 12.5pt 0 -6.5pt;
   padding-left: 6pt;
 }
 

@@ -10,7 +10,7 @@
 <div class="frame"></div>
 <header class="head">
 <div class="headtext">
-<h1 class="name">{% for word in name.split() %}<span class="w">{{ word }}</span>{{ " " if not loop.last }}{% endfor %}</h1>
+<h1 class="name">{{ base.words(name, "w") }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 </div>
 {{ base.contact_lines() }}

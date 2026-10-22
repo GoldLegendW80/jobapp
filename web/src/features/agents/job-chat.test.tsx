@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
+import { jobKey } from "@/features/jobs/api";
 import { FakeEventSource } from "@/test/fake-event-source";
 import { makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
@@ -418,10 +419,22 @@ describe("job detail: chat panel", () => {
   // there, silently. It now holds the message, which goes out when the answer is complete.
   it("holds a message sent with Enter while an answer is pending, and sends it afterwards", async () => {
     const chat = await answering();
-    await chat.user.type(composer(), "And the salary?{Enter}");
+    await chat.user.type(composer(), "And the salary?");
+    expect(
+      within(chat.panel).queryByTestId("chat-held-message"),
+    ).not.toBeInTheDocument();
+    await chat.user.keyboard("{Enter}{Enter}");
     expect(chat.state.sends).toEqual([]);
     expect(composer()).toHaveValue("And the salary?");
-    expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
+    const pending = within(chat.panel).getByTestId("chat-held-message");
+    expect(pending).toHaveTextContent("And the salary?");
+    expect(pending).toHaveTextContent("Pending");
+    expect(
+      within(pending).getByRole("button", { name: "Cancel" }),
+    ).toBeEnabled();
+    const hint = within(chat.panel).getByText(HOLDING);
+    expect(hint).toHaveAttribute("aria-live", "polite");
+    expect(hint).toHaveAttribute("aria-atomic", "true");
     settle(chat);
     await waitFor(() => {
       expect(chat.state.sends).toEqual(["And the salary?"]);
@@ -431,9 +444,123 @@ describe("job detail: chat panel", () => {
     });
     expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
     expect(
+      within(chat.panel).queryByTestId("chat-held-message"),
+    ).not.toBeInTheDocument();
+    expect(
       await within(chat.panel).findByText("And the salary?"),
     ).toBeInTheDocument();
     expect(chat.state.sends).toHaveLength(1); // once
+  });
+
+  it("cancels a held message without clearing the draft or sending it when the run ends", async () => {
+    const chat = await answering();
+    await chat.user.type(composer(), "Keep this draft{Enter}");
+    const pending = within(chat.panel).getByTestId("chat-held-message");
+    const cancel = within(pending).getByRole("button", { name: "Cancel" });
+    await chat.user.tab({ shift: true });
+    expect(cancel).toHaveFocus();
+    await chat.user.keyboard("{Enter}");
+    expect(
+      within(chat.panel).queryByTestId("chat-held-message"),
+    ).not.toBeInTheDocument();
+    expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+    expect(composer()).toHaveValue("Keep this draft");
+    expect(composer()).toHaveFocus();
+    settle(chat);
+    await waitFor(() => {
+      expect(sendButton()).toBeEnabled();
+    });
+    expect(chat.state.sends).toEqual([]);
+    await chat.user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(chat.state.sends).toEqual(["Keep this draft"]);
+    });
+  });
+
+  it.each(["while away", "after returning"])(
+    "discards a hold permanently on job navigation when the run ends %s",
+    async (completion) => {
+      const chat = await answering();
+      const other = "00000000-0000-4000-9000-000000000002";
+      server.use(
+        http.get("*/api/jobs/:id", ({ params }) =>
+          HttpResponse.json(makeDetail({ id: String(params.id) })),
+        ),
+        http.get("*/api/agents/threads", ({ request }) =>
+          HttpResponse.json({
+            items:
+              new URL(request.url).searchParams.get("job_id") === JOB
+                ? [thread]
+                : [],
+          }),
+        ),
+      );
+      // Both jobs are cached so navigation retains this panel and its composer instance.
+      chat.app.client.setQueryData(jobKey(other), makeDetail({ id: other }));
+      const input = composer();
+      await chat.user.type(input, "Only for the first job{Enter}");
+      expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
+      await act(async () => {
+        await chat.app.router.navigate(`/jobs/${other}?chat=open`);
+      });
+      await within(chat.panel).findByTestId("chat-empty");
+      expect(composer()).toBe(input);
+      expect(input).toHaveValue("Only for the first job");
+      expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+      if (completion === "while away") {
+        settle(chat);
+        await act(async () => {
+          await chat.app.client.invalidateQueries({
+            queryKey: threadKey(THREAD),
+            refetchType: "all",
+          });
+        });
+      }
+      await act(async () => {
+        await chat.app.router.navigate(`/jobs/${JOB}?chat=open`);
+      });
+      expect(composer()).toBe(input);
+      expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+      expect(
+        within(chat.panel).queryByTestId("chat-held-message"),
+      ).not.toBeInTheDocument();
+      if (completion === "after returning") {
+        // The old EventSource was closed on navigation; the thread read controls completion.
+        settle(chat);
+        await act(async () => {
+          await chat.app.client.invalidateQueries({
+            queryKey: threadKey(THREAD),
+          });
+        });
+      }
+      await within(chat.panel).findByText("It fits.");
+      await waitFor(() => {
+        expect(sendButton()).toBeEnabled();
+      });
+      expect(input).toHaveValue("Only for the first job");
+      expect(chat.state.sends).toEqual([]);
+    },
+  );
+
+  it("keeps a held draft after a failed send without holding or sending it again", async () => {
+    const chat = await answering();
+    const release = slowSend(chat.state, true);
+    await chat.user.type(composer(), "Try this once{Enter}");
+    settle(chat);
+    await waitFor(() => {
+      expect(chat.state.sends).toEqual(["Try this once"]);
+    });
+    expect(
+      within(chat.panel).queryByTestId("chat-held-message"),
+    ).not.toBeInTheDocument();
+    release();
+    await screen.findByText("The message was not sent. Broken.");
+    await waitFor(() => {
+      expect(sendButton()).toBeEnabled();
+    });
+    expect(composer()).toHaveValue("Try this once");
+    expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+    expect(chat.state.sends).toEqual(["Try this once"]);
   });
 
   it("holds the text as it is when the answer is complete, and nothing once it was cleared", async () => {
@@ -458,11 +585,13 @@ describe("job detail: chat panel", () => {
     expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
     await chat.user.type(composer(), " and a second one");
     expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+    expect(
+      within(chat.panel).queryByTestId("chat-held-message"),
+    ).not.toBeInTheDocument();
     settle(chat);
     await waitFor(() => {
       expect(sendButton()).toBeEnabled();
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(chat.state.sends).toEqual([]);
     expect(composer()).toHaveValue("First idea and a second one");
     // His Enter, on the text as it stands now, sends it.

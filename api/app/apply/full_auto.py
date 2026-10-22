@@ -152,7 +152,7 @@ def blocking_mode(mode: Mode) -> Mode:
 
 
 def hold_s(values: caps.Values) -> int:
-    return max(values.hold_s, int(_setting("apply_hold_s")))
+    return max(values.hold_s, caps.hold_floor_s())
 
 
 # --- the review queue ----------------------------------------------------------------------------

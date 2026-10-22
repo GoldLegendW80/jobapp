@@ -42,12 +42,15 @@ back off that starts at WRITE_BACKOFF_S and doubles up to WRITE_BACKOFF_MAX_S (b
 after a success): during it nothing is published and `close_block` returns at once. So a run
 waits at most `timeout_s` per attempt, and a run of ten minutes on a Redis that never answers
 makes about thirteen attempts: it loses its live text and about thirteen seconds, not its speed.
-A Redis that answers, but slowly, is treated the same way (issue #90): an attempt that took more
-than STORE_SLOW_S starts the back off too, with nothing given up, and the wait for an attempt
+A Redis that answers, but slowly, is treated the same way (issue #90): an attempt whose own calls
+took more than STORE_SLOW_S starts the back off too, with nothing given up (the wait for the
+lock is not counted: it is another attempt's time, issue #155), and the wait for an attempt
 already under way (the pump's) is taken out of the timeout of the next, so `close_block` costs
 one timeout at most, never two.
 At the end of the run the buffer is cleared whatever the back off (`aclose`, one retry), after
-the run's final status is stored.
+the run's final status is stored. From then on no write starts (issue #155): a pump the run could
+not stop writes nothing more once its call comes back, and clears what that call wrote, which may
+have landed after the final clear.
 
 Which agents are live, and when the api reads. An agent definition can turn its live text off
 (`AgentDefinition.live_text`, for agents reading private documents): the runner then asks for
@@ -309,6 +312,7 @@ class LiveText:
         self._stored = 0
         self._broken: int | None = None
         self._owed: int | None = None  # a block whose buffer is still to be cleared
+        self._closed = False  # the run has ended (`aclose`): no write starts any more
         self._wake = asyncio.Event()
         self._lock = asyncio.Lock()
         # Counts for the run's log line (never text).
@@ -387,11 +391,17 @@ class LiveText:
         (all of its text is here, nothing of it was written).
 
         One call costs its caller at most one timeout, the wait for a call already under way
-        included: the timeout of an attempt is what the wait left of it. And an attempt that
-        was answered, but took longer than `slow_s` in all, starts the same back off as a
+        included: the timeout of an attempt is what the wait left of it. And an attempt whose
+        own calls were answered, but took longer than `slow_s`, starts the same back off as a
         failure, with nothing given up (the store holds what it was told): a store that is
         slow without ever failing is left alone like one that fails, instead of being waited
-        for at every block."""
+        for at every block. The wait for the lock is not counted there: a call queued behind
+        a slow one is not slow itself.
+
+        Once the live text is closed (`aclose`) no write starts. An attempt that was under way
+        then, which comes back later (a pump the run could not stop), is followed under the
+        same lock by one that clears what its calls wrote: they may have landed after the
+        final clear."""
         began = self._clock()
         if began < self._quiet_until:
             return
@@ -407,43 +417,57 @@ class LiveText:
                 self.failures += 1
                 self._back_off("live text not published", exc)
             return
+        closed = self._closed
         try:
-            if self._clock() < self._quiet_until:
-                return
-            block, after, text, is_open = self.block, self._after, self._text, self._open
-            touched = self._stored_block if self._stored_block is not None else block
-            if not self._due(block, is_open, text):
-                return
-            self.attempts += 1
-            left = max(self._timeout_s - (self._clock() - began), 0.0)
-            try:
-                async with asyncio.timeout(left):
-                    wrote = await self._tell(block, after, text, is_open)
-            except asyncio.CancelledError:
-                # Cancelled in the middle of a call (the pump, at the end of the run): what
-                # the store holds is not known any more, so its clear is owed (paid by aclose).
-                self._give_up(block, is_open, touched)
-                raise
-            except Exception as exc:
-                self.failures += 1
-                self._give_up(block, is_open, touched)
-                self._back_off("live text not published", exc)
-                return
-            if self._clock() - began > self._slow_s:
-                self.slow += 1
-                self._back_off("live text slow", None)
-            elif wrote:
-                self._next_backoff = self._backoff_s
+            await self._attempt(began)
         finally:
-            self._lock.release()
+            try:
+                # Under way when the run ended (above): one more attempt, which only clears.
+                if self._closed and not closed:
+                    self._quiet_until = 0.0
+                    await self._attempt(self._clock())
+            finally:
+                self._lock.release()
+
+    async def _attempt(self, began: float) -> None:
+        """One attempt on the store, under the lock (`_sync`), within one timeout of `began`."""
+        if self._clock() < self._quiet_until:
+            return
+        block, after, text, is_open = self.block, self._after, self._text, self._open
+        touched = self._stored_block if self._stored_block is not None else block
+        if not self._due(block, is_open, text):
+            return
+        self.attempts += 1
+        called = self._clock()
+        left = max(self._timeout_s - (called - began), 0.0)
+        try:
+            async with asyncio.timeout(left):
+                wrote = await self._tell(block, after, text, is_open)
+        except asyncio.CancelledError:
+            # Cancelled in the middle of a call (the pump, at the end of the run): what
+            # the store holds is not known any more, so its clear is owed (paid by aclose).
+            self._give_up(block, is_open, touched)
+            raise
+        except Exception as exc:
+            self.failures += 1
+            self._give_up(block, is_open, touched)
+            self._back_off("live text not published", exc)
+            return
+        if self._clock() - called > self._slow_s:
+            self.slow += 1
+            self._back_off("live text slow", None)
+        elif wrote:
+            self._next_backoff = self._backoff_s
 
     async def _tell(self, block: int, after: int, text: str, is_open: bool) -> bool:
         """The calls of one attempt, in order. True when the block's text was brought up to
-        date (False when the attempt only cleared, or had nothing to write for this block)."""
+        date (False when the attempt only cleared, or had nothing to write for this block).
+        Once the live text is closed it only clears, also after a call that was under way
+        when it closed."""
         if self._owed is not None:
             await self._store.clear(self._run_id, self._owed)
             self._owed = None
-        if not is_open:
+        if not is_open or self._closed:
             if self._stored_block is not None:
                 stored, self._stored_block = self._stored_block, None
                 await self._store.clear(self._run_id, stored)
@@ -454,6 +478,8 @@ class LiveText:
             previous, self._stored_block = self._stored_block, block
             self._stored = 0
             await self._store.open(self._run_id, block, after, previous)
+            if self._closed:
+                return False
         safe = publishable(text, self._secret, self._redacted)
         if len(safe) > self._stored:
             piece, self._stored = safe[self._stored :], len(safe)
@@ -480,7 +506,7 @@ class LiveText:
         attempt (and the store is not asked for nothing)."""
         if self._owed is not None:
             return True
-        if not is_open:
+        if not is_open or self._closed:
             return self._stored_block is not None
         if self._broken == block:
             return False
@@ -499,6 +525,8 @@ class LiveText:
         while True:
             await self._wake.wait()
             self._wake.clear()
+            if self._closed:
+                return
             await self._sync()
             await _pause(self._flush_s)
 
@@ -513,13 +541,16 @@ class LiveText:
         await self._sync()
 
     async def aclose(self) -> None:
-        """The run has ended: nothing may stay live. The back off does not apply (this is the
-        last chance to clear the buffer, and the run's end is already stored), and a clear that
-        fails is tried once more. What still fails expires by itself (TTL_S), and the stream
-        never reads the buffer of a run that has ended."""
+        """The run has ended: nothing may stay live, and no write starts any more (a pump
+        still running ends, and clears behind a call that comes back late, `_sync`). The back
+        off does not apply (this is the last chance to clear the buffer, and the run's end is
+        already stored), and a clear that fails is tried once more. What still fails expires by
+        itself (TTL_S), and the stream never reads the buffer of a run that has ended."""
+        self._closed = True
         self._open = False
         self._index = None
         self._text = ""
+        self._wake.set()
         for attempt in range(2):
             self._quiet_until = 0.0
             await self._sync()

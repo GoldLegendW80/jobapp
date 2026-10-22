@@ -14,7 +14,7 @@ cd "$ROOT"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 CHECK="$ROOT/ops/env_check.sh"
-CANARY="CANARY0secret0value0never0printed"
+CANARY="CANARY0${RANDOM}0${RANDOM}0${RANDOM}0never0printed"
 
 passed=0
 step() { printf '\n== %s\n' "$*"; }
@@ -87,7 +87,7 @@ run 1 "$CHECK" "$broken" .env
 out_has ".env: line 20: invalid (not KEY=VALUE)"
 out_has ".env: line 21: invalid (the name before = is not a variable name"
 out_has ".env: line 22: invalid (spaces or quotes in the value need the whole value in quotes)"
-out_has ".env: 3 invalid line(s); docker compose would refuse this file"
+out_has ".env: 3 invalid line(s); fix this file before deploying"
 no_secret
 grep -qF "matches in" "$WORK/out" && fail "the line itself was printed"
 grep -qF ".env.jetson:20" "$WORK/out" && fail "the line itself was printed"
@@ -119,6 +119,34 @@ expect_invalid "a double quote is not closed" "KEY=\"$CANARY"
 expect_invalid "a double quote is not closed" "KEY=\"$CANARY\\\""
 expect_invalid "a single quote is not closed" "KEY='$CANARY"
 ok "bare word, leading space, export, digit first, dash, space before =, empty name, non-ASCII name, unquoted spaces or quotes, text after a closing quote, unclosed quotes (multi-line values)"
+
+step "OPENSSL_armcap is refused even with a blank value: the Jetson keeps hardware AES"
+for value in '' 0 1 '""' "''" '"0"' "'0'" ' # removed' '"" # removed' \
+  "$CANARY" "\"$CANARY\"" "'$CANARY'" "$CANARY=padding"; do
+  expect_invalid 'OPENSSL_armcap is only for Mac development; remove this key' "OPENSSL_armcap=$value"
+done
+for line in "export OPENSSL_armcap=$CANARY" " OPENSSL_armcap=$CANARY" \
+  "OPENSSL_armcap =$CANARY" "OPENSSL_armcap= $CANARY"; do
+  printf '%s\n' "$line" >"$WORK/armcap.env"
+  run 1 "$CHECK" "$WORK/armcap.env"
+  no_secret
+done
+printf 'OPENSSL_armcap=\r\n' >"$WORK/armcap.env"
+run 1 "$CHECK" "$WORK/armcap.env"
+out_has 'line 1: invalid (OPENSSL_armcap is only for Mac development; remove this key)'
+printf 'OPENSSL_armcap=%s' "$CANARY" >"$WORK/armcap.env"
+run 1 "$CHECK" "$WORK/armcap.env"
+no_secret
+for line in "# OPENSSL_armcap=$CANARY" "  # export OPENSSL_armcap=$CANARY" \
+  "OTHER=$CANARY # OPENSSL_armcap=0" 'OTHER=OPENSSL_armcap=0' \
+  "OTHER='OPENSSL_armcap=$CANARY'" 'OPENSSL_armcap_EXTRA=0' 'MY_OPENSSL_armcap=0' \
+  'OPENSSL_armcap0=0' '_OPENSSL_armcap=0' 'OPENSSL_ARM_CAP=0' 'openssl_armcap=0' \
+  'OPENSSL_ARMCAP=0' 'OPENSSL_armca=0' 'OPENSSL_armcapx=0'; do
+  printf '%s\n' "$line" >"$WORK/armcap.env"
+  run 0 "$CHECK" "$WORK/armcap.env"
+  [[ ! -s "$WORK/out" ]] || fail 'output on a harmless neighbour of the forbidden key'
+done
+ok "the exact key is refused with unquoted, quoted, empty, CRLF and no-final-newline values; export and malformed assignments stay invalid; comments, values and other names pass; no value printed"
 
 step "a \$ outside single quotes: compose interpolates it (review of PR #20)"
 # shellcheck disable=SC2016 # literal $ in the lines under test
@@ -182,6 +210,10 @@ cp "$good" "$JHOME/jobapp/.env"
 run 0 dfun check_env_files 0
 out_has ".env.jetson: syntax ok"
 out_has "fakejetson:jobapp/.env: syntax ok"
+printf 'OPENSSL_armcap=%s\n' "$CANARY" >"$JHOME/jobapp/.env"
+run 1 dfun check_env_files 0
+out_has 'line 1: invalid (OPENSSL_armcap is only for Mac development; remove this key)'
+no_secret
 cp "$broken" "$JHOME/jobapp/.env"
 run 1 dfun check_env_files 0
 out_has "fakejetson:jobapp/.env: line 20: invalid (not KEY=VALUE)"
