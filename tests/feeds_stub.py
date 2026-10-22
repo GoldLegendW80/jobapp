@@ -39,9 +39,9 @@ What `ok` holds (the journeys and the api tests read these):
 - Remote OK: a contract "AI Engineer" mission at Quillfeather Example Labs (tags contract), a
   permanent "GenAI Engineer" at Brightmoor Example Co with a stated salary, the "Applied AI
   Engineer" of Larkspur Example Studio that We Work Remotely also lists, a "Cybersecurity AI
-  Engineer" contract and a "Security AI Engineer" written with a soft hyphen (spellings the
-  sweep's whole word match lets through, as for a board: stored, never in the deck), a "Threat
-  AI Engineer" contract (the never apply rule: stored `skipped`), a "Sales Lead", and a posting
+  Engineer" contract, a "Security AI Engineer" written with a soft hyphen and a "Threat AI
+  Engineer" contract (the never apply rule, read folded as for a board: stored `skipped`,
+  never in the deck), a "Sales Lead", and a posting
   whose address is off remoteok.com (refused).
 - We Work Remotely: Larkspur's "Applied AI Engineer" again, a contract "Forward Deployed
   Engineer" at Tamberlin Example, an "Ingénieur Cybersécurité" (never in the deck).
