@@ -65,6 +65,20 @@ const answerSchema = z.object({
 export type Answer = z.infer<typeof answerSchema>;
 
 const approvalSchema = z.object({
+  email: z
+    .object({
+      written_by: z.string(),
+      issues: z.array(
+        z.object({
+          id: z.string(),
+          code: z.string(),
+          start: z.number(),
+          end: z.number(),
+        }),
+      ),
+    })
+    .nullable()
+    .optional(),
   state: z.string(),
   dry_run: z.boolean(),
   answers_hash: z.string(),
@@ -166,7 +180,18 @@ const decide = (applicationId: string, action: string, body?: unknown) =>
 export const approveApplication = (
   applicationId: string,
   answersHash: string,
-) => decide(applicationId, "approve", { answers_hash: answersHash });
+  confirmedEmailRecipient?: string,
+  acknowledgedEmailIssues: string[] = [],
+) =>
+  decide(applicationId, "approve", {
+    answers_hash: answersHash,
+    ...(confirmedEmailRecipient
+      ? {
+          confirmed_email_recipient: confirmedEmailRecipient,
+          acknowledged_email_issues: acknowledgedEmailIssues,
+        }
+      : {}),
+  });
 export const rejectApplication = (applicationId: string) =>
   decide(applicationId, "reject");
 export const cancelApplication = (applicationId: string) =>

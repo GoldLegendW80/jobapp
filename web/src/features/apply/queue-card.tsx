@@ -154,8 +154,20 @@ export function QueueCard({
     onError: failed,
   });
   const approve = useMutation({
-    mutationFn: (current: Approval) =>
-      approveApplication(item.id, current.answers_hash),
+    mutationFn: ({
+      current,
+      acknowledged,
+    }: {
+      current: Approval;
+      acknowledged: string[];
+    }) =>
+      approveApplication(
+        item.id,
+        current.answers_hash,
+        current.answers.find((answer) => answer.field_key === "email_to")
+          ?.value as string | undefined,
+        acknowledged,
+      ),
     onMutate: () => {
       setNotice(null);
     },
@@ -489,8 +501,8 @@ export function QueueCard({
             if (next?.isConnected) next.focus();
             else onLeave();
           }}
-          onConfirm={() => {
-            approve.mutate(approval);
+          onConfirm={(acknowledged = []) => {
+            approve.mutate({ current: approval, acknowledged });
           }}
         />
       ) : null}
