@@ -10,14 +10,17 @@ submit element with `designate_submit(ref)`. What is accepted is decided here, i
   shown in the snapshot (a hidden element has no ref), named as a submit (`SUBMIT_NAMES`, a closed
   list in English and French, never a step's `NEXT_NAMES`), in the same frame as every field of
   the form, inside the smallest part of the page that holds them all (a `form` around the fields
-  when the page names one), after the last field, and the only such button there. Anything else
-  is refused, and an application without an accepted designation needs the person.
+  when the page names one), after the last field, inside no part of the page of its own that
+  leaves a field out (`PARTS`: a dialog, a form, a search, the header, the footer, a navigation
+  or an aside), and the only such button there. Anything else is refused, and an application
+  without an accepted designation needs the person.
 - `marked`: the tool layer's submit detector (browser B5) marks it. Asked without a click: a
   `browser_select_option` is judged before it touches the element, and the detector refuses it
   as `submit` when the element is a submit control by type, a selector of the lease or a wrapper
   of one (the `check` judgement reads no names: a button that is a submit by its name alone is
   refused by a click but not marked here, so it is left to the person); any other answer is
-  "not marked".
+  "not marked", and so is a probe the browser does not answer (`BrowserError`: the lease ended,
+  browserd down or late).
 
 The submit lease (app/apply/submit.py) refills with no model: `configured` gives the adapter the
 approved designation (`designated:submit`, `designated:step:<n>` rows, covered by the approval's
@@ -30,8 +33,16 @@ element's box that browserd reads (`browser_box`).
 Declared open points: a frame's origin is not in the snapshot, so a form inside an iframe of
 another site is accepted as the page's form (as the framed adapters of `base`); a submit named
 otherwise than `SUBMIT_NAMES` ("Go", "Done", an icon only button, another language) is refused
-and left to the person; a submit placed above the last field is refused; `addressed` reads a page
-that names an AI reader with the words of `AI_READER` only.
+and left to the person; a submit placed above the last field is refused. The fields are every
+field of the page, so a field after the submit (a newsletter box in the footer) refuses it as
+`before_a_field`, and a field outside the submit's part (a search box in the header beside a
+named form, the page behind a modal form) as `another_part`: the person submits. A part the
+snapshot does not name (a plain block, a named `region`) is read as the form's own, so a box
+there after a form whose submit has another name may be designated; the "before" screenshot
+shows it to the person. `addressed` reads a page that names an AI reader with the words of
+`AI_READER`, and a model's own name only where the page speaks to it (`AI_NAMED`): a sentence
+that opens on a person named Claude and a comma is reported, and a greeting ("Hey Claude,") or a
+name right after a heading, whose words the read joins with no stop, is not.
 """
 
 import io
@@ -53,6 +64,7 @@ from app.apply.ats.base import (
     label_of,
     parse_snapshot,
 )
+from app.browser.client import BrowserError
 
 SUBMIT_NAMES = frozenset(
     {
@@ -67,6 +79,13 @@ NEXT_NAMES = frozenset(
     {
         "next", "next step", "continue", "save and continue", "suivant", "etape suivante",
         "continuer",
+    }
+)  # fmt: skip
+# Roles of a part with controls of its own: a submit inside one is read as that part's.
+PARTS = frozenset(
+    {
+        "alertdialog", "banner", "complementary", "contentinfo", "dialog", "form", "navigation",
+        "search",
     }
 )  # fmt: skip
 STEPS_MAX = 5
@@ -142,6 +161,9 @@ def check_designation(root: Node, ref: str) -> str:
     order = _order(root)
     if order[id(target)] < max(order[id(f)] for f in fields):
         return "before_a_field"
+    held = [{id(n) for n in _ancestors(f)} for f in fields]
+    if any(p.role in PARTS and any(id(p) not in up for up in held) for p in _ancestors(target)):
+        return "another_part"
     rivals = [
         n
         for n in region.walk()
@@ -152,21 +174,36 @@ def check_designation(root: Node, ref: str) -> str:
 
 async def marked(tools: Tools, ref: str, name: str = "") -> bool:
     """The tool layer's submit detector marks the element (module docstring); nothing clicked."""
-    result = await tools.select_option(ref, [PROBE], name)
+    try:
+        result = await tools.select_option(ref, [PROBE], name)
+    except BrowserError:
+        return False
     return not result.get("ok") and result.get("error") == "submit"
 
 
 AI_READER = re.compile(
     r"\b(?:ai (?:assistants?|agents?|models?|tools?|systems?)|artificial intelligence|"
-    r"(?:large )?language models?|llms?|chatgpt|claude|gpt-?\d*|automated assistants?|"
-    r"if you are an ai|assistants? ia|agents? ia|intelligence artificielle)\b"
+    r"(?:large )?language models?|llms?|automated assistants?|if you are an ai|"
+    r"assistants? ia|agents? ia|intelligence artificielle)\b"
+)
+# A model's own name is also a person's (a recruiter named Claude): only an address counts.
+_VERSION = r"\d+(?:\.\d+)?"
+_MODEL = (
+    rf"(?:chat ?gpt|gpt)(?:-?{_VERSION}o?)?"
+    rf"|claude(?: ai| (?:{_VERSION} )?(?:opus|sonnet|haiku)(?: {_VERSION})?| {_VERSION})?"
+)
+AI_NAMED = re.compile(
+    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:{_MODEL})\b"
+    rf"|(?:^|[.!?] |\b(?:note|message|instructions?|consignes?) (?:to|for|pour) )"
+    rf"(?:{_MODEL}) ?[,:]"
 )
 
 
 def addressed(text: str) -> bool:
     """The page names an AI reader (SPEC-apply: a form that addresses AI assistants is reported).
     Reported only: nothing the page asks is done."""
-    return AI_READER.search(fold(text)) is not None
+    folded = fold(text)
+    return AI_READER.search(folded) is not None or AI_NAMED.search(folded) is not None
 
 
 # --- the adapter ---------------------------------------------------------------------------------

@@ -1,9 +1,12 @@
 """Fakes for the generic strategy of apply A8: the custom forms of tests/ats_forms/a8/ modelled over
 A6's SubmitForm, with refs that stay the same from one read to the next (as Playwright keeps them
 while an element lives), so a recorded stream can name them. The tool layer's submit detector is
-modelled: a click or a select on a marked element answers `submit`; `box` answers an element's
-box and the screenshot is a real JPEG, so the highlight is drawn. A scripted form agent drives a
-session by labels, with no model. Every call is recorded; nothing reaches a browser or a company."""
+modelled: a click or a select on a marked element answers `submit`, a select on another button
+answers browserd's `page_error` (Playwright's error on an element that is no select), and
+`probe_raises` makes the probe raise as the client does when browserd fails or the lease ends;
+`box` answers an element's box and the screenshot is a real JPEG, so the highlight is drawn. A
+scripted form agent drives a session by labels, with no model. Every call is recorded; nothing
+reaches a browser or a company."""
 
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ from PIL import Image
 
 from app.apply import form_agent
 from app.apply.ats.base import label_of, parse_snapshot
+from app.browser.client import BrowserError
 from tests.apply.a4_support import Spec
 from tests.apply.a6_support import SubmitForm
 
@@ -50,6 +54,7 @@ class CustomForm(SubmitForm):
         submit_attrs: str = "",
         extras: Sequence[tuple[str, str]] = (),
         paragraph: str = "",
+        probe_raises: str = "",
         **kw: Any,
     ) -> None:
         super().__init__([s for step in steps for s in step], **kw)
@@ -57,6 +62,7 @@ class CustomForm(SubmitForm):
         self.step = 0
         self.next_name, self.next_is_submit = next_name, next_is_submit
         self.submit_marked, self.submit_attrs = submit_marked, submit_attrs
+        self.probe_raises = probe_raises
         self.extras, self.paragraph = list(extras), paragraph
         self.shot = page_jpeg()
         self.probes: list[str] = []
@@ -131,9 +137,11 @@ class CustomForm(SubmitForm):
         if target is not None and target[0] in ("submit", "next", "extra"):
             self._log("select_option", ref=ref, values=values)
             self.probes.append(target[0])
+            if target[0] == "submit" and self.probe_raises:
+                raise BrowserError(self.probe_raises)
             if target[0] == "submit" and self.submit_marked:
                 return {"ok": False, "error": "submit"}
-            return {"ok": False, "error": "failed"}  # not a select: Playwright's error
+            return {"ok": False, "error": "page_error"}
         return await super().select_option(ref, values, element)
 
     async def box(self, ref: str, element: str = "") -> dict[str, Any]:
