@@ -242,12 +242,17 @@ export const runsKey = ["ingestion", "runs"] as const;
 export const runKey = (id: string) => ["ingestion", "runs", id] as const;
 
 /**
- * A run started or changed state: read the list of runs again, and the id of the latest finished
- * run that the review list shows. The second key sits under the first but `exact` stops there.
+ * A run started or changed state: read the list of runs again, the id of the latest finished
+ * run that the review list shows, and that list (it says when a newer run is in progress). The
+ * other keys sit under the first but `exact` stops there.
  */
 export function refreshRuns(client: QueryClient) {
   void client.invalidateQueries({ queryKey: runsKey, exact: true });
   void client.invalidateQueries({ queryKey: finishedRunKey });
+  void client.invalidateQueries({
+    queryKey: runsKey,
+    predicate: (query) => query.queryKey[3] === "proposals",
+  });
 }
 
 export const PAUSED_ON_CEILING = "token_ceiling";

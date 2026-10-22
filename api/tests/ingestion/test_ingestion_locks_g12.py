@@ -30,10 +30,10 @@ from tests.agents.run_helpers import add_user, now, save_credential
 from tests.ingestion import engine_helpers as eh
 from tests.ingestion import merge_helpers as mh
 from tests.ingestion.extract_helpers import add_document, key, keyring, settings
-from tests.ingestion.test_ingestion_locks import END_S, Path
+from tests.ingestion.test_ingestion_locks import END_S, Path, lock_probe
 from tests.ingestion.test_item_proposals import stored
 
-_FIXTURES = (key, keyring, settings)
+_FIXTURES = (key, keyring, lock_probe, settings)
 NAMED = ("identity", "full_name", "Alice Martin", "Alice Martin")
 HEADLINE = ("identity", "headline", "Engineer", "an Engineer")
 EMAIL = ("identity", "email", "alice@example.org", "alice@example.org")

@@ -1,12 +1,25 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
 import { server } from "@/test/server";
 
-import { PAGE, ProposalList } from "./proposal-list";
+import {
+  NEWER_RUN_NOTE,
+  PAGE,
+  ProposalList,
+  REPLACE_NOTE,
+  TWO_ENTRIES_NOTE,
+  TYPED_NOTE,
+} from "./proposal-list";
 
 /**
  * The decisions of the review (task G13) against a fake api that keeps what was decided, so the
@@ -270,6 +283,9 @@ describe("the review of a run's proposals", () => {
     );
     expect(start).toBeInvalid();
     expect(start).toHaveAccessibleDescription(/a period is a year/);
+    // The refused field takes the focus, and it was never disabled on the way.
+    expect(start).toHaveFocus();
+    expect(start).toBeEnabled();
     expect(api.count("pending")).toBe(1);
     // A year alone becomes a month, and the whole entry is sent as the user left it.
     await user.clear(start);
@@ -326,7 +342,8 @@ describe("the review of a run's proposals", () => {
     );
     expect(
       await within(identity).findByText(
-        "Accepted 2. 3 left for you to accept one by one.",
+        // From the answer's `skipped`: the invalid one was never asked, so it is not counted.
+        "Accepted 2. 2 left for you to accept one by one.",
       ),
     ).toHaveAttribute("role", "status");
     // One call for the section; what does not fit any more is not asked for.
@@ -392,15 +409,18 @@ describe("the review of a run's proposals", () => {
   });
 
   it("names the proposal that stopped a bulk accept and applies nothing", async () => {
-    const api = fakeApi([item("headline", "Engineer")]);
+    const api = fakeApi([
+      item("headline", "Engineer"),
+      item("links:a", { label: "A", url: "https://a.example.org" }),
+    ]);
     server.use(
       http.post("*/api/ingestion/runs/:id/accept-section", () =>
         HttpResponse.json(
           {
             detail:
-              "Nothing was accepted. One proposal no longer fits your profile and was set aside: too long. Accept the others again.",
-            reason: "invalid",
-            proposal_id: "p-headline",
+              "Nothing was accepted. Your profile cannot take one of these as it is: too many links. Edit or reject that one, then accept the others again.",
+            reason: "profile_conflict",
+            proposal_id: "p-links:a",
           },
           { status: 409 },
         ),
@@ -412,10 +432,195 @@ describe("the review of a run's proposals", () => {
     await user.click(
       within(identity).getByRole("button", { name: /Accept all/ }),
     );
-    expect(await within(identity).findByRole("alert")).toHaveTextContent(
-      "Nothing was accepted. One proposal no longer fits your profile",
+    // The alert is on the proposal the server named, and the focus goes to it.
+    expect(
+      await within(proposal("links:a")).findByRole("alert"),
+    ).toHaveTextContent("Your profile cannot take one of these as it is");
+    expect(within(proposal("headline")).queryByRole("alert")).toBeNull();
+    await waitFor(() => {
+      expect(
+        within(proposal("links:a")).getByRole("heading", { name: "Links" }),
+      ).toHaveFocus();
+    });
+    expect(api.count("pending")).toBe(2);
+  });
+
+  it("keeps the single buttons disabled while a bulk call runs, then focuses the section", async () => {
+    const api = fakeApi([item("headline", "Engineer")]);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post("*/api/ingestion/runs/:id/accept-section", async () => {
+        await held;
+        const one = api.state.items[0];
+        if (one) one.status = "accepted";
+        return HttpResponse.json({
+          run_id: "run-1",
+          section: "identity",
+          decided: ["p-headline"],
+          skipped: [],
+          left_out: {},
+          revision: 4,
+          profile_revision: 4,
+        });
+      }),
     );
-    expect(api.count("pending")).toBe(1);
+    const user = userEvent.setup();
+    show();
+    const identity = await screen.findByRole("region", { name: "Identity" });
+    await user.click(
+      within(identity).getByRole("button", { name: /Accept all/ }),
+    );
+    expect(
+      within(proposal("headline")).getByRole("button", {
+        name: "Accept: Headline",
+      }),
+    ).toBeDisabled();
+    release();
+    expect(
+      await within(identity).findByText("Accepted 1."),
+    ).toBeInTheDocument();
+    // The bulk buttons went with what they decided: the focus is on the section's heading.
+    await waitFor(() => {
+      expect(
+        within(identity).getByRole("heading", { name: "Identity" }),
+      ).toHaveFocus();
+    });
+  });
+
+  it("says when the rest of a bulk call was decided elsewhere", async () => {
+    fakeApi([item("headline", "Engineer"), item("website", "https://a.org")]);
+    server.use(
+      http.post("*/api/ingestion/runs/:id/accept-section", () =>
+        HttpResponse.json({
+          run_id: "run-1",
+          section: "identity",
+          decided: ["p-headline"],
+          skipped: [{ id: "p-website", reason: "not_pending" }],
+          left_out: { not_pending: 1 },
+          revision: 4,
+          profile_revision: 4,
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    show();
+    const identity = await screen.findByRole("region", { name: "Identity" });
+    await user.click(
+      within(identity).getByRole("button", { name: /Accept all/ }),
+    );
+    expect(
+      await within(identity).findByText(
+        "Accepted 1. 1 was decided elsewhere meanwhile or no longer here.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("takes back an accepted proposal from the page", async () => {
+    const api = fakeApi([
+      item("headline", "Engineer", { status: "accepted", applied_revision: 3 }),
+    ]);
+    server.use(
+      http.post("*/api/ingestion/proposals/:id/undo", ({ params }) => {
+        const one = api.state.items.find((each) => each.id === params.id);
+        if (one) one.status = "undone";
+        return HttpResponse.json({ id: params.id, status: "undone" });
+      }),
+    );
+    const user = userEvent.setup();
+    show();
+    const row = await screen.findByTestId("proposal");
+    await user.click(
+      within(row).getByRole("button", { name: "Take back: Headline" }),
+    );
+    expect(await within(row).findByText("Taken back")).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /Take back/ })).toBeNull();
+  });
+
+  it("shows the server's sentence when a take back is refused", async () => {
+    fakeApi([
+      item("headline", "Engineer", { status: "accepted", applied_revision: 3 }),
+    ]);
+    server.use(
+      http.post("*/api/ingestion/proposals/:id/undo", () =>
+        HttpResponse.json(
+          {
+            detail:
+              "The profile changed here since this was accepted, so it was left as it is.",
+            reason: "changed_since",
+            status: "accepted",
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    show();
+    const row = await screen.findByTestId("proposal");
+    await user.click(within(row).getByRole("button", { name: /Take back/ }));
+    expect(await within(row).findByRole("alert")).toHaveTextContent(
+      "The profile changed here since this was accepted",
+    );
+  });
+
+  it("says why accept all leaves a replace and a change of your own value", async () => {
+    fakeApi([
+      item("headline", "Lead engineer", {
+        before: "Engineer",
+        bulk: "typed_by_you",
+      }),
+      item("website", "https://b.org", { action: "replace", bulk: "replace" }),
+    ]);
+    show();
+    await screen.findAllByTestId("proposal");
+    expect(
+      within(proposal("headline")).getByText("Your own value"),
+    ).toBeInTheDocument();
+    expect(
+      within(proposal("headline")).getByText(TYPED_NOTE),
+    ).toBeInTheDocument();
+    expect(
+      within(proposal("website")).getByText(REPLACE_NOTE),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("What is left here is accepted one by one."),
+    ).toBeInTheDocument();
+  });
+
+  it("says that a newer run will replace what is undecided", async () => {
+    const api = fakeApi([item("headline", "Engineer")]);
+    show();
+    await screen.findByTestId("proposal");
+    expect(screen.queryByTestId("newer-run")).toBeNull();
+    server.use(
+      http.get("*/api/ingestion/runs/:id/proposals", () =>
+        HttpResponse.json({
+          run_id: "run-1",
+          status: "done",
+          partial: false,
+          newer_run: true,
+          profile_revision: api.state.revision,
+          counts: {
+            total: 0,
+            pending: 0,
+            accepted: 0,
+            rejected: 0,
+            superseded: 0,
+            invalid: 0,
+            undone: 0,
+          },
+          documents: [],
+          sections: [],
+        }),
+      ),
+    );
+    cleanup();
+    show();
+    expect(await screen.findByTestId("newer-run")).toHaveTextContent(
+      NEWER_RUN_NOTE,
+    );
   });
 
   it("shows a conflict as a choice and accepts the value picked", async () => {
@@ -432,6 +637,10 @@ describe("the review of a run's proposals", () => {
     const user = userEvent.setup();
     show();
     const row = await screen.findByTestId("proposal");
+    // Two positions started the same year share a key: the list says they may be two entries.
+    expect(
+      within(row).getByText(TWO_ENTRIES_NOTE.trim(), { exact: false }),
+    ).toBeInTheDocument();
     const accept = within(row).getByRole("button", {
       name: "Accept: Employers: Acme Group",
     });

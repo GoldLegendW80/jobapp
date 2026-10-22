@@ -1,4 +1,4 @@
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,9 @@ import {
  * A value is either one thing (a line, a text, a number, a list of words) or a record of such
  * things (an employer, a language, a fact). A part that is neither (a nested list of records)
  * is not shown and is sent back as it was.
+ *
+ * While the call runs the fields are read only (`aria-busy`), not disabled, so the focus stays
+ * where it was; a refusal moves it to the field it names.
  */
 
 const HINTS: Record<string, string> = {
@@ -57,11 +60,17 @@ export function EditForm({
     named && fields.some((field) => field.name === named.name)
       ? named
       : undefined;
+  const focused = at ? `${id}-${at.name || "value"}` : undefined;
+  useEffect(() => {
+    if (focused) document.getElementById(focused)?.focus();
+  }, [focused, refused]);
   const set = (name: string, draft: Draft) => {
+    if (busy) return;
     setDrafts((current) => ({ ...current, [name]: draft }));
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (busy) return;
     const edited = fields.map(
       (field) =>
         [field.name, valueOf(field, drafts[field.name] ?? "")] as const,
@@ -75,6 +84,7 @@ export function EditForm({
   return (
     <form
       aria-label={`Edit ${title}`}
+      aria-busy={busy || undefined}
       noValidate
       onSubmit={submit}
       className="flex flex-col gap-3 rounded-md border bg-muted/30 p-3"
@@ -90,7 +100,8 @@ export function EditForm({
         const draft = drafts[field.name] ?? "";
         const shared = {
           id: fieldId,
-          disabled: busy,
+          readOnly: busy,
+          "aria-busy": busy || undefined,
           autoFocus: index === 0,
           "aria-invalid": problem ? true : undefined,
           "aria-describedby": described,
