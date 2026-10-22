@@ -1273,7 +1273,8 @@
       "onboarding": {
         "completed_at": null,
         "dismissed_at": null,
-        "steps_passed": []
+        "steps_passed": [],
+        "starter_handled": []
       },
       "documents_language": "auto",
       "documents_tone": "plain"
