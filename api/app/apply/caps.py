@@ -598,7 +598,12 @@ def linkedin_daily(db: Session, application: Application, now: datetime) -> bool
 def pace_of(host: str) -> Pace:
     if host == "linkedin":
         return Pace(
-            timedelta(seconds=_setting("apply_linkedin_min_interval_s")),
+            timedelta(
+                seconds=(
+                    _setting("test_apply_linkedin_min_interval_s")
+                    or _setting("apply_linkedin_min_interval_s")
+                )
+            ),
             _setting("apply_linkedin_daily_max"),
         )
     return Pace(
