@@ -367,8 +367,11 @@ def _version_ids(versions: dict[str, Any]) -> dict[str, str]:
 
 def documents_code(db: Session, application: Application) -> str | None:
     """`documents_changed` when `documents.current` no longer returns the versions filled (and
-    covered by the hash), else None. Nothing is refused on content."""
+    covered by the hash), or while an approved version is still rendering (the one filled is
+    then an older one), else None. Nothing is refused on content."""
     found = documents.current(db, application.user_id, application.posting_id)
+    if found.cv.awaits_render or found.letter.awaits_render:
+        return "documents_changed"
     now_ids = {
         kind: str(slot.version.version_id)
         for kind, slot in (("cv", found.cv), ("letter", found.letter))
