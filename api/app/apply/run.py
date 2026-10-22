@@ -81,6 +81,7 @@ from app.apply import (
     guardrails,
     model_check,
     shots,
+    signin,
     states,
 )
 from app.apply import form_agent as forms
@@ -1076,6 +1077,9 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         return "waiting_lease"
     lease_id = acquired.lease.lease_id
     if acquired.token is None:
+        if getattr(acquired.lease, "state", None) == "waiting_person":
+            await wait("browser_signin")
+            return "waiting_person"
         # Ours, from a job that died: nothing can drive it. Let the next tick start a fresh one.
         await services.leases.release(user, lease_id, "apply_restart")
         return "lease_restarted"
@@ -1094,7 +1098,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
-        tools = _Watched(lease_tools)
+        tools = _Watched(signin.Tools(lease_tools, plan.form_url))
         result = await _guarded(_drive(services, plan, tools), tools)
         try:
             written = await asyncio.to_thread(
@@ -1119,11 +1123,32 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             )
     except asyncio.CancelledError:
         # docker stop, or the job's timeout: the application never stays `filling`.
-        await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
+        if await asyncio.shield(signin.waiting(services.leases, user, lease_id)):
+            await asyncio.shield(
+                asyncio.to_thread(
+                    _in_db,
+                    services.sessions,
+                    lambda db: finish(
+                        db,
+                        application_id,
+                        Result(State.needs_person, needs="signin"),
+                        services.clock(),
+                        started,
+                        services.delays(),
+                    ),
+                )
+            )
+        else:
+            await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
         raise
     finally:
         try:
-            await services.leases.release(user, lease_id, "apply_fill_done")
+            if await signin.waiting(services.leases, user, lease_id):
+                from app.browser.later_handoff import bind_wait
+
+                await bind_wait(services.leases, user, "application", application_id, lease_id)
+            else:
+                await services.leases.release(user, lease_id, "apply_fill_done")
         except (BrowserError, StoreUnavailableError):
             logger.warning("apply.release_failed", extra={"application_id": str(application_id)})
     logger.info("apply.filled", extra={"application_id": str(application_id), "state": written})
