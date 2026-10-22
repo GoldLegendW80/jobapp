@@ -229,8 +229,8 @@ _PRACTICAL = re.compile(
 # living or moving ("Why do you want to work in the US?", "travailler à Paris"). "Work in
 # robotics" names no place, and is a question about the field.
 _WHERE = re.compile(
-    r"\b(?:work\w*|liv(?:e|es|ed|ing)|based|located|stay\w*|mov(?:e|es|ed|ing)|relocat\w*"
-    r"|join\w*(?: (?:us|the \w+|our \w+))?|travailler|vivre|habiter|rejoindre|trabajar|vivir)"
+    r"\b(?:(?:work\w*|travailler|trabajar)(?!\s+to\b)|liv(?:e|es|ed|ing)|based|located|stay\w*|mov(?:e|es|ed|ing)|relocat\w*"
+    r"|join\w*(?: (?:us|the \w+|our \w+))?|vivre|habiter|rejoindre|vivir)"
     r"\s+(?:in|from|to|at|out of|near|a|au|aux|en|dans)\s+(.{1,80})"
 )
 # A short "why <name>" question (`_WHY_NAME`) whose name is a time or a move, not an employer.
@@ -751,13 +751,20 @@ def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
 
 
 _CLAUSES = re.compile(r"[.!?;\n]+|\b(?:and|but|because|et|mais|car|parce que)\b", re.I)
+_SENTENCES = re.compile(r"[.!?;\n]+")
 _CLAIM_FRAME = re.compile(
     r"^(?:(?:nonetheless|notably) )?(?:i|we|my work|our work|your mission|your culture)\b"
     r"|^(?:robotics|robots?|agents?|software|ai|robotique|je|nous)\b"
+    r"|^(?:the|this|your) (?:robots?|software|team|role)\b"
 )
 _CLAIM_TOPIC = re.compile(
     r"\b(?:robot\w*|agents?|software|ai|evaluat\w*|build\w*|built|project\w*|projet\w*"
-    r"|engineer\w*|develop\w*|design\w*|integrat\w*|algorith\w*|system\w*|tools?|work|problem\w*)\b"
+    r"|engineer\w*|develop\w*|design\w*|integrat\w*|algorith\w*|system\w*|tools?|work|test\w*|problem\w*)\b"
+)
+_COORDINATED_ACTION = re.compile(r"^(?:build|design|develop|create|improve|test|evaluate)\b")
+_COORDINATED_OBJECT = re.compile(
+    r"^(?:agents?|robotics|software|ai|evaluation)(?: work)?"
+    r"(?: to (?:the|this|your|our) team)?$"
 )
 # Grammar and neutral motivation words add no personal fact. Content words must belong to a
 # supported job topic or the permitted sources; the model's source label is not proof.
@@ -778,6 +785,7 @@ _CLAIM_GLUE = frozenset(
         "it",
         "its",
         "their",
+        "them",
         "me",
         "us",
         "you",
@@ -856,6 +864,9 @@ _CLAIM_GLUE = frozenset(
         "evaluate",
         "evaluated",
         "evaluation",
+        "test",
+        "tests",
+        "testing",
         "because",
         "and",
         "but",
@@ -878,6 +889,8 @@ _CLAIM_GLUE = frozenset(
         "robotics",
         "team",
         "teams",
+        "role",
+        "roles",
         "agent",
         "agents",
         "ai",
@@ -887,6 +900,9 @@ _CLAIM_GLUE = frozenset(
         "field",
         "physical",
         "world",
+        "kind",
+        "puts",
+        "front",
         "interested",
         "interest",
         "excited",
@@ -945,22 +961,37 @@ def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bo
         *sources.employers,
         *sources.schools,
     )
-    clauses = [answers.option_key(c) for c in _CLAUSES.split(value) if answers.option_key(c)]
     stored = {answers.option_key(c) for text in texts for c in _CLAUSES.split(undashed(text))}
     words = {w for text in texts for w in answers.option_key(text).split()}
-    for clause in clauses:
-        if clause in stored:
-            continue
-        if exact:
-            return False
-        if not _CLAIM_FRAME.search(clause) or not _CLAIM_TOPIC.search(clause):
-            return False
-        if any(
-            w not in words and w not in _CLAIM_GLUE and not _SUBJECT.fullmatch(w)
-            for w in clause.split()
-        ):
-            return False
-    return bool(clauses)
+    found = False
+    for sentence in _SENTENCES.split(value):
+        subject = False
+        object_list = False
+        for raw in _CLAUSES.split(sentence):
+            clause = answers.option_key(raw)
+            if not clause:
+                continue
+            found = True
+            framed = bool(_CLAIM_FRAME.search(clause) and _CLAIM_TOPIC.search(clause))
+            # A conjunction can retain a first-person subject or continue the object of
+            # "bring my ...". It cannot lend that frame to another independent assertion.
+            coordinated = subject and (
+                bool(_COORDINATED_ACTION.search(clause))
+                or (object_list and bool(_COORDINATED_OBJECT.fullmatch(clause)))
+            )
+            if clause not in stored:
+                if exact or not (framed or coordinated):
+                    return False
+                if any(
+                    w not in words and w not in _CLAIM_GLUE and not _SUBJECT.fullmatch(w)
+                    for w in clause.split()
+                ):
+                    return False
+            subject = subject or bool(re.match(r"^(?:i|we)\b", clause))
+            object_list = bool(
+                re.match(r"^(?:i|we) (?:would |can |could )?bring (?:my|our)\b", clause)
+            )
+    return found
 
 
 def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.Sources) -> Verdict:

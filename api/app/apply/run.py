@@ -1008,10 +1008,11 @@ async def _fill_on_page(
     that asks for a card ends here, before anything is typed."""
     if _card_asked(await tools.snapshot()):
         return await _payment_asked(tools)
+    adapter.person_answers = plan.person_answers
     if isinstance(adapter, generic.Deterministic):
         if plan.person_target and getattr(adapter, "target", "") != plan.person_target:
             return Result(State.needs_person, needs="form_changed", shot=await shots.take(tools))
-        adapter.person_answers, adapter.person_shapes = plan.person_answers, plan.person_shapes
+        adapter.person_shapes = plan.person_shapes
         if getattr(adapter, "_waiting_report", None) is None:
             adapter.seen_shapes = {}
     report = await adapter.fill_form(tools, plan.context)

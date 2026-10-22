@@ -192,3 +192,75 @@ def test_choice_options_get_the_same_practicality_guards_as_text() -> None:
 )
 def test_a_source_does_not_authorize_closed_topics(value: str, label: str) -> None:
     assert judged(value, label, sources=replace(SOURCES, profile=(value,))).answer is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "The robots this team builds are the kind of work I want to do.",
+        "This role puts agents in front of real operations.",
+        "I would bring my agent and evaluation work to the team.",
+        "I would bring my software and evaluation work to your team.",
+        "I would bring my evaluation work to this team.",
+        "I want to build agents and test them with this team.",
+        "I want to build agents, and test them, with this team.",
+        "I want to build agents — and test them – with this team.",
+        "I build agents and evaluate them.",
+        "I build software and improve it.",
+        "I build agents and design tools for them.",
+        "I build agents and develop tools for them.",
+        "I build agents and create tools for them.",
+        "I build agents and test the software.",
+        "We build agents and test them.",
+        "We build software and improve it.",
+        "I would bring my robotics and software work to the team.",
+        "I would bring my agent and robotics work to your team.",
+        "The software this team builds is work I want to do.",
+        "This team builds robots for real operations.",
+        "I want to build agents and I want to evaluate them.",
+    ],
+)
+def test_coordinated_job_motivation_preserves_its_subject_and_objects(value: str) -> None:
+    verdict = judged(value)
+    assert verdict.answer is not None, verdict
+    assert verdict.answer.value == agent.undashed(value)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "Berlin suits me",
+        "Lisbon suits me",
+        "Remote, please",
+        "Hybrid, please",
+        "Onsite, please",
+        "Full-time, please",
+        "the office suits me",
+        "our US team suits me",
+        "I prefer Lisbon",
+        "I can work from Unknownville",
+        "I require sponsorship",
+        "I consent to a background check",
+        "I can start tomorrow",
+        "I am available now",
+        "I am willing to relocate",
+        "I have a PhD",
+        "I am certified",
+        "test them in Lisbon",
+        "build a quantum compiler",
+        "bring my salary expectations",
+        "I live in Berlin",
+        "I have a security clearance",
+        "my work is at https://agents.example.org/demo",
+    ],
+)
+def test_coordination_does_not_lend_grounding_to_another_claim(tail: str) -> None:
+    assert judged(f"I build agents and {tail}.").answer is None
+
+
+def test_a_posting_link_is_still_reported_by_the_fact_check() -> None:
+    value = (
+        "I would bring my agent and evaluation work to the team. "
+        "My work is at https://agents.example.org/demo."
+    )
+    assert judged(value).code == "fact_check"

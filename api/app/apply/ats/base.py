@@ -608,6 +608,14 @@ def _ok(result: Mapping[str, Any]) -> str:
 # --- the adapter ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class PersonAnswer:
+    label: str
+    kind: str
+    options: tuple[str, ...]
+    value: str | bool
+
+
 class Adapter:
     """One ATS strategy. Subclasses set the class attributes and may override `form_url`,
     `open` and `pending_step`."""
@@ -625,6 +633,7 @@ class Adapter:
         page, and reads only the iframe that holds the form (`adapter_for` sets it)."""
         self.stub_base = stub_base.rstrip("/") if stub_base else None
         self.framed = framed
+        self.person_answers: dict[str, PersonAnswer] = {}
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({'framed=True' if self.framed else ''})"
@@ -784,6 +793,17 @@ class Adapter:
         except _StopError as stop:
             return Filled("failed", stop.code)
 
+    def resolve(self, item: Field, context: answers.Context) -> answers.Answer | answers.Left:
+        own = self.person_answers.get(item.key)
+        if own is None:
+            return answers.resolve(item.form_field(), context)
+        if (own.label, own.kind, own.options) != (item.label, item.kind, tuple(item.options)):
+            return answers.Left("person_answer_changed", required=item.required)
+        if item.kind == "yes_no":
+            option = "Yes" if own.value is True else "No"
+            return answers.Answer(own.value, "person", option=option)
+        return answers.Answer(own.value, "person")
+
     async def fill_form(self, tools: Tools, context: answers.Context) -> Report:
         """Discovers the form, resolves every field from the profile (apply A3) and fills what
         is answered, in page order. Stops at the first `form_changed`, refused click or tool
@@ -800,7 +820,7 @@ class Adapter:
         for _ in range(2):
             for item in [f for f in found.fields if f.key not in done]:
                 done.add(item.key)
-                answer = answers.resolve(item.form_field(), context)
+                answer = self.resolve(item, context)
                 result = await self.fill(tools, item, answer)
                 report.outcomes.append(Outcome(item, answer, result))
                 if result.status == "failed" and result.code in PENDING_STEPS:
