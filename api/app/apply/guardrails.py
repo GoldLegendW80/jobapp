@@ -81,7 +81,7 @@ from app.jobs.never_apply import NeverApplyRule, fold, matching_rule
 SAME_ROLE_DAYS = 180
 FULL_AUTO_TEXT_CHARS = 1500
 APPLIED_STATUSES = frozenset({JobStatus.applied, JobStatus.interview, JobStatus.rejected})
-SUPPORTED_ATS = ("ashby", "greenhouse", "lever")
+SUPPORTED_ATS = ("ashby", "greenhouse", "lever", "linkedin")
 
 NEVER_APPLY = "Your rules exclude this role."
 NEVER_APPLY_REFUSED = (
@@ -203,6 +203,7 @@ def unstub(url: str, stub_base: str | None) -> str:
     first, _, tail = rest.partition("/")
     hosts = {"ashby": "jobs.ashbyhq.com", "greenhouse": "boards.greenhouse.io"}
     hosts["lever"] = "jobs.lever.co"
+    hosts["linkedin"] = "www.linkedin.com"
     return f"https://{hosts[first]}/{tail}" if first in hosts else url
 
 
@@ -229,9 +230,13 @@ def ats_of(url: str) -> str:
     found = _host(url)
     if found is None:
         return "other"
-    host, _, query = found
+    host, segments, query = found
     if _on(host, "linkedin.com"):
-        return "other"  # the host decides first: a LinkedIn address with ?gh_jid= is not Greenhouse
+        return (
+            "linkedin"
+            if len(segments) == 3 and segments[:2] == ["jobs", "view"] and _number(segments[2])
+            else "other"
+        )
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
         if _on(host, domain):
             return ats
@@ -253,6 +258,8 @@ def canonical_key(url: str | None) -> str | None:
         return None
     host, segments, query = found
     ats = ats_of(url)
+    if ats == "linkedin":
+        return f"linkedin:{segments[2]}"
     if ats == "ashby":
         job = _uuid(segments[1]) if _on(host, "ashbyhq.com") and len(segments) >= 2 else None
         job = job or _uuid(query.get("ashby_jid", ""))

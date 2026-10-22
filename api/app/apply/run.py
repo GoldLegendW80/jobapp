@@ -88,6 +88,7 @@ from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
+from app.apply.ats.linkedin import LinkedIn, Report
 from app.apply.bank import AnswerBank
 from app.apply.models import (
     AnswerBankEntry,
@@ -189,6 +190,7 @@ class Result:
     report: ats_base.Report = field(default_factory=ats_base.Report)
     shot: bytes | None = field(default=None, repr=False)
     cost: dict[str, Any] = field(default_factory=dict)
+    company_url: str | None = None
 
 
 class _Watched:
@@ -578,7 +580,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 label=label,
                 kind="designated",
                 value=name,
-                source=AnswerSource.agent,
+                source=AnswerSource.identity if isinstance(report, Report) else AnswerSource.agent,
                 required=False,
                 approved=False,
             )
@@ -619,6 +621,10 @@ def finish(
     if application.state is not State.filling:
         _event(db, application, "fill_superseded", now, state=application.state.value)
         return "superseded"
+    if result.company_url:
+        from app.apply.linkedin import follow_company
+
+        return follow_company(db, application, posting, result.company_url, now)
     # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
     # replaces them, for a field the form still has.
     mine = db.execute(
@@ -905,6 +911,8 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
             return await _drive_generic(services, plan, adapter, tools)
     else:
         code = await adapter.open(tools, plan.form_url)
+        if code == "company_site" and isinstance(adapter, LinkedIn):
+            return Result(State.queued, company_url=adapter.company_url)
         if code:
             state, needs, error = _stopped(code)
             return Result(state, needs=needs, error=error, shot=await shots.take(tools))
@@ -920,16 +928,21 @@ async def _fill_on_page(
         return await _payment_asked(tools)
     report = await adapter.fill_form(tools, plan.context)
     cost: dict[str, Any] = {"agent": "not_run"}
-    if not report.stopped:
+    if not report.stopped and not isinstance(adapter, LinkedIn):
         cost = await _answer_left(services, plan, adapter, tools, report)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
     else:
         needs = _needs(report)
         state, error = (State.needs_person if needs else State.ready), None
-    return Result(
-        state, needs=needs, error=error, report=report, shot=await shots.take(tools), cost=cost
-    )
+    shot = await shots.take(tools)
+    if isinstance(adapter, LinkedIn) and getattr(report, "designated_ref", ""):
+        lit = await generic.highlighted(tools, report.designated_ref, shot)
+        if lit is None:
+            state, needs = State.needs_person, "submit_not_highlighted"
+        else:
+            shot = lit
+    return Result(state, needs=needs, error=error, report=report, shot=shot, cost=cost)
 
 
 def _card_asked(shot: dict[str, Any]) -> bool:
@@ -1106,8 +1119,12 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
-        tools = _Watched(signin.Tools(lease_tools, plan.form_url))
+        from app.apply.linkedin import watched
+
+        tools = _Watched(watched(services, plan, signin.Tools(lease_tools, plan.form_url)))
         result = await _guarded(_drive(services, plan, tools), tools)
+        if result.company_url:
+            await services.leases.release(user, lease_id, "company_site")
         try:
             written = await asyncio.to_thread(
                 _in_db,

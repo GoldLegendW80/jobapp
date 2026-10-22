@@ -76,12 +76,16 @@ class Config:
     # test stack's pages server only (tests/browser.compose.yml). Empty in compose.yml, and
     # refused at start under APP_ENV=production (review of PR #294, issue #230).
     proxy_allow: frozenset[str] = frozenset()
+    linkedin_stub_base_url: str = ""  # exact test origin and /linkedin prefix, never production
 
     @classmethod
     def from_env(cls) -> "Config":
         allow = os.environ.get("BROWSER_PROXY_ALLOW_PRIVATE", "")
         names = frozenset(h.strip().lower() for h in allow.split(",") if h.strip())
-        if names and os.environ.get("APP_ENV", "").strip().lower() == "production":
+        linkedin_stub = os.environ.get("BROWSER_LINKEDIN_STUB_BASE_URL", "").rstrip("/")
+        if (names or linkedin_stub) and os.environ.get(
+            "APP_ENV", ""
+        ).strip().lower() == "production":
             raise ValueError(
                 "BROWSER_PROXY_ALLOW_PRIVATE is for test stacks, refused when APP_ENV=production"
             )
@@ -92,4 +96,5 @@ class Config:
             session_max_s=_int("BROWSER_SESSION_MAX_S", 1800, 1, 7200),
             mem_guard_pct=_int("BROWSER_MEM_GUARD_PCT", 90, 10, 99),
             proxy_allow=names,
+            linkedin_stub_base_url=linkedin_stub,
         )

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
+import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import { describeError } from "@/lib/api";
 
 import {
@@ -104,6 +105,21 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [unsaved, setUnsaved] = useState(0);
   const [asking, setAsking] = useState<DecisionKind | null>(null);
+  let onLinkedIn = false;
+  try {
+    const host = new URL(job.url ?? "").hostname
+      .toLowerCase()
+      .replace(/\.$/, "");
+    onLinkedIn = host === "linkedin.com" || host.endsWith(".linkedin.com");
+  } catch {
+    /* A posting without an address already has its normal refusal. */
+  }
+  const linkedin = useQuery({
+    queryKey: linkedinKey,
+    queryFn: ({ signal }) => getLinkedIn(signal),
+    enabled: onLinkedIn,
+  });
+  const linkedinBlocked = onLinkedIn && !linkedin.data?.allowed;
 
   const latest = useQuery({
     queryKey: applicationsKey(job.id),
@@ -439,18 +455,28 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             {phase === "idle" ? (
               <>
-                <Button
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("review");
-                  }}
-                >
-                  {start.isPending && start.variables === "review" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply (Review first)
-                </Button>
+                {linkedinBlocked ? (
+                  <p className="text-sm text-muted-foreground">
+                    Turn on LinkedIn in Account and accept its current sentence
+                    to use Easy Apply. You can also apply yourself.
+                  </p>
+                ) : (
+                  <Button
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("review");
+                    }}
+                  >
+                    {start.isPending && start.variables === "review" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply (Review first)
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   className="w-full sm:w-fit"

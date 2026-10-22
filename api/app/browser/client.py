@@ -245,6 +245,19 @@ class BrowserdClient:
             raise BrowserError("refused")
         raise self._failure(status, payload)
 
+    async def linkedin_open(self, lease_id: str, token: str, job_id: str) -> dict[str, Any]:
+        """Private code-owned opener. Never a model tool and never a submit capability."""
+        status, payload = await self._call(
+            "POST",
+            f"/leases/{lease_id}/linkedin/open",
+            TOOL_TIMEOUT_S,
+            {"job_id": job_id},
+            headers={"X-Lease-Token": token},
+        )
+        if status == 200 and isinstance(payload, dict):
+            return payload
+        raise self._tool_failure(status, payload)
+
     async def put_file(self, lease_id: str, token: str, name: str, data: bytes) -> dict[str, Any]:
         # The name goes into the path: one browserd accepts, checked here too, so a "../x.pdf"
         # never becomes another route once the path is normalised.

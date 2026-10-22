@@ -52,6 +52,11 @@ class LeaseTools:
         api's copy of the lease waiting and polls, which a bare tool call would not."""
         return await self._call(SIGNIN_TOOL, {"site": site, "reason": reason})
 
+    async def linkedin_open(self, job_id: str) -> dict[str, Any]:
+        """The LinkedIn adapter's private opener, absent from `call` and the model tools."""
+        await self._held()
+        return await self.client.linkedin_open(self.lease_id, self._token, job_id)
+
     async def _call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._held()
         return await self.client.tool(self.lease_id, self._token, name, args)

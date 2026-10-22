@@ -64,7 +64,7 @@ import zoneinfo
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
@@ -555,7 +555,17 @@ def _fixture_linkedin(url: str) -> bool:
 def host_of(ats: str, form_url: str) -> str:
     """The host a click is paced on: the ATS for the known ones, else the form's host."""
     url = guardrails.unstub(form_url or "", _setting("apply_stub_base_url"))
-    host = (urlsplit(url).hostname or "").lower().rstrip(".").removeprefix("www.")
+    try:
+        host = (
+            unquote(urlsplit(url).hostname or "")
+            .encode("idna")
+            .decode("ascii")
+            .lower()
+            .rstrip(".")
+            .removeprefix("www.")
+        )
+    except (ValueError, UnicodeError):
+        host = ""
     if host == "linkedin.com" or host.endswith(".linkedin.com") or _fixture_linkedin(url):
         return "linkedin"  # the host decides first, whatever ATS the address pretends to be
     if ats in KNOWN_HOSTS:
@@ -571,6 +581,18 @@ def linkedin_refusal(db: Session, application: Application, now: datetime) -> st
     if host_of(application.ats, application.form_url) != "linkedin":
         return None
     return linkedin_guard.refusal(db, application.user_id, now)
+
+
+def linkedin_daily(db: Session, application: Application, now: datetime) -> bool:
+    if host_of(application.ats, application.form_url) != "linkedin":
+        return False
+    return (
+        sum(
+            host_of(ats, url) == "linkedin"
+            for _, ats, url in db.execute(clicks_since(now - DAY)).all()
+        )
+        >= pace_of("linkedin").daily_max
+    )
 
 
 def pace_of(host: str) -> Pace:

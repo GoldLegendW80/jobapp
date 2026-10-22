@@ -93,6 +93,7 @@ from app.apply import caps, full_auto, gate, guardrails, model_check, run, shots
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
+from app.apply.ats.linkedin import LinkedIn
 from app.apply.models import Application, Authorisation, Mode, ShotKind, State
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
@@ -257,7 +258,10 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
         code = full_auto.recheck(db, application, posting, now)
     if code is None:
         return None
-    if code in gate.KEEP:
+    if code in gate.KEEP or (
+        application.mode is Mode.full_auto
+        and code in ("linkedin_off", "linkedin_paused", "linkedin_daily")
+    ):
         return Stop(State.ready, code)
     return Stop(State.posting_closed if code == "posting_closed" else State.blocked, code)
 
@@ -598,7 +602,11 @@ async def refill(
                 return Stop(State.ready, "form_changed")  # a question nobody approved
             if row.value is None:
                 continue  # left: the read back checks it shows nothing
-            if row.kind == "checkbox" and row.value is not True:
+            if (
+                row.kind == "checkbox"
+                and row.value is not True
+                and not (isinstance(adapter, LinkedIn) and adapter.optional_follow(item))
+            ):
                 # A box approved unticked (the person's No): the adapter never ticks it, so
                 # there is nothing to type; the read back checks the page shows it unticked.
                 continue
@@ -854,6 +862,9 @@ async def submit(services: Services, application_id: uuid.UUID) -> str:
     written = "interrupted"
     try:
         tools = services.tools_for(user, lease_id, acquired.token)
+        from app.apply.linkedin import watched
+
+        tools = watched(services, plan, tools)
         try:
             written = await _drive(services, plan, tools, capability, armed)
         except asyncio.CancelledError:

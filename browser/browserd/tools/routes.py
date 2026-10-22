@@ -36,7 +36,7 @@ import secrets
 from typing import Any
 
 from browserd.leases import MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
-from browserd.tools import actions, pacing, policy
+from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
 GATE_PURPOSES = ("apply_submit", "profile_edit")
@@ -154,8 +154,32 @@ async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
     return 200, await _run(svc, lease_id, token, work)
 
 
+async def linkedin_open(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """Private application code endpoint, never dispatched as an agent tool."""
+    lease_id = match["lease_id"]
+    token = req.headers.get("x-lease-token", "")
+    lease = svc.manager.check_token(lease_id, token)
+    body = req.json()
+    if not isinstance(body, dict) or set(body) != {"job_id"} or not isinstance(body["job_id"], str):
+        raise LeaseError(400, "bad_args")
+    if not linkedin.JOB.fullmatch(body["job_id"]):
+        raise LeaseError(400, "bad_args")
+    tab = actions.Tab(
+        lease.request, state_of(lease), svc.manager.browser, PACER, lease_tag=lease_id[:8]
+    )
+
+    async def work() -> dict[str, Any]:
+        async with _lock(lease):
+            return await linkedin.open_modal(
+                tab, body["job_id"], svc.manager.config.linkedin_stub_base_url
+            )
+
+    return 200, await _run(svc, lease_id, token, work)
+
+
 # (method, pattern, handler, body_max): browserd/app.py makes its Route of each.
 ROUTES = [
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/linkedin/open"), linkedin_open, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/tools/(?P<name>[a-z_]{{1,48}})"), call_tool,
      64 * 1024),
     ("PUT", re.compile(rf"/leases/{LEASE_ID}/files/(?P<name>[^/]{{1,100}})"), put_file,

@@ -485,7 +485,7 @@ def decide(
     if application.mode is Mode.full_auto:
         if documents_need_review(application.document_versions):
             return refused("documents_review")
-        if code := full_auto.checks(db, application, posting):
+        if code := full_auto.checks(db, application, posting, now):
             return refused(code)
 
     authorisation.used_at = now
@@ -676,7 +676,11 @@ def set_answer(
         )
         .with_for_update()
     ).scalar_one_or_none()
-    if row is None or row.field_key.startswith("skipped:") or row.kind == "file":
+    if (
+        row is None
+        or row.field_key.startswith(("skipped:", "designated:"))
+        or row.kind in ("file", "designated")
+    ):
         raise InvalidAnswerError("unknown_field")
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):

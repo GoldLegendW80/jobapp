@@ -48,6 +48,7 @@ name right after a heading, whose words the read joins with no stop, is not.
 import io
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
@@ -237,6 +238,12 @@ class Generic(Adapter):
     def form_url(self, posting_url: str) -> str | None:
         return None
 
+    def check_designation(self, root: Node, ref: str) -> str:
+        return check_designation(root, ref)
+
+    def approved(self, rows: Sequence["Row"]) -> None:
+        """A known wizard may retain approved summary values for its final readback."""
+
     def recognises(self, snapshot: str) -> bool:
         """Any page that shows a field: the last adapter of `ADAPTERS`."""
         return bool(discover_fields(parse_snapshot(snapshot), self.submit_names).fields)
@@ -297,7 +304,10 @@ def configured(adapter: Adapter, rows: Sequence[Row]) -> Adapter | None:
     submit, steps = designation_of(rows)
     if not submit:
         return None
-    return Generic(adapter.stub_base, submit=submit, steps=steps)
+    prepared = copy(adapter)
+    prepared.submit, prepared.steps, prepared.step = submit, steps, 0
+    prepared.approved(rows)
+    return prepared
 
 
 def _step_of(row: Row) -> int:
@@ -343,7 +353,7 @@ async def recheck(adapter: Adapter, tools: Tools, found: Discovery) -> str:
     if len(found.submit_refs) != 1 or found.root is None:
         return "submit_missing"
     ref = found.submit_refs[0]
-    if code := check_designation(found.root, ref):
+    if code := adapter.check_designation(found.root, ref):
         return code
     return "" if await marked(tools, ref, adapter.submit) else "not_marked"
 
