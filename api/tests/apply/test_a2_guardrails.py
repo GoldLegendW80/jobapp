@@ -816,3 +816,81 @@ def test_random_walks_never_submit_without_the_gate_or_in_a_rehearsal(start: Sta
 )
 def test_issue335_title_keys_use_the_shared_exclusion_fold(title: str) -> None:
     assert title_key(title) == title_key("Applied AI Engineer")
+
+
+_HOST_WRITINGS = [
+    lambda host: host.upper(),
+    lambda host: host + ".",
+    lambda host: host.replace(".", "\u3002"),
+    lambda host: host.replace(".", "\uff0e"),
+    lambda host: host.replace(".", "\uff61"),
+    lambda host: host.replace(".", "%2e"),
+    lambda host: host.replace("o", "o\u00ad", 1),
+    lambda host: "".join(chr(ord(c) + 0xFEE0) if "a" <= c <= "z" else c for c in host),
+]
+
+
+@pytest.mark.parametrize("writing", range(len(_HOST_WRITINGS)))
+@pytest.mark.parametrize(
+    ("host", "path", "key"),
+    [
+        ("boards.greenhouse.io", "/org/jobs/4012345", "greenhouse:4012345"),
+        ("jobs.ashbyhq.com", f"/org/{ASHBY}", f"ashby:{ASHBY}"),
+        ("jobs.lever.co", f"/org/{LEVER}", f"lever:{LEVER}"),
+        ("example.org", "/careers/42", "url:http://example.org/careers/42"),
+    ],
+)
+def test_issue335_idna_host_writings_have_one_canonical_key(
+    writing: int, host: str, path: str, key: str
+) -> None:
+    url = f"https://{_HOST_WRITINGS[writing](host)}{path}"
+    assert canonical_key(url) == key
+    assert guardrails.current_key(f"url:{url}") == key
+    assert guardrails.current_key(key) == key
+
+
+@pytest.mark.parametrize("writing", range(len(_HOST_WRITINGS)))
+def test_issue335_linkedin_aliases_join_keys_but_do_not_grant_consent(writing: int) -> None:
+    url = f"https://{_HOST_WRITINGS[writing]('www.linkedin.com')}/jobs/view/4100000001"
+    assert canonical_key(url) == "linkedin:4100000001"
+    assert guardrails.ats_of(url) == "other"
+
+
+@pytest.mark.parametrize(
+    ("unicode_host", "ascii_host"),
+    [
+        ("bücher.example.org", "xn--bcher-kva.example.org"),
+        ("straße.example.org", "strasse.example.org"),
+    ],
+)
+def test_issue335_international_hosts_match_their_idna_form(
+    unicode_host: str, ascii_host: str
+) -> None:
+    assert canonical_key(f"https://{unicode_host}/careers") == canonical_key(
+        f"https://{ascii_host}/careers"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[broken/jobs/1",
+        "https://boards.greenhouse.io／org/jobs/1",
+        "https://boards.greenhouse.io？org/jobs/1",
+    ],
+)
+def test_issue335_unparseable_hosts_have_no_form_key(url: str) -> None:
+    assert canonical_key(url) is None
+
+
+def test_issue335_legacy_linkedin_keys_keep_http_https_duplicate_equivalence() -> None:
+    legacy = "url:http://www.linkedin。com/jobs/view/4100000001"
+    assert guardrails.current_key(legacy) == canonical_key(
+        "https://www.linkedin.com/jobs/view/4100000001"
+    )
+    assert guardrails.ats_of(legacy[4:]) == "other"
+
+
+@pytest.mark.parametrize("encoded", ["%2f", "%3f", "%23", "%40", "%5c"])
+def test_issue335_encoded_delimiters_do_not_change_the_url_authority(encoded: str) -> None:
+    assert canonical_key(f"https://boards.greenhouse.io{encoded}other/org/jobs/1") is None

@@ -68,7 +68,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -183,14 +183,48 @@ def _number(text: str) -> str | None:
     return str(int(text)) if text.isascii() and text.isdigit() and len(text) <= 20 else None
 
 
-def _host(url: str) -> tuple[str, list[str], dict[str, str]] | None:
-    parts = urlsplit(url.strip())
-    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+def browser_host(hostname: str) -> str:
+    """IDNA 2003 host spelling, including its dot variants and percent escapes."""
+    decoded = unquote(hostname)
+    try:
+        return decoded.encode("idna").decode("ascii").lower().rstrip(".")
+    except UnicodeError:
+        return decoded.lower().rstrip(".")
+
+
+@dataclass(frozen=True)
+class _Address:
+    host: str
+    segments: list[str]
+    query: dict[str, str]
+    url: str
+
+
+def _host(url: str) -> _Address | None:
+    try:
+        parts = urlsplit(url.strip())
+        hostname = parts.hostname
+    except ValueError:
         return None
-    host = parts.hostname.lower().rstrip(".").removeprefix("www.")
+    if parts.scheme.lower() not in ("http", "https") or not hostname:
+        return None
+    host = browser_host(hostname)
+    if any(c in host for c in r"/\?#@%[]") or (":" in host and ":" not in hostname):
+        return None
+    # Preserve credentials and ports: canonicalising a host must not make an unsupported
+    # LinkedIn URL pass its strict adapter's address check.
+    before, at, authority = parts.netloc.rpartition("@")
+    authority = authority if at else parts.netloc
+    if authority.startswith("["):
+        suffix = authority[authority.index("]") + 1 :]
+    else:
+        _, colon, port = authority.partition(":")
+        suffix = colon + port
+    netloc = (before + "@" if at else "") + (f"[{host}]" if ":" in host else host) + suffix
+    normalized = urlunsplit(parts._replace(netloc=netloc))
     segments = [segment for segment in parts.path.split("/") if segment]
     query = {name.lower(): value for name, value in parse_qsl(parts.query)}
-    return host, segments, query
+    return _Address(host.removeprefix("www."), segments, query, normalized)
 
 
 def unstub(url: str, stub_base: str | None) -> str:
@@ -253,7 +287,7 @@ def ats_of(url: str) -> str:
     found = _host(url)
     if found is None:
         return "other"
-    host, _segments, query = found
+    host, query = found.host, found.query
     if _on(host, "linkedin.com"):
         from app.apply.ats.linkedin import LinkedIn
 
@@ -279,10 +313,16 @@ def canonical_key(url: str | None) -> str | None:
     found = _host(url)
     if found is None:
         return None
-    host, segments, query = found
+    host, segments, query = found.host, found.segments, found.query
+    if _on(host, "linkedin.com"):
+        from app.apply.ats.linkedin import LinkedIn
+
+        # Duplicate identity retains slug.url_key's http/https equivalence. Adapter selection
+        # and consent still use the original address in ats_of and caps.host_of.
+        identity = urlunsplit(urlsplit(found.url)._replace(scheme="https"))
+        if job := LinkedIn().job_of(identity):
+            return f"linkedin:{job}"
     ats = ats_of(url)
-    if ats == "linkedin":
-        return f"linkedin:{segments[2]}"
     if ats == "ashby":
         job = _uuid(segments[1]) if _on(host, "ashbyhq.com") and len(segments) >= 2 else None
         job = job or _uuid(query.get("ashby_jid", ""))
@@ -297,7 +337,12 @@ def canonical_key(url: str | None) -> str | None:
         job = _uuid(segments[1])
         if job:
             return f"lever:{job}"
-    return f"url:{slug.url_key(url)}"
+    return f"url:{slug.url_key(found.url)}"
+
+
+def current_key(key: str) -> str:
+    """Read a legacy stored URL key through today's canonical address rules."""
+    return (canonical_key(key[4:]) or key) if key.startswith("url:") else key
 
 
 # --- the same role -------------------------------------------------------------------------------
