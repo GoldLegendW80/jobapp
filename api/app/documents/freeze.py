@@ -21,7 +21,9 @@ module is the one place that decides which version that is, and what the apply m
   sent by landing, and an approval given after `applied` freezes only when the render of that
   version lands after it.
 - `current`: what the apply module sends, the approved version else the latest rendered one,
-  of the posting's CV and letter, with the reason a document is not there yet.
+  of the posting's CV and letter, with the reason a document is not there yet and whether the
+  approved version is still rendering (the apply module waits for it rather than fill an older
+  one).
 - `freeze`: the apply module attaches a version to a submission. It never refuses on content
   (an overflowing version, one with corrections, one with notes), and returns the version's fit
   and corrections for the run report. Freezing a frozen version changes nothing.
@@ -94,10 +96,13 @@ class Slot:
     """One document of the posting. `version` is the approved version, else the latest rendered
     one, else None. `coming` says a document is still on its way (a `GenerationWait` value,
     `WRITING` or `RENDERING`), whether or not an older version is there: the apply module waits
-    on `version is None and coming is not None`, ends `no_documents` on both None."""
+    on `version is None and coming is not None`, ends `no_documents` on both None.
+    `awaits_render`: the approved version has no PDF yet and a render of the document is queued
+    or running, so `version` is an older one (or None); the apply module waits on it too."""
 
     version: SentVersion | None
     coming: str | None
+    awaits_render: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,10 +163,12 @@ def current(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> Current:
     only: a posting of another person has no documents here. Reads and writes nothing else."""
     slots: dict[Kind, Slot] = {kind: Slot(None, None) for kind in Kind}
     for document in store.posting_documents(db, user_id, posting_id):
-        picked = choose(store.versions(db, user_id, document.id))
+        versions = store.versions(db, user_id, document.id)
+        picked = choose(versions)
         slots[document.kind] = Slot(
             version=_sent(picked, document.kind) if picked is not None else None,
             coming=_coming(db, user_id, document),
+            awaits_render=_awaits_render(document, versions),
         )
     return Current(cv=slots[Kind.cv], letter=slots[Kind.letter])
 
