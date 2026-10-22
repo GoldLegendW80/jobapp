@@ -39,10 +39,10 @@ field of the page, so a field after the submit (a newsletter box in the footer) 
 named form, the page behind a modal form) as `another_part`: the person submits. A part the
 snapshot does not name (a plain block, a named `region`) is read as the form's own, so a box
 there after a form whose submit has another name may be designated; the "before" screenshot
-shows it to the person. `addressed` reads a page that names an AI reader with the words of
-`AI_READER`, and a model's own name only where the page speaks to it (`AI_NAMED`): a sentence
-that opens on a person named Claude and a comma is reported, and a greeting ("Hey Claude,") or a
-name right after a heading, whose words the read joins with no stop, is not.
+shows it to the person. `addressed` recognises direct reader addresses (`AI_READER`,
+`AI_NAMED`), rather than mentions of AI as a posting's subject. An opening name and comma can
+also address a person named Claude. Greetings and indirect or unfamiliar address wording can
+be missed; this report flag grants no permission to follow page instructions.
 """
 
 import io
@@ -184,10 +184,19 @@ async def marked(tools: Tools, ref: str, name: str = "") -> bool:
     return not result.get("ok") and result.get("error") == "submit"
 
 
+_READER = (
+    r"(?:ai(?: (?:assistants?|agents?|models?|tools?|systems?))?|artificial intelligence|"
+    r"(?:large )?language models?|llms?|automated assistants?|"
+    r"assistants? ia|agents? ia|intelligence artificielle)"
+)
+_BOUNDARY = r"(?:^|[.!?\n]\s*)"
 AI_READER = re.compile(
-    r"\b(?:ai (?:assistants?|agents?|models?|tools?|systems?)|artificial intelligence|"
-    r"(?:large )?language models?|llms?|automated assistants?|if you are an ai|"
-    r"assistants? ia|agents? ia|intelligence artificielle)\b"
+    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:an? |un |une )?{_READER}\s*[,.:;!?]"
+    rf"|(?:{_BOUNDARY}|\b(?:note|message|instructions?|consignes?) "
+    rf"(?:to|for|pour|a) )(?:les |aux )?{_READER}\s*[,:]"
+    rf"|\b{_READER} reading this (?:page|form) (?:must|should)\b"
+    rf"|{_BOUNDARY}(?:les )?{_READER} doivent "
+    r"(?:ignorer|repondre|inclure|ecrire|envoyer|suivre)\b"
 )
 # A model's own name is also a person's (a recruiter named Claude): only an address counts.
 _VERSION = r"\d+(?:\.\d+)?"
@@ -197,7 +206,7 @@ _MODEL = (
 )
 AI_NAMED = re.compile(
     rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:{_MODEL})\b"
-    rf"|(?:^|[.!?] |\b(?:note|message|instructions?|consignes?) (?:to|for|pour) )"
+    rf"|(?:{_BOUNDARY}|\b(?:note|message|instructions?|consignes?) (?:to|for|pour) )"
     rf"(?:{_MODEL}) ?[,:]"
 )
 
@@ -205,7 +214,7 @@ AI_NAMED = re.compile(
 def addressed(text: str) -> bool:
     """The page names an AI reader (SPEC-apply: a form that addresses AI assistants is reported).
     Reported only: nothing the page asks is done."""
-    folded = fold(text)
+    folded = "\n".join(fold(line) for line in text.splitlines())
     return AI_READER.search(folded) is not None or AI_NAMED.search(folded) is not None
 
 
