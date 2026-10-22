@@ -176,3 +176,152 @@ def test_live_takeover_owns_native_fill_submit_save_and_private_opener(stack: St
     stack.lease(str(uuid.uuid4()), 20000)
     result = json.loads(stack.python(NATIVE))
     assert result == {"checks": 7, "native_clicks": 0}
+
+
+NATIVE_BOUNDARIES = (
+    NATIVE.split("async def main():", 1)[0]
+    + r"""
+from browserd import pages
+
+
+async def main():
+    checks = 0
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port()}")
+        context = browser.contexts[0]
+        page = context.pages[0]
+
+        async def start(request, lease_id):
+            return Attached(browser)
+
+        async def no_sleep(seconds):
+            pass
+
+        async def setup(purpose="apply_fill"):
+            await page.goto("http://pages:8080/b5/form.html")
+            await page.bring_to_front()
+            manager = Manager(Config(secret=b"e2e-live-native"), start)
+            lease, token = await manager.acquire(Request(
+                "e2e-owner", str(uuid.uuid4()), 20000, purpose, True, ("en",), "UTC",
+                hosts=("pages",),
+            ))
+            svc = Service(manager, b"e2e-live-native")
+            svc.live = Live(manager, b"e2e-live-native")
+            routes.PACER = pacing.Pacer(no_sleep)
+
+            async def call(name, args):
+                req = HttpRequest("POST", "/", {"x-lease-token": token}, json.dumps(args).encode())
+                return (await routes.call_tool(svc, req, {
+                    "name": name, "lease_id": lease.lease_id,
+                }))[1]
+
+            return manager, lease, svc, call
+
+        for boundary in ("dwell", "front"):
+            for give_back in (False, True):
+                manager, lease, svc, call = await setup()
+                before = page.url
+                await page.evaluate("window.navigation_canary = 'unchanged'")
+
+                def take():
+                    svc.live.take(lease.lease_id, "viewer")
+                    if give_back:
+                        svc.live.give_back(lease.lease_id)
+
+                async def dwell(seconds):
+                    if boundary == "dwell":
+                        take()
+
+                original_front, fronts = pages.front, []
+
+                async def front(target):
+                    result = await original_front(target)
+                    fronts.append(target)
+                    if boundary == "front" and len(fronts) == 2:
+                        take()
+                    return result
+
+                routes.PACER = pacing.Pacer(dwell)
+                pages.front = front
+                try:
+                    result = await call("browser_navigate", {"url": before + "?attempted=1"})
+                    assert result.get("error") == "person_input", result
+                    assert page.url == before
+                    assert await page.evaluate("window.navigation_canary") == "unchanged"
+                finally:
+                    pages.front = original_front
+                    await manager.release(lease.lease_id, "test_done")
+                checks += 1
+
+        for purpose in ("apply_fill", "apply_manual"):
+            manager, lease, svc, call = await setup(purpose)
+            assert not lease.app_turn
+            target = "http://pages:8080/b5/form.html?permitted=1"
+            assert (await call("browser_navigate", {"url": target}))["ok"]
+            assert page.url == target
+            await manager.release(lease.lease_id, "test_done")
+            checks += 1
+
+        # Open a real second tab at the fixture, without a transient off-list blank tab.
+        async with context.expect_page() as opened:
+            await page.evaluate("window.open('http://pages:8080/b5/form.html?second=1')")
+        other = await opened.value
+        await other.wait_for_load_state()
+        for action in ("select", "close", "list"):
+            for give_back in (False, True):
+                manager, lease, svc, call = await setup()
+                state = routes.state_of(lease)
+                state.page = page
+                original_settle = actions.Tab.settle
+                took = False
+
+                async def settle(tab, result):
+                    nonlocal took
+                    result = await original_settle(tab, result)
+                    if not took:
+                        took = True
+                        svc.live.take(lease.lease_id, "viewer")
+                        if give_back:
+                            svc.live.give_back(lease.lease_id)
+                    return result
+
+                actions.Tab.settle = settle
+                try:
+                    result = await call("browser_tabs", {
+                        "action": action, "index": context.pages.index(other),
+                    })
+                    if action == "list":
+                        assert result["ok"] and len(result["tabs"]) == 2, result
+                    else:
+                        assert result.get("error") == "person_input", result
+                    assert state.page is page
+                    assert not other.is_closed()
+                    assert await page.evaluate("document.visibilityState") == "visible"
+                finally:
+                    actions.Tab.settle = original_settle
+                    await manager.release(lease.lease_id, "test_done")
+                checks += 1
+
+        # Unchanged ownership permits the same native selection and close boundaries.
+        manager, lease, svc, call = await setup()
+        index = context.pages.index(other)
+        assert (await call("browser_tabs", {"action": "select", "index": index}))["ok"]
+        assert routes.state_of(lease).page is other
+        assert await other.evaluate("document.visibilityState") == "visible"
+        checks += 1
+        assert (await call("browser_tabs", {"action": "close", "index": index}))["ok"]
+        assert other.is_closed()
+        checks += 1
+        await manager.release(lease.lease_id, "test_done")
+    print(json.dumps({"checks": checks, "refused_navigations": 4, "refused_tab_mutations": 4}))
+
+
+asyncio.run(main())
+"""
+)
+
+
+def test_live_takeover_owns_native_navigation_and_tab_mutations(stack: Stack):
+    stack.lease(str(uuid.uuid4()), 20000)
+    result = json.loads(stack.python(NATIVE_BOUNDARIES))
+    assert result == {"checks": 14, "refused_navigations": 4, "refused_tab_mutations": 4}

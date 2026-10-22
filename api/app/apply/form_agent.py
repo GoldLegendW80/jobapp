@@ -67,6 +67,7 @@ from app.apply import agents as answer_agents
 from app.apply import answers
 from app.apply.ats import base as ats_base
 from app.apply.ats import generic
+from app.browser.client import TAKEOVER_WAIT_S
 from app.config import Settings
 
 if TYPE_CHECKING:
@@ -384,7 +385,7 @@ def _definition() -> FormDefinition:
         model=MODEL,
         model_by_credential={CredentialKind.anthropic_api_key.value: MODEL_API_KEY},
         max_turns=MAX_TURNS,
-        wall_time_s=WALL_TIME_S + SIGNIN_WAIT_S,
+        wall_time_s=WALL_TIME_S + SIGNIN_WAIT_S + TAKEOVER_WAIT_S,
         effort="medium",
         internal=True,
         live_text=False,

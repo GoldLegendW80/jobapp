@@ -19,6 +19,152 @@ from tests.browser.test_b4_live_unit import VIEWER, World, run
 from tests.browser.test_b5_actions import Page, acted, facts, tab_of
 
 
+@pytest.fixture
+def navigation_errors(monkeypatch):
+    # The API environment omits the browser image's Playwright package. These two exception
+    # types are its only dependency on this fake page; pages.navigate itself remains real.
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.async_api",
+        SimpleNamespace(Error=RuntimeError, TimeoutError=TimeoutError),
+    )
+
+
+@pytest.mark.parametrize("give_back", [False, True])
+@pytest.mark.parametrize("boundary", ["dwell", "front"])
+def test_navigation_rechecks_live_ownership_after_each_await(
+    monkeypatch, navigation_errors, boundary, give_back
+):
+    async def go(w):
+        svc, lease, headers = await acquire(w, "apply_fill")
+        page = Page()
+        w.manager.browser.browser = tab_of(page).browser.browser
+        navigated = []
+
+        def take():
+            w.live.take(lease.lease_id, VIEWER)
+            if give_back:
+                w.live.give_back(lease.lease_id)
+
+        async def dwell(_):
+            if boundary == "dwell":
+                take()
+
+        fronts = 0
+
+        async def front():
+            nonlocal fronts
+            fronts += 1
+            if boundary == "front" and fronts == 2:
+                take()
+
+        async def goto(url, **kwargs):
+            navigated.append(url)
+
+        monkeypatch.setattr(page, "bring_to_front", front)
+        monkeypatch.setattr(page, "goto", goto)
+        monkeypatch.setattr(routes, "PACER", pacing.Pacer(sleep=dwell))
+        result = (await call(svc, lease, headers, "browser_navigate", {"url": "http://pages/new"}))[
+            1
+        ]
+        assert result.get("error") == "person_input", result
+        assert navigated == []
+
+    run(go)
+
+
+@pytest.mark.parametrize("action", ["select", "close", "list"])
+@pytest.mark.parametrize("give_back", [False, True])
+def test_tab_mutations_recheck_the_live_owner_after_settle(monkeypatch, action, give_back):
+    async def go(w):
+        svc, lease, headers = await acquire(w, "apply_fill")
+        page, other = Page(), Page()
+        context = tab_of(page).browser.browser
+        context.contexts[0].pages.append(other)
+        w.manager.browser.browser = context
+        state = routes.state_of(lease)
+        state.page = page
+        fronts = []
+
+        async def front():
+            fronts.append(other)
+
+        original = actions.Tab.settle
+
+        async def settle(tab, result):
+            answer = await original(tab, result)
+            w.live.take(lease.lease_id, VIEWER)
+            if give_back:
+                w.live.give_back(lease.lease_id)
+            return answer
+
+        monkeypatch.setattr(other, "bring_to_front", front)
+        monkeypatch.setattr(actions.Tab, "settle", settle)
+        result = (await call(svc, lease, headers, "browser_tabs", {"action": action, "index": 1}))[
+            1
+        ]
+        if action == "list":
+            assert result["ok"]
+            assert len(result["tabs"]) == 2
+        else:
+            assert result.get("error") == "person_input", result
+        assert fronts == []
+        assert not other.closed
+        assert state.page is page
+
+    run(go)
+
+
+@pytest.mark.parametrize("purpose", ["apply_fill", "apply_manual"])
+def test_unchanged_and_manual_person_time_navigation_still_reaches_the_page(
+    monkeypatch, navigation_errors, purpose
+):
+    async def go(w):
+        svc, lease, headers = await acquire(w, purpose)
+        page = Page()
+        page.on = lambda *_: None  # Apply myself installs its file chooser listener.
+        w.manager.browser.browser = tab_of(page).browser.browser
+
+        async def no_sleep(_):
+            pass
+
+        monkeypatch.setattr(routes, "PACER", pacing.Pacer(sleep=no_sleep))
+        assert not lease.app_turn
+        result = (await call(svc, lease, headers, "browser_navigate", {"url": "http://pages/new"}))[
+            1
+        ]
+        assert result["ok"], result
+        assert page.url == "http://pages/new"
+
+    run(go)
+
+
+@pytest.mark.parametrize("give_back", [False, True])
+def test_tab_selection_does_not_commit_stale_state_after_awaited_focus(monkeypatch, give_back):
+    async def go(w):
+        svc, lease, headers = await acquire(w, "apply_fill")
+        page, other = Page(), Page()
+        browser = tab_of(page).browser.browser
+        browser.contexts[0].pages.append(other)
+        w.manager.browser.browser = browser
+        state = routes.state_of(lease)
+        state.page = page
+
+        async def front():
+            w.live.take(lease.lease_id, VIEWER)
+            if give_back:
+                w.live.give_back(lease.lease_id)
+
+        monkeypatch.setattr(other, "bring_to_front", front)
+        result = (
+            await call(svc, lease, headers, "browser_tabs", {"action": "select", "index": 1})
+        )[1]
+        assert result.get("error") == "person_input", result
+        assert state.page is page
+
+    run(go)
+
+
 async def acquire(w: World, purpose: str):
     request = Request.parse(
         {

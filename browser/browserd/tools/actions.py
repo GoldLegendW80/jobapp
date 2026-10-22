@@ -330,7 +330,10 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         return refused(code)
     page = await tab.page()
     await tab.pacer.dwell()
-    result = await pages.navigate(page, args["url"])
+    # Apply myself may open its form during PERSON_TIME. Automated navigation must still own
+    # input after both pacing and the helper's awaited focus, immediately before goto.
+    before_input = tab.require_input if tab.request.purpose != "apply_manual" else None
+    result = await pages.navigate(page, args["url"], before_input=before_input)
     if result.get("ok"):
         await tab.pacer.read()
     return await tab.settle(result)
@@ -654,8 +657,11 @@ async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         index = args.get("index")
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(found):
             return failure("bad_args", "index must be the index of an open tab.")
+        tab.require_input()
         if action == "select":
-            tab.state.page = await pages.front(found[index])
+            selected = await pages.front(found[index])
+            tab.require_input()
+            tab.state.page = selected
         elif len(found) > 1:
             await found[index].close()
         found = list(context.pages)
