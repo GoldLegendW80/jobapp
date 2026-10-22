@@ -285,8 +285,8 @@ async def save_section(
             else:
                 if kind == "file":
 
-                    def cv(db: Session):
-                        plan = site_profile.prepare_cv(db, user_id)
+                    def cv(db: Session, source=source):
+                        plan = site_profile.prepare_cv(db, user_id, source)
                         return plan
 
                     pdf = await asyncio.to_thread(site_profile._in_db, services, cv)

@@ -365,7 +365,10 @@ def test_generic_profile_has_one_aggregate_model_budget(db, factory, person_a):
     assert parts[1].error_code == "budget_exhausted"
 
 
-def test_reference_cv_upload_uses_rendered_base_version_bytes(db, factory, person_a):
+@pytest.mark.parametrize("changed", ["newer", "tampered", "missing"])
+def test_reference_cv_upload_uses_rendered_base_version_bytes(
+    db, factory, person_a, monkeypatch, changed
+):
     from app.documents import store
     from app.documents.models import BaseSource, FitResult, Origin
     from tests.apply.a4_support import Spec
@@ -405,7 +408,57 @@ def test_reference_cv_upload_uses_rendered_base_version_bytes(db, factory, perso
     asyncio.run(site_profile.fill(services(factory, portal), run_id))
     assert received == [("reference-cv.pdf", pdf)]
     _run, _part, rows = section(db, person_a.user_id, run_id)
-    assert next(row for row in rows if row.label == "Resume").source_path == "documents.cv"
+    source = next(row for row in rows if row.label == "Resume").source_path
+    assert source.startswith(f"documents.cv:{version.id}:")
+    digest = profile_sources.value_hash(_part, rows)
+    newer, _ = store.snapshot(
+        db, person_a.user_id, base.id, Origin.generated, at=AT, content=base_cv("alex")
+    )
+    store.attach_pdf(
+        db,
+        person_a.user_id,
+        base.id,
+        newer.number,
+        b"%PDF-1.7\nChanged CV\n%%EOF",
+        fit=FitResult.one_page,
+        fit_step=None,
+        pages=1,
+    )
+    db.commit()
+    assert site_profile.prepare_cv(db, person_a.user_id, source) == pdf
+    assert site_profile.reference_cv(db, person_a.user_id)[1] != pdf
+    assert profile_sources.value_hash(_part, rows) == digest
+    if changed == "tampered":
+        db.refresh(version)
+        version.pdf = b"%PDF-1.7\nAltered old bytes\n%%EOF"
+    elif changed == "missing":
+        db.delete(version)
+    auth = profile_gate.authorise_section(db, person_a.user_id, run_id, _part.section, digest, AT)
+    auth_id, section_key = auth.id, _part.section
+    db.commit()
+    fresh = CustomForm(
+        [[Spec("Full name", "text"), Spec("Resume", "file")]],
+        submit="Save",
+        title="Profile",
+        files=("reference-cv.pdf",),
+    )
+    fresh.put_file = put_file
+    clicks = []
+
+    async def click(*args):
+        clicks.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(profile_gate, "gate_click", click)
+    asyncio.run(profile_gate.save_section(services(factory, fresh), run_id, section_key, auth_id))
+    if changed == "newer":
+        assert received == [("reference-cv.pdf", pdf), ("reference-cv.pdf", pdf)]
+        assert clicks == [True]
+    else:
+        assert site_profile.prepare_cv(db, person_a.user_id, source) is None
+        assert received == [("reference-cv.pdf", pdf)]
+        assert clicks == []
+        assert section(db, person_a.user_id, run_id)[1].error_code == "reference_cv_missing"
 
 
 def test_linkedin_checkpoint_records_seven_day_pause_before_any_write(

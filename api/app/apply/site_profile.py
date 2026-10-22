@@ -336,6 +336,7 @@ class Plan:
     confirmed: bool
     context: answers.Context
     cv: bytes | None
+    cv_source: str
 
 
 def prepare(db: Session, run_id: uuid.UUID, now: datetime) -> Plan | None:
@@ -354,7 +355,7 @@ def prepare(db: Session, run_id: uuid.UUID, now: datetime) -> Plan | None:
             if v and k in ("identity", "experience", "skills", "answers", "facts")
         },
     )
-    cv = prepare_cv(db, run.user_id)
+    cv_source, cv = reference_cv(db, run.user_id)
     if cv is not None:
         context = answers.Context(
             run.user_id, context.sections, documents=answers.Documents(cv_path="reference-cv.pdf")
@@ -370,13 +371,14 @@ def prepare(db: Session, run_id: uuid.UUID, now: datetime) -> Plan | None:
         run.autosave_confirmed,
         context,
         cv,
+        cv_source,
     )
 
 
-def prepare_cv(db: Session, user_id: uuid.UUID) -> bytes | None:
+def reference_cv(db: Session, user_id: uuid.UUID) -> tuple[str, bytes | None]:
     document = documents.default_base(db, user_id)
     if document is None:
-        return None
+        return "", None
     version = db.scalar(
         sa.select(DocumentVersion)
         .where(
@@ -387,7 +389,32 @@ def prepare_cv(db: Session, user_id: uuid.UUID) -> bytes | None:
         .order_by(DocumentVersion.number.desc())
         .limit(1)
     )
-    return bytes(version.pdf) if version is not None else None
+    if version is None:
+        return "", None
+    pdf = bytes(version.pdf)
+    return f"documents.cv:{version.id}:{hashlib.sha256(pdf).hexdigest()}", pdf
+
+
+def prepare_cv(db: Session, user_id: uuid.UUID, source: str) -> bytes | None:
+    """Read only the exact rendered version and digest included in the approved hash."""
+    try:
+        prefix, version_id, digest = source.split(":")
+        version_id = uuid.UUID(version_id)
+    except (ValueError, AttributeError):
+        return None
+    if prefix != "documents.cv" or len(digest) != 64:
+        return None
+    version = db.scalar(
+        sa.select(DocumentVersion).where(
+            DocumentVersion.id == version_id,
+            DocumentVersion.user_id == user_id,
+            DocumentVersion.pdf.is_not(None),
+        )
+    )
+    if version is None:
+        return None
+    pdf = bytes(version.pdf)
+    return pdf if hashlib.sha256(pdf).hexdigest() == digest else None
 
 
 @dataclass
@@ -517,6 +544,9 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
             await update(SiteRunState.filling)
             shot = await tools.snapshot()
             text = str(shot.get("snapshot") or "")
+            if pending := base.Adapter().pending_step(text):
+                await update(SiteRunState.needs_person, pending)
+                return
         elif pending:
             await update(SiteRunState.needs_person, pending)
             return
@@ -594,7 +624,13 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                             item.checked if item.kind == "checkbox" else item.value or None
                         ),
                         source=source_of(answer.source) if answered else SiteFieldSource.left,
-                        source_path=answer.source if answered else "",
+                        source_path=(
+                            plan.cv_source
+                            if answered and item.kind == "file" and answer.source == "documents.cv"
+                            else answer.source
+                            if answered
+                            else ""
+                        ),
                         required=item.required,
                         options=list(item.options),
                         refusal=None if answered else answer.reason,
