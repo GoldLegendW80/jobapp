@@ -10,9 +10,9 @@ a `DocumentSources` that carries what the documents' own rules read besides:
 - `answers`: the answers section (`checks` lets a number of an answer source only a sentence
   about the same thing: `answer_topics` holds each answer with the words of its question);
 - `employers`, `schools`, `titles`: from the fixed facts;
-- for a letter only, the posting's title in `titles` and its company in `participants`, so that
-  a letter may name the role and the company it writes to. Never for a CV: there they would make
-  "Senior Data Engineer at Example SA" pass as experience;
+- for a letter and an outreach proposal only, the posting's title in `titles` and its company
+  in `participants`, so that they may name the role and the company they write to. Never for a
+  CV: there they would make "Senior Data Engineer at Example SA" pass as experience;
 - `known_terms`: the skills terms, so that a technology is not taken for an organisation;
 - `terms`: the skills terms with the base CV's skills items and competencies, after which a
   version number is cut alone (`corrections`);
@@ -176,7 +176,7 @@ def sources_for(
     upload_text: str | None,
     posting: PostingView | None,
     *,
-    kind: Literal["cv", "base", "letter"] = "cv",
+    kind: Literal["cv", "base", "letter", "proposal"] = "cv",
 ) -> DocumentSources:
     profile = [f"{title}\n{body}" for title, body in view.facts_blocks]
     profile += [
@@ -200,7 +200,7 @@ def sources_for(
     own_titles = [*titles, *(e.title for e in base.fixed.employers)] if base else list(titles)
     participants: list[str] = []
     posting_titles: list[str] = []
-    if posting is not None and kind == "letter":
+    if posting is not None and kind in ("letter", "proposal"):
         titles.append(posting.title)
         posting_titles.append(posting.title)
         participants.append(posting.company)

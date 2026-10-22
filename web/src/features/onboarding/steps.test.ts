@@ -4,6 +4,7 @@ import { EMPTY, type Search } from "@/features/profile/api";
 
 import {
   draftOf,
+  nextPage,
   openStep,
   passedOf,
   readPay,
@@ -240,5 +241,62 @@ describe("savedDraft", () => {
     expect(savedDraft(paid, draft({ ratherNotSay: true })).ratherNotSay).toBe(
       false,
     );
+  });
+});
+
+describe("nextPage", () => {
+  it.each([
+    ["/jobs", "/jobs"],
+    ["/jobs/42", "/jobs/42"],
+    [
+      "/jobs?status=found&q=data%20engineer",
+      "/jobs?status=found&q=data%20engineer",
+    ],
+    ["/jobs/map#paris", "/jobs/map#paris"],
+    ["/profile/fill?step=review", "/profile/fill?step=review"],
+    ["/account", "/account"],
+    ["/jobs/./42", "/jobs/42"],
+    ["/jobs/../account", "/account"],
+    ["/caf%C3%A9", "/caf%C3%A9"],
+    // a path of this origin, harmless: the router opens a page that does not exist
+    ["/javascript:alert(1)//", "/javascript:alert(1)//"],
+  ])("keeps the path of this app %j", (value, kept) => {
+    expect(nextPage(value)).toBe(kept);
+  });
+
+  it.each([
+    null,
+    "",
+    "jobs",
+    "https://evil.example/jobs",
+    "//evil.example",
+    "///evil.example",
+    "/\\evil.example",
+    "\\/evil.example",
+    "/\t/evil.example",
+    "/\n/evil.example",
+    "/\r/evil.example",
+    "\t/evil.example",
+    "/ /evil.example",
+    "/jobs evil",
+    "/jobs\u0000",
+    "/jobs\u007f",
+    "/\u00a0/evil.example",
+    "/\u2028/evil.example",
+    "/%09/evil.example",
+    "/%0a/evil.example",
+    "/%0D/evil.example",
+    "/%20/evil.example",
+    "/%5c/evil.example",
+    "/%2F/evil.example",
+    "/%2f%2fevil.example",
+    "/%E0%A4%A",
+    "/welcome",
+    "/welcome?step=pay",
+    "/welcome/again",
+    "/%77elcome",
+    "javascript:alert(1)",
+  ])("refuses %j", (value) => {
+    expect(nextPage(value)).toBeNull();
   });
 });

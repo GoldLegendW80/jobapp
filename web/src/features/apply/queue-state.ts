@@ -1,7 +1,8 @@
 /**
  * What a card of the review queue shows, as pure functions: which actions an item offers, the
  * line of each document with its check, what is left for the person, and how often the page
- * reads the queue again. The api's own sentences (a reason, a refusal) are shown as they come.
+ * reads the queue again. The api's own sentences (a reason, a refusal) are shown as they come,
+ * and a reason without one gets a label here.
  * No dashes as separators.
  */
 import { documentLine } from "./apply-state";
@@ -92,10 +93,44 @@ export function leftLine(item: QueueItem): string | null {
   return `${item.left} fields left for you${required}.`;
 }
 
-/** Why a filled item came back to the person: the api's sentence, else its code in words. */
+/**
+ * The reasons the api sends without a sentence: what the fill or the submit lease stopped on
+ * before any click (api/app/apply/run.py and submit.py), and `other`, the summary's reason of an
+ * item sent to the person without a code.
+ */
+const REASONS: Record<string, string> = {
+  captcha: "The site asked for a captcha, so it waits for you.",
+  signin: "The site asked you to sign in, so it waits for you.",
+  email_code:
+    "The site sent a code by e-mail that only you can read, so it waits for you.",
+  required_left: "A required question was left for you to answer.",
+  payment_requested: "The site asked for a payment, so it waits for you.",
+  no_adapter: "The app does not know this form yet, so it waits for you.",
+  needs_person: "The form needed you before it could go on.",
+  form_changed: "The form changed since it was filled, so it waits for you.",
+  no_documents:
+    "The CV or the letter of this form could not be read, so it waits for you.",
+  no_capability:
+    "The browser could not be made ready for the click, so it waits for you.",
+  put_file_failed:
+    "A file could not be attached to the form, so it waits for you.",
+  failed: "The form could not be opened, so it waits for you.",
+  ended: "The browser session ended before the click, so it waits for you.",
+  host_not_allowed: "The form moved to another site, so it waits for you.",
+  unreadable: "The page could not be read, so it waits for you.",
+  other: "Another reason: open it to see where it stopped.",
+};
+
+/** A code this page does not know yet: said in words, never shown raw. */
+export const OTHER_REASON =
+  "The app stopped before the click, so it waits for you.";
+
+/** Why a filled item came back to the person: the api's sentence, else a label of its code. */
 export function reasonLine(reason: QueueItem["reason"]): string | null {
   if (!reason) return null;
   if (reason.sentence) return reason.sentence;
-  const words = reason.code.replace(/_/g, " ").trim();
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
+  const label = Object.hasOwn(REASONS, reason.code)
+    ? REASONS[reason.code]
+    : undefined;
+  return label ?? OTHER_REASON;
 }

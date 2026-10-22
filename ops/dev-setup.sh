@@ -12,9 +12,10 @@
 # merge gate refuses to start under 12 and uses about 3 while it runs); the pinned shellcheck
 # image of the gate, present or pullable (`docker manifest inspect`, nothing is pulled); uv;
 # Node at least the version of `.nvmrc` when the file exists, else of `engines.node` in
-# web/package.json; pnpm of the major version `packageManager` of web/package.json names, or pnpm
-# 10 or later above it (it runs the pinned version itself); python3 at least 3.12 (the scripts of
-# .github/scripts parse the api's code); pre-commit, and its hook installed in this clone; Claude
+# web/package.json; pnpm compatible with the `packageManager` pin (9.x needs at least 9.2.0
+# for a different 9.x pin), or a newer major with a warning about version switching; python3
+# at least 3.12 (the scripts of .github/scripts parse the api's code); pre-commit, and its hook
+# installed in this clone; Claude
 # Code (`claude`), as a warning. Only with --jetson: the ssh alias `jetson`
 # (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password prompt; nothing needs it
 # any more (owner decision of 2026-10-15: deploys and operations go through GitHub, README
@@ -193,17 +194,43 @@ pnpm_fix() {
 if ! have pnpm; then
   miss "pnpm is not installed" "$(pnpm_fix "${pnpm_want:-9}")"
 else
-  # Asked from / with the pnpm 10 and 11 switches off: under web/, pnpm would download the pin.
-  pnpm_have="$(first_version "$(cd / && npm_config_manage_package_manager_versions=false pnpm_config_pm_on_fail=ignore pnpm --version 2>/dev/null)")"
+  # No project pin in /, no pnpm switching, and no Corepack or Node compile-cache writes.
+  # https://github.com/nodejs/corepack#environment-variables
+  # https://nodejs.org/api/module.html#module-compile-cache
+  pnpm_version="$(cd / && COREPACK_ENABLE_NETWORK=0 COREPACK_ENABLE_AUTO_PIN=0 COREPACK_DEFAULT_TO_LATEST=0 NODE_DISABLE_COMPILE_CACHE=1 npm_config_manage_package_manager_versions=false pnpm_config_pm_on_fail=ignore pnpm --version 2>/dev/null)" || pnpm_version=""
+  pnpm_have="$(first_version "$pnpm_version")"
   pnpm_have_major="${pnpm_have%%.*}"
   pnpm_want_major="${pnpm_want%%.*}"
-  if [[ -z "$pnpm_want" ]]; then
+  if [[ -z "$pnpm_have" ]]; then
+    miss "pnpm is installed but its version could not be read with downloads disabled" "$(pnpm_fix "${pnpm_want:-9}")"
+  elif [[ -z "$pnpm_want" ]]; then
     warn "pnpm $pnpm_have, but web/package.json names no packageManager" "check web/package.json"
   elif [[ "$pnpm_have_major" == "$pnpm_want_major" ]]; then
-    ok "pnpm $pnpm_have (web/package.json pins $pnpm_want)"
+    # Before 9.2, packageManagerStrict requires the exact version, even within major 9.
+    # https://github.com/pnpm/pnpm/releases/tag/v9.2.0
+    if [[ "$pnpm_have_major" == 9 && "$pnpm_have" != "$pnpm_want" ]] && ! version_ge "$pnpm_have" 9.2.0; then
+      miss "pnpm $pnpm_have, web/package.json pins $pnpm_want; pnpm 9.2.0 or newer is needed for a different 9.x pin" "$(pnpm_fix "$pnpm_want")"
+    else
+      ok "pnpm $pnpm_have (web/package.json pins $pnpm_want)"
+    fi
   # pnpm 10 and later run the pinned version themselves by default (pmOnFail=download from 11).
   elif ((10#${pnpm_have_major:-0} >= 10 && 10#${pnpm_have_major:-0} > 10#$pnpm_want_major)); then
-    ok "pnpm $pnpm_have, runs the pinned $pnpm_want itself (packageManager of web/package.json)"
+    # Even a config query outside the project can provision a user-configured Node runtime.
+    # Keep the version-only probe above and leave user and project switching unverified.
+    # https://github.com/pnpm/pnpm/blob/v10.17.1/pnpm/src/main.ts#L268-L283
+    # https://pnpm.io/10.x/settings#managepackagemanagerversions
+    # https://pnpm.io/settings/cli#pmonfail
+    pnpm_switch_setting=""
+    case "$pnpm_have_major" in
+    10) pnpm_switch_setting=managePackageManagerVersions=true ;;
+    11) pnpm_switch_setting=pmOnFail=download ;;
+    esac
+    if [[ -n "$pnpm_switch_setting" ]]; then
+      warn "pnpm $pnpm_have, version switching could not be checked for the $pnpm_want pin" \
+        "check $pnpm_switch_setting (the default) and any user or web project overrides, or npm install -g pnpm@$pnpm_want"
+    else
+      warn "pnpm $pnpm_have, version switching could not be checked for the $pnpm_want pin" "$(pnpm_fix "$pnpm_want")"
+    fi
   else
     miss "pnpm $pnpm_have, web/package.json pins $pnpm_want" "$(pnpm_fix "$pnpm_want")"
   fi

@@ -7,9 +7,29 @@ import {
   serverOffset,
   spokenLeft,
   summaryLine,
+  waitsForYou,
 } from "./full-auto-state";
+import type { ApplySettings } from "./settings-api";
 
 const SEPARATOR = /[–—]| - /;
+
+const applySettings = (values: Partial<ApplySettings>): ApplySettings => ({
+  mode_after_like: "full_auto",
+  full_auto_available: true,
+  paused: false,
+  min_fit: 80,
+  min_fit_chosen: false,
+  safety_ceiling: 30,
+  hold_s: 900,
+  hold_min_s: 900,
+  company_days: 30,
+  show_postings_from: null,
+  write_documents_from: null,
+  rehearsals: 3,
+  rehearsals_done: 3,
+  full_auto_since: null,
+  ...values,
+});
 
 describe("the hold's countdown", () => {
   it("reads the server's clock, not the page's", () => {
@@ -111,5 +131,30 @@ describe("the summary line", () => {
     });
     expect(line).toBe("1 submitted, 0 held, 3 sent to you for review");
     expect(line).not.toMatch(SEPARATOR);
+  });
+});
+
+describe("what waits for the person instead", () => {
+  it("names every rule that sends a Full auto item to the queue, with the person's own figures", () => {
+    const lines = waitsForYou(
+      applySettings({ min_fit: 85, company_days: 45, safety_ceiling: 12 }),
+    );
+    expect(lines).toEqual([
+      "a posting whose fit is below 85",
+      "a site Full auto does not handle yet",
+      "a question left, a captcha or a sign in",
+      "a free text answer the app wrote itself, unless the app's own check of it passed",
+      "a term your never apply rules exclude, in the posting's text",
+      "a CV or letter that runs over its page or has a correction to look at",
+      "a second application to the same company within 45 days",
+      "anything past the safety ceiling of 12 submissions a day",
+    ]);
+    for (const line of lines) expect(line).not.toMatch(SEPARATOR);
+  });
+
+  it("says one day in the singular", () => {
+    expect(waitsForYou(applySettings({ company_days: 1 }))).toContain(
+      "a second application to the same company within 1 day",
+    );
   });
 });

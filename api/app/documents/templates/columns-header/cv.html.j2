@@ -4,15 +4,17 @@
     three columns as well. An empty section is not printed. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{% import "_base/layout.html.j2" as layout with context %}
 {% block body %}
 <header class="head">
 <div class="headtext">
-<h1 class="name">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</h1>
+<h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 </div>
 {{ base.portrait() }}
 </header>
-{{ base.contact_lines() }}
+{#- the characters a line holds in one cell and in two, at the loosest step -#}
+{{ layout.contact_cells(28, 62) }}
 
 {% if content.summary %}
 <section class="block">

@@ -31,21 +31,29 @@ cancel endpoint, claim, the reapers) take no thread lock and fit any order. Noth
 a job or a user today; a path that did would cascade to runs and threads in trigger order, so it
 would have to lock the threads itself first.
 
+Bounded waits (issue #161): a send and a delete wait LOCK_WAIT_S at most for each lock of their
+transaction (`bounded_lock_waits`), then answer 409 with nothing written. The worker ending a
+chat run waits its own bound for the thread; when that passes, it stores no answer and fails the
+run at once, in a transaction that locks the run's row alone and so fits the order above
+(runner.py, `_record_end`).
+
 Quoting (issue #27): in the prompt, every message sits inside <message> tags, with "&" and "<"
 written as "&amp;" and "&lt;" (`quoted`), so no message can close its own block, fake another
 turn or end the conversation. Only the prompt is escaped: the database, the api and the UI keep
 the raw text.
 """
 
+import contextlib
 import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.agents import definitions, runs
@@ -57,6 +65,7 @@ from app.agents.models import (
     MessageRole,
     RunStatus,
 )
+from app.jobs import service as jobs_service
 from app.jobs.models import Job
 
 HISTORY_BUDGET_TOKENS = 30_000
@@ -64,6 +73,10 @@ CHARS_PER_TOKEN = 4
 MESSAGE_OVERHEAD_TOKENS = 4
 # The newest messages read to build a prompt: far more than any budget keeps.
 HISTORY_READ_MAX = 1000
+# How long a send or a delete waits for each lock of its transaction, the thread's row first
+# (seconds, Postgres `lock_timeout`). Another send, a delete or the worker storing an answer
+# holds that row for a moment; a holder that keeps it longer is stuck.
+LOCK_WAIT_S = 5.0
 
 AGENT = definitions.JOB_CHAT
 
@@ -74,6 +87,31 @@ class ThreadBusyError(Exception):
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(str(run_id))
         self.run_id = run_id
+
+
+class ThreadLockedError(Exception):
+    """A lock wait inside `bounded_lock_waits` outlasted its bound; the transaction is rolled
+    back."""
+
+
+@contextlib.contextmanager
+def bounded_lock_waits(db: Session, wait_s: float) -> Iterator[None]:
+    """Make each lock wait of `db`'s transaction, from here to its end, last `wait_s` at most.
+    The bound is the transaction's own (`SET LOCAL lock_timeout`): it is gone with the
+    transaction, and the pooled connection goes back to waiting as it did. A wait refused inside
+    the block (SQLSTATE 55P03) rolls the transaction back and raises ThreadLockedError; every
+    other error goes through as it is."""
+    db.execute(
+        sa.text("SELECT set_config('lock_timeout', :wait, true)"),
+        {"wait": f"{max(1, round(wait_s * 1000))}ms"},
+    )
+    try:
+        yield
+    except DBAPIError as exc:
+        if not jobs_service.is_lock_timeout(exc):
+            raise
+        db.rollback()
+        raise ThreadLockedError from exc
 
 
 def default_title(job: Job) -> str:

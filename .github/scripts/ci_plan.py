@@ -34,10 +34,13 @@ none is ever skipped, and the run is green when every job is.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 UNITS = ("api", "web", "shell", "e2e")
@@ -356,8 +359,423 @@ def verify_problems(
     return problems
 
 
+# --- the journey groups of the batch check (issue #552, owner's decision of 2026-10-21) ----------
+#
+#     python3 .github/scripts/ci_plan.py journeys <base commit> <head commit> <groups
+#
+# ops/local-check.sh runs every journey group of web/e2e on a stack of its own, and they are most
+# of its time. A batch runs only the groups its changed files touch: the files of <head> against
+# <base> (the merged tree against the main it was merged onto), each file judged by the first of
+# these that answers:
+#
+# 1. Every api/app/ path runs every group. Python dependencies, reflective loaders and
+#    registrations are not inferred.
+# 2. RULES above: a file whose units leave out e2e (documentation, task notes, Claude Code's
+#    configuration) touches no group. The same rules as the pull request plan of CI, not a copy.
+# 3. JOURNEY_RULES below: the gate itself and this mapping run every group, the fakes of a group
+#    run that group, the scripts of operations and the shell tests run none.
+# 4. A web feature (web/src/features/<feature>/) touches its
+#    groups and those of every feature that imports the file, directly or transitively.
+#    Web wiring (routes.tsx, App.tsx, main.tsx) carries nothing on; files outside a feature
+#    (web/src/lib/) are shared. AREA_GROUPS names the groups of web features.
+# 5. A spec or a group config of web/e2e touches its own group; any other file there (stack.ts,
+#    a helper, playwright.config.ts) every group.
+# 6. Anything else runs every group: a path nobody decided is checked in full.
+#
+# Input on stdin: one line per group, `<group>\t<its Playwright arguments>` as journey_specs of
+# ops/local-check.sh prints them (a list of spec files, or `-c e2e/<group>-all.config.ts`). Output:
+# `changed\t<number of files>\t<sha256 of their sorted list>`, then one line per group in the order
+# given, `run\t<group>\t<why>` or `skip\t<group>\t<why>`. The pytest suite, the lint, the type
+# check, the build, Vitest and the shell tests are not scoped: the gate runs them in full.
+
+EVERY = "every"
+NO_GROUP: frozenset[str] = frozenset()
+
+# (pattern, groups or EVERY, why), first match wins, matched as RULES are.
+JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
+    ("ops/local-check.sh", EVERY, "the gate itself"),
+    ("ops/ship.sh", EVERY, "the script that runs the gate"),
+    (".github/scripts/ci_plan.py", EVERY, "this mapping"),
+    (
+        ".github/scripts/e2e_groups.py",
+        EVERY,
+        "it reads the group configs for this mapping",
+    ),
+    (".github/scripts/ci_env.sh", EVERY, "the .env of every journey stack"),
+    ("api/alembic/*", EVERY, "a migration, every journey stack runs them"),
+    ("api/pyproject.toml", EVERY, "the api's dependencies"),
+    ("api/uv.lock", EVERY, "the api's dependencies"),
+    ("web/package.json", EVERY, "the web's dependencies"),
+    ("web/pnpm-lock.yaml", EVERY, "the web's dependencies"),
+    ("*/Dockerfile", EVERY, "an image of every journey stack"),
+    ("compose*.yml", EVERY, "the compose files of every journey stack"),
+    (
+        ".github/scripts/synthetic_jobs.py",
+        frozenset({"apps"}),
+        "the data of the apps group",
+    ),
+    (".github/*", NO_GROUP, "CI configuration, no journey reads it"),
+    ("ops/*", NO_GROUP, "an operations script, no journey runs it"),
+    ("tests/ats-stub.compose.yml", EVERY, "the fake ATS of every journey stack"),
+    ("tests/ats_stub.py", EVERY, "the fake ATS of every journey stack"),
+    (
+        "tests/ats-forms-stub.compose.yml",
+        frozenset({"apply", "opportunities"}),
+        "the fake forms server",
+    ),
+    (
+        "tests/ats_forms_stub.py",
+        frozenset({"apply", "opportunities"}),
+        "the fake forms server",
+    ),
+    (
+        "tests/ats_forms/*",
+        frozenset({"apply", "opportunities"}),
+        "the fake forms server",
+    ),
+    (
+        "tests/gmail-stub.compose.yml",
+        frozenset({"mail"}),
+        "the fake Google of the mail group",
+    ),
+    (
+        "tests/browser-pages.compose.yml",
+        frozenset({"browser"}),
+        "the static pages of the browser group",
+    ),
+    (
+        "tests/browser_pages/*",
+        frozenset({"browser"}),
+        "the static pages of the browser group",
+    ),
+    ("tests/*_test.sh", NO_GROUP, "a shell test, the gate runs them all"),
+    ("tests/*jetson*", NO_GROUP, "a run on the Jetson, never in the gate"),
+    ("api/tests/jobs/fake_ats.py", EVERY, "the fake ATS of every journey stack"),
+    ("api/tests/mail/*", frozenset({"mail"}), "the fake Google and its mailbox data"),
+    ("api/tests/ingestion/*", EVERY, "input data and streams read by journeys"),
+    ("api/tests/documents/fixtures/*", EVERY, "document input data read by journeys"),
+    (
+        "api/tests/*",
+        NO_GROUP,
+        "other pytest files, the gate runs the suite in full",
+    ),
+    ("browser/*", frozenset({"browser", "apply"}), "the browser service"),
+    ("renderer/*", frozenset({"documents", "apply"}), "the PDF renderer"),
+    (".pre-commit-config.yaml", NO_GROUP, "pre-commit, run in full by the gate"),
+    (".gitignore", NO_GROUP, "git configuration"),
+    (".rsyncignore", NO_GROUP, "the file list of a deploy"),
+)
+
+# The journey groups of web features (web/src/features/<feature>), by folder name.
+# EVERY for the features every group goes through:
+# each journey signs in (identity, auth), seeds postings and a profile (jobs, profile), sets a
+# model credential (agents) and moves through the shell, the account and the onboarding pages.
+# A module missing here runs every group.
+AREA_GROUPS: dict[str, frozenset[str] | str] = {
+    "identity": EVERY,
+    "profile": EVERY,
+    "jobs": EVERY,
+    "agents": EVERY,
+    "auth": EVERY,
+    "shell": EVERY,
+    "public": EVERY,
+    "account": EVERY,
+    "admin": EVERY,
+    "onboarding": EVERY,
+    "health": EVERY,
+    "ingestion": frozenset({"ingestion", "documents"}),
+    "mail": frozenset({"mail"}),
+    "documents": frozenset({"documents", "apply"}),
+    "apply": frozenset({"apply", "browser", "opportunities"}),
+    "browser": frozenset({"browser", "apply"}),
+    "opportunities": frozenset({"opportunities"}),
+}
+
+WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
+SHARED = "<shared>"
+TS_TOKEN = re.compile(
+    # ECMAScript 12.3: LF, CR, LS and PS terminate a single-line comment.
+    # https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html#sec-line-terminators
+    r"\s+|//[^\n\r\u2028\u2029]*|/\*[\s\S]*?\*/|'(?:\\[\s\S]|[^'\\])*'|\"(?:\\[\s\S]|[^\"\\])*\"|`(?:\\[\s\S]|[^`\\])*`|[\w$]+|[^\s]"
+)
+
+
+class MappingError(ValueError):
+    """Uncertain dependencies require every journey group."""
+
+
+def source_files(root: Path, suffixes: tuple[str, ...]):
+    # Path.rglob can suppress traversal errors, losing every consumer in a directory.
+    def failed(error):
+        raise error
+
+    for directory, _, names in os.walk(root, onerror=failed):
+        for name in sorted(names):
+            if name.endswith(suffixes):
+                yield Path(directory) / name
+
+
+def ts_imports(text: str) -> list[str]:
+    """Read import declarations/calls as tokens, without pretending to parse TypeScript.
+    Unsupported targets fail closed. Comments and strings cannot hide declarations.
+    https://www.typescriptlang.org/docs/handbook/modules/reference.html
+    """
+    tokens = []
+    for match in TS_TOKEN.finditer(text):
+        token = match.group()
+        if not token.isspace() and not token.startswith(("//", "/*")):
+            tokens.append(token)
+    if any(t in ("'", '"', "`") for t in tokens) or text.count("/*") > text.count("*/"):
+        raise MappingError("unterminated TypeScript string or comment")
+    for token in tokens:
+        if token == "/" or token.startswith("`") and "${" in token:
+            raise MappingError("unsupported TypeScript expression can contain imports")
+        if token.startswith(("'", '"')) and "\n" in token:
+            raise MappingError("unsupported multiline TypeScript string")
+
+    def literal(index):
+        token = tokens[index] if index < len(tokens) else ""
+        if len(token) < 2 or token[0] not in "'\"`" or "\\" in token or "${" in token:
+            raise MappingError("unsupported TypeScript import target")
+        return token[1:-1]
+
+    specs = []
+    seen_export = False
+    for i, token in enumerate(tokens):
+        if token == "export":
+            seen_export = True
+        tail = tokens[i + 1 : i + 2]
+        if token in ("import", "require"):
+            if tail == ["."]:
+                raise MappingError("unsupported module loader property")
+            if tail == ["("]:
+                specs.append(literal(i + 2))
+                if tokens[i + 3 : i + 4] != [")"]:
+                    raise MappingError("unsupported TypeScript dynamic import")
+                continue
+            if token == "require":
+                raise MappingError("unsupported require reference")
+            if tail and tail[0].startswith(("'", '"')):
+                specs.append(literal(i + 1))
+                continue
+            for j in range(i + 1, len(tokens)):
+                if tokens[j] == "from":
+                    specs.append(literal(j + 1))
+                    break
+                if tokens[j] in (";", "import", "export"):
+                    raise MappingError("unsupported TypeScript import declaration")
+            else:
+                raise MappingError("incomplete TypeScript import declaration")
+        elif token == "from" and seen_export:
+            specs.append(literal(i + 1))
+    return specs
+
+
+def matches(pattern: str, path: str) -> bool:
+    """A rule's pattern against a path, as units_for reads RULES."""
+    if "/" not in pattern and "/" in path:
+        return False
+    return fnmatch.fnmatchcase(path, pattern)
+
+
+def web_test_file(path: str) -> bool:
+    return path.startswith("web/src/test/") or path.endswith((".test.ts", ".test.tsx"))
+
+
+class Imports:
+    """Web paths and their importers in the tree at `root`, read once."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._web: dict[str, set[str]] | None = None
+
+    def web(self) -> dict[str, set[str]]:
+        if self._web is None:
+            graph: dict[str, set[str]] = {}
+            src = self.root / "web/src"
+            for path in source_files(src, (".ts", ".tsx")):
+                me = path.relative_to(self.root).as_posix()
+                text = path.read_text(encoding="utf-8")
+                for spec in ts_imports(text):
+                    if spec.startswith("@/"):
+                        target = src / spec[2:]
+                    elif spec.startswith("."):
+                        target = path.parent / spec
+                    else:
+                        continue
+                    for candidate in (
+                        target,
+                        target.with_name(target.name + ".ts"),
+                        target.with_name(target.name + ".tsx"),
+                        target / "index.ts",
+                        target / "index.tsx",
+                    ):
+                        if candidate.is_file():
+                            name = Path(os.path.normpath(candidate)).relative_to(
+                                self.root
+                            )
+                            graph.setdefault(name.as_posix(), set()).add(me)
+                            break
+                    else:
+                        raise MappingError(f"unresolved TypeScript import {spec}")
+            self._web = graph
+        return self._web
+
+
+def web_area(path: str) -> str:
+    parts = path.split("/")
+    return parts[3] if len(parts) > 4 and parts[2] == "features" else SHARED
+
+
+def importers(start: str, graph: dict[str, set[str]], stop) -> set[str]:
+    """`start` and everything that imports it, directly or not, without going through `stop`."""
+    seen = {start}
+    todo = [start]
+    while todo:
+        for user in graph.get(todo.pop(), ()):
+            if user not in seen and not stop(user):
+                seen.add(user)
+                todo.append(user)
+    return seen
+
+
+def areas_groups(areas: set[str]) -> tuple[frozenset[str] | str, str]:
+    groups: set[str] = set()
+    for area in sorted(areas):
+        if area == SHARED:
+            return EVERY, "a file outside the modules is shared"
+        decided = AREA_GROUPS.get(area)
+        if decided is None:
+            return EVERY, f"no journey groups are decided for the module {area}"
+        if decided == EVERY:
+            return EVERY, f"every journey goes through the module {area}"
+        groups |= decided
+    names = ", ".join(sorted(areas))
+    return frozenset(groups), f"the module{'s' if len(areas) > 1 else ''} {names}"
+
+
+def journey_groups_for(
+    path: str, specs: dict[str, str], configs: dict[str, str], imports: Imports
+) -> tuple[frozenset[str] | str, str]:
+    """(the groups one changed path touches, or EVERY; why). `specs` maps a spec file name to its
+    group, `configs` a config path (web/e2e/x-all.config.ts) to its group."""
+    if path.startswith("api/app/"):
+        return EVERY, "API application changes run every group"
+    units, why = units_for(path)
+    if "e2e" not in units:
+        return NO_GROUP, why
+    for pattern, groups, why in JOURNEY_RULES:
+        if matches(pattern, path):
+            return groups, why
+    parts = path.split("/")
+    if path.startswith("web/src/"):
+        if web_test_file(path):
+            return NO_GROUP, "a Vitest file, the gate runs Vitest in full"
+        users = importers(
+            path, imports.web(), lambda name: name in WEB_WIRING or web_test_file(name)
+        )
+        return areas_groups({web_area(name) for name in users})
+    if path.startswith("web/e2e/") and len(parts) == 3:
+        if parts[2] in specs:
+            return frozenset({specs[parts[2]]}), "a spec of the group"
+        if path in configs:
+            return frozenset({configs[path]}), "the config of the group"
+        return EVERY, "a file of web/e2e that is not one group's spec or config"
+    return EVERY, "no rule names this path"
+
+
+def journey_plan(
+    root: Path, paths: list[str], group_args: Sequence[tuple[str, str]]
+) -> list[tuple[str, str, str]]:
+    """[(run|skip, group, why)] for the changed paths, in the order of the groups given."""
+    import e2e_groups  # beside this file; only this command needs it
+
+    specs: dict[str, str] = {}
+    configs: dict[str, str] = {}
+    for group, args in group_args:
+        words = args.split()
+        for index, word in enumerate(words):
+            if word.endswith(".spec.ts"):
+                specs[word.rpartition("/")[2]] = group
+            if word == "-c" and index + 1 < len(words):
+                config = words[index + 1]
+                configs[f"web/{config}"] = group
+                for name in e2e_groups.config_specs(root / "web" / config):
+                    specs[name] = group
+    imports = Imports(root)
+    pulled: dict[str, str] = {}
+    every = ""
+    for path in paths:
+        try:
+            # --no-renames exposes old and new paths. A deletion can have consumers only
+            # in the base, so the head graph cannot justify skipping any group.
+            if path.startswith("web/src/") and not (root / path).is_file():
+                raise MappingError("deleted or missing source path")
+            groups, why = journey_groups_for(path, specs, configs, imports)
+        except (OSError, UnicodeError, SyntaxError, ValueError, ImportError) as error:
+            groups, why = EVERY, f"dependency mapping failed ({type(error).__name__})"
+        if groups == EVERY:
+            every = every or f"{shown(path)}: {why}"
+            continue
+        for group in sorted(groups):
+            pulled.setdefault(group, f"{shown(path)}: {why}")
+    plan = []
+    for group, _ in group_args:
+        if every:
+            plan.append(("run", group, f"every group, {every}"))
+        elif group in pulled:
+            plan.append(("run", group, pulled[group]))
+        else:
+            plan.append(("skip", group, "no changed file touches it"))
+    return plan
+
+
+def changes_digest(paths: list[str]) -> str:
+    """The sha256 of a change set: raw pathname bytes sorted, each terminated by NUL. ops/ship.sh computes the same
+    from a PASS record's base and head, so a record is never taken for another change set."""
+    return hashlib.sha256(
+        b"".join(path + b"\0" for path in sorted(os.fsencode(p) for p in paths))
+    ).hexdigest()
+
+
+def journeys_main(root: Path, base: str, head: str) -> int:
+    done = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            base,
+            head,
+        ],
+        capture_output=True,
+        check=False,
+        env=git_env(),
+    )
+    if done.returncode != 0:
+        print(
+            f"ci_plan: cannot read the files of {head} against {base}", file=sys.stderr
+        )
+        return 1
+    paths = [os.fsdecode(name) for name in done.stdout.split(b"\0") if name]
+    group_args = []
+    for line in sys.stdin.read().splitlines():
+        if line.strip():
+            group, _, args = line.partition("\t")
+            group_args.append((group, args))
+    print(f"changed\t{len(paths)}\t{changes_digest(paths)}")
+    for verdict, group, why in journey_plan(root, paths, group_args):
+        print(f"{verdict}\t{group}\t{why}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parents[2]
+    if len(argv) == 4 and argv[1] == "journeys":
+        return journeys_main(root, argv[2], argv[3])
     if len(argv) > 1 and argv[1] == "verify":
         lane = os.environ.get("CI_LANE", "")
         plan = os.environ.get("CI_PLAN", "")

@@ -8,7 +8,9 @@ importer.convert builds from Harald's ../data) is one JSON object:
 
 Each job carries the row's fields (slug, company, title, location, contract_type, url, source,
 status, fit, competencies, gaps, description, posting_text, published_on, found_on, applied_on,
-notes, legacy) and its files: {"name", "mime", "size", "sha256" (hex), "base64" (standard)}.
+notes, legacy), optionally its pay and work mode (pay_min, pay_max, pay_currency, pay_period,
+work_mode: checked as PATCH checks them; absent, the stored values are kept; null, they are
+removed), and its files: {"name", "mime", "size", "sha256" (hex), "base64" (standard)}.
 The document is checked whole before anything is written: slugs unique, URLs unique (by the
 duplicate rules of slug.py), every file's size and SHA-256 equal to its decoded bytes, a PDF
 starting with %PDF-. Errors name the place (`jobs.12.files.0.sha256: ...`), never the value.
@@ -35,6 +37,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     StringConstraints,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -157,6 +160,14 @@ class ImportJob(BaseModel):
     notes: Annotated[str, StringConstraints(max_length=TEXT_MAX)] = ""
     legacy: dict[str, Any] = {}
     files: Annotated[list[ImportFile], Field(max_length=FILES_PER_JOB_MAX)] = []
+    # The pay and the work mode (opportunities O3, O3b), checked as PATCH checks them (PayIn):
+    # the four pay fields all set or all null. A row that does not carry them leaves the stored
+    # values alone, so a document written before they existed imports as before.
+    pay_min: int | None = None
+    pay_max: int | None = None
+    pay_currency: str | None = None
+    pay_period: PayPeriod | None = None
+    work_mode: WorkMode | None = None
 
     @field_validator("files")
     @classmethod
@@ -165,6 +176,42 @@ class ImportJob(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("two files have the same name")
         return files
+
+    @model_validator(mode="before")
+    @classmethod
+    def _pay(cls, data: Any) -> Any:
+        """The four pay fields through PayIn, so a figure, a currency and a period an import may
+        store are exactly those PATCH accepts (strict whole numbers from 1 to PAY_MAX, min at
+        most max, a currency of the list, a period)."""
+        if not isinstance(data, dict):
+            return data
+        # Keys first (review of #513, follow-up 4): a row carries all four pay keys or none, so
+        # a lone "pay_min": null never clears the four stored columns.
+        carried = PAY_KEYS & data.keys()
+        if carried and carried != PAY_KEYS:
+            raise ValueError("pay_min, pay_max, pay_currency and pay_period go together")
+        values = {name: data.get(f"pay_{name}") for name in ("min", "max", "currency", "period")}
+        if all(value is None for value in values.values()):
+            return data
+        if any(value is None for value in values.values()):
+            raise ValueError("pay_min, pay_max, pay_currency and pay_period go together")
+        try:
+            PayIn.model_validate(values)
+        except ValidationError as exc:  # its message names the place, never the value
+            raise ValueError(f"pay: {describe_validation_error(exc)}") from None
+        return data
+
+    @property
+    def carries_pay(self) -> bool:
+        return bool(PAY_KEYS & self.model_fields_set)
+
+    @property
+    def carries_work_mode(self) -> bool:
+        return "work_mode" in self.model_fields_set
+
+
+PAY_KEYS = frozenset({"pay_min", "pay_max", "pay_currency", "pay_period"})
+CARRIED_ONLY_WHEN_SET = PAY_KEYS | {"work_mode"}
 
 
 class JobsImportDocument(BaseModel):
@@ -192,7 +239,13 @@ class JobsImportDocument(BaseModel):
         return self
 
     def to_json(self) -> str:
-        return json.dumps(self.model_dump(mode="json"), ensure_ascii=False, indent=1) + "\n"
+        """The document as JSON; a row's pay and work mode are written only when it carries
+        them, so a row that states none never clears what an import target holds."""
+        data = self.model_dump(mode="json")
+        for job, row in zip(self.jobs, data["jobs"], strict=True):
+            for name in CARRIED_ONLY_WHEN_SET - job.model_fields_set:
+                del row[name]
+        return json.dumps(data, ensure_ascii=False, indent=1) + "\n"
 
 
 class DocumentError(ValueError):
@@ -391,7 +444,8 @@ class PayIn(BaseModel):
 
     min: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
     max: Annotated[int, Field(ge=1, le=PAY_MAX, strict=True)]
-    currency: str
+    # Capped so the schema bounds its own size (the body limit's route classes rely on it).
+    currency: Annotated[str, Field(max_length=3)]
     period: PayPeriod
 
     @field_validator("currency")

@@ -1,7 +1,8 @@
 """Lock order of issue #27: the worker ending a chat run locks the thread before it updates the
 run, like `delete_thread` does (thread, then the run it cancels). With the old order (the run
 updated, then the thread locked to store the answer) a delete racing the end of a run made each
-side wait for the other's row, and Postgres aborted one of them as a deadlock."""
+side wait for the other's row, and Postgres aborted one of them as a deadlock. And the bound of
+that wait (issues #37 and #161): an answer whose thread stays locked fails its run at once."""
 
 import logging
 import threading
@@ -12,9 +13,10 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import chat, runner
+from app.agents import chat, operator, runner
 from app.agents.crypto import Keyring
 from app.agents.models import AgentMessage, AgentRun, AgentThread, MessageRole, RunStatus
 from app.jobs import service as jobs_service
@@ -23,6 +25,7 @@ from tests.agents.run_helpers import (
     add_job,
     add_user,
     context,
+    events,
     execute,
     now,
     run_row,
@@ -305,22 +308,23 @@ def test_lock_thread_of_run(stage: Stage, factory: sessionmaker[Session]) -> Non
         assert chat.record_reply(db, run, "too late", now()) is False
 
 
-def test_the_wait_for_the_threads_lock_has_a_bound(
+def test_an_answer_whose_thread_stays_locked_fails_the_run_at_once(
     stage: Stage, factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Issue #37, point 6. A session holds the thread's row and does not let go (a stuck
-    request, a forgotten psql). The worker ending a chat run used to wait for it without any
-    bound, its slot taken for as long. It now waits `thread_lock_wait_s`: the end is not
-    recorded by this worker, which says so and is free again, and nothing is stored twice."""
+    """Issue #37, point 6, and issue #161, point 1. A session holds the thread's row and does
+    not let go (a stuck request, a forgotten psql). The worker ending a chat run waits
+    `thread_lock_wait_s` for it, stores no answer, and fails the run at once in a transaction
+    that does not lock the thread: the run reads failed while the row is still held. The thread
+    then takes the next message as soon as the row is free, where it used to answer 409 until
+    the stale reaper failed the run."""
     rc, user, thread = stage
     rc = replace(rc, thread_lock_wait_s=0.3)
     run = say(factory, user, thread, "Does this fit me?")
-    outcome: dict[str, Any] = {}
     errors: list[BaseException] = []
 
     def work() -> None:
         try:
-            outcome["status"] = execute(rc, run)
+            execute(rc, run)
         except BaseException as exc:
             errors.append(exc)
 
@@ -333,13 +337,23 @@ def test_the_wait_for_the_threads_lock_has_a_bound(
         worker.start()
         worker.join(WAIT_S)
         still_waiting = worker.is_alive()
+        # Read before the holder lets go: the end of the run did not need the thread.
+        ended = run_row(factory, run)
+        written = events(factory, run)
         holder.rollback()
     worker.join(WAIT_S)
     assert not still_waiting  # the worker came back while the row was still held
     assert errors == []
-    assert "agent run end not recorded" in caplog.text
-    row = run_row(factory, run)
-    assert row.finished_at is None  # left to the reaper, like any run its worker could not end
+    assert ended.status is RunStatus.failed
+    assert ended.error == runner.ANSWER_NOT_STORED
+    assert ended.finished_at is not None
+    assert ended.output is None
+    # What the run used stays on it: the fake stream reports its usage and cost.
+    assert ended.input_tokens is not None
+    assert ended.cost_usd is not None
+    assert written[-1] == ("status", {"status": "failed", "error": runner.ANSWER_NOT_STORED})
+    assert "agent run answer not stored: its thread stayed locked" in caplog.text
+    assert "agent run end not recorded" not in caplog.text
     with factory() as db:
         answers = db.scalar(
             sa.select(sa.func.count())
@@ -347,11 +361,16 @@ def test_the_wait_for_the_threads_lock_has_a_bound(
             .where(AgentMessage.role == MessageRole.assistant)
         )
     assert answers == 0
+    # The next message goes through at once, by the path of the send route.
+    sent = operator.send_message(factory, user, thread, "Should I apply?", now())
+    assert sent.run.status is RunStatus.queued
+    assert sent.message.text == "Should I apply?"
 
 
 def test_the_bound_is_the_transactions_own(stage: Stage, factory: sessionmaker[Session]) -> None:
     """`SET LOCAL`: the timeout holds inside the transaction that ends the run and is gone
-    with it, so the next user of the pooled connection waits as it always did."""
+    with it, so the next user of the pooled connection waits as it always did. The same
+    `chat.bounded_lock_waits` bounds a send and a delete."""
     rc, user, thread = stage
     run = say(factory, user, thread, "Does this fit me?")
     assert rc.thread_lock_wait_s == runner.THREAD_LOCK_WAIT_S == 10.0
@@ -360,3 +379,24 @@ def test_the_bound_is_the_transactions_own(stage: Stage, factory: sessionmaker[S
         assert db.scalar(sa.text("SHOW lock_timeout")) == "250ms"
         db.rollback()
         assert db.scalar(sa.text("SHOW lock_timeout")) == "0"
+
+
+def test_only_a_refused_lock_becomes_thread_locked(
+    stage: Stage, factory: sessionmaker[Session]
+) -> None:
+    """`chat.bounded_lock_waits`, the bound of a send and a delete (5 seconds): a lock wait
+    that outlasts it raises ThreadLockedError with the transaction rolled back, so the session
+    goes on at once; any other database error inside the block goes through as it is."""
+    _, user, thread = stage
+    assert chat.LOCK_WAIT_S == 5.0
+    with factory() as db, pytest.raises(DBAPIError), chat.bounded_lock_waits(db, 0.25):
+        db.execute(sa.text("SELECT 1 / 0"))
+    with factory() as holder, factory() as db:
+        held = holder.scalar(
+            sa.select(AgentThread.id).where(AgentThread.id == thread).with_for_update()
+        )
+        assert held == thread
+        with pytest.raises(chat.ThreadLockedError), chat.bounded_lock_waits(db, 0.05):
+            chat.get_thread(db, user, thread, lock=True)
+        assert db.scalar(sa.text("SHOW lock_timeout")) == "0"
+        holder.rollback()
