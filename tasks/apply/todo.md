@@ -304,7 +304,7 @@ First slice (the Lever adapter, issue #245, measured on 2026-10-15 on the modell
 First slice (issue #246, 2026-10-21): the backend and browserd's side, no model call in any step (0 tokens). The session watches the page every 3 s with a snapshot that does not count as activity, so the 5 minute idle timeout of BROWSER_IDLE_S still ends a session nobody uses; the panel warns from 60 s before it. The second slice, in the same pull request (#517): the web panel (`manual-panel.tsx`, one line of `apply-section.tsx`) and the journey `apply-a9.spec.ts`.
 
 ### A10a
-Nothing yet.
+First slice (issue #247, 2026-10-21): the retries, the wait for the person and a payment page call no model (0 tokens). A retry is one more fill (its tokens as A5's); the wait polls the page with one snapshot every 5 s (`failures.WAIT_POLL_S`), so at most 360 snapshots over APPLY_NEEDS_PERSON_WAIT_S; the payment check adds at most two snapshots per fill, one before anything is typed and one after the fill. The payment table holds 19 card labels and 20 neighbours kept apart (an e-mail "Security code", an identity card number, a gift card); a page of 20,000 fields is read in one pass. Gap in browserd: only the sign in hand off suspends a lease's timers (`waiting_person`), so the wait for a captcha or an e-mail code runs on the lease's active time (15 minutes for `apply_fill`) instead of the spec's 30 minutes outside it; a browser task adds a `waiting_person` for these two steps. Left: the journey `apply-a10a.spec.ts` with the fake captcha that stays solved on a reload (A10a does not close before it runs once on its own stack), the rules after #343's hand over to the form agent, and 429 and 403 pages (neither retried nor closed: owner decision).
 
 ### A10b
 Nothing yet.

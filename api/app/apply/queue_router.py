@@ -16,7 +16,8 @@
   (`rehearsed`, `mode` full_auto, no No recorded) waits for the person too (`rehearsal`
   true); a `held` item carries the end of its hold (`hold_until`); `now` is the server's
   time, so a countdown never reads the page's clock.
-- GET /api/apply/queue/count: how many wait for the person, for the app shell.
+- GET /api/apply/queue/count: how many wait for the person, for the app shell, and how many of
+  them need the person before the form can go on (`needs_you`: `needs_person`, apply A10a's dot).
 - POST /api/apply/queue/{application_id}/reject `{skip_posting}`: Reject (A6's `gate.cancel`,
   `ready` or `needs_person` to `cancelled`, the posting kept); with `skip_posting` the posting
   also moves to `skipped` in the same transaction, from a status before `applied` only.
@@ -37,7 +38,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.apply import full_auto, gate, likes, service
+from app.apply import failures, full_auto, gate, likes, service
 from app.apply.models import (
     AnswerSource,
     Application,
@@ -121,6 +122,7 @@ class QueueOut(BaseModel):
 
 class CountOut(BaseModel):
     waiting_on_you: int
+    needs_you: int = 0
 
 
 class RejectIn(BaseModel):
@@ -349,8 +351,10 @@ def read_queue(request: Request, user: CurrentUser, db: Db) -> QueueOut:
 
 @router.get("/api/apply/queue/count", response_model=CountOut)
 def read_count(user: CurrentUser, db: Db) -> CountOut:
-    """How many applications wait for the person."""
-    return CountOut(waiting_on_you=_waiting_count(db, user.id))
+    """How many applications wait for the person, and how many of them need the person."""
+    return CountOut(
+        waiting_on_you=_waiting_count(db, user.id), needs_you=failures.needs_count(db, user.id)
+    )
 
 
 @router.post(
