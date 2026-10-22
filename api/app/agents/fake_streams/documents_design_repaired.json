@@ -1,0 +1,182 @@
+{
+ "description": "D25b: a first template refused by the rules (an @import), repaired once and accepted, then no fidelity change.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__read_design",
+     "mcp__app__view_page",
+     "mcp__app__view_render",
+     "mcp__app__submit_template"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_design_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read the layout and look at the first page."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_design_002_1",
+       "name": "mcp__app__read_design",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_design_002_2",
+       "name": "mcp__app__view_page",
+       "input": {
+        "page": 0
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 400,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_design_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_design_003_0",
+       "name": "mcp__app__submit_template",
+       "input": {
+        "cv_html": "{#- classic: the command line's layout re-expressed. A header with the photo, the name, the\n    headline and the contact lines between two rules, then one row per section: its label in a\n    narrow column on the left, its body on the right. An empty section is not printed. -#}\n{% extends \"_base/page.html.j2\" %}\n{% import \"_base/macros.html.j2\" as base with context %}\n{% block body %}\n<div class=\"bar\"></div>\n{{ base.header(content.headline) }}\n<div class=\"bar\"></div>\n\n{% if content.summary or content.highlights or content.competencies %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"summary\") }}</h2>\n<div class=\"body\">\n{% if content.summary %}<p class=\"summary\">{{ content.summary }}</p>{% endif %}\n{% if content.highlights or content.competencies %}\n<div class=\"about-cols\">\n{% if content.highlights %}\n<div>\n<h3 class=\"sub\">{{ base.label(\"highlights\") }}</h3>\n{{ base.bullets(content.highlights) }}\n</div>\n{% endif %}\n{% if content.competencies %}\n<div>\n<h3 class=\"sub\">{{ base.label(\"competencies\") }}</h3>\n{{ base.bullets(content.competencies, \"competencies\") }}\n</div>\n{% endif %}\n</div>\n{% endif %}\n</div>\n</section>\n{% endif %}\n\n{% if roles %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"experience\") }}</h2>\n<div class=\"body\">\n{% for role in roles %}\n{{ base.employer(role) }}\n{% endfor %}\n</div>\n</section>\n{% endif %}\n\n{% if schools %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"education\") }}</h2>\n<div class=\"body schools\">\n{% for item in schools %}\n{{ base.school(item) }}\n{% endfor %}\n</div>\n</section>\n{% endif %}\n\n{% if content.skills %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"skills\") }}</h2>\n<div class=\"body skills\">\n{% for group in content.skills %}\n{{ base.skill_group(group) }}\n{% endfor %}\n</div>\n</section>\n{% endif %}\n\n{% if languages %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"languages\") }}</h2>\n<div class=\"body\">\n<ul class=\"languages\">\n{% for item in languages %}\n{{ base.language(item) }}\n{% endfor %}\n</ul>\n</div>\n</section>\n{% endif %}\n{% endblock %}\n",
+        "letter_html": "{#- classic, the letter: the CV's header, then the date, the recipient, the subject, the\n    salutation, the paragraphs, the closing and the name. -#}\n{% extends \"_base/page.html.j2\" %}\n{% import \"_base/macros.html.j2\" as base with context %}\n{% block body %}\n<div class=\"bar\"></div>\n{{ base.header(content.headline) }}\n<div class=\"bar\"></div>\n\n<div class=\"letter-body\">\n{{ base.letter_date() }}\n{% if content.recipient %}<p class=\"recipient\">{{ content.recipient }}</p>{% endif %}\n{% if content.subject %}<p class=\"subject\"><strong>{{ base.label(\"subject\") }}</strong> {{ content.subject }}</p>{% endif %}\n{% if content.salutation %}<p class=\"salutation\">{{ content.salutation }}</p>{% endif %}\n{{ base.paragraphs(content.paragraphs) }}\n{% if content.closing %}<p class=\"closing\">{{ content.closing }}</p>{% endif %}\n<p class=\"signature\">{{ name }}</p>\n</div>\n{% endblock %}\n",
+        "css": "/* classic: one column, sans (Nunito Sans, the bundled stand in for the command line's Avenir),\n   a label column on the left of each section, rules between the sections. The density comes\n   from the step on :root: --body-size, --line-height, --section-gap, --item-gap, --margin. */\n@page { size: A4; }\n* { box-sizing: border-box; }\nhtml {\n  font-family: \"Arimo\", sans-serif;\n  font-size: var(--body-size);\n  line-height: var(--line-height);\n  color: #1d232b;\n}\nbody { margin: 0; }\np, ul, h1, h2, h3 { margin: 0; padding: 0; }\na { color: inherit; text-decoration: none; }\nli, p { overflow-wrap: anywhere; }\n\n.bar { border-top: 2.5px solid #1d232b; }\n\n.head {\n  display: flex;\n  gap: 14pt;\n  align-items: center;\n  padding: 9pt 0;\n}\n.photo {\n  width: 25mm;\n  height: 25mm;\n  object-fit: cover;\n  border-radius: 50%;\n  flex: 0 0 auto;\n}\n.headtext { flex: 1 1 auto; }\n.name {\n  font-size: 2.35em;\n  font-weight: 700;\n  line-height: 1.1;\n  letter-spacing: 0.01em;\n}\n.headline {\n  font-size: 1.15em;\n  color: var(--accent);\n  font-weight: 600;\n  margin-top: 2pt;\n}\n.contact {\n  list-style: none;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 1pt 12pt;\n  margin-top: 5pt;\n  color: #4a525e;\n}\n\n.row {\n  display: flex;\n  gap: 10pt;\n  padding: var(--section-gap) 0;\n  border-bottom: 0.75px solid #c9d0d9;\n}\n.row:last-child { border-bottom: 0; }\n.label {\n  flex: 0 0 27mm;\n  font-size: 0.82em;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.09em;\n  color: var(--accent);\n  padding-top: 0.2em;\n}\n.body { flex: 1 1 auto; }\n\n.summary { margin-bottom: var(--item-gap); }\n.about-cols {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 12pt;\n}\n.sub, .group-label {\n  font-size: 0.86em;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #4a525e;\n  margin-bottom: 1pt;\n}\n.body ul { padding-left: 1.05em; }\n.body li { margin-bottom: 1pt; }\n.body li::marker { color: var(--accent); }\n\n.entry { margin-bottom: var(--item-gap); }\n.entry:last-child { margin-bottom: 0; }\n.entry-head {\n  display: flex;\n  justify-content: space-between;\n  gap: 10pt;\n  align-items: baseline;\n}\n.entry-title { font-size: 1.04em; font-weight: 700; }\n.org { font-weight: 600; }\n.entry .org { color: var(--accent); }\n.period, .place { color: #5a6270; font-size: 0.92em; }\n.entry-head .period { flex: 0 0 auto; text-align: right; }\n\n.schools {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: var(--item-gap) 12pt;\n}\n.skills {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: var(--item-gap) 12pt;\n}\n.languages {\n  list-style: none;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 2pt 16pt;\n}\n.body .languages { padding-left: 0; }\n\n.letter-body { padding-top: 14pt; }\n.letter-body p { margin-bottom: var(--item-gap); }\n.date { text-align: right; color: #4a525e; }\n.recipient { margin-top: var(--section-gap); }\n.subject { margin: var(--section-gap) 0; }\n.paragraph { text-align: justify; white-space: pre-line; }\n.closing { margin-top: var(--section-gap); }\n.signature { font-weight: 700; margin-top: var(--section-gap); }\n\n@import \"x.css\";\n"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 400,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_design_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_design_004_0",
+       "name": "mcp__app__submit_template",
+       "input": {
+        "cv_html": "{#- classic: the command line's layout re-expressed. A header with the photo, the name, the\n    headline and the contact lines between two rules, then one row per section: its label in a\n    narrow column on the left, its body on the right. An empty section is not printed. -#}\n{% extends \"_base/page.html.j2\" %}\n{% import \"_base/macros.html.j2\" as base with context %}\n{% block body %}\n<div class=\"bar\"></div>\n{{ base.header(content.headline) }}\n<div class=\"bar\"></div>\n\n{% if content.summary or content.highlights or content.competencies %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"summary\") }}</h2>\n<div class=\"body\">\n{% if content.summary %}<p class=\"summary\">{{ content.summary }}</p>{% endif %}\n{% if content.highlights or content.competencies %}\n<div class=\"about-cols\">\n{% if content.highlights %}\n<div>\n<h3 class=\"sub\">{{ base.label(\"highlights\") }}</h3>\n{{ base.bullets(content.highlights) }}\n</div>\n{% endif %}\n{% if content.competencies %}\n<div>\n<h3 class=\"sub\">{{ base.label(\"competencies\") }}</h3>\n{{ base.bullets(content.competencies, \"competencies\") }}\n</div>\n{% endif %}\n</div>\n{% endif %}\n</div>\n</section>\n{% endif %}\n\n{% if roles %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"experience\") }}</h2>\n<div class=\"body\">\n{% for role in roles %}\n{{ base.employer(role) }}\n{% endfor %}\n</div>\n</section>\n{% endif %}\n\n{% if schools %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"education\") }}</h2>\n<div class=\"body schools\">\n{% for item in schools %}\n{{ base.school(item) }}\n{% endfor %}\n</div>\n</section>\n{% endif %}\n\n{% if content.skills %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"skills\") }}</h2>\n<div class=\"body skills\">\n{% for group in content.skills %}\n{{ base.skill_group(group) }}\n{% endfor %}\n</div>\n</section>\n{% endif %}\n\n{% if languages %}\n<section class=\"row\">\n<h2 class=\"label\">{{ base.label(\"languages\") }}</h2>\n<div class=\"body\">\n<ul class=\"languages\">\n{% for item in languages %}\n{{ base.language(item) }}\n{% endfor %}\n</ul>\n</div>\n</section>\n{% endif %}\n{% endblock %}\n",
+        "letter_html": "{#- classic, the letter: the CV's header, then the date, the recipient, the subject, the\n    salutation, the paragraphs, the closing and the name. -#}\n{% extends \"_base/page.html.j2\" %}\n{% import \"_base/macros.html.j2\" as base with context %}\n{% block body %}\n<div class=\"bar\"></div>\n{{ base.header(content.headline) }}\n<div class=\"bar\"></div>\n\n<div class=\"letter-body\">\n{{ base.letter_date() }}\n{% if content.recipient %}<p class=\"recipient\">{{ content.recipient }}</p>{% endif %}\n{% if content.subject %}<p class=\"subject\"><strong>{{ base.label(\"subject\") }}</strong> {{ content.subject }}</p>{% endif %}\n{% if content.salutation %}<p class=\"salutation\">{{ content.salutation }}</p>{% endif %}\n{{ base.paragraphs(content.paragraphs) }}\n{% if content.closing %}<p class=\"closing\">{{ content.closing }}</p>{% endif %}\n<p class=\"signature\">{{ name }}</p>\n</div>\n{% endblock %}\n",
+        "css": "/* classic: one column, sans (Nunito Sans, the bundled stand in for the command line's Avenir),\n   a label column on the left of each section, rules between the sections. The density comes\n   from the step on :root: --body-size, --line-height, --section-gap, --item-gap, --margin. */\n@page { size: A4; }\n* { box-sizing: border-box; }\nhtml {\n  font-family: \"Arimo\", sans-serif;\n  font-size: var(--body-size);\n  line-height: var(--line-height);\n  color: #1d232b;\n}\nbody { margin: 0; }\np, ul, h1, h2, h3 { margin: 0; padding: 0; }\na { color: inherit; text-decoration: none; }\nli, p { overflow-wrap: anywhere; }\n\n.bar { border-top: 2.5px solid #1d232b; }\n\n.head {\n  display: flex;\n  gap: 14pt;\n  align-items: center;\n  padding: 9pt 0;\n}\n.photo {\n  width: 25mm;\n  height: 25mm;\n  object-fit: cover;\n  border-radius: 50%;\n  flex: 0 0 auto;\n}\n.headtext { flex: 1 1 auto; }\n.name {\n  font-size: 2.35em;\n  font-weight: 700;\n  line-height: 1.1;\n  letter-spacing: 0.01em;\n}\n.headline {\n  font-size: 1.15em;\n  color: var(--accent);\n  font-weight: 600;\n  margin-top: 2pt;\n}\n.contact {\n  list-style: none;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 1pt 12pt;\n  margin-top: 5pt;\n  color: #4a525e;\n}\n\n.row {\n  display: flex;\n  gap: 10pt;\n  padding: var(--section-gap) 0;\n  border-bottom: 0.75px solid #c9d0d9;\n}\n.row:last-child { border-bottom: 0; }\n.label {\n  flex: 0 0 27mm;\n  font-size: 0.82em;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.09em;\n  color: var(--accent);\n  padding-top: 0.2em;\n}\n.body { flex: 1 1 auto; }\n\n.summary { margin-bottom: var(--item-gap); }\n.about-cols {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 12pt;\n}\n.sub, .group-label {\n  font-size: 0.86em;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #4a525e;\n  margin-bottom: 1pt;\n}\n.body ul { padding-left: 1.05em; }\n.body li { margin-bottom: 1pt; }\n.body li::marker { color: var(--accent); }\n\n.entry { margin-bottom: var(--item-gap); }\n.entry:last-child { margin-bottom: 0; }\n.entry-head {\n  display: flex;\n  justify-content: space-between;\n  gap: 10pt;\n  align-items: baseline;\n}\n.entry-title { font-size: 1.04em; font-weight: 700; }\n.org { font-weight: 600; }\n.entry .org { color: var(--accent); }\n.period, .place { color: #5a6270; font-size: 0.92em; }\n.entry-head .period { flex: 0 0 auto; text-align: right; }\n\n.schools {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: var(--item-gap) 12pt;\n}\n.skills {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: var(--item-gap) 12pt;\n}\n.languages {\n  list-style: none;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 2pt 16pt;\n}\n.body .languages { padding-left: 0; }\n\n.letter-body { padding-top: 14pt; }\n.letter-body p { margin-bottom: var(--item-gap); }\n.date { text-align: right; color: #4a525e; }\n.recipient { margin-top: var(--section-gap); }\n.subject { margin: var(--section-gap) 0; }\n.paragraph { text-align: justify; white-space: pre-line; }\n.closing { margin-top: var(--section-gap); }\n.signature { font-weight: 700; margin-top: var(--section-gap); }\n"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 400,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000005",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_design_005",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The template is stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 400,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 4,
+    "session_id": "{session_id}",
+    "result": "Done.",
+    "total_cost_usd": 0.1,
+    "usage": {
+     "input_tokens": 16000,
+     "output_tokens": 1600
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

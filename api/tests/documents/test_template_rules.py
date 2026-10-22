@@ -18,7 +18,7 @@ import pytest
 from jinja2 import Environment, nodes
 
 from app.documents import content as c
-from app.documents import template_css, template_rules, templates
+from app.documents import design_check, template_css, template_rules, templates
 from app.documents.template_rules import FIELDS, LABELS, MACROS, Problem, check, check_css
 
 CLASSIC = templates.ROOT / "classic"
@@ -51,6 +51,14 @@ WHOLE = {"classic", "compact", "grid"}
 _CUT = ("literal", "markup cut by a Jinja construct")
 _OUTSIDE = ("property", "a property outside the allowed list")
 _SELECTOR = ("selector", "a selector outside the allowed forms")
+# A full bleed sheet sets its own page margin, executive's band a fixed height and sidebar's
+# column a page high minimum: a template from an upload may not, the render check lays out the
+# step's page box and one content shape.
+_PAGE = ("page", "@page: margin: var(--margin)")
+_HEIGHT = ("property", "height: auto, a length only on the photo (img or .photo)")
+_MIN_HEIGHT = ("property", "min-height: auto, a length only on the photo (img or .photo)")
+# banner and sidebar are pinned in REPOSITORY below, with the rest of what they use
+GEOMETRY = {"executive": {_HEIGHT}}
 # the helpers of _base/layout.html.j2, which only the repository's templates import
 _LAYOUT = {
     ("construct", "import only _base/macros.html.j2 as base with context"),
@@ -76,7 +84,13 @@ def _over(*properties):
 REPOSITORY = {
     "academic": (set(), {_SELECTOR}),
     # page 1's margin, which the band bleeds into
-    "banner": (set(), {("page", "@page :first: the repository's templates only")}),
+    "banner": (
+        set(),
+        {
+            ("page", "@page :first: the repository's templates only"),
+            ("page", "@page: only size: A4 and margin: var(--margin)"),
+        },
+    ),
     "bold": (
         {("construct", "the expression Compare"), _CUT},
         {
@@ -97,7 +111,7 @@ REPOSITORY = {
     ),
     "elegant": (
         set(),
-        {_OUTSIDE, ("property", "position: static or relative")}
+        {_OUTSIDE, ("property", "position: static or relative"), _PAGE}
         | _box("border-bottom", "flex")
         | _over("bottom", "grid-row", "left", "right", "top"),
     ),
@@ -110,11 +124,16 @@ REPOSITORY = {
     "portrait": (
         _LAYOUT
         | {("construct", "the construct Assign"), _CUT, ("name", "a name that is not a field")},
-        {_OUTSIDE, _SELECTOR, ("property", "vertical-align: a value outside the allowed list")}
+        {
+            _OUTSIDE,
+            _SELECTOR,
+            _HEIGHT,
+            ("property", "vertical-align: a value outside the allowed list"),
+        }
         | _box("border", "border-top", "height", "width")
         | _over("grid-row"),
     ),
-    "sidebar": (_LAYOUT_CONTACT, _over("grid-area")),
+    "sidebar": (_LAYOUT_CONTACT, {_PAGE, _MIN_HEIGHT} | _over("grid-area")),
     "split-right": (_LAYOUT_CONTACT, _over("grid-area") | _box("border-top", "width")),
 }
 
@@ -150,6 +169,9 @@ def test_every_bundled_template_passes_untouched_but_for_the_overlay_family(fold
         fonts=tuple(manifest["fonts"]),
         accent=manifest["accent"],
     )
+    pinned = GEOMETRY.get(folder.name, set())
+    assert {(p.code, p.detail) for p in found if (p.code, p.detail) in pinned} == pinned
+    found = [p for p in found if (p.code, p.detail) not in pinned]
     assert (found == []) == (folder.name in WHOLE)
     assert [p for p in found if p.file != "style.css" or p.code != "property"] == []
     assert all(p.detail.split(": ", 1)[1].startswith(OVERLAY_FAMILY) for p in found)
@@ -389,7 +411,7 @@ CSS_REFUSED = [
     (_css("", "line-height: var(--line-height);", "line-height: 1.3;"), "density_unread"),
     (_css("", "var(--section-gap)", "8pt"), "density_unread"),
     (_css("", "var(--item-gap)", "4pt"), "density_unread"),
-    (_css("@page { margin: 0; }"), "density_unread"),
+    (_css("@page { margin: 0; }"), "page"),
     (_css("@page { size: letter; }"), "page"),
     (_css("@page { size: A4; padding: 0; }"), "page"),
     (_css(".name { font-size: 24pt; }"), "size"),
@@ -430,7 +452,7 @@ CSS_ACCEPTED = [
     _css('.x::before { content: "\\00b7\\00a0"; } .y::after { content: "•"; }'),
     _css(".band { background: #1f4e79; } .band h2 { color: #ffffff; }"),
     _css(".band { background: var(--accent); } .band p { color: #dff3ef; }"),
-    _css("@page { size: A4; margin: 0; } .page { padding: var(--margin); }"),
+    _css("@page { size: A4; margin: var(--margin); } .page { padding: 2mm; }"),
     _css(".x { color: var(--accent); font-size: 115%; line-height: 1.2; letter-spacing: 0.1em; }"),
     _css(".x { font-family: 'Nunito Sans', sans-serif; } .y { font-weight: 700 !important; }"),
     _css(":root { --rail: 27mm; } .x { grid-template-columns: var(--rail) minmax(0, 1fr); }"),
@@ -768,7 +790,7 @@ LEFT_TO_THE_RENDER_CHECK = [
     # declared open points: an inline box's vertical padding paints over the line above, a box
     # smaller than its text lets it run under a later positioned box
     "span { padding: 30mm 0; background: #ffffff; }",
-    ".summary { height: 0; } .row { position: relative; background: #ffffff; }",
+    ".summary { width: 1mm; } .row { position: relative; background: #ffffff; }",
 ]
 
 
@@ -1065,3 +1087,180 @@ ROUND_FOUR_SHEET_ACCEPTED = [
 @pytest.mark.parametrize("addition", ROUND_FOUR_SHEET_ACCEPTED)
 def test_round_four_sheets_written_another_way_pass(addition):
     assert _check(_css(addition)) == []
+
+
+# --- PR #518 round 2: the page box and the shape of the content (issue #220) ------------------
+
+GEOMETRY_REFUSED = [
+    # the reviewer's page: a margin of its own, which print uses and the check does not
+    ("@page { margin: 10mm 10mm 10mm 120mm; } .bar { margin-top: var(--margin); }", "page"),
+    ("@page { margin: 0; }", "page"),
+    ("@page { margin: 15mm; }", "page"),
+    ("@page { margin: var(--margin) 120mm; }", "page"),
+    ("@page { margin: var(--section-gap); }", "page"),
+    ("@page { margin-left: 120mm; }", "page"),
+    ("@page { margin-left: var(--margin); }", "page"),
+    ("@page { margin-top: 0; }", "page"),
+    ("@page { padding: 0; }", "page"),
+    ("@page { width: 100mm; }", "page"),
+    ("@page { size: A5; }", "page"),
+    ("@page { size: A4 landscape; }", "page"),
+    ("@page { size: 210mm 297mm; }", "page"),
+    ("@page { size: A4; @top-center { content: ','; } }", "structure"),
+    ("@page :first { margin: 0; }", None),
+    ("@page :left { margin: var(--margin); }", None),
+    # the reviewer's box: a fixed height its text outgrows; then the family
+    (".summary { height: 3.2em; }", "property"),
+    (".summary { height: 0; }", "property"),
+    (".summary { height: 30mm; }", "property"),
+    (".summary { height: 100%; }", "property"),
+    (".summary { height: var(--section-gap); }", "property"),
+    (".summary { max-height: 3em; }", "property"),
+    (".photo .summary { height: 1em; }", "property"),
+    (".photo::before { height: 1em; }", "property"),
+    ("img, .summary { height: 25mm; }", "property"),
+    (".photos { height: 25mm; }", "property"),
+    ("p.photo { height: 1em; }", "property"),
+    # the reviewer's lone item grid, then the family: fixed or empty tracks
+    (
+        ".schools .school:first-child:last-child { display: grid;"
+        " grid-template-columns: 0px 0px; grid-auto-flow: column; }",
+        "property",
+    ),
+    (
+        ".languages li:first-child:last-child { display: grid; grid-template-columns: 0 0; }",
+        "property",
+    ),
+    (".x { grid-template-columns: 1px 1fr; }", "property"),
+    (".x { grid-template-columns: 19mm 1fr; }", "property"),
+    (".x { grid-template-columns: 4em 1fr; }", "property"),
+    (".x { grid-template-columns: 5% 1fr; }", "property"),
+    (".x { grid-template-columns: 0fr 0fr; }", "property"),
+    (".x { grid-template-columns: minmax(0, 0px) 1fr; }", "property"),
+    (".x { grid-template-columns: minmax(0, 0fr) 1fr; }", "property"),
+    (".x { grid-template-columns: minmax(1fr, 1fr) 1fr; }", "property"),
+    (".x { grid-template-columns: var(--item-gap) 1fr; }", "property"),
+    (":root { --rail: 2mm; } .x { grid-template-columns: var(--rail) 1fr; }", "property"),
+    (".x { grid-template-rows: 1px 1px 1px; }", "property"),
+    (".x { grid-template-rows: 3em; }", "property"),
+    (".x { grid-template-rows: 30mm 1fr; }", "property"),
+    (".x { grid-template-rows: 50%; }", "property"),
+    (".x { grid-template-rows: minmax(0, 1fr); }", "property"),
+    (".x { grid-auto-rows: 0; }", "property"),
+    (".x { grid-auto-rows: 2em; }", "property"),
+    (".x { grid-auto-columns: 0; }", "property"),
+]
+
+
+@pytest.mark.parametrize(("addition", "code"), GEOMETRY_REFUSED)
+def test_what_sets_the_page_box_or_a_box_shorter_than_its_text_is_refused(addition, code):
+    found = _check(_css(addition))
+    assert found
+    if code is not None:
+        assert code in {p.code for p in found}, found
+
+
+GEOMETRY_ACCEPTED = [
+    "@page { size: A4; }",
+    "@page { size: A4; margin: var(--margin); }",
+    "@page { size: a4 portrait; margin: var(--margin) !important; }",
+    ".photo { height: 25mm; width: 20mm; }",
+    "img { height: 30mm; }",
+    ".header .photo { height: 24mm; }",
+    "img.photo, .side .photo { height: 26mm; }",
+    ".summary { height: auto; min-height: auto; }",
+    ".photo { min-height: 25mm; }",
+    ".x { grid-template-columns: 30mm 1fr; }",
+    ".x { grid-template-columns: 20mm minmax(0, 1fr); }",
+    ".x { grid-template-columns: minmax(0, 1fr) 62mm; }",
+    ".x { grid-template-columns: 1fr 1fr 1fr; }",
+    ".x { grid-template-columns: auto 1fr; }",
+    ".x { grid-template-columns: max-content minmax(min-content, 1fr); }",
+    ".x { grid-template-columns: 25% 75%; }",
+    ".x { grid-template-columns: 6em 1fr; }",
+    ".x { grid-template-columns: minmax(10mm, 30mm) 1fr; }",
+    ":root { --rail: 27mm; } .x { grid-template-columns: var(--rail) minmax(0, 1fr); }",
+    ".x { grid-template-rows: auto 1fr; grid-auto-rows: min-content; }",
+    ".x { grid-template-rows: none; }",
+]
+
+
+@pytest.mark.parametrize("addition", GEOMETRY_ACCEPTED)
+def test_a_page_box_of_the_step_and_boxes_that_grow_with_their_text_pass(addition):
+    assert _check(_css(addition)) == []
+
+
+# PR #518 round 3: the app's own rules come after the sheet (template_css.ENFORCED_CSS), so a
+# sheet may not mark the properties they set `!important`; a column flex item keeps its
+# automatic minimum height (min-height only `auto` off the photo), so no flex basis makes it
+# shorter than its text; the class `photo`, which may hold a height, is the portrait's alone.
+ENFORCED_REFUSED = [
+    "li, p { overflow-wrap: normal !important; }",
+    ".contact li { overflow-wrap: normal ! important; }",
+    ".x { overflow-wrap: break-word !IMPORTANT; }",
+    ".x { word-break: keep-all !important; }",
+    ".x { overflow-wrap: inherit !important; }",
+    ".x::before { content: ','; overflow-wrap: normal !important; }",
+    # the reviewer's flex basis as a height, then the family
+    ".body { display: flex; flex-direction: column; } .summary { flex: 0 0 34mm; min-height: 0; }",
+    ".summary { flex-basis: 30mm; min-height: 0; }",
+    ".summary { min-height: 0; }",
+    ".summary { min-height: 5mm; }",
+    ".summary { min-height: 1em; }",
+    ".summary { min-height: var(--section-gap); }",
+    ".photo .summary { min-height: 0; }",
+    "p.photo { min-height: 0; }",
+]
+
+
+@pytest.mark.parametrize("addition", ENFORCED_REFUSED)
+def test_a_sheet_that_would_outrank_the_apps_rules_or_shrink_a_flex_item_is_refused(addition):
+    assert "property" in {p.code for p in _check(_css(addition))}
+
+
+ENFORCED_ACCEPTED = [
+    "li, p { overflow-wrap: break-word; }",
+    ".x { word-break: keep-all; overflow-wrap: normal; }",
+    ".summary { color: #1d232b !important; }",
+    ".body { display: flex; flex-direction: column; } .summary { flex: 0 0 34mm; }",
+    ".summary { min-height: auto; }",
+    "img { min-height: 20mm; }",
+]
+
+
+@pytest.mark.parametrize("addition", ENFORCED_ACCEPTED)
+def test_a_sheet_the_apps_rules_still_end_passes(addition):
+    assert _check(_css(addition)) == []
+
+
+PHOTO_CLASS_REFUSED = [
+    # the class `photo` on a text, through a macro's class or on the markup
+    (_cv("{{ base.header(content.headline) }}", "{{ base.header(content.headline) }}"
+         "{{ base.contact_lines(\"photo\") }}")),
+    _cv(SUMMARY, '<p class="summary photo">{{ content.summary }}</p>'),
+    _cv(SUMMARY, '<div class="photo"><p class="summary">{{ content.summary }}</p></div>'),
+    _cv(SUMMARY, '<p class="photo">{{ content.summary }}</p>'),
+    _cv(ROLES, "{% for role in roles %}\n{{ base.employer(role) }}\n{% endfor %}"
+        "{{ base.bullets(content.highlights, \"photo\") }}"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("files", PHOTO_CLASS_REFUSED)
+def test_the_class_photo_is_the_portraits_alone(files):
+    detail = "the class photo on another element than the portrait"
+    assert Problem("cv.html.j2", 0, "attribute", detail) in _check(files)
+
+
+def test_the_portrait_may_take_the_class_photo_among_others():
+    header = "{{ base.header(content.headline) }}"
+    files = _cv(header, header.replace("header(", 'portrait("photo round") }}{{ base.header('))
+    assert not any(p.detail.startswith("the class photo") for p in _check(files))
+
+
+def test_the_apps_rules_come_last_in_every_built_page():
+    sample = design_check.canary("cv")
+    for template in templates.registry().values():
+        page = templates.build_html(
+            template, "cv", sample.content, sample.view, "en", 0, sample.rendered_on
+        )
+        assert page.split("</style>", 1)[0].endswith(template_css.ENFORCED_CSS)
