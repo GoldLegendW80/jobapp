@@ -39,7 +39,9 @@ Runtime proof
   A5 and A7: all 7 original tests passed in 8.0 minutes.
   Thirty additional refusal cases keep unknown buttons unsupported within
   named groups. The whole Apply suite covers these final 80 regression cases.
-  Whole Apply result is recorded in the final handoff.
+  Whole Apply: 7,070 passed in 374.08 seconds, including all final 80 cases.
+  Command: caffeinate -i bash ops/agent-test.sh --name ash604-apply
+  tests/apply -m 'not docker' -n 2. Log: /tmp/ash604-apply.log.
 
 Static checks
   API Ruff check and format: passed, 750 files.
@@ -51,4 +53,6 @@ Scope
   production environment, credential, or approved PR branch was used or changed.
   All ash604 runtime containers, networks, volumes and owned image tags were
   removed by the foreground supervisor. The borrowed renderer and browser
-  image tags were not modified. Test-helper services are removed on exit.
+  image tags were not modified. The final Postgres/Redis test helpers were
+  removed on exit. Final container, network, volume and image-tag queries
+  for ash604 returned no owned resources. The worktree is clean.
