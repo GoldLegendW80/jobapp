@@ -172,6 +172,11 @@ describe("the review queue page", () => {
   it.each([
     [409, "stale", "This answer changed on another page."],
     [422, "wrong_type", "That answer cannot be saved."],
+    [
+      422,
+      "email_subject",
+      "Use an email subject of at most 998 characters on one line.",
+    ],
   ] as const)(
     "keeps an unsaved answer and explains a %s refusal",
     async (status, code, detail) => {

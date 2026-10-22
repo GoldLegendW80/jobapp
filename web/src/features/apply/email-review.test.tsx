@@ -7,7 +7,7 @@ import { http, HttpResponse } from "msw";
 import { fakeAnswer } from "@/test/apply";
 import { server } from "@/test/server";
 
-import type { Approval } from "./apply-api";
+import { getApproval, type Approval } from "./apply-api";
 import { ApproveDialog } from "./approve-dialog";
 import { EmailApplication } from "./email-application";
 
@@ -20,7 +20,9 @@ function approval(): Approval {
     screenshots: [],
     answers: [
       fakeAnswer("email_to", "Email recipient", "e2e-jobs@example.org"),
-      fakeAnswer("email_subject", "Email subject", "Robotics Engineer"),
+      fakeAnswer("email_subject", "Email subject", "Robotics Engineer", {
+        max_chars: 998,
+      }),
       fakeAnswer(
         "email_body",
         "Email message",
@@ -44,6 +46,19 @@ function props(current = approval()) {
 }
 
 describe("email application approval", () => {
+  it("accepts the exact email subject limit through the real approval API client", async () => {
+    server.use(
+      http.get("/api/applications/application/approval", () =>
+        HttpResponse.json(approval()),
+      ),
+    );
+    const current = await getApproval("application");
+    expect(
+      current.answers.find((answer) => answer.field_key === "email_subject")
+        ?.max_chars,
+    ).toBe(998);
+  });
+
   it("loads the exact email and asks Sent reconciliation through the normal API client", async () => {
     const user = userEvent.setup();
     let checked = 0;

@@ -59,7 +59,9 @@ const answerSchema = z.object({
   required: z.boolean(),
   approved: z.boolean(),
   you_answer: z.boolean(),
-  max_chars: z.union([z.literal(5000), z.literal(10000)]).optional(),
+  max_chars: z
+    .union([z.literal(998), z.literal(5000), z.literal(10000)])
+    .optional(),
   left_reason: z.string().nullable().optional(),
   // The choices of a select field, when the api lists them.
   options: z.array(z.string()).nullable().optional(),

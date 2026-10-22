@@ -167,7 +167,7 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
             required=row.required,
             approved=row.approved,
             you_answer=row.source is AnswerSource.left,
-            max_chars=gate.answer_max(row),
+            max_chars=gate.answer_max(row, email=application.ats == "email"),
             left_reason=row.left_reason if row.source is AnswerSource.left else None,
         )
         for row in gate.rows_of(db, application)
@@ -361,6 +361,10 @@ def approve(
             answers_hash=exc.current.hex(),
             answers=_answers(db, application),
         )
+    except gate.InvalidAnswerError as exc:
+        db.rollback()
+        out = GateRefusalOut(detail=gate.SENTENCES[exc.code], code=exc.code)
+        return JSONResponse(status_code=422, content=out.model_dump(mode="json"), headers=NO_STORE)
     except gate.RefusedError as exc:
         db.rollback()
         return _refusal(exc.code)

@@ -8,6 +8,35 @@ import { statusLine } from "./apply-state";
 import { FieldsList } from "./fields-list";
 
 describe("document letter edits", () => {
+  it.each([998, 999])(
+    "honours the email subject limit at %i characters",
+    (length) => {
+      const onSave = vi.fn().mockResolvedValue(true);
+      render(
+        <AnswerEditor
+          answer={fakeAnswer("email_subject", "Email subject", "Original", {
+            max_chars: 998,
+          })}
+          saving={false}
+          onSave={onSave}
+          onDirtyChange={vi.fn()}
+        />,
+      );
+      const box = screen.getByRole("textbox");
+      expect(box).toHaveAttribute("maxlength", "998");
+      fireEvent.change(box, { target: { value: "x".repeat(length) } });
+      const save = screen.getByRole("button", { name: "Save answer" });
+      if (length === 998) {
+        expect(save).toBeEnabled();
+        fireEvent.click(save);
+        expect(onSave).toHaveBeenCalledWith("x".repeat(998));
+      } else {
+        expect(save).toBeDisabled();
+        expect(onSave).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("shows saved Unicode text whole and counts the native editor's units", () => {
     const value = "🤖".repeat(5001);
     render(

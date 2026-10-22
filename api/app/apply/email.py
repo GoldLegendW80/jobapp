@@ -195,16 +195,38 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> str:
     return application.state.value
 
 
+def field_issue(field_key: str, value: object) -> str | None:
+    if field_key == "email_subject" and (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > 998
+        or any(c in value for c in "\r\n")
+    ):
+        return "email_subject"
+    return None
+
+
 def sync_draft(db: Session, application: Application, draft: MailDraft, now: datetime) -> None:
     values = {r.field_key: r for r in gate.rows_of(db, application)}
     recipient = values.get("email_to")
     allowed = addresses(db.get(Job, application.posting_id))
     if recipient is None or recipient.value not in allowed:
-        raise ValueError("Choose a recipient from the posting.")
-    draft.to_addrs, draft.cc_addrs = [drafts.address(recipient.value)], []
-    draft.subject = values["email_subject"].value
-    draft.body = values["email_body"].value
-    draft.written_by = "user" if values["email_body"].source is AnswerSource.person else "agent"
+        raise gate.InvalidAnswerError("email_recipient")
+    subject, body = values.get("email_subject"), values.get("email_body")
+    if issue := field_issue("email_subject", subject.value if subject else None):
+        raise gate.InvalidAnswerError(issue)
+    candidate = MailDraft(
+        to_addrs=[drafts.address(recipient.value)],
+        cc_addrs=[],
+        subject=subject.value,
+        body=body.value if body else "",
+    )
+    try:
+        drafts.validate(candidate)
+    except ValueError:
+        raise gate.InvalidAnswerError("email_message") from None
+    draft.to_addrs, draft.cc_addrs = candidate.to_addrs, candidate.cc_addrs
+    draft.subject, draft.body = candidate.subject, candidate.body
+    draft.written_by = "user" if body and body.source is AnswerSource.person else "agent"
     draft.document_versions = application.document_versions
     draft.updated_at = now
-    drafts.validate(draft)

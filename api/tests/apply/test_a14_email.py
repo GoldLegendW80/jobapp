@@ -565,7 +565,7 @@ def test_dispatch_excludes_future_holds_and_rotates_blocked_due_items(
         state=SimpleNamespace(
             sessionmaker=factory,
             clock=lambda: current[0],
-            settings=SimpleNamespace(mail_send_key=SECRET),
+            settings=SimpleNamespace(mail_send_key=SECRET, mail_sends_keep_days=365),
         )
     )
 

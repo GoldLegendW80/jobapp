@@ -12,7 +12,7 @@ from app.apply import admin, full_auto
 from app.apply import email as apply_email
 from app.apply import gate as apply_gate
 from app.apply.models import Application, State
-from app.mail import gate, log, reconciling
+from app.mail import gate, log, reconciling, retention
 from app.mail.draft_models import MailSend
 from app.mail.mcp_client import GmailMcp
 
@@ -67,6 +67,8 @@ async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
 async def once(app: Any) -> int:
     sessions = app.state.sessionmaker
     with sessions() as db:
+        retention.prune(db, app.state.clock(), keep_days=app.state.settings.mail_sends_keep_days)
+        db.commit()
         waiting = list(
             db.scalars(
                 sa.select(Application)

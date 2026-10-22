@@ -116,6 +116,9 @@ SENTENCES = {
     "not_editable": "The answers of this application can no longer be changed.",
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
+    "email_subject": "Use an email subject of at most 998 characters on one line.",
+    "email_recipient": "Choose an email recipient from the posting.",
+    "email_message": "Review the email message before approving it.",
     "letter_too_long": "Shorten the letter to at most 10000 characters before saving.",
     "letter_control_character": (
         "Remove tabs, carriage returns and other control characters before saving the letter."
@@ -653,7 +656,9 @@ def _confirm_submitted_locked(
 EDITABLE = frozenset({State.needs_person, State.ready, State.approved})
 
 
-def answer_max(row: ApplicationAnswer) -> int:
+def answer_max(row: ApplicationAnswer, *, email: bool = False) -> int:
+    if email and row.field_key == "email_subject":
+        return 998
     return LETTER_MAX if row.document_letter and row.kind in {"text", "textarea"} else ANSWER_MAX
 
 
@@ -735,12 +740,19 @@ def set_answer(
         or row.kind in ("file", "designated")
     ):
         raise InvalidAnswerError("unknown_field")
+    if application.ats == "email":
+        from app.apply.email import field_issue
+
+        if issue := field_issue(field_key, value):
+            raise InvalidAnswerError(issue)
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
         raise InvalidAnswerError("wrong_type")
     if isinstance(value, str) and row.document_letter and (issue := letter_issue(value)):
         raise InvalidAnswerError(issue)
-    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > answer_max(row)):
+    if isinstance(value, str) and (
+        row.kind not in TEXT_KINDS or len(value) > answer_max(row, email=application.ats == "email")
+    ):
         raise InvalidAnswerError("wrong_type")
     if isinstance(value, str) and row.kind == "date" and not _is_date(value):
         raise InvalidAnswerError("wrong_type")

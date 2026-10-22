@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker, undefer
 from app.apply import caps, full_auto, states, submit
 from app.apply import email as application_email
 from app.apply import gate as apply_gate
-from app.apply.models import Application, State
+from app.apply.models import Application, Mode, State
 from app.apply.models import Authorisation as ApplyAuthorisation
 from app.config import Settings
 from app.documents import freeze as documents
@@ -187,18 +187,31 @@ def expire_pending(db: Session, user_id: uuid.UUID, now: datetime) -> None:
 
 
 def _application_for_send(
-    db: Session, row: MailSend, draft: MailDraft
+    db: Session, row: MailSend, draft: MailDraft | None
 ) -> tuple[Application, Job] | None:
     """Re-read the exact active application binding under apply's locks, after lock_send."""
-    if (
-        draft.id != row.draft_id
-        or draft.user_id != row.user_id
-        or draft.kind != "application"
-        or not draft.application_id
-    ):
-        return None
+    if draft is None:
+        application_id = db.scalar(
+            sa.select(Application.id).where(
+                Application.user_id == row.user_id,
+                Application.posting_id == row.posting_id,
+                Application.mail_send_id == row.id,
+                Application.ats == "email",
+            )
+        )
+        if application_id is None:
+            return None
+    else:
+        if (
+            draft.id != row.draft_id
+            or draft.user_id != row.user_id
+            or draft.kind != "application"
+            or not draft.application_id
+        ):
+            return None
+        application_id = draft.application_id
     try:
-        application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
+        application, posting = apply_gate.lock(db, row.user_id, application_id)
     except apply_gate.NotFoundError:
         return None
     if (
@@ -230,25 +243,27 @@ def _finish(
         if row.draft_id
         else None
     )
-    application_binding = None
-    if draft is not None and draft.application_id:
-        application_binding = _application_for_send(db, row, draft)
-        if application_binding is None:
-            # A provider may confirm a historical attempt, but it cannot settle a newer one.
-            draft = None
+    application_binding = _application_for_send(db, row, draft)
+    if draft is not None and draft.application_id and application_binding is None:
+        # A provider may confirm a historical attempt, but it cannot settle a newer one.
+        draft = None
     row.result, row.updated_at, row.refusal_code = result, now, code
     row.gmail_message_id, row.gmail_thread_id = message_id, thread_id
     row.resolved_by = resolved_by
-    if draft is None:
-        return
-    draft.status = {"sent": "sent", "unknown": "send_unknown", "failed": "draft"}.get(
-        result, draft.status
-    )
-    draft.updated_at = now
-    if result == "sent":
-        draft.gmail_message_id, draft.sent_at = message_id, now
+    if draft is not None:
+        draft.status = {"sent": "sent", "unknown": "send_unknown", "failed": "draft"}.get(
+            result, draft.status
+        )
+        draft.updated_at = now
+        if result == "sent":
+            draft.gmail_message_id, draft.sent_at = message_id, now
     if application_binding is not None:
         application, posting = application_binding
+        if result == "unknown" and application.state in states.DECIDED:
+            # A lost process may have crossed the provider boundary. Keep uncertainty closed
+            # even if its committed pending audit predates the submitting transaction.
+            states.move(application, State.submitting, now)
+            db.flush()
         if application.state is State.submitting:
             outcome = {
                 "sent": State.submitted,
@@ -310,6 +325,8 @@ def _decide(
                 or spent.user_id != auth.user_id
                 or spent.kind.value != auth.kind
                 or spent.used_at is None
+                or (latest := submit._spent(db, application)) is None
+                or latest.id != spent.id
             ):
                 code = "not_authorised"
             elif application.mail_send_id is not None:
@@ -422,9 +439,7 @@ def _decide(
         if caps.reserve(db, application, now):
             row.refusal_code = "paced"
             return row, None, None, None
-        states.move(application, State.submitting, now)
         application.mail_send_id = row.id
-        apply_gate._event(db, application, "click", now, send_id=str(row.id))
     row.result = "pending"
     draft.status = "sending"
     return row, draft, account, raw
@@ -472,6 +487,7 @@ async def _call_send(
     raw: bytes,
     switches_for: Callable[[], Awaitable[apply_gate.Switches]] | None = None,
     clock: Callable[[], datetime] | None = None,
+    authorisation_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     db.commit()
     # Re-read cancellation, the live pauses, caps, Like validity and exact approval after MIME
@@ -483,19 +499,58 @@ async def _call_send(
     code = apply_gate.switch_code(fresh_switches)
     locks.lock_send(db, row.user_id)
     db.expire_all()
+    if row.result != "pending":
+        return {"result": row.result}
     code = code or application_email.account_code(db, row.user_id)
+    application, stop = None, None
     if draft.application_id:
         application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
-        if application.state is not State.submitting or application.mail_send_id != row.id:
+        if application.state not in states.DECIDED or application.mail_send_id != row.id:
             code = code or "not_open"
+        elif (spent := submit._spent(db, application)) is None or spent.id != authorisation_id:
+            code = code or "not_authorised"
         elif apply_gate.current_hash(db, application) != bytes(application.answers_hash or b""):
             code = code or "stale"
         elif refused := submit.recheck(db, application, posting, now):
-            code = code or refused.code
+            code, stop = code or refused.code, refused
+    if application and application.state in {
+        State.submitting,
+        State.submit_unknown,
+        State.submitted,
+    }:
+        return {"result": "unknown"}
     if code:
+        if application and application.mail_send_id == row.id:
+            draft.status, draft.updated_at = "draft", now
+            application.mail_send_id = None
+            if application.state in states.DECIDED:
+                if code in {"not_connected", "needs_reconnect", "no_send_scope"}:
+                    stop = submit.Stop(State.needs_person, code, code)
+                elif application.mode is Mode.full_auto:
+                    stop = submit.Stop(State.ready, code)
+                elif code in {"paused", "submit_disabled"}:
+                    stop = submit.Stop(State.cancelled, code)
+                submit._stop(db, application, stop or submit.Stop(State.ready, code), now)
+            else:
+                full_auto.hand_over(db, application, code, now)
+        if application is None:
+            draft.status, draft.updated_at = "draft", now
+        # The proven non-send and its application handover are one transaction. A crash
+        # cannot leave a pending audit blocking the next fresh approval after this stop.
+        row.result, row.refusal_code, row.updated_at = "failed", code, now
         db.commit()
-        return {"result": "gmail_4xx", "status": 0, "code": code}
+        return {"result": "not_sent", "code": code}
     thread_id = db.get(MailThread, draft.thread_id).gmail_thread_id if draft.thread_id else None
+    if application:
+        states.move(application, State.submitting, now)
+        apply_gate._event(db, application, "click", now, send_id=str(row.id))
+        db.commit()  # the irreversible state is visible before minting any provider capability
+        locks.lock_send(db, row.user_id)
+        db.expire_all()
+        # Disconnect can win the lock after that commit. A revoked connection cannot call
+        # the provider; uncertainty remains conservative once submitting was committed.
+        if application_email.account_code(db, row.user_id):
+            return {"result": "unknown"}
     key = send_key.mint(
         settings.mail_send_key.get_secret_value(),
         row.id,
@@ -540,7 +595,7 @@ async def send(
             return row
         try:
             answer = await _call_send(
-                db, mcp, settings, row, draft, account, now, raw, switches_for, clock
+                db, mcp, settings, row, draft, account, now, raw, switches_for, clock, auth.apply_id
             )
         except MailConnectionError:
             answer = {"result": "not_sent", "code": "needs_reconnect"}
