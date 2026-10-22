@@ -42,8 +42,29 @@ new private captcha wait/person X click/passive read/resume/submit refusal).
 Native paced takeover:1passed in17.10s. Initial probe used200characters, the
 existing PASTE_FROM threshold; corrected to199 to exercise per-character
 checks. The test observes partial typing before takeover and stable text after.
-The new captcha native test gained an additional same-tab value-retention
-assertion after that5case pass; this final assertion still needs a rerun.
+Final native captcha rerun PASS1 in25.87s with additional same-tab value
+retention assertion: a value typed before waiting is still present on resume.
+
+Whole affected backend PASS7167 in246.18s:
+rtk proxy caffeinate -i ops/agent-test.sh --name apply-wait-whole tests/apply
+tests/browser -m 'not docker' -n 2 -q --tb=short
+This includes the4 new persisted later-step Workday/LinkedIn captcha/email-code
+waits followed by complete approved replay once, and the3 inherited A9 recovery
+fixtures with corrected transaction setup. Source was18f01b7b, except the new
+Redis/private-HTTP test file was added after that run collected its tests.
+
+Additional real Redis/private browserd HTTP PASS3 in2.77s:
+rtk proxy caffeinate -i ops/agent-test.sh --name apply-wait-redis
+tests/browser/test_a10a_wait_leases.py -m 'not docker' -n 2 -q --tb=short
+Exercises all3 wait reasons, wrong owner/token, a session setting of60seconds,
+lost Redis keys restored before ownership checks, unchanged browser deadline,
+remaining active900seconds and fresh idle on same-lease resume. First focused
+attempt failed only because World.make_store already passed session_max_s;
+the final fixture injects60 after normal construction. No assertions weakened.
+
+Final ruff check app/tests/browserd clean; format739files clean. Frontend
+production source is unchanged;19 handoff boundary tests and typecheck passed.
+Final CI plan PASS81 in39.549s and E2E registry clean on the tracked final source.
 
 Owned image retained for root's runtime continuation:
 jobapp-browser:apply-person-wait-247
@@ -51,11 +72,12 @@ Built only browserd from the checkpoint source; fake-page fixtures mount from
 the running checkout. Both native fixture stacks and all their volumes were
 removed by their finally paths. Image build mutex released to root after build.
 
-Pending at follow-up source checkpoint: whole Apply/browser not-docker batch
-on slot1, then the actual Redis/private-HTTP restart test added after its
-collection. The whole batch includes4 persisted later-step wizard waits and
-the3 corrected A9 recovery fixtures. Actual Playwright A9/A10a/later-step
+Remaining work, transferred to root's fresh runtime continuation:
+Actual Playwright A9/A10a/later-step
 captcha/email-code UI/API journeys, a native incidental-chooser race during an
 app Attach, independent composed review and final runtime remain required.
+There is no web/e2e/apply-a10a.spec.ts on this source; the runtime worker must
+create and register it. The existing A9 journey has not been run by this worker.
 No image built or stack started before first source checkpoint. Root granted
-heavy slot1 after source checks. No deployment or real account/site/mail used.
+heavy slot1 after source checks, released after final focused checks. No
+deployment or real account/site/mail used. No worker process or stack remains.

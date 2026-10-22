@@ -15,7 +15,8 @@ def test_private_wait_recovers_after_redis_loss_without_refresh_and_resumes_rema
     world: World, reason: str
 ):
     async def go():
-        store = world.make_store(session_max_s=60)
+        store = world.make_store()
+        store.session_max_s = 60
         world.store = store
         held = await store.acquire(A, "apply_fill", True)
         lease_id, token = held.lease.lease_id, held.token
