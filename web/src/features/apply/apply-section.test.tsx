@@ -60,15 +60,15 @@ const filled = () => [
 ];
 
 describe("starting", () => {
-  it("offers Apply (Review first) and a disabled Apply myself, and starts a Review first application", async () => {
+  it("offers Apply (Review first) and Apply myself, and starts a Review first application", async () => {
     const api = fakeApply({ application: null });
     const { user, section } = await openSection();
     expect(
       await within(section).findByText(/Nothing is sent without your approval/),
     ).toBeInTheDocument();
     expect(
-      within(section).getByRole("button", { name: /Apply myself/ }),
-    ).toBeDisabled();
+      within(section).getByRole("button", { name: "Apply myself" }),
+    ).toBeEnabled();
     await user.click(
       within(section).getByRole("button", { name: "Apply (Review first)" }),
     );

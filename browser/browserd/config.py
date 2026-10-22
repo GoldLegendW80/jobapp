@@ -10,11 +10,13 @@ import re
 from dataclasses import dataclass, field
 
 # Active seconds a lease may run, per purpose (SPEC-browser, "Leases"): 15 minutes for the apply
-# purposes, 30 for a person's own session. BROWSER_LEASE_MAX_S overrides some of them as
+# purposes, 30 for a person's own session (Apply myself's `apply_manual` included, apply A9).
+# BROWSER_LEASE_MAX_S overrides some of them as
 # "purpose=seconds,purpose=seconds" (A15 measures a Workday wizard and proposes its figure).
 LEASE_MAX_S = {
     "takeover": 1800,
     "signin": 1800,
+    "apply_manual": 1800,
     "apply_fill": 900,
     "apply_submit": 900,
     "profile_edit": 900,

@@ -18,6 +18,11 @@ only. A `browser_click` that carries it in `X-Gate-Capability` may click an elem
 detector marks; nothing else may, and a wrong value is refused before the page is touched. The
 api's `client.gate_click` is its only sender (api/app/browser/client.py).
 
+Apply myself (A9): `browser_snapshot` with `{"passive": true}` on an `apply_manual` lease is the
+app's watch of the page the person fills; it does not count as activity (Manager.call). Outside
+the app's turn (`app_turn`, a "Fill my details") only PERSON_TIME's tools run there: a click, a
+key or a typed value is refused `person_input`, so a Take over during the fill stops it.
+
 Calls on one lease run one at a time, through `Manager.call` (the lease's idle timer and its end
 cancel them).
 """
@@ -30,7 +35,7 @@ import re
 import secrets
 from typing import Any
 
-from browserd.leases import Lease, LeaseEnded, LeaseError
+from browserd.leases import MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
 from browserd.tools import actions, pacing, policy
 
 log = logging.getLogger("browserd")
@@ -38,6 +43,12 @@ GATE_PURPOSES = ("apply_submit", "profile_edit")
 LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 LOCKS: dict[str, asyncio.Lock] = {}
 PACER = pacing.Pacer()
+# What the app may do on an `apply_manual` lease while the person holds the input: read, open the
+# form, answer a file chooser or a file input with a document of the lease.
+PERSON_TIME = frozenset({
+    "browser_snapshot", "browser_navigate", "browser_file_upload", "browser_box",
+    "browser_take_screenshot", "browser_wait_for",
+})  # fmt: skip
 
 
 def _hash(value: str) -> bytes:
@@ -67,9 +78,9 @@ def _lock(lease: Lease) -> asyncio.Lock:
     return LOCKS.setdefault(lease.lease_id, asyncio.Lock())
 
 
-async def _run(svc: Any, lease_id: str, token: str, work: Any) -> Any:
+async def _run(svc: Any, lease_id: str, token: str, work: Any, *, touch: bool = True) -> Any:
     try:
-        return await svc.manager.call(lease_id, token, work)
+        return await svc.manager.call(lease_id, token, work, touch=touch)
     except LeaseEnded as exc:
         raise LeaseError(410, "lease_ended", reason=exc.reason) from None
 
@@ -90,6 +101,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         good = bool(lease.gate_hash) and hmac.compare_digest(lease.gate_hash, _hash(capability))
         if name != "browser_click" or not good:
             raise LeaseError(403, "bad_capability")
+    manual = lease.request.purpose == MANUAL_PURPOSE
     tab = actions.Tab(
         request=lease.request,
         state=state_of(lease),
@@ -101,6 +113,9 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
 
     async def work() -> dict[str, Any]:
         async with _lock(lease):
+            if manual and not lease.app_turn and name not in PERSON_TIME:
+                log.info("lease %s: %s refused: person_input", lease_id[:8], name)
+                return actions.failure("person_input", "Refused: the person holds the input.")
             try:
                 return await actions.run(tab, name, args)
             except ValueError as exc:
@@ -111,7 +126,8 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
                 return actions.failure("page_error", "The page did not let this action finish.")
 
-    return 200, await _run(svc, lease_id, token, work)
+    passive = manual and name == "browser_snapshot" and args.get("passive") is True
+    return 200, await _run(svc, lease_id, token, work, touch=not passive)
 
 
 async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
