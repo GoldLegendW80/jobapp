@@ -196,13 +196,26 @@ recorded separately from unfinished implementation.
   passed all 201 real database/API letter and render-wait cases, including both manual modes,
   second edits, forged classification, control characters and escaped multibyte bodies.
   All migration cases passed with one `0026` head, upgrade/downgrade and matching metadata.
-  The remaining body-limit assertion identifies six new unbounded request schemas; those
-  contracts need inspection and correction before the complete run can pass.
+  The remaining body-limit assertion identified six new unbounded request schemas. Source
+  `fcad617a`, integrated as `a6d0301f`, adds explicit bounds without registry exceptions or
+  larger body classes. Its new API boundary cases await their corrected error-shape rerun.
 - Recovery's actual captcha and email-code journeys both passed through person input,
   same-attempt continuation, retained earlier fields/steps and one freshly approved fake
   submission. Four manual recovery tests passed, including immediate person Submit-and-Close,
   both document freezes, no app click, and an ended session returning to the queue for reopen
   or explicit recording. Final evidence cleanup and the complete composed run remain.
+- A1 fidelity source `eeecebad` is integrated as `446aa8c5`: Ashby JSON/button groups,
+  chooser-backed uploads and ignored Autofill; Greenhouse numeric question ids and JSON;
+  server-owned sessions, observed inputs/dwell and replay refusal. Eleven new cases failed
+  before the source fix, then 526 focused cases and all 5,478 Apply backend cases passed.
+  The required whole Apply and Opportunities browser groups remain for the final stack.
+- Answer/report sources `b8394192`, `337deea2`, `e01036c8` and `1dc69d76` are integrated as
+  `1f6cdf6e`, `5551fac5`, `08299507` and `e55b9471`. These cover direct AI-reader addresses,
+  explicit stored question mappings and grounded claim structures. The latest pinned
+  Apply/agents run passed 6,925 cases with 19 existing opt-in skips and five failures;
+  purpose/directive grammar and the remaining runtime integration cases still need fixes.
+  An earlier combined run with the preceding answer source passed 8,666 cases and failed
+  239; that fanout must be checked again on the final source rather than assumed resolved.
 - A17 retention `6ff0ae6d`: seven tests passed after a red run, covering expiry boundaries,
   image kinds, posting deletion and the privileged-click import boundary. The final route,
   account-deletion and mode-canary suite must run after all features are integrated.
