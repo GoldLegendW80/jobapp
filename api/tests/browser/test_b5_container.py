@@ -23,9 +23,9 @@ from typing import Any
 
 import pytest
 
-from tests.browser.test_browser_container import Stack, stack
+from tests.browser.test_browser_container import Stack, no_lease_left, stack
 
-__all__ = ["stack"]
+__all__ = ["no_lease_left", "stack"]
 
 pytestmark = [pytest.mark.docker]
 

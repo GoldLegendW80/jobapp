@@ -22,8 +22,9 @@ Where a form lives (a posting's address is one of these; `--variant` is a suffix
 Variants: slow (the page answers after 10 s), closed (the posting is gone), captcha (a visible
 challenge that must be solved), layout (other names, order, labels and widgets), assistants (the
 page addresses AI assistants), contradict (options that contradict their question), hidden
-(hidden fields and a honeypot), morph (the first input adds a required question), code (Greenhouse
-only: an e-mail code step).
+(hidden fields and a honeypot), morph (the first input adds a required question), plain (only the
+name, the e-mail, the files and the required consent box: nothing a profile leaves, as Full auto's
+journey needs), code (Greenhouse only: an e-mail code step).
 
 For tests (JSON):
 
@@ -74,7 +75,23 @@ VARIANTS = (
     "contradict",
     "hidden",
     "morph",
+    "plain",
     "code",
+)
+# The fields of the plain variant: what any profile with its documents answers.
+PLAIN = frozenset(
+    {
+        "_systemfield_name",
+        "_systemfield_email",
+        "_systemfield_resume",
+        "first_name",
+        "last_name",
+        "email",
+        "resume",
+        "cover_letter",
+        "consent",
+        "privacy",
+    }
 )
 
 # Invented companies and their postings: ats -> org -> job -> (company, title, location).
@@ -93,6 +110,28 @@ POSTINGS: dict[str, dict[str, dict[str, tuple[str, str, str]]]] = {
             "4012345": (
                 "Northwind Labs",
                 "Software Engineer, Agents",
+                "Remote, Europe",
+            ),
+            # More forms of one company: a journey that applies more than once needs distinct
+            # form addresses (apply A13b: three rehearsals, then two Full auto Likes).
+            "4012346": (
+                "Northwind Labs",
+                "Robotics Engineer, Fleet",
+                "Paris, France",
+            ),
+            "4012347": (
+                "Northwind Labs",
+                "Controls Engineer",
+                "Berlin, Germany",
+            ),
+            "4012348": (
+                "Northwind Labs",
+                "Perception Engineer",
+                "Paris, France",
+            ),
+            "4012349": (
+                "Northwind Labs",
+                "Simulation Engineer",
                 "Remote, Europe",
             ),
         }
@@ -240,7 +279,8 @@ def _greenhouse_fields(variant: str) -> list[Field]:
 
 
 def fields_for(ats: str, variant: str) -> list[Field]:
-    return _ashby_fields(variant) if ats == "ashby" else _greenhouse_fields(variant)
+    fields = _ashby_fields(variant) if ats == "ashby" else _greenhouse_fields(variant)
+    return [f for f in fields if f.name in PLAIN] if variant == "plain" else fields
 
 
 def layout_fields(fields: list[Field]) -> list[Field]:

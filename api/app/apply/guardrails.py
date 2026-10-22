@@ -281,6 +281,8 @@ def ats_of(url: str) -> str:
     if found is None:
         return "other"
     host, _, query = found
+    if _on(host, "linkedin.com"):
+        return "other"  # the host decides first: a LinkedIn address with ?gh_jid= is not Greenhouse
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
         if _on(host, domain):
             return ats

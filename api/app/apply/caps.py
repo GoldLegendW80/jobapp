@@ -70,6 +70,7 @@ from app.apply.caps_models import (
     LikeMode,
 )
 from app.apply.models import Application, ApplicationEvent, Mode, State
+from app.browser import linkedin_guard
 from app.jobs import service as jobs_service
 from app.jobs import sweep
 from app.jobs.models import Job
@@ -116,6 +117,16 @@ def _setting(name: str) -> Any:
         return getattr(get_settings(), name)
     except ConfigError:
         return Settings.model_fields[name].default
+
+
+def hold_floor_s() -> int:
+    """`Settings.apply_hold_floor_s`; APPLY_HOLD_S's default when the settings cannot be read."""
+    from app.config import ConfigError, Settings, get_settings
+
+    try:
+        return int(get_settings().apply_hold_floor_s)
+    except ConfigError:
+        return int(Settings.model_fields["apply_hold_s"].default)
 
 
 # --- the company ---------------------------------------------------------------------------------
@@ -214,7 +225,7 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
         min_fit_chosen=bool(row and row.min_fit is not None),
         company_days=stored(row and row.company_days, "apply_full_auto_company_days"),
         safety_ceiling=stored(row and row.safety_ceiling, "apply_full_auto_safety_ceiling"),
-        hold_s=stored(row and row.hold_s, "apply_hold_s"),
+        hold_s=row.hold_s if row and row.hold_s is not None else hold_floor_s(),
         full_auto_since=row.full_auto_since if row else None,
         rehearsals_done=row.rehearsals_done if row else 0,
         timezone=(search.sweep_schedule if search else SweepSchedule()).timezone,
@@ -455,15 +466,32 @@ class Pace:
     daily_max: int
 
 
+def _fixture_linkedin(url: str) -> bool:
+    """Tests only: an address under the fixture pages' LinkedIn (BROWSER_SOURCES_BASE_URL plus
+    /linkedin/, browser B10's journey) is LinkedIn's. The setting is refused in production."""
+    base = _setting("browser_sources_base_url")
+    return bool(base) and url.startswith(str(base).rstrip("/") + "/linkedin/")
+
+
 def host_of(ats: str, form_url: str) -> str:
     """The host a click is paced on: the ATS for the known ones, else the form's host."""
-    if ats in KNOWN_HOSTS:
-        return ats
     url = guardrails.unstub(form_url or "", _setting("apply_stub_base_url"))
     host = (urlsplit(url).hostname or "").lower().rstrip(".").removeprefix("www.")
-    if host == "linkedin.com" or host.endswith(".linkedin.com"):
-        return "linkedin"
+    if host == "linkedin.com" or host.endswith(".linkedin.com") or _fixture_linkedin(url):
+        return "linkedin"  # the host decides first, whatever ATS the address pretends to be
+    if ats in KNOWN_HOSTS:
+        return ats
     return host or "unknown"
+
+
+def linkedin_refusal(db: Session, application: Application, now: datetime) -> str | None:
+    """LinkedIn's guard on an application whose form is on LinkedIn (browser B10, until A16
+    brings Easy Apply): `linkedin_off` or `linkedin_paused` when the person's switch, acceptance
+    or a checkpoint's pause forbids LinkedIn work now, None otherwise and for every other host.
+    Apply's prepare (before any lease), the gate and the submit lease's recheck call it."""
+    if host_of(application.ats, application.form_url) != "linkedin":
+        return None
+    return linkedin_guard.refusal(db, application.user_id, now)
 
 
 def pace_of(host: str) -> Pace:

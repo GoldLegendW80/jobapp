@@ -20,10 +20,10 @@ import { useTitle } from "@/lib/use-title";
 
 import { AnswerBank } from "./answer-bank";
 import { CapsEditor } from "./caps-editor";
+import { FullAutoAdvanced, FullAutoModeCard } from "./full-auto-settings";
 import {
   applySettingsKey,
   getApplySettings,
-  holdText,
   readFit,
   saveApplySettings,
   type ApplySettings,
@@ -31,9 +31,9 @@ import {
 
 /**
  * /settings/applications, "Applications" (SPEC-apply.md, "Frontend", Settings): the mode after a
- * Like (Review first; Full auto shown, not offered yet), the pause switch, the three fit
+ * Like (Review first or Full auto, full-auto-settings.tsx), the pause switch, the three fit
  * thresholds labelled apart (only "Apply automatically from" is changed here), the Advanced
- * values read only, the company caps and the saved answers.
+ * values (the hold length is changed there), the company caps and the saved answers.
  */
 export function ApplicationsSettingsPage() {
   useTitle("Applications");
@@ -72,7 +72,7 @@ export function ApplicationsSettingsPage() {
         </Alert>
       ) : (
         <>
-          <ModeCard settings={query.data} />
+          <FullAutoModeCard settings={query.data} />
           <PauseCard settings={query.data} />
           <ThresholdCard
             id="show-postings"
@@ -88,7 +88,7 @@ export function ApplicationsSettingsPage() {
             sentence="The app writes a CV and a letter for postings from this fit score. It is a documents setting, read only here."
           />
           <MinFitCard settings={query.data} />
-          <AdvancedCard settings={query.data} />
+          <FullAutoAdvanced settings={query.data} />
         </>
       )}
       <CapsEditor />
@@ -105,73 +105,6 @@ function useSaveSettings() {
       client.setQueryData<ApplySettings>(applySettingsKey, saved);
     },
   });
-}
-
-function ModeCard({ settings }: { settings: ApplySettings }) {
-  const id = useId();
-  return (
-    <Card aria-labelledby={`${id}-title`}>
-      <CardHeader>
-        <CardTitle>
-          <h2 id={`${id}-title`} className="text-lg">
-            After a Like
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          What the app does with a posting you like.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <fieldset className="flex flex-col gap-3">
-          <legend className="sr-only">Mode after a Like</legend>
-          <div className="flex items-start gap-2">
-            <input
-              id={`${id}-review`}
-              type="radio"
-              name={`${id}-mode`}
-              className="mt-0.5 size-4 shrink-0 accent-primary"
-              checked={settings.mode_after_like === "review"}
-              readOnly
-              aria-describedby={`${id}-review-text`}
-            />
-            <div className="flex flex-col gap-0.5">
-              <Label htmlFor={`${id}-review`}>Review first</Label>
-              <p
-                id={`${id}-review-text`}
-                className="text-sm text-muted-foreground"
-              >
-                The app fills the form and waits for your approval before it
-                submits.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-start gap-2">
-            <input
-              id={`${id}-full`}
-              type="radio"
-              name={`${id}-mode`}
-              className="mt-0.5 size-4 shrink-0 accent-primary"
-              checked={settings.mode_after_like === "full_auto"}
-              disabled
-              readOnly
-              aria-describedby={`${id}-full-text`}
-            />
-            <div className="flex flex-col gap-0.5">
-              <Label htmlFor={`${id}-full`} className="opacity-60">
-                Full auto
-              </Label>
-              <p
-                id={`${id}-full-text`}
-                className="text-sm text-muted-foreground"
-              >
-                Not available yet.
-              </p>
-            </div>
-          </div>
-        </fieldset>
-      </CardContent>
-    </Card>
-  );
 }
 
 function PauseCard({ settings }: { settings: ApplySettings }) {
@@ -369,39 +302,6 @@ function MinFitCard({ settings }: { settings: ApplySettings }) {
             ) : null}
           </div>
         </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-function AdvancedCard({ settings }: { settings: ApplySettings }) {
-  return (
-    <Card>
-      <CardContent>
-        <details className="group">
-          <summary className="cursor-pointer rounded-md text-lg font-semibold">
-            Advanced
-          </summary>
-          <dl className="mt-4 grid gap-3 text-sm">
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-medium">Safety ceiling</dt>
-              <dd className="text-muted-foreground">
-                At most {settings.safety_ceiling} submissions a day in Full
-                auto.
-              </dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-medium">Hold length</dt>
-              <dd className="text-muted-foreground">
-                {holdText(settings.hold_s)} between a Full auto decision and its
-                submission, so you can cancel it.
-              </dd>
-            </div>
-          </dl>
-          <p className="mt-3 text-sm text-muted-foreground">
-            Both are read only for now.
-          </p>
-        </details>
       </CardContent>
     </Card>
   );

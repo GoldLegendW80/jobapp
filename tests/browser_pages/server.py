@@ -1,8 +1,9 @@
 """The pages server of the browser test stack (tests/browser.compose.yml, browser B2): the static
 pages of this folder, a resource held back for `?ms=` milliseconds (slow.html) and an echo of the
 request headers (the Accept-Language the profile's preferences give), and a 302 to `?to=`.
-A folder asked with `?q=<word>` or `?query=<word>` answers its file `<word>.html` when there is one:
-the search pages of browser B8 (b8/), one fixture per search word. Run with the browser image's
+A folder asked with `?q=<word>`, `?query=<word>` or `?keywords=<word>` answers its file
+`<word>.html` when there is one: the search pages of browser B8 (b8/) and of B10's LinkedIn
+(b10/linkedin/, reached as b8/linkedin/), one fixture per search word. Run with the browser image's
 Python, read only, as an unprivileged user, on the `egress` network: the public side of the test.
 
 It answers HTTP on 8000 and on 8080 (a port the egress proxy allows: by its private address the
@@ -76,7 +77,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return None
-        word = (query.get("q") or query.get("query") or [""])[0]
+        word = (query.get("q") or query.get("query") or query.get("keywords") or [""])[
+            0
+        ]
         folder = self.translate_path(url.path)
         if SEARCH_WORD.fullmatch(word) and os.path.isfile(
             os.path.join(folder, word + ".html")

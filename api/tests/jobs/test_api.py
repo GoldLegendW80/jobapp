@@ -16,8 +16,9 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.models import User
+from app.jobs import router as jobs_router
 from app.jobs import service
-from app.jobs.models import ContractType, Job, JobEventKind, JobFile, JobStatus
+from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobFile, JobStatus
 from app.jobs.schemas import IMPORT_HTTP_MAX_BYTES, ImportFile, JobsImportDocument
 from tests.identity.api_helpers import (
     Api,
@@ -165,6 +166,7 @@ def test_list_item_fields(api: Api, alice: Signed, factory: sessionmaker[Session
         "id", "slug", "company", "title", "location", "contract_type", "url", "source", "status",
         "fit", "fit_overridden", "competencies", "gaps", "description", "published_on",
         "found_on", "applied_on", "notes", "file_count", "created_at", "updated_at",
+        "pay_min", "pay_max", "pay_currency", "pay_period", "work_mode",
     }  # fmt: skip
     assert (item["id"], item["contract_type"], item["fit"], item["file_count"]) == (
         str(job.id),
@@ -678,3 +680,102 @@ def test_the_detail_is_read_at_one_snapshot(
     assert api.get(f"/api/jobs/{job.id}", token=alice.token).status_code == 200
     assert levels == ["repeatable read"]
     assert_pooled_connection_is_at_default(one_connection, pids)
+
+
+# A write that commits between two statements of the route (issue #161, point 3). The control
+# runs the same read without its snapshot: it shows the torn answer the test is there to catch,
+# so the test cannot pass by missing the moment it writes in.
+SNAPSHOT_OR_CONTROL = pytest.mark.parametrize(
+    "one_snapshot", [True, False], ids=["one snapshot", "read committed, the control"]
+)
+
+
+def _without_snapshot(monkeypatch: pytest.MonkeyPatch, one_snapshot: bool) -> None:
+    if not one_snapshot:
+        monkeypatch.setattr(jobs_router, "read_snapshot", lambda db: None)
+
+
+@SNAPSHOT_OR_CONTROL
+def test_a_job_committed_during_the_list_is_in_none_of_it(
+    api: Api,
+    alice: Signed,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    one_snapshot: bool,
+) -> None:
+    """A job commits after the page is read and before the status counts: the page, the counts,
+    the total and the histogram all leave it out, and the next read has it everywhere."""
+    seed(factory, alice.id, [{}])
+    _without_snapshot(monkeypatch, one_snapshot)
+    real = service.status_counts
+    added: list[Job] = []
+
+    def counts_after_an_import(db: Session, *args: Any, **kwargs: Any) -> Any:
+        if not added:
+            late = {"slug": "job-late", "url": "https://jobs.example/late", "fit": 80}
+            added.extend(seed(factory, alice.id, [late]))
+        return real(db, *args, **kwargs)
+
+    def figures(page: dict[str, Any]) -> tuple[int, int, int, int]:
+        histogram = page["fit_histogram"]
+        scored = sum(bucket["count"] for bucket in histogram["buckets"])
+        counted = sum(page["counts_by_status"].values())
+        return len(page["items"]), page["total"], counted, scored + histogram["unscored"]
+
+    monkeypatch.setattr(service, "status_counts", counts_after_an_import)
+    page = ok(api, alice)
+    monkeypatch.setattr(service, "status_counts", real)
+    assert len(added) == 1
+    # Items, total, status counts, histogram.
+    assert figures(page) == ((1, 1, 1, 1) if one_snapshot else (1, 2, 2, 2))
+    assert figures(ok(api, alice)) == (2, 2, 2, 2)
+
+
+@SNAPSHOT_OR_CONTROL
+def test_a_status_change_committed_during_the_detail_is_in_none_of_it(
+    api: Api,
+    alice: Signed,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    one_snapshot: bool,
+) -> None:
+    """The job moves to applied, with its status event, after the job is read and before its
+    events are: the detail shows the job and its events of the same moment, and the next read
+    shows the move in both."""
+    (job,) = seed(factory, alice.id, [{}])
+    _without_snapshot(monkeypatch, one_snapshot)
+    real = service.recent_events
+    moved: list[bool] = []
+
+    def events_after_a_move(db: Session, *args: Any, **kwargs: Any) -> Any:
+        if not moved:
+            with factory() as other, other.begin():
+                row = other.get(Job, job.id)
+                assert row is not None
+                row.status = JobStatus.applied
+                other.add(
+                    JobEvent(
+                        job_id=job.id,
+                        user_id=alice.id,
+                        at=NOW,
+                        kind=JobEventKind.status,
+                        data={"from": JobStatus.found.value, "to": JobStatus.applied.value},
+                    )
+                )
+            moved.append(True)
+        return real(db, *args, **kwargs)
+
+    def shown(detail: dict[str, Any]) -> tuple[str, list[str], int]:
+        moves = [event["data"]["to"] for event in detail["events"] if event["kind"] == "status"]
+        return detail["status"], moves, detail["events_total"]
+
+    monkeypatch.setattr(service, "recent_events", events_after_a_move)
+    response = api.get(f"/api/jobs/{job.id}", token=alice.token)
+    monkeypatch.setattr(service, "recent_events", real)
+    assert response.status_code == 200, response.text
+    assert moved == [True]
+    # The control: a job still found whose newest event moved it to applied.
+    torn = ("found", ["applied"], 1)
+    assert shown(response.json()) == (("found", [], 0) if one_snapshot else torn)
+    after = api.get(f"/api/jobs/{job.id}", token=alice.token).json()
+    assert shown(after) == ("applied", ["applied"], 1)

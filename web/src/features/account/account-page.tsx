@@ -1,7 +1,10 @@
+import { Link } from "react-router";
+
 import { ModelAccessCard } from "@/features/agents/model-access-card";
 import { useMe } from "@/features/auth/auth-context";
 import { BrowserCard } from "@/features/browser/browser-card";
 import { GmailCard } from "@/features/mail/gmail-card";
+import { WELCOME } from "@/features/onboarding/onboarding-gate";
 import { useTitle } from "@/lib/use-title";
 
 import { NameCard } from "./name-card";
@@ -20,6 +23,11 @@ export function AccountPage() {
         <p className="text-muted-foreground">
           Your name, the password you sign in with, the model access your agents
           run on, and your Gmail connection.
+        </p>
+        <p className="text-sm">
+          <Link className="underline underline-offset-4" to={WELCOME}>
+            Open the setup wizard
+          </Link>
         </p>
       </header>
       <NameCard key={user.name} user={user} />

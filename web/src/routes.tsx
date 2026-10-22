@@ -20,6 +20,8 @@ import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
 import { JobsMapPage } from "@/features/jobs/map/jobs-map-page";
 import { DeckPage } from "@/features/opportunities/deck/deck-page";
+import { OnboardingGate } from "@/features/onboarding/onboarding-gate";
+import { WelcomePage } from "@/features/onboarding/welcome-page";
 import { ProfilePage } from "@/features/profile/profile-page";
 import { AppShell } from "@/features/shell/app-shell";
 import { NotFoundPage } from "@/features/shell/not-found-page";
@@ -55,7 +57,9 @@ export const routes: RouteObject[] = [
       {
         element: (
           <RequireAuth>
-            <AppShell />
+            <OnboardingGate>
+              <AppShell />
+            </OnboardingGate>
           </RequireAuth>
         ),
         children: [
@@ -67,6 +71,7 @@ export const routes: RouteObject[] = [
             element: <PostingDocumentPage />,
           },
           { path: "discover", element: <DeckPage /> },
+          { path: "welcome", element: <WelcomePage /> },
           { path: "documents/templates", element: <TemplatesPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },

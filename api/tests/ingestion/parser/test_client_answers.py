@@ -806,3 +806,9 @@ def test_no_cap_is_looser_than_the_check_constraint_of_its_column() -> None:
     assert pc.MAX_IMAGE_SIDE <= models.IMAGE_MAX_SIDE
     assert pc.MAX_READ_PAGES <= models.PAGES_MAX
     assert pc.MAX_PAGES < 2**31
+
+
+def test_a_page_count_up_to_the_cap_is_read_and_one_past_it_is_malformed() -> None:
+    whole = {"ok": True, "pages": pc.MAX_PAGES, "pages_text": 0, "pages_image": 0}
+    assert pc.check_parsed(whole, "pdf_render").pages == pc.MAX_PAGES
+    malformed({**whole, "pages": pc.MAX_PAGES + 1}, "pages", "pdf_render")

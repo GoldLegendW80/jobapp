@@ -217,6 +217,39 @@ describe("invite page", () => {
     );
   });
 
+  it.each(["invite", "reset"] as const)(
+    "shows the busy API sentence once when accepting a %s link",
+    async (kind) => {
+      const detail = "The server is busy. Try again in a moment.";
+      const calls = linkAnswers(
+        () =>
+          HttpResponse.json({
+            email: "e2e-busy-link@example.org",
+            kind,
+            expires_at: "2026-10-22T10:00:00Z",
+          }),
+        () =>
+          HttpResponse.json(
+            { detail },
+            { status: 503, headers: { "Retry-After": "2" } },
+          ),
+      );
+      renderApp(`/${kind}/${TOKEN}`);
+      const user = userEvent.setup();
+      await screen.findByLabelText(kind === "invite" ? "Name" : "New password");
+      await fill(user, { name: kind === "invite" ? "Example" : undefined });
+      const action = kind === "invite" ? "Create account" : "Save password";
+      await user.click(screen.getByRole("button", { name: action }));
+
+      expect((await screen.findByRole("alert")).textContent).toBe(detail);
+      expect(
+        screen.getByLabelText(kind === "invite" ? "Password" : "New password"),
+      ).toHaveValue(PASSWORD);
+      expect(screen.getByRole("button", { name: action })).toBeEnabled();
+      expect(calls.accept).toHaveLength(1);
+    },
+  );
+
   it("shows any other refusal in an alert (409 account exists, network)", async () => {
     let call = 0;
     linkAnswers(invite, () => {

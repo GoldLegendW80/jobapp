@@ -147,7 +147,8 @@ ssh jetson                        # then, once: the browser's host firewall (sud
 cd ~/jobapp && sudo bash ops/browser-egress.sh install jobapp_egress
 tests/reboot_check.sh             # a reboot (sudo) and its recovery check
 # and the commands of ./deploy.sh that take an argument: restore <file> --into-live, admin create <email>,
-# admin unlock, profile import, jobs import, documents import-legacy, backup-schedule install
+# admin unlock, profile import, jobs import, documents import-legacy, ingestion close-run,
+# backup-schedule install
 ./deploy.sh                       # the first deploy and a new .env
 ```
 
@@ -1287,6 +1288,14 @@ and the sweeps to a stub of the three APIs; with `ATS_BASE_URL_ORG_PREFIX=fake-`
 starting with it go there (`tests/compose.j5-e2e.yml`), the CI stack sends every org
 (`tests/ats-stub.compose.yml`).
 
+LinkedIn's 7 day pause after a security check (browser B10) has no button to lift it. Only the
+owner can, by deleting the person's rows of `linkedin_checkpoints`:
+
+```bash
+ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'" <<< "
+DELETE FROM linkedin_checkpoints WHERE user_id = (SELECT id FROM users WHERE email = 'e2e-someone@example.org');"
+```
+
 ## Agent runs
 
 Claude agents run in the `worker` (SPEC-agents.md, agents A2), on the user's own model credential
@@ -1404,6 +1413,15 @@ curl -s -b cookies http://localhost/api/ingestion/consent                       
 curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
   -d '{"version":1}' http://localhost/api/ingestion/consent                      # record it
 ```
+
+A run that cannot move (its `advance` keeps failing) is closed by the cron after five failures in
+a row (sixty for a failure of the database, the first one when the user asked to cancel it). The
+operator can close it at once: `./deploy.sh ingestion close-run <run id> --dry-run` prints what
+the close would do, the same without `--dry-run` closes it (`python -m app.ingestion.cli
+close-run` in the api container): `failed` with the stuck sentence, or `cancelled` when the user
+asked to cancel it, the planned steps cancelled, the running step's agent run asked to stop, the
+steps read kept for the next run. It prints the status the run ends on. A run that has already
+ended is left as it is, so running it again changes nothing.
 
 ## The parser service
 

@@ -30,9 +30,13 @@ const defaults: ApplySettings = {
   min_fit_chosen: false,
   safety_ceiling: 30,
   hold_s: 900,
+  hold_min_s: 900,
   company_days: 30,
   show_postings_from: 60,
   write_documents_from: 65,
+  rehearsals: 3,
+  rehearsals_done: 0,
+  full_auto_since: null,
 };
 
 function fakeSettings(initial: Partial<ApplySettings> = {}) {
@@ -228,20 +232,113 @@ describe("the Applications page", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers Review first and shows Full auto disabled", async () => {
-    fakeSettings();
+  it("explains what a Like does before Full auto turns on, then turns it on", async () => {
+    const api = fakeSettings({ min_fit: 72, hold_s: 1200 });
+    fakeCaps([]);
+    fakeBank([]);
+    const { user } = await openPage();
+    expect(screen.getByRole("radio", { name: "Review first" })).toBeChecked();
+    const full = screen.getByRole("radio", { name: "Full auto" });
+    expect(full).toBeEnabled();
+    expect(full).toHaveAccessibleDescription(/Your Like is your approval/);
+
+    await user.click(full);
+    const panel = screen.getByRole("region", { name: "Turn on Full auto" });
+    expect(panel).toHaveTextContent(
+      "The app will submit applications for you when a posting's fit is at least 72, at least 20 minutes after each Like unless you cancel, and never more than one application per company in 30 days.",
+    );
+    expect(panel).toHaveTextContent(
+      'Your next 3 Likes are rehearsals: the app fills the form and checks it, submits nothing, and asks you "Does this look right?" in Applications.',
+    );
+    expect(panel).toHaveTextContent(
+      "A company cap you set on this page replaces the one per company rule for that company.",
+    );
+    const waits = within(panel).getByRole("list", {
+      name: "These wait for you in Applications instead:",
+    });
+    expect(
+      within(waits)
+        .getAllByRole("listitem")
+        .map((one) => one.textContent),
+    ).toEqual([
+      "a posting whose fit is below 72",
+      "a site Full auto does not handle yet",
+      "a question left, a captcha or a sign in",
+      "a free text answer the app wrote itself, unless the app's own check of it passed",
+      "a term your never apply rules exclude, in the posting's text",
+      "a CV or letter that runs over its page or has a correction to look at",
+      "a second application to the same company within 30 days",
+      "anything past the safety ceiling of 30 submissions a day",
+    ]);
+    expect(api.puts).toEqual([]);
+
+    await user.click(
+      within(panel).getByRole("button", { name: "Keep Review first" }),
+    );
+    expect(screen.getByRole("radio", { name: "Review first" })).toBeChecked();
+    expect(api.puts).toEqual([]);
+
+    await user.click(full);
+    await user.click(screen.getByRole("button", { name: "Turn on Full auto" }));
+    await screen.findByText("Full auto is on.");
+    expect(api.puts).toEqual([{ mode_after_like: "full_auto" }]);
+    expect(screen.getByRole("radio", { name: "Full auto" })).toBeChecked();
+    expect(
+      screen.getByRole("region", { name: "Full auto is on" }),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("turns Full auto on by keyboard", async () => {
+    const api = fakeSettings();
+    fakeCaps([]);
+    fakeBank([]);
+    const { user } = await openPage();
+    screen.getByRole("radio", { name: "Review first" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "Full auto" })).toHaveFocus();
+    const turnOn = await screen.findByRole("button", {
+      name: "Turn on Full auto",
+    });
+    turnOn.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(api.puts).toEqual([{ mode_after_like: "full_auto" }]);
+    });
+  });
+
+  it("turns Full auto off at once with Review first, and says where held items go", async () => {
+    const api = fakeSettings({
+      mode_after_like: "full_auto",
+      rehearsals_done: 3,
+      paused: true,
+    });
+    fakeCaps([]);
+    fakeBank([]);
+    const { user } = await openPage();
+    const on = screen.getByRole("region", { name: "Full auto is on" });
+    expect(on).not.toHaveTextContent("rehearsal");
+    expect(on).toHaveTextContent("Automatic applications are paused");
+    await user.click(screen.getByRole("radio", { name: "Review first" }));
+    await screen.findByText(
+      "Full auto is off. Held applications wait for you in Applications.",
+    );
+    expect(api.puts).toEqual([{ mode_after_like: "review" }]);
+    expect(screen.getByRole("radio", { name: "Review first" })).toBeChecked();
+  });
+
+  it("names the rehearsals left once Full auto is on", async () => {
+    fakeSettings({ mode_after_like: "full_auto", rehearsals_done: 2 });
     fakeCaps([]);
     fakeBank([]);
     await openPage();
-    expect(screen.getByRole("radio", { name: "Review first" })).toBeChecked();
-    const full = screen.getByRole("radio", { name: "Full auto" });
-    expect(full).toBeDisabled();
-    expect(full).not.toBeChecked();
-    expect(full).toHaveAccessibleDescription("Not available yet.");
+    expect(
+      screen.getByRole("region", { name: "Full auto is on" }),
+    ).toHaveTextContent("Your next Like is a rehearsal:");
   });
 
-  it("keeps the safety ceiling and the hold read only under Advanced", async () => {
-    fakeSettings();
+  it("keeps the safety ceiling read only and saves the hold, never below the minimum", async () => {
+    const api = fakeSettings({ hold_min_s: 600 });
     fakeCaps([]);
     fakeBank([]);
     const { user } = await openPage();
@@ -253,9 +350,54 @@ describe("the Applications page", () => {
       screen.getByText(/At most 30 submissions a day in Full auto/),
     ).toBeVisible();
     expect(screen.getByText(/15 minutes between a Full auto/)).toBeVisible();
-    const details = advanced.closest("details") as HTMLElement;
-    expect(within(details).queryByRole("textbox")).toBe(null);
-    expect(within(details).queryByRole("spinbutton")).toBe(null);
+    expect(screen.getByText(/Never less than 10 minutes/)).toBeVisible();
+    const box = screen.getByRole("textbox", { name: "Hold length in minutes" });
+    expect(box).toHaveValue("15");
+    for (const wrong of ["9", "1441", "", "ten", "12.5"]) {
+      await user.clear(box);
+      if (wrong) await user.type(box, wrong);
+      await user.click(
+        screen.getByRole("button", { name: "Save hold length" }),
+      );
+      expect(box).toHaveAccessibleDescription(
+        "Type a whole number of minutes from 10 to 1440.",
+      );
+    }
+    expect(api.puts).toEqual([]);
+    await user.clear(box);
+    await user.type(box, "30");
+    await user.click(screen.getByRole("button", { name: "Save hold length" }));
+    await screen.findByText("Hold length saved.");
+    expect(api.puts).toEqual([{ hold_s: 1800 }]);
+    expect(screen.getByText(/30 minutes between a Full auto/)).toBeVisible();
+  });
+
+  it("shows the api's sentence when the hold is refused", async () => {
+    fakeSettings();
+    server.use(
+      http.put("*/api/apply/settings", () =>
+        HttpResponse.json(
+          {
+            detail: "The hold cannot be shorter than the server's minimum.",
+            code: "hold_too_short",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    fakeCaps([]);
+    fakeBank([]);
+    const { user } = await openPage();
+    await user.click(screen.getByText("Advanced"));
+    const box = screen.getByRole("textbox", { name: "Hold length in minutes" });
+    await user.clear(box);
+    await user.type(box, "20");
+    await user.click(screen.getByRole("button", { name: "Save hold length" }));
+    expect(
+      await screen.findByText(
+        "The hold cannot be shorter than the server's minimum.",
+      ),
+    ).toBeVisible();
   });
 
   it("saves Apply automatically from, and refuses a value out of range before any call", async () => {

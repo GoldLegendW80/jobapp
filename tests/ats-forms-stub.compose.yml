@@ -56,11 +56,16 @@ services:
     environment:
       BROWSER_PROXY_ALLOW_PRIVATE: atsforms
 
+  # Full auto's journey (apply A13b) waits through a hold after its three rehearsals: on this
+  # stack the floor of the hold is 60 s (TEST_APPLY_HOLD_S, refused in production and without
+  # APPLY_STUB_BASE_URL; APPLY_HOLD_S itself is never under 900 s).
   api:
     environment:
       APPLY_STUB_BASE_URL: http://atsforms:8080
+      TEST_APPLY_HOLD_S: "60"
 
   worker:
     environment:
       APPLY_HOST_MIN_INTERVAL_S: "10"
       APPLY_STUB_BASE_URL: http://atsforms:8080
+      TEST_APPLY_HOLD_S: "60"

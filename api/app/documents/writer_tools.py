@@ -17,6 +17,8 @@ a run at another document, posting or person.
   the posting the run is bound to, so no id is chosen by the model; "no CV yet" while that CV is
   empty.
 - `submit_letter(...)`: the letter, as D2's content JSON, through the same `submit.handle`.
+- `submit_proposal(...)`: an outreach proposal (issue #485), through the same `submit.handle`;
+  its `to` is put back to the app's address whatever the writer sends.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ GET_DRAFT = "get_draft"
 SUBMIT_CV = "submit_cv"
 GET_DOCUMENT = "get_document"
 SUBMIT_LETTER = "submit_letter"
+SUBMIT_PROPOSAL = "submit_proposal"
 SECTIONS = ("facts", "experience", "skills", "answers")
 NOT_AVAILABLE = "Not available: read facts, experience, skills or answers."
 NO_BASE = "No base CV: write from the profile alone."
@@ -223,9 +226,29 @@ def _submit_letter(scope: app_tools.Scope) -> SdkMcpTool[Any]:
     return submit_letter
 
 
+# The proposal as the tool's arguments: its schema, unknown fields refused.
+PROPOSAL_SCHEMA = c.ProposalContent.model_json_schema(by_alias=True)
+
+
+def _submit_proposal(scope: app_tools.Scope) -> SdkMcpTool[Any]:
+    @tool(
+        SUBMIT_PROPOSAL,
+        "Submit the whole proposal once it is written: a subject and a body of at most 150 "
+        "words (more than 180 is refused). Leave `to` as the draft has it: the app sets the "
+        "address. The answer says what to fix, if anything.",
+        PROPOSAL_SCHEMA,
+    )
+    async def submit_proposal(args: dict[str, Any]) -> dict[str, Any]:
+        text, error = await asyncio.to_thread(_submit, scope, "proposal", args)
+        return app_tools.text_result(text, error=error)
+
+    return submit_proposal
+
+
 app_tools.register(READ_PROFILE_SECTION, _read_profile_section)
 app_tools.register(GET_BASE_CV, _get_base_cv)
 app_tools.register(GET_DRAFT, _get_draft)
 app_tools.register(SUBMIT_CV, _submit_cv)
 app_tools.register(GET_DOCUMENT, _get_document)
 app_tools.register(SUBMIT_LETTER, _submit_letter)
+app_tools.register(SUBMIT_PROPOSAL, _submit_proposal)
