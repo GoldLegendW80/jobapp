@@ -10,6 +10,9 @@ The rules, in the order they apply:
 1. **The items read.** The rows of `reuse.source_steps` that pass `stored_items.of_stored_text()`
    (the one condition every reader applies). The rows of those steps that fail it cite a text
    that is no longer stored: they are deleted here, in the same transaction, and never proposed.
+   A row that removes an entry, a line or a whole list (`items.removes_a_list`) is dropped: the
+   extraction refuses such a removal since PR #398, and a step finished before it is reused
+   without being read again (`plan.EXTRACTOR_VERSION` stays 1, owner, 2026-10-21, #408).
 2. **Older proposals.** Every pending profile item of the user that belongs to another run is
    superseded, in id order, before anything is proposed. So the pending items after a merge are
    exactly this run's, and the proposals are a function of the items, the profile and the user's
@@ -91,6 +94,7 @@ class Merged:
     equal_to_profile: int = 0
     rejected_before: int = 0
     removals_dropped: int = 0
+    removals_refused: int = 0  # list removals stored before the extraction refused them (#408)
     left_out: int = 0
     superseded: int = 0
     deleted: int = 0
@@ -188,13 +192,17 @@ def _is_transcribed(marks: Mapping[str, Any], citation: Mapping[str, Any]) -> bo
 
 def _variants(
     rows: Sequence[IngestionItem], marks: Mapping[str, Any], order: Mapping[str, int]
-) -> tuple[dict[tuple[str, str], dict[str, Variant]], int]:
-    """The stored rows grouped by (section, key) then by value, and how many rows no longer
-    build (their section model changed since they were stored)."""
+) -> tuple[dict[tuple[str, str], dict[str, Variant]], int, int]:
+    """The stored rows grouped by (section, key) then by value, how many rows no longer build
+    (their section model changed since they were stored), and how many list removals were
+    dropped (rule 1)."""
     groups: dict[tuple[str, str], dict[str, Variant]] = {}
-    left_out = 0
+    left_out = refused = 0
     built: list[tuple[tuple[int, str, int, int], IngestionItem, items.Item]] = []
     for row in rows:
+        if items.removes_a_list(row.section, row.key, row.action):
+            refused += 1
+            continue
         try:
             item = stored_items.as_item(row)
         except _REFUSED:
@@ -236,7 +244,7 @@ def _variants(
                     one["end"],
                 )
             )
-    return groups, left_out
+    return groups, left_out, refused
 
 
 def _holds(section_data: Mapping[str, Any], item: items.Item) -> bool:
@@ -295,7 +303,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     marks = _transcribed_pages(db, (row.document_id for row in rows))
     # citations in the order the user selected the documents, then by place in the text
     order = {str(one): index for index, one in enumerate(ingestion_run.document_ids or ())}
-    groups, left_out = _variants(rows, marks, order)
+    groups, left_out, refused_removals = _variants(rows, marks, order)
 
     profile = profile_service.get_profile(db, user_id, now)
     stored: dict[str, dict[str, Any] | None] = {}
@@ -372,6 +380,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
         equal_to_profile=equal,
         rejected_before=rejected,
         removals_dropped=removals,
+        removals_refused=refused_removals,
         left_out=left_out,
         superseded=superseded,
         deleted=deleted,
@@ -379,12 +388,14 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     )
     log.info(
         "ingestion merge: run %s wrote %d proposals (%d conflicts, %d equal to the profile, "
-        "%d rejected before, %d left out, %d superseded, %d items of a replaced text deleted)",
+        "%d rejected before, %d list removals refused, %d left out, %d superseded, "
+        "%d items of a replaced text deleted)",
         run_id,
         result.proposals,
         conflicts,
         equal,
         rejected,
+        refused_removals,
         left_out,
         superseded,
         deleted,

@@ -147,6 +147,60 @@ def test_a_removal_is_dropped_where_a_document_gives_a_value(
     assert "conflict" not in one.payload
 
 
+def test_a_list_removal_stored_before_the_tool_refused_it_is_dropped_by_the_merge(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    # #408: a step finished before PR #398 may hold the removal of an entry, which the write tool
+    # now refuses. Such a step is reused (EXTRACTOR_VERSION stays 1), so the merge drops the row.
+    saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
+    mh.save(factory, alice, "experience", {"employers": [saved]})
+    mh.save(factory, alice, "identity", {"headline": "Engineer"})
+    run_id, _ = mh.begin(factory, alice, settings, [mh.CV, mh.LETTER])
+    first = eh.running(factory, run_id)
+    mh.store(factory, alice, first, "experience", ACME_2021, None, "Acme Group", "remove")
+    mh.store(factory, alice, first, "identity", "headline", None, "Engineer", "remove")
+    mh.store(factory, alice, first, *name_fact())
+    eh.finish_step(factory, run_id, settings)
+    assert eh.running(factory, run_id).document_id != first.document_id
+    with factory() as db, db.begin():
+        run = db.get_one(IngestionRun, run_id, with_for_update=True)
+        result = merge.merge(db, run, now())
+    assert result.removals_refused == 1
+    found = {
+        (one.payload["key"], one.payload["action"])
+        for one in mh.proposals_of(factory, alice)
+        if one.payload["key"] != merge.YEARS_KEY  # derived from the employer the profile holds
+    }
+    # The removal of a field that holds one value is still proposed, as the tool still takes it.
+    assert found == {("full_name", "add"), ("headline", "remove")}
+
+
+def test_a_reused_step_with_a_list_removal_proposes_no_removal(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
+    mh.save(factory, alice, "experience", {"employers": [saved]})
+    first, documents = mh.merged(
+        factory,
+        alice,
+        settings,
+        [mh.CV],
+        [[("experience", ACME_2021, None, "Acme Group", "remove"), name_fact()]],
+    )
+
+    def keys(run_id: uuid.UUID, status: ProposalStatus | None) -> list[str]:
+        found = mh.proposals_of(factory, alice, run_id, status=status)
+        return [one.payload["key"] for one in found if one.payload["key"] != merge.YEARS_KEY]
+
+    assert keys(first, ProposalStatus.pending) == ["full_name"]
+    second = eh.start(factory, alice, documents)
+    eh.advance(factory, second, settings)
+    assert eh.run_of(factory, second).status is RunStatus.done
+    assert keys(second, None) == ["full_name"]
+    with factory() as db:  # the stored row is kept: only the merge leaves it out
+        assert db.scalar(sa.select(sa.func.count()).where(IngestionItem.action == "remove")) == 1
+
+
 # --- against the profile and earlier decisions ----------------------------------------------------
 
 

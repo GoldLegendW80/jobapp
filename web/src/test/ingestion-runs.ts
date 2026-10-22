@@ -136,6 +136,7 @@ export function fakeRun(over: RunOver = {}): Run {
     cancel_requested: false,
     document_ids: ["d1", "d2"],
     unread_document_ids: [],
+    secret_document_ids: [],
     current_agent_run_id: null,
     tokens: {
       spent: 3_760,

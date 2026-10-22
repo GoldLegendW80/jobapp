@@ -29,9 +29,9 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import agents, deletion, engine, estimate, estimate_router, plan
+from app.ingestion import agents, deletion, engine, estimate, estimate_router, plan, reuse
 from app.ingestion.models import IngestionDocument
-from app.ingestion.runs_models import IngestionRun, RunStatus, text_sha256
+from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus, text_sha256
 from tests.agents.conftest import OAUTH, OTHER_KEY
 from tests.agents.g6_helpers import run_context
 from tests.agents.push_backend import COUNTED, INPUT_SIDE, OUTPUT, PushBackend, looping
@@ -1273,6 +1273,99 @@ def test_the_steps_of_a_cancelled_run_are_reused_and_those_of_another_user_are_n
         for number, digest in enumerate(digests)
     ]
     assert eh.statuses(factory, eh.start(factory, bob, theirs)) == ["planned", "planned"]
+
+
+def set_ranges(
+    factory: sessionmaker[Session],
+    run_id: uuid.UUID,
+    ranges: Sequence[tuple[int | None, int | None]],
+) -> None:
+    """The stored ranges of a run's extraction steps, in order of part, as another cut left them."""
+    with factory() as db, db.begin():
+        for part, (start, end) in enumerate(ranges):
+            db.execute(
+                sa.update(IngestionRunStep)
+                .where(IngestionRunStep.ingestion_run_id == run_id, IngestionRunStep.part == part)
+                .values(range_start=start, range_end=end)
+            )
+
+
+def ranges_of(factory: sessionmaker[Session], run_id: uuid.UUID) -> list[tuple[int, int]]:
+    return [(one.range_start, one.range_end) for one in eh.steps_of(factory, run_id)]
+
+
+def sources_of(factory: sessionmaker[Session], run_id: uuid.UUID) -> set[uuid.UUID]:
+    with factory() as db:
+        return set(reuse.source_steps(db, run_id))
+
+
+def ids_of(factory: sessionmaker[Session], run_id: uuid.UUID) -> set[uuid.UUID]:
+    return {one.id for one in eh.steps_of(factory, run_id)}
+
+
+# A text whose only break is in the first half of the first window: the floor moved its cut from
+# (0, 2), (2, 100002), (100002, 200000) to (0, 100000), (100000, 200000), part numbers kept.
+MOVED = "\n\n" + ("word " * 40_000)[:199_998]
+OLD_CUT = [(0, 2), (2, 100_002)]
+NEW_CUT = [(0, 100_000), (100_000, 200_000)]
+
+
+def test_a_part_whose_range_moved_is_read_again_and_nothing_is_left_unread(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """#541 round 2: the identity holds the part number, not the range. Parts 0 and 1 finished
+    under the old cut cover 0 to 100,002 only; reusing them would leave 100,002 to 200,000 unread
+    in a run that still ends done."""
+    assert plan.cut(MOVED) == tuple(NEW_CUT)
+    document = add_document(factory, alice, MOVED)
+    first = eh.start(factory, alice, [document])
+    assert ranges_of(factory, first) == NEW_CUT
+    assert eh.run_to_the_end(factory, first, settings).status is RunStatus.done
+    set_ranges(factory, first, OLD_CUT)  # as the cut before the floor stored them
+
+    with factory() as db:
+        quote = estimate_router.quote(db, alice, [str(document)])
+    assert [(one.steps, one.reused_steps) for one in quote.documents] == [(2, 0)]
+    again = eh.start(factory, alice, [document])
+    assert eh.statuses(factory, again) == ["planned", "planned"]
+    assert ranges_of(factory, again) == NEW_CUT  # every character, 0 to 200,000, is read
+    run = eh.run_to_the_end(factory, again, settings)
+    assert (run.status, run.partial) == (RunStatus.done, False)
+    assert sources_of(factory, again) == ids_of(factory, again)
+
+    # A reused step stands only for an earlier step of the same range: moved, it stands for none.
+    third = eh.start(factory, alice, [document])
+    assert eh.statuses(factory, third) == ["reused", "reused"]
+    assert sources_of(factory, third) == ids_of(factory, again)
+    set_ranges(factory, again, OLD_CUT)
+    assert sources_of(factory, third) == set()
+
+
+def test_unchanged_cuts_of_a_long_text_are_still_reused(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """The owner's rule (#408 decision 1): a text whose cut did not move is not read again."""
+    text = "Made-up notes.\n\n" + ("word " * 30_000) + "\n\n" + ("more " * 20_000)
+    document = add_document(factory, alice, text)
+    first = eh.start(factory, alice, [document])
+    assert ranges_of(factory, first) == [(0, 100_000), (100_000, 150_018), (150_018, 250_018)]
+    eh.run_to_the_end(factory, first, settings)
+    again = eh.start(factory, alice, [document])
+    assert eh.statuses(factory, again) == ["reused", "reused", "reused"]
+    assert sources_of(factory, again) == ids_of(factory, first)
+
+
+def test_a_step_stored_without_a_range_counts_as_a_whole_read_and_is_reused(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """A null stored range is (0, n): the whole text, as `agents.py` reads it."""
+    (document,) = eh.documents(factory, alice, 1)
+    first = eh.start(factory, alice, [document])
+    eh.run_to_the_end(factory, first, settings)
+    set_ranges(factory, first, [(None, None)])
+    again = eh.start(factory, alice, [document])
+    assert eh.statuses(factory, again) == ["reused"]
+    assert sources_of(factory, again) == ids_of(factory, first)
 
 
 # --- a replaced or deleted document -----------------------------------------------------------
