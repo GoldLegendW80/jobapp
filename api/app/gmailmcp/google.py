@@ -45,6 +45,8 @@ from app.mail.google import (
 
 
 class GmailGoogle(GoogleClient):
+    refresh_on_401 = True
+
     async def _gmail(
         self,
         grant: Grant,
@@ -64,7 +66,7 @@ class GmailGoogle(GoogleClient):
 
         async def once() -> dict[str, Any]:
             answer = await exchange()
-            if answer.status == 401:
+            if answer.status == 401 and self.refresh_on_401:
                 # The token died early (revoked, or Google's clock is ahead): one refresh.
                 self.forget(grant.user_id)
                 answer = await exchange()

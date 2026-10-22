@@ -20,7 +20,7 @@ from app.config import Settings
 from app.gmailmcp.google import GmailGoogle
 from app.mail import log, send_key
 from app.mail.errors import GoogleError
-from app.mail.google import TIMEOUT, Budget, Grant
+from app.mail.google import JSON_MAX_BYTES, MESSAGE_MAX_BYTES, TIMEOUT, Budget, Grant
 
 _headers: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar("gmailmcp_headers")
 MAX_RAW_BYTES = 12 * 1024 * 1024
@@ -30,6 +30,7 @@ class AccessGoogle(GmailGoogle):
     """A per-call client: the supplied access token is never cached or refreshed here."""
 
     access: str = ""
+    refresh_on_401 = False
 
     async def _token(self, grant: Grant) -> str:
         return self.access
@@ -124,7 +125,13 @@ class Service:
 
                 self.agent_budget.spend(grant.user_id, UNITS[call])
             with log.hide(client.access, headers.get("x-jobapp-address")), log.quiet():
-                return await client._gmail(grant, call, path, params)
+                return await client._gmail(
+                    grant,
+                    call,
+                    path,
+                    params,
+                    cap=MESSAGE_MAX_BYTES if call == "messages.get" else JSON_MAX_BYTES,
+                )
         except (PermissionError, ValueError, KeyError):
             return {"error": "not_connected"}
         except GoogleError as exc:
@@ -135,10 +142,10 @@ class Service:
     ) -> dict[str, Any]:
         try:
             if len(raw) > MAX_RAW_BYTES * 2:
-                return {"error": "invalid_request"}
+                return {"result": "not_sent", "code": "message_too_large"}
             data = base64.b64decode(raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True)
             if len(data) > MAX_RAW_BYTES:
-                return {"error": "invalid_request"}
+                return {"result": "not_sent", "code": "message_too_large"}
             secret = self.settings.mail_send_key
             payload = send_key.verify(
                 secret.get_secret_value() if secret else None,
@@ -155,11 +162,18 @@ class Service:
                 f"mailmcp:send:{payload['send_id']}", "1", nx=True, ex=600
             )
             if not accepted:
-                return {"error": "not_authorised"}
-        except (PermissionError, ValueError, GoogleError):
-            return {"error": "not_authorised"}
+                return {"result": "unknown", "code": "key_used"}
+        except GoogleError as exc:
+            if exc.status == 401:
+                return {"error": "token_expired"}
+            return {
+                "result": "not_sent",
+                "code": "gmail_quota" if exc.code == "quota" else "gmail_error",
+            }
+        except (PermissionError, ValueError):
+            return {"result": "not_sent", "code": "not_authorised"}
         except Exception:
-            return {"error": "mail_server_down"}
+            return {"result": "not_sent", "code": "mail_server_down"}
         try:
             self.budget.spend(grant.user_id, 100)
             body: dict[str, Any] = {"raw": raw}
@@ -235,6 +249,10 @@ def build_app(service: Service) -> Any:
     @server.tool()
     async def send_message(send_key: str, raw: str, thread_id: str | None = None) -> dict[str, Any]:
         return await service.send(send_key, raw, thread_id, _headers.get())
+
+    @server.custom_route("/healthz", methods=["GET"])
+    async def health(request: Request) -> Any:
+        return JSONResponse({"status": "ok"})
 
     @server.custom_route("/attachments/{message_id}/{attachment_id}", methods=["GET"])
     async def attachment(request: Request) -> Any:

@@ -81,6 +81,14 @@ logger = logging.getLogger(__name__)
 HASH_HEX = 64
 
 SENTENCES = {
+    "unconfirmed_recipient": "Confirm the new email recipient before approving.",
+    "email_company_domain": (
+        "The recipient is not on a confirmed company domain. Review this application."
+    ),
+    "not_connected": "Connect Gmail in Account to send this application.",
+    "no_send_scope": "Reconnect Gmail in Account to allow sending.",
+    "needs_reconnect": "Reconnect Gmail in Account to continue.",
+    "mail_send_unavailable": "Email sending is not configured. Ask the administrator to enable it.",
     "submit_disabled": "Submissions are switched off on this server for now. Nothing was sent.",
     "paused": "Submissions are paused by the administrator for now. Nothing was sent.",
     "not_ready": "This application is not waiting for your approval.",
@@ -208,7 +216,11 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
         for row in rows
     )
     versions = {
-        kind: str(record.get("version_id"))
+        kind: (
+            [str(record.get("version_id")), record["pdf_sha256"]]
+            if "pdf_sha256" in record
+            else str(record.get("version_id"))
+        )
         for kind, record in sorted((document_versions or {}).items())
         if isinstance(record, dict)
     }
@@ -707,10 +719,32 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
     approval (a new authorisation through `decide`) leads to a click again. A Full auto item
     becomes a review item in the same transaction: its Like was spent on the first click, so
     only the person's Approve clicks again."""
+    if (
+        db.scalar(
+            sa.select(Application.ats).where(
+                Application.id == application_id, Application.user_id == user_id
+            )
+        )
+        == "email"
+    ):
+        from app.mail.locks import lock_send
+
+        lock_send(db, user_id)
     application, _ = lock(db, user_id, application_id)
     if application.state not in (State.submit_unknown, State.refused_by_site):
         raise RefusedError("not_retryable")
     previous = application.state.value
+    if application.ats == "email" and application.mail_send_id is not None:
+        from app.mail.draft_models import MailDraft, MailSend
+
+        row = db.get(MailSend, application.mail_send_id)
+        if row and row.result == "unknown":
+            row.resolved_by = "user_retry"
+            row.updated_at = now
+        draft = db.scalar(sa.select(MailDraft).where(MailDraft.application_id == application.id))
+        if draft:
+            draft.status, draft.updated_at = "draft", now
+        application.mail_send_id = None
     states.move(application, State.ready, now)
     application.error_code = None
     _event(db, application, "retry", now, previous=previous)

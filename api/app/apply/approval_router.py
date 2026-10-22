@@ -34,6 +34,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 import anyio
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
@@ -41,7 +42,7 @@ from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.apply import admin, gate, model_check, service, shots
-from app.apply.models import AnswerSource, Application
+from app.apply.models import AnswerSource, Application, ApplicationAnswer
 from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
 from app.db import get_session
 from app.identity import deps
@@ -68,6 +69,8 @@ class ApproveIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answers_hash: str = Field(min_length=gate.HASH_HEX, max_length=gate.HASH_HEX)
+    confirmed_email_recipient: str | None = Field(default=None, max_length=254)
+    acknowledged_email_issues: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class AnswerIn(BaseModel):
@@ -110,6 +113,7 @@ class CheckOut(BaseModel):
 
 
 class ApprovalView(BaseModel):
+    email: dict[str, Any] | None = None
     state: str
     dry_run: bool
     answers_hash: str
@@ -213,7 +217,29 @@ def _enqueue_submit(request: Request, application_id: uuid.UUID) -> None:
 def read_approval(application_id: str, user: CurrentUser, db: Db) -> ApprovalView:
     """What an approval of this application covers, and the hash to send back."""
     application = _application(db, user, application_id)
+    email_check = None
+    if application.ats == "email":
+        from app.mail import gate as mail_gate
+        from app.mail.draft_models import MailDraft
+
+        values = {row.field_key: row for row in gate.rows_of(db, application)}
+        body = values.get("email_body")
+        recipient = values.get("email_to")
+        preview = MailDraft(
+            user_id=user.id,
+            application_id=application.id,
+            kind="application",
+            to_addrs=[recipient.value] if recipient and recipient.value else [],
+            cc_addrs=[],
+            body=body.value if body else "",
+            subject="",
+        )
+        email_check = {
+            "issues": mail_gate.issues(db, preview, application.updated_at),
+            "written_by": "user" if body and body.source is AnswerSource.person else "agent",
+        }
     return ApprovalView(
+        email=email_check,
         state=application.state.value,
         dry_run=application.dry_run,
         answers_hash=gate.current_hash(db, application).hex(),
@@ -263,6 +289,23 @@ def approve(
         authorisation = gate.authorise_approval(
             db, user.id, wanted, sent, now, settings.apply_approval_ttl_s
         )
+        approved_application = db.get(Application, wanted)
+        if approved_application.ats == "email":
+            recipient = db.get(ApplicationAnswer, (wanted, "email_to"))
+            if recipient is None or body.confirmed_email_recipient != recipient.value:
+                db.rollback()
+                return _refusal("unconfirmed_recipient")
+            from app.apply.email import sync_draft
+            from app.mail import drafts as mail_drafts
+            from app.mail.draft_models import MailDraft
+
+            draft = db.scalar(sa.select(MailDraft).where(MailDraft.application_id == wanted))
+            if draft is not None:
+                sync_draft(db, approved_application, draft, now)
+                draft.fact_check = {
+                    "hash": mail_drafts.content_hash(draft),
+                    "acknowledged": body.acknowledged_email_issues,
+                }
         decision = gate.decide(
             db,
             user.id,
@@ -291,7 +334,15 @@ def approve(
         return _refusal("busy")
     if not decision.passed:
         return _refusal(decision.code or "refused", state=decision.state.value)
-    _enqueue_submit(request, wanted)
+    approved = _application(db, user, application_id)
+    if approved.ats == "email":
+        from app.mail.dispatch import application as send_email_application
+
+        db.commit()
+        anyio.from_thread.run(send_email_application, request.app, wanted)
+        db.expire_all()
+    else:
+        _enqueue_submit(request, wanted)
     return ApplicationOut.model_validate(_application(db, user, application_id))
 
 

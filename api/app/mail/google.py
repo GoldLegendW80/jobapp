@@ -509,9 +509,17 @@ class GoogleClient:
         self._refreshing: dict[str, asyncio.Lock] = {}
 
     async def connection_profile(self, account: Any, keyring: Any) -> Profile:
-        from app.mail.mcp_client import GmailMcp
+        from app.mail.mcp_client import (
+            GmailMcp,
+            MailConnectionError,
+            MailRequestUnknownError,
+            MailServerDownError,
+        )
 
-        found = await GmailMcp(self.settings, self, keyring).get_profile(account)
+        try:
+            found = await GmailMcp(self.settings, self, keyring).get_profile(account)
+        except (MailConnectionError, MailServerDownError, MailRequestUnknownError):
+            raise GoogleDownError(reason="unreachable") from None
         if "error" in found:
             raise GoogleDownError(reason="unreachable")
         return Profile(

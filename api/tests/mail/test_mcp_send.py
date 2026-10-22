@@ -62,7 +62,7 @@ def test_mcp_transport_send_and_replay(fake, clock, sleeps) -> None:
             # This lower boundary test is the sole test-only bypass of mail.gate.send.
             answer = await client.call(account, "send_message", args)
             assert answer["result"] == "sent", answer
-            assert (await client.call(account, "send_message", args))["error"] == "not_authorised"
+            assert (await client.call(account, "send_message", args))["result"] == "unknown"
             assert len(fake.sent) == 1
             account.email = BOB
             assert (await client.get_profile(account))["error"] == "not_connected"

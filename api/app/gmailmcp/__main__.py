@@ -6,17 +6,19 @@ from pathlib import Path
 import redis.asyncio as redis
 import uvicorn
 
-from app.config import Settings
 from app.gmailmcp.server import Service, build_app
+from app.gmailmcp.settings import ProviderSettings
 
 
 async def main() -> None:
-    settings = Settings(database_url="postgresql+psycopg://unused@invalid/unused")
+    settings = ProviderSettings()
     password_file = settings.gmail_mcp_redis_password_file
-    if not password_file:
-        raise RuntimeError("gmailmcp Redis password file is required")
-    password = (await asyncio.to_thread(Path(password_file).read_text)).strip()
-    store = redis.Redis(host="redis", username="gmailmcp", password=password)
+    if settings.mail_send_key and not password_file:
+        raise RuntimeError("gmailmcp Redis password file is required for sending")
+    password = (
+        (await asyncio.to_thread(Path(password_file).read_text)).strip() if password_file else None
+    )
+    store = redis.Redis(host="redis", username="gmailmcp", password=password) if password else None
     app = build_app(Service(settings, store))
     try:
         await uvicorn.Server(
@@ -29,7 +31,8 @@ async def main() -> None:
             )
         ).serve()
     finally:
-        await store.aclose()
+        if store is not None:
+            await store.aclose()
 
 
 if __name__ == "__main__":

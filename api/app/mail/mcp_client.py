@@ -8,11 +8,16 @@ import httpx
 from app.agents.crypto import Keyring
 from app.config import Settings
 from app.mail import log
+from app.mail.errors import GoogleError
 from app.mail.google import GoogleClient, Grant
 from app.mail.models import TOKEN_KIND, MailAccount
 
 
 class MailServerDownError(RuntimeError):
+    pass
+
+
+class MailConnectionError(RuntimeError):
     pass
 
 
@@ -45,7 +50,10 @@ class GmailMcp:
         token = token.plaintext
         grant = Grant(str(account.user_id), token)
         for attempt in range(2):
-            access = await self.oauth.access_token(grant)
+            try:
+                access = await self.oauth.access_token(grant)
+            except GoogleError:
+                raise MailConnectionError("needs_reconnect") from None
             headers = {
                 "Authorization": f"Bearer {access}",
                 "X-Jobapp-User": str(account.user_id),

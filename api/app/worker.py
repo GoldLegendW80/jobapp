@@ -106,6 +106,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+import sqlalchemy as sa
 from arq import cron, func
 from arq.connections import ArqRedis, create_pool
 from arq.constants import result_key_prefix
@@ -653,8 +654,16 @@ def apply_services(ctx: dict[str, Any]) -> Any:
 
 
 async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
+    from app.apply import email as apply_email
     from app.apply import run as apply_run
+    from app.apply.models import Application
 
+    with sessions_of(ctx)() as db:
+        application = db.get(Application, uuid.UUID(application_id))
+        if application and application.ats == "email":
+            apply_email.prepare(db, application.id, clock_of(ctx)())
+            db.commit()
+            return
     await apply_run.fill(apply_services(ctx), uuid.UUID(application_id))
 
 
@@ -711,6 +720,12 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     redis: ArqRedis | None = ctx.get("redis")
     if redis is None:
         return 0
+    # Email dispatch belongs to the API process, whose send key the worker cannot hold.
+    from app.apply.models import Application
+
+    with sessions_of(ctx)() as db:
+        email_ids = set(db.scalars(sa.select(Application.id).where(Application.ats == "email")))
+    approved = [item for item in approved if item not in email_ids or item in deciding]
     queued = 0
     for application_id in due:
         job = await redis.enqueue_job(
@@ -923,6 +938,8 @@ class QueueWorker(Worker):
 def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
     """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
     agent registered since the agents queue was built can outlive its job timeout."""
+    if settings is not None and settings.mail_send_key is not None:
+        raise RuntimeError("MAIL_SEND_KEY must never be set in the worker")
     specs = queues(settings)
     for spec in specs:
         if spec.name == queue.AGENTS:
