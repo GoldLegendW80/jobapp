@@ -16,6 +16,15 @@ from typing import Any, NamedTuple
 import pytest
 
 from app.apply.answers import (
+    AUTHORISATION_OPTION_TEXTS,
+    CONSENT_OPTION_TEXTS,
+    DEGREE_LEVEL_TEXTS,
+    DEGREE_SCALE_TEXTS,
+    DEGREE_TEXTS,
+    LEVEL_WORDS,
+    NEED_OPTION_TEXTS,
+    NO_OPTION_TEXTS,
+    YES_OPTION_TEXTS,
     Answer,
     Context,
     Documents,
@@ -23,6 +32,8 @@ from app.apply.answers import (
     Left,
     Posting,
     _range_option,
+    degree_of,
+    option_key,
     resolve,
 )
 from app.apply.bank import AnswerBank
@@ -791,12 +802,13 @@ LANGS = ("English", "French", "German", "Spanish")
 # questions it found left and the right answers it quotes), origin "review2"; then our own, half
 # of them traps, origin "own3" or "trap3". All run on the second review's profile.
 ROUND3: list[Case] = [
-    # N1 a work permit is never read as authorisation
+    # N1 a work permit is never read as authorisation: needing one is needing sponsorship (#269)
     C(
         "N1 need permit france",
         "Do you need a work permit to work in France?",
         "yes_no",
         context="probe",
+        expected=False,
         origin="review2",
     ),
     C(
@@ -804,6 +816,7 @@ ROUND3: list[Case] = [
         "Would you require a work permit to work in the UK?",
         "yes_no",
         context="probe",
+        expected=True,
         origin="review2",
     ),
     C(
@@ -811,6 +824,7 @@ ROUND3: list[Case] = [
         "Avez-vous besoin d'un permis de travail pour travailler en France ?",
         "yes_no",
         context="probe",
+        expected=False,
         origin="review2",
     ),
     # N2 two questions in one label
@@ -1700,7 +1714,13 @@ ROUND4: list[Case] = [
     R("everyday home phone", "Home phone"),
     R("everyday cv pdf", "CV (PDF only)", "file"),
     R("everyday salary k", "Expected salary (k€)"),
-    R("everyday degree msc", "Degree", "select", ("Bachelor's", "Master's", "PhD")),
+    R(
+        "everyday degree msc",
+        "Degree",
+        "select",
+        ("Bachelor's", "Master's", "PhD"),
+        expected="Master's",
+    ),
     # our own: options that contradict the label
     R(
         "contradict authorized citizen",
@@ -1762,6 +1782,7 @@ ROUND4: list[Case] = [
         "Visa sponsorship",
         "select",
         ("Required", "Not required"),
+        expected="Not required",
         origin="trap4",
     ),
     # near-duplicate options
@@ -2109,6 +2130,7 @@ ROUND4: list[Case] = [
         "Highest level of education",
         "select",
         ("Master", "Bachelor"),
+        expected="Master",
         origin="trap4",
     ),
     R("kind website file", "Website", "file", origin="trap4"),
@@ -2823,3 +2845,807 @@ def test_range_option_units_come_from_the_option_then_the_label(
     label: str, options: tuple[str, ...], expected: str | None
 ) -> None:
     assert _range_option(options, 4.0, 4.0, label) == expected
+
+
+# Round 7 (#269): the round 4 review's follow ups, each a family of the closed vocabularies (the
+# degrees and their levels, Required and Not required, I consent and I do not consent, the
+# Professional band, the work permit template), and the documented reading of needs_sponsorship.
+# The quoted inputs are "review4"; our own are "own7" or "trap7", half of them traps.
+def _p4(english: str = "C1", **answers: Any) -> dict[str, Any]:
+    stored = _probe4()
+    stored["answers"].update(answers)
+    stored["identity"]["languages"][1]["level"] = english
+    return stored
+
+
+CONTEXTS.update(
+    {
+        "p4_amsterdam": lambda: Context(USER, _probe4(), Posting.at("Amsterdam, Netherlands")),
+        "p4_masters": lambda: Context(USER, _p4(highest_degree="Master's degree"), None),
+        "p4_licence": lambda: Context(USER, _p4(highest_degree="Licence"), None),
+        "p4_phd": lambda: Context(USER, _p4(highest_degree="PhD"), None),
+        "p4_mba": lambda: Context(USER, _p4(highest_degree="MBA"), None),
+        "p4_bac5": lambda: Context(USER, _p4(highest_degree="Bac+5"), None),
+        "p4_m2": lambda: Context(USER, _p4(highest_degree="Master 2"), None),
+        "p4_progress": lambda: Context(
+            USER, _p4(highest_degree="Master's degree (in progress)"), None
+        ),
+        "p4_field": lambda: Context(USER, _p4(highest_degree="MSc Computer Science"), None),
+        "p4_refuse": lambda: Context(
+            USER, _p4(background_check_consent=False, reference_check_consent=False), None
+        ),
+        "p4_unset": lambda: Context(
+            USER, _p4(background_check_consent=None, reference_check_consent=None), None
+        ),
+        "p4_bg_only": lambda: Context(USER, _p4(reference_check_consent=None), None),
+        "p4_b2": lambda: Context(USER, _p4("B2"), None),
+        "p4_pro": lambda: Context(USER, _p4("Professional"), None),
+    }
+)
+NEED = ("Required", "Not required")
+CONSENT = ("I consent", "I do not consent")
+GREENHOUSE = (
+    "High School",
+    "Associate's Degree",
+    "Bachelor's Degree",
+    "Master's Degree",
+    "Master of Business Administration (M.B.A.)",
+    "Doctor of Philosophy (Ph.D.)",
+    "Other",
+)
+BAC = ("Bac", "Bac+2", "Licence (Bac+3)", "Master (Bac+5)", "Doctorat (Bac+8)")
+BAC_SCALE = ("Bac", "Bac+2", "Bac+3", "Bac+5", "Bac+8")
+LEVELS3 = ("Bachelor's", "Master's", "PhD")
+PRO = (
+    "English - Basic",
+    "English - Professional",
+    "English - Native",
+    "French - Basic",
+    "French - Professional",
+    "French - Native",
+)
+PRO_SCALE = ("Basic", "Intermediate", "Professional", "Native")
+PERMIT_NL = "Do you need a work permit to work in the Netherlands?"
+BACKGROUND = "Would you agree to a background check?"
+
+
+def G(  # noqa: N802, one letter like C and R, a case of round 7
+    name: str,
+    label: str,
+    kind: str = "text",
+    options: tuple[str, ...] = (),
+    context: str = "p4",
+    expected: Any = LEFT,
+    origin: str = "own7",
+) -> Case:
+    return Case(name, label, kind, options, context, expected, origin)
+
+
+ROUND7: list[Case] = [
+    # a degree picks its own degree, else the narrowest wider name of its level, never a narrower one
+    G(
+        "deg review masters",
+        "Your highest qualification",
+        "select",
+        LEVELS3,
+        "p4_masters",
+        "Master's",
+        "review4",
+    ),
+    G(
+        "deg msc level name",
+        "Highest degree",
+        "select",
+        ("Bachelor's degree", "Master's degree", "Doctorate"),
+        expected="Master's degree",
+    ),
+    G(
+        "deg msc greenhouse",
+        "Highest level of education",
+        "select",
+        GREENHOUSE,
+        expected="Master's Degree",
+    ),
+    G(
+        "deg mba greenhouse",
+        "Highest level of education",
+        "select",
+        GREENHOUSE,
+        "p4_mba",
+        "Master of Business Administration (M.B.A.)",
+    ),
+    G(
+        "deg phd greenhouse",
+        "Highest level of education",
+        "select",
+        GREENHOUSE,
+        "p4_phd",
+        "Doctor of Philosophy (Ph.D.)",
+    ),
+    G("deg mba level", "Degree", "select", LEVELS3, "p4_mba", "Master's"),
+    G("deg msc bac", "Niveau d'études", "select", BAC, expected="Master (Bac+5)"),
+    G("deg masters bac named", "Niveau d'études", "select", BAC, "p4_masters", "Master (Bac+5)"),
+    G(
+        "deg masters bare scale",
+        "Niveau d'études",
+        "select",
+        BAC_SCALE,
+        "p4_masters",
+        origin="trap7",
+    ),
+    G("deg msc bare scale", "Niveau d'études", "select", BAC_SCALE, origin="trap7"),
+    G("deg stored scale", "Niveau d'études", "select", BAC, "p4_bac5", origin="trap7"),
+    G(
+        "deg licence bachelor",
+        "Highest degree",
+        "select",
+        ("Bachelor's degree", "Master's degree"),
+        "p4_licence",
+        "Bachelor's degree",
+    ),
+    G(
+        "deg phd doctorat",
+        "Diplôme",
+        "select",
+        ("Licence", "Master", "Doctorat"),
+        "p4_phd",
+        "Doctorat",
+    ),
+    G(
+        "deg msc multi",
+        "Education level",
+        "multi",
+        ("Bachelor", "Master", "PhD"),
+        expected=("Master",),
+    ),
+    G(
+        "deg msc spelled",
+        "Degree",
+        "select",
+        ("Bachelor's degree", "Master of Science", "Master of Arts"),
+        expected="Master of Science",
+    ),
+    G(
+        "deg msc combobox",
+        "Degree",
+        "combobox",
+        ("Bachelors", "Masters", "Doctorate"),
+        expected="Masters",
+    ),
+    G(
+        "deg masters beside msc",
+        "Degree",
+        "select",
+        ("Master", "Master of Science"),
+        "p4_masters",
+        "Master",
+    ),
+    G("deg masters text", "Highest degree", context="p4_masters", expected="Master's degree"),
+    G(
+        "deg level never a degree",
+        "Highest degree",
+        "select",
+        ("BSc", "MSc", "PhD"),
+        "p4_masters",
+        origin="trap7",
+    ),
+    G(
+        "deg two of one level",
+        "Highest degree",
+        "select",
+        ("Master's degree", "Masters"),
+        origin="trap7",
+    ),
+    G(
+        "deg or higher",
+        "Highest degree",
+        "select",
+        ("Bachelor's degree", "Master's degree or higher"),
+        origin="trap7",
+    ),
+    G(
+        "deg scale never a level",
+        "Highest degree",
+        "select",
+        ("Bachelor's degree", "Master's degree"),
+        "p4_bac5",
+        origin="trap7",
+    ),
+    G("deg stored in progress", "Highest degree", "select", LEVELS3, "p4_progress", origin="trap7"),
+    G("deg stored with field", "Highest degree", "select", LEVELS3, "p4_field", origin="trap7"),
+    G("deg stored m2", "Highest degree", "select", LEVELS3, "p4_m2", origin="trap7"),
+    G(
+        "deg option in progress",
+        "Highest degree",
+        "select",
+        ("Bachelor's", "Master's (in progress)", "PhD"),
+        origin="trap7",
+    ),
+    G("deg no own level", "Highest degree", "select", ("Bachelor's", "PhD"), origin="trap7"),
+    G(
+        "deg other masters",
+        "Highest degree",
+        "select",
+        ("Master of Arts", "Master of Engineering", "Bachelor of Science"),
+        origin="trap7",
+    ),
+    G(
+        "deg names disagree",
+        "Niveau d'études",
+        "select",
+        ("Licence (Bac+5)", "Master (Bac+3)"),
+        origin="trap7",
+    ),
+    G(
+        "deg licence pro",
+        "Degree",
+        "select",
+        ("Licence professionnelle", "Master"),
+        "p4_licence",
+        origin="trap7",
+    ),
+    G(
+        "deg engineer",
+        "Highest degree",
+        "select",
+        ("Engineer's Degree", "Bachelor's Degree"),
+        origin="trap7",
+    ),
+    G(
+        "deg doctorate no phd",
+        "Highest degree",
+        "select",
+        ("Master's", "PhD"),
+        "p4_masters",
+        "Master's",
+    ),
+    G(
+        "deg bac scale only",
+        "Niveau d'études",
+        "select",
+        ("Bac+3", "Bac+4"),
+        "p4_masters",
+        origin="trap7",
+    ),
+    # Required and Not required answer only a question that asks whether sponsorship or a permit is needed
+    G(
+        "need review uk",
+        "Visa sponsorship required to work in the UK?",
+        "select",
+        NEED,
+        expected="Required",
+        origin="review4",
+    ),
+    G(
+        "need uk from london",
+        "Visa sponsorship required to work in the UK?",
+        "select",
+        NEED,
+        "p4_london",
+        "Required",
+    ),
+    G(
+        "need france",
+        "Visa sponsorship required to work in France?",
+        "select",
+        NEED,
+        expected="Not required",
+    ),
+    G(
+        "need posting paris",
+        "Do you require visa sponsorship?",
+        "select",
+        NEED,
+        expected="Not required",
+    ),
+    G(
+        "need posting london",
+        "Do you require visa sponsorship?",
+        "select",
+        NEED,
+        "p4_london",
+        "Required",
+    ),
+    G(
+        "need yes required",
+        "Will you need sponsorship to work in the US?",
+        "select",
+        ("Yes, required", "No, not required"),
+        expected="Yes, required",
+    ),
+    G(
+        "need french words",
+        "Avez-vous besoin d'un parrainage ?",
+        "select",
+        ("Nécessaire", "Pas nécessaire"),
+        expected="Pas nécessaire",
+    ),
+    G(
+        "need visa mirror",
+        "Visa sponsorship",
+        "select",
+        ("Visa sponsorship required", "Visa sponsorship not required"),
+        expected="Visa sponsorship not required",
+    ),
+    G(
+        "need subjectless mirror",
+        "Will you require sponsorship?",
+        "select",
+        ("Requires sponsorship", "Does not require sponsorship"),
+        expected="Does not require sponsorship",
+    ),
+    G(
+        "need permit words",
+        "Do you need a work permit to work in the UK?",
+        "select",
+        NEED,
+        expected="Required",
+    ),
+    G(
+        "need authorised question",
+        "Are you authorized to work in France?",
+        "select",
+        NEED,
+        origin="trap7",
+    ),
+    G("need status question", "Work authorization status", "select", NEED, origin="trap7"),
+    G(
+        "need without question",
+        "Can you work in France without sponsorship?",
+        "select",
+        NEED,
+        origin="trap7",
+    ),
+    G(
+        "need beside status",
+        "Visa sponsorship required to work in the UK?",
+        "select",
+        ("Required", "Not required", "Sponsorship required"),
+        expected="Required",
+    ),
+    G(
+        "need two say needed",
+        "Visa sponsorship required to work in the UK?",
+        "select",
+        ("Required", "Needed", "Not required"),
+        origin="trap7",
+    ),
+    G(
+        "need two say no",
+        "Do you require visa sponsorship?",
+        "select",
+        ("Yes", "No", "Not required"),
+        origin="trap7",
+    ),
+    G(
+        "need no entry",
+        "Visa sponsorship required to work in Norway?",
+        "select",
+        NEED,
+        origin="trap7",
+    ),
+    G(
+        "need europe",
+        "Visa sponsorship required to work in Europe?",
+        "select",
+        NEED,
+        origin="trap7",
+    ),
+    G(
+        "need no posting",
+        "Do you require visa sponsorship?",
+        "select",
+        NEED,
+        "p4_none",
+        origin="trap7",
+    ),
+    G(
+        "need extra words",
+        "Do you require visa sponsorship?",
+        "select",
+        ("Required soon", "Not required yet"),
+        origin="trap7",
+    ),
+    G(
+        "need negated label",
+        "Visa sponsorship not required to work in the UK?",
+        "select",
+        NEED,
+        origin="trap7",
+    ),
+    G("need company question", "Is visa sponsorship available?", "select", NEED, origin="trap7"),
+    # a consent option answers a consent question, only from the person's stored consent
+    G("consent review", BACKGROUND, "select", CONSENT, expected="I consent", origin="review4"),
+    G("consent refused", BACKGROUND, "select", CONSENT, "p4_refuse", "I do not consent"),
+    G(
+        "consent agree",
+        "Do you consent to a background check?",
+        "select",
+        ("I agree", "I do not agree"),
+        expected="I agree",
+    ),
+    G(
+        "consent reference yes",
+        "Do you consent to a reference check?",
+        "select",
+        ("Yes, I consent", "No, I do not consent"),
+        expected="Yes, I consent",
+    ),
+    G(
+        "consent french",
+        "Acceptez-vous une vérification des antécédents ?",
+        "select",
+        ("J'accepte", "Je n'accepte pas"),
+        "p4_refuse",
+        "Je n'accepte pas",
+    ),
+    G(
+        "consent references agree",
+        "Would you agree to a reference check?",
+        "select",
+        ("Agree", "Disagree"),
+        expected="Agree",
+    ),
+    G("consent unset", BACKGROUND, "select", CONSENT, "p4_unset", origin="trap7"),
+    G(
+        "consent one for another",
+        "Do you consent to a reference check?",
+        "select",
+        CONSENT,
+        "p4_bg_only",
+        origin="trap7",
+    ),
+    G("consent drug test", "Do you consent to a drug test?", "select", CONSENT, origin="trap7"),
+    G(
+        "consent credit check",
+        "Do you consent to a credit check?",
+        "select",
+        CONSENT,
+        origin="trap7",
+    ),
+    G(
+        "consent criminal",
+        "Do you consent to a criminal background check?",
+        "select",
+        CONSENT,
+        origin="trap7",
+    ),
+    G(
+        "consent after offer",
+        BACKGROUND,
+        "select",
+        ("I consent after an offer", "I do not consent"),
+        origin="trap7",
+    ),
+    G("consent two say yes", BACKGROUND, "select", ("I consent", "Yes", "No"), origin="trap7"),
+    G(
+        "consent other words",
+        BACKGROUND,
+        "select",
+        ("Consent given", "Consent refused"),
+        origin="trap7",
+    ),
+    G(
+        "consent onsite",
+        "Are you willing to work on site?",
+        "select",
+        ("I agree", "I do not agree"),
+        origin="trap7",
+    ),
+    G(
+        "consent authorised",
+        "Are you authorized to work in France?",
+        "select",
+        CONSENT,
+        origin="trap7",
+    ),
+    G(
+        "consent negated",
+        "Do you not consent to a background check?",
+        "select",
+        CONSENT,
+        origin="trap7",
+    ),
+    G("consent box", "I consent to a background check", "checkbox", origin="trap7"),
+    # Professional is a word of the fluent band (C1, C2), never of a native or an intermediate level
+    G(
+        "pro review",
+        "Your languages",
+        "multi",
+        PRO,
+        expected=("English - Professional", "French - Native"),
+        origin="review4",
+    ),
+    G("pro english level", "English level", "select", PRO_SCALE, expected="Professional"),
+    G(
+        "pro french words",
+        "Niveau d'anglais",
+        "select",
+        ("Débutant", "Intermédiaire", "Professionnel", "Bilingue"),
+        expected="Professionnel",
+    ),
+    G(
+        "pro proficiency",
+        "Languages",
+        "multi",
+        ("English (Professional proficiency)", "French (Native)"),
+        expected=("English (Professional proficiency)", "French (Native)"),
+    ),
+    G(
+        "pro stored",
+        "What is your level of English?",
+        "select",
+        ("Basic", "Conversational", "Professional", "Native"),
+        "p4_pro",
+        "Professional",
+    ),
+    G(
+        "pro grade beside",
+        "English level",
+        "select",
+        ("A2", "B2", "Professional"),
+        expected="Professional",
+    ),
+    G(
+        "pro grade agrees",
+        "English level",
+        "select",
+        ("Professional (C1)", "Native (C2)"),
+        expected="Professional (C1)",
+    ),
+    G("pro b2 intermediate", "English level", "select", PRO_SCALE, "p4_b2", "Intermediate"),
+    G(
+        "pro two fluent",
+        "English level",
+        "select",
+        ("Basic", "Intermediate", "Professional", "Fluent", "Native"),
+        origin="trap7",
+    ),
+    G(
+        "pro b2 never",
+        "English level",
+        "select",
+        ("Basic", "Professional", "Native"),
+        "p4_b2",
+        origin="trap7",
+    ),
+    G(
+        "pro linkedin working",
+        "English level",
+        "select",
+        (
+            "Elementary proficiency",
+            "Limited working proficiency",
+            "Professional working proficiency",
+            "Native or bilingual proficiency",
+        ),
+        origin="trap7",
+    ),
+    G(
+        "pro semi",
+        "Your languages",
+        "multi",
+        ("English - Semi-professional", "French - Native"),
+        origin="trap7",
+    ),
+    G(
+        "pro not",
+        "Your languages",
+        "multi",
+        ("English - Not professional", "English - Native", "French - Native"),
+        origin="trap7",
+    ),
+    G(
+        "pro native never",
+        "French level",
+        "select",
+        ("Basic", "Intermediate", "Professional"),
+        origin="trap7",
+    ),
+    G(
+        "pro grade disagrees",
+        "English level",
+        "select",
+        ("Professional (B2)", "Native"),
+        origin="trap7",
+    ),
+    G(
+        "pro is not fluent",
+        "Are you fluent in English?",
+        "yes_no",
+        context="p4_pro",
+        origin="trap7",
+    ),
+    G("pro business", "English level", "select", ("Basic", "Business", "Native"), origin="trap7"),
+    # needing a work permit is needing sponsorship there; holding a permit or a visa is never read
+    G("permit review nl", PERMIT_NL, "yes_no", expected=False, origin="review4"),
+    G("permit nl options", PERMIT_NL, "select", ("Yes", "No"), "p4_amsterdam", "No"),
+    G(
+        "permit posting country",
+        "Do you need a work permit?",
+        "yes_no",
+        context="p4_amsterdam",
+        expected=False,
+    ),
+    G(
+        "permit switzerland",
+        "Would you require a work permit to work in Switzerland?",
+        "yes_no",
+        expected=True,
+    ),
+    G(
+        "permit us options",
+        "Will you need a work permit for the United States?",
+        "select",
+        ("Yes", "No"),
+        expected="Yes",
+    ),
+    G(
+        "permit french nl",
+        "Avez-vous besoin d'un permis de travail pour travailler aux Pays-Bas ?",
+        "select",
+        ("Oui", "Non"),
+        expected="Non",
+    ),
+    G(
+        "permit french autorisation",
+        "Avez-vous besoin d'une autorisation de travail pour travailler au Royaume-Uni ?",
+        "yes_no",
+        expected=True,
+    ),
+    G(
+        "permit germany eu",
+        "Do you need a work permit to work in Germany?",
+        "yes_no",
+        expected=False,
+    ),
+    G(
+        "permit future canada",
+        "Will you now or in the future require a work permit to work in Canada?",
+        "yes_no",
+        expected=True,
+    ),
+    G("permit need words", PERMIT_NL, "select", NEED, expected="Not required"),
+    G("permit text sentence", PERMIT_NL, expected="EU citizen, no sponsorship needed."),
+    G("permit have", "Do you have a work permit for the Netherlands?", "yes_no", origin="trap7"),
+    G(
+        "permit hold valid",
+        "Do you hold a valid work permit for the Netherlands?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G("permit no entry", "Do you need a work permit to work in Norway?", "yes_no", origin="trap7"),
+    G("permit europe", "Do you need a work permit to work in Europe?", "yes_no", origin="trap7"),
+    G(
+        "permit two permits",
+        "Do you need a work or residence permit to work in the Netherlands?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G(
+        "permit residence",
+        "Do you need a residence permit to work in the Netherlands?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G("permit visa", "Do you need a visa to work in the Netherlands?", "yes_no", origin="trap7"),
+    G(
+        "permit no posting",
+        "Do you need a work permit?",
+        "yes_no",
+        context="p4_none",
+        origin="trap7",
+    ),
+    G(
+        "permit negated",
+        "Do you not need a work permit to work in the Netherlands?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G(
+        "permit spouse",
+        "Does your spouse need a work permit to work in the Netherlands?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G(
+        "permit citizen option",
+        PERMIT_NL,
+        "select",
+        ("Yes", "No, I am an EU citizen"),
+        origin="trap7",
+    ),
+    G(
+        "permit two countries",
+        "Do you need a work permit to work in the Netherlands or Belgium?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G("permit city", "Would you need a work permit to work in Paris?", "yes_no", origin="trap7"),
+    G(
+        "permit contractor",
+        "Do you need a work permit to work in the Netherlands as a contractor?",
+        "yes_no",
+        origin="trap7",
+    ),
+    G(
+        "permit sponsored by us",
+        "Do you need a work permit sponsored by us to work in the Netherlands?",
+        "yes_no",
+        origin="trap7",
+    ),
+    # needs_sponsorship reads as not authorised (the line on _authorisation_option)
+    G(
+        "authorised later reads no",
+        "Are you authorized to work in the UK?",
+        "yes_no",
+        expected=False,
+    ),
+    G(
+        "authorised later option",
+        "Are you authorized to work in the UK?",
+        "select",
+        ("Authorized to work", "Not authorized to work"),
+        expected="Not authorized to work",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", ROUND7, ids=[c.name for c in ROUND7])
+def test_round7_question(case: Case) -> None:
+    test_question(case)
+
+
+def test_round7_has_every_follow_up_and_half_of_our_own_are_traps() -> None:
+    review = [c for c in ROUND7 if c.origin == "review4"]
+    own = [c for c in ROUND7 if c.origin in ("own7", "trap7")]
+    assert len(review) == 5
+    assert len(own) >= 80
+    assert sum(c.origin == "trap7" for c in own) * 2 >= len(own)
+    assert len({c.name for c in ROUND7}) == len(ROUND7)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("MSc", ("master", 0, "MSc")),
+        ("M.Sc.", ("master", 0, "MSc")),
+        ("Master of Science", ("master", 0, "MSc")),
+        ("Master's", ("master", 1, "master")),
+        ("Masters Degree", ("master", 1, "master")),
+        ("Licence (Bac+3)", ("bachelor", 0, "Licence")),
+        ("Master (Bac+5)", ("master", 1, "master")),
+        ("Bac + 5", ("master", 2, "master")),
+        ("Doctor of Philosophy (Ph.D.)", ("doctorate", 0, "PhD")),
+        ("Master's degree (MSc)", ("master", 0, "MSc")),
+        ("MSc (MBA)", None),
+        ("Licence (Bac+5)", None),
+        ("Master's (in progress)", None),
+        ("MSc Computer Science", None),
+        ("Master 2", None),
+        ("Baccalaureate", None),
+        ("MS", None),
+        ("Diplôme d'ingénieur", None),
+        ("((MSc))", ("master", 0, "MSc")),
+        ("MSc (", ("master", 0, "MSc")),
+        ("", None),
+    ],
+)
+def test_round7_a_degree_reads_as_its_level_rank_and_name(text: str, expected: object) -> None:
+    assert degree_of(text) == expected
+
+
+def test_round7_no_two_vocabularies_share_an_option() -> None:
+    seen: dict[str, str] = {}
+    vocabularies = [("yes", YES_OPTION_TEXTS), ("no", NO_OPTION_TEXTS)]
+    vocabularies += list(AUTHORISATION_OPTION_TEXTS.items())
+    vocabularies += [(f"consent {said}", texts) for said, texts in CONSENT_OPTION_TEXTS.items()]
+    vocabularies += [(f"need {said}", texts) for said, texts in NEED_OPTION_TEXTS.items()]
+    vocabularies += [(f"degree {name}", texts) for name, (_, texts) in DEGREE_TEXTS.items()]
+    vocabularies += list(DEGREE_LEVEL_TEXTS.items())
+    vocabularies += [(f"scale {level}", (text,)) for level, text in DEGREE_SCALE_TEXTS.items()]
+    vocabularies += [(f"band {band}", words) for band, words in LEVEL_WORDS.items()]
+    for name, texts in vocabularies:
+        for text in texts:
+            key = option_key(text)
+            assert seen.setdefault(key, name) == name, (text, seen[key], name)

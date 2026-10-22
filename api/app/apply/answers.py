@@ -16,7 +16,9 @@ exact form ("without sponsorship").
 
 Options too are a closed world: an answer picks an option only when the option's whole text is in
 that answer's vocabulary (the yes and no options, the work authorisation status options by
-category, the language levels) or reads exactly as the stored value. No option is ever picked
+category, "Required" and "Not required" for a question that asks whether sponsorship or a work
+permit is needed, "I consent" and "I do not consent" for a consent question, the language
+levels, the degrees and their levels) or reads exactly as the stored value. No option is ever picked
 because it starts with or holds a word of the answer. A free value (a notice period, a salary or
 relocation sentence) goes into text fields only. The field's kind has the last word: a file field
 takes only a document, a date field only a stored date.
@@ -27,7 +29,9 @@ pay received, free text); then the person's answer bank, for the exact question 
 then the templates. A rule that matches but finds no value in the profile leaves the field.
 Work authorisation is answered for the country the question names, else the posting's; a member
 state of the EU with no entry of its own is answered from the person's EU entry; Europe, the EEA,
-Schengen and EFTA read only an entry of their own. A context
+Schengen and EFTA read only an entry of their own. An entry's `needs_sponsorship` is the one
+fact read: needing sponsorship there is needing a work permit there, and not being authorised
+there (`_authorisation_option`). Holding a permit, or a visa, is never read. A context
 without a posting (the profile run of A18a) leaves everything that needs the posting's country.
 """
 
@@ -330,6 +334,25 @@ AUTHORISATION_OPTION_TEXTS: dict[str, tuple[str, ...]] = {
         "No, I don't need sponsorship",
         "No, I will not require sponsorship",
         "No, I will not need sponsorship",
+        "No, sponsorship not required",
+        "No, sponsorship not needed",
+        "Do not require sponsorship",
+        "Don't require sponsorship",
+        "Does not require sponsorship",
+        "Do not need sponsorship",
+        "Don't need sponsorship",
+        "Does not need sponsorship",
+        "Visa sponsorship not required",
+        "Visa sponsorship not needed",
+        "No visa sponsorship required",
+        "No visa sponsorship needed",
+        "I do not need visa sponsorship",
+        "I don't need visa sponsorship",
+        "I do not require visa sponsorship",
+        "I don't require visa sponsorship",
+        "I will not need visa sponsorship",
+        "I will not require visa sponsorship",
+        "Parrainage non nécessaire",
         "Oui, je suis autorisé",
         "Oui, je suis autorisé(e)",
         "Non, je n'ai pas besoin de parrainage",
@@ -360,6 +383,11 @@ AUTHORISATION_OPTION_TEXTS: dict[str, tuple[str, ...]] = {
         "Yes, I need sponsorship",
         "Yes, I will require sponsorship",
         "Yes, I will need sponsorship",
+        "Yes, sponsorship required",
+        "Yes, sponsorship needed",
+        "Yes, visa sponsorship required",
+        "Yes, visa sponsorship needed",
+        "I require visa sponsorship",
         "Oui, j'ai besoin d'un parrainage",
     ),
     # Not authorised to work there: true exactly when sponsorship is needed.
@@ -431,6 +459,135 @@ EEO_YES_NO_OPTION_TEXTS: dict[str, dict[bool, tuple[str, ...]]] = {
     },
 }
 
+# The options that give or refuse a consent (a background or a reference check), read only for
+# a consent question and only from the person's stored consent.
+CONSENT_OPTION_TEXTS: dict[bool, tuple[str, ...]] = {
+    True: (
+        "I consent",
+        "I agree",
+        "I accept",
+        "I give my consent",
+        "Yes, I consent",
+        "Yes, I agree",
+        "Yes, I accept",
+        "Consent",
+        "Agree",
+        "Je consens",
+        "J'accepte",
+        "Je donne mon consentement",
+        "Oui, je consens",
+        "Oui, j'accepte",
+    ),
+    False: (
+        "I do not consent",
+        "I don't consent",
+        "I do not agree",
+        "I don't agree",
+        "I do not accept",
+        "I don't accept",
+        "I disagree",
+        "No, I do not consent",
+        "No, I don't consent",
+        "No, I do not agree",
+        "No, I don't agree",
+        "No, I do not accept",
+        "No, I don't accept",
+        "Do not consent",
+        "Disagree",
+        "Je ne consens pas",
+        "Je n'accepte pas",
+        "Non, je ne consens pas",
+        "Non, je n'accepte pas",
+    ),
+}
+# The options that say whether sponsorship or a work permit is needed, without naming it: read
+# only for a question that asks whether it is needed ("Visa sponsorship required?").
+NEED_OPTION_TEXTS: dict[bool, tuple[str, ...]] = {
+    True: (
+        "Required",
+        "Needed",
+        "Yes, required",
+        "Yes, needed",
+        "Requis",
+        "Requise",
+        "Nécessaire",
+        "Oui, requis",
+        "Oui, nécessaire",
+    ),
+    False: (
+        "Not required",
+        "Not needed",
+        "No, not required",
+        "No, not needed",
+        "Non requis",
+        "Non requise",
+        "Pas requis",
+        "Pas requise",
+        "Non nécessaire",
+        "Pas nécessaire",
+        "Non, pas requis",
+        "Non, pas nécessaire",
+    ),
+}
+
+
+def _by_answer(texts: Mapping[bool, tuple[str, ...]]) -> dict[bool, frozenset[str]]:
+    return {said: frozenset(option_key(t) for t in words) for said, words in texts.items()}
+
+
+CONSENT_OPTIONS = _by_answer(CONSENT_OPTION_TEXTS)
+NEED_OPTIONS = _by_answer(NEED_OPTION_TEXTS)
+
+# A degree, read as (level, rank, name). Rank 0 is one degree (an MSc, a licence), rank 1 the
+# name of its level (Master's degree): a stored degree picks an option of its own rank and name,
+# else one naming its level, never a narrower one ("Master's degree" never picks "MSc", it may
+# be an MA). Rank 2, the French count of years after the baccalaureate, only confirms a name
+# beside it ("Master (Bac+5)"): a bare "Bac+3" is never picked, a 4 year bachelor may be Bac+4.
+DEGREE_TEXTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "Baccalauréat": ("secondary", ("Baccalauréat", "Bac")),
+    "Licence": ("bachelor", ("Licence",)),
+    "BSc": ("bachelor", ("BSc", "B.Sc.", "BS", "B.S.", "Bachelor of Science")),
+    "BA": ("bachelor", ("BA", "B.A.", "Bachelor of Arts")),
+    "BEng": ("bachelor", ("BEng", "B.Eng.", "Bachelor of Engineering")),
+    "MSc": ("master", ("MSc", "M.Sc.", "Master of Science")),
+    "MA": ("master", ("MA", "M.A.", "Master of Arts")),
+    "MEng": ("master", ("MEng", "M.Eng.", "Master of Engineering")),
+    "MBA": ("master", ("MBA", "M.B.A.", "Master of Business Administration")),
+    "PhD": ("doctorate", ("PhD", "Ph.D.", "DPhil", "D.Phil.", "Doctor of Philosophy")),
+}
+DEGREE_LEVEL_TEXTS: dict[str, tuple[str, ...]] = {
+    "secondary": ("High school", "High school diploma", "Secondary school", "Secondary education"),
+    "associate": ("Associate degree", "Associate's degree", "Associates degree", "Associate's"),
+    "bachelor": (
+        "Bachelor",
+        "Bachelors",
+        "Bachelor's",
+        "Bachelor degree",
+        "Bachelors degree",
+        "Bachelor's degree",
+    ),
+    "master": (
+        "Master",
+        "Masters",
+        "Master's",
+        "Master degree",
+        "Masters degree",
+        "Master's degree",
+    ),
+    "doctorate": ("Doctorate", "Doctorate degree", "Doctoral degree", "Doctorat"),
+}
+DEGREE_SCALE_TEXTS = {
+    "associate": "Bac+2",
+    "bachelor": "Bac+3",
+    "master": "Bac+5",
+    "doctorate": "Bac+8",
+}
+_DEGREE_OF: dict[str, tuple[str, int, str]] = {
+    **{option_key(t): (level, 0, name) for name, (level, ts) in DEGREE_TEXTS.items() for t in ts},
+    **{option_key(t): (level, 1, level) for level, ts in DEGREE_LEVEL_TEXTS.items() for t in ts},
+    **{option_key(t): (level, 2, level) for level, t in DEGREE_SCALE_TEXTS.items()},
+}
+
 _OTHER = ("other", "others", "autre", "autres", "something else", "not listed", "none of the above")
 _DECLINE = (
     "prefer not to say",
@@ -466,10 +623,13 @@ def _whole_words(inner: str, outer: str) -> bool:
     return len(inner) >= 3 and re.search(rf"\b{re.escape(inner)}\b", outer) is not None
 
 
-def _yes_no_option(value: bool, options: tuple[str, ...]) -> str | None:
-    """The one option whose whole text says yes (or no), from the vocabulary; none or two is
-    no match."""
-    vocabulary = YES_OPTIONS if value else NO_OPTIONS
+Words = Mapping[bool, frozenset[str]]
+
+
+def _yes_no_option(value: bool, options: tuple[str, ...], words: Words | None = None) -> str | None:
+    """The one option whose whole text says yes (or no), from the vocabulary and the words of
+    the question (consent, needed); none or two is no match."""
+    vocabulary = (YES_OPTIONS if value else NO_OPTIONS) | (words[value] if words else frozenset())
     hits = [option for option in options if option_key(option) in vocabulary]
     return hits[0] if len(hits) == 1 else None
 
@@ -506,13 +666,15 @@ def _family_option(family: tuple[str, ...], options: tuple[str, ...]) -> str | N
     return hits[0] if len(hits) == 1 else None
 
 
-def _boolean(field: FormField, value: bool, source: str) -> Answer | Left:
+def _boolean(
+    field: FormField, value: bool, source: str, words: Words | None = None
+) -> Answer | Left:
     """A yes or no for a field of any kind: the boolean for a checkbox or a bare yes/no, the one
-    option of the yes or no vocabulary for a choice."""
+    option of the yes or no vocabulary (and the question's own words) for a choice."""
     if field.kind in ("checkbox",) or (field.kind == "yes_no" and not field.options):
         return Answer(value, source)
     if field.options:
-        picked = _yes_no_option(value, field.options)
+        picked = _yes_no_option(value, field.options, words)
         if picked is None:
             return Left("no_matching_option", field.options, field.required)
         return Answer(picked, source, option=picked)
@@ -785,10 +947,10 @@ def _left(field: FormField, reason: str) -> Left:
     return Left(reason, field.options, field.required)
 
 
-def _boolean_form(field: FormField) -> bool:
+def _boolean_form(field: FormField, words: Words | None = None) -> bool:
+    known = YES_OPTIONS | NO_OPTIONS | (words[True] | words[False] if words else frozenset())
     return field.kind in ("yes_no", "checkbox") or (
-        field.kind in _CHOICES
-        and any(option_key(o) in YES_OPTIONS | NO_OPTIONS for o in field.options)
+        field.kind in _CHOICES and any(option_key(o) in known for o in field.options)
     )
 
 
@@ -901,7 +1063,17 @@ LEVEL_WORDS: dict[str, tuple[str, ...]] = {
         "basique",
     ),
     "intermediate": ("intermediate", "conversational", "intermediaire"),
-    "fluent": ("fluent", "advanced", "full professional", "courant", "avance", "courante"),
+    "fluent": (
+        "fluent",
+        "advanced",
+        "full professional",
+        "professional",
+        "courant",
+        "avance",
+        "courante",
+        "professionnel",
+        "professionnelle",
+    ),
     "native": (
         "native",
         "mother tongue",
@@ -1073,7 +1245,9 @@ def _authorisation_option(field: FormField, entries: list[WorkAuthorization]) ->
     """The one status option (`AUTHORISATION_OPTIONS`) whose category is true for the person in
     the country asked: "authorised" when the entries need no sponsorship, "requires_sponsorship"
     when they do. A citizenship, residence or visa option is never true: the profile stores none.
-    A status option reads the same whatever the label asks, so it is chosen on its own truth."""
+    A status option reads the same whatever the label asks, so it is chosen on its own truth.
+    The profile keeps no dates: an entry that needs sponsorship reads as not authorised there,
+    also for a person authorised today who needs sponsorship later."""
     needs = {e.needs_sponsorship for e in entries}
     if len(needs) != 1 or None in needs:
         return _left(field, "countries_disagree_or_unstated")
@@ -1088,20 +1262,25 @@ def _authorisation_option(field: FormField, entries: list[WorkAuthorization]) ->
 
 
 def _work(kind: Literal["authorised", "needs", "status"]) -> Handler:
-    """Work authorisation ("may you work there"), sponsorship ("do you need it") and the status
-    sentence, for the country the question names, else for the posting's."""
+    """Work authorisation ("may you work there"), sponsorship or a work permit ("do you need
+    it", which also takes "Required" and "Not required") and the status sentence, for the
+    country the question names, else for the posting's."""
+    words = NEED_OPTIONS if kind == "needs" else None
 
     def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
         entries, problem = _entries(field, ctx, s, m.groupdict().get("country"))
         if problem:
             return problem
-        if _boolean_form(field):
+        if _boolean_form(field, words):
             needs = {e.needs_sponsorship for e in entries}
             if kind == "status" or len(needs) != 1 or None in needs:
                 return _left(field, "countries_disagree_or_unstated")
             needed = bool(needs.pop())
             said = _boolean(
-                field, needed if kind == "needs" else not needed, "answers.work_authorization"
+                field,
+                needed if kind == "needs" else not needed,
+                "answers.work_authorization",
+                words,
             )
             if isinstance(said, Left) and field.options:
                 # "Oui, je suis autorisé(e)" beside "Non": a status option, true on its own.
@@ -1241,14 +1420,14 @@ def _relocation(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -
     return _boolean(field, verdict, "answers.relocation")
 
 
-def _flag(attr: str) -> Handler:
+def _flag(attr: str, words: Words | None = None) -> Handler:
     def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
         value = getattr(s.answers, attr)
         if value is None:
             return _left(field, f"no_{attr}")
         if field.kind in ("text", "textarea"):
             return _left(field, "not_a_yes_or_no")
-        return _boolean(field, value, f"answers.{attr}")
+        return _boolean(field, value, f"answers.{attr}", words)
 
     return handler
 
@@ -1529,12 +1708,59 @@ def _latest_school(s: Sections) -> Any:
     return schools[0] if schools else None
 
 
+def degree_of(text: str | None) -> tuple[str, int, str] | None:
+    """A degree as (level, rank, name), from its whole text: "MSc" reads ("master", 0, "MSc"),
+    "Master's" ("master", 1, "master"), "Licence (Bac+3)" ("bachelor", 0, "Licence"). None when
+    it is not wholly a degree ("MSc Computer Science", "Master's (in progress)") or its two
+    names disagree."""
+    whole = _DEGREE_OF.get(option_key(text))
+    named = re.fullmatch(r"([^()]+)\(([^()]+)\)", fold(text))
+    if whole is not None or named is None:
+        return whole
+    first, second = (_DEGREE_OF.get(option_key(part)) for part in named.groups())
+    if first is None or second is None or first[0] != second[0]:
+        return None
+    if first[1] == second[1] and first[2] != second[2]:
+        return None
+    return min(first, second, key=lambda read: read[1])
+
+
+def _degree_option(stored: str, options: tuple[str, ...]) -> str | None:
+    """The option for a stored degree: the one that reads the same, else the one of its own
+    rank and name, else the one naming its level (`DEGREE_TEXTS`); one of each, or none."""
+    picked = match_option(stored, options)
+    have = degree_of(stored)
+    if picked is not None or have is None:
+        return picked
+    level, rank, name = have
+    read = [(option, degree_of(option)) for option in options]
+    for wanted in range(rank, 2):
+        hits = [
+            o
+            for o, r in read
+            if r is not None
+            and r[0] == level
+            and r[1] == wanted
+            and (wanted > rank or r[2] == name)
+        ]
+        if hits:
+            return hits[0] if len(hits) == 1 else None
+    return None
+
+
 def _education(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     degree, source = s.answers.highest_degree, "answers.highest_degree"
     if not degree:
         school = _latest_school(s)
         degree, source = (school.degree, "experience.education") if school else (None, "")
-    return _text(field, degree, source) if degree else _left(field, "no_degree")
+    if not degree:
+        return _left(field, "no_degree")
+    if field.kind in _CHOICES and field.options:
+        picked = _degree_option(degree, field.options)
+        if picked is None:
+            return _left(field, "no_matching_option")
+        return Answer((picked,) if field.kind == "multi" else picked, source, picked)
+    return _text(field, degree, source)
 
 
 def _graduation_year(
@@ -1746,6 +1972,14 @@ TEMPLATES: tuple[Template, ...] = (
         rf"(?:necessitez|necessiterez) vous un (?:parrainage|sponsoring)(?: de visa)?(?: pour travailler {_IN} {{C}})?",
     ),
     _t(
+        "needs_work_permit",
+        _work("needs"),
+        r"(?:do|will|would) you (?:now or in the future )?(?:need|require) a work permit"
+        r"(?: now or in the future| in the future)?(?: (?:to work )?(?:in|for) {C})?",
+        rf"(?:avez|aurez) vous (?:maintenant ou a l avenir )?besoin d (?:un permis|une autorisation) de travail"
+        rf"(?: maintenant ou a l avenir)?(?: (?:pour travailler )?{_IN} {{C}})?",
+    ),
+    _t(
         "work_authorisation_status",
         _work("status"),
         rf"{_YOUR}(?:work authori[sz]ation|visa status|immigration status)(?: status)?(?: (?:in|for) {{C}})?",
@@ -1800,14 +2034,14 @@ TEMPLATES: tuple[Template, ...] = (
     ),
     _t(
         "background_check",
-        _flag("background_check_consent"),
+        _flag("background_check_consent", CONSENT_OPTIONS),
         r"(?:do you |would you )?(?:consent|agree) to (?:a |undergo a )?background checks?"
         r"|background check consent|are you willing to undergo a background check",
         r"(?:acceptez vous|consentez vous a) (?:une |la )?verification des antecedents",
     ),
     _t(
         "reference_check",
-        _flag("reference_check_consent"),
+        _flag("reference_check_consent", CONSENT_OPTIONS),
         r"(?:do you |would you )?(?:consent|agree) to (?:a )?reference checks?"
         r"|reference check consent|may we contact your references(?: reference check)?",
         r"acceptez vous que nous contactions vos references",
