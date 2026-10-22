@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from app.apply import gate, service
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.documents.models import DocumentVersion
+from app.jobs import service as jobs_service
 from app.jobs.models import Job
 from app.mail import gate as mail_gate
 from app.mail import locks, reconciling
@@ -47,7 +48,7 @@ def unknown(db, factory, person):
     assert row.result == "unknown"
     db.expire_all()
     assert db.get(Application, application.id).state is State.submit_unknown
-    return application.id, row.id, auth.draft_id, fake, app, mcp
+    return application.id, row.id, auth.draft_id, fake, ring, settings
 
 
 def confirm(api, token, application_id, send_id, entry):
@@ -113,7 +114,8 @@ def test_person_confirmation_settles_exact_attempt_and_replays(api, db, factory,
 
 @pytest.mark.parametrize("entry", ["apply", "mail"])
 def test_provider_confirmation_survives_person_replay(api, db, factory, person_a, entry):
-    app_id, send_id, draft_id, fake, app, mcp = unknown(db, factory, person_a)
+    app_id, send_id, draft_id, fake, ring, _ = unknown(db, factory, person_a)
+    _, app, mcp = provider(fake, ring)
 
     async def reconcile():
         async with app.router.lifespan_context(app):
@@ -132,7 +134,8 @@ def test_provider_confirmation_survives_person_replay(api, db, factory, person_a
 
 
 def test_person_confirmation_skips_later_provider_reconciliation(api, db, factory, person_a):
-    app_id, send_id, draft_id, fake, app, mcp = unknown(db, factory, person_a)
+    app_id, send_id, draft_id, fake, ring, _ = unknown(db, factory, person_a)
+    _, app, mcp = provider(fake, ring)
     assert (
         confirm(api, api.login_token(person_a.email), app_id, send_id, "apply").status_code == 200
     )
@@ -144,6 +147,50 @@ def test_person_confirmation_skips_later_provider_reconciliation(api, db, factor
             return await reconciling.reconcile(factory, person_a.user_id, mcp, AT)
 
     assert asyncio.run(reconcile()) == 0
+    assert snapshot(db, app_id, send_id, draft_id) == first
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.parametrize("entry", ["apply", "mail"])
+def test_existing_application_confirmation_repairs_only_mail_records(
+    api, db, factory, person_a, entry
+):
+    app_id, send_id, draft_id, fake, _, _ = unknown(db, factory, person_a)
+    application = db.get(Application, app_id)
+    application.state, application.submitted_at = State.submitted, AT
+    db.add(
+        ApplicationEvent(
+            application_id=app_id,
+            user_id=person_a.user_id,
+            at=AT,
+            kind="person_confirmed",
+            data={},
+        )
+    )
+    db.commit()
+    response = confirm(api, api.login_token(person_a.email), app_id, send_id, entry)
+    assert response.status_code == 200, response.text
+    result = snapshot(db, app_id, send_id, draft_id)
+    assert result[0:4] == (State.submitted, AT, "sent", "user")
+    assert result[6] == "sent"
+    assert result[10] == 1
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.parametrize("entry", ["apply", "mail"])
+def test_confirmation_rolls_all_records_back_on_transition_failure(
+    api, db, factory, person_a, entry, monkeypatch
+):
+    app_id, send_id, draft_id, fake, _, _ = unknown(db, factory, person_a)
+    first = snapshot(db, app_id, send_id, draft_id)
+    db.commit()
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic status failure")
+
+    monkeypatch.setattr(jobs_service, "set_status", fail)
+    with pytest.raises(RuntimeError, match="synthetic status failure"):
+        confirm(api, api.login_token(person_a.email), app_id, send_id, entry)
     assert snapshot(db, app_id, send_id, draft_id) == first
     assert len(fake.sent) == 1
 
@@ -192,7 +239,7 @@ def test_form_confirmation_preserves_replay_refusal(api, db, person_a, mode):
     application = service.start(
         db, person_a.user_id, person_a.posting_id, mode, False, now=AT
     ).application
-    application.state = State.submit_unknown
+    application.state, application.submitted_at = State.submit_unknown, AT
     db.commit()
     token = api.login_token(person_a.email)
     response = confirm(api, token, application.id, uuid.uuid4(), "apply")

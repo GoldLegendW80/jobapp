@@ -6,6 +6,8 @@ from datetime import datetime
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
+from app.apply import gate as apply_gate
+from app.apply.models import State
 from app.mail import gate, locks
 from app.mail.draft_models import MailDraft, MailSend
 from app.mail.mcp_client import GmailMcp
@@ -104,18 +106,44 @@ def resolve(
         sa.select(MailSend)
         .where(MailSend.id == send_id, MailSend.user_id == user_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if row is None:
         raise LookupError("No such send.")
-    if row.result != "unknown" or row.resolved_by == "user_retry":
+    draft = (
+        db.scalar(
+            sa.select(MailDraft)
+            .where(MailDraft.id == row.draft_id, MailDraft.user_id == user_id)
+            .execution_options(populate_existing=True)
+        )
+        if row.draft_id
+        else None
+    )
+    application_binding = None
+    if row.posting_id is not None or (draft is not None and draft.application_id):
+        application_binding = gate._application_for_send(db, row, draft) if draft else None
+        if application_binding is None:
+            raise ValueError("This send is not waiting for a decision.")
+    if row.resolved_by == "user_retry":
         raise ValueError("This send is not waiting for a decision.")
-    draft = db.get(MailDraft, row.draft_id) if row.draft_id else None
+    if action == "sent" and row.result == "sent" and application_binding is not None:
+        application, posting = application_binding
+        if application.state is State.submit_unknown:
+            apply_gate._confirm_submitted_locked(db, application, posting, now)
+        elif application.state is not State.submitted:
+            raise ValueError("This send is not waiting for a decision.")
+        return row
+    if row.result != "unknown":
+        raise ValueError("This send is not waiting for a decision.")
+    if application_binding is not None and application_binding[0].state not in (
+        State.submit_unknown,
+        State.submitted if action == "sent" else State.submit_unknown,
+    ):
+        raise ValueError("This send is not waiting for a decision.")
     if action == "sent":
         gate._finish(db, row, "sent", now, resolved_by="user")
     elif action == "send_again" and draft:
         if draft.application_id:
-            from app.apply import gate as apply_gate
-
             application = apply_gate.retry(db, user_id, draft.application_id, now)
             application.mail_send_id = None
         draft.status, draft.updated_at = "draft", now

@@ -186,6 +186,30 @@ def expire_pending(db: Session, user_id: uuid.UUID, now: datetime) -> None:
         _finish(db, row, "unknown", now)
 
 
+def _application_for_send(
+    db: Session, row: MailSend, draft: MailDraft
+) -> tuple[Application, Job] | None:
+    """Re-read the exact active application binding under apply's locks, after lock_send."""
+    if (
+        draft.id != row.draft_id
+        or draft.user_id != row.user_id
+        or draft.kind != "application"
+        or not draft.application_id
+    ):
+        return None
+    try:
+        application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
+    except apply_gate.NotFoundError:
+        return None
+    if (
+        application.ats != "email"
+        or application.mail_send_id != row.id
+        or application.posting_id != row.posting_id
+    ):
+        return None
+    return application, posting
+
+
 def _finish(
     db: Session,
     row: MailSend,
@@ -197,7 +221,21 @@ def _finish(
     thread_id: str | None = None,
     resolved_by: str | None = None,
 ) -> None:
-    draft = db.get(MailDraft, row.draft_id) if row.draft_id else None
+    draft = (
+        db.scalar(
+            sa.select(MailDraft)
+            .where(MailDraft.id == row.draft_id, MailDraft.user_id == row.user_id)
+            .execution_options(populate_existing=True)
+        )
+        if row.draft_id
+        else None
+    )
+    application_binding = None
+    if draft is not None and draft.application_id:
+        application_binding = _application_for_send(db, row, draft)
+        if application_binding is None:
+            # A provider may confirm a historical attempt, but it cannot settle a newer one.
+            draft = None
     row.result, row.updated_at, row.refusal_code = result, now, code
     row.gmail_message_id, row.gmail_thread_id = message_id, thread_id
     row.resolved_by = resolved_by
@@ -209,17 +247,17 @@ def _finish(
     draft.updated_at = now
     if result == "sent":
         draft.gmail_message_id, draft.sent_at = message_id, now
-    if draft.application_id:
-        application = db.get(Application, draft.application_id)
-        if application and application.state is State.submitting:
+    if application_binding is not None:
+        application, posting = application_binding
+        if application.state is State.submitting:
             outcome = {
                 "sent": State.submitted,
                 "unknown": State.submit_unknown,
                 "failed": State.refused_by_site,
             }[result]
             submit.record(db, application.id, outcome, now, code=code)
-        elif application and result == "sent" and application.state is State.submit_unknown:
-            apply_gate.confirm_submitted(db, application.user_id, application.id, now)
+        elif result == "sent" and application.state is State.submit_unknown:
+            apply_gate._confirm_submitted_locked(db, application, posting, now)
 
 
 def _decide(

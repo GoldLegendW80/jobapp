@@ -588,7 +588,48 @@ def confirm_submitted(
 ) -> Application:
     """ "It was submitted" on a `submit_unknown`: the versions frozen (already, at the click; a
     frozen version keeps its first reason and time), the posting to `applied`."""
+    if (
+        db.scalar(
+            sa.select(Application.ats).where(
+                Application.id == application_id, Application.user_id == user_id
+            )
+        )
+        == "email"
+    ):
+        from app.mail.locks import lock_send
+
+        lock_send(db, user_id)
     application, posting = lock(db, user_id, application_id)
+    if application.ats == "email":
+        from app.mail import reconciling
+        from app.mail.draft_models import MailDraft, MailSend
+
+        send_id = db.scalar(
+            sa.select(MailSend.id)
+            .join(MailDraft, MailDraft.id == MailSend.draft_id)
+            .where(
+                MailSend.id == application.mail_send_id,
+                MailSend.user_id == user_id,
+                MailSend.posting_id == application.posting_id,
+                MailDraft.user_id == user_id,
+                MailDraft.application_id == application.id,
+                MailDraft.kind == "application",
+            )
+        )
+        if send_id is None or application.state not in (State.submit_unknown, State.submitted):
+            raise RefusedError("not_unknown")
+        try:
+            reconciling.resolve(db, user_id, send_id, "sent", now)
+        except (LookupError, ValueError):
+            raise RefusedError("not_unknown") from None
+        return application
+    return _confirm_submitted_locked(db, application, posting, now)
+
+
+def _confirm_submitted_locked(
+    db: Session, application: Application, posting: Job, now: datetime
+) -> Application:
+    """Record the confirmation while the caller holds the application and posting locks."""
     if application.state is not State.submit_unknown:
         raise RefusedError("not_unknown")
     freeze_sent(db, application, now)
