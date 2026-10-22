@@ -197,7 +197,7 @@ def test_only_a_full_template_match_answers() -> None:
         ("Are you authorized to work in France or do you require sponsorship?", "two_questions"),
         ("Do you require sponsorship now? Will you later?", "two_questions"),
         ("Are you authorized to work in France as a contractor?", "not_a_known_question"),
-        ("Do you need a work permit to work in France?", "not_a_known_question"),
+        ("Do you need a work visa to work in France?", "not_a_known_question"),
         ("Have you previously worked for this company?", "not_a_known_question"),
         ("Are you unwilling to work on-site?", "not_a_known_question"),
     ]:
@@ -588,8 +588,25 @@ def test_the_option_vocabularies_never_share_an_option() -> None:
         ("Basic (C2)", None),
         ("B2 / C1", None),
         ("Professional working", None),
+        ("Professional", None),
+        ("Professionnelle", None),
         ("", None),
     ],
 )
 def test_a_level_reads_as_a_grade_and_a_band(level: str, expected: object) -> None:
     assert language_level(level) == expected
+
+
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        ("Professional", (None, "fluent")),
+        ("Professionnel", (None, "fluent")),
+        ("Professional (C1)", ("c1", "fluent")),
+        ("Professional (B2)", None),
+        ("Fluent", (None, "fluent")),
+        ("Professional working", None),
+    ],
+)
+def test_an_option_also_reads_professional_as_fluent(level: str, expected: object) -> None:
+    assert language_level(level, option=True) == expected
