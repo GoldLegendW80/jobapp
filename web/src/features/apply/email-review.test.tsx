@@ -1,11 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { http, HttpResponse } from "msw";
 
 import { fakeAnswer } from "@/test/apply";
+import { server } from "@/test/server";
 
 import type { Approval } from "./apply-api";
 import { ApproveDialog } from "./approve-dialog";
+import { EmailApplication } from "./email-application";
 
 function approval(): Approval {
   return {
@@ -40,6 +44,43 @@ function props(current = approval()) {
 }
 
 describe("email application approval", () => {
+  it("loads the exact email and asks Sent reconciliation through the normal API client", async () => {
+    const user = userEvent.setup();
+    let checked = 0;
+    server.use(
+      http.get("/api/applications/application/email", () =>
+        HttpResponse.json({
+          id: "draft",
+          status: "send_unknown",
+          to: ["e2e-jobs@example.org"],
+          subject: "Robotics Engineer",
+          body: "Please find my application attached.",
+          send_id: "send",
+          message: null,
+          issues: [],
+        }),
+      ),
+      http.post("/api/mail/sends/send/reconcile", () => {
+        checked += 1;
+        return HttpResponse.json({ resolved: 0 });
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <EmailApplication applicationId="application" />
+      </QueryClientProvider>,
+    );
+    expect(
+      await screen.findByText("Please find my application attached."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Check Sent" }));
+    await waitFor(() => {
+      expect(checked).toBe(1);
+    });
+  });
   it("shows the exact message and document versions and requires the new recipient confirmation", async () => {
     const user = userEvent.setup();
     const values = props();

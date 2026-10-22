@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
-import { API_BASE, describeError, request } from "@/lib/api";
+import { describeError, request } from "@/lib/api";
 
 const emailSchema = z.object({
   id: z.string(),
@@ -23,7 +23,7 @@ export function EmailApplication({ applicationId }: { applicationId: string }) {
   const draft = useQuery({
     queryKey: ["email-application", applicationId],
     queryFn: () =>
-      request(`${API_BASE}/applications/${applicationId}/email`, {
+      request(`/applications/${applicationId}/email`, {
         validate: (answer) => emailSchema.parse(answer),
       }),
     refetchInterval: 3000,
@@ -31,7 +31,7 @@ export function EmailApplication({ applicationId }: { applicationId: string }) {
   });
   const check = useMutation({
     mutationFn: () =>
-      request(`${API_BASE}/mail/sends/${draft.data?.send_id}/reconcile`, {
+      request(`/mail/sends/${draft.data?.send_id}/reconcile`, {
         method: "POST",
         validate: (answer) => z.object({ resolved: z.number() }).parse(answer),
       }),
@@ -39,7 +39,7 @@ export function EmailApplication({ applicationId }: { applicationId: string }) {
       void client.invalidateQueries();
     },
   });
-  if (!draft.data) return null;
+  if (!draft.data || draft.data.status === "preparing") return null;
   return (
     <section
       aria-label="Application email"
