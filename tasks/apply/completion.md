@@ -5,8 +5,9 @@ The owner's request of 2026-10-22 implements [SPEC-apply.md](../../SPEC-apply.md
 This ledger records implementation and separate test checkpoints. The final review and batch
 gate result on that pull request identify the exact checked head and tree.
 
-Implementation and scoped source review now cover A1 to A18. Runtime acceptance and the final
-combined gate are still in progress. The current application source is frozen at
+Implementation and scoped source review cover A1 to A18. Composed runtime checkpoints are
+recorded below; PR #604 records the final combined gate and independent review on its exact
+head/tree. The application source was frozen at
 `0070e6202cfe983ab2b6136f29e154c87c16a67c`, tree
 `602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`. The complete composed Apply/browser suite
 passes 10,460 tests in 361.17 seconds on that source. Later documentation, fixture corrections
@@ -17,8 +18,10 @@ credential-free fills and explicit Saved answers creation. These are implemented
 native file readback passes all four A8 journeys and three native file/iframe/chooser cases,
 with exactly one accepted nonempty approved CV per Lever/custom submission and zero custom
 submissions before approval. Saved answers passes its real fresh-user Add/reuse/local-edit/
-profile-precedence journey, with zero submissions. Actual known-fallback Review/Full auto,
-framed recovery and no-credential acceptance remain pending in the new combined rerun.
+profile-precedence journey, with zero submissions. The six-case actual native known-fallback
+file now passes Review, Full auto rehearsals/held submission, framed recovery and credential-free
+fills; its [acceptance report](../evidence/apply604-native-canonical-fixture.md) records the
+complete run and earlier failures.
 
 Fresh [field/progress closure](../evidence/apply604-field-progress-closure.md) closes the parser
 and original-budget findings, including preservation of person edits and closed wizard steps.
@@ -28,7 +31,8 @@ mutations are detected. The [implementation checkpoint](../evidence/apply604-fie
 passes 710 focused cases including eight real PostgreSQL finish/persistence cases. Visible
 unresolved fields remain separate from attempted outcomes so fresh and resumed credential-free
 prefill both work. The earlier 10,049-case whole Apply/browser pass is a separate checkpoint;
-the final composed source and native runtime are now running. These counts do not substitute
+the final composed source passes 10,460 module cases and the six-case native file. These counts
+do not substitute
 for the quiet exact-tree gate or final whole-PR review.
 
 ## Integration boundary
@@ -194,11 +198,11 @@ all existing field and Submit checks. A second module attempt was intentionally 
 (exit 130) to wait for the latest source fixes. These are not native acceptance. The
 [native delta review](../evidence/apply604-native-delta-review.md) also requires verified fill
 counts and a nonempty pinned PDF in the frame/no-credential journeys; source labels alone
-permit unverified outcomes. A fresh continuation owns those proof assertions and the actual
+permit unverified outcomes. A fresh continuation then owned those proof assertions and the actual
 composed rerun. The fresh [proof recheck](../evidence/apply604-native-proof-recheck.md)
 closes that assertion defect at source: independent tests reject unverified fills, wrong
-values, missing events and empty/non-PDF/wrong-version files. Actual native counts and
-execution still need confirmation. Rehearsals use normal person cancellation between attempts
+values, missing events and empty/non-PDF/wrong-version files. At that source checkpoint, actual native counts and
+execution still needed confirmation. Rehearsals use normal person cancellation between attempts
 and a separate Review account so the real duplicate-form guards remain in force.
 
 The composed native attempt ran ten tests with one worker. Two setup tests passed, the
@@ -213,11 +217,27 @@ Review also passes in 2.1 minutes, including zero submissions before approval, e
 afterward and full-byte/SHA equality with the approved CV. The rehearsal fixture then
 attempted to create a second posting at the same canonical URL and correctly received 409
 (`This posting is already in your list.`); this is not an optimistic-version conflict. Two
-known-fallback tests passed, one failed, and three did not run. A fresh agent owns legitimate
-posting reuse and the remaining native acceptance; no application duplicate guard is changed.
+known-fallback tests passed, one failed, and three did not run. A fresh agent then owned legitimate
+posting reuse and the remaining native acceptance; no application duplicate guard changed.
 All retry resources were cleaned. The [native attempt record](../evidence/apply604-native-attempts.md)
 preserves exact logs, traces, cgroup figures and screenshot paths. These checkpoints do not
 close production memory #605.
+
+The corrected canonical-posting fixture is integrated as `7782c22b`. A fresh uninterrupted
+known-fallback stack passes all six native tests in 11.7 minutes, with one worker and zero
+retries. All three real Like/Yes/Cancel rehearsals create distinct applications on the same
+posting and increment the real completed count to three. The fourth application waits through
+its hold, then submits exactly once with the pinned CV bytes/SHA. Framed mid-fill recovery
+passes in 48.6 seconds and credential-free filling in 57.1 seconds: each verifies six filled,
+one Left, zero unverified/failed/agent/skipped, exact values and a nonempty pinned PDF. Both
+perform zero clicks/submissions/model calls; framed Full auto returns to Review with its frame
+binding and unverified-origin reason. No duplicate, clock, authority or memory guard changed.
+
+The [completed native report](../evidence/apply604-native-canonical-fixture.md) records exact
+caps, cgroup figures, logs and cleanup. Root inspected the [twenty fallback layouts](../evidence/apply-known-fallback/README.md) and
+the four fresh A8 Review/Applied captures under `tasks/evidence/apply-a8/final-native-*`.
+These are functional native checkpoints, separate from long-lived memory and real-site/Jetson
+acceptance. Earlier failures and incomplete attempts remain recorded above.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
