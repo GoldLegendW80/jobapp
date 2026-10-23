@@ -251,3 +251,83 @@ def test_records_evict_only_terminal_history_and_drop_consumed_references() -> N
         assert len(records) == 32
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("swap", [False, True], ids=["initial", "swap"])
+def test_stale_start_callback_preserves_pending_delivery_cleanup(swap: bool) -> None:
+    async def go() -> None:
+        class DeliveryBrowser(Browser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.closes = 0
+                self.cleanup_task: asyncio.Task[Any] | None = None
+
+            async def stop(self) -> None:
+                self.closes += 1
+                self.cleanup_task = asyncio.current_task()
+                await super().stop()
+
+        late = DeliveryBrowser()
+        ids: list[str] = []
+        browsers: list[Browser] = []
+        caller: asyncio.Task[Any]
+        delivery: asyncio.Task[Any] | None = None
+
+        async def start(_: Request, lease_id: str) -> Browser:
+            nonlocal delivery
+            ids.append(lease_id)
+            if len(ids) == (2 if swap else 1):
+                delivery = asyncio.current_task()
+                # Cancel before the owned start finishes and schedules its done callback.
+                caller.cancel()
+                browsers.append(late)
+                return late
+            browser = Browser()
+            browser.finish.set()
+            browsers.append(browser)
+            return browser
+
+        manager = Manager(Config(secret=b"s"), start)
+        original = request()
+        if swap:
+            lease, token = await manager.acquire(original)
+            caller = asyncio.create_task(manager.swap(lease, replace(original, automation=False)))
+        else:
+            caller = asyncio.create_task(manager.acquire(original))
+        outcome = (await asyncio.gather(caller, return_exceptions=True))[0]
+        assert isinstance(outcome, asyncio.CancelledError)
+        await late.closing.wait()
+        record = manager._records[ids[-1]]
+        assert late.cleanup_task is not None
+        try:
+            assert record.task is late.cleanup_task
+            assert not record.task.done()
+            assert record.browser is late
+            assert record.revoked
+            assert manager.current() is None
+            assert manager.uses(original.profile_id)
+            await busy(manager)
+            assert len(ids) == (2 if swap else 1)
+            if not swap:
+                assert delivery is not None
+                lease, token = delivery.result()
+            with pytest.raises(LeaseError) as refused:
+                manager.check_token(lease.lease_id, token)
+            assert (refused.value.status, refused.value.code) == (404, "no_such_lease")
+        finally:
+            late.finish.set()
+            await asyncio.gather(late.cleanup_task, return_exceptions=True)
+        assert late.stopped
+        assert late.closes == 1
+        assert record.task is None
+        assert record.browser is None
+        assert not manager.uses(original.profile_id)
+        other, other_token = await manager.acquire(request("b"))
+        assert not await manager.release(lease.lease_id, "released")
+        assert manager.current() is other
+        assert manager.check_token(other.lease_id, other_token) is other
+        assert not browsers[-1].stopped
+        assert await manager.release(other.lease_id, "released")
+        assert all(browser.stopped for browser in browsers)
+
+    asyncio.run(go())
