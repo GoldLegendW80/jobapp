@@ -5,42 +5,29 @@ The owner's request of 2026-10-22 implements [SPEC-apply.md](../../SPEC-apply.md
 This ledger records implementation and separate test checkpoints. The final review and batch
 gate result on that pull request identify the exact checked head and tree.
 
-Implementation is still in progress. The capability audit found that the default worker did
-not construct the generic form agent and its custom-site journey was permanently skipped.
-Known-ATS `form_changed` also did not hand over automatically in both modes. The original-budget
-fallback source is now integrated, with 86 focused backend, 56 frontend and 7,563 whole Apply
-cases passing at that checkpoint. Actual known-ATS fallback acceptance remains pending.
-The default worker's actual custom
-fill and strict approved replay now pass after current native file-input readback was added.
-All four A8 journeys pass, including exactly one accepted fake submission with a nonempty
-approved CV for both Lever and the custom form, and zero custom submissions before approval.
-The earlier pure generic-run tests alone did not establish default-worker execution.
+Implementation and scoped source review now cover A1 to A18. Runtime acceptance and the final
+combined gate are still in progress. The current application source is frozen at
+`0070e6202cfe983ab2b6136f29e154c87c16a67c`, tree
+`602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`, for the composed Apply/browser and native rerun.
 
-The fresh default-wiring audit additionally found four implementation gaps: footer actions
-reported as whole-form unknown widgets, framed known-ATS fallback refused unconditionally,
-generic forms not receiving deterministic fills without model credentials, and Saved answers
-offering only Edit/Forget with no production insertion path. These source gaps are now closed:
-structural field grouping removes page-wrapper false positives, framed recovery keeps its original
-lease and hands Full auto back to Review, and credential-free generic filling uses exact
-code-resolvable values. Saved answers now offers explicit Add, preserves authoritative profile
-precedence and counts verified reuse once per application field. Its checkpoints pass 7,653
-backend cases, 402 UI cases and 170 composed bank/resolver/generic-recovery cases. The actual Saved
-answers journey also passes: a fresh user adds answers visibly, current profile values win, reuse
-is counted once and application edits stay local, with zero submissions. The framed/no-credential
-recovery source checkpoint passes all 7,678 Apply cases. Actual known-fallback acceptance,
-independent review and the final combined gate remain in progress; these separate checkpoints
-do not substitute for combined acceptance. Independent review has since reproduced a parser
-edge case where a genuine named unsupported group with a help link or inline heading disappears
-from Left. It also reproduced fallback preparation using a stale remaining timeout before
-starting the model at or beyond the original deadline. Both require fresh corrections and
-independent rechecks before acceptance. The first corrections pass 886 focused cases;
-the nested generic-wrapper follow-up passes 950 focused cases. The fresh
-[recheck](../evidence/apply604-parser-budget-recheck.md) closes the original disappearance and
-late-model-start defects but finds two further issues: two loose actions can fabricate a
-whole-form question, and early budget stops can discard prior person answers and closed wizard
-progress. A fresh fix round owns structural field-branch boundaries and conservative progress
-reporting. The 10,049-case whole Apply/browser pass at the earlier fix checkpoint does not
-close these independently reproduced gaps.
+The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
+credential-free fills and explicit Saved answers creation. These are implemented. Current
+native file readback passes all four A8 journeys and three native file/iframe/chooser cases,
+with exactly one accepted nonempty approved CV per Lever/custom submission and zero custom
+submissions before approval. Saved answers passes its real fresh-user Add/reuse/local-edit/
+profile-precedence journey, with zero submissions. Actual known-fallback Review/Full auto,
+framed recovery and no-credential acceptance remain pending in the new combined rerun.
+
+Fresh [field/progress closure](../evidence/apply604-field-progress-closure.md) closes the parser
+and original-budget findings, including preservation of person edits and closed wizard steps.
+Independent checks pass 3,360 genuine local choices, 495 clear wrapper controls, 48 ambiguous
+named groups retained as unknown, and 108 actual-helper progress cases; all 11 targeted
+mutations are detected. The [implementation checkpoint](../evidence/apply604-field-progress-implementation.md)
+passes 710 focused cases including eight real PostgreSQL finish/persistence cases. Visible
+unresolved fields remain separate from attempted outcomes so fresh and resumed credential-free
+prefill both work. The earlier 10,049-case whole Apply/browser pass is a separate checkpoint;
+the final composed source and native runtime are now running. These counts do not substitute
+for the quiet exact-tree gate or final whole-PR review.
 
 ## Integration boundary
 
