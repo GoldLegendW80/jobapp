@@ -25,8 +25,13 @@ module passes 8,573 tests without failures or skips on `593d2b91`. Its complete 
 hash-safe coverage diagnostic is 95.0224466042898 percent; this combines fresh changed-file
 data with unchanged-source baseline data and is not a fresh full-suite gate result.
 The [failure-path evidence](../evidence/apply604-failure-path-coverage.md) preserves the baseline,
-all three test cohorts and earlier failures. Review UX's canonical-posting fixture repair,
-fresh native acceptance, a complete quiet gate and final whole-PR review remain required.
+all three test cohorts and earlier failures. Review UX's canonical-posting fixture repair
+passes [fresh independent source closure](../evidence/apply604-ux-posting-source-closure.md).
+Its fresh native run on `f61962cb` fails the first fill when the unchanged browser memory
+guard closes the tab at 1,006 MiB: one pass, one failure, three not run, zero required layouts.
+This is an actual functional acceptance blocker under #605, beyond the earlier sustained-use
+concern. Memory diagnosis, fresh native acceptance, the complete quiet gate and final
+whole-PR review remain required.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
@@ -285,9 +290,14 @@ all 4, 6 and 8 cases respectively with zero retries. Their
 from final acceptance. Review UX first exposes a partial model-registry import; after its
 canonical-registry fix, it passes the earlier editor/render-failed assertions but a later
 fixture correctly receives a duplicate-posting 409. Both failed attempts and unrun cases are
-retained. A fresh author owns canonical posting reuse and new-generation document readiness;
-all five native cases and 16 final layouts still need acceptance. The complete Apply module
-and corrected coverage diagnostic above do not substitute for the final full gate.
+retained. Canonical posting reuse and new-generation document readiness now pass fresh
+independent source closure. The next immutable `f61962cb` native run has one pass, one failure
+and three not run, without retries: the memory guard closes the first fill at 1,006 MiB before
+the editor. No required layout quartet is emitted. The actual failure image and cgroup/trace
+provenance are retained in the [native evidence](../evidence/apply604-composed-native/README.md).
+All five native cases and 16 final layouts still need acceptance after the memory blocker is
+resolved. The complete Apply module and corrected coverage diagnostic do not substitute for
+the final full gate.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
