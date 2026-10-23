@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -81,21 +82,7 @@ async function fill(
       })
     ).status(),
   ).toBe(202);
-  await expect
-    .poll(
-      async () => {
-        const response = await page.request.get(`/api/jobs/${job}/documents`);
-        const body = (await response.json()) as {
-          documents: Array<{ latest: unknown }>;
-        };
-        return (
-          body.documents.length === 2 &&
-          body.documents.every((document) => document.latest !== null)
-        );
-      },
-      { timeout: 150_000 },
-    )
-    .toBe(true);
+  await waitForPostingDocuments(page.request, job);
   const started = await page.request.post(`/api/postings/${job}/applications`, {
     headers: CSRF,
     data: { mode: "review" },

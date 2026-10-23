@@ -8,6 +8,7 @@ import {
   type Page,
 } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { stub } from "./apply-helpers";
 import {
   CSRF,
@@ -140,21 +141,7 @@ async function posting(variant = "normal"): Promise<string> {
       })
     ).status(),
   ).toBe(202);
-  await expect
-    .poll(
-      async () => {
-        const response = await page.request.get(`/api/jobs/${job}/documents`);
-        const { documents } = (await response.json()) as {
-          documents: { latest: unknown }[];
-        };
-        return (
-          documents.length === 2 &&
-          documents.every((one) => one.latest !== null)
-        );
-      },
-      { timeout: 150_000 },
-    )
-    .toBe(true);
+  await waitForPostingDocuments(page.request, job);
   return job;
 }
 
@@ -179,10 +166,17 @@ async function edit(answer: Answer): Promise<Locator> {
     .getByRole("region", { name: "Apply", exact: true })
     .getByRole("listitem")
     .filter({
-      has: page.getByRole("button", {
-        name: `Edit: ${answer.label}`,
-        exact: true,
-      }),
+      has: page
+        .getByRole("button", {
+          name: `Edit: ${answer.label}`,
+          exact: true,
+        })
+        .or(
+          page.getByRole("button", {
+            name: `Stop editing: ${answer.label}`,
+            exact: true,
+          }),
+        ),
     });
   await row
     .getByRole("button", { name: `Edit: ${answer.label}`, exact: true })

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import {
   CSRF,
   addPosting,
@@ -78,21 +79,7 @@ test("review confirms a posting recipient and sends exactly the fixed PDFs throu
       },
     );
     expect(written.status()).toBe(202);
-    await expect
-      .poll(
-        async () => {
-          const response = await page.request.get(`/api/jobs/${job}/documents`);
-          const { documents } = (await response.json()) as {
-            documents: Array<{ latest: unknown }>;
-          };
-          return (
-            documents.length === 2 &&
-            documents.every((one) => one.latest !== null)
-          );
-        },
-        { timeout: 150_000 },
-      )
-      .toBe(true);
+    await waitForPostingDocuments(page.request, job);
     await page.goto(`/jobs/${job}`);
     const section = page.getByRole("region", { name: "Apply", exact: true });
     await section.getByRole("button", { name: "Apply (Review first)" }).click();
