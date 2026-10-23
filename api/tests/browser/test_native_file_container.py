@@ -2,20 +2,28 @@
 
 import pytest
 
-from tests.browser.test_b5_container import Lease, ref
+from app.apply.ats.base import parse_snapshot
+from tests.browser.test_b5_container import Lease
 from tests.browser.test_browser_container import Stack, no_lease_left, stack
 
 __all__ = ["no_lease_left", "stack"]
 pytestmark = pytest.mark.docker
 
 
+def ref(snapshot: str, role: str, name: str) -> str:
+    return next(n.ref for n in parse_snapshot(snapshot).walk() if n.role == role and name in n.name)
+
+
+@pytest.mark.parametrize("framed", [False, True])
 def test_native_file_selection_without_an_echo_tracks_replace_clear_and_rejection(
     stack: Stack,
+    framed: bool,
 ) -> None:
     lease = Lease(stack, "apply_fill")
     assert lease.put("cv.pdf")["status"] == 200
     assert lease.put("other.pdf")["status"] == 200
-    assert lease.tool("browser_navigate", url="http://pages:8080/b5/native-files.html")["ok"]
+    path = "native-files-frame.html" if framed else "native-files.html"
+    assert lease.tool("browser_navigate", url=f"http://pages:8080/b5/{path}")["ok"]
 
     def read():
         shot = lease.tool("browser_snapshot")
