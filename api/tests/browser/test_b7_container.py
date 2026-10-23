@@ -119,6 +119,13 @@ def wait_title(stack: Stack, text: str, attempts: int = 300) -> None:
     raise AssertionError(f"no window titled {text!r}: {window_titles(stack)[-1500:]}")
 
 
+def reaped(stack: Stack, uid: int, attempts: int = 300) -> bool:
+    """After an end the browser itself decided (wait_ended): GET /leases/current shows no lease
+    from the start of the end, while its stop, reap and rmtree still run under the uid (the
+    helpers are processes of that uid too). Each look is a docker exec round trip, no sleep."""
+    return any(not [p for p in processes(stack) if p[0] == uid] for _ in range(attempts))
+
+
 def end(stack: Stack) -> dict:
     lease = stack.current()["lease"]
     assert lease is not None
@@ -257,7 +264,7 @@ def test_a_session_without_cdp_killed_from_outside_ends_browser_crashed(stack: S
     stack.python(kill, user=str(UID_C))
     ended = stack.wait_ended()
     assert ended["last_end"]["reason"] == "browser_crashed"
-    assert not [p for p in processes(stack) if p[0] == UID_C]
+    assert reaped(stack, UID_C)
     assert "Signed in as e2e-browser-c" in read_site(stack, C, UID_C)
 
 
@@ -267,7 +274,7 @@ def test_the_memory_guard_ends_a_session_without_cdp(stack: Stack) -> None:
         session(stack, "signin", C, UID_C, f"{PAGES}/hog.html?cap=400")
         ended = stack.wait_ended(attempts=600)
         assert ended["last_end"]["reason"] == "memory_guard"
-        assert not [p for p in processes(stack) if p[0] == UID_C]
+        assert reaped(stack, UID_C)
     finally:
         stack.run("up", "-d", "--wait", "--no-build", "browser")
 
@@ -761,7 +768,7 @@ def test_a_port_opened_in_a_persons_session_ends_it(stack: Stack) -> None:
     with port_listener(stack, UID_G):
         ended = stack.wait_ended()
         assert ended["last_end"]["reason"] == "debugging_port"
-        assert not [p for p in processes(stack) if p[0] == UID_G]
+        assert reaped(stack, UID_G)
 
 
 def test_a_window_that_closes_ends_the_session_browser_closed(stack: Stack) -> None:
@@ -771,4 +778,4 @@ def test_a_window_that_closes_ends_the_session_browser_closed(stack: Stack) -> N
     session(stack, "signin", profile, uid, f"{PAGES}/b7/close.html")
     ended = stack.wait_ended(attempts=300)
     assert ended["last_end"]["reason"] == "browser_closed"
-    assert not [p for p in processes(stack) if p[0] == uid]
+    assert reaped(stack, uid)
