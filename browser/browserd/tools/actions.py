@@ -195,7 +195,7 @@ class Tab:
     async def settle(self, result: dict[str, Any]) -> dict[str, Any]:
         context = self.browser.browser.contexts[0]
         for other in list(context.pages):
-            off = policy.url_verdict(other.url, self.hosts) is not None
+            off = not self.allowed(other.url)
             if other is not self.state.page and off:
                 log.warning("lease %s: a tab outside the allow list closed", self.lease_tag)
                 await other.close()
@@ -279,11 +279,15 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def close_off_list(tab: Any, hosts: tuple[str, ...], lease_tag: str) -> None:
-    """A tab the page opens (window.open, a target=_blank link) is closed unless it shows a page
-    of the list once it has loaded (its navigation off the list was aborted by the guard)."""
+    """A new tab stays only on the list or at the exact internal blank used by the memory
+    guard. Navigation off the list is still aborted by the navigation guard."""
     with contextlib.suppress(Exception):
         await tab.wait_for_load_state("domcontentloaded", timeout=10_000)
-    if not tab.is_closed() and policy.url_verdict(tab.url, hosts) is not None:
+    if (
+        not tab.is_closed()
+        and tab.url != ABOUT_BLANK
+        and policy.url_verdict(tab.url, hosts) is not None
+    ):
         log.warning("lease %s: a tab outside the allow list closed", lease_tag)
         with contextlib.suppress(Exception):
             await tab.close()
