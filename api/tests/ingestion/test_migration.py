@@ -45,6 +45,7 @@ DOCUMENT_COLUMNS = {
     "secret_confirmed_at": ("TIMESTAMP", True),
     "pending_since": ("TIMESTAMP", True),
     "created_at": ("TIMESTAMP", False),
+    "keep_bytes": ("BOOLEAN", False),
 }
 IMAGE_COLUMNS = {
     "id": ("BIGINT", False),
