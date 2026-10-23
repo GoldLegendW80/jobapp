@@ -296,11 +296,13 @@ async def _here(tab: Tab) -> dict[str, Any]:
 async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     page = await tab.page()
     text, cut = policy.cut_snapshot(await pages.snapshot_for_ai(page))
+    native_files = await pages.native_files(page, text)
     return {
         "ok": True,
         "url": page.url,
         "title": await title(page),
         "snapshot": text,
+        "native_files": native_files,
         "cut": cut,
         **_chooser(tab),
     }
