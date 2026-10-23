@@ -7,6 +7,7 @@ No test sleeps or reads the wall clock: the lease clock is injected, waits are o
 the session's own timers are set to zero here. Every id and secret is made up.
 """
 
+import ast
 import asyncio
 import json
 import os
@@ -951,3 +952,22 @@ def test_the_managed_policy_blocks_every_chrome_page_and_keeps_cdp() -> None:
     assert policy["ExtensionInstallBlocklist"] == ["*"]
     assert "RemoteDebuggingAllowed" not in policy
     assert "DeveloperToolsAvailability" not in policy
+
+
+def test_every_profile_of_the_b7_container_tests_has_its_own_uid() -> None:
+    """The B7 container tests share one browser per module, and bind_uid ties a uid to its first
+    profile for ever: two tests that make a fresh profile under the same uid pass alone and fail
+    together with 409 `uid_in_use`, the second one in whatever order the run picks (the gate of
+    PR #521, where Save page as and issue #488's test both took 20026)."""
+    tree = ast.parse((Path(__file__).parent / "test_b7_container.py").read_text())
+    uids = [
+        node.value.elts[1].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Tuple)
+        and len(node.value.elts) == 2
+        and "uuid4" in ast.unparse(node.value.elts[0])
+        and isinstance(node.value.elts[1], ast.Constant)
+    ]
+    assert len(uids) >= 10, uids
+    assert sorted(u for u in set(uids) if uids.count(u) > 1) == []
