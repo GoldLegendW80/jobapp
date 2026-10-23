@@ -21,6 +21,7 @@
   document.querySelector('#reset').addEventListener('click', () => {
     const old = document.querySelector('#resume');
     const fresh = old.cloneNode();
+    fresh.value = '';
     old.replaceWith(fresh);
     bind();
   });
