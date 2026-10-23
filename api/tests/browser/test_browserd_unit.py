@@ -603,6 +603,8 @@ def test_the_image_installs_the_managed_webrtc_policy() -> None:
         "PolicyTestPageEnabled": False,
         "ExtensionInstallBlocklist": ["*"],
         "PasswordManagerEnabled": False,
+        "BrowserLabsEnabled": False,
+        "AllowFileSelectionDialogs": False,
     }
     dockerfile = (ROOT / "browser/Dockerfile").read_text()
     assert "COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json" in dockerfile

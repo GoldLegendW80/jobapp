@@ -17,6 +17,7 @@ import { ApplySection } from "@/features/apply/apply-section";
 import { PostingDocumentsSection } from "@/features/documents/posting-documents";
 import { JobAssessment } from "@/features/agents/job-assessment";
 import { JobChat } from "@/features/agents/job-chat";
+import { viaFeed } from "@/features/opportunities/sources/source-words";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
@@ -155,6 +156,32 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/**
+ * The posting's sources in words. When a freelance feed found it first, "via Remote OK" links
+ * back to the posting there, as the feed asks (opportunities O8); another source found too is
+ * named after it.
+ */
+function SourceFact({ source, link }: { source: string; link: string | null }) {
+  const via = viaFeed(source);
+  if (!via || !link) return <>{sourceLabel(source)}</>;
+  const others = source.split(", ").slice(1).join(", ");
+  return (
+    <>
+      <a
+        href={link}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 underline underline-offset-4"
+      >
+        {via}
+        <ExternalLink aria-hidden="true" className="size-3" />
+        <span className="sr-only">(opens in a new tab)</span>
+      </a>
+      {others ? `; ${sourceLabel(others)}` : null}
+    </>
+  );
+}
+
 function JobDetailView({ job }: { job: JobDetail }) {
   const save = useJobEditor(job.id);
   const link = safeHttpUrl(job.url);
@@ -204,7 +231,9 @@ function JobDetailView({ job }: { job: JobDetail }) {
           {pay ? <Fact label={WORDING.pay}>{pay}</Fact> : null}
           {workMode ? <Fact label={WORDING.workMode}>{workMode}</Fact> : null}
           {job.source ? (
-            <Fact label="Source">{sourceLabel(job.source)}</Fact>
+            <Fact label="Source">
+              <SourceFact source={job.source} link={link} />
+            </Fact>
           ) : null}
           {job.url ? (
             <Fact label="Posting">

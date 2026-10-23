@@ -12,5 +12,7 @@
   ],
   "PolicyTestPageEnabled": false,
   "ExtensionInstallBlocklist": ["*"],
-  "PasswordManagerEnabled": false
+  "PasswordManagerEnabled": false,
+  "BrowserLabsEnabled": false,
+  "AllowFileSelectionDialogs": false
 }

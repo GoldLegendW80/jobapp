@@ -121,6 +121,41 @@ describe("job detail", () => {
     expect(document.title).toBe("Applied AI Engineer at Mistral AI · jobapp");
   });
 
+  it("says via which feed a mission came and links back to it there (O8)", async () => {
+    fakeJobDetail(
+      makeDetail({
+        source: "remoteok, greenhouse:acme",
+        url: "https://remoteok.com/remote-jobs/123-ai-engineer",
+        contract_type: "Freelance",
+      }),
+    );
+    const app = await openDetail();
+    const source = screen.getByText("Source").nextSibling as HTMLElement;
+    const via = within(source).getByRole("link", { name: /via Remote OK/ });
+    expect(via).toHaveAttribute(
+      "href",
+      "https://remoteok.com/remote-jobs/123-ai-engineer",
+    );
+    expect(via).toHaveAttribute("target", "_blank");
+    expect(source).toHaveTextContent(
+      "via Remote OK(opens in a new tab); greenhouse:acme",
+    );
+    app.unmount();
+    fakeJobDetail(
+      makeDetail({
+        source: "hackernews:freelance",
+        url: "https://news.ycombinator.com/item?id=4001",
+      }),
+    );
+    await openDetail();
+    expect(
+      within(screen.getByText("Source").nextSibling as HTMLElement).getByRole(
+        "link",
+        { name: /via Hacker News, freelance thread/ },
+      ),
+    ).toHaveAttribute("href", "https://news.ycombinator.com/item?id=4001");
+  });
+
   it("keeps the paragraphs of the posting", async () => {
     fakeJobDetail(makeDetail());
     await openDetail();

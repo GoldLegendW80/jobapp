@@ -10,7 +10,9 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   combobox with its options), each key once. Then `refusal` fails closed: what the owner keeps
   for the person stays left whatever a model would say (test_what_the_agent_is_never_asked).
   The resolver's default for a label it does not know is `not_a_known_question`, so three lines
-  close the door, in any widget:
+  close the door, in any widget, each reading the label through `_plain` (compatibility forms
+  folded, invisible characters and marks dropped, a Cyrillic, Greek or small capital letter drawn
+  like a Latin one read as that letter, as the never apply rules read a title):
   1. the shape (`not_open`): a question the resolver does not know is asked only when its label
      reads as an open question or a prompt to write: it opens on why, what, which, how,
      describe, tell us, explain, share, walk us through, give an example (pourquoi, quel,
@@ -21,12 +23,18 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
      "Team preference") or a statement stays the person's, whatever its options. A3's free
      text questions (`free_text_for_the_agent`) were already read as prompts and skip this line;
   2. the topic (`off_topic`): every question, A3's free text included (issue #317), is asked
-     only when it is about the job, the company, the team, or the person's motivation,
-     interests, field and experience (`_ABOUT_THE_JOB`, an allowlist of topics, so a closed
-     question needs no row per wording; "Why <Company>?" and "Why do you want to work in
-     robotics?" are among them). A textarea "Describe your status" and "What is your legal
-     status?" fall out; "Why do you want to work here?", "Tell us about a project" and "Share
-     your portfolio" stay;
+     only when the allowlist of topics reads it (`_on_topic`): a subject of the person's
+     (`_SUBJECT`: a project, experience, skills, motivation, the field, a time they led or
+     disagreed), or an employer word (the company, the role, the team, joining, working here)
+     inside a question of motivation (`_MOTIVATION`: why, what attracts you, what you would
+     bring, what you look for), or a short "Why <name>?". An employer word alone is no topic:
+     "How soon could you join?", "Which office would you join?" and "Team preference" stay the
+     person's; "Why do you want to join us?", "Tell us about a project" and "Share your
+     portfolio" are asked. The name of "Why <name>?" is checked twice: here it must not be a
+     place of the gazetteer or a time ("Why Berlin?", "Why now?": `practical`), and at the judge
+     it must be the posting's company (`off_topic` otherwise: "Why Lisbon?"). "us" is no
+     employer word: only the whole short "Why us?" (`_US_ONLY`) is asked, as the company, so
+     "Why us and are you over 18?" or "What do you know about us?" stay the person's;
   3. the vocabularies, in any wording, open or not:
   - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
     accuracy statement (arbitration, background checks, marketing, data retention, a
@@ -48,9 +56,15 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   - sensitive personal data and where the person lives (`personal`: religion, marital status,
     a divorce, children, health, medication, accommodation, caste, politics, pronouns, age,
     family, where the person lives or moved to);
-  - the person's practicalities (`practical`: a start date, availability, relocation, remote,
-    hybrid or on site work, a commute, travel, other applications or offers, and working in a
-    place the jobs gazetteer knows: "Why do you want to work in the US?");
+  - the person's practicalities (`practical`: when they could start or join in any verb, a
+    notice, availability, relocation, remote, hybrid or on site work, an arrangement, hours,
+    weekends, a commute, travel, other applications or offers, a place word (an office, a
+    location, a city, a time zone), working in a place the jobs gazetteer knows ("Why do you
+    want to work in the US?"), and in a question of motivation a capitalised name of the
+    gazetteer anywhere ("Why do you want to join our Berlin team?"));
+  - leaving a job in any verb (exit, move on, step away), looking for a new role, a return to
+    work or a career break, and in a question of motivation the person's own current or last
+    job ("Why do you want to exit your last role?": `history`);
   - the person's identity or a credential (a password, a social security, tax or ID number, an
     address, a phone, an e-mail, a name, a signature, a birth date): the agent never receives
     the identity section, so any value would be invented;
@@ -80,7 +94,10 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   A typed value that states sensitive personal data (gender, sexuality, pronouns, disability,
   health, pregnancy, religion, ethnicity, age, family) is dropped too (`personal_statement`),
   whatever the question: the model never reads an EEO answer, so such a value is invented or
-  steered by the page. A dash used
+  steered by the page. So is a typed practicality (`practical_statement`: "I can start
+  immediately", "I am based in Berlin", "I prefer to work remotely", a notice, travel, a time
+  zone, other offers): the model never reads the profile's answers on these. Each typed value is
+  read through `_plain`, so a Cyrillic letter inside "permit" changes nothing. A dash used
   as a separator in a typed value is replaced by code first (`undashed`: the owner's rule, no
   dashes as separators). A typed value then goes through mail M9's `factcheck_rules.check`
   against the profile: a number, a duration, a link, an employer or a title that the profile
@@ -96,15 +113,30 @@ The call itself is an `AnswerAgent`: in the worker, `app.apply.agents.RuntimeAns
 `apply_answer` agent of the agents runtime (internal, private_io, model_by_credential, the
 `TOKEN_BUDGET` below, one submit tool). A run without one, or a person without a credential,
 skips the agent: every question it would have asked stays left.
+
+Declared open points (test_a5_agent_filters.py holds the families these rules are tested over):
+- a place the gazetteer does not know reaches the model in "Why Lisbon?" (its answer is dropped
+  unless Lisbon is the posting's company) and in "Why do you want to join us in Lisbon?" (its
+  answer is kept unless it states a practicality); "US" in capitals inside a question of
+  motivation is read as the country ("our US team", `practical`), and so is a label written
+  wholly in capitals ("WHY US?");
+- a practicality typed without a first person or a time to come ("Berlin suits me", "Remote,
+  please") is typed;
+- what is refused though it is about the job: an employer word outside a question of motivation
+  ("Team preference" written by A3), "Why now?", a technical word that is also a place or an
+  arrangement word ("Microsoft Office", "a location service", "an exit strategy", "full-time"),
+  a project named like a city ("Phoenix") in a question of motivation, and a label written
+  wholly in Cyrillic or Greek letters.
 """
 
+import functools
 import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.apply import answers, terms
+from app.apply import answers, guardrails, terms
 from app.apply.ats import base
 from app.documents import profile_view
 from app.documents import rules as doc_rules
@@ -184,10 +216,10 @@ class Verdict:
 
 
 # --- what stays the person's (fail closed) -------------------------------------------------------
-# Each vocabulary is read on the folded label (`answers.fold`: lower case, no accents), English and
-# French, some German and Spanish. They are the second line behind `_OPEN`: a label they miss is
-# asked only if it reads as an open question, and the judge then drops a bare negation and any
-# typed statement on these topics. They lean wide on purpose.
+# Each vocabulary is read on the label as `_plain` reads it (lower case, no accents, lookalike
+# letters as Latin ones), English and French, some German and Spanish. They are the second line
+# behind `_OPEN`: a label they miss is asked only if it reads as an open question, and the judge
+# then drops a bare negation and any typed statement on these topics. They lean wide on purpose.
 
 # Pay wanted or received: A3's pay words (`answers._PAY`, `answers._SALARY_WORDS`), the forms a
 # package takes, and German and Spanish stems (read anywhere in a word: "Gehaltsvorstellung").
@@ -231,6 +263,26 @@ _HISTORY = re.compile(
     r"|\b(?:role|job|contract|position|employment|contrat|poste)\b.{0,40}"
     r"\b(?:end(?:ed|s|ing)?|terminat\w*|expir\w*)\b(?! of\b)|not renewed|renouvel"
     r"|\b(?:company|employer|manager|boss) (?:does not |doesn'?t |do not |don'?t |not )?know"
+    # leaving in other verbs, looking for the next job, and a time away from work
+    r"|\bexit\w*|\bmov(?:e|ing) on\b|\bstep(?:ped|ping|s)? (?:down|away)\b|\bwalk\w* away\b"
+    r"|\bpart\w* ways\b|\bswitch\w* (?:jobs?|roles?|compan\w+|employers?|careers?|fields?)\b"
+    r"|\b(?:looking|searching|seeking|hunting|applying) (?:for )?(?:a |an |your |the )?"
+    r"(?:new|another|different|other|next) (?:\w+ )?(?:roles?|jobs?|positions?|opportunit\w+"
+    r"|challenges?|employers?|compan\w+|steps?)\b|\bon the (?:job )?market\b"
+    r"|\bnouveau (?:poste|defi|emploi)"
+    r"|\b(?:returning|return|back|going back|went back) to (?:work|the workforce)\b"
+    r"|\bcareer (?:break|change|switch|pause)\b|\bsabbatical\b|\btime off\b|\breconversion\b"
+)
+# The person's own current or last job: history inside a question of motivation only.
+_OWN_JOB = re.compile(
+    r"\b(?:your|votre|ihre?[mnrs]?|deine?[mnrs]?|su|tu) (?:\w+ )?(?:last|current|previous|former"
+    r"|present|old|prior|existing|today'?s|actuel\w*|ancien\w*|dernier|derniere|precedent\w*"
+    r"|aktuell\w*|letzt\w*|jetzig\w*|bisherig\w*|vorherig\w*|actual|ultimo|ultima|anterior)"
+    r" (?:\w+ )?(?:roles?|jobs?|positions?|compan\w+|employers?|teams?|managers?|contracts?|posts?"
+    r"|organi[sz]ations?|firms?|workplaces?|boss|gig|one|poste|emploi|entreprise|employeur|equipe"
+    r"|contrat|travail|stelle|firma|arbeitgeber|rolle|trabajo|empleo|puesto|empresa)\b"
+    r"|\b(?:votre|su) (?:poste|emploi|entreprise|employeur|equipe|contrat|trabajo|empleo|puesto"
+    r"|empresa) (?:actuel\w*|precedent\w*|actual|anterior)\b"
 )
 # The person's practical situation: when they can start, where and how they work, whether they
 # move or travel, where else they are applying. The profile's answers on these are not sent to
@@ -247,14 +299,35 @@ _PRACTICAL = re.compile(
     r"|\binterview\w* (?:with|at|elsewhere)|\b(?:applying|applied) (?:to|at|with|elsewhere)"
     r"|\bother (?:offers?|applications?|interviews?|processes)\b"
     r"|\bautres? (?:offres?|candidatures?|processus|entretiens?)\b"
+    # when they could start or join, in any verb
+    r"|\bhow (?:soon|quickly|fast|early)\b|\bearliest\b|\bnotice\b|\b(?:by|until|from) when\b"
+    r"|\bwhen (?:can|could|would|will|might|do|are|is) you\b|^[\W\d_]*(?:when|quand|wann|cuando)\b"
+    r"|\b(?:a partir de|des|d'ici) quand\b|\b(?:ab|bis) wann\b|\bdesde cuando\b"
+    r"|\b(?:what|which) date\b|\bjoin\w*\b.{0,30}\b(?:date|soon|earliest|when)\b"
+    # where they would work: a place word, whatever the verb ("Which office would you join?")
+    r"|\boffices?\b|\blocations?\b|\btime ?-?zones?\b|\bcity\b|\bcities\b|\bcountry\b"
+    r"|\bcountries\b|\bhub\b|\bcampus\b|\bheadquarters\b|\bhq\b|\bregion\b|\babroad\b"
+    r"|\bbureaux?\b|\bville\b|\bpays\b|\bfuseau\w* horaires?\b|\blieu de travail\b"
+    r"|\bstandort\w*|\bburo\b|\bzeitzone\b|\boficina\b|\bciudad\b|\bubicacion\b|\bsede\b"
+    r"|\bzona horaria\b"
+    # how they would work: an arrangement, hours, days or shifts
+    r"|\barrangements?\b|\bwork(?:ing)? (?:schedule|hours|pattern|week|days|model|mode)\b"
+    r"|\b(?:hours|days) (?:a|per) week\b|\b(?:night|day|evening|weekend|rotating) shifts?\b"
+    r"|\bshift work\b|\bweekends?\b|\bpart-? ?time\b|\bfull-? ?time\b|\bin-? ?person\b"
+    r"|\bflexib\w* (?:work\w*|hours|schedule)\b|\bhoraires?\b|\barbeitszeit\w*|\bhorario\b"
 )
 # Where the person works or lives, read as a place of the jobs gazetteer after a verb of working,
 # living or moving ("Why do you want to work in the US?", "travailler à Paris"). "Work in
 # robotics" names no place, and is a question about the field.
 _WHERE = re.compile(
     r"\b(?:work\w*|liv(?:e|es|ed|ing)|based|located|stay\w*|mov(?:e|es|ed|ing)|relocat\w*"
-    r"|travailler|vivre|habiter|trabajar|vivir)\s+(?:in|from|to|at|out of|near|a|au|aux|en|dans)"
-    r"\s+(.{1,80})"
+    r"|join\w*(?: (?:us|the \w+|our \w+))?|travailler|vivre|habiter|rejoindre|trabajar|vivir)"
+    r"\s+(?:in|from|to|at|out of|near|a|au|aux|en|dans)\s+(.{1,80})"
+)
+# A short "why <name>" question (`_WHY_NAME`) whose name is a time or a move, not an employer.
+_NOT_A_NAME = re.compile(
+    r"\b(?:now|today|then|soon|late|abroad|maintenant|jetzt|ahora|move|moving|change|switch"
+    r"|transition|leave|leaving|career)\b"
 )
 # Sensitive personal data and where the person lives: the profile holds none of it for a model.
 _PERSONAL = re.compile(
@@ -262,7 +335,7 @@ _PERSONAL = re.compile(
     r"|\bmedic(?:al|ation|ine)s?\b|disab|accommodat|caste|politic|\bunions?\b|sexual|orientation"
     r"|pronoun|veteran|family|gender|ethnic|racial|\bhow old\b|\bage\b|\bborn\b"
     r"|where do you live|\b(?:city|state|country) do you live|\b(?:do|did) you live\b"
-    r"|today'?s date|divorc|widow|\bmov(?:e|ed|ing) to\b"
+    r"|today'?s date|divorc|widow|\bmov(?:e|ed|ing) to\b|\bparent\w*|\bcaregiv\w*|\bcarers?\b"
 )
 # Consent to share, keep or contact: a data sharing, retention or communications choice. A
 # request for the person's own link or work ("Share your portfolio") is not one.
@@ -307,38 +380,73 @@ _CLOSED = re.compile(
 # legal statement whatever it is about, beside what `terms` reads.
 _CONSENT = re.compile(
     r"\b(?:agree|consent|accept|acknowledge|authori[sz]|certify|certifie\b|attest|declare|undertake|waive"
-    r"|accepte|consen|autoris|atteste|declare|engage)"
+    r"|accepte|consen|autoris|atteste|declare|engage)|\bconflicts? of interests?\b"
 )
 # An open question or a prompt to write: an opener (after numbering, a required mark, "please",
 # "briefly" or "in a few words"), or a whole prompt noun. German "was" is not here: English
 # "was" opens a closed question, and `_CLOSED` reads first.
 _OPEN = re.compile(
-    r"^[\W\d_]*(?:(?:please|kindly|briefly|in (?:a few|one|two|three|\w+) (?:words|sentences|lines)"
-    r"|merci de|veuillez|en quelques (?:mots|lignes))\W+)*"
-    r"(?:why|what|which|how|describe|tell (?:us|me)|explain|share|walk us through"
-    r"|give (?:us )?an example|pourquoi|quel(?:le)?s?|comment|qu'est-ce|que|en quoi|decri\w*"
-    r"|parlez|expliqu\w*|racontez|partagez|presentez|warum|wie|welche[rsmn]?|beschreiben"
-    r"|erzahlen|erklaren|por ?que|cual(?:es)?|como|describ\w*|cuent\w*)\b"
-    r"|^\W*(?:motivation|cover letter|lettre de motivation|additional information"
-    r"|informations? complementaires?)\W*$"
+    r"""
+    ^[\W\d_]*
+    (?:
+        (?: please | kindly | briefly
+          | in\ (?:a\ few|one|two|three|\w+)\ (?:words|sentences|lines)
+          | merci\ de | veuillez | en\ quelques\ (?:mots|lignes)
+        )\W+
+    )*
+    (?: why | what | which | how | describe | tell\ (?:us|me) | explain | share
+      | walk\ us\ through | give\ (?:us\ )?an\ example
+      | pourquoi | quel(?:le)?s? | comment | qu'est-ce | que | en\ quoi | decri\w*
+      | parlez | expliqu\w* | racontez | partagez | presentez
+      | warum | wie | welche[rsmn]? | beschreiben | erzahlen | erklaren
+      | por\ ?que | cual(?:es)? | como | describ\w* | cuent\w*
+    )\b
+    | ^\W*(?: motivation | cover\ letter | lettre\ de\ motivation | additional\ information
+           | informations?\ complementaires? )\W*$
+    """,
+    re.VERBOSE,
 )
-# The question is about the job, the company, the team or the person's motivation, interests and
-# experience: an allowlist of topics, beside the vocabularies that name the closed ones. Not "us",
-# "our" or "why" alone: "Why did you leave your last job?" is history. "Why <Company>?" is read as
-# a short "why" that is not a verb ("Why Example Robotics?").
-_ABOUT_THE_JOB = re.compile(
-    r"\b(?:work (?:here|for|with|at)|join\w*|rejoindre|compan\w+|role|position|team|motivat\w*"
-    r"|interest\w*|excit\w*|passion\w*|attract\w*|projects?|experience|skill\w*|strength\w*"
-    r"|achiev\w*|proud|challenge\w*|example|leadership|environment|yourself|fit|contribut\w*"
-    r"|goals?|ideal|mission|product|values?|culture|opportunity|this job|approach\w*|evaluat\w*"
-    r"|work(?:ing)? in|field|industry|domain|sector|secteur|domaine|branche"
-    r"|build\w*|built|bug|design\w*|test\w*|technolog\w*|tools?|stack|systems?|agents?|favou?rite"
-    r"|years? of|portfolio|github|learn\w*|solv\w*|trade-?off|projet|entreprise|poste|equipe"
-    r"|hir(?:e|ing)|empresa|puesto|equipo|unternehmen|stelle|projekt|proyecto|erfahrung|experiencia"
-    r"|trabajar (?:aqui|con|en)|bei uns|approche|evalu\w*|outils?|sistema"
-    r"|additional information|informations? complementaires?)\b"
-    r"|^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
-    r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)\w+(?:\s+\w+){0,2}\W*$"
+# The topic allowlist (`_on_topic`): a subject, or an employer word in a question of motivation.
+_SUBJECT = re.compile(
+    r"\b(?:motiv\w*|interest\w*|excit\w*|passion\w*|attract\w*|projects?|experience|skill\w*"
+    r"|strength\w*|achiev\w*|proud|challenge\w*|example|leadership|yourself|contribut\w*|goals?"
+    r"|mission|product|values?|culture|approach\w*|evaluat\w*|field|industry|domain|sector"
+    r"|secteur|domaine|branche|build\w*|built|bug|design\w*|test\w*|technolog\w*|tools?|stack"
+    r"|systems?|agents?|favou?rite|years? of|portfolio|github|learn\w*|solv\w*|trade-?off|projet"
+    r"|approche|evalu\w*|outils?|sistema|erfahrung|experiencia|projekt|proyecto|led|lead\w*"
+    r"|mentor\w*|feedback|collaborat\w*|disagree\w*|stakeholders?|priorit\w*|responsibilit\w*"
+    r"|deadlines?|additional information|informations? complementaires?)\b"
+)
+_EMPLOYER = re.compile(
+    r"\b(?:work (?:here|for|with|at)|join\w*|rejoindre|compan\w+|role|position|team|this job"
+    r"|opportunity|ideal|environment|fit|work(?:ing)? in|hir(?:e|ing)|here|entreprise|poste"
+    r"|equipe|empresa|puesto|equipo|unternehmen|stelle|bei uns|trabajar (?:aqui|con|en))\b"
+)
+_MOTIVATION = re.compile(
+    r"\b(?:why|pourquoi|warum|wieso|weshalb|por ?que)\b"
+    r"|\bwhat (?:attracts|excites|interests|motivates|draws|appeals|drives|inspires|makes|made"
+    r"|leads|led|prompted|pushed)\b"
+    r"|\bwhat (?:do|would|did) you (?:like|love|enjoy|admire|know|find|value|hope|look for|seek)\b"
+    r"|\bwhat (?:are|were) you (?:looking|hoping) for\b"
+    r"|\bwhat (?:can|could|would|will) you (?:bring|contribute|add|offer)\b"
+    r"|\bhow (?:would|will|could|can|do) you (?:contribute|fit|add)\b"
+    r"|\bqu'est-ce qui\b|\ben quoi\b|\bwas (?:reizt|motiviert|begeistert|interessiert)\b"
+    r"|\bque (?:te|le) (?:atrae|motiva|interesa)\b"
+)
+# The name of a short "Why us?" (`_WHY_NAME`): the pronoun alone, after a few polite words, is the
+# posting's company and never a place. Only the whole label: "Why us and are you over 18?" is
+# no short why, so a second closed question never rides on the pronoun.
+_POLITE = r"(?:please|exactly|really|specifically|then)"
+_US_ONLY = re.compile(rf"^(?:{_POLITE}\s+)?(?:us|nous|uns|nosotros)(?:\s+{_POLITE})?$")
+# The same short why read on the whole label, commas allowed ("Please, why us?", "Why us, then?").
+_WHY_US = re.compile(
+    rf"^[\W\d_]*(?:{_POLITE}\W+)?(?:why|pourquoi|warum|por ?que)\W+(?:{_POLITE}\W+)?"
+    rf"(us|nous|uns|nosotros)(?:\W+{_POLITE})?\W*$"
+)
+# "Why <Company>?": a short why that is not a verb, the name in group 1 (`_named_only`).
+_WHY_NAME = re.compile(
+    r"^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
+    r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)(\w+(?:\s+\w+){0,2})\W*$"
 )
 # A document asked for as text: the whole label names the CV or the cover letter (A3's `resume`
 # and `cover_letter` templates, which leave such a text field when there is no letter text), or
@@ -417,10 +525,55 @@ _PERSONAL_STATEMENT = re.compile(
 )
 
 
+# A typed practicality (module docstring): a start needs a time to come, a place a first person.
+_RELATIVE_TIME = (
+    r"(?:immediately|right away|straight away|at once|asap|as soon as|tomorrow"
+    r"|next (?:week|month)|(?:in|within) (?:\d+|a|an|one|two|three|four|six|a few|several)"
+    r" (?:days?|weeks?|months?)|from (?:the )?(?:\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov"
+    r"|dec|next|mid|early|late|end)|after (?:my|a|the) notice)"
+)
+_PRACTICAL_STATEMENT = re.compile(
+    rf"\b(?:start|begin|commence|join|onboard)\w*\b.{{0,40}}?\b{_RELATIVE_TIME}\b"
+    rf"|\bavailab\w*\b.{{0,30}}?\b(?:{_RELATIVE_TIME}|now|as of|starting|on (?:the )?\d"
+    r"|to (?:start|join|begin|relocate|travel|interview))\b"
+    r"|\bimmediately available\b|\b(?:i am|i'm|i will be|i'll be) (?:\w+ )?available\b"
+    r"|\bnotice\b|\bpreavis\b|\bkundigungsfrist\b|\bpreaviso\b"
+    r"|\b(?:i|i'm|i've|we|je|j'|ich|yo)\b.{0,30}?\b(?:based|located|living|live|lived|reside"
+    r"|residing|habite|vis|wohne|lebe|vivo|resido)\s+(?:in|at|near|out of|close to|a|en|au|aux"
+    r"|dans|nach)\b"
+    r"|\brelocat\w*|\bdemenag\w*|\bumzieh\w*|\bumzug\b|\breubic\w*|\btrasladar\w*|\bmudar\w*"
+    r"|\b(?:i|i'm|i'd|i'll|happy to|willing to|ready to|open to|plan to|planning to)\b.{0,20}?"
+    r"\bmov(?:e|ing) (?:to|abroad)\b"
+    r"|\b(?:work\w*|be|being|based)\s+(?:fully\s+|mostly\s+|partly\s+)?(?:remote(?:ly)?"
+    r"|from home|hybrid|on-? ?site|onsite|in the office|in office|in-? ?person)\b"
+    r"|\b(?:remote|hybrid|on-? ?site|onsite|in-? ?person) (?:work\w*|roles?|positions?|jobs?"
+    r"|setup|set-up|arrangements?|basis|policy|options?|schedule)\b"
+    r"|\bteletravail\w*|\bpresentiel\b|\bhome ?office\b|\bteletrabajo\b"
+    r"|\btravel\w*\b.{0,20}?\b(?:\d+ ?%|percent|up to|frequent\w*|regular\w*|abroad"
+    r"|internationally|as (?:needed|required)|for work)\b"
+    r"|\b(?:can|could|happy to|willing to|able to|open to|ready to|available to)\s+(?:\w+\s+)?"
+    r"travel\b"
+    r"|\b(?:my|our|your|same|overlapping|compatible) time ?-?zones?\b|\bmon fuseau horaire\b"
+    r"|\b(?:other|another|competing|second|several|multiple|two|three|parallel) (?:job )?"
+    r"(?:offers?|interviews?|(?:interview |recruitment |hiring )?process(?:es)?)\b"
+    r"|\binterviewing (?:with|at|elsewhere)\b|\b(?:autres?|plusieurs) (?:offres?|processus"
+    r"|entretiens?)\b"
+    r"|\b(?:looking for|seeking|want|prefer|available for|open to)\b.{0,20}?"
+    r"\b(?:part|full)-? ?time\b"
+    r"|\b(?:commencer|demarrer|debuter|rejoindre|integrer)\w*\b.{0,40}?\b(?:immediatement"
+    r"|des (?:maintenant|que|le)|a partir d\w*|(?:sous|dans) (?:\d+|un|une|deux|trois)"
+    r" (?:jours?|semaines?|mois))\b|\bdisponib\w*\b.{0,30}?\b(?:immediat\w*|des |a partir"
+    r"|sous|dans|rapidement)|\b(?:anfangen|beginnen|starten|eintreten)\b.{0,30}?\b(?:sofort"
+    r"|ab|innerhalb)\b|\bsofort\b.{0,20}?\b(?:anfangen|beginnen|starten|eintreten)\b"
+    r"|\bab sofort\b|\bverfugbar\b|\b(?:empezar|comenzar|incorporar\w*)\b"
+    r".{0,30}?\b(?:inmediat\w*|ya|desde|en (?:\d+|una|dos|tres) (?:semanas?|meses|dias))\b"
+)
+
+
 def _says_yes_or_no(option: str) -> bool:
     """An option that answers a closed question: a yes or no text of A3's, or one opening on yes
     or no ("Yes, with sponsorship", "N/A" too: an option is short, so this leans wide)."""
-    key = answers.option_key(option)
+    key = answers.option_key(_plain(option))
     return key in answers.YES_OPTIONS or key in answers.NO_OPTIONS or bool(_YES_NO_WORD.match(key))
 
 
@@ -428,18 +581,87 @@ def fold(text: str) -> str:
     return answers.fold(text)
 
 
-def _plain(value: str) -> str:
-    """A typed value as the statement vocabularies read it: compatibility forms folded (a
-    word in fullwidth letters reads as its ASCII self), invisible format characters dropped (a
-    zero width space inside a word), then `fold`."""
-    compat = unicodedata.normalize("NFKC", value)
-    return fold("".join(c for c in compat if unicodedata.category(c) != "Cf"))
+# What a reader does not see: format characters, controls, and the marks drawn on a letter.
+_UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
+
+
+@functools.lru_cache(maxsize=4096)
+def _latin(letter: str) -> str:
+    """A letter outside ASCII as the never apply rules read it (`guardrails.fold`): its accents
+    dropped, and a Cyrillic, Greek or small capital letter drawn like a Latin one read as it."""
+    return guardrails.fold(letter)
+
+
+def _visible(text: str) -> str:
+    """Compatibility forms folded (a word in fullwidth letters reads as its ASCII self) and what
+    a reader does not see dropped (a zero width space inside a word); the case is kept."""
+    compat = unicodedata.normalize("NFKC", text)
+    return "".join(c for c in compat if c.isspace() or unicodedata.category(c) not in _UNSEEN)
+
+
+def _plain(text: str) -> str:
+    """A label, an option or a typed value as the vocabularies read it: `_visible`, each letter
+    drawn like a Latin one read as that letter (a Cyrillic a inside "salary"), then `fold`."""
+    return fold(
+        "".join(_latin(c) if c.isalpha() and not c.isascii() else c for c in _visible(text))
+    )
 
 
 def _names_where(text: str) -> bool:
     """A place of the gazetteer where the person would work, live or move to."""
     found = _WHERE.search(text)
     return bool(found and places_of(found.group(1)))
+
+
+def _names_a_place(label: str) -> bool:
+    """A capitalised name of the gazetteer anywhere in a label ("Why do you want to join our
+    Berlin team?"). Only capitalised words are read, so "nice" or "us" in a sentence is no place;
+    "US" in capitals is the country ("Why do you want to join our US team?")."""
+    names = [
+        word
+        for word in re.findall(r"[^\W_]+", _visible(label))
+        if word[0].isupper() and word not in ("us", "Us")
+    ]
+    return bool(names) and bool(places_of(_plain(" ".join(names))))
+
+
+def _named_only(text: str) -> str | None:
+    """The name of a "why <name>" question that no subject and no employer word puts on topic,
+    else None: the one topic the label alone cannot settle."""
+    if _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)):
+        return None
+    found = _WHY_US.search(text) or _WHY_NAME.search(text)
+    return found.group(1) if found else None
+
+
+def _not_an_employer(text: str) -> bool:
+    """A "why <name>" whose name is a place of the gazetteer or a time or a move ("Why Berlin?",
+    "Why the US?", "Why now?"). The pronoun alone ("Why us?", `_US_ONLY`) is the company."""
+    name = _named_only(text)
+    if name is None or _US_ONLY.match(name):
+        return False
+    return bool(places_of(name) or _NOT_A_NAME.search(name))
+
+
+def _on_topic(text: str) -> bool:
+    return _named_only(text) is not None or bool(
+        _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text))
+    )
+
+
+def _names_the_company(name: str, participants: Sequence[str]) -> bool:
+    """The name of a "why <name>" question is the posting's company: each of its words is one of
+    the company's, or the name glued is the company glued ("Why ExampleRobotics?"). The pronoun
+    alone ("Why us?") names the posting's company whatever it is called, if there is one."""
+    if _US_ONLY.match(name):
+        return any(_plain(company) for company in participants)
+    words = set(name.split()) - {"the", "a", "an"}
+    for company in participants:
+        folded = _plain(company)
+        own = set(re.findall(r"\w+", folded))
+        if (words and words <= own) or re.sub(r"\W", "", name) == re.sub(r"\W", "", folded):
+            return True
+    return False
 
 
 def _bare_negation(value: str) -> bool:
@@ -466,15 +688,28 @@ REFUSALS: tuple[tuple[str, Callable[[str, str, tuple[str, ...]], bool]], ...] = 
     ("eeo", lambda text, kind, options: answers.eeo_topic(text) is not None),
     ("pay", lambda text, kind, options: bool(_PAY.search(text))),
     ("authorization", lambda text, kind, options: bool(_AUTHORIZATION.search(text))),
-    ("history", lambda text, kind, options: bool(_HISTORY.search(text))),
+    (
+        "history",
+        lambda text, kind, options: (
+            bool(_HISTORY.search(text)) or bool(_MOTIVATION.search(text) and _OWN_JOB.search(text))
+        ),
+    ),
     ("consent_topic", lambda text, kind, options: bool(_CONSENT_TOPIC.search(text))),
     ("legal", lambda text, kind, options: terms.legal_reading(text) or bool(_CONSENT.search(text))),
     ("personal", lambda text, kind, options: bool(_PERSONAL.search(text))),
-    ("practical", lambda text, kind, options: bool(_PRACTICAL.search(text)) or _names_where(text)),
+    (
+        "practical",
+        lambda text, kind, options: (
+            bool(_PRACTICAL.search(text)) or _names_where(text) or _not_an_employer(text)
+        ),
+    ),
     ("identity", lambda text, kind, options: bool(_IDENTITY.search(text))),
     ("unproven", lambda text, kind, options: bool(_UNPROVEN.search(text))),
     ("yes_or_no", lambda text, kind, options: any(_says_yes_or_no(o) for o in options)),
-    ("option_topic", lambda text, kind, options: any(_STATEMENT.search(fold(o)) for o in options)),
+    (
+        "option_topic",
+        lambda text, kind, options: any(_STATEMENT.search(_plain(o)) for o in options),
+    ),
     ("yes_or_no", lambda text, kind, options: bool(_CLOSED.search(text))),
 )
 
@@ -487,15 +722,17 @@ def refusal(
     reason but A3's free text, by default) must also read as open (`_OPEN`); every question,
     A3's free text included, must be about the job (`_ABOUT_THE_JOB`, which holds "why
     <company>"). A document asked for as text is never the model's (`document`)."""
-    text = answers.fold(label)
+    text = _plain(label)
     if not text:
         return "no_label"
     for code, refuses in REFUSALS:
         if refuses(text, kind, options):
             return code
+    if _MOTIVATION.search(text) and _names_a_place(label):
+        return "practical"
     if reason != "free_text_for_the_agent" and not _OPEN.search(text):
         return "not_open"
-    if not _ABOUT_THE_JOB.search(text):
+    if not _on_topic(text):
         return "off_topic"
     return None
 
@@ -588,6 +825,9 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
     key, value = question.key, proposal.value
     if refused := refusal(question.label, question.kind, question.options, question.reason):
         return Verdict(key, None, refused)
+    name = _named_only(_plain(question.label))
+    if name is not None and not _names_the_company(name, sources.participants):
+        return Verdict(key, None, "off_topic")
     if value is None or not value.strip():
         return Verdict(key, None, "agent_left")
     if proposal.source not in PERSON_SOURCES:
@@ -613,6 +853,8 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         return Verdict(key, None, "legal_statement")
     if _PERSONAL_STATEMENT.search(plain):
         return Verdict(key, None, "personal_statement")
+    if _PRACTICAL_STATEMENT.search(plain):
+        return Verdict(key, None, "practical_statement")
     if _issues(value, sources):
         return Verdict(key, None, "fact_check")
     return Verdict(key, answers.Answer(value, source), "accepted")

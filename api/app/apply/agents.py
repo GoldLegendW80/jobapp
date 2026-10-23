@@ -321,12 +321,17 @@ class RuntimeAnswerAgent:
 
 async def _release(context: RunContext, run_id: uuid.UUID) -> None:
     """A run still queued when its fill is cancelled: failed, shielded from the cancellation (the
-    `sweep.run_sweep` pattern). A run the runner claimed is left to the runner."""
+    `sweep.run_sweep` pattern). A run the runner claimed is left to the runner.
+
+    Called while a cancellation unwinds (here, in form_agent.py and browser/finder.py): an error
+    of the store is swallowed, so the caller re-raises its CancelledError and not that error; the
+    run then stays queued until the stale reaper fails it (AGENT_STALE_QUEUED)."""
 
     def fail(db: Session) -> bool:
         return runs.fail_queued(db, run_id, runs.STOPPED, context.clock())
 
-    await asyncio.shield(asyncio.to_thread(_in_db, context.sessions, fail))
+    with contextlib.suppress(Exception):
+        await asyncio.shield(asyncio.to_thread(_in_db, context.sessions, fail))
 
 
 def _ended(db: Session, run_id: uuid.UUID) -> _Ended:
@@ -366,3 +371,4 @@ if importlib.util.find_spec("claude_agent_sdk") is not None:
     from app.apply import answer_tools as _tools  # noqa: F401
 
 from app.apply import form_agent as _form_agent  # noqa: E402, F401  (A8's agent)
+from app.apply import model_check as _model_check  # noqa: E402, F401  (A13c's agent)

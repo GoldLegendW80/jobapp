@@ -152,10 +152,10 @@ class Settings(BaseSettings):
     # Apply (SPEC-apply.md, app/apply/). Every setting of the module, added at once by task A2 so
     # that no later task edits this file. The kill switch of every submission (the administrator's
     # pause in Redis is the other one); how long a person's approval is valid; Full auto's hold
-    # before each submit.
+    # before each submit, never under 15 minutes (owner, docs/decisions.md).
     apply_submit_enabled: bool = True
     apply_approval_ttl_s: int = Field(default=86_400, ge=300, le=7 * 86_400)
-    apply_hold_s: int = Field(default=900, ge=60, le=86_400)
+    apply_hold_s: int = Field(default=900, ge=900, le=86_400)
     # Full auto's guarded defaults (owner decisions 1 and 2): the runaway backstop of
     # submissions per day (no fixed daily number), the default fit threshold offered when the
     # person turns it on, one application per company in this many days, the rehearsals first.
@@ -178,6 +178,16 @@ class Settings(BaseSettings):
     # address under it is read as the Ashby, Greenhouse or Lever form its path names. Refused in
     # production.
     apply_stub_base_url: str | None = None
+    # Opportunities O7 (app/opportunities/sources): the freelance and project feeds the sweep
+    # reads. A request's timeout in seconds; the top level comments read of a Hacker News thread
+    # (one request each). Tests only: the fake feeds server (tests/feeds_stub.py) answers every
+    # feed under this address. Refused in production.
+    feeds_timeout_s: float = Field(default=20.0, ge=1.0, le=120.0)
+    feeds_hn_max_comments: int = Field(default=500, ge=1, le=1_000)  # ITEMS_MAX of the feeds
+    feeds_stub_base_url: str | None = None
+    # Tests only: the floor of Full auto's hold on a stack of the fake forms server, in place of
+    # APPLY_HOLD_S. Refused in production and without APPLY_STUB_BASE_URL.
+    test_apply_hold_s: int | None = Field(default=None, ge=60, le=899)
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -227,6 +237,7 @@ class Settings(BaseSettings):
         "ats_base_url",
         "apply_stub_base_url",
         "browser_sources_base_url",
+        "feeds_stub_base_url",
         "model_api_base_url",
         "google_auth_url",
         "google_token_base_url",
@@ -301,6 +312,16 @@ class Settings(BaseSettings):
                 "TEST_FAST_TIMERS shortens the schedule tick and the board timeouts for tests and "
                 "must not be set in production"
             )
+        if self.app_env == "production" and self.test_apply_hold_s is not None:
+            raise ValueError(
+                "TEST_APPLY_HOLD_S shortens the Full auto hold for tests and must not be set in "
+                "production"
+            )
+        if self.test_apply_hold_s is not None and self.apply_stub_base_url is None:
+            raise ValueError(
+                "TEST_APPLY_HOLD_S is for a stack of the fake forms server only: it needs "
+                "APPLY_STUB_BASE_URL"
+            )
         if self.app_env == "production" and self.model_api_base_url is not None:
             raise ValueError(
                 "MODEL_API_BASE_URL points the credential check at a test stub and must not be "
@@ -315,6 +336,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BROWSER_SOURCES_BASE_URL points the browser sources at test pages and must not "
                 "be set in production"
+            )
+        if self.app_env == "production" and self.feeds_stub_base_url is not None:
+            raise ValueError(
+                "FEEDS_STUB_BASE_URL points the freelance feeds at a test server and must not be "
+                "set in production"
             )
         for name in ("google_auth_url", "google_token_base_url", "google_api_base_url"):
             if self.app_env == "production" and getattr(self, name) is not None:
@@ -393,6 +419,11 @@ class Settings(BaseSettings):
         ):
             raise ValueError("CREDENTIALS_KEY_PREVIOUS must differ from CREDENTIALS_KEY")
         return self
+
+    @property
+    def apply_hold_floor_s(self) -> int:
+        """The shortest Full auto hold: APPLY_HOLD_S, or a test stack's TEST_APPLY_HOLD_S."""
+        return self.test_apply_hold_s or self.apply_hold_s
 
     @property
     def sqlalchemy_url(self) -> URL:

@@ -9,8 +9,8 @@ order of the gate (SPEC-apply, "Guardrails"), so two starts at once make one row
    first and Full auto a refusal; the same for rules that cannot be read;
 3. the form address: none (`no_address`) refuses in every mode;
 4. duplicates (`guardrails.duplicates`): every code refuses in every mode, except `same_role` and
-   `same_address`, which Apply myself shows as warnings (the person decides; the app never clicks
-   there).
+   `same_address`, and a passed posting (`passed`), which Apply myself shows as warnings (the
+   person decides; the app never clicks there).
 
 Then the `applications` row (`queued`, attempt 0) and its `created` event, which holds the mode,
 whether it is a rehearsal and the warning codes: ids and codes only. Full auto's own checks (the
@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 
 LIST_LIMIT_MAX = 200
 # What turns into a warning instead of a refusal when the person applies himself.
-MANUAL_WARNS = frozenset({"never_apply_role", "rules_unreadable", "same_address", "same_role"})
+MANUAL_WARNS = frozenset(
+    {"never_apply_role", "rules_unreadable", "same_address", "same_role", "passed"}
+)
 
 
 class PostingNotFoundError(LookupError):

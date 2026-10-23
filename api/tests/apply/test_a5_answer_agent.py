@@ -494,6 +494,40 @@ def test_a_fill_cancelled_before_the_claim_fails_its_queued_run(
     assert agents._PENDING == {}
 
 
+def test_a_store_error_while_a_cancelled_fill_releases_its_run_keeps_the_cancellation(
+    db: Session, person_a: Person, runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fill's job must end cancelled, not with the store's error (issue #317): the run stays
+    queued for the stale reaper."""
+    from app.agents import runner
+
+    entered = asyncio.Event()
+
+    async def never_claimed(context: RunContext, run_id: uuid.UUID) -> RunStatus:
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    def store_down(*args: Any, **kwargs: Any) -> bool:
+        raise sa.exc.OperationalError("UPDATE agent_runs", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(runner, "execute", never_claimed)
+    monkeypatch.setattr(runs, "fail_queued", store_down)
+    runtime.give_key(person_a)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(runtime.agent()(request(person_a.user_id)))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    (made,) = runs_of(db, person_a.user_id)
+    assert made.status is RunStatus.queued
+    assert agents._PENDING == {}
+
+
 def test_a_fill_cancelled_while_its_run_is_created_fails_the_run(
     db: Session, person_a: Person, runtime: Runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:

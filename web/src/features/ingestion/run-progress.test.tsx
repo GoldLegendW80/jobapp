@@ -344,6 +344,36 @@ describe("the run on the page", () => {
     expect(panel()).not.toHaveTextContent(RAW);
   });
 
+  it("says a document was not read because its text may hold a secret", async () => {
+    await show(
+      fakeRun({
+        status: "done",
+        partial: true,
+        finished_at: "2026-10-13T09:20:00Z",
+        document_ids: ["d1", "d2"],
+        unread_document_ids: ["d2"],
+        secret_document_ids: ["d2"],
+        counts: { steps: 2, running: 0, done: 1, failed: 1 },
+        steps: [
+          fakeStep({ position: 0, status: "done", items: 3, tokens: 3_760 }),
+          fakeStep({
+            position: 1,
+            status: "failed",
+            document_id: "d2",
+            document_name: "scan.png",
+          }),
+        ],
+      }),
+    );
+    const unread = within(
+      screen.getByRole("region", { name: "Documents that were not read" }),
+    ).getAllByRole("listitem");
+    expect(unread.map((one) => one.textContent)).toEqual([
+      "scan.png: its text may hold a secret, such as a password or a key, so it was not read. Check it under Documents, confirm it, then start a new run.",
+    ]);
+    expect(panel()).not.toHaveTextContent(RAW);
+  });
+
   it("a run that read nothing and failed says so", async () => {
     const { state } = await show(
       fakeRun({

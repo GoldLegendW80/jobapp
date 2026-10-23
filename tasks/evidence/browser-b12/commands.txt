@@ -1,0 +1,14 @@
+Browser B12b, 2026-10-20, on the Mac (Docker Desktop, arm64), images under tags of their own
+(b12b-*:test, built with compose.extra-ca.yml), removed after the run.
+
+COMPOSE_PROFILES=browser docker compose -p b12b-stack -f compose.yml -f compose.mac.yml \
+  -f tests/ats-stub.compose.yml -f tests/browser-pages.compose.yml -f <own image override> up -d --wait
+docker compose -p b12b-stack -f compose.yml exec -T api alembic upgrade head
+E2E_CADDY_URL=http://127.0.0.1:8197 E2E_COMPOSE_PROJECT=b12b-stack \
+  ops/agent-test.sh --name b12b --playwright -c e2e/browser-all.config.ts browser-b12.spec.ts
+  4 passed (1.5m)
+Same stack, the whole group (browser-b3, b4, b7, b12): 14 passed.
+The typed name (e2e-b12-...) in the stack's logs: 0 lines.
+
+Screenshots: banner-phone-* (the banner on Account during the wait, the live view at the
+person's keyboard), signed-in-* (after I'm signed in, the banner gone).

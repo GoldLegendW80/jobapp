@@ -51,6 +51,7 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-10-10 | Explicit consent the first time a run sends documents to Anthropic, recorded with the date and the version of the text. |
 | 2026-10-10 | A run pauses at twice its high estimate; an explicit Continue raises the ceiling by one estimate. Applies to every user. |
 | 2026-10-10 | Parsers run in their own `parser` service (own uid, no credentials, no network beyond what it needs). Backups keep 7 nightly dumps. The profile accepts a year alone as a date. |
+| 2026-10-21 | Review (#184, #174, #111): "Accept all" takes additions only. A `replace`, and an item that would change a value the profile already holds (typed by the person or kept from an earlier decision), each need their own click. Derived years accepted after their employer was rejected stay as they are, shown stale with "check it" and Edit. Two positions or degrees at one organisation started the same year keep one key (the year), and the review says they may be two entries. Boards a document proposes are still inserted enabled. |
 
 ### Ingestion and profile fill (owner decisions of 2026-10-21, through the orchestrator)
 
@@ -226,3 +227,7 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
    only the pace per host holds back stays valid, at most 7 days after it was given, and the gate
    checks everything again before the click; a Full auto Like stays valid at most 7 days in any
    case, and only while Full auto stays on.
+
+- 2026-10-21 (#528): a skipped (passed) posting is refused with `passed` at start, at the
+  decision and at both submission rechecks, in Review first and Full auto. Apply myself only
+  warns; the other duplicate refusals still apply. Undo the Pass before asking the app to apply.

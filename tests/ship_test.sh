@@ -259,14 +259,34 @@ if [[ -n "$failed" ]]; then
   exit 1
 fi
 mkdir -p "$MAIN/.local-check"
-python3 - "$MAIN/.local-check/$tree.json" "$work/merged" "$tree" "$head" "$base" <<'PY'
+# $STATE/journeys, when it exists, adds the journeys of issue #552: "scoped" (the digest of the
+# files of head against base), "scoped-other" (a digest of another change set) or "full".
+python3 - "$MAIN/.local-check/$tree.json" "$work/merged" "$tree" "$head" "$base" "$(cat "$STATE/journeys" 2>/dev/null)" <<'PY'
+import hashlib
 import json
+import subprocess
 import sys
 
-out, merged, tree, head, base = sys.argv[1:]
+out, merged, tree, head, base, journeys = sys.argv[1:]
 rows = [line.split("\t") for line in open(merged).read().splitlines() if line]
 record = {"result": "PASS", "tree": tree, "head": head, "base": {"ref": "origin/main", "commit": base},
           "merged": [{"ref": ref, "commit": sha} for ref, sha in rows], "stub": False}
+if journeys:
+    names = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", base, head],
+                           capture_output=True, check=True).stdout
+    paths = sorted(name for name in names.split(b"\0") if name)
+    listed = paths + ([b"another.txt"] if journeys == "scoped-other" else [])
+    if journeys == "scoped-collision":
+        listed = [b"\n".join(paths)]
+    record["journeys"] = {
+        "scope": "full" if journeys == "full" else "scoped",
+        "full_because": "LOCAL_CHECK_FULL=1" if journeys == "full" else None,
+        "changed_files": len(listed) + (1 if journeys == "scoped-count" else 0),
+        "changes": hashlib.sha256(b"".join(p + b"\0" for p in sorted(listed))).hexdigest(),
+        "ran": [{"group": "apps", "why": "web/src/features/jobs/x.tsx: the module jobs"}]
+        + ([{"group": "mail", "why": "full: LOCAL_CHECK_FULL=1"}] if journeys == "full" else []),
+        "skipped": [] if journeys == "full" else [{"group": "mail", "why": "no changed file touches it"}],
+    }
 open(out, "w").write(json.dumps(record, indent=2) + "\n")
 PY
 echo "record: $MAIN/.local-check/$tree.json"
@@ -760,6 +780,50 @@ out_has "differs from the gate's tree"
 out_has "nothing deployed"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed a tree that was not checked"
 ok "a main tree that differs from the gate's tree stops before the deploy"
+
+# === the journey groups of the record (issue #552) ===================================================
+fresh
+mkpr 91
+echo scoped >"$STATE/journeys"
+run 0 ship --approved
+[[ "$(last_line)" == "SHIP: OK" ]] || fail "scoped record: $(last_line)"
+out_has "journeys: scoped on 1 changed files, ran apps; skipped mail (no changed file touches it)"
+fresh
+mkpr 92
+echo full >"$STATE/journeys"
+run 0 ship --approved
+out_has "journeys: full (LOCAL_CHECK_FULL=1), ran apps, mail"
+fresh
+mkpr 93
+run 0 ship --approved
+out_has "journeys: not recorded (a gate before issue #552: every group ran)"
+fresh
+mkpr 94
+echo scoped-other >"$STATE/journeys"
+run 1 ship --approved
+out_has "its journey scope was computed for another change set: nothing merged"
+log_lacks gh.log "pr merge"
+[[ ! -e "$STATE/deploy.log" ]] || fail "deployed on a record of another change set"
+ok "the summary names the journey groups the gate ran and skipped (scoped, full, a record without them); a scoped record of another change set is refused before any merge"
+
+for mode in scoped-collision scoped-count; do
+  fresh
+  mkpr 95 a
+  mkpr 96 b
+  echo "$mode" >"$STATE/journeys"
+  run 1 ship --approved
+  out_has "its journey scope was computed for another change set: nothing merged"
+  log_lacks gh.log "pr merge"
+  [[ ! -e "$STATE/deploy.log" ]] || fail "deployed on $mode metadata"
+done
+ok "pathname-boundary collisions and incorrect recorded counts stop before any merge"
+
+fresh
+mkpr 97 $'line\nbreak\t"quoted".txt'
+echo scoped >"$STATE/journeys"
+run 0 ship --approved
+out_has "journeys: scoped on 1 changed files"
+ok "a real newline, tab and quote in a Git pathname remain one attested change"
 
 fresh
 mkpr 66

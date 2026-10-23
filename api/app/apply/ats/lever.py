@@ -3,10 +3,11 @@
 
 - the resume parse: once the CV is attached, Lever reads it and writes the name, e-mail, phone
   and current company it found into the form. A value of the application comes from the profile,
-  never from that parse: right after the upload, every text field the parse changed is cleared
-  (`_undo_parse`), then the fill types the profile's answers in page order (the CV comes first
-  on Lever's form), so a field the resolver leaves shows nothing rather than the parse's guess,
-  and the submit lease's refill does the same before its read back;
+  never from that parse: right after the upload, the form is read until two consecutive reads
+  agree (a parse may write over more than one render), every text field the parse changed is
+  cleared (`_undo_parse`), then the fill types the profile's answers in page order (the CV comes
+  first on Lever's form), so a field the resolver leaves shows nothing rather than the parse's
+  guess, and the submit lease's refill does the same before its read back;
 - its questions are native selects (`base._fill_select`);
 - the letter: when no letter is uploaded (Lever's form has no letter input), the "Additional
   information" box carries the letter's own text, typed by code (`letter_box`), never a
@@ -19,8 +20,11 @@ Addresses it takes (anything else is not Lever's, fail closed):
     https://jobs.eu.lever.co/<org>/<uuid>[/apply]
     <stub>/forms/a8/lever/<org>/<job>[/apply.html]     the fake form of tests/ats_forms/a8/
 
-Declared open points: a parse that ends after `PARSE_WAITS` reads writes over values typed
-later; the read back before the gate's click sees it and ends `form_changed`. An hCaptcha that
+Declared open points: a parse that writes again after two consecutive reads agreed, or after
+`PARSE_WAITS` reads, writes over values typed later; the read back before the gate's click sees
+it and ends `form_changed`. A form that asks for the CV after other fields (Lever's own form
+puts it first): a field typed before the upload and rewritten by the parse is cleared and stays
+empty while reported `filled`, so the read back ends `form_changed` there too. An hCaptcha that
 shows only after the click is the site's refusal of the submit (apply A10). A letter box named
 in another wording than `LETTER_BOX` is left to the answer agent's letter rule (apply A5).
 """
@@ -66,6 +70,10 @@ def letter_box(label: str) -> bool:
 def hcaptcha(root: base.Node) -> bool:
     """hCaptcha's own control: a checkbox, button or frame whose name starts with "hCaptcha"."""
     return any(n.role in _CAPTCHA_ROLES and _HCAPTCHA.match(base.fold(n.name)) for n in root.walk())
+
+
+def _texts(found: base.Discovery) -> dict[str, str]:
+    return {f.key: f.value for f in found.fields if f.kind == "text"}
 
 
 class Lever(base.Adapter):
@@ -125,10 +133,12 @@ class Lever(base.Adapter):
         return await self._undo_parse(tools, before) or filled
 
     async def _undo_parse(self, tools: base.Tools, before: base.Discovery) -> base.Filled | None:
-        """Clears every text field whose value the parse changed; None when all are cleared
-        (or no parse showed within `PARSE_WAITS` reads), else the failure."""
-        shown = {f.key: f.value for f in before.fields if f.kind == "text"}
+        """Clears every text field whose value the parse changed, as the last read shows it
+        once a change is seen and two consecutive reads agree; None when all are cleared (or
+        no parse showed within `PARSE_WAITS` reads), else the failure."""
+        shown = _texts(before)
         parsed: list[base.Field] = []
+        previous: dict[str, str] | None = None
         for attempt in range(PARSE_WAITS):
             now, code = await self.read(tools)
             if now is None:
@@ -140,8 +150,10 @@ class Lever(base.Adapter):
                 for f in now.fields
                 if f.kind == "text" and f.value and f.value != shown.get(f.key, "")
             ]
-            if parsed:
+            values = _texts(now)
+            if parsed and values == previous:
                 break
+            previous = values
             if attempt < PARSE_WAITS - 1:
                 await tools.wait_for(time=PARSE_WAIT_S)
         for item in parsed:

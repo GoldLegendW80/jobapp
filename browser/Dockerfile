@@ -10,9 +10,12 @@
 #
 # Chromium is pinned by Debian version (bookworm-security) and the image is rebuilt when Debian
 # publishes a security update: build with --build-arg CHROMIUM_VERSION=<new version>.
+# bookworm-security serves only its latest Chromium, so an older pin fails the build. To bump,
+# set the Candidate this prints: docker run --rm debian:bookworm-slim sh -c
+# 'apt-get update -qq && apt-cache policy chromium'
 FROM debian:bookworm-slim
 
-ARG CHROMIUM_VERSION=155.0.8059.39-1~deb12u1
+ARG CHROMIUM_VERSION=155.0.8059.79-1~deb12u1
 ARG PLAYWRIGHT_VERSION=1.55.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -58,7 +61,9 @@ RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbi
 # RemoteDebuggingAllowed and DeveloperToolsAvailability would also take CDP from the agents'
 # leases. No extension may be installed (Debian's wrapper adds --enable-remote-extensions, and
 # chrome://extensions is blocked). Chromium never offers to save a password
-# (PasswordManagerEnabled): the app stores none.
+# (PasswordManagerEnabled): the app stores none. No Labs button (BrowserLabsEnabled). No file
+# dialog (AllowFileSelectionDialogs): "Save page as" saves into the lease's download folder,
+# never into the profile, and no dialog browses the container's files.
 COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json
 
 COPY browserd /opt/browserd/browserd

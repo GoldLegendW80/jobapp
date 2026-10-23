@@ -23,6 +23,18 @@ Protocol, HTTP/1.1, one request per connection, no other path and no parameter:
                    200 application/pdf with `X-Pages`, or a JSON body {"code": ...}:
                    400 bad_request, 404 not_found, 413 too_large, 503 busy, 504 timeout,
                    500 render_failed. A code, never the engine's text.
+    POST /check    the visibility check of a template a model wrote (documents D25b): a JSON
+                   body {"html", "needles", "width", "name"}. The page is laid out for print at
+                   `width` CSS pixels, the width of an A4 page's text, and for each needle (a
+                   text the page must show) every occurrence in the body's text is measured
+                   glyph by glyph: its box, its font size, and whether `elementFromPoint` at
+                   the glyph's centre is the element that holds the text, so nothing lies over
+                   it. Then two screenshots: the page as it is, and the page with the needles
+                   painted transparent through a CSS highlight named `name`, which changes no
+                   layout; the worker compares their pixels (app/documents/design_check.py).
+                   200 application/json, or the refusals of /render. The page's own scripts
+                   stay off: the measures run through the DevTools protocol, which a page
+                   without JavaScript cannot reach or change.
     GET /health    200 when the browser is connected, 503 otherwise.
 
     python -I server.py            serves on 0.0.0.0:7071
@@ -34,6 +46,7 @@ tested without a browser (api/tests/documents/test_renderer_server.py).
 """
 
 import asyncio
+import base64
 import json
 import re
 import sys
@@ -64,6 +77,107 @@ CODES = {400: "bad_request", 404: "not_found", 413: "too_large", 500: "render_fa
 CODES |= {503: "busy", 504: "timeout"}
 
 _PAGE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
+
+CHECK_SCALE = 2  # device pixels per CSS pixel of the screenshots
+CHECK_PAGE_HEIGHT = 1123  # an A4 page at 96 CSS pixels an inch
+# What is laid out lower is outside the check: under the 256 MiB mem_limit the peak is 187 MiB at
+# 1005 px and at the limit from about 1550 px; 2.3 pages failed (measured on a Mac, PR #518).
+CHECK_MAX_HEIGHT = 3 * CHECK_PAGE_HEIGHT // 2
+CHECK_WIDTHS = (200, 1200)
+CHECK_NEEDLES = 400
+CHECK_NEEDLE = 2000
+CHECK_TEXT = (
+    16_000  # characters of all the needles together: the glyphs measured, and hidden
+)
+CHECK_FOUND = 8  # occurrences of one needle measured
+_NAME = re.compile(r"[a-z][a-z0-9]{7,39}")
+
+# How far down the page lays out, in CSS pixels: [the lowest text below the root element's top,
+# the lowest text or box of the body from the viewport's top].
+# The viewport's own height does not count, as the document's scroll height would.
+HEIGHT_JS = """() => {
+  let text = 0;
+  let box = 0;
+  for (const element of document.body.querySelectorAll("*")) {
+    box = Math.max(box, element.getBoundingClientRect().bottom);
+  }
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  while (walker.nextNode()) {
+    if (walker.currentNode.data.trim()) {
+      range.selectNodeContents(walker.currentNode);
+      text = Math.max(text, range.getBoundingClientRect().bottom);
+    }
+  }
+  // The text's height from the top of the root element, below the sheet's own root margin.
+  const top = document.documentElement.getBoundingClientRect().top;
+  return [Math.ceil(Math.max(0, text - top)), Math.ceil(Math.max(text, box))];
+}"""
+# Every occurrence of every needle in the body's text: [font size, [[x, y, w, h, own]]], a glyph
+# a line, `own` 1 when the element at its centre is the one that holds the text.
+MEASURE_JS = """(needles) => {
+  const nodes = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  return needles.map((needle) => {
+    const found = [];
+    const wanted = needle.toLowerCase();
+    for (const node of nodes) {
+      // Lower case on both sides (a template may print a field in capitals); a text whose
+      // lower case changes its length is left out, its indexes would not be the node's.
+      const data = node.data.toLowerCase();
+      let at = data.length === node.data.length ? data.indexOf(wanted) : -1;
+      while (at >= 0 && found.length < FOUND_MAX) {
+        const parent = node.parentElement;
+        const glyphs = [];
+        for (let i = at; i < at + needle.length; i++) {
+          const code = node.data.charCodeAt(i);
+          const wide = code >= 0xd800 && code < 0xdc00 ? 2 : 1;
+          if (!/\\s/.test(node.data[i])) {
+            const range = document.createRange();
+            range.setStart(node, i);
+            range.setEnd(node, i + wide);
+            const box = range.getClientRects()[0];
+            if (!box || box.width <= 0 || box.height <= 0) {
+              glyphs.push([0, 0, 0, 0, 0]);
+            } else {
+              const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+              glyphs.push([box.left, box.top, box.width, box.height, hit === parent ? 1 : 0]);
+            }
+          }
+          i += wide - 1;
+        }
+        found.push([parseFloat(getComputedStyle(parent).fontSize) || 0, glyphs]);
+        at = data.indexOf(wanted, at + needle.length);
+      }
+    }
+    return found;
+  });
+}""".replace("FOUND_MAX", str(CHECK_FOUND))
+# The needles painted transparent: the same boxes, the same layout, no glyph.
+HIDE_JS = """([name, needles]) => {
+  const style = document.createElement("style");
+  style.textContent = `::highlight(${name}){color:transparent;-webkit-text-fill-color:transparent;text-shadow:none}`;
+  document.head.append(style);
+  const marked = new Highlight();
+  const counts = needles.map(() => 0);
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const data = node.data.toLowerCase();
+    if (data.length !== node.data.length) continue;
+    for (const [n, needle] of needles.map((one) => one.toLowerCase()).entries()) {
+      for (let at = data.indexOf(needle); at >= 0 && counts[n] < FOUND_MAX; at = data.indexOf(needle, at + 1)) {
+        counts[n] += 1;
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + needle.length);
+        marked.add(range);
+      }
+    }
+  }
+  CSS.highlights.set(name, marked);
+}""".replace("FOUND_MAX", str(CHECK_FOUND))
 
 
 class RenderTimeout(Exception):
@@ -131,6 +245,12 @@ class Renderer:
                 kill()
 
     async def render(self, html: str) -> tuple[bytes, int]:
+        return await self._turn(lambda: self._render(html))
+
+    async def check(self, asked: "CheckAsked") -> dict[str, Any]:
+        return await self._turn(lambda: self._check(asked))
+
+    async def _turn(self, make: Callable[[], Awaitable[Any]]) -> Any:
         if self.waiting >= WAITING:
             raise BusyError
         self.waiting += 1
@@ -140,7 +260,7 @@ class Renderer:
             self.waiting -= 1
         try:
             await self.ensure_browser()
-            job = asyncio.ensure_future(self._render(html))
+            job = asyncio.ensure_future(make())
             job.add_done_callback(lambda done: done.cancelled() or done.exception())
             finished, _ = await asyncio.wait({job}, timeout=self.timeout_s)
             if job not in finished:
@@ -167,6 +287,39 @@ class Renderer:
         )
         return pdf, count_pages(pdf)
 
+    async def _check(self, asked: "CheckAsked") -> dict[str, Any]:
+        self.context = await self.browser.new_context(
+            java_script_enabled=False,
+            offline=True,
+            service_workers="block",
+            accept_downloads=False,
+            viewport={"width": asked.width, "height": CHECK_PAGE_HEIGHT},
+            device_scale_factor=CHECK_SCALE,
+        )
+        await self.context.route("**/*", only_data)
+        page = await self.context.new_page()
+        await page.emulate_media(media="print")
+        await page.set_content(
+            asked.html, wait_until="load", timeout=self.timeout_s * 1000
+        )
+        height, lowest = await page.evaluate(HEIGHT_JS)
+        height = int(height)
+        shown = max(1, min(int(lowest), CHECK_MAX_HEIGHT))
+        await page.set_viewport_size({"width": asked.width, "height": shown})
+        found = await page.evaluate(MEASURE_JS, list(asked.needles))
+        before = await page.screenshot(type="png")
+        await page.evaluate(HIDE_JS, [asked.name, list(asked.needles)])
+        after = await page.screenshot(type="png")
+        return {
+            "width": asked.width,
+            "height": height,
+            "shown": shown,
+            "scale": CHECK_SCALE,
+            "found": found,
+            "before": base64.b64encode(before).decode("ascii"),
+            "after": base64.b64encode(after).decode("ascii"),
+        }
+
     async def stop(self, hung: bool) -> None:
         """The context of the render that ended is closed, never reused. One that does not
         close in time, or a render that hung before it had one, takes the browser with it: it
@@ -185,6 +338,44 @@ class Renderer:
 
 class BusyError(Exception):
     pass
+
+
+class CheckAsked:
+    def __init__(
+        self, html: str, needles: tuple[str, ...], width: int, name: str
+    ) -> None:
+        self.html, self.needles, self.width, self.name = html, needles, width, name
+
+
+def check_asked(body: bytes) -> CheckAsked:
+    """The body of POST /check, strictly; HttpError(400) otherwise."""
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise HttpError(400) from None
+    if not isinstance(data, dict) or set(data) != {"html", "needles", "width", "name"}:
+        raise HttpError(400)
+    html, needles, width, name = (
+        data["html"],
+        data["needles"],
+        data["width"],
+        data["name"],
+    )
+    if (
+        not isinstance(html, str)
+        or not isinstance(name, str)
+        or not _NAME.fullmatch(name)
+    ):
+        raise HttpError(400)
+    if type(width) is not int or not CHECK_WIDTHS[0] <= width <= CHECK_WIDTHS[1]:
+        raise HttpError(400)
+    if not isinstance(needles, list) or not 1 <= len(needles) <= CHECK_NEEDLES:
+        raise HttpError(400)
+    if not all(isinstance(n, str) and 1 <= len(n) <= CHECK_NEEDLE for n in needles):
+        raise HttpError(400)
+    if sum(map(len, needles)) > CHECK_TEXT:
+        raise HttpError(400)
+    return CheckAsked(html, tuple(needles), width, name)
 
 
 class Request:
@@ -226,7 +417,7 @@ async def read_request(reader: asyncio.StreamReader) -> Request:
             headers[name.strip().lower()] = value.strip()
     if (method, target) == ("GET", "/health"):
         return Request(method, target, headers, b"")
-    if (method, target) != ("POST", "/render"):
+    if (method, target) not in (("POST", "/render"), ("POST", "/check")):
         raise HttpError(404)  # another path, a query string, a URL or a file to fetch
     if "transfer-encoding" in headers:
         raise HttpError(400)
@@ -263,6 +454,8 @@ async def handle(renderer: Renderer, request: Request) -> tuple[bytes, str]:
         if renderer.healthy():
             return answer(200, b"ok", "text/plain"), "health"
         return answer(503, b"no browser", "text/plain"), "unhealthy"
+    if request.path == "/check":
+        return await handle_check(renderer, request)
     try:
         html = request.body.decode("utf-8")
     except UnicodeDecodeError:
@@ -276,6 +469,22 @@ async def handle(renderer: Renderer, request: Request) -> tuple[bytes, str]:
     except Exception:  # noqa: BLE001  (the engine's text never leaves the service)
         return refusal(500), "render_failed"
     return answer(200, pdf, "application/pdf", {"X-Pages": str(pages)}), "ok"
+
+
+async def handle_check(renderer: Renderer, request: Request) -> tuple[bytes, str]:
+    try:
+        asked = check_asked(request.body)
+    except HttpError:
+        return refusal(400), "bad_request"
+    try:
+        found = await renderer.check(asked)
+    except BusyError:
+        return refusal(503), "busy"
+    except RenderTimeout:
+        return refusal(504), "timeout"
+    except Exception:  # noqa: BLE001  (the engine's text never leaves the service)
+        return refusal(500), "render_failed"
+    return answer(200, json.dumps(found).encode(), "application/json"), "checked"
 
 
 async def serve_one(

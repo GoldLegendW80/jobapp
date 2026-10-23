@@ -3,12 +3,12 @@
     subject, the salutation, the paragraphs, the closing and the name. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{% import "_base/layout.html.j2" as layout with context %}
 {% block body %}
-{% set parts = name.split() %}
-{% set initials = ((parts[0][:1] ~ (parts[-1][:1] if parts | length > 1 else "")) | upper) if parts else "" %}
+{% set initials = layout.initials(name) %}
 <header class="head{% if not photo and not initials %} bare{% endif %}">
 <div class="headtext">
-<h1 class="name">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</h1>
+<h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 {{ base.contact_lines() }}
 </div>
@@ -22,6 +22,6 @@
 {% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
 {{ base.paragraphs(content.paragraphs) }}
 {% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
-<p class="signature">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</p>
+<p class="signature">{{ base.words(name) }}</p>
 </div>
 {% endblock %}
