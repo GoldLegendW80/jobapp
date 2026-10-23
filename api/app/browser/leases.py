@@ -6,7 +6,8 @@ second one. The keys, all under `jobapp:browser:`:
 
     holder          the current lease as JSON, written and ended by compare and set only
     queue:<tier>    one sorted set per priority tier, members `<user id>|<purpose>`, in order of
-                    arrival; tier 0 first: a person's own session (`takeover`, `signin`), then
+                    arrival; tier 0 first: a person's own session (`takeover`, `signin`, and
+                    Apply myself's `apply_manual`, apply A9), then
                     the apply purposes a person waits on, then `full_auto`, then `sweep`
     ticket:<member> present while that waiter still waits: it lives TICKET_TTL_S and is renewed
                     each time the waiter asks again; a member whose ticket is gone leaves the queue
@@ -102,6 +103,7 @@ FORGETS = PREFIX + "forgets:"
 LEASE_MAX_S = {
     "takeover": 1800,
     "signin": 1800,
+    "apply_manual": 1800,
     "apply_fill": 900,
     "apply_submit": 900,
     "profile_edit": 900,
@@ -112,6 +114,7 @@ PURPOSES = tuple(LEASE_MAX_S)
 TIERS = {
     "takeover": 0,
     "signin": 0,
+    "apply_manual": 0,
     "apply_fill": 1,
     "apply_submit": 1,
     "profile_edit": 1,

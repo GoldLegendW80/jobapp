@@ -35,18 +35,22 @@ before any decision. One job at a time (the queue's concurrency is 1, the browse
    the cost and the duration, and the state: `ready`; `needs_person` with what is needed (a
    captcha, a sign in or an e-mail code seen at any point of the fill, the agent's fields
    included, a required field left, `form_changed`, `no_adapter`); `posting_closed`; or `failed`
-   with the tool's code (A10 adds the retries). The posting moves to `staged` through
-   `set_status` (`via: "apply"`) only from `found`, `shortlisted` or `cv_ready`, so a status the
-   person set during the fill (skipped, closed, applied by a mail) is never moved back
-   (test_a_status_the_person_set_during_the_fill_is_kept). An application the person cancelled
-   during the fill keeps its state, and nothing of the fill is stored over it.
+   with the tool's code, or `queued` again for a retry (A10a, `failures.py`). The posting moves
+   to `staged` through `set_status` (`via: "apply"`) only from `found`, `shortlisted` or
+   `cv_ready`, so a status the person set during the fill (skipped, closed, applied by a mail)
+   is never moved back (test_a_status_the_person_set_during_the_fill_is_kept). An application
+   the person cancelled during the fill keeps its state, and nothing of the fill is stored over
+   it.
 
 The lease is released whatever happens, and no application stays `filling`: a fill cancelled (a
-stop, the job's timeout) or whose step 5 raised ends `failed` with `interrupted` (`interrupt`,
-shielded from the cancellation), and the queue's start ends those a killed worker left
-(`reset_interrupted`). A dry run ends `ready` like any other: SPEC-apply has every
-rehearsal go through the whole gate, and the gate (A6) is the one that stops it as `rehearsed`
-before the click; this run never moves an application past `ready`, so never to `submitting`.
+stop, the job's timeout) or whose step 5 raised ends `failed` with `interrupted`, or is queued for
+its retry (`interrupt`, shielded from the cancellation), and the queue's start does the same with
+those a killed worker left (`reset_interrupted`). A Full auto fill holds a `full_auto` lease, which
+never waits for a person (browser B12a); in Review first a step on the page (a captcha, an e-mail
+code) keeps the lease while the run waits for the person (`_wait_for_person`, A10a). A dry run
+ends `ready` like any other: SPEC-apply has every rehearsal go through the whole gate, and the
+gate (A6) is the one that stops it as `rehearsed` before the click; this run never moves an
+application past `ready`, so never to `submitting`.
 
 Tool calls go through `Services.before_tool` when set: browser B4's `Live.agent_turn`, awaited
 before each call so the person's input in the live view comes first. B4 is not merged yet, so
@@ -60,15 +64,25 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
+from functools import partial
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, caps, full_auto, guardrails, model_check, shots, states
+from app.apply import (
+    agent,
+    caps,
+    failures,
+    full_auto,
+    guardrails,
+    model_check,
+    shots,
+    states,
+)
 from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
@@ -96,6 +110,7 @@ from app.profile import service as profile_service
 logger = logging.getLogger(__name__)
 
 PURPOSE = "apply_fill"
+FULL_AUTO_PURPOSE = "full_auto"
 CV_NAME, LETTER_NAME = "cv.pdf", "letter.pdf"
 # Extra marks for browserd's submit detector, beside its own (B5): the generic submit controls.
 SUBMIT_SELECTORS = ('button[type="submit"]', 'input[type="submit"]')
@@ -104,6 +119,8 @@ STAGE_FROM = frozenset({JobStatus.found, JobStatus.shortlisted, JobStatus.cv_rea
 FILLED = frozenset({"filled", "unverified"})
 INTERRUPTED = "interrupted"
 DUE_LIMIT = 200
+# A step the person takes on the page: what the page shows wins over its HTTP status.
+_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT})
 
 
 class RunTools(ats_base.Tools, Protocol):
@@ -138,6 +155,12 @@ class Services:
     before_tool: Callable[[], Awaitable[None]] | None = None  # B4's Live.agent_turn
     form_agent: forms.FormAgent | None = None  # the generic strategy's (A8)
     check: model_check.Checker | None = None  # the check by model before a Full auto decision
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    retry_delays_s: tuple[int, ...] | None = None  # None: APPLY_RETRY_DELAYS_S
+    needs_person_wait_s: int | None = None  # None: APPLY_NEEDS_PERSON_WAIT_S
+
+    def delays(self) -> tuple[int, ...]:
+        return self.retry_delays_s if self.retry_delays_s is not None else failures.retry_delays()
 
 
 @dataclass
@@ -165,6 +188,24 @@ class Result:
     report: ats_base.Report = field(default_factory=ats_base.Report)
     shot: bytes | None = field(default=None, repr=False)
     cost: dict[str, Any] = field(default_factory=dict)
+
+
+class _Watched:
+    """The lease's tools with the HTTP status of the last page opened kept (a 404 or 5xx page,
+    which an adapter reads only as a page without its form)."""
+
+    def __init__(self, tools: RunTools) -> None:
+        self._tools = tools
+        self.status: int | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tools, name)
+
+    async def navigate(self, url: str) -> dict[str, Any]:
+        answer = await self._tools.navigate(url)
+        status = answer.get("status") if isinstance(answer, dict) else None
+        self.status = status if isinstance(status, int) else None
+        return answer
 
 
 class _Turned:
@@ -318,24 +359,29 @@ def _end(db: Session, application: Application, to: State, code: str, now: datet
     _event(db, application, "refused" if to is State.blocked else "ended", now, code=code)
 
 
-def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str:
+def prepare(
+    db: Session, application_id: uuid.UUID, now: datetime, *, manual: bool = False
+) -> Plan | str:
     """Step 1 and 2: the plan of the fill, or the code of why there is none (the caller
-    commits either way)."""
+    commits either way). `manual`: the plan of an Apply myself session (A9, apply/manual.py),
+    which never apply only warns about (at the start) and which opens without a CV."""
     found = _locked(db, application_id)
     if found is None:
         return "gone"
     application, posting = found
     if application.state is not State.queued:
         return "not_queued"
-    if application.mode is Mode.manual:
-        return "manual"
+    if (application.mode is Mode.manual) is not manual:
+        return "manual" if not manual else "not_manual"
     user_id = application.user_id
-    code = guardrails.never_apply(
-        posting,
-        _rules(db, user_id),
-        swept=guardrails.swept_never_apply(db, user_id, posting.id),
-        mode=full_auto.blocking_mode(application.mode),
-    )
+    code = None
+    if not manual:
+        code = guardrails.never_apply(
+            posting,
+            _rules(db, user_id),
+            swept=guardrails.swept_never_apply(db, user_id, posting.id),
+            mode=full_auto.blocking_mode(application.mode),
+        )
     if code is None:
         code = caps.linkedin_refusal(db, application, now)
     if code is not None:
@@ -343,7 +389,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         return "blocked"
 
     current = documents.current(db, user_id, posting.id)
-    if current.cv.version is None and current.cv.coming is None:
+    if current.cv.version is None and current.cv.coming is None and not manual:
         _end(db, application, State.blocked, "no_documents", now)
         return "blocked"
     for kind, slot in (("cv", current.cv), ("letter", current.letter)):
@@ -373,7 +419,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         pdfs[name] = data
         if kind == "letter":
             letter_text = _letter_text(db, user_id, slot.version.version_id)
-    if CV_NAME not in pdfs:
+    if CV_NAME not in pdfs and not manual:
         _end(db, application, State.blocked, "no_documents", now)
         return "blocked"
     application.document_versions = versions
@@ -407,7 +453,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
     )
 
 
-def begin(db: Session, application_id: uuid.UUID, now: datetime) -> bool:
+def begin(db: Session, application_id: uuid.UUID, now: datetime, purpose: str = PURPOSE) -> bool:
     """`queued` to `filling` once the lease is held; False when the application moved since."""
     found = _locked(db, application_id)
     if found is None or found[0].state is not State.queued:
@@ -417,8 +463,43 @@ def begin(db: Session, application_id: uuid.UUID, now: datetime) -> bool:
     application.attempt += 1
     application.needs = None
     application.error_code = None
-    _event(db, application, "lease", now, purpose=PURPOSE, attempt=application.attempt)
+    _event(db, application, "lease", now, purpose=purpose, attempt=application.attempt)
     return True
+
+
+def still_needs(db: Session, application_id: uuid.UUID, reason: str) -> bool:
+    """The application still waits in Review first for the step `reason`: the person has not
+    answered, approved, rejected or cancelled it in the app meanwhile."""
+    application = db.execute(
+        sa.select(Application).where(Application.id == application_id)
+    ).scalar_one_or_none()
+    return (
+        application is not None
+        and application.state is State.needs_person
+        and application.needs == reason
+        and application.mode is Mode.review
+    )
+
+
+def resume(db: Session, application_id: uuid.UUID, reason: str, now: datetime) -> bool:
+    """`needs_person` to `filling` once the step `reason` is gone from the page (the person took
+    it in the live view); the attempt is the same. False when the application moved since."""
+    found = _locked(db, application_id)
+    if found is None:
+        return False
+    application = found[0]
+    if application.state is not State.needs_person or application.needs != reason:
+        return False
+    states.move(application, State.filling, now)
+    application.needs = None
+    _event(db, application, "person_done", now, needs=reason)
+    return True
+
+
+def note(db: Session, application_id: uuid.UUID, kind: str, now: datetime, **data: Any) -> None:
+    found = _locked(db, application_id)
+    if found is not None:
+        _event(db, found[0], kind, now, **data)
 
 
 def _source(answer: Answer | Left, status: str) -> AnswerSource:
@@ -520,10 +601,16 @@ def _counts(report: ats_base.Report) -> dict[str, int]:
 
 
 def finish(
-    db: Session, application_id: uuid.UUID, result: Result, now: datetime, started: datetime
+    db: Session,
+    application_id: uuid.UUID,
+    result: Result,
+    now: datetime,
+    started: datetime,
+    delays: Sequence[int] = (),
 ) -> str:
     """Step 5. Returns the state written, or `superseded` when the application left `filling`
-    during the fill (the person cancelled it)."""
+    during the fill (the person cancelled it). A failure with retries left is `queued` again
+    (`failures.after_failure`, `delays` the waits before each retry)."""
     found = _locked(db, application_id)
     if found is None:
         return "gone"
@@ -571,17 +658,22 @@ def finish(
     else:
         _event(db, application, "screenshot_failed", now)
     application.cost = {**result.cost, "duration_s": round((now - started).total_seconds(), 3)}
-    application.needs = result.needs
+    to, needs, retry = result.state, result.needs, {}
+    if to is State.failed:
+        to, retry = failures.after_failure(application, result.error, now, delays)
+        needs = failures.RETRY if to is State.queued else None
+    application.needs = needs
     application.error_code = result.error
-    states.move(application, result.state, now)
+    states.move(application, to, now)
     _event(
         db,
         application,
-        result.state.value,
+        "retry" if to is State.queued else to.value,
         now,
-        needs=result.needs,
+        needs=needs,
         code=result.error,
         dry_run=application.dry_run,
+        **retry,
     )
     if result.state is State.needs_person:
         # Full auto (A13a): what needs the person, a sign in wall included, is a review item.
@@ -599,14 +691,16 @@ def finish(
             )
         else:
             _event(db, application, "posting_status_kept", now, status=posting.status.value)
-    return result.state.value
+    return to.value
 
 
-def interrupt(db: Session, application_id: uuid.UUID, now: datetime) -> str:
+def interrupt(
+    db: Session, application_id: uuid.UUID, now: datetime, delays: Sequence[int] | None = None
+) -> str:
     """A fill that could not end (cancelled by a stop or its timeout, or `finish` raised):
     `failed` with `interrupted` when the application is still `filling`, so it never stays
-    there (A10's retries start from `failed`). Locks the application's row alone: the posting's
-    may be the one held."""
+    there, or `queued` for its retry while one is left (A10a). Locks the application's row
+    alone: the posting's may be the one held."""
     application = db.execute(
         sa.select(Application)
         .where(Application.id == application_id)
@@ -615,19 +709,31 @@ def interrupt(db: Session, application_id: uuid.UUID, now: datetime) -> str:
     ).scalar_one_or_none()
     if application is None or application.state is not State.filling:
         return "superseded"
-    _end(db, application, State.failed, INTERRUPTED, now)
-    return State.failed.value
+    waits = failures.retry_delays() if delays is None else delays
+    to, retry = failures.after_failure(application, INTERRUPTED, now, waits)
+    if to is State.failed:
+        _end(db, application, State.failed, INTERRUPTED, now)
+        return to.value
+    states.move(application, to, now)
+    application.needs, application.error_code = failures.RETRY, INTERRUPTED
+    _event(db, application, "retry", now, needs=failures.RETRY, code=INTERRUPTED, **retry)
+    return to.value
 
 
-def reset_interrupted(db: Session, now: datetime) -> int:
+def reset_interrupted(db: Session, now: datetime, delays: Sequence[int] | None = None) -> int:
     """At the worker's start no fill runs: every application left `filling` by a dead process
-    ends `failed` with `interrupted`. Answers a count."""
+    ends `failed` with `interrupted`, or is queued for its retry (Apply myself's sessions:
+    `manual.reset_interrupted`). Answers a count."""
     ids = (
-        db.execute(sa.select(Application.id).where(Application.state == State.filling))
+        db.execute(
+            sa.select(Application.id).where(
+                Application.state == State.filling, Application.mode != Mode.manual
+            )
+        )
         .scalars()
         .all()
     )
-    return sum(interrupt(db, application_id, now) == State.failed.value for application_id in ids)
+    return sum(interrupt(db, application_id, now, delays) != "superseded" for application_id in ids)
 
 
 def _in_db[T](sessions: sessionmaker[Session], step: Callable[[Session], T]) -> T:
@@ -787,6 +893,8 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
         if not opened.get("ok"):
             return Result(State.failed, error=str(opened.get("error") or "failed"))
         shot = await tools.snapshot()
+        if _card_asked(shot):
+            return await _payment_asked(tools)
         adapter = adapter_for(
             plan.form_url, str(shot.get("snapshot") or ""), stub_base=services.stub_base
         )
@@ -799,6 +907,16 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
         if code:
             state, needs, error = _stopped(code)
             return Result(state, needs=needs, error=error, shot=await shots.take(tools))
+    return await _fill_on_page(services, plan, adapter, tools)
+
+
+async def _fill_on_page(
+    services: Services, plan: Plan, adapter: ats_base.Adapter, tools: RunTools
+) -> Result:
+    """The adapter's fill of the page shown, then the answer agent for what is left. A page
+    that asks for a card ends here, before anything is typed."""
+    if _card_asked(await tools.snapshot()):
+        return await _payment_asked(tools)
     report = await adapter.fill_form(tools, plan.context)
     cost: dict[str, Any] = {"agent": "not_run"}
     if not report.stopped:
@@ -813,6 +931,111 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
     )
 
 
+def _card_asked(shot: dict[str, Any]) -> bool:
+    return bool(shot.get("ok")) and failures.payment_page(str(shot.get("snapshot") or ""))
+
+
+async def _payment_asked(tools: RunTools) -> Result:
+    return Result(State.needs_person, needs=failures.PAYMENT, shot=await shots.take(tools))
+
+
+async def _checked(result: Result, tools: _Watched) -> Result:
+    """What the page says beside the adapter's reading (A10a). A step the person takes on the
+    page (captcha, sign in, e-mail code, a card asked) is kept whatever the page's status; else
+    a 404 page is a closed posting and a 5xx page a passing fault (retried). A card field or
+    frame on the page after the fill asks for payment, whatever state the fill reached."""
+    if result.needs in _ON_PAGE:
+        return result
+    if result.state is not State.ready and tools.status == 404:
+        return replace(result, state=State.posting_closed, needs=None, error="posting_closed")
+    if result.state is not State.ready and tools.status is not None and tools.status >= 500:
+        return replace(result, state=State.failed, needs=None, error=failures.HTTP_5XX)
+    if result.state is State.posting_closed or result.error in failures.RETRYABLE:
+        return result
+    try:
+        shot = await tools.snapshot()
+    except BrowserError:
+        return result
+    if _card_asked(shot):
+        return replace(result, state=State.needs_person, needs=failures.PAYMENT, error=None)
+    return result
+
+
+async def _guarded(work: Awaitable[Result], tools: _Watched) -> Result:
+    """The fill then `_checked`; nothing either raises escapes, so nothing leaves it `filling`."""
+    try:
+        return await _checked(await work, tools)
+    except BrowserError as exc:  # the lease ended under the fill, browserd went away
+        return Result(State.failed, error=exc.code)
+    except Exception as exc:  # never leave an application `filling`
+        logger.error("apply.fill_crashed", extra={"error": type(exc).__name__})
+        return Result(State.failed, error="internal_error")
+
+
+async def _wait_for_person(
+    services: Services,
+    plan: Plan,
+    adapter: ats_base.Adapter,
+    tools: _Watched,
+    started: datetime,
+    reason: str,
+) -> str:
+    """Review first, a step on the page (`failures.WAIT_ON_PAGE`): the lease is kept while the
+    person takes the step in the live view, at most `needs_person_wait_s` by the clock. Once the
+    step is gone from the page the fill goes on at the same page; when the person acted in the
+    app (answered, rejected, cancelled) or the time is up, the run ends and the application keeps
+    its state."""
+    application_id = plan.application_id
+    wait_s = services.needs_person_wait_s or failures.needs_person_wait_s()
+    deadline = services.clock() + timedelta(seconds=wait_s)
+    written = State.needs_person.value
+
+    def db(step: Callable[[Session], Any]) -> Awaitable[Any]:
+        return asyncio.to_thread(_in_db, services.sessions, step)
+
+    await db(lambda s: note(s, application_id, "waiting_person", services.clock(), needs=reason))
+    while True:
+        await services.sleep(failures.WAIT_POLL_S)
+        if services.clock() >= deadline:
+            await db(lambda s: note(s, application_id, "person_not_back", services.clock()))
+            return written
+        if not await db(partial(still_needs, application_id=application_id, reason=reason)):
+            return "person_acted"
+        try:
+            shot = await tools.snapshot()
+        except BrowserError:
+            return written  # the lease ended (its maximum, browserd gone): the item waits
+        page = str(shot.get("snapshot") or "")
+        if not shot.get("ok") or adapter.pending_step(page) == reason:
+            continue
+        went_on = partial(resume, application_id=application_id, reason=reason)
+        if not await db(partial(went_on, now=services.clock())):
+            return "person_acted"
+        # The person reached this page in the live view, not by `navigate`: its status is unknown.
+        tools.status = None
+        result = await _guarded(_fill_on_page(services, plan, adapter, tools), tools)
+        try:
+            written = await db(
+                partial(
+                    finish,
+                    application_id=application_id,
+                    result=result,
+                    now=services.clock(),
+                    started=started,
+                    delays=services.delays(),
+                )
+            )
+        except Exception as exc:  # as in `fill`: the posting's row held, the store gone
+            logger.error("apply.finish_failed", extra={"error": type(exc).__name__})
+            now, delays = services.clock(), services.delays()
+            return str(
+                await db(partial(interrupt, application_id=application_id, now=now, delays=delays))
+            )
+        if written != State.needs_person.value or result.needs not in failures.WAIT_ON_PAGE:
+            return written
+        reason = result.needs
+
+
 async def fill(services: Services, application_id: uuid.UUID) -> str:
     """The job: one application's fill, from `queued` to `ready`, `needs_person` or an end.
     Returns a code for the log (no value of the person's)."""
@@ -824,6 +1047,8 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         return plan
     user = str(plan.user_id)
     adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
+    # Full auto never waits for a person (browser B12a's rule for a `full_auto` lease).
+    purpose = FULL_AUTO_PURPOSE if plan.mode is Mode.full_auto else PURPOSE
 
     async def wait(needs: str, **data: Any) -> None:
         def step(db: Session) -> None:
@@ -836,7 +1061,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
     try:
         acquired = await services.leases.acquire(
             user,
-            PURPOSE,
+            purpose,
             True,
             hosts=_hosts(adapter, plan.form_url),
             submit_selectors=SUBMIT_SELECTORS,
@@ -856,33 +1081,42 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         return "lease_restarted"
 
     def interrupted(db: Session) -> str:
-        return interrupt(db, application_id, services.clock())
+        return interrupt(db, application_id, services.clock(), services.delays())
 
     try:
         began = await asyncio.to_thread(
-            _in_db, services.sessions, lambda db: begin(db, application_id, services.clock())
+            _in_db,
+            services.sessions,
+            lambda db: begin(db, application_id, services.clock(), purpose),
         )
         if not began:
             return "not_queued"
-        tools: RunTools = services.tools_for(user, lease_id, acquired.token)
+        lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
-            tools = _Turned(tools, services.before_tool)  # type: ignore[assignment]
-        try:
-            result = await _drive(services, plan, tools)
-        except BrowserError as exc:  # the lease ended under the fill, browserd went away
-            result = Result(State.failed, error=exc.code)
-        except Exception as exc:  # never leave an application `filling`
-            logger.error("apply.fill_crashed", extra={"error": type(exc).__name__})
-            result = Result(State.failed, error="internal_error")
+            lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
+        tools = _Watched(lease_tools)
+        result = await _guarded(_drive(services, plan, tools), tools)
         try:
             written = await asyncio.to_thread(
                 _in_db,
                 services.sessions,
-                lambda db: finish(db, application_id, result, services.clock(), started),
+                lambda db: finish(
+                    db, application_id, result, services.clock(), started, services.delays()
+                ),
             )
         except Exception as exc:  # the posting's row held past the lock timeout, the store gone
             logger.error("apply.finish_failed", extra={"error": type(exc).__name__})
             written = await asyncio.to_thread(_in_db, services.sessions, interrupted)
+        if (
+            written == State.needs_person.value
+            and plan.mode is Mode.review
+            and result.needs in failures.WAIT_ON_PAGE
+            and adapter is not None
+            and not isinstance(adapter, generic.Generic)
+        ):
+            written = await _wait_for_person(
+                services, plan, adapter, tools, started, str(result.needs)
+            )
     except asyncio.CancelledError:
         # docker stop, or the job's timeout: the application never stays `filling`.
         await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
@@ -899,14 +1133,17 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
 # --- the tick ----------------------------------------------------------------------------------
 
 
-def due(db: Session) -> list[uuid.UUID]:
+def due(
+    db: Session, now: datetime | None = None, delays: Sequence[int] | None = None
+) -> list[uuid.UUID]:
     """The applications a fill should be asked for: `queued`, not Apply myself, at most one per
     person, and none for a person whose fill runs (`filling`), so one person's backlog never
     keeps another's out of the one-at-a-time queue: each tick queues the next of every person
     in turn. A person's next is their oldest application ready to fill; those waiting for their
     documents come after, the one asked longest ago first (each ask touches `updated_at`), so a
     document finished for a later one is not stuck behind an earlier one still being written.
-    Oldest person's turn first, the limit after the ranking."""
+    Oldest person's turn first, the limit after the ranking. A retry (A10a) is asked for once its
+    time came by `now` (None: the database's clock), and meanwhile the person's next goes."""
     waits = sa.case((Application.needs.like("documents:%"), 1), else_=0)
     rank = sa.func.row_number().over(
         partition_by=Application.user_id,
@@ -923,6 +1160,7 @@ def due(db: Session) -> list[uuid.UUID]:
             Application.state == State.queued,
             Application.mode != Mode.manual,
             Application.user_id.not_in(filling),
+            ~failures.retry_waiting(now, failures.retry_delays() if delays is None else delays),
         )
         .subquery()
     )

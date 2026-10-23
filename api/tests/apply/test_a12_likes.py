@@ -685,8 +685,14 @@ def test_the_routes(
         # the runs finish: the queue fills
         assert filled(factory, first, stub) == "ready"
         assert filled(factory, second, stub) == "ready"
-        assert api.get("/api/apply/queue/count", token=token_a).json() == {"waiting_on_you": 2}
-        assert api.get("/api/apply/queue/count", token=token_b).json() == {"waiting_on_you": 0}
+        assert api.get("/api/apply/queue/count", token=token_a).json() == {
+            "waiting_on_you": 2,
+            "needs_you": 0,
+        }
+        assert api.get("/api/apply/queue/count", token=token_b).json() == {
+            "waiting_on_you": 0,
+            "needs_you": 0,
+        }
         assert api.get("/api/apply/queue", token=token_b).json()["items"] == []
         items = {i["id"]: i for i in api.get("/api/apply/queue", token=token_a).json()["items"]}
         card = items[str(first)]
