@@ -18,8 +18,12 @@ import { SectionReview } from "./section-review";
 
 export function SiteProfileRunPage() {
   const { id = "" } = useParams();
+  return <SiteProfileRunContent key={id} id={id} />;
+}
+
+function SiteProfileRunContent({ id }: { id: string }) {
   const client = useQueryClient();
-  const { handoff } = useHandoff();
+  const { handoff: currentHandoff } = useHandoff();
   const query = useQuery({
     queryKey: runKey(id),
     queryFn: ({ signal }) => getRun(id, signal),
@@ -38,6 +42,8 @@ export function SiteProfileRunPage() {
     ),
     refetchInterval: 2000,
   });
+  const browserReady = browser.isFetchedAfterMount && !browser.isError;
+  const handoff = browserReady ? currentHandoff : null;
   const update = async (run: ProfileRun) => {
     await client.cancelQueries({ queryKey: runKey(id) });
     client.setQueryData(runKey(id), run);
@@ -60,6 +66,14 @@ export function SiteProfileRunPage() {
       </div>
     );
   const run = query.data;
+  const lease =
+    browserReady && browser.data?.holder === "you" ? browser.data.lease : null;
+  const liveLease =
+    lease?.automation &&
+    lease.purpose === "profile_edit" &&
+    ["active", "waiting_person"].includes(lease.state)
+      ? lease
+      : null;
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6">
       <header className="space-y-2">
@@ -114,8 +128,8 @@ export function SiteProfileRunPage() {
       {run.autosave && (
         <p className="rounded-lg bg-muted p-4 text-sm">{autosaveSentence}</p>
       )}
-      {!handoff && ["filling", "saving"].includes(run.state) && (
-        <LiveBrowser person={false} />
+      {!handoff && liveLease && ["filling", "saving"].includes(run.state) && (
+        <LiveBrowser key={liveLease.id} person={false} />
       )}
       {run.sections.map((section) => (
         <SectionReview
