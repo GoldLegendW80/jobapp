@@ -35,6 +35,11 @@ A person's own session (a lease without automation, browser B7: `look` and `sign
 agent: every viewer of it forwards the keyboard and the mouse from its start to its end, and Take
 over and Give back are refused 409 `person_session` (there is nothing to take or give back).
 
+Apply myself (`apply_manual`, apply A9) is a person's session with the app's tools beside it:
+every viewer forwards the keyboard and the mouse, except during the app's turn. The api starts
+the turn with `{viewer: null}` and no `from` (a "Fill my details"), and ends it with a viewer;
+a page's own give back (with `from`) never takes the input from the person there.
+
 Logs: never a grant, a ticket, a query string, nor a byte of the stream.
 """
 
@@ -54,7 +59,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from browserd import config as c
-from browserd.leases import LeaseError, Manager
+from browserd.leases import MANUAL_PURPOSE, LeaseError, Manager
 
 log = logging.getLogger("browserd.live")
 
@@ -395,6 +400,8 @@ class Live:
         lease = self.manager.current()
         if lease is None or lease.lease_id != lease_id:
             return False
+        if lease.request.purpose == MANUAL_PURPOSE:
+            return not lease.app_turn
         return not lease.request.automation or lease.person_input
 
     def take(self, lease_id: str, viewer: str) -> None:
@@ -669,6 +676,12 @@ async def set_input(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     for value in (viewer, giver):
         if value is not None and (not isinstance(value, str) or not re.fullmatch(UUID, value)):
             raise LeaseError(400, "bad_viewer")
+    lease = live.manager.current()
+    manual = lease is not None and lease.request.purpose == MANUAL_PURPOSE
+    if lease is not None and manual and lease.lease_id == match["lease_id"]:
+        if viewer is not None or giver is None:
+            lease.app_turn = viewer is None
+        return 200, {"input": "agent" if lease.app_turn else "person"}
     if viewer is None:
         if match["lease_id"] != live._lease_id():
             raise LeaseError(404, "no_such_lease")

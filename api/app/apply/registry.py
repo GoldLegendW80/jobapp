@@ -17,6 +17,7 @@ ROUTER_MODULES: tuple[str, ...] = (
     "settings_router",  # A11: the Applications settings, company caps, the answer bank
     "queue_router",  # A12: the review queue
     "full_auto_router",  # A13a: the rehearsal's answer
+    "manual_router",  # A9: Apply myself's panel
     "profile_router",  # A18a: Complete my profile on this site, the run
     "profile_approve_router",  # A18b: its gate and its save
 )

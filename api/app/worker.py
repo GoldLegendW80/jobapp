@@ -679,6 +679,24 @@ async def apply_submit(ctx: dict[str, Any], application_id: str) -> None:
     await apply_submit_run.submit(services, uuid.UUID(application_id))
 
 
+async def apply_manual(ctx: dict[str, Any], application_id: str) -> None:
+    """One Apply myself session (apply A9, app/apply/manual.py): the person's, on the lease."""
+    from app.apply import manual
+
+    fill = apply_services(ctx)
+    services = ctx.get("apply_manual_services") or manual.Services(
+        fill, manual.RedisChannel(ctx["redis"]), fill.leases.client, _manual_max_s(ctx["settings"])
+    )
+    await manual.session(services, uuid.UUID(application_id))
+
+
+def _manual_max_s(settings: Settings | None) -> int:
+    from app.browser.leases import LEASE_MAX_S, lease_max_table
+
+    table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
+    return table["apply_manual"]
+
+
 async def apply_decide(ctx: dict[str, Any], application_id: str) -> None:
     """The decision of one `ready` Full auto item and its check by model (apply A13c), on the
     agents queue: the model call never holds the apply queue, and counts as one agent run."""
@@ -735,7 +753,9 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
 
 async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
     """No fill runs when the apply queue starts: an application left `filling` by a killed
-    worker ends `failed` with `interrupted`."""
+    worker ends `failed` with `interrupted`; an Apply myself session ends as `manual.close`
+    ends it."""
+    from app.apply import manual as apply_manual
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
 
@@ -743,8 +763,10 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
 
     def step(db: Session) -> int:
         # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
-        return apply_run.reset_interrupted(db, clock()) + apply_submit_run.reset_interrupted(
-            db, clock()
+        return (
+            apply_run.reset_interrupted(db, clock())
+            + apply_submit_run.reset_interrupted(db, clock())
+            + apply_manual.reset_interrupted(db, clock())
         )
 
     count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
@@ -766,6 +788,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
     fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
     submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
+    manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,
         functions=[
@@ -780,6 +803,13 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 keep_result=0,
             ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
+            func(
+                apply_manual,
+                name="apply_manual",
+                timeout=manual_timeout_s,
+                max_tries=1,
+                keep_result=0,
+            ),
         ],
         cron_jobs=[
             cron(
@@ -792,7 +822,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         ],
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
-        job_timeout_s=max(fill_timeout_s, submit_timeout_s),
+        job_timeout_s=max(fill_timeout_s, submit_timeout_s, manual_timeout_s),
         on_start=reset_fills_at_start,
     )
 

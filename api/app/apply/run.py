@@ -359,24 +359,29 @@ def _end(db: Session, application: Application, to: State, code: str, now: datet
     _event(db, application, "refused" if to is State.blocked else "ended", now, code=code)
 
 
-def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str:
+def prepare(
+    db: Session, application_id: uuid.UUID, now: datetime, *, manual: bool = False
+) -> Plan | str:
     """Step 1 and 2: the plan of the fill, or the code of why there is none (the caller
-    commits either way)."""
+    commits either way). `manual`: the plan of an Apply myself session (A9, apply/manual.py),
+    which never apply only warns about (at the start) and which opens without a CV."""
     found = _locked(db, application_id)
     if found is None:
         return "gone"
     application, posting = found
     if application.state is not State.queued:
         return "not_queued"
-    if application.mode is Mode.manual:
-        return "manual"
+    if (application.mode is Mode.manual) is not manual:
+        return "manual" if not manual else "not_manual"
     user_id = application.user_id
-    code = guardrails.never_apply(
-        posting,
-        _rules(db, user_id),
-        swept=guardrails.swept_never_apply(db, user_id, posting.id),
-        mode=full_auto.blocking_mode(application.mode),
-    )
+    code = None
+    if not manual:
+        code = guardrails.never_apply(
+            posting,
+            _rules(db, user_id),
+            swept=guardrails.swept_never_apply(db, user_id, posting.id),
+            mode=full_auto.blocking_mode(application.mode),
+        )
     if code is None:
         code = caps.linkedin_refusal(db, application, now)
     if code is not None:
@@ -384,7 +389,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         return "blocked"
 
     current = documents.current(db, user_id, posting.id)
-    if current.cv.version is None and current.cv.coming is None:
+    if current.cv.version is None and current.cv.coming is None and not manual:
         _end(db, application, State.blocked, "no_documents", now)
         return "blocked"
     for kind, slot in (("cv", current.cv), ("letter", current.letter)):
@@ -414,7 +419,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         pdfs[name] = data
         if kind == "letter":
             letter_text = _letter_text(db, user_id, slot.version.version_id)
-    if CV_NAME not in pdfs:
+    if CV_NAME not in pdfs and not manual:
         _end(db, application, State.blocked, "no_documents", now)
         return "blocked"
     application.document_versions = versions
@@ -717,9 +722,14 @@ def interrupt(
 
 def reset_interrupted(db: Session, now: datetime, delays: Sequence[int] | None = None) -> int:
     """At the worker's start no fill runs: every application left `filling` by a dead process
-    ends `failed` with `interrupted`, or is queued for its retry. Answers a count."""
+    ends `failed` with `interrupted`, or is queued for its retry (Apply myself's sessions:
+    `manual.reset_interrupted`). Answers a count."""
     ids = (
-        db.execute(sa.select(Application.id).where(Application.state == State.filling))
+        db.execute(
+            sa.select(Application.id).where(
+                Application.state == State.filling, Application.mode != Mode.manual
+            )
+        )
         .scalars()
         .all()
     )

@@ -29,6 +29,10 @@ Tightened by apply A6 (issue #296):
 - A rehearsal (`dry_run`) never reaches `submitting`: the gate records `rehearsed` from
   `approved` after the refill and the read back, before the click. `ready` has no move to
   `rehearsed`: a rehearsal always passes the gate first.
+- Apply myself (A9, `apply/manual.py`): the person clicks the site's own Submit, so the app
+  records `submitted` from `queued`, `filling` or `needs_person` without `submitting` and
+  without the gate (`MANUAL_SENT_FROM`), for a `manual` application only
+  (test_the_manual_move_is_for_manual_applications_only).
 - Before the click the submit lease may stop: `approved` to `ready` (a difference on the read
   back, the approval spent), `needs_person` (a captcha on the refilled form), or an end.
 """
@@ -68,6 +72,9 @@ TRANSITIONS: dict[State, frozenset[State]] = {
     S.rehearsed: frozenset({S.ready}),
 }
 
+# Apply myself: the person sent it from the live view, the one way to `submitted` past the gate.
+MANUAL_SENT_FROM = frozenset({S.queued, S.filling, S.needs_person})
+
 # The states in which the app has clicked Submit: they hold the posting for good.
 CLICKED = frozenset({S.submitted, S.submit_unknown})
 # The states only the gate's decision enters.
@@ -88,7 +95,10 @@ def move(application: Application, to: State, now: datetime, *, by_gate: bool = 
     gate's decision passes `by_gate` (into `approved` or `held`); a rehearsal never moves to
     `submitting`."""
     current = State(application.state)
-    if not allowed(current, to):
+    sent_by_person = (
+        application.mode is Mode.manual and to is S.submitted and current in MANUAL_SENT_FROM
+    )
+    if not sent_by_person and not allowed(current, to):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")
     if to in DECIDED and not by_gate:
         raise TransitionError(

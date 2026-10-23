@@ -43,6 +43,7 @@ import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot } from "./live-view-slot";
+import { ManualPanel } from "./manual-panel";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
@@ -116,6 +117,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const application = latest.data ?? null;
   const phase = phaseOf(application);
   const id = application?.id;
+  const manual = application?.mode === "manual";
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(id ?? ""),
@@ -200,7 +202,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   };
 
   const start = useMutation({
-    mutationFn: () => startApplication(job.id),
+    mutationFn: (mode: "review" | "manual") => startApplication(job.id, mode),
     onMutate: () => {
       setNotice(null);
     },
@@ -343,18 +345,20 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
-          <NeedsPerson
-            application={application}
-            job={job}
-            events={onPage ? detail.data?.events : undefined}
-          />
-          {phase === "filling" ? (
+          {!manual ? (
+            <NeedsPerson
+              application={application}
+              job={job}
+              events={onPage ? detail.data?.events : undefined}
+            />
+          ) : null}
+          {phase === "filling" && !manual ? (
             <LiveViewSlot
               idle="The assistant is filling the form. A screenshot of the filled form appears here when it is done."
               leaseOf="any"
             />
           ) : null}
-          {phase === "waiting" ? (
+          {phase === "waiting" && !manual ? (
             <LiveViewSlot
               idle={
                 retrying
@@ -364,6 +368,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   : "The browser starts soon. A screenshot of the filled form appears here when it is done."
               }
               leaseOf="none"
+            />
+          ) : null}
+          {application && manual ? (
+            <ManualPanel
+              application={application}
+              onChanged={settle}
+              onFailed={failed}
             />
           ) : null}
 
@@ -416,10 +427,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   className="w-full sm:w-fit"
                   disabled={busy}
                   onClick={() => {
-                    start.mutate();
+                    start.mutate("review");
                   }}
                 >
-                  {start.isPending ? (
+                  {start.isPending && start.variables === "review" ? (
                     <LoaderCircle aria-hidden="true" className="animate-spin" />
                   ) : null}
                   Apply (Review first)
@@ -427,10 +438,15 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 <Button
                   variant="outline"
                   className="w-full sm:w-fit"
-                  disabled
-                  title="Coming soon"
+                  disabled={busy}
+                  onClick={() => {
+                    start.mutate("manual");
+                  }}
                 >
-                  Apply myself (coming soon)
+                  {start.isPending && start.variables === "manual" ? (
+                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  ) : null}
+                  Apply myself
                 </Button>
               </>
             ) : null}
@@ -482,7 +498,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 Try again
               </Button>
             ) : null}
-            {canCancel(application) && !holdUntil ? (
+            {canCancel(application) && !manual && !holdUntil ? (
               <Button
                 variant="outline"
                 className="w-full sm:w-fit"
@@ -498,7 +514,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
           {phase === "idle" ? (
             <p className="text-sm text-muted-foreground">
               The assistant fills the form and stops. You look at every answer,
-              then approve.
+              then approve. With Apply myself, you fill and send the form
+              yourself in your browser here.
             </p>
           ) : null}
 
