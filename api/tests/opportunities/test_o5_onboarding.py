@@ -6,6 +6,8 @@ Real Postgres; the queue is a fake (no worker runs a sweep here). Accounts are i
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -18,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.models import Role, User
 from app.jobs.models import Sweep, SweepStatus
+from app.logging_config import JsonFormatter
 from app.opportunities import onboarding
 from app.profile.models import Profile
 from tests.identity.api_helpers import Api, Clock, make_user
@@ -234,8 +237,17 @@ def test_an_unknown_step_is_422(api: Api, new_a: Who, name: Any) -> None:
 
 
 def test_the_steps_survive_a_save_and_an_import_and_a_save_never_writes_them(
-    factory: sessionmaker[Session], api: Api, new_a: Who
+    factory: sessionmaker[Session], api: Api, new_a: Who, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level(logging.INFO, logger="app.profile.service")
+    marker = f"marker-{uuid.uuid4().hex}"
+    identity = api.request(
+        "PUT",
+        "/api/profile/identity",
+        token=new_a.token,
+        json={"base_revision": 0, "data": {"full_name": marker}},
+    )
+    assert identity.status_code == 200, identity.text
     step(api, new_a, "looking")
     loaded = api.get("/api/profile", token=new_a.token).json()
     prefs = loaded["sections"]["preferences"]
@@ -251,20 +263,95 @@ def test_the_steps_survive_a_save_and_an_import_and_a_save_never_writes_them(
 
     # sent back as loaded: saved, the steps kept
     assert put({**prefs, "documents_tone": "warm"}, loaded["revision"]).status_code == 200
+    assert not _ignored_events(caplog)
     # a save that adds or clears a step is saved, and the stored steps stay (a tab loaded
     # before the last step holds an older list: it must not be refused for it)
     for offset, steps in enumerate((["looking", "pay"], [])):
         changed = {**prefs, "onboarding": {**prefs["onboarding"], "steps_passed": steps}}
         saved = put(changed, loaded["revision"] + 1 + offset)
         assert saved.status_code == 200, saved.text
+        assert saved.json()["revision"] == loaded["revision"] + 2 + offset
+        assert saved.json()["sections"]["preferences"]["documents_tone"] == "plain"
         assert saved.json()["sections"]["preferences"]["onboarding"]["steps_passed"] == ["looking"]
+        assert len(_ignored_events(caplog)) == offset + 1
     assert stored_onboarding(factory, new_a)["steps_passed"] == ["looking"]
+    history = api.get("/api/profile/revisions?section=preferences", token=new_a.token).json()
+    assert len(history["items"]) == 3
+    for item in history["items"]:
+        revision = api.get(f"/api/profile/revisions/{item['revision']}", token=new_a.token).json()
+        assert revision["data"]["onboarding"]["steps_passed"] == ["looking"]
     # an import of a file with other steps keeps the stored ones
     exported = api.get("/api/profile/export", token=new_a.token).json()
     exported["sections"]["preferences"]["onboarding"]["steps_passed"] = ["apply", "summary"]
     imported = api.post("/api/profile/import", token=new_a.token, json=exported)
     assert imported.status_code == 200, imported.text
     assert stored_onboarding(factory, new_a)["steps_passed"] == ["looking"]
+    events = _ignored_events(caplog)
+    assert len(events) == 2  # the import adds no ignored-save event
+    for event in events:
+        payload = json.loads(JsonFormatter().format(event))
+        assert set(payload) == {"ts", "level", "logger", "msg"}
+        assert {key: value for key, value in payload.items() if key != "ts"} == {
+            "level": "info",
+            "logger": "app.profile.service",
+            "msg": "profile_onboarding_steps_ignored",
+        }
+        output = f"{vars(event)} {payload}"
+        for private in (marker, NEW_A, str(new_a.user_id), "looking", "pay", "stale base revision"):
+            assert private not in output
+    assert marker not in caplog.text
+
+
+def _ignored_events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name == "app.profile.service"
+        and record.getMessage() == "profile_onboarding_steps_ignored"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("section", "data", "base_revision", "status"),
+    [
+        ("preferences", {"documents_tone": "warm"}, 0, 200),
+        ("preferences", {"onboarding": {"dismissed_at": None}}, 0, 200),
+        ("preferences", {"onboarding": {"steps_passed": ["looking"]}}, 0, 200),
+        ("preferences", {"onboarding": {"steps_passed": ["pay"]}}, 1, 409),
+        (
+            "preferences",
+            {"onboarding": {"steps_passed": ["pay"], "completed_at": "2026-10-20T08:00:00Z"}},
+            0,
+            422,
+        ),
+        (
+            "preferences",
+            {"onboarding": {"steps_passed": ["pay"], "starter_handled": ["ashby:fake-ok"]}},
+            0,
+            422,
+        ),
+        ("identity", {"full_name": "Example Person"}, 0, 200),
+    ],
+)
+def test_only_successful_preferences_saves_with_differing_supplied_steps_log(
+    api: Api,
+    new_a: Who,
+    caplog: pytest.LogCaptureFixture,
+    section: str,
+    data: dict[str, Any],
+    base_revision: int,
+    status: int,
+) -> None:
+    step(api, new_a, "looking")
+    caplog.set_level(logging.INFO, logger="app.profile.service")
+    response = api.request(
+        "PUT",
+        f"/api/profile/{section}",
+        token=new_a.token,
+        json={"base_revision": base_revision, "data": data},
+    )
+    assert response.status_code == status, response.text
+    assert not _ignored_events(caplog)
 
 
 def test_a_second_tab_saves_after_the_wizard_passed_steps(

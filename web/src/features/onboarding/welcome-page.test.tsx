@@ -1,16 +1,19 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { matchRoutes } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { fakeDeck } from "@/features/opportunities/deck/deck-test-api";
 import { fakeSession, member } from "@/test/auth";
+import { fakeDocuments as fakeCvDocuments } from "@/test/documents";
 import { fakeDocument, fakeDocuments, fakePrompt } from "@/test/ingestion";
 import { CONSENT_TEXT, fakeRuns, REMINDER } from "@/test/ingestion-runs";
 import { EMPTY, profileKey } from "@/features/profile/api";
 import { fakeProfile, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { onboardingDone, server } from "@/test/server";
+import { routes } from "@/routes";
 
 import type { OnboardingState } from "./onboarding-api";
 
@@ -142,6 +145,48 @@ const stepHeading = () =>
   screen.getByRole("heading", { level: 2, name: /^Step \d of 7/ });
 
 describe("the first login redirect", () => {
+  it.each([
+    "/welcome?step=profile#upload",
+    "/Welcome?step=profile#upload",
+    "/%57elcome?step=profile#upload",
+    "/WELCOME///?step=profile#upload",
+  ])("stays on the actual wizard route %s", async (path) => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeCvDocuments();
+    const calls = fakeOnboarding();
+    const user = userEvent.setup();
+    const app = renderApp(path);
+    await screen.findByRole("heading", { level: 1, name: "Welcome" });
+    expect(app.location()).toBe(path);
+    expect(document.documentElement.dataset.onboarding).toBe("stay");
+    await user.click(screen.getByRole("button", { name: "Skip for now" }));
+    await waitFor(() => {
+      expect(app.location()).toBe("/jobs");
+    });
+    expect(calls.dismiss).toBe(1);
+  });
+
+  it.each(["/welcome-again", "/welcome/again", "/welcome%2F", "/%2557elcome"])(
+    "keeps the router boundary for %s",
+    async (pathname) => {
+      const matches = matchRoutes(routes, { pathname });
+      expect(matches?.some(({ route }) => route.path === "welcome")).toBe(
+        false,
+      );
+      fakeSession(member);
+      fakeProfile(null);
+      fakeCvDocuments();
+      fakeOnboarding();
+      const app = renderApp(pathname);
+      await screen.findByRole("heading", { level: 1, name: "Welcome" });
+      expect(app.location()).toBe(
+        `/welcome?${new URLSearchParams({ next: pathname }).toString()}`,
+      );
+      expect(document.documentElement.dataset.onboarding).toBe("welcome");
+    },
+  );
+
   it("sends a new member to /welcome once per session", async () => {
     fakeSession(member);
     fakeProfile(null);
