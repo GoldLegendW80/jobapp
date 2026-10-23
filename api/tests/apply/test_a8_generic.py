@@ -32,6 +32,7 @@ from app.apply.models import (
 )
 from app.jobs.models import Job
 from app.profile import service as profile_service
+from tests.apply.a4_support import Spec
 from tests.apply.a5_support import FakeLeases
 from tests.apply.a8b_support import (
     ASKS,
@@ -48,7 +49,11 @@ from tests.apply.a8b_support import (
     workable,
 )
 from tests.apply.conftest import AT, Person
-from tests.apply.test_a5_answer_agent import Runtime, runtime  # noqa: F401  the runtime fixture
+from tests.apply.test_a5_answer_agent import (  # noqa: F401  the runtime fixture
+    Runtime,
+    runs_of,
+    runtime,
+)
 from tests.apply.test_a5_run import application, fill, services, started
 from tests.apply.test_a6_gate import TTL, approve, run_submit, submit_services
 from tests.profile.conftest import full
@@ -637,10 +642,20 @@ def test_without_a_credential_the_form_agent_does_not_run(
 ) -> None:
     agent = form_agent.RuntimeFormAgent(runtime.context, script="apply_a8b_workable")
     form = workable()
+    form.fields.append(Spec("Notice period", "text"))
+    form.groups[0] += 1
     app_id, state = filled(db, factory, person_a, stub, form, WORKABLE_PATH, agent)
     assert state == "needs_person"
     assert application(db, app_id).cost["stopped"] == "no_credential"
-    assert [c for c in form.acted() if c[0] not in ("put_file", "screenshot")] == []
+    rows = rows_of(db, app_id)
+    assert any(r.source.value == "identity" and r.value == person_a.email for r in rows.values())
+    assert any(r.source.value == "document" and r.value == "cv.pdf" for r in rows.values())
+    assert any(r.source.value == "answers" for r in rows.values())
+    assert any(r.source.value == "left" for r in rows.values())
+    assert generic.SUBMIT_KEY not in rows
+    assert form.submit_clicks == 0
+    assert not [c for c in form.acted() if c[0] in ("click", "check")]
+    assert runs_of(db, person_a.user_id) == []
 
 
 def test_what_the_app_sends_the_form_agent_per_application() -> None:

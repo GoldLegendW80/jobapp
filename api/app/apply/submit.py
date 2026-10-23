@@ -620,15 +620,42 @@ def _stop_of(code: str, step: str = "") -> Stop:
 async def _open(services: Services, plan: Plan, tools: run.RunTools) -> ats_base.Adapter | Stop:
     adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
     if any(row.key == fallback.KEY for row in plan.rows):
-        bound = fallback.binding(plan.rows, plan.form_url, adapter.name if adapter else "")
+        # A company page's framed adapter is recovered from the code-owned vendor, never
+        # chosen by a model during replay. Framed bindings confer no Full auto exception.
+        if adapter is None:
+            candidates = [
+                fallback.binding(plan.rows, plan.form_url, vendor, allow_frame=True)
+                for vendor in fallback.KNOWN
+            ]
+            framed = next((value for value in candidates if value and "frame" in value), None)
+            if framed:
+                from app.apply.ats import ADAPTERS
+
+                adapter = next(
+                    (
+                        kind(services.stub_base, framed=True)
+                        for kind in ADAPTERS
+                        if kind.name == framed["vendor"]
+                    ),
+                    None,
+                )
+        bound = fallback.binding(
+            plan.rows, plan.form_url, adapter.name if adapter else "", allow_frame=True
+        )
+        if bound and adapter and "frame" in bound:
+            adapter.framed = True
         if bound is None or fallback.target(adapter, plan.form_url, bound["target"]) is None:
             return Stop(State.ready, "form_changed")
-        prepared = fallback.Generic(services.stub_base, known=adapter)
+        if ("frame" in bound) != bool(adapter and adapter.framed):
+            return Stop(State.ready, "form_changed")
+        prepared = fallback.Generic(services.stub_base, known=adapter, frame=bound.get("frame"))
         code = await prepared.visit(tools, bound["target"])
         if code:
             return _stop_of(code)
         shot = await tools.snapshot()
-        if str(shot.get("url") or "") != bound["target"]:
+        if fallback.canonical_url(str(shot.get("url") or "")) != fallback.canonical_url(
+            bound["target"]
+        ):
             return Stop(State.ready, "form_changed")
         return prepared
     if adapter is None:

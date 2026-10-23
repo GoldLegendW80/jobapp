@@ -197,6 +197,7 @@ class Result:
     cost: dict[str, Any] = field(default_factory=dict)
     company_url: str | None = None
     strategy: dict[str, Any] | None = None
+    review_reason: str | None = None
 
 
 class _Watched:
@@ -796,9 +797,9 @@ def finish(
         dry_run=application.dry_run,
         **retry,
     )
-    if result.state is State.needs_person:
+    if result.state is State.needs_person or (result.state is State.ready and result.review_reason):
         # Full auto (A13a): what needs the person, a sign in wall included, is a review item.
-        full_auto.hand_over(db, application, result.needs, now)
+        full_auto.hand_over(db, application, result.review_reason or result.needs, now)
     filled_any = counts["filled"] + counts["unverified"] > 0
     if result.state in (State.ready, State.needs_person) and filled_any:
         if posting.status in STAGE_FROM:
@@ -996,20 +997,21 @@ async def _drive_generic(
     previous_cost: dict[str, Any] | None = None,
     previous_report: ats_base.Report | None = None,
 ) -> Result:
-    """Unknown forms require Review first. A code-bound known ATS fallback keeps its mode,
-    remaining token allowance, original lease and every gate check."""
+    """Unknown forms require Review first. Known fallback keeps its remaining allowance,
+    original lease and gate checks; an unverified frame is handed to Review."""
     if (plan.mode is not Mode.review and strategy is None) or services.form_agent is None:
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
     adapter.person_answers = plan.person_answers
     session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
+    session.clock = lambda: services.clock().timestamp()
+    session.deadline = plan.form_deadline
+    review_reason = "frame_origin_unverified" if strategy and "frame" in strategy else None
     if strategy is not None:
         before = previous_cost or {}
         used = int(before.get("input_tokens", 0)) + int(before.get("output_tokens", 0))
         session.token_budget = max(0, agent.TOKEN_BUDGET - used)
         if before.get("stopped") == "token_budget":
             session.token_budget = 0
-        session.clock = lambda: services.clock().timestamp()
-        session.deadline = plan.form_deadline
         adapter.person_shapes = plan.person_shapes
         remaining = max(0.0, (session.deadline or session.clock()) - session.clock())
         if not session.token_budget or not remaining:
@@ -1062,7 +1064,14 @@ async def _drive_generic(
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
         return Result(
-            state, needs=needs, error=error, report=report, shot=shot, cost=cost, strategy=strategy
+            state,
+            needs=needs,
+            error=error,
+            report=report,
+            shot=shot,
+            cost=cost,
+            strategy=strategy,
+            review_reason=review_reason,
         )
     needs = _needs(report)
     if not report.designated:
@@ -1072,7 +1081,15 @@ async def _drive_generic(
     else:
         shot = lit
     state = State.needs_person if needs else State.ready
-    return Result(state, needs=needs, report=report, shot=shot, cost=cost, strategy=strategy)
+    return Result(
+        state,
+        needs=needs,
+        report=report,
+        shot=shot,
+        cost=cost,
+        strategy=strategy,
+        review_reason=review_reason,
+    )
 
 
 async def _known_fallback(
@@ -1103,17 +1120,34 @@ async def _known_fallback(
     target = fallback.target(adapter, plan.form_url, str(shot.get("url") or ""))
     if target is None:
         return stopped
-    prepared = fallback.Generic(services.stub_base, known=adapter)
+    frame = None
+    root = ats_base.parse_snapshot(str(shot.get("snapshot") or ""))
+    scope = ats_base.form_frame(root, generic.SUBMIT_NAMES | generic.NEXT_NAMES)
+    frames = [node for node in root.walk() if node.role == "iframe"]
+    if adapter.framed and scope is None:
+        candidates = [
+            node
+            for node in frames
+            if ats_base.discover_fields(node, generic.SUBMIT_NAMES | generic.NEXT_NAMES).fields
+        ]
+        scope = candidates[0] if len(candidates) == 1 else None
+    if adapter.framed or scope is not None:
+        if scope is None or scope not in frames or frames.index(scope) >= 100:
+            return stopped
+        frame = frames.index(scope)
+    prepared = fallback.Generic(services.stub_base, known=adapter, frame=frame)
     prepared.step = len(getattr(report, "steps", ()))
     if prepared.step:
         # The replay starts at the original form and follows the recorded earlier Nexts.
-        target = adapter.form_url(plan.form_url)
+        target = adapter.form_url(fallback.canonical_url(plan.form_url) or "") or target
         prepared.shapes = {
             key: value
             for key, value in getattr(adapter, "seen_shapes", {}).items()
             if int(key) < prepared.step
         }
     strategy = {"version": 1, "vendor": adapter.name, "form_url": plan.form_url, "target": target}
+    if frame is not None:
+        strategy["frame"] = frame
     return await _drive_generic(
         services,
         plan,

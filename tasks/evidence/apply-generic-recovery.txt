@@ -1,0 +1,30 @@
+Apply generic recovery source checkpoint, 2026-10-23
+
+Base: 7b7c1c1795340f1f8eaa2ccbef6764414c67714e. Local invented fakes only.
+
+Framed known ATS form_changed now invokes generic recovery in the existing attempt.
+The reserved hash-bound strategy adds an iframe ordinal. Existing per-step field shapes,
+recorded Next names and exact approved values govern model-free replay. A frame cannot
+use the hosted Full auto designation exception. Ready and needs-person outcomes hand
+Full auto to Review atomically through finish, retaining frame_origin_unverified in the
+sent_to_review event. Snapshots provide no trusted iframe origin, including same-origin
+appearance, so framed recovery requires Review. Hosted positive controls remain supported.
+
+The default RuntimeFormAgent with no credential now resolves and fills visible fields
+through existing adapter/resolver methods and paced lease tools. It does not advance steps,
+designate Submit, create an agent run or execute a model. Missing and policy-refused values
+remain Left. Exact application edits retain person provenance. The existing deadline,
+pending-step and interrupted lease controls stop this deterministic filling.
+
+Source proofs:
+* Focused recovery, hosted fallback, A18 budgets and worker binding: 163 passed.
+* Broader generic, fallback, budget, worker and person-answer pure selection: 431 passed,
+  44 database/runtime fixtures deselected because heavy slots were reserved.
+* Whole API Ruff check and Ruff format check passed (780 files).
+* E2E registry passed: 29 CI specs, 4 reasoned exclusions, 50 local group specs.
+* CI plan: 81 passed. Scoped pre-commit hooks passed, including the secret scan.
+
+Pending at this source checkpoint: real DB/Redis whole Apply module, composed actual browser
+journeys for default known fallback, framed takeover and credential-free filling, and final
+exact-tree gate. The root assigns the shared runtime resources and final acceptance owner.
+This file records source evidence, not a public review verdict or whole-spec acceptance.

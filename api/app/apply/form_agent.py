@@ -146,6 +146,36 @@ class FormSession:
     deadline: float | None = None  # on `clock`: the end of the run's wall time
     clock: Callable[[], float] = time.monotonic
 
+    async def prefill(self) -> None:
+        """With no credential, fill this visible step using the shared source resolver.
+
+        Discovery, live readback, person answers and pending-step refusals remain the
+        adapter's. This path neither advances a wizard nor designates a submit.
+        """
+        remaining = (self.deadline or self.clock()) - self.clock()
+        if remaining <= 0 or self.stopped or self.signin_over:
+            self.stopped = self.stopped or "budget_exceeded"
+            return
+        try:
+            async with asyncio.timeout(remaining):
+                found, code = await self.adapter.discover(self.tools)
+                for _ in range(2):
+                    if found is None or code:
+                        self.stopped = code
+                        self.pending = found.pending if found else ""
+                        return
+                    for item in found.fields:
+                        if item.key not in self.outcomes:
+                            if self.clock() >= (self.deadline or self.clock()):
+                                self.stopped = "budget_exceeded"
+                                return
+                            await self.fill_field(item.ref)
+                            if self.stopped or self.pending:
+                                return
+                    found, code = await self.adapter.discover(self.tools, frozenset(self.outcomes))
+        except TimeoutError:
+            self.stopped = "budget_exceeded"
+
     async def _read(self) -> tuple[ats_base.Discovery | None, str]:
         if self.signin_over:
             return None, SIGNIN_OVER
@@ -417,6 +447,8 @@ class RuntimeFormAgent:
     async def __call__(self, session: FormSession) -> Ran:
         if session.token_budget <= 0 or session.turn_budget <= 0:
             return Ran(stopped="token_budget" if session.token_budget <= 0 else "turn_limit")
+        if session.deadline is None:
+            session.deadline = session.clock() + APPLY_FORM.wall_time_s
         from app.agents import runner  # the SDK: the worker's image only
 
         context = self.context()
@@ -450,9 +482,9 @@ class RuntimeFormAgent:
                     await answer_agents._release(context, made)
             raise
         if isinstance(created, str):
+            if created == "no_credential":
+                await session.prefill()
             return Ran(stopped=created)
-        if session.deadline is None:
-            session.deadline = session.clock() + APPLY_FORM.wall_time_s
         with _LOCK:
             _KEYS.add(key)
             _SESSIONS[created] = session
