@@ -23,8 +23,8 @@ profile, so a removal of an entry, of a line or of a whole list is refused
 (REMOVAL_OF_A_LIST), whatever key it gives. A removal carries no value, so the checker only finds
 its excerpts: what keeps a dictated removal out of the profile is that a removal is never part of
 "Accept all" (`item_proposals.bulk_exclusion`).
-It takes the document row `FOR KEY SHARE`, then the step row `FOR UPDATE` (the module's lock
-order: 4 then 5), and never the run row. A deletion of the document waits for a call in flight,
+It takes the document row `FOR NO KEY UPDATE`, then the step row `FOR UPDATE` (the module's
+lock order: 4 then 5), and never the run row. A deletion of the document waits for a call in flight,
 and the call after it finds no document. Last, before it counts the items of the run against
 ITEMS_PER_RUN, it takes the run's item lock (`_lock_items`, a transaction advisory lock that
 nothing else takes), so two steps of one run that write at once count each other's rows.
@@ -183,8 +183,8 @@ def _locate(
     same file uploaded again over the row, or read again: the row keeps its id and the hash of
     its file, so only the hash of the text tells), the step not this agent run's, not an
     extraction step, not running or without a text hash, its ingestion run not running. With
-    `lock`, the document row is taken `FOR KEY SHARE` and then the step row `FOR UPDATE`, in that
-    order. The run row is read, never locked: the step row is the fence, the run's status a
+    `lock`, the document row is taken `FOR NO KEY UPDATE` and then the step row `FOR UPDATE`, in
+    that order. The run row is read, never locked: the step row is the fence, the run's status a
     second look."""
     document = sa.select(
         IngestionDocument.sha256,
@@ -332,8 +332,8 @@ class _StepState:
         self, db: Session, scope: Scope, at: Bound, planned_on: bytes
     ) -> citations.Document | None:
         """The whole text the step was planned on, normalised once and kept under its hash. None
-        when the text read is not that one: `FOR KEY SHARE` on the document row does not hold a
-        change of its text back, so what is read here is hashed again before it is used."""
+        when the text read is not that one: the text may have changed since the step was planned,
+        so what is read here is hashed again before it is used."""
         if self.document is None or self.planned_on != planned_on:
             self.forget()
             text = db.execute(

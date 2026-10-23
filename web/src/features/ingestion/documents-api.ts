@@ -151,13 +151,17 @@ export function filenameHeader(name: string): string | undefined {
   }
 }
 
+/** `forBaseCv`: the file is sent to become a base CV, so the server keeps it once read. */
 export function uploadDocument(
   file: File,
-  options: Pick<UploadOptions<StoredDocument>, "onProgress" | "signal"> = {},
+  options: Pick<UploadOptions<StoredDocument>, "onProgress" | "signal"> & {
+    forBaseCv?: boolean;
+  } = {},
 ): Promise<StoredDocument> {
+  const { forBaseCv = false, ...rest } = options;
   const name = filenameHeader(file.name);
-  return upload(BASE, file, {
-    ...options,
+  return upload(forBaseCv ? `${BASE}?for=base_cv` : BASE, file, {
+    ...rest,
     // The server reads the type from the bytes; a declared type is never trusted.
     headers: {
       "Content-Type": "application/octet-stream",

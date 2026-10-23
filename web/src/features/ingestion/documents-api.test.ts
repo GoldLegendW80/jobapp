@@ -249,6 +249,15 @@ describe("calls", () => {
     expect(new TextDecoder().decode(sent?.body)).toBe("# Robin Example\n");
     // The declared type is never the file's own: the server reads the bytes.
     expect(sent?.type).toBe("application/octet-stream");
+    expect(sent?.purpose).toBeNull();
+  });
+
+  it("asks the server to keep the file of an upload for a base CV", async () => {
+    const state = fakeDocuments();
+    await uploadDocument(new File(["%PDF-1.7 Morgan"], "cv.pdf"), {
+      forBaseCv: true,
+    });
+    expect(state.uploads.map((one) => one.purpose)).toEqual(["base_cv"]);
   });
 
   it("says when the same file was already there", async () => {
