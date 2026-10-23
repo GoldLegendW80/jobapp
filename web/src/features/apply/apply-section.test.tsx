@@ -118,6 +118,47 @@ describe("starting", () => {
   });
 });
 
+describe("a retry and a wait", () => {
+  it("shows a queued retry's time, not a browser about to start", async () => {
+    const api = fakeApply({
+      application: fakeApplication("queued", { needs: "retry" }),
+    });
+    api.events.push({
+      at: "2026-10-15T08:02:00Z",
+      kind: "retry",
+      data: { attempt: 1, delay_s: 600, due: "2026-10-15T08:12:00Z" },
+    });
+    const { section } = await openSection();
+    const slot = await within(section).findByTestId("live-view-slot");
+    await waitFor(() => {
+      expect(slot).toHaveTextContent(/tries again at \d/);
+    });
+    expect(slot).not.toHaveTextContent("The browser starts soon.");
+    expect(within(section).getByText(/tries again later/)).toBeInTheDocument();
+  });
+
+  it("follows the run once the person took the step in the live view", async () => {
+    const api = fakeApply({
+      application: fakeApplication("needs_person", { needs: "captcha" }),
+    });
+    api.events.push({
+      at: "2026-10-15T08:02:00Z",
+      kind: "waiting_person",
+      data: { needs: "captcha" },
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText("A captcha needs you"),
+    ).toBeInTheDocument();
+    api.application = fakeApplication("filling");
+    expect(
+      await within(section).findByText(/Filling the form/, undefined, {
+        timeout: APPLY_POLL_MS * 4,
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("the review", () => {
   it("highlights the fields left for the person and blocks Approve with the field named", async () => {
     fakeApply({

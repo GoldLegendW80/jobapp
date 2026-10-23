@@ -305,7 +305,7 @@ First slice (the Lever adapter, issue #245, measured on 2026-10-15 on the modell
 Nothing yet.
 
 ### A10a
-Nothing yet.
+First slice (issue #247, 2026-10-21): the retries, the wait for the person and a payment page call no model (0 tokens). A retry is one more fill (its tokens as A5's); the wait polls the page with one snapshot every 5 s (`failures.WAIT_POLL_S`), so at most 360 snapshots over APPLY_NEEDS_PERSON_WAIT_S; the payment check adds at most two snapshots per fill, one before anything is typed and one after the fill. The payment table holds 19 card labels and 20 neighbours kept apart (an e-mail "Security code", an identity card number, a gift card); a page of 20,000 fields is read in one pass. Gap in browserd: only the sign in hand off suspends a lease's timers (`waiting_person`), so the wait for a captcha or an e-mail code runs on the lease's active time (15 minutes for `apply_fill`) instead of the spec's 30 minutes outside it; a browser task adds a `waiting_person` for these two steps. Left: the journey `apply-a10a.spec.ts` with the fake captcha that stays solved on a reload (A10a does not close before it runs once on its own stack), the rules after #343's hand over to the form agent, and 429 and 403 pages (neither retried nor closed: owner decision).
 
 ### A10b
 Nothing yet.
