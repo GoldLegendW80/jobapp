@@ -1,0 +1,457 @@
+{
+  "issue": 74,
+  "depends_on": [
+    611,
+    610
+  ],
+  "base_head": "b8c0be4a353fb26dd82b42e50385337c2fb0aae2",
+  "base_tree": "1d548119e23c27031cb0dea1cef2de2608a93766",
+  "stages": {
+    "red": {
+      "tested_code_head": "6ef0ce1f2f45f229463bdc18335d6e7e1d4f8eb4",
+      "tested_code_tree": "59112202d332c8d09abd1ca49de46a960147353f",
+      "source_sha256": {
+        "web/src/features/opportunities/deck/deck-page.tsx": "ef76e377ee42fec30e8459e47fac4947bcae1fc3ab58a0c4fa5c2965e3cccab5",
+        "web/e2e/opportunities-o2.spec.ts": "82d5ce2b91d8cf369b1b3e4d0379897cb9beb2c0a3c6bcb80a6ff76a083f4029"
+      },
+      "bound_source_files": 1992,
+      "collected_tests": 40,
+      "executed_tests": 1,
+      "playwright_stats": {
+        "startTime": "2026-10-23T11:10:48.535Z",
+        "duration": 10151.742,
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 1,
+        "flaky": 0
+      },
+      "wrapper_exit": 1,
+      "wrapper_duration_s": 11.345,
+      "workers": 1,
+      "retries": [
+        0
+      ],
+      "test_timeout_ms": [
+        180000
+      ],
+      "images": [
+        {
+          "tags": [
+            "o74-red-api:review"
+          ],
+          "id": "sha256:cb0581ac882b31667fb101dda921ebe111806e3d4799fbf951a2a94a7ec28a6b",
+          "head_label": "6ef0ce1f2f45f229463bdc18335d6e7e1d4f8eb4",
+          "tree_label": "59112202d332c8d09abd1ca49de46a960147353f"
+        },
+        {
+          "tags": [
+            "o74-red-worker:review"
+          ],
+          "id": "sha256:7e0e10db027e3be04e28dec4155b3464628321a376e356e9acede015f2d3497f",
+          "head_label": "6ef0ce1f2f45f229463bdc18335d6e7e1d4f8eb4",
+          "tree_label": "59112202d332c8d09abd1ca49de46a960147353f"
+        },
+        {
+          "tags": [
+            "o74-red-caddy:review"
+          ],
+          "id": "sha256:32d9bc78f2b45acdda1ee995a458533d06a385bfd4300858d87303fa09051eeb",
+          "head_label": "6ef0ce1f2f45f229463bdc18335d6e7e1d4f8eb4",
+          "tree_label": "59112202d332c8d09abd1ca49de46a960147353f"
+        }
+      ],
+      "all_services_running_healthy_zero_restarts": true,
+      "service_count": 11,
+      "alembic_current_and_heads": "0023 (head)",
+      "remaining_owned_containers_networks_volumes": 0,
+      "owned_image_tags_removed": true,
+      "borrowed_renderer_before_after": "sha256:95a287fd6ab2e53c62fc06fa1c08d97346039557bb3951b08626fb6b0e475610"
+    },
+    "green": {
+      "tested_code_head": "85b2b78fcec5ebee2e7c2ab0e029701eb8059ec5",
+      "tested_code_tree": "891aa291410aa5affb9b5ae0b6ffda92a9c6f746",
+      "source_sha256": {
+        "web/src/features/opportunities/deck/deck-page.tsx": "ad550ef18cc5f9191ccd909bf32c87782a76da8880f8bdc81eba2f24a84de1cd",
+        "web/e2e/opportunities-o2.spec.ts": "ab2fc66c199694a3678aa585b7670c763f0925fcf86ce18e5e3c061c2c3c21c0"
+      },
+      "bound_source_files": 1992,
+      "collected_tests": 40,
+      "executed_tests": 40,
+      "playwright_stats": {
+        "startTime": "2026-10-23T11:16:09.944Z",
+        "duration": 83910.819,
+        "expected": 40,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "wrapper_exit": 0,
+      "wrapper_duration_s": 85.018,
+      "workers": 1,
+      "retries": [
+        0
+      ],
+      "test_timeout_ms": [
+        180000
+      ],
+      "images": [
+        {
+          "tags": [
+            "o74-green-api:review"
+          ],
+          "id": "sha256:f144a1b70e5ec1bcdfcf8e1b53edb906e83ca215d2e4a4a6c07768a91c10d1ce",
+          "head_label": "85b2b78fcec5ebee2e7c2ab0e029701eb8059ec5",
+          "tree_label": "891aa291410aa5affb9b5ae0b6ffda92a9c6f746"
+        },
+        {
+          "tags": [
+            "o74-green-worker:review"
+          ],
+          "id": "sha256:33775d34ec010fa9f8060fdbde21df490eaf141c7b8ccda808a4f08f9627e19d",
+          "head_label": "85b2b78fcec5ebee2e7c2ab0e029701eb8059ec5",
+          "tree_label": "891aa291410aa5affb9b5ae0b6ffda92a9c6f746"
+        },
+        {
+          "tags": [
+            "o74-green-caddy:review"
+          ],
+          "id": "sha256:ecdc4f7cc4fcb98c876b513b6fcb587bd8436d3cc873ba71bf077edc2ccb91ad",
+          "head_label": "85b2b78fcec5ebee2e7c2ab0e029701eb8059ec5",
+          "tree_label": "891aa291410aa5affb9b5ae0b6ffda92a9c6f746"
+        }
+      ],
+      "all_services_running_healthy_zero_restarts": true,
+      "service_count": 11,
+      "alembic_current_and_heads": "0023 (head)",
+      "remaining_owned_containers_networks_volumes": 0,
+      "owned_image_tags_removed": true,
+      "borrowed_renderer_before_after": "sha256:95a287fd6ab2e53c62fc06fa1c08d97346039557bb3951b08626fb6b0e475610"
+    }
+  },
+  "red_geometry": {
+    "card": {
+      "x": 16,
+      "y": 233,
+      "width": 343,
+      "height": 545
+    },
+    "source": {
+      "x": 37,
+      "y": 713,
+      "width": 125.296875,
+      "height": 44
+    },
+    "actions": [
+      {
+        "name": "ArrowLeft",
+        "x": 48.046875,
+        "y": 732,
+        "width": 64,
+        "height": 64
+      },
+      {
+        "name": "U",
+        "x": 128.046875,
+        "y": 742,
+        "width": 118.890625,
+        "height": 44
+      },
+      {
+        "name": "ArrowRight",
+        "x": 262.9375,
+        "y": 732,
+        "width": 64,
+        "height": 64
+      }
+    ],
+    "intended_failure": "action ArrowLeft overlaps card content"
+  },
+  "green_geometry": [
+    {
+      "test": "deck controls leave the short card clear in light",
+      "measurements": 12,
+      "viewport_widths": [
+        375,
+        1280
+      ],
+      "filters": [
+        "closed",
+        "open"
+      ],
+      "scroll_states": [
+        "heading",
+        "source link",
+        "actions"
+      ],
+      "minimum_card_to_action_gap_px": 20,
+      "initial_375px_rectangles": {
+        "scroll_y": 0,
+        "card": {
+          "x": 16,
+          "y": 233,
+          "width": 343,
+          "height": 277
+        },
+        "source": {
+          "x": 37,
+          "y": 445,
+          "width": 113.09375,
+          "height": 44
+        },
+        "actions": [
+          {
+            "name": "ArrowLeft",
+            "x": 48.046875,
+            "y": 530,
+            "width": 64,
+            "height": 64
+          },
+          {
+            "name": "U",
+            "x": 128.046875,
+            "y": 540,
+            "width": 118.890625,
+            "height": 44
+          },
+          {
+            "name": "ArrowRight",
+            "x": 262.9375,
+            "y": 530,
+            "width": 64,
+            "height": 64
+          }
+        ]
+      }
+    },
+    {
+      "test": "deck controls leave the short card clear in dark",
+      "measurements": 12,
+      "viewport_widths": [
+        375,
+        1280
+      ],
+      "filters": [
+        "closed",
+        "open"
+      ],
+      "scroll_states": [
+        "heading",
+        "source link",
+        "actions"
+      ],
+      "minimum_card_to_action_gap_px": 20,
+      "initial_375px_rectangles": {
+        "scroll_y": 0,
+        "card": {
+          "x": 16,
+          "y": 233,
+          "width": 343,
+          "height": 277
+        },
+        "source": {
+          "x": 37,
+          "y": 445,
+          "width": 113.09375,
+          "height": 44
+        },
+        "actions": [
+          {
+            "name": "ArrowLeft",
+            "x": 48.046875,
+            "y": 530,
+            "width": 64,
+            "height": 64
+          },
+          {
+            "name": "U",
+            "x": 128.046875,
+            "y": 540,
+            "width": 118.890625,
+            "height": 44
+          },
+          {
+            "name": "ArrowRight",
+            "x": 262.9375,
+            "y": 530,
+            "width": 64,
+            "height": 64
+          }
+        ]
+      }
+    },
+    {
+      "test": "deck controls leave the long card clear in light",
+      "measurements": 12,
+      "viewport_widths": [
+        375,
+        1280
+      ],
+      "filters": [
+        "closed",
+        "open"
+      ],
+      "scroll_states": [
+        "heading",
+        "source link",
+        "actions"
+      ],
+      "minimum_card_to_action_gap_px": 20,
+      "initial_375px_rectangles": {
+        "scroll_y": 0,
+        "card": {
+          "x": 16,
+          "y": 233,
+          "width": 343,
+          "height": 545
+        },
+        "source": {
+          "x": 37,
+          "y": 713,
+          "width": 125.296875,
+          "height": 44
+        },
+        "actions": [
+          {
+            "name": "ArrowLeft",
+            "x": 48.046875,
+            "y": 798,
+            "width": 64,
+            "height": 64
+          },
+          {
+            "name": "U",
+            "x": 128.046875,
+            "y": 808,
+            "width": 118.890625,
+            "height": 44
+          },
+          {
+            "name": "ArrowRight",
+            "x": 262.9375,
+            "y": 798,
+            "width": 64,
+            "height": 64
+          }
+        ]
+      }
+    },
+    {
+      "test": "deck controls leave the long card clear in dark",
+      "measurements": 12,
+      "viewport_widths": [
+        375,
+        1280
+      ],
+      "filters": [
+        "closed",
+        "open"
+      ],
+      "scroll_states": [
+        "heading",
+        "source link",
+        "actions"
+      ],
+      "minimum_card_to_action_gap_px": 20,
+      "initial_375px_rectangles": {
+        "scroll_y": 0,
+        "card": {
+          "x": 16,
+          "y": 233,
+          "width": 343,
+          "height": 545
+        },
+        "source": {
+          "x": 37,
+          "y": 713,
+          "width": 125.296875,
+          "height": 44
+        },
+        "actions": [
+          {
+            "name": "ArrowLeft",
+            "x": 48.046875,
+            "y": 798,
+            "width": 64,
+            "height": 64
+          },
+          {
+            "name": "U",
+            "x": 128.046875,
+            "y": 808,
+            "width": 118.890625,
+            "height": 44
+          },
+          {
+            "name": "ArrowRight",
+            "x": 262.9375,
+            "y": 798,
+            "width": 64,
+            "height": 64
+          }
+        ]
+      }
+    }
+  ],
+  "green_total_geometry_measurements": 48,
+  "green_total_field_action_intersections": 0,
+  "green_minimum_control_width_px": 64,
+  "green_minimum_control_height_px": 44,
+  "captures": [
+    {
+      "file": "red-long-mobile-dark-overlap.png",
+      "stage": "red",
+      "state": "375px dark, Advanced closed, initial overlap failure",
+      "sha256": "9a3f1c6ef51f8367c2d2b11ab88f6222084c1922f12fac0533dcec2e9c27564c",
+      "source_copy_unchanged": true
+    },
+    {
+      "file": "green-long-mobile-light-closed.png",
+      "stage": "green",
+      "state": "375px light, long card, Advanced closed, full page after scrolling to actions",
+      "sha256": "12dd7aa1e0a2c43eef6df7a632146c25729fbea504a9e0dd001caf72165e8d03",
+      "source_copy_unchanged": true
+    },
+    {
+      "file": "green-long-mobile-dark-open.png",
+      "stage": "green",
+      "state": "375px dark, long card, Advanced open, full page after scrolling to actions",
+      "sha256": "29ca6bef0fbeb88c133a5417345671a54b29fe89c45525ffd3b810c57235f5d3",
+      "source_copy_unchanged": true
+    },
+    {
+      "file": "green-hacker-news-mobile-dark.png",
+      "stage": "green",
+      "state": "375px dark, original O7 Hacker News feed fixture, Advanced open",
+      "sha256": "1a352363059e1558dfb9dc169c902077d60b4f287e1e3229ae20a4ddf87cde03",
+      "source_copy_unchanged": true
+    },
+    {
+      "file": "green-remote-ok-mobile-light.png",
+      "stage": "green",
+      "state": "375px light, original O7 Remote OK feed fixture, Advanced open",
+      "sha256": "ef899bf5a704620898b85f95928462b3b02705c8893cd19e2adb23623307ac42",
+      "source_copy_unchanged": true
+    },
+    {
+      "file": "green-short-desktop-dark-closed.png",
+      "stage": "green",
+      "state": "1280px dark, short card, Advanced closed, full page after scrolling to actions",
+      "sha256": "ac7b060fc3e7cb2b94b592e5813f9d1bd4066ae37e5dddb885ae0aa326302852",
+      "source_copy_unchanged": true
+    },
+    {
+      "file": "green-long-desktop-light-open.png",
+      "stage": "green",
+      "state": "1280px light, long card, Advanced open, full page after scrolling to actions",
+      "sha256": "458b10c6a31228a91a7b73dd3a2790af26af406aa9845ae1a2e199072106cc1b",
+      "source_copy_unchanged": true
+    }
+  ],
+  "actual_visual_inspection": {
+    "red_overlap_png": 1,
+    "new_geometry_pngs": 16,
+    "original_o7_hacker_news_remote_ok_pngs": 8
+  },
+  "image_labels_refer_to_tested_code_heads_only": true,
+  "private_raw_evidence_location": "/tmp/jobapp-74-evidence"
+}
