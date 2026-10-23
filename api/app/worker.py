@@ -609,10 +609,11 @@ APPLY_JOB_MARGIN_S = 120
 
 def apply_services(ctx: dict[str, Any]) -> Any:
     """The fill's services: tests put theirs in the context; else the lease store and the tools
-    of browser B3 and B5 on this worker's Redis, and the answer agent (`apply_answer`, run in
-    this process on the runner's context of `agent_context`). B4's `Live.agent_turn` goes in
-    `before_tool` once B4 is merged."""
+    of browser B3 and B5 on this worker's Redis, and the answer and generic form agents
+    (`apply_answer`, `apply_form`, run in this process on `agent_context`). B4's
+    `Live.agent_turn` goes in `before_tool` once B4 is merged."""
     from app.apply import agents as apply_agents
+    from app.apply import form_agent as apply_forms
     from app.apply import model_check as apply_check
     from app.apply import run as apply_run
 
@@ -648,6 +649,7 @@ def apply_services(ctx: dict[str, Any]) -> Any:
         leases=leases,
         tools_for=lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         answer_agent=apply_agents.RuntimeAnswerAgent(lambda: agent_context(ctx)),
+        form_agent=apply_forms.RuntimeFormAgent(lambda: agent_context(ctx)),
         check=apply_check.RuntimeCheck(lambda: agent_context(ctx)),
         stub_base=settings.apply_stub_base_url,
     )
