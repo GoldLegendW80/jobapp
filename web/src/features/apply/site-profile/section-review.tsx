@@ -59,6 +59,40 @@ const canEditField = (field: ProfileField) =>
     )
   );
 
+function preciseTime(value: string): readonly [number, number] | null {
+  const match =
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(
+      value,
+    );
+  if (!match) return null;
+  const wall = Date.parse(`${match[1]}Z`);
+  if (
+    !Number.isFinite(wall) ||
+    new Date(wall).toISOString().slice(0, 19) !== match[1]
+  )
+    return null;
+  const seconds = Date.parse(`${match[1]}${match[3]}`);
+  return Number.isFinite(seconds)
+    ? [seconds, Number((match[2] ?? "").padEnd(6, "0"))]
+    : null;
+}
+
+function newerTime(current: string, acknowledged: string): boolean {
+  const left = preciseTime(current);
+  const right = preciseTime(acknowledged);
+  return (
+    !!left &&
+    !!right &&
+    (left[0] > right[0] || (left[0] === right[0] && left[1] > right[1]))
+  );
+}
+
+type FieldEdit = {
+  field: string;
+  changes: { value?: string; replace?: boolean };
+  acknowledged?: { field: ProfileField; updatedAt: string };
+};
+
 function FieldRow({
   field,
   run,
@@ -231,16 +265,41 @@ function SectionReviewContent({
       ? draft.value
       : editText(field.value);
   };
+  const [pendingEdit, setPendingEdit] = useState<FieldEdit | null>(null);
+  const acknowledged = pendingEdit?.acknowledged;
+  if (
+    acknowledged &&
+    (newerTime(run.updated_at, acknowledged.updatedAt) ||
+      section.fields.some(
+        (field) =>
+          field.field_key === pendingEdit.field &&
+          field.replace === acknowledged.field.replace &&
+          editText(field.value) === editText(acknowledged.field.value),
+      ))
+  ) {
+    setPendingEdit(null);
+  }
   const edit = useMutation({
-    mutationFn: ({
-      field,
-      changes,
-    }: {
-      field: string;
-      changes: { value?: string; replace?: boolean };
-    }) => editField(run.id, section.section, field, changes),
-    onSuccess: update,
-    onError: refresh,
+    mutationFn: ({ field, changes }: FieldEdit) =>
+      editField(run.id, section.section, field, changes),
+    onSuccess: async (value, operation) => {
+      await update(value);
+      const field = value.sections
+        .find((current) => current.section === section.section)
+        ?.fields.find((current) => current.field_key === operation.field);
+      setPendingEdit((current) =>
+        current === operation && field
+          ? {
+              ...operation,
+              acknowledged: { field, updatedAt: value.updated_at },
+            }
+          : current,
+      );
+    },
+    onError: (_error, operation) => {
+      setPendingEdit((current) => (current === operation ? null : current));
+      refresh();
+    },
   });
   const save = useMutation({
     mutationFn: (operation: "approve" | "skip") =>
@@ -268,14 +327,18 @@ function SectionReviewContent({
       (field) =>
         canEditField(field) && fieldValue(field) !== editText(field.value),
     );
+  const editPending = pendingEdit !== null || edit.isPending;
   const approvalBlocked =
-    !editable || !!section.error_code || unsaved || edit.isPending;
+    !editable || !!section.error_code || unsaved || editPending;
   const saveField = (
     field: ProfileField,
     changes: { value?: string; replace?: boolean },
   ) => {
+    if (editPending || save.isPending) return;
+    const operation = { field: field.field_key, changes };
     setConfirm(null);
-    edit.mutate({ field: field.field_key, changes });
+    setPendingEdit(operation);
+    edit.mutate(operation);
   };
   return (
     <Card aria-labelledby={`profile-section-${section.section}`}>
@@ -357,11 +420,11 @@ function SectionReviewContent({
                   run={editable ? run : { ...run, autosave: true }}
                   value={fieldValue(field)}
                   replace={
-                    edit.isPending && edit.variables.field === field.field_key
-                      ? (edit.variables.changes.replace ?? field.replace)
+                    pendingEdit?.field === field.field_key
+                      ? (pendingEdit.changes.replace ?? field.replace)
                       : field.replace
                   }
-                  pending={edit.isPending || save.isPending}
+                  pending={editPending || save.isPending}
                   error={
                     edit.variables?.field === field.field_key
                       ? edit.error
@@ -410,7 +473,7 @@ function SectionReviewContent({
                 Keep or undo your edits before approving this section.
               </p>
             )}
-            {edit.isPending && (
+            {editPending && (
               <p role="status" className="text-sm text-muted-foreground">
                 Waiting for your field changes to be saved.
               </p>
@@ -426,7 +489,7 @@ function SectionReviewContent({
               </Button>
               <Button
                 variant="outline"
-                disabled={save.isPending || edit.isPending}
+                disabled={save.isPending || editPending}
                 onClick={() => {
                   save.mutate("skip");
                 }}
