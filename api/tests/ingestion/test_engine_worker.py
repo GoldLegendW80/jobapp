@@ -47,10 +47,15 @@ def test_the_cron_runs_every_minute_on_the_ingestion_queue_and_keeps_no_result()
 
 
 def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply() -> None:
+    """The agents queue's limit is the longest agent of the queue plus the margin, whichever
+    module registers it (today apply's form agent, whose run holds a sign in hand off's wait).
+    The ingestion agents are counted in it and keep their own wall time: a longer agent elsewhere
+    raises the queue's limit, never the extract step's."""
     spec = worker.agents_queue()
     from app.apply import form_agent
 
     assert agents.EXTRACT_NAME in definitions.AGENTS  # registered by building the queue
+    longest = max(agent.wall_time_s for agent in definitions.AGENTS.values())
     assert definitions.AGENTS[agents.EXTRACT_NAME].wall_time_s == agents.EXTRACT_WALL_TIME_S == 900
     assert (
         definitions.AGENTS[agents.TRANSCRIBE_NAME].wall_time_s
@@ -66,11 +71,13 @@ def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply
     assert spec.name == queues.AGENTS
     assert spec.max_jobs == worker.MAX_AGENT_RUNS == 2
     assert spec.job_timeout_s == 3720  # 3600 aggregate transport, 120 runner cleanup
+    assert spec.job_timeout_s == longest + worker.AGENT_JOB_MARGIN_S
     assert all(agent.wall_time_s <= spec.job_timeout_s for agent in definitions.AGENTS.values())
     (run_agent,) = [one for one in spec.functions if one.name == "run_agent"]
     assert run_agent.timeout_s == spec.job_timeout_s == 3720
     assert run_agent.max_tries == 1
     assert worker.agent_stale_running().total_seconds() == 3900  # 3600 plus 300 stale grace
+    assert worker.agent_stale_running().total_seconds() == longest + worker.AGENT_STALE_MARGIN_S
 
 
 def test_an_agent_longer_than_the_job_timeout_registered_when_the_queue_is_built(

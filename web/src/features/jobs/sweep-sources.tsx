@@ -2,15 +2,30 @@
  * The browser sources of a sweep in its summary (browser B8, `stats.sources` of
  * api/app/browser/sources): per job site read in the person's browser, what it found, what was
  * new, and in plain words why it stopped early when it did. A site the sweep never began
- * (`not_started`, after another stopped the sweep's sites) shows only that.
+ * (`not_started`, after another stopped the sweep's sites) shows only that. The freelance and
+ * project feeds of the same list have their own heading and words (opportunities O8).
  */
 import { Globe } from "lucide-react";
+
+import { isFeedKind } from "@/features/opportunities/sources/source-words";
+import { SweepFeeds } from "@/features/opportunities/sources/sweep-feeds";
 
 import { SOURCE_PROBLEMS, sourceName } from "./labels";
 import { plural } from "./selection";
 import type { SweepSource } from "./sweeps-api";
 
 export function SweepSources({ sources }: { sources: SweepSource[] }) {
+  const feeds = sources.filter((source) => isFeedKind(source.kind));
+  const sites = sources.filter((source) => !isFeedKind(source.kind));
+  return (
+    <>
+      <BrowserSites sources={sites} />
+      <SweepFeeds feeds={feeds} />
+    </>
+  );
+}
+
+function BrowserSites({ sources }: { sources: SweepSource[] }) {
   if (!sources.length) return null;
   return (
     <section

@@ -28,6 +28,8 @@ export const sweepSourceSchema = z.object({
   result_pages: z.number().int().nonnegative(),
   found: z.number().int().nonnegative(),
   new: z.number().int().nonnegative(),
+  // Opportunities O8: what the never apply rules set aside; absent from an older api.
+  skipped_by_rule: z.number().int().nonnegative().default(0),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;
