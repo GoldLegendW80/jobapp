@@ -30,7 +30,21 @@ different account email in the fixture; it now checks the profile's authoritativ
 Self-review also reproduced default-port replay lookup refusal and malformed-port errors
 with six red pure cases. The adapter lookup now canonicalises only saved fallback addresses.
 
-Pending at this source checkpoint: real DB/Redis whole Apply module, composed actual browser
-journeys for default known fallback, framed takeover and credential-free filling, and final
-exact-tree gate. The root assigns the shared runtime resources and final acceptance owner.
-This file records source evidence, not a public review verdict or whole-spec acceptance.
+Final source proof, f337da19 with native-file integration 747db486 merged:
+* Focused recovery, known fallback, A18 budget and worker-binding selection: 177 passed.
+* caffeinate -i ops/agent-test.sh --name genrec604final tests/apply -m 'not docker' -n 2
+  passed 7,678 tests in 337.59 seconds using owned temporary Postgres and Redis.
+* This whole-module run includes the default RuntimeFormAgent with no credential using
+  authoritative profile/document/answer values, unresolved fields Left, no designation,
+  zero AgentRun rows and zero Submit clicks.
+* Current API Ruff check and format check passed (780 files); scoped commit hooks passed.
+* CI-plan refresh: 81 passed. E2E registry refresh passed with the same 29/4/50 partition.
+* Owned genrec604 containers and volumes were absent after the wrapper exited. No images
+  were built or retagged, no image mutex was used, and the assigned heavy slot was released.
+  Disk free after cleanup: 45 GiB.
+
+Pending: composed actual browser journeys for default known fallback, framed takeover and
+credential-free filling, plus the final exact-tree gate and fresh review. This isolated
+module proof does not include the later Saved answers or parser-footer changes being
+composed by their separate owners. The root assigns those runtime resources and the final
+acceptance owner. This is evidence, not a public review verdict or whole-spec acceptance.
