@@ -14,12 +14,16 @@ from browserd import pages  # noqa: E402
 
 
 class Selection:
-    def __init__(self, value: Any) -> None:
-        self.value = value
+    def __init__(self, value: Any, present: bool = True) -> None:
+        self.value, self.present = value, present
 
-    async def evaluate_all(self, script: str) -> Any:
+    async def count(self) -> int:
+        return int(self.present)
+
+    async def evaluate(self, script: str, **kwargs: Any) -> Any:
         assert "files" in script
         assert "name" in script
+        assert kwargs == {"timeout": 5000}
         return self.value
 
 
@@ -31,7 +35,7 @@ class Page:
     def locator(self, selector: str) -> Selection:
         ref = selector.removeprefix("aria-ref=")
         self.refs.append(ref)
-        return Selection(self.current[ref])
+        return Selection(self.current.get(ref), ref in self.current)
 
 
 def test_native_file_metadata_is_fresh_and_includes_empty_selection() -> None:
@@ -62,7 +66,7 @@ def test_page_text_cannot_supply_a_native_file_ref(snapshot: str) -> None:
 def test_a_changed_ref_refuses_the_snapshot_instead_of_reusing_selection() -> None:
     page = Page()
     del page.current["e2"]
-    with pytest.raises(KeyError):
+    with pytest.raises(pages.SnapshotUnavailable, match="ref changed"):
         asyncio.run(pages.native_files(page, '- button "Resume" [ref=e2]'))
 
 

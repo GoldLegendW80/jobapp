@@ -72,3 +72,18 @@ def test_current_native_selection_controls_document_readback(
         assert form.submit_clicks == 0
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("metadata", [None, "cv.pdf", ["cv.pdf"]])
+def test_malformed_native_metadata_cannot_fall_back_to_a_page_echo(metadata: Any) -> None:
+    class Malformed(NativeForm):
+        async def snapshot(self) -> dict[str, Any]:
+            shot = await super().snapshot()
+            shot["native_files"] = metadata
+            return shot
+
+    form = Malformed(greenhouse_form().fields)
+    form.echo = "cv.pdf"
+    found, code = asyncio.run(Greenhouse().read(form))
+    assert found is None
+    assert code == "unreadable"
