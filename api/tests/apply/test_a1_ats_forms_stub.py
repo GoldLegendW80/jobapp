@@ -670,3 +670,16 @@ def test_every_container_of_the_stub_listens_on_its_own_address_at_the_port_it_p
         probe = " ".join(service["healthcheck"]["test"])
         assert f":{port}/healthz" in probe
         assert not re.search(r"127\.0\.0\.1|localhost", probe)
+
+
+def test_known_fallback_uses_native_fixture_only_for_an_existing_ashby_posting(
+    forms: Forms,
+) -> None:
+    response = forms.get(ashby("known-fallback"))
+    assert response.status == 200
+    assert 'data-kind="known-fallback"' in response.text
+    assert "/forms/a8/custom.js" in response.text
+    assert forms.get("/ashby/example-robotics/missing--known-fallback/application").status == 404
+    assert 'data-kind="known-fallback"' not in forms.get(ashby()).text
+    for name in ("hosted", "framed", "mid-fill", "no-credential"):
+        assert forms.get(f"/forms/apply-fallback/{name}.html").status == 200

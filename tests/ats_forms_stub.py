@@ -1031,6 +1031,10 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                 if missing:
                     return missing
                 variant = job.partition("--")[2]
+                if variant == "known-fallback":
+                    return 200, (
+                        FORMS_DIR / "apply-fallback" / "hosted.html"
+                    ).read_text()
                 if variant == "slow":
                     stub.sleep(stub.slow_seconds)
                 return 200, form_page(
