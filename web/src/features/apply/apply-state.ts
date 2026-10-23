@@ -105,6 +105,9 @@ function waitingLine(needs: string | null): string {
   if (needs?.startsWith("documents:")) {
     return "Waiting for your CV and letter to be written. The form is filled once they are ready.";
   }
+  if (needs === "retry") {
+    return "The last attempt did not finish, so the assistant tries again later by itself. Nothing was sent.";
+  }
   return "Waiting for a browser. Starting in a few seconds, and it can take up to a minute.";
 }
 

@@ -75,9 +75,17 @@ def services(
     answer_agent: FakeAgent | None = None,
     **rest: Any,
 ) -> run.Services:
+    clock = Clock()
+
+    async def nobody_comes(seconds: float) -> None:
+        clock.now += timedelta(seconds=seconds)
+
+    # A10a's wait for the person: never a real sleep, and nobody comes unless a test says so.
+    rest.setdefault("sleep", nobody_comes)
+    rest.setdefault("needs_person_wait_s", 10)
     return run.Services(
         sessions=factory,
-        clock=Clock(),
+        clock=clock,
         leases=leases or FakeLeases(),
         tools_for=lambda user, lease, token: form,
         answer_agent=answer_agent,
@@ -335,7 +343,9 @@ def test_the_browser_crashing_mid_fill_fails_it_and_releases_the_lease(
     app_id = started(db, person_a)
     form, leases = run_ashby(), FakeLeases()
     form.crash_at = 8
-    assert fill(services(factory, form, leases, stub_base=stub), app_id) == "failed"
+    # No retry left (A10a retries it otherwise, test_a10a_failures).
+    svc = services(factory, form, leases, stub_base=stub, retry_delays_s=())
+    assert fill(svc, app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "ended")
     assert len(leases.released) == 1
