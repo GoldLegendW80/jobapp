@@ -51,6 +51,13 @@ CASES = (
     Case("PUT", "/api/apply/caps", {"items": [], "revision": "a" * 64}, 409, "own stale revision"),
     Case("GET", "/api/apply/answer-bank", foreign_status=200, exception="authenticated bank"),
     Case(
+        "POST",
+        "/api/apply/answer-bank",
+        {"question": "Example question", "answer": "Example"},
+        201,
+        "authenticated bank creation",
+    ),
+    Case(
         "PUT",
         "/api/apply/answer-bank",
         {"question_key": "missing", "answer": "Example"},

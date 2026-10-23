@@ -267,6 +267,7 @@ const EVENTS: Record<string, string> = {
   waiting: "Waiting for the documents",
   lease: "Browser ready",
   filled: "Form filled",
+  saved_answer_used: "Saved answer reused",
   decision: "Your approval checked",
   click: "Submit clicked",
   cancelled: "Cancelled",

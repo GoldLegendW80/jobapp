@@ -2366,6 +2366,42 @@ def _leave_blank_hit(text: str, s: Sections) -> bool:
 # A checkbox that asks about the person (a yes or no in disguise) goes by the templates.
 _BOX_QUESTION = re.compile(r"relocat|on-?site|hybrid|authori[sz]ed|sponsor|willing|eligible")
 
+# Only an absent source permits a saved answer. Mapping failures, ambiguity and contextual
+# refusals keep the authoritative result. New handlers default to keeping their refusal.
+_BANK_FALLBACK = frozenset(
+    {
+        "not_a_known_question",
+        "no_full_name",
+        "no_last_name",
+        "no_email",
+        "no_phone",
+        "no_city",
+        "no_country",
+        "no_location",
+        "no_link",
+        "no_preferred_name",
+        "no_pronouns",
+        "no_notice_period",
+        "no_earliest_start",
+        "no_relocation",
+        "no_travel",
+        "no_willing_onsite",
+        "no_willing_hybrid",
+        "no_background_check_consent",
+        "no_reference_check_consent",
+        "no_previously_applied_default",
+        "no_languages",
+        "no_language_level",
+        "language_not_in_profile",
+        "years_not_stated",
+        "no_degree",
+        "no_graduation_year",
+        "no_school",
+        "no_heard_about",
+        "country_not_in_work_authorization",
+    }
+)
+
 
 def _checkbox(field: FormField) -> Answer | Left:
     box = terms.classify(field.label)
@@ -2392,6 +2428,20 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
     settled = _policies_first(field, sections, text)
     if isinstance(settled, Left):
         return settled
+    matched = match_template(field.label)
+    if isinstance(matched, str):
+        if field.kind == "checkbox":
+            return _checkbox(field)
+        result = Left(matched, field.options, field.required)
+    else:
+        template, found = matched
+        result = template.handler(field, context, sections, found)
+    # Current identity, documents and profile answers precede a separately saved answer.
+    # An authoritative value that cannot fit this widget stays left, rather than using stale data.
+    if isinstance(result, Answer):
+        return _fits_kind(field, result)
+    if result.reason not in _BANK_FALLBACK:
+        return result
     # The bank answers the exact question it was typed for (its normalised key), nothing else.
     bank = context.bank.lookup(field.label) if settled and context.bank else None
     if bank is not None and field.kind not in ("file", "checkbox"):
@@ -2403,13 +2453,7 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
         if field.kind == "yes_no" and option_key(bank) in YES_OPTIONS | NO_OPTIONS:
             return _boolean(field, option_key(bank) in YES_OPTIONS, "bank")
         return _fits_kind(field, Answer(bank, "bank"))
-    matched = match_template(field.label)
-    if isinstance(matched, str):
-        if field.kind == "checkbox":
-            return _checkbox(field)
-        return Left(matched, field.options, field.required)
-    template, found = matched
-    return _fits_kind(field, template.handler(field, context, sections, found))
+    return result
 
 
 def _fits_kind(field: FormField, result: Answer | Left) -> Answer | Left:

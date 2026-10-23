@@ -798,6 +798,94 @@ describe("the saved answers", () => {
     { question_key: "pronouns", question: "Pronouns", answer: "they" },
   ];
 
+  it("adds the first reusable answer with keyboard focus and returns focus after saving", async () => {
+    fakeSettings();
+    fakeCaps([]);
+    fakeBank([]);
+    const posts: unknown[] = [];
+    server.use(
+      http.post("*/api/apply/answer-bank", async ({ request }) => {
+        const body = await request.json();
+        posts.push(body);
+        return HttpResponse.json(
+          {
+            items: [
+              {
+                question_key: "how did you hear about us",
+                question: "How did you hear about us?",
+                answer: "A colleague",
+                used_count: 0,
+                updated_at: "2026-10-23T08:00:00Z",
+              },
+            ],
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const { user } = await openPage();
+    const add = await screen.findByRole("button", { name: "Add answer" });
+    await user.click(add);
+    const question = screen.getByRole("textbox", { name: "Question" });
+    expect(question).toHaveFocus();
+    expect(question).toHaveAttribute("maxLength", "200");
+    await user.click(screen.getByRole("button", { name: "Save new answer" }));
+    expect(question).toHaveAccessibleDescription(
+      "Type the question as it appears on the form.",
+    );
+    expect(posts).toEqual([]);
+    await user.type(question, "How did you hear about us?");
+    await user.type(
+      screen.getByRole("textbox", { name: "Reusable answer" }),
+      "A colleague",
+    );
+    await user.click(screen.getByRole("button", { name: "Save new answer" }));
+    expect(await screen.findByText("A colleague")).toBeInTheDocument();
+    expect(posts).toEqual([
+      { question: "How did you hear about us?", answer: "A colleague" },
+    ]);
+    expect(add).toHaveFocus();
+  });
+
+  it("keeps a duplicate draft, reloads the list and permits retry after an error", async () => {
+    fakeSettings();
+    fakeCaps([]);
+    fakeBank(entries);
+    server.use(
+      http.post("*/api/apply/answer-bank", () =>
+        HttpResponse.json(
+          {
+            detail:
+              "You already saved this question. Edit its answer in the list.",
+            code: "saved_question_exists",
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const { user } = await openPage();
+    await user.click(await screen.findByRole("button", { name: "Add answer" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Question" }),
+      "Notice period",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reusable answer" }),
+      "Two months",
+    );
+    await user.click(screen.getByRole("button", { name: "Save new answer" }));
+    expect(
+      await screen.findByText(
+        "You already saved this question. Edit its answer in the list.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Reusable answer" }),
+    ).toHaveValue("Two months");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Add answer" })).toHaveFocus();
+  });
+
   it("changes one answer, and refuses an empty one before any call", async () => {
     fakeSettings();
     fakeCaps([]);

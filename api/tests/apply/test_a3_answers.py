@@ -485,18 +485,59 @@ def test_what_the_person_asked_to_leave_blank_is_left() -> None:
     assert value("Email", context=ctx(sections=secs)) == full("identity")["email"]
 
 
-def test_a_bank_answer_beats_the_pattern_table() -> None:
+def test_current_identity_and_profile_answers_precede_the_bank() -> None:
+    bank = AnswerBank(USER).with_answer("Email", "e2e-bank@example.org")
+    bank = bank.with_answer("Notice period", "90 days")
+    assert ask("Email", context=ctx(bank=bank)) == Answer(
+        full("identity")["email"], "identity.email"
+    )
+    assert ask("Notice period", context=ctx(bank=bank)) == Answer(
+        full("answers")["notice_period"], "answers.notice_period"
+    )
+    # A stale saved value cannot rescue a choice incompatible with the current profile.
+    assert isinstance(ask("Notice period", "select", ("90 days",), context=ctx(bank=bank)), Left)
+
+
+def test_a_bank_answer_is_used_when_the_profile_has_no_answer() -> None:
     bank = AnswerBank(USER).with_answer("Notice period *", "Two weeks")
-    result = ask("Notice period", context=ctx(bank=bank))
+    context = ctx(bank=bank, sections=sections(notice_period=None))
+    result = ask("Notice period", context=context)
     assert result == Answer("Two weeks", "bank")
-    picked = ask("Notice period", "select", ("One week", "Two weeks"), context=ctx(bank=bank))
+    picked = ask("Notice period", "select", ("One week", "Two weeks"), context=context)
     assert picked.value == "Two weeks"
     assert picked.source == "bank"
-    miss = ask("Notice period", "select", ("Month", "Quarter"), context=ctx(bank=bank))
+    miss = ask("Notice period", "select", ("Month", "Quarter"), context=context)
     assert miss.reason == "no_matching_option"
     yes = AnswerBank(USER).with_answer("Do you play chess?", "yes")
     assert value("Do you play chess?", "yes_no", context=ctx(bank=yes)) is True
     assert value("Do you play chess?", "single", YES_NO, context=ctx(bank=yes)) == "Yes"
+
+
+@pytest.mark.parametrize(
+    ("label", "options", "saved"),
+    [
+        ("Notice period", ("Immediate", "90 days"), "90 days"),
+        ("Email", ("e2e-bank@example.org",), "e2e-bank@example.org"),
+        ("Country", ("Japan",), "Japan"),
+        ("Preferred name", ("Other name",), "Other name"),
+        ("Pronouns", ("they/them",), "they/them"),
+    ],
+)
+def test_present_profile_values_that_do_not_fit_options_cannot_fall_back_to_saved_values(
+    label: str, options: tuple[str, ...], saved: str
+) -> None:
+    without = ask(label, "select", options)
+    assert isinstance(without, Left)
+    bank = AnswerBank(USER).with_answer(label, saved)
+    assert ask(label, "select", options, context=ctx(bank=bank)) == without
+
+
+def test_saved_answers_cannot_replace_ambiguous_questions_or_invalid_profile_dates() -> None:
+    label = "Do you require sponsorship now? Will you later?"
+    bank = AnswerBank(USER).with_answer(label, "No").with_answer("Start date", "2026-12-01")
+    assert ask(label, "yes_no", context=ctx(bank=bank)) == ask(label, "yes_no")
+    context = ctx(bank=bank, sections=sections(earliest_start="After my notice period"))
+    assert left("Start date", "date", context=context).reason == "start_is_not_a_date"
 
 
 def test_a_bank_of_another_person_is_refused() -> None:

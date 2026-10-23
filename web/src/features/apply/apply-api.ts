@@ -208,7 +208,7 @@ export const retryApplication = (applicationId: string) =>
   decide(applicationId, "retry");
 
 /**
- * Type or correct one answer before the approval (saved to the person's answer bank). The answer
+ * Type or correct one answer before approval, local to this application. The answer
  * changes the form's hash; the api answers with the approval view as it is now, new hash and
  * answers, which the page shows at once.
  */

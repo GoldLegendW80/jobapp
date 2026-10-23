@@ -167,9 +167,22 @@ Automatic runs share the person's daily cap of automatic runs and the person's a
 | POST /api/applications/{id}/submitted ; POST /api/applications/{id}/retry | "It was submitted" (on `submit_unknown`), "Try again" |
 | GET /api/applications/{id}/manual ; POST .../manual/open ; POST .../manual/actions `{action}` ; POST .../manual/record `{seen}` ; POST .../manual/close | Apply myself (A9): the session's status (waiting with its place, open, ended; the documents placed, a confirmation seen, a file chooser waiting, the idle warning, the warnings of the start), asking for the session, "Attach my CV", "Attach my letter", "Fill my details", "Record as applied" and "I submitted it" (`submitted` without the gate, the placed versions frozen), closing it (`cancelled`; recorded instead once the page showed the confirmation) |
 | GET /api/applications/{id}/screenshots/{n} | one image, owner only |
-| GET/PUT /api/apply/settings ; GET/PUT /api/apply/caps ; GET/PUT /api/apply/answer-bank | mode, Full auto settings (`min_fit`; Advanced: `safety_ceiling`, hold length), pause switch, company caps, saved answers |
+| GET/PUT /api/apply/settings ; GET/PUT /api/apply/caps ; GET/POST/PUT /api/apply/answer-bank | mode, Full auto settings (`min_fit`; Advanced: `safety_ceiling`, hold length), pause switch, company caps, saved answers |
+
 | POST /api/site-profiles `{url}` ; GET /api/site-profiles ; GET /api/site-profiles/{id} | start "Complete my profile on this site", list the person's runs, one run with its sections, fields and screenshots |
 | PUT /api/site-profiles/{id}/sections/{n}/fields/{field} ; POST /api/site-profiles/{id}/sections/{n}/approve `{values_hash}` ; POST .../skip ; POST /api/site-profiles/{id}/cancel | the person's decisions per section, with "Replace" chosen per field |
+
+Saved answers start empty. POST accepts only `{question, answer}`, with a question of 1 to 200
+characters and an answer of 1 to 5000 characters. The server trims surrounding whitespace,
+preserves Unicode and LF answer line breaks, and refuses empty values, control or format
+characters and questions without a normalized key. The session supplies the owner and the
+server derives the question key. Creation returns 201 with the current list. A duplicate
+normalized question, including a concurrent creation, returns 409 `saved_question_exists`
+without replacing the existing answer. PUT keeps its existing edit and forget semantics,
+including 404 for an absent key. `used_count` counts verified fills once per application field;
+unverified fills and local application edits do not count. A refill of the same application
+field does not count again. Current identity, documents and profile answers precede the bank;
+a profile value that cannot fit the offered choices stays left.
 
 The document-letter allowance is persisted by the adapter, survives a person edit and a refill of the same field shape, and cannot be granted by an answer request, label or field key. Existing rows without that provenance keep the ordinary limit until a fresh fill establishes it. Approval answers expose the server-derived `max_chars` and a `left_reason` when the document letter could not be typed. A letter over 10000 characters, or with a tab, carriage return or another refused control character, is left empty with its reason, never shortened or silently normalised. LF line breaks are allowed. The answer route accepts at most 121024 bytes, including JSON surrogate escapes for 10000 astral characters. The native editor counts UTF-16 units, so some symbols use two of its 5000 or 10000 positions; its counter uses that same count. Backend and browser typing limits count Unicode code points. A saved answer is displayed whole even when it exceeds the native editor limit. Email application subjects use a separate limit of 998 Unicode code points and reject CR or LF before a write; their approval view exposes `max_chars: 998`. An invalid legacy subject remains visible and editable, and approval returns a typed 422 instead of starting a send.
 

@@ -89,7 +89,7 @@ from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
-from app.apply.bank import AnswerBank
+from app.apply.bank import AnswerBank, question_key
 from app.apply.models import (
     AnswerBankEntry,
     AnswerSource,
@@ -708,6 +708,46 @@ def _counts(report: ats_base.Report) -> dict[str, int]:
     return counts
 
 
+def _record_bank_use(
+    db: Session,
+    application: Application,
+    rows: list[ApplicationAnswer],
+    report: ats_base.Report,
+    now: datetime,
+) -> None:
+    """Count a verified bank fill once per application field, including across refills."""
+    counted = {
+        data.get("field_key")
+        for data in db.scalars(
+            sa.select(ApplicationEvent.data).where(
+                ApplicationEvent.application_id == application.id,
+                ApplicationEvent.user_id == application.user_id,
+                ApplicationEvent.kind == "saved_answer_used",
+            )
+        )
+    }
+    verified = {o.field.key for o in report.outcomes if o.filled.status == "filled"}
+    for row in rows:
+        if (
+            row.source is not AnswerSource.bank
+            or row.field_key not in verified
+            or row.field_key in counted
+        ):
+            continue
+        key = db.execute(
+            sa.update(AnswerBankEntry)
+            .where(
+                AnswerBankEntry.user_id == application.user_id,
+                AnswerBankEntry.question_key == question_key(row.label),
+            )
+            .values(used_count=AnswerBankEntry.used_count + 1)
+            .returning(AnswerBankEntry.question_key)
+        ).scalar_one_or_none()
+        if key is not None:
+            _event(db, application, "saved_answer_used", now, field_key=row.field_key)
+            counted.add(row.field_key)
+
+
 def finish(
     db: Session,
     application_id: uuid.UUID,
@@ -760,6 +800,7 @@ def finish(
                 row.value, row.source = old.value, AnswerSource.person
                 row.document_letter = bool(row.document_letter or old.document_letter)
                 row.left_reason = None
+    _record_bank_use(db, application, rows, result.report, now)
     db.add_all(rows)
     counts = _counts(result.report)
     _event(db, application, "filled", now, **counts)

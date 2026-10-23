@@ -723,6 +723,11 @@ def test_person_a_never_reads_lists_or_edits_bs_lever_application_or_answers(
         )
     )
     db.commit()
+    # The bank is a fallback only when the current profile has no answer for this question.
+    profile = profile_service.get_profile(db, person_b.user_id, AT)
+    own_answers = {**profile.sections["answers"], "heard_about": None}
+    profile_service.save_section(db, person_b.user_id, "answers", own_answers, profile.revision, AT)
+    db.commit()
     app_a = ready(db, factory, person_a, stub)
     app_b = ready(db, factory, person_b, stub)
     assert answers_of(db, app_b)[HEARD] == "Referral"
