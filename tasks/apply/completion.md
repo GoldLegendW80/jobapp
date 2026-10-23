@@ -239,6 +239,15 @@ the four fresh A8 Review/Applied captures under `tasks/evidence/apply-a8/final-n
 These are functional native checkpoints, separate from long-lived memory and real-site/Jetson
 acceptance. Earlier failures and incomplete attempts remain recorded above.
 
+The second combined gate on `2d9df92c` / tree `af3a367c` stopped with exit 130 after its
+mock local-check test inherited the valid outer `apply:82` setting but expected its own default
+`apply:2`. Complete API/coverage/Docker/components and remaining journeys were unfinished.
+The [harness failure and closure](../evidence/apply604-gate2-harness-failure.md) preserves the
+exact evidence: baseline fails after twenty passes; the test-only environment boundary then
+passes all 51 scenarios under both inherited settings and clean defaults, plus 81 CI-plan
+checks. All original assertions remain and production gating is unchanged. The next exact-head
+quiet gate must run in full; the earlier partial results are not acceptance.
+
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
 lint, components and production build, migration upgrade/downgrade with one head, script and
