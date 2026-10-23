@@ -39,9 +39,18 @@ pass 31 final focused cases and the existing non-native browser module. A separa
 passes 56 focused cases and 2,184 browser cases: exact internal blank tabs survive listener
 and settlement cleanup, while the original memory event, victim and navigation refusals stay
 unchanged. This preserves the replacement tab; the original form still closes at the guard.
-Both changes are composed on `9358e4eb` and await fresh independent source closure before
-one bounded diagnostic run. They do not identify or repair the memory spike. Fresh native
-acceptance, the complete quiet gate and final whole-PR review remain required.
+Both changes on `9358e4eb` passed fresh independent source closure. Its subsequent
+[all-five diagnostic](../evidence/apply604-startup-memory-diagnostic.md) still produced
+one pass, one failure, three not run and zero required layouts. The guard reached
+1011.016 MiB working set; all foreign PSS and mapping reads were denied.
+The reviewed navigation correction on `ba93a08a` then produced the existing queued
+`navigation_failed` retry state in a [declared two-case diagnostic](../evidence/apply604-v5-native-diagnostic.md).
+Preparation passed and the first fill failed before repeated edits; three cases were
+not selected and zero required layouts were produced. That attempt's observer failed
+before its first accounting snapshot, so it supplies no valid attribution series.
+The independent application guard read reached 1049530368 working-set bytes. Neither
+classification nor diagnostics repair the memory spike. Fresh native acceptance,
+the complete quiet gate and final whole-PR review remain required.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
@@ -71,6 +80,13 @@ The isolated `apply/spec-completion` branch combines immutable snapshots of #465
 #516, #470, #598, #583, #588, #589, #590, #591, #592, #595, #600 and #601. Existing approved heads and their source branches are left untouched. Earlier fixes #600 and
 #601 retain their independently reviewed heads. Those approvals do not approve this combined
 tree. This task has not merged changes into main or deployed.
+
+The integration now also contains externally merged current main `c58f4535` and the
+reviewed O7 deck-order fixture from new draft #610. Current main's only conflict was a
+comment next to the already distinct test UID; the comment and incoming tests remain.
+All 81 affected browser unit cases pass, and frontend typechecking passes after the
+clean O7 merge. Earlier native fixture evidence remains separate from this composition;
+the complete quiet gate has not run on the resulting tree.
 
 Tests use invented `e2e-*@example.org` accounts, local fake ATS sites and fake Gmail. No test
 submits to a real company or sends real mail. Browser verification uses the repository's
