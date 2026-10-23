@@ -228,6 +228,20 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+  /** O7: the freelance and project feeds the sweep reads; kept as is by this tab until O8's card */
+  feeds?: Feed[];
+}
+
+export const FEED_KINDS = [
+  "remoteok",
+  "weworkremotely",
+  "hackernews_freelance",
+  "hackernews_hiring",
+] as const;
+export interface Feed {
+  kind: (typeof FEED_KINDS)[number];
+  terms: TermList;
+  enabled: boolean;
 }
 
 export interface PayRange {
@@ -243,6 +257,8 @@ export interface Preferences {
     dismissed_at: string | null;
     /** the wizard's steps passed (Next or Skip), so another device resumes there */
     steps_passed: string[];
+    /** the starter list's boards and sites added or removed (O5b), never proposed again */
+    starter_handled?: string[];
   };
   documents_language: (typeof DOCUMENTS_LANGUAGES)[number];
   documents_tone: (typeof DOCUMENTS_TONES)[number];

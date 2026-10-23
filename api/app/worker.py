@@ -259,6 +259,7 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
             client,
             clock_of(ctx),
             browser=browser_sources(ctx),
+            feeds=feed_sources(ctx),
         )
 
 
@@ -274,6 +275,16 @@ def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
     return sources.runner_for(
         ctx["settings"], ctx["redis"], sessions_of(ctx), lambda: agent_context(ctx)
     )
+
+
+def feed_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The freelance and project feeds' run (opportunities O7): tests put theirs in the context."""
+    if "feed_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["feed_sources"]
+        return hook
+    from app.opportunities import sources
+
+    return sources.runner_for(ctx["settings"])
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:

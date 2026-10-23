@@ -50,10 +50,10 @@ from tests.ingestion.conftest import signed_in
 from tests.ingestion.extract_helpers import add_document, key, keyring, settings
 from tests.ingestion.helpers import delete as api_delete
 from tests.ingestion.helpers import user_id
-from tests.ingestion.test_ingestion_locks import Path
+from tests.ingestion.test_ingestion_locks import Path, lock_probe
 from tests.ingestion.test_ingestion_locks_g12 import free
 
-_FIXTURES = (key, keyring, settings)
+_FIXTURES = (key, keyring, lock_probe, settings)
 Factory = sessionmaker[Session]
 NAMED = ("identity", "full_name", "Alice Martin", "Alice Martin")
 RENAMED = ("identity", "full_name", "Alice Marie Martin", "Alice Martin")

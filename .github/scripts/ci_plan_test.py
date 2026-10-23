@@ -1515,6 +1515,10 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(self.ran(["web/e2e/apply-all.config.ts"]), ["apply"])
         self.assertEqual(self.ran(["web/e2e/jobs.spec.ts"]), ["apps"])
         self.assertEqual(self.ran(["tests/gmail-stub.compose.yml"]), ["mail"])
+        # The fake feeds server (O7) is started by the opportunities group alone.
+        rules = {pattern: groups for pattern, groups, _ in ci_plan.JOURNEY_RULES}
+        for path in ("tests/feeds_stub.py", "tests/feeds-stub.compose.yml"):
+            self.assertEqual(rules[path], frozenset({"opportunities"}))
 
     def test_a_file_imported_by_another_module_runs_that_module_s_groups_too(
         self,

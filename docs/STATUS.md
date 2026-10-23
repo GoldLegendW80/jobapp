@@ -26,7 +26,7 @@ Built and merged, by module (task ids of `tasks/<module>/todo.md`):
 | platform | Compose stack, deploy, Tailscale Funnel URL, backups (7 days), the batch gate `ops/local-check.sh`, `ops/deploy-checked.sh`, `ops/ship.sh`, `ops/agent-test.sh`, request body limits, flaky test fixes (W1, W2, W3, first slice of W3b), the harness versioned (#325 for #324: CLAUDE.md, `docs/agents/`, `.claude/` config, `ops/card.sh`, `ops/dev-setup.sh`), the harness permissions (#326: `git -C` forms, `gh api` reads, `.env` shell denies) |
 | identity | invite only accounts, sessions, throttling, administration |
 | profile | profile editing, export and import, year only dates (P1 to P7) |
-| jobs | postings, board sweeps (Ashby, Greenhouse, Lever), scoring, map, edit, J8 lock guard |
+| jobs | postings, board sweeps (Ashby, Greenhouse, Lever), scoring, map, edit, J8 lock guard; J7 and Checkpoint J wait on the owner: the Jetson runs of `tests/e2e_jobs_jetson.sh` (and its `view` journey) and `tests/e2e_jobs_sweep_jetson.sh`, then a schedule check in his browser ([tasks/jobs/todo.md](../tasks/jobs/todo.md), Checkpoint J) |
 | agents | encrypted credentials, runtime and live stream, triage, chat, real runs (A1 to A5) |
 | ingestion | G0 to G16 (documents to profile proposals, parser service, transcription, review, deletion); Checkpoint G (#61) still open |
 | mail | M1 fake Gmail and Google client, M2 public pages, M3 parsing, M4 Gmail connection, M9 fact check rules; the rest is paused by the owner |

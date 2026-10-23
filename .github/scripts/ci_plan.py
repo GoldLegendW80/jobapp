@@ -434,6 +434,16 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
         "the fake forms server",
     ),
     (
+        "tests/feeds-stub.compose.yml",
+        frozenset({"opportunities"}),
+        "the fake feeds server of the opportunities group",
+    ),
+    (
+        "tests/feeds_stub.py",
+        frozenset({"opportunities"}),
+        "the fake feeds server of the opportunities group",
+    ),
+    (
         "tests/gmail-stub.compose.yml",
         frozenset({"mail"}),
         "the fake Google of the mail group",

@@ -42,6 +42,7 @@ from tests.ingestion.helpers import (
 
 ESTIMATE = "/api/ingestion/runs/estimate"
 CONSENT = "/api/ingestion/consent"
+V = estimate_router.CONSENT_VERSION  # the version a consent is recorded under today
 OPUS = "claude-opus-5-5"
 SONNET = "claude-sonnet-5-5"
 KEYRING = Keyring(secrets.token_bytes(KEY_BYTES))
@@ -92,7 +93,7 @@ def test_signed_out_answers_401_on_every_route(api: Api) -> None:
     for response in (
         ask(api, None, [str(uuid.uuid4())]),
         api.get(CONSENT, token=None),
-        api.post(CONSENT, token=None, json={"version": 1}),
+        api.post(CONSENT, token=None, json={"version": V}),
     ):
         assert response.status_code == 401
         assert response.json() == {"detail": UNAUTHORIZED}
@@ -144,7 +145,7 @@ def test_an_api_key_reads_the_range_the_ceiling_and_the_three_costs(
     assert body["unreadable"] == []
     assert body["blockers"] == []
     assert body["can_start"] is True
-    assert body["consent"] == {"version": 1, "accepted": False}
+    assert body["consent"] == {"version": V, "accepted": False}
     assert body["limits"] == {
         "documents": 30,
         "characters": 1_500_000,
@@ -479,12 +480,12 @@ def test_another_users_documents_credential_and_consent_never_count(
     for letter in "bcd":
         text_file(api, bob, letter, 50_000)
     credential(factory, BOB)
-    assert api.post(CONSENT, token=bob, json={"version": 1}).status_code == 200
+    assert api.post(CONSENT, token=bob, json={"version": V}).status_code == 200
     body = answer(api, alice, [mine])
     assert body["tokens"] == {"low": 52_500, "high": 178_000, "ceiling": 356_000}
     assert body["credential_kind"] is None
     assert body["cost"] is None
-    assert body["consent"] == {"version": 1, "accepted": False}
+    assert body["consent"] == {"version": V, "accepted": False}
     # The same file in both accounts is two documents: each user plans their own.
     same = text_file(api, bob, "a", 30_000)
     assert same != mine
@@ -527,25 +528,25 @@ def test_consent_the_first_time_then_read_back_then_given_again(
     assert first.status_code == 200
     assert first.headers["cache-control"] == "no-store"
     assert first.json() == {
-        "version": 1,
+        "version": V,
         "text": estimate_router.CONSENT_TEXT,
         "reminder": estimate_router.CONSENT_REMINDER,
         "accepted": False,
         "accepted_at": None,
     }
-    given = api.post(CONSENT, token=alice, json={"version": 1})
+    given = api.post(CONSENT, token=alice, json={"version": V})
     assert given.status_code == 200, given.text
     assert given.json()["accepted"] is True
     accepted_at = given.json()["accepted_at"]
     assert accepted_at is not None
     assert api.get(CONSENT, token=alice).json()["accepted_at"] == accepted_at
     # Given again: one row, and the first date stays.
-    again = api.post(CONSENT, token=alice, json={"version": 1})
+    again = api.post(CONSENT, token=alice, json={"version": V})
     assert again.status_code == 200
     assert again.json()["accepted_at"] == accepted_at
-    assert consents(factory) == [(user_id(factory, ALICE), 1)]
+    assert consents(factory) == [(user_id(factory, ALICE), V)]
     assert answer(api, alice, [text_file(api, alice, "a", 10)])["consent"] == {
-        "version": 1,
+        "version": V,
         "accepted": True,
     }
 
@@ -553,7 +554,7 @@ def test_consent_the_first_time_then_read_back_then_given_again(
 def test_the_consent_of_one_user_is_not_the_consent_of_another(
     api: Api, factory: sessionmaker[Session], alice: str, bob: str
 ) -> None:
-    assert api.post(CONSENT, token=alice, json={"version": 1}).status_code == 200
+    assert api.post(CONSENT, token=alice, json={"version": V}).status_code == 200
     assert api.get(CONSENT, token=bob).json()["accepted"] is False
     with factory() as db:
         assert estimate_router.has_consented(db, user_id(factory, ALICE)) is True
@@ -564,29 +565,50 @@ def test_the_consent_of_one_user_is_not_the_consent_of_another(
 def test_a_new_text_asks_again_and_keeps_what_was_accepted_before(
     api: Api, factory: sessionmaker[Session], alice: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    first = api.post(CONSENT, token=alice, json={"version": 1}).json()
-    assert (first["accepted"], first["text"]) == (True, estimate_router.CONSENT_TEXTS[1])
+    first = api.post(CONSENT, token=alice, json={"version": V}).json()
+    assert (first["accepted"], first["text"]) == (True, estimate_router.CONSENT_TEXTS[V])
     # A new text is a new entry beside the old one, and the current version is the highest.
-    new_words = "Synthetic words of a second version."
-    monkeypatch.setitem(estimate_router.CONSENT_TEXTS, 2, new_words)
+    new_words = "Synthetic words of a next version."
+    monkeypatch.setitem(estimate_router.CONSENT_TEXTS, V + 1, new_words)
     monkeypatch.setattr(estimate_router, "CONSENT_VERSION", max(estimate_router.CONSENT_TEXTS))
     state = api.get(CONSENT, token=alice).json()
-    assert (state["version"], state["accepted"], state["accepted_at"]) == (2, False, None)
+    assert (state["version"], state["accepted"], state["accepted_at"]) == (V + 1, False, None)
     # The words shown are those of the version asked for, and the old ones stay readable.
     assert state["text"] == new_words
-    assert estimate_router.consent_text(1) == first["text"]
+    assert estimate_router.consent_text(V) == first["text"]
     # The version the page still shows is the old one: refused, nothing recorded.
-    old = api.post(CONSENT, token=alice, json={"version": 1})
+    old = api.post(CONSENT, token=alice, json={"version": V})
     assert old.status_code == 422
     assert old.json() == {"detail": estimate_router.CONSENT_OUTDATED}
     assert api.get(CONSENT, token=alice).json()["accepted"] is False
-    assert api.post(CONSENT, token=alice, json={"version": 2}).json()["accepted"] is True
+    assert api.post(CONSENT, token=alice, json={"version": V + 1}).json()["accepted"] is True
     owner = user_id(factory, ALICE)
+    assert consents(factory) == [(owner, V), (owner, V + 1)]
+
+
+def test_a_consent_to_version_1_is_asked_again_once_for_version_2(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    """#115: version 2 says the proposals are stored. A user who accepted version 1 has not
+    consented to it: the page shows the new words, a run cannot start, and one click records it."""
+    owner = user_id(factory, ALICE)
+    with factory() as db, db.begin():
+        db.add(IngestionConsent(user_id=owner, text_version=1))
+    with factory() as db:
+        assert estimate_router.has_consented(db, owner) is False
+    state = api.get(CONSENT, token=alice).json()
+    assert (state["version"], state["accepted"]) == (2, False)
+    assert "stored in your account until you accept or reject them" in state["text"]
+    assert api.post(CONSENT, token=alice, json={"version": 1}).status_code == 422
+    assert api.post(CONSENT, token=alice, json={"version": 2}).json()["accepted"] is True
+    assert api.post(CONSENT, token=alice, json={"version": 2}).json()["accepted"] is True
+    with factory() as db:
+        assert estimate_router.has_consented(db, owner) is True
     assert consents(factory) == [(owner, 1), (owner, 2)]
 
 
 def test_a_version_that_does_not_exist_yet_is_refused(api: Api, alice: str) -> None:
-    response = api.post(CONSENT, token=alice, json={"version": 2})
+    response = api.post(CONSENT, token=alice, json={"version": V + 1})
     assert response.status_code == 422
     assert response.json() == {"detail": estimate_router.CONSENT_OUTDATED}
 
@@ -631,14 +653,14 @@ def test_two_consents_at_once_are_one_row(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         dates = [task.result(timeout=30) for task in [pool.submit(give), pool.submit(give)]]
-    assert consents(factory) == [(owner, 1)]
+    assert consents(factory) == [(owner, V)]
     assert dates[0] == dates[1]
 
 
 def test_the_consent_goes_with_the_user(
     api: Api, factory: sessionmaker[Session], alice: str
 ) -> None:
-    assert api.post(CONSENT, token=alice, json={"version": 1}).status_code == 200
+    assert api.post(CONSENT, token=alice, json={"version": V}).status_code == 200
     with factory() as db, db.begin():
         db.execute(sa.text("DELETE FROM users WHERE email = :email"), {"email": ALICE})
     assert consents(factory) == []
@@ -678,7 +700,7 @@ def test_nothing_of_a_document_reaches_the_log_or_an_error(
         refused = ask(api, alice, [document_id], reread_document_ids=[str(uuid.uuid4())])
         assert refused.status_code == 422
         assert marker not in refused.text
-        assert api.post(CONSENT, token=alice, json={"version": 1}).status_code == 200
+        assert api.post(CONSENT, token=alice, json={"version": V}).status_code == 200
     events = [record for record in caplog.records if record.name == "app.ingestion"]
     assert {record.getMessage() for record in events} == {
         "ingestion_estimate",
@@ -871,10 +893,10 @@ def test_whatever_changes_what_was_shown_changes_the_quote_id(
         assert now["quote_id"] != shown["quote_id"]
     # The consent text has a new version.
     with monkeypatch.context() as deploy:
-        deploy.setitem(estimate_router.CONSENT_TEXTS, 2, "Synthetic words of a second version.")
-        deploy.setattr(estimate_router, "CONSENT_VERSION", 2)
+        deploy.setitem(estimate_router.CONSENT_TEXTS, V + 1, "Synthetic words of a next version.")
+        deploy.setattr(estimate_router, "CONSENT_VERSION", V + 1)
         now = answer(api, alice, ids)
-        assert now["consent"]["version"] == 2
+        assert now["consent"]["version"] == V + 1
         assert now["quote_id"] != shown["quote_id"]
         refused(fresh_quote(factory, ALICE, ids), shown["quote_id"])
     # Another run finishes a step in between: the figures only go down, and the user reads the

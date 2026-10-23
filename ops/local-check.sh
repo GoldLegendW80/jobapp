@@ -1063,6 +1063,9 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
     ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
     export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     files+=(-f tests/ats-forms-stub.compose.yml)
+    # The fake feeds server the worker's sweeps read for the freelance feeds (O7), never a
+    # real platform; only the worker reads it, so it has no port.
+    files+=(-f tests/feeds-stub.compose.yml)
     ;;
   esac
   specs="$(journey_specs "$part")"

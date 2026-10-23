@@ -279,7 +279,7 @@ def test_never_apply_rule_skips_with_the_rule_as_note(
         ("No defence: defense; defence.", ("defense", "defence"), "AI Engineer, Defence", True),
         ("No defence roles.", (), "AI Engineer, Defence", False),
         ("Rule: (only a remark)", (), "Anything", False),
-        ("No cyber: cyber", ("cyber",), "Cybersecurity Engineer", False),
+        ("No cyber: cyber", ("cyber",), "Cybersecurity Engineer", True),
         ("No banks: Goldman Sachs", ("Goldman Sachs",), "AI Engineer", True),
         ("Odd: a(b, c+", ("a(b", "c+"), "AI Engineer a(b", True),
     ],

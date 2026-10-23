@@ -374,9 +374,11 @@ def own_template() -> Any:
     """A person's own template, served while `alive[0]`, as D25b's loader would."""
     alive = [True]
     mine = dataclasses.replace(templates.registry()["classic"], slug=OWN, name={"en": "Mine"})
+    # design_capture registers the real loader at import: put it back for the tests after
+    previous = templates._loader
     templates.register_loader(lambda db, user, slug: mine if slug == OWN and alive[0] else None)
     yield alive
-    templates.register_loader(None)
+    templates.register_loader(previous)
 
 
 def _ask_and_settle(

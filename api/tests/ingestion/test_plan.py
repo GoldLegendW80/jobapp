@@ -59,6 +59,43 @@ def test_a_text_with_no_break_at_all_is_cut_at_the_limit() -> None:
     assert sizes(plan.cut("a" * 250_000)) == [100_000, 100_000, 50_000]
 
 
+def test_a_break_at_the_very_start_of_the_window_is_not_taken() -> None:
+    # #115 N4: an empty line then 99,999 characters with no break made a part of two characters.
+    text = "\n\n" + "a" * 99_999
+    assert plan.cut(text) == ((0, 100_000), (100_000, 100_001))
+
+
+@pytest.mark.parametrize(
+    ("at", "first"),
+    [
+        (0, 100_000),
+        (49_997, 100_000),  # the break ends at 49,999: under the floor
+        (49_998, 100_000),  # ends at 50,000, its mark starts under the floor
+        (
+            49_999,
+            50_001,
+        ),  # the empty line starts under the floor, its 2nd line feed is one
+        (50_000, 50_002),  # the first break past the floor is taken
+        (99_998, 100_000),
+    ],
+)
+def test_the_floor_of_a_part_is_half_the_window(at: int, first: int) -> None:
+    text = "a" * at + "\n\n" + "b" * (150_000 - at)
+    assert plan.cut(text)[0] == (0, first)
+
+
+def test_a_line_end_under_the_floor_is_not_taken_either() -> None:
+    text = "a" * 10_000 + "\n" + "b" * 120_000
+    assert sizes(plan.cut(text)) == [100_000, 30_001]
+
+
+def test_no_part_but_the_last_is_under_the_floor() -> None:
+    text = ("x" * 30_000 + "\n\n") * 20
+    parts = plan.cut(text)
+    assert all(size > plan.PART_MIN_BREAK for size in sizes(parts)[:-1])
+    assert parts[-1][1] == len(text)
+
+
 def test_the_parts_touch_cover_the_text_and_fit() -> None:
     paragraph = "word " * 700 + "\n\n"
     text = paragraph * 130

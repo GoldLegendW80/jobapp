@@ -142,7 +142,7 @@ test("the estimate of a run over them is the range and the ceiling computed by h
   expect(estimate.cost).toBeNull();
   expect(estimate.can_start).toBe(false);
   expect(estimate.blockers.map((one) => one.code)).toEqual(["no_credential"]);
-  expect(estimate.consent).toEqual({ version: 1, accepted: false });
+  expect(estimate.consent).toEqual({ version: 2, accepted: false });
 });
 
 test("a selection the api cannot take is refused in words, and nobody reads it signed out", async ({
@@ -179,12 +179,16 @@ test("the consent is not given at first, then recorded, then read back", async (
   expect(before.status()).toBe(200);
   expect(before.headers()["cache-control"]).toBe("no-store");
   const none = (await before.json()) as Consent;
-  expect(none.version).toBe(1);
+  // Version 2 (#115): version 1 and the sentence on the stored proposals.
+  expect(none.version).toBe(2);
   expect(none.accepted).toBe(false);
   expect(none.accepted_at).toBeNull();
   expect(none.text).toContain("Anthropic");
   expect(none.text).toContain(
     "does not delete what Anthropic has already received",
+  );
+  expect(none.text).toContain(
+    "The proposals it writes are stored in your account until you accept or reject them.",
   );
 
   // A version the app does not show is refused, and nothing is recorded.
@@ -223,7 +227,7 @@ test("the consent is not given at first, then recorded, then read back", async (
     data: { document_ids: ids },
   });
   expect(((await estimate.json()) as Estimate).consent).toEqual({
-    version: 1,
+    version: 2,
     accepted: true,
   });
 });

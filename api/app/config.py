@@ -178,6 +178,13 @@ class Settings(BaseSettings):
     # address under it is read as the Ashby, Greenhouse or Lever form its path names. Refused in
     # production.
     apply_stub_base_url: str | None = None
+    # Opportunities O7 (app/opportunities/sources): the freelance and project feeds the sweep
+    # reads. A request's timeout in seconds; the top level comments read of a Hacker News thread
+    # (one request each). Tests only: the fake feeds server (tests/feeds_stub.py) answers every
+    # feed under this address. Refused in production.
+    feeds_timeout_s: float = Field(default=20.0, ge=1.0, le=120.0)
+    feeds_hn_max_comments: int = Field(default=500, ge=1, le=1_000)  # ITEMS_MAX of the feeds
+    feeds_stub_base_url: str | None = None
     # Tests only: the floor of Full auto's hold on a stack of the fake forms server, in place of
     # APPLY_HOLD_S. Refused in production and without APPLY_STUB_BASE_URL.
     test_apply_hold_s: int | None = Field(default=None, ge=60, le=899)
@@ -230,6 +237,7 @@ class Settings(BaseSettings):
         "ats_base_url",
         "apply_stub_base_url",
         "browser_sources_base_url",
+        "feeds_stub_base_url",
         "model_api_base_url",
         "google_auth_url",
         "google_token_base_url",
@@ -328,6 +336,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BROWSER_SOURCES_BASE_URL points the browser sources at test pages and must not "
                 "be set in production"
+            )
+        if self.app_env == "production" and self.feeds_stub_base_url is not None:
+            raise ValueError(
+                "FEEDS_STUB_BASE_URL points the freelance feeds at a test server and must not be "
+                "set in production"
             )
         for name in ("google_auth_url", "google_token_base_url", "google_api_base_url"):
             if self.app_env == "production" and getattr(self, name) is not None:
