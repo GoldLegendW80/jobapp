@@ -8,11 +8,25 @@ gate result on that pull request identify the exact checked head and tree.
 Implementation is still in progress. The capability audit found that the default worker did
 not construct the generic form agent and its custom-site journey was permanently skipped.
 Known-ATS `form_changed` also did not hand over automatically in both modes. The original-budget
-fallback source is now integrated, with 86 focused backend and 56 frontend cases passing;
-whole-module and actual acceptance remain pending. The default worker's actual custom fill
-now works, but approved replay exposed missing native file-input readback. A fresh fix is
-addressing that gap without weakening exact approved-value checks. The existing pure generic-run
-tests did not establish default-worker execution.
+fallback source is now integrated, with 86 focused backend, 56 frontend and 7,563 whole Apply
+cases passing at that checkpoint. Actual known-ATS fallback acceptance remains pending.
+The default worker's actual custom
+fill and strict approved replay now pass after current native file-input readback was added.
+All four A8 journeys pass, including exactly one accepted fake submission with a nonempty
+approved CV for both Lever and the custom form, and zero custom submissions before approval.
+The earlier pure generic-run tests alone did not establish default-worker execution.
+
+The fresh default-wiring audit additionally found four implementation gaps: footer actions
+reported as whole-form unknown widgets, framed known-ATS fallback refused unconditionally,
+generic forms not receiving deterministic fills without model credentials, and Saved answers
+offering only Edit/Forget with no production insertion path. These source gaps are now closed:
+structural field grouping preserves genuine unknown questions, framed recovery keeps its original
+lease and hands Full auto back to Review, and credential-free generic filling uses exact
+code-resolvable values. Saved answers now offers explicit Add, preserves authoritative profile
+precedence and counts verified reuse once per application field. Its checkpoints pass 7,653
+backend cases, 402 UI cases and 170 composed bank/resolver/generic-recovery cases. Actual Saved
+answers and known-fallback journeys, independent review and the final combined gate are still
+in progress; these separate source checkpoints do not substitute for acceptance.
 
 ## Integration boundary
 
@@ -30,7 +44,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 
 | Capability | Implemented behavior | Runtime verification and final gate coverage |
 |---|---|---|
-| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Generic replay's native file readback is in progress; known-ATS fallback source is integrated. | Fidelity checkpoint: 5,478 Apply passes. The named-group label fix passes all 7,070 Apply tests and seven actual A5/A7 browser tests, including exactly one approved fake submission each for Ashby and Greenhouse. Generic default-worker replay and fallback execution still need passing actual journeys and independent review. |
+| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Default generic worker, known fallback, framed recovery and explicit Saved answers are implemented. | The named-group checkpoint passes all 7,070 Apply tests and seven actual A5/A7 browser tests. Native file fix: 9,729 Apply/browser passes, three actual native file/iframe/chooser cases and all four actual A8 cases pass. Known fallback and Saved answers actual acceptance and the final combined gate/review remain required. |
 | A9: Apply myself | Native document picker ownership, immediate Submit-and-Close recording, ended-session queue/reopen/record, placed-document freezing, no app submit click. | Four new real browser recovery flows, original manual flows, six inherited native cases and distinct incidental-picker race pass. Whole Apply/Browser groups cover final integration. |
 | A10a: retries and person input | Immutable 1,800-second person wait outside active time; same adapter, attempt, earlier fields and steps survive captcha/email-code input. | Whole Apply/browser checkpoint: 7,167 passes, plus three real Redis/private-HTTP cases. Actual captcha/email-code flows pass before a fresh approval and one fake submission. |
 | A10b: sign-in | Watched and later owner-owned handoffs, registered typed callbacks and idempotent queueing; Full auto becomes Review first. | Both fake-site journeys and all 22 backend cases pass. Whole Apply/Browser groups cover final integration. |

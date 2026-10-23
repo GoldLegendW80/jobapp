@@ -47,7 +47,18 @@ Real Postgres/Redis whole Apply suite, whole affected UI suite/typecheck/lint, n
 fallback journey with default worker wiring, exact approved fake Submit, fresh independent
 review and final composed gate. This checkpoint alone does not claim native acceptance.
 
-Declared boundary: a fallback can bind only the same recognised hosted ATS form, without a
+Declared boundary at this historical checkpoint: a fallback can bind only the same recognised hosted ATS form, without a
 frame or external origin. Unsupported sources stay outside Full auto. A wizard whose changed
 page can no longer replay the recorded earlier steps returns form_changed for fresh approval;
 the app never guesses a step or bypasses the readback to make it submit.
+
+Subsequent checkpoints, 2026-10-23
+
+The original unframed fallback slice passed all 7,563 whole Apply cases in 399 seconds.
+Later integration adds framed recovery on the same lease and original budget, with a
+hash-bound frame ordinal and shape. Unverified framed Full auto is handed to Review with
+frame_origin_unverified; this does not expand the Full auto source allowlist. Credential-free
+generic filling now uses exact code-resolvable values while leaving unknown questions for
+the person. Its final source module run and actual default-worker fallback journeys are
+tracked separately in tasks/apply/completion.md and the PR; this historical report alone
+does not establish their combined acceptance.
