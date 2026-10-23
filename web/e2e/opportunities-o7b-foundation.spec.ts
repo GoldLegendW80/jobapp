@@ -166,7 +166,7 @@ test("Search preserves hidden consent, actual source indices, current Off and th
     });
     expect(off.status()).toBe(200);
     await save(page, 409);
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
     await page
       .getByRole("button", { name: "Keep editing", exact: true })
       .click();
