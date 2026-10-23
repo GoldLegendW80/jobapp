@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -166,6 +167,45 @@ function idOf(name: string): string {
   return one;
 }
 
+async function withWorkerPaused<T>(action: () => Promise<T>): Promise<T> {
+  const project = process.env.E2E_COMPOSE_PROJECT;
+  if (!project)
+    throw new Error("E2E_COMPOSE_PROJECT names the journey's own stack");
+  // Direct Docker commands select only this stack and do not load Compose's .env file.
+  const workers = execFileSync(
+    "docker",
+    [
+      "ps",
+      "--all",
+      "--quiet",
+      "--filter",
+      `label=com.docker.compose.project=${project}`,
+      "--filter",
+      "label=com.docker.compose.service=worker",
+    ],
+    { encoding: "utf8" },
+  )
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  expect(workers, "the journey owns exactly one worker").toHaveLength(1);
+  const worker = at(workers, 0);
+  const state = execFileSync(
+    "docker",
+    ["inspect", "--format", "{{.State.Running}} {{.State.Paused}}", worker],
+    { encoding: "utf8" },
+  ).trim();
+  expect(state, "the worker is running and was not already paused").toBe(
+    "true false",
+  );
+  execFileSync("docker", ["pause", worker]);
+  try {
+    return await action();
+  } finally {
+    execFileSync("docker", ["unpause", worker]);
+  }
+}
+
 test.beforeAll(async ({ browser }) => {
   context = await newContext(browser);
   page = await context.newPage();
@@ -317,24 +357,28 @@ test("a start is refused without the consent, then the run goes through both ste
   const quote = await estimateOf(documents);
   expect(quote.can_start).toBe(true);
 
-  const run = await started(quote, documents);
-  expect(ACTIVE).toContain(run.status);
-  expect([...run.document_ids].sort()).toEqual([...documents].sort());
-  expect(run.tokens.low).toBe(quote.tokens.low);
-  expect(run.tokens.high).toBe(quote.tokens.high);
-  expect(run.tokens.ceiling).toBe(2 * quote.tokens.high);
-  expect(run.tokens.history).toEqual([]);
+  // Keep the quote unchanged until the duplicate start reaches the active-run guard.
+  const run = await withWorkerPaused(async () => {
+    const run = await started(quote, documents);
+    expect(ACTIVE).toContain(run.status);
+    expect([...run.document_ids].sort()).toEqual([...documents].sort());
+    expect(run.tokens.low).toBe(quote.tokens.low);
+    expect(run.tokens.high).toBe(quote.tokens.high);
+    expect(run.tokens.ceiling).toBe(2 * quote.tokens.high);
+    expect(run.tokens.history).toEqual([]);
 
-  // One run at a time: a second start names the run in progress.
-  const second = await start(quote, documents);
-  expect(second.status()).toBe(409);
-  expect(await second.json()).toMatchObject({
-    code: "active_run",
-    run_id: run.id,
+    // One run at a time: a second start names the run in progress.
+    const second = await start(quote, documents);
+    expect(second.status()).toBe(409);
+    expect(await second.json()).toMatchObject({
+      code: "active_run",
+      run_id: run.id,
+    });
+    const list = (await (await context.request.get(RUNS)).json()) as RunList;
+    expect(list.active_run_id).toBe(run.id);
+    expect(list.runs.map((one) => one.id)).toEqual([run.id]);
+    return run;
   });
-  const list = (await (await context.request.get(RUNS)).json()) as RunList;
-  expect(list.active_run_id).toBe(run.id);
-  expect(list.runs.map((one) => one.id)).toEqual([run.id]);
 
   const seen = new Set<string>();
   const done = await until(run.id, "the run ends", (now) => {
