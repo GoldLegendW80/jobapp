@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+import { stub } from "./apply-helpers";
 import {
   CSRF,
   caddyUrl,
@@ -7,7 +8,7 @@ import {
   signUp,
   type Person,
 } from "./documents-helpers";
-import { deckPosting, readDeck } from "./opportunities-helpers";
+import { STACK_FORMS, deckPosting, readDeck } from "./opportunities-helpers";
 import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
 
 /**
@@ -162,3 +163,208 @@ test("B sees none of A's cards and cannot swipe them", async () => {
   });
   expect(like.status()).toBe(404);
 });
+
+/** Read real browser rectangles, including fields that could sit under a sticky action. */
+async function expectClearDeck(page: Page) {
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(0);
+  const layout = await page.evaluate(() => {
+    const article = document.querySelector('[data-testid="deck-card"]');
+    if (!article) throw new Error("the deck card is missing");
+    const rectangle = (element: Element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    };
+    const content = [
+      article,
+      ...article.querySelectorAll("h2, p, span, a, button"),
+    ].map((element) => ({ text: element.textContent, ...rectangle(element) }));
+    const actions = [
+      ...document.querySelectorAll("button[aria-keyshortcuts]"),
+    ].map((element) => ({
+      name: element.getAttribute("aria-keyshortcuts"),
+      ...rectangle(element),
+    }));
+    return { content, actions };
+  });
+  expect(layout.actions).toHaveLength(3);
+  for (const action of layout.actions) {
+    expect(action.width, action.name ?? "action").toBeGreaterThanOrEqual(44);
+    expect(action.height, action.name ?? "action").toBeGreaterThanOrEqual(44);
+    const covered = layout.content.filter(
+      (field) =>
+        action.x < field.x + field.width &&
+        action.x + action.width > field.x &&
+        action.y < field.y + field.height &&
+        action.y + action.height > field.y,
+    );
+    if (covered.length > 0) {
+      await page.screenshot({
+        path: test.info().outputPath("action-overlap.png"),
+        animations: "disabled",
+      });
+    }
+    expect(
+      covered,
+      `action ${action.name} overlaps card content: ${JSON.stringify(layout)}`,
+    ).toEqual([]);
+  }
+}
+
+for (const length of ["short", "long"] as const) {
+  for (const scheme of ["light", "dark"] as const) {
+    test(`deck controls leave the ${length} card clear in ${scheme}`, async ({
+      browser,
+    }, testInfo) => {
+      const person = invented(`o2-${length}-${scheme}`);
+      clearAttempts([person.email]);
+      const context = await newContext(browser);
+      try {
+        const page = await context.newPage();
+        const problems = watchErrors(page);
+        page.on("console", (message) => {
+          if (message.type() === "warning") problems.push(message.text());
+        });
+        await signUp(page, person);
+        const title =
+          length === "short"
+            ? "Platform Engineer"
+            : "Senior Platform Engineer for developer tools, distributed workflow orchestration and reliable research infrastructure";
+        const source = length === "short" ? "remoteok" : "hackernews:freelance";
+        const label = length === "short" ? "via Remote OK" : "via Hacker News";
+        const url = (await stub.posting("greenhouse")).replace(
+          process.env.E2E_ATS_FORMS_URL ?? "",
+          STACK_FORMS,
+        );
+        const imported = await page.request.post("/api/jobs/import", {
+          headers: CSRF,
+          data: {
+            format: "jobapp-jobs",
+            version: 1,
+            exported_at: "2026-10-01T00:00:00Z",
+            warnings: [],
+            jobs: [
+              {
+                slug: `e2e-o2-${length}-${scheme}`,
+                title,
+                source,
+                url,
+                company:
+                  length === "short"
+                    ? "Cedar Example Labs"
+                    : "Cedar Example Research Infrastructure and Distributed Developer Tools Cooperative",
+                location:
+                  length === "short"
+                    ? "Remote"
+                    : "Nantes, France, with collaboration across Paris, Amsterdam, Helsinki and distributed European research teams",
+                contract_type: "CDI",
+                status: "found",
+                fit: 92,
+                found_on: "2026-10-01",
+                posting_text: person.posting.posting_text,
+                competencies:
+                  length === "short"
+                    ? ["Python"]
+                    : [
+                        "Distributed workflow orchestration and reliable service operations",
+                        "Developer tooling for reproducible research infrastructure",
+                        "Python application design and observability for platform teams",
+                      ],
+                gaps: ["Kubernetes production capacity planning"],
+                pay_min: 70000,
+                pay_max: 90000,
+                pay_currency: "EUR",
+                pay_period: "year",
+                work_mode: "remote",
+              },
+            ],
+          },
+        });
+        expect(imported.ok(), await imported.text()).toBe(true);
+        const second = `${person.posting.title}, next card`;
+        await deckPosting(page.request, person, {
+          title: second,
+          ats: "ashby",
+          fit: 88,
+        });
+        const initialIds = (await readDeck(page.request)).cards.map(
+          (one) => one.id,
+        );
+        await page.goto("/discover");
+        await expect(heading(page)).toHaveText(title);
+        await page.emulateMedia({ colorScheme: scheme });
+        const advanced = page.getByRole("button", {
+          name: "Advanced",
+          exact: true,
+        });
+        const sourceLink = card(page).getByRole("link", { name: label });
+        await expect(sourceLink).toHaveAttribute("href", url);
+        await expect(card(page)).toContainText("70,000 to 90,000 EUR a year");
+        await expect(card(page)).toContainText("Matches:");
+        for (const width of [375, 1280]) {
+          await page.setViewportSize({
+            width,
+            height: width === 375 ? 812 : 800,
+          });
+          for (const open of [false, true]) {
+            if ((await advanced.getAttribute("aria-expanded")) !== String(open))
+              await advanced.click();
+            await page
+              .getByRole("heading", { level: 1, name: "Discover" })
+              .scrollIntoViewIfNeeded();
+            await expectClearDeck(page);
+            await sourceLink.scrollIntoViewIfNeeded();
+            await expectClearDeck(page);
+            await sourceLink.click({ trial: true });
+            expect(
+              await sourceLink.evaluate((link) => {
+                const box = link.getBoundingClientRect();
+                return link.contains(
+                  document.elementFromPoint(
+                    box.x + box.width / 2,
+                    box.y + box.height / 2,
+                  ),
+                );
+              }),
+            ).toBe(true);
+            await page
+              .getByRole("button", { name: "Like", exact: true })
+              .scrollIntoViewIfNeeded();
+            await expectClearDeck(page);
+            await page.screenshot({
+              path: testInfo.outputPath(
+                `deck-${width}-${open ? "open" : "closed"}.png`,
+              ),
+              fullPage: true,
+              animations: "disabled",
+            });
+            await expect(card(page)).toHaveAttribute("data-dx", "0");
+            await expect(heading(page)).toHaveText(title);
+          }
+        }
+        expect(
+          (await readDeck(page.request)).cards.map((one) => one.id),
+        ).toEqual(initialIds);
+        await page.setViewportSize({ width: 375, height: 812 });
+        await page.getByRole("button", { name: "Pass", exact: true }).click();
+        await expect(heading(page)).toHaveText(second);
+        await page.getByRole("button", { name: "Undo last" }).click();
+        await expect(heading(page)).toHaveText(title);
+        await page.getByRole("button", { name: "Like", exact: true }).click();
+        await expect(heading(page)).toHaveText(second);
+        await expect(
+          page.getByText("Liked. Your documents are being written."),
+        ).toBeVisible();
+        expect(problems).toEqual([]);
+      } finally {
+        await context.close();
+        clearAttempts([person.email]);
+      }
+    });
+  }
+}
