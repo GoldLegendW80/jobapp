@@ -27,9 +27,9 @@ is: nothing accepted is taken back.
 Locks, in the plan's order: the user's active run row, if any (3), the document row (4), the
 rows of its steps at work (5), their agent runs (7), then the proposals that cite it in id order
 (8). So a delete waits for a merge in flight (which holds 3 and writes 8), for a tool call in
-flight (which holds 4 `FOR KEY SHARE`), and for an accept of one of its items (2 then 8); the
+flight (which holds 4 `FOR NO KEY UPDATE`), and for an accept of one of its items (2 then 8); the
 tool call after it finds no document, and a start that comes after it finds the document gone
-(`engine.create` reads the documents `FOR KEY SHARE` after inserting its run). A start that
+(`engine.create` reads the documents `FOR NO KEY UPDATE` after inserting its run). A start that
 committed while the delete waited for the document makes a run active that the delete did not
 hold: its row is taken then, after the document row. That is safe, because no path holds a run
 row and waits for a document row (`advance` and the merge only read documents). A wait longer

@@ -425,8 +425,9 @@ class Upload:
 
 def readable_upload(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> Upload:
     """The person's ingestion document a base CV may be converted from, taken `FOR KEY SHARE`
-    until the caller's commit (a deletion in ingestion waits for the base CV that points at it).
-    Raises UploadRefusedError."""
+    until the caller's commit: a deletion in ingestion (`FOR UPDATE`) waits for the base CV that
+    points at it, `store.delete_base` (lock 1b, `FOR NO KEY UPDATE`) does not. Raises
+    UploadRefusedError."""
     row = db.execute(
         sa.select(
             IngestionDocument.name,
@@ -438,7 +439,7 @@ def readable_upload(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> Up
             sa.func.char_length(IngestionDocument.text),
         )
         .where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
-        .with_for_update(key_share=True)
+        .with_for_update(key_share=True, read=True)
     ).one_or_none()
     if row is None:
         raise UploadRefusedError("not_found")
@@ -499,6 +500,9 @@ def build_from_upload(
     unless one is given, and its `base_upload` generation, `queued` or `waiting` (module
     docstring). Raises UploadRefusedError, store.BaseLimitError. The caller commits, then
     `start_ready` and `generate.enqueue_run`."""
+    # The store's lock order: the person (1), then the upload (1b), as `delete_base` takes them.
+    store.lock_person(db, user_id)
+    store.lock_source(db, user_id, upload_id)
     found = readable_upload(db, user_id, upload_id)
     if language is None:
         language = upload.language_of(upload_text(db, user_id, upload_id) or "")

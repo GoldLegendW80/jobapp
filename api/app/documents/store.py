@@ -17,6 +17,12 @@ circle:
 
 1. the person's row (`users`, `FOR NO KEY UPDATE`), only when the list of base CVs changes
    (create, make default, delete): it serializes the count, the default and the promotion;
+1b. the ingestion document a base CV was converted from (`ingestion_documents`): `FOR NO KEY
+   UPDATE` by `delete_base`, which may drop the file kept for it, and `FOR KEY SHARE`
+   (`lock_source`) by a write that reads it: a conversion (`writer_base.build_from_upload`,
+   after lock 1) and a chat message on a base CV (`chat.post`, before lock 3). The two modes
+   never wait for each other. Ingestion's delete holds that row `FOR UPDATE` and then rewrites
+   the base CVs (their `SET NULL`), so every path takes it before lock 3;
 2. the posting row (`jobs`), only when a status moves (the jobs service takes it `FOR NO KEY
    UPDATE`; the freeze of D14 runs under it), or shared (`lock_posting`, `FOR SHARE`) by a write
    that inserts a row referencing the posting (a posting document, a writer run) while it holds
@@ -91,6 +97,7 @@ from app.documents.models import (
 )
 from app.documents.settings import DEFAULT as DEFAULT_SETTINGS
 from app.documents.settings import DocumentSettings
+from app.ingestion import documents as ingestion_documents
 from app.ingestion.models import IngestionDocument
 from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobFile, JobStatus
@@ -217,6 +224,25 @@ def _lock_person(db: Session, user_id: uuid.UUID) -> None:
 
 
 @_busy
+def lock_person(db: Session, user_id: uuid.UUID) -> None:
+    """Lock 1, for a caller that reads what a new base CV is made from before `create_base`
+    takes it again (`writer_base.build_from_upload`)."""
+    _lock_person(db, user_id)
+
+
+def lock_source(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> None:
+    """Lock 1b, shared: the person's ingestion document `FOR KEY SHARE`, taken by a write that
+    reads it (`writer_base.readable_upload`) after lock 1 and before lock 3. It waits for
+    ingestion's delete of the row, never for `delete_base`."""
+    _wait(db)
+    query = (
+        sa.select(IngestionDocument.id)
+        .where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
+        .with_for_update(key_share=True, read=True)
+    )
+    _execute(db, query)
+
+
 def lock_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> JobStatus | None:
     """Lock 2, shared: the user's posting `FOR SHARE`, taken before lock 3 by a write that
     inserts a row referencing the posting. It waits for a status move, which holds the posting
@@ -594,20 +620,54 @@ def _lock_written_from(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> N
     _execute(db, query)
 
 
+def _lock_source(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> uuid.UUID | None:
+    """Lock 1b, `FOR NO KEY UPDATE`, on the upload the base CV was converted from: its id, or
+    None."""
+    upload_id = db.execute(
+        sa.select(Document.source_document_id).where(
+            Document.id == base_id, Document.user_id == user_id, Document.scope == Scope.base
+        )
+    ).scalar_one_or_none()
+    if upload_id is None:
+        return None
+    query = (
+        sa.select(IngestionDocument.id)
+        .where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
+        .with_for_update(key_share=True)  # FOR NO KEY UPDATE
+    )
+    _wait(db)
+    return _execute(db, query).scalar_one_or_none()
+
+
+def _converted_from(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> bool:
+    """A base CV of the person is still converted from this upload."""
+    query = sa.select(Document.id).where(
+        Document.user_id == user_id,
+        Document.scope == Scope.base,
+        Document.source_document_id == upload_id,
+    )
+    return db.execute(query.limit(1)).first() is not None
+
+
 @_busy
 def delete_base(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at: datetime
 ) -> Document | None:
     """Delete a base CV. The posting documents written from it stay (their `base_document_id`
     becomes null). Deleting the default makes the oldest other one the default; deleting the
-    last one is allowed. Returns the default after the delete."""
+    last one is allowed. The file of the upload it was converted from goes when no other base
+    CV is converted from it (`ingestion_documents.drop_kept_file`). Returns the default after
+    the delete."""
     _lock_person(db, user_id)
+    upload_id = _lock_source(db, user_id, document_id)
     _lock_written_from(db, user_id, document_id)
     document = _own_base(db, user_id, document_id)
     was_default = document.is_default
     db.delete(document)
     db.flush()
     _log("documents.store.base_deleted", document)
+    if upload_id is not None and not _converted_from(db, user_id, upload_id):
+        ingestion_documents.drop_kept_file(db, user_id, upload_id)
     if not was_default:
         return default_base(db, user_id)
     others = base_cvs(db, user_id)

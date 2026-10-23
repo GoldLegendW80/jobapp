@@ -24,7 +24,8 @@ keeps its row, as any file that cannot be read.)
    would queue the row at every tick, without end.
 3. One transaction writes the outcome, under the user's advisory lock and then the row's own:
    - a text: `text`, the page counts, `truncated`, `note`, `text_status = done`, the secret
-     warning of secrets.scan, and the bytes set to NULL;
+     warning of secrets.scan, and the bytes set to NULL, unless the upload was sent to become
+     a base CV (`keep_bytes`: they stay, and the quota counts them);
    - a failure of the file (protected, damaged, no text, too heavy): `failed` for good, with a
      sentence the page shows, and the bytes set to NULL. A new upload of the file replaces it;
    - a failure of the server (the parser down, busy, too slow, a malformed answer): the row
@@ -63,11 +64,12 @@ slot) or a short one (SECOND_TRIGGER_CHARS, the second trigger), for the images 
 memory (9 MB at most). A PDF whose every page has text never reaches the renderer. Then ONE
 transaction (`_store_pages`) writes the text with an empty slot per page that waits, the
 counts, `awaiting_transcription`, every image at its zero based page index (0 for an uploaded
-image) and sets the bytes to NULL. One rule for a failure in any batch: the document fails as
-it would have at the first call (for good for the file's fault, once more for the server's),
-and no image of an earlier batch is kept, since none was written. A scanned page that got no
-image (over RENDER_MAX, a size the renderer refuses, the time budget) stays an empty slot and
-is counted in the note, never in `pages_image`: `pages_image` is the number of stored images.
+image) and sets the bytes to NULL, unless kept as for a text. One rule for a failure in any
+batch: the document fails as it would have at the first call (for good for the file's fault,
+once more for the server's), and no image of an earlier batch is kept, since none was
+written. A scanned page that got no image (over RENDER_MAX, a size the renderer refuses, the
+time budget) stays an empty slot and is counted in the note, never in `pages_image`:
+`pages_image` is the number of stored images.
 
 Privacy: nothing of a document is logged, returned or left in Redis. The job takes an id and
 returns a word; its result is not kept (`keep_result=0` in app/worker.py); the log lines hold
@@ -319,15 +321,32 @@ def _held(
 
 
 def _fail(db: Session, document: IngestionDocument, kind: FailedKind, reason: str) -> None:
-    """Failed for good: the reason stays, the bytes go."""
+    """Failed for good: the reason stays, the bytes go, kept for a base CV or not (a failed
+    document is never converted)."""
     document.text_status = TextStatus.failed
     document.failed_kind = kind
     document.failed_reason = reason
     document.pending_since = None
+    document.keep_bytes = False
+    db.flush()
     db.execute(
         sa.update(IngestionDocument).where(IngestionDocument.id == document.id).values(raw=None)
     )
     db.flush()
+
+
+def _keeps_file(document: IngestionDocument, kind: Kind) -> bool:
+    """The upload was sent to become a base CV: its bytes stay once its text is stored
+    (SPEC-ingestion.md, "Text extraction"). Read on the row the caller holds locked."""
+    return document.keep_bytes and kind in documents.KEPT_KINDS
+
+
+def _drop_file(db: Session, document: IngestionDocument, kind: Kind) -> None:
+    """The bytes go now that the text or the images are stored, unless they are kept."""
+    if not _keeps_file(document, kind):
+        db.execute(
+            sa.update(IngestionDocument).where(IngestionDocument.id == document.id).values(raw=None)
+        )
 
 
 def fail_unqueued(
@@ -483,9 +502,11 @@ def _store_text(
         document = _held(db, claim.document_id, claim.attempts, claim.pending_since)
         if document is None:
             return SUPERSEDED
-        # The bytes leave and the text comes: what the user keeps may grow (a small PDF can
-        # hold a long text), so the quota is asked again, under the lock every upload takes.
-        used = documents.usage(db, claim.user_id).bytes - claim.size
+        # The bytes leave (unless kept) and the text comes: what the user keeps may grow (a
+        # small PDF can hold a long text), so the quota is asked again, under the lock every
+        # upload takes.
+        leaving = 0 if _keeps_file(document, claim.kind) else claim.size
+        used = documents.usage(db, claim.user_id).bytes - leaving
         if used + stored_bytes > documents.USER_MAX_BYTES:
             _fail(db, document, FailedKind.file, OVER_QUOTA)
             _log("document parse failed", document, failure="file", code="quota")
@@ -506,9 +527,7 @@ def _store_text(
         document.secret_warning = bool(secret_rules)
         document.secret_confirmed_at = None
         db.flush()
-        db.execute(
-            sa.update(IngestionDocument).where(IngestionDocument.id == document.id).values(raw=None)
-        )
+        _drop_file(db, document, claim.kind)
         _log(
             "document parsed",
             document,
@@ -533,8 +552,9 @@ def _store_pages(
 ) -> str:
     """A document with page images, written in ONE transaction: its text with an empty slot
     per page that waits, its counts, `awaiting_transcription`, its images at their page index,
-    and its bytes set to NULL. Under the same locks and the same guard as a text: a document
-    deleted or replaced while it was rendered gets nothing, not even one image."""
+    and its bytes set to NULL unless kept for a base CV. Under the same locks and the same guard
+    as a text: a document deleted or replaced while it was rendered gets nothing, not even one
+    image."""
     text = clean_pages(parsed.text or "")
     secret_rules = secrets.scan(text)
     stored_bytes = len(text.encode("utf-8")) + sum(len(image.jpeg) for image in parsed.images)
@@ -543,8 +563,10 @@ def _store_pages(
         document = _held(db, claim.document_id, claim.attempts, claim.pending_since)
         if document is None:
             return SUPERSEDED
-        # The bytes leave, the text and the images come: the quota is asked again.
-        used = documents.usage(db, claim.user_id).bytes - claim.size
+        # The bytes leave (unless kept), the text and the images come: the quota is asked
+        # again.
+        leaving = 0 if _keeps_file(document, claim.kind) else claim.size
+        used = documents.usage(db, claim.user_id).bytes - leaving
         if used + stored_bytes > documents.USER_MAX_BYTES:
             _fail(db, document, FailedKind.file, OVER_QUOTA)
             _log("document parse failed", document, failure="file", code="quota")
@@ -568,9 +590,7 @@ def _store_pages(
         document.secret_warning = bool(secret_rules)
         document.secret_confirmed_at = None
         db.flush()
-        db.execute(
-            sa.update(IngestionDocument).where(IngestionDocument.id == document.id).values(raw=None)
-        )
+        _drop_file(db, document, claim.kind)
         # None is there (an upload that replaces a row empties it), but the unique position
         # must hold whatever a row went through.
         db.execute(sa.delete(IngestionImage).where(IngestionImage.document_id == document.id))

@@ -15,6 +15,10 @@ secret warning, delete (SPEC-ingestion.md, API; the rules are in documents.py).
   (`_queue_reading`): the answer comes with the document still `pending`, and the list shows it
   ready or failed a moment later. When the queue cannot take the job the document is failed at
   once and the answer, still 201, says so in `failed_reason`.
+  `?for=base_cv` (the CV panel of the profile, issue #519): the file is sent to become a base
+  CV, so a PDF or a Word file keeps its bytes once its text is stored (`keep_bytes`), and the
+  same file already there takes the mark and gets its file back (documents.py, step 1). Any
+  other value is 422.
 - POST /api/ingestion/documents/text {text, name?}: a pasted text, same answers (it takes no
   upload slot, so never 503); 413 over 100,000 characters.
 - GET /api/ingestion/documents: the caller's documents, newest first, what they take and the
@@ -169,6 +173,8 @@ TOO_FAST = (
 OWN_BUSY = "Another upload of yours is still on its way. Wait for it to finish, then add this one."
 PASTE_BODY_TOO_LARGE = documents.PASTE_TOO_LONG
 BAD_JSON = "The request is not valid JSON."
+BASE_CV = "base_cv"
+BAD_PURPOSE = "Unknown purpose of the upload: send for=base_cv, or nothing."
 
 
 def _no_store(response: Response) -> None:
@@ -534,10 +540,11 @@ def _store_file(
     body: bytearray,
     digest: bytes,
     now: datetime,
+    keep: bool,
 ) -> documents.Stored:
     """On the threadpool: one session, one transaction."""
     with sessions() as db:
-        stored = documents.store_file(db, user_id, name, body, digest, now)
+        stored = documents.store_file(db, user_id, name, body, digest, now, keep=keep)
         db.commit()
         return stored
 
@@ -562,9 +569,19 @@ def _store_file(
         }
     },
 )
-async def upload_document(request: Request, user: CurrentUser, response: Response) -> StoredOut:
+async def upload_document(
+    request: Request,
+    user: CurrentUser,
+    response: Response,
+    purpose: Annotated[
+        str | None,
+        Query(alias="for", description="`base_cv`: the file is sent to become a base CV."),
+    ] = None,
+) -> StoredOut:
     """Add a file to the caller's documents."""
     size = _declared(request)
+    if purpose not in (None, BASE_CV):
+        _refuse(user, status.HTTP_422_UNPROCESSABLE_CONTENT, BAD_PURPOSE, "purpose", size, **CLOSE)
     if size > FILE_MAX_BYTES:
         _refuse(
             user,
@@ -601,6 +618,7 @@ async def upload_document(request: Request, user: CurrentUser, response: Respons
                 body,
                 digest,
                 deps.clock(request),
+                purpose == BASE_CV,
             )
         except _NotTakenError as exc:
             # The rest of a body that was refused is not read: the connection ends with the
