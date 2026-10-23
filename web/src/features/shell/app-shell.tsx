@@ -36,6 +36,8 @@ export function AppShell() {
           >
             {APP_NAME}
           </Link>
+          {/* relative: the links' sr-only words (absolute) stay inside the scrolling nav; else
+              they sit past its edge and widen the page on a phone. */}
           <nav
             aria-label="Main"
             className="relative flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"

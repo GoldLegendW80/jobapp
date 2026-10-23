@@ -386,11 +386,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
           {application?.ats === "email" && id ? (
             <EmailApplication applicationId={id} />
           ) : null}
-          <NeedsPerson
-            application={application}
-            job={job}
-            events={onPage ? detail.data?.events : undefined}
-          />
+          {!manual ? (
+            <NeedsPerson
+              application={application}
+              job={job}
+              events={onPage ? detail.data?.events : undefined}
+            />
+          ) : null}
           {phase === "filling" && !manual ? (
             <LiveViewSlot
               idle="The assistant is filling the form. A screenshot of the filled form appears here when it is done."
