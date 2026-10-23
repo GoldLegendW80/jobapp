@@ -321,6 +321,7 @@ asyncio.run(main())
 
 
 def test_live_takeover_owns_native_navigation_and_tab_mutations(stack: Stack):
-    stack.lease(str(uuid.uuid4()), 20000)
+    # Ending a lease keeps its profile's UID binding, so this fresh profile needs its own UID.
+    stack.lease(str(uuid.uuid4()), 20001)
     result = json.loads(stack.python(NATIVE_BOUNDARIES))
     assert result == {"checks": 14, "refused_navigations": 4, "refused_tab_mutations": 4}
