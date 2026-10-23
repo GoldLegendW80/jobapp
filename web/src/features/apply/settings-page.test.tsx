@@ -922,9 +922,11 @@ describe("the saved answers", () => {
     ).toBeInTheDocument();
     expect(question).toHaveValue("An optional question?");
     expect(answer).toHaveValue("My reusable answer");
-    expect(
-      screen.getByRole("button", { name: "Save new answer" }),
-    ).toBeEnabled();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Save new answer" }),
+      ).toBeEnabled();
+    });
   });
 
   it("changes one answer, and refuses an empty one before any call", async () => {
