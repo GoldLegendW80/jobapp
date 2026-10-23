@@ -716,6 +716,12 @@ def _record_bank_use(
     now: datetime,
 ) -> None:
     """Count a verified bank fill once per application field, including across refills."""
+    verified = {o.field.key for o in report.outcomes if o.filled.status == "filled"}
+    eligible = [
+        row for row in rows if row.source is AnswerSource.bank and row.field_key in verified
+    ]
+    if not eligible:
+        return
     counted = {
         data.get("field_key")
         for data in db.scalars(
@@ -726,13 +732,8 @@ def _record_bank_use(
             )
         )
     }
-    verified = {o.field.key for o in report.outcomes if o.filled.status == "filled"}
-    for row in rows:
-        if (
-            row.source is not AnswerSource.bank
-            or row.field_key not in verified
-            or row.field_key in counted
-        ):
+    for row in eligible:
+        if row.field_key in counted:
             continue
         key = db.execute(
             sa.update(AnswerBankEntry)
