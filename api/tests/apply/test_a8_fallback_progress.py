@@ -7,12 +7,15 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+import sqlalchemy as sa
 
 from app.apply import form_agent, run
 from app.apply.answers import Answer
 from app.apply.ats import base, generic
-from app.apply.models import AnswerSource, State
+from app.apply.models import AnswerSource, Application, ApplicationAnswer, State
 from tests.apply.a8b_support import workable
+from tests.apply.conftest import AT
+from tests.apply.test_a5_run import started
 from tests.apply.test_a8_known_fallback import plan
 
 
@@ -85,12 +88,23 @@ async def attempt(monkeypatch, phase, elapsed=1.0, interruption="", wizard=False
         models.append(
             (session.clock(), session.deadline, session.token_budget, session.turn_budget)
         )
-        if phase == "partial":
+        if phase == "changed_model":
+            current[0] = replace(
+                current[0], label="Changed live question", required=True, ref="new2"
+            )
+            await session.read_form()
+            await boundary("changed_model")
+        elif phase == "partial":
             await session.fill_field(extra.ref)
             session.designated = "Submit application"
             await boundary("partial")
         else:
             await boundary("model")
+        if phase == "model" and session.clock() >= session.deadline:
+            # These tool calls must be refused without another browser read or action.
+            await session.fill_field(current[0].ref)
+            await session.next_step("next")
+            await session.designate_submit("submit")
         return form_agent.Ran(stopped="cancelled")
 
     async def shot(*args):
@@ -100,7 +114,10 @@ async def attempt(monkeypatch, phase, elapsed=1.0, interruption="", wizard=False
     monkeypatch.setattr(run.shots, "take", shot)
     current_plan = plan()
     current_plan.form_deadline = 100.0
-    services = SimpleNamespace(clock=lambda: datetime.fromtimestamp(now[0], UTC), form_agent=model)
+    services = SimpleNamespace(
+        clock=lambda: datetime.fromtimestamp(now[0], UTC),
+        form_agent=None if phase == "no_agent" else model,
+    )
     adapter = Adapter()
     adapter.step = int(wizard)
     adapter.shapes = {"0": "earlier-shape"} if wizard else {}
@@ -235,3 +252,110 @@ def test_live_fallback_retains_deadline_budget_and_current_refs(monkeypatch):
         assert [by_key[o.field.key].value for o in old] == [o.answer.value for o in old]
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("elapsed", [1.0, 1.000001, 2.0])
+def test_model_transition_at_expiry_retains_answers_and_starts_no_more_browser_work(
+    monkeypatch, elapsed
+):
+    async def check():
+        result, rows, events, models, old = await attempt(
+            monkeypatch, "model", elapsed, wizard=True
+        )
+        assert models == [(99.0, 100.0, 33_863, 30)]
+        assert events == ["read", "refill:live2", "model"]
+        assert result.needs == "form_changed"
+        assert result.report.designated == result.report.designated_ref == ""
+        by_key = {row.field_key: row for row in rows}
+        assert [by_key[o.field.key].value for o in old] == [o.answer.value for o in old]
+
+    asyncio.run(check())
+
+
+def test_changed_live_read_before_timeout_retains_closed_person_but_drops_current_answer(
+    monkeypatch,
+):
+    async def check():
+        result, rows, _, _, _ = await attempt(
+            monkeypatch, "changed_model", elapsed=0, interruption="timeout", wizard=True
+        )
+        by_key = {row.field_key: row for row in rows}
+        assert by_key["text:first name#1"].value == "Exact person edit"
+        current = by_key["s2/text:summary#1"]
+        assert (current.label, current.required, current.value, current.source) == (
+            "Changed live question",
+            True,
+            None,
+            AnswerSource.left,
+        )
+        assert result.report.outcomes[-1].field.ref == "new2"
+        assert result.report.designated == ""
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    "phase", ["before", "tokens", "no_agent", "read", "refill:live2", "model", "partial"]
+)
+def test_real_finish_replaces_rows_without_losing_closed_person_or_verified_document(
+    db, person_a, monkeypatch, phase
+):
+    application_id = started(db, person_a)
+    application = db.get(Application, application_id)
+    application.state = State.filling
+    result, _, _, _, old = asyncio.run(
+        attempt(
+            monkeypatch,
+            phase,
+            elapsed=0 if phase == "partial" else 1,
+            interruption="timeout" if phase == "partial" else "",
+            wizard=True,
+        )
+    )
+    prior = form_agent.FormReport(outcomes=old, steps=["Next"])
+    db.add_all(run._answer_rows(application, prior))
+    db.commit()
+    assert run.finish(db, application_id, result, AT, AT) == "needs_person"
+    db.commit()
+    db.expire_all()
+    persisted = {
+        row.field_key: row
+        for row in db.scalars(
+            sa.select(ApplicationAnswer).where(ApplicationAnswer.application_id == application_id)
+        )
+    }
+    assert persisted["text:first name#1"].value == "Exact person edit"
+    assert persisted["text:first name#1"].source is AnswerSource.person
+    assert persisted["s2/text:summary#1"].value == "Exact document prose"
+    assert persisted["s2/text:summary#1"].source is AnswerSource.document
+    assert persisted["s2/text:summary#1"].document_letter is True
+    assert persisted["designated:step:1"].value == "Next"
+    assert generic.SUBMIT_KEY not in persisted
+    assert all(not row.approved for row in persisted.values())
+    if phase == "partial":
+        assert persisted["s2/text:extra#1"].value == "New verified progress"
+    assert db.get(Application, application_id).state is State.needs_person
+
+
+def test_real_finish_does_not_rebind_a_person_answer_to_a_changed_required_field(
+    db, person_a, monkeypatch
+):
+    application_id = started(db, person_a)
+    application = db.get(Application, application_id)
+    application.state = State.filling
+    result, _, _, _, old = asyncio.run(attempt(monkeypatch, "read", change={"required": True}))
+    db.add_all(run._answer_rows(application, form_agent.FormReport(outcomes=old)))
+    db.commit()
+    assert run.finish(db, application_id, result, AT, AT) == "needs_person"
+    db.commit()
+    db.expire_all()
+    changed = db.scalar(
+        sa.select(ApplicationAnswer).where(
+            ApplicationAnswer.application_id == application_id,
+            ApplicationAnswer.field_key == "text:first name#1",
+        )
+    )
+    assert changed.required is True
+    assert changed.source is AnswerSource.left
+    assert changed.value is None
+    assert changed.approved is False

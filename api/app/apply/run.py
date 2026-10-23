@@ -796,7 +796,12 @@ def finish(
         if row.field_key in theirs and not row.field_key.startswith(("skipped:", "designated:")):
             old = theirs[row.field_key]
             # A reused key on a changed form must not transfer the old field's allowance.
-            same_shape = (row.label, row.kind, row.options) == (old.label, old.kind, old.options)
+            same_shape = (row.label, row.kind, row.options, row.required) == (
+                old.label,
+                old.kind,
+                old.options,
+                old.required,
+            )
             if same_shape:
                 row.value, row.source = old.value, AnswerSource.person
                 row.document_letter = bool(row.document_letter or old.document_letter)
@@ -1054,6 +1059,53 @@ def _fallback_progress(session: forms.FormSession) -> forms.FormReport:
     return report
 
 
+class _FallbackSession(forms.FormSession):
+    """Retain current field evidence while the original attempt allowance is live."""
+
+    def remember(self, found: ats_base.Discovery) -> None:
+        known, self.outcomes = self.outcomes, {}
+        for item in found.fields:
+            outcome = known.get(item.key)
+            old = outcome.field if outcome is not None else None
+            if old is not None and (item.label, item.kind, item.options, item.required) == (
+                old.label,
+                old.kind,
+                old.options,
+                old.required,
+            ):
+                self.outcomes[item.key] = ats_base.Outcome(item, outcome.answer, outcome.filled)
+            else:
+                self.outcomes[item.key] = self._outcome(item)
+        self.skipped += found.skipped
+
+    def expired(self) -> bool:
+        return self.deadline is not None and self.clock() >= self.deadline
+
+    async def _read(self):
+        if self.expired():
+            self.stopped = "form_changed"
+            return None, "The fill allowance has ended. Stop now."
+        shapes = dict(getattr(self.adapter, "shapes", {}))
+        found, problem = await super()._read()
+        if found is not None:
+            self.remember(found)
+        else:
+            self.adapter.shapes = shapes
+        if self.expired():
+            self.stopped = "form_changed"
+            return None, "The fill allowance has ended. Stop now."
+        return found, problem
+
+    async def finish(self):
+        if self.expired():
+            return _fallback_progress(self)
+        report = await super().finish()
+        if self.expired():
+            report.stopped = "form_changed"
+            report.designated = report.designated_ref = ""
+        return report
+
+
 async def _drive_generic(
     services: Services,
     plan: Plan,
@@ -1066,10 +1118,11 @@ async def _drive_generic(
 ) -> Result:
     """Unknown forms require Review first. Known fallback keeps its remaining allowance,
     original lease and gate checks; an unverified frame is handed to Review."""
-    if (plan.mode is not Mode.review and strategy is None) or services.form_agent is None:
+    if strategy is None and (plan.mode is not Mode.review or services.form_agent is None):
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
     adapter.person_answers = plan.person_answers
-    session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
+    factory = _FallbackSession if strategy is not None else forms.FormSession
+    session = factory(adapter, tools, plan.context, str(plan.user_id))
     session.clock = lambda: services.clock().timestamp()
     session.deadline = plan.form_deadline
     review_reason = "frame_origin_unverified" if strategy and "frame" in strategy else None
@@ -1081,6 +1134,10 @@ async def _drive_generic(
             session.token_budget = 0
         adapter.person_shapes = plan.person_shapes
         if previous_report is not None:
+            adapter.shapes = {
+                **getattr(previous_report, "shapes", {}),
+                **getattr(adapter, "shapes", {}),
+            }
             session.steps = list(getattr(previous_report, "steps", ()))
             session.closed = [
                 outcome
@@ -1105,6 +1162,8 @@ async def _drive_generic(
                 review_reason=review_reason,
             )
 
+        if services.form_agent is None:
+            return stopped(needs="no_adapter")
         remaining = max(0.0, (session.deadline or session.clock()) - session.clock())
         if not session.token_budget or not remaining:
             return stopped()
@@ -1113,30 +1172,16 @@ async def _drive_generic(
                 if previous_report is not None:
                     # Keep known progress only where the current page has the exact same field.
                     # Refill it by code, so a model may skip an already filled field safely.
+                    shapes = dict(getattr(adapter, "shapes", {}))
                     found, code = await adapter.read(tools)
                     if found is None or code or found.pending:
+                        adapter.shapes = shapes
                         state, needs, error = _stopped(
                             code or "needs_person", found.pending if found else ""
                         )
                         return stopped(state, needs, error)
                     current = {item.key: item for item in found.fields}
-                    known = session.outcomes
-                    session.outcomes = {}
-                    for item in found.fields:
-                        outcome = known.get(item.key)
-                        old = outcome.field if outcome is not None else None
-                        if old is not None and (
-                            item.label,
-                            item.kind,
-                            item.options,
-                            item.required,
-                        ) == (old.label, old.kind, old.options, old.required):
-                            session.outcomes[item.key] = ats_base.Outcome(
-                                item, outcome.answer, outcome.filled
-                            )
-                        else:
-                            session.outcomes[item.key] = session._outcome(item)
-                    session.skipped += found.skipped
+                    session.remember(found)
                     for outcome in previous_report.outcomes:
                         if session.clock() >= session.deadline:
                             return stopped()
@@ -1168,6 +1213,15 @@ async def _drive_generic(
         cost["output_tokens"] = int(before.get("output_tokens", 0)) + cost.get("output_tokens", 0)
         cost["fallback"] = strategy["vendor"]
         report.shapes = adapter.shapes
+        if session.expired():
+            return Result(
+                State.needs_person,
+                needs="form_changed",
+                report=report,
+                cost=cost,
+                strategy=strategy,
+                review_reason=review_reason,
+            )
     else:
         report, cost = await forms.fill(services.form_agent, session)
     shot = await shots.take(tools)
