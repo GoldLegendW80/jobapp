@@ -384,8 +384,10 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
 
 
 def _named_choices(group: Node) -> bool:
-    """A named local choice can include help content or a companion field. An isolated
-    action beside another field still cannot borrow a form wrapper's name."""
+    """A named local group owns its loose controls through transparent wrappers, stopping
+    at independently labelled field branches. Direct companion controls and help do not
+    establish that boundary: their relationship is ambiguous, so keep the unknown field.
+    """
     if group.role != "group" or not group.name:
         return False
     label = fold(label_of(group.name)[0])
@@ -394,20 +396,17 @@ def _named_choices(group: Node) -> bool:
     for node in reversed(nodes):
         if any(id(child) in controlled for child in node.children):
             controlled.add(id(node))
-    repeated_label = False
-    buttons = 0
-    other_fields = False
+    choices = False
+    independent = False
     stack = list(group.children)
     while stack:
         node = stack.pop()
         if node.role in CONTROLS:
             if node.role == "button":
-                buttons += fold(node.name) not in SUBMIT_NAMES
-            elif node.role != "link":
-                other_fields = True
+                choices |= fold(node.name) not in SUBMIT_NAMES
             continue
         if node.role == "group" and node.name:
-            other_fields = True
+            independent |= id(node) in controlled
             continue
         if node.role in ("generic", "group") and id(node) in controlled:
             # A different visible label before its controls makes a sibling field,
@@ -419,12 +418,10 @@ def _named_choices(group: Node) -> bool:
                 if child.role in ("generic", "text", "paragraph") and (child.text or child.name):
                     labels.append(child.text or child.name)
             if any(fold(label_of(word)[0]) != label for word in labels):
-                other_fields = True
+                independent = True
                 continue
-        if node.role in ("generic", "text", "paragraph"):
-            repeated_label |= fold(label_of(node.text or node.name)[0]) == label
         stack.extend(node.children)
-    return buttons > 1 or (buttons == 1 and repeated_label and not other_fields)
+    return choices and not independent
 
 
 def _is_yes_no(node: Node) -> dict[str, str] | None:

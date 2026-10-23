@@ -1029,6 +1029,31 @@ async def _type(
     return False
 
 
+def _fallback_progress(session: forms.FormSession) -> forms.FormReport:
+    """The last established progress, without another read or a submit designation.
+
+    A cancelled read cannot erase the earlier report. A completed preparation read replaces
+    this page's evidence, retaining answers only for fields with the same key and structure.
+    Closed wizard pages remain their original record.
+    """
+    outcomes = {outcome.field.key: outcome for outcome in session.closed}
+    outcomes.update(
+        (key, outcome)
+        for key, outcome in session.outcomes.items()
+        if generic._step_of(outcome.field) == session.adapter.step
+    )
+    report = forms.FormReport(
+        outcomes=list(outcomes.values()),
+        skipped=list(dict.fromkeys(session.skipped)),
+        steps=list(session.steps),
+        stopped="form_changed",
+        refused=dict(session.refused),
+        addressed=session.addressed,
+    )
+    report.shapes = dict(getattr(session.adapter, "shapes", {}))
+    return report
+
+
 async def _drive_generic(
     services: Services,
     plan: Plan,
@@ -1055,20 +1080,37 @@ async def _drive_generic(
         if before.get("stopped") == "token_budget":
             session.token_budget = 0
         adapter.person_shapes = plan.person_shapes
+        if previous_report is not None:
+            session.steps = list(getattr(previous_report, "steps", ()))
+            session.closed = [
+                outcome
+                for outcome in previous_report.outcomes
+                if generic._step_of(outcome.field) < adapter.step
+            ]
+            session.outcomes = {
+                outcome.field.key: outcome
+                for outcome in previous_report.outcomes
+                if generic._step_of(outcome.field) == adapter.step
+            }
+            session.skipped = list(previous_report.skipped)
+
+        def stopped(state=State.needs_person, needs="form_changed", error=None):
+            return Result(
+                state,
+                needs=needs,
+                error=error,
+                report=_fallback_progress(session),
+                cost=before,
+                strategy=strategy,
+                review_reason=review_reason,
+            )
+
         remaining = max(0.0, (session.deadline or session.clock()) - session.clock())
         if not session.token_budget or not remaining:
-            return Result(State.needs_person, needs="form_changed", cost=before)
+            return stopped()
         try:
             async with asyncio.timeout(remaining):
                 if previous_report is not None:
-                    session.steps = list(getattr(previous_report, "steps", ()))
-                    session.closed = [
-                        outcome
-                        for outcome in previous_report.outcomes
-                        if generic._step_of(outcome.field) < adapter.step
-                    ]
-                    if adapter.step:
-                        session.skipped = list(previous_report.skipped)
                     # Keep known progress only where the current page has the exact same field.
                     # Refill it by code, so a model may skip an already filled field safely.
                     found, code = await adapter.read(tools)
@@ -1076,11 +1118,28 @@ async def _drive_generic(
                         state, needs, error = _stopped(
                             code or "needs_person", found.pending if found else ""
                         )
-                        return Result(state, needs=needs, error=error, cost=before)
+                        return stopped(state, needs, error)
                     current = {item.key: item for item in found.fields}
+                    known = session.outcomes
+                    session.outcomes = {}
+                    for item in found.fields:
+                        outcome = known.get(item.key)
+                        old = outcome.field if outcome is not None else None
+                        if old is not None and (
+                            item.label,
+                            item.kind,
+                            item.options,
+                            item.required,
+                        ) == (old.label, old.kind, old.options, old.required):
+                            session.outcomes[item.key] = ats_base.Outcome(
+                                item, outcome.answer, outcome.filled
+                            )
+                        else:
+                            session.outcomes[item.key] = session._outcome(item)
+                    session.skipped += found.skipped
                     for outcome in previous_report.outcomes:
                         if session.clock() >= session.deadline:
-                            return Result(State.needs_person, needs="form_changed", cost=before)
+                            return stopped()
                         item = current.get(outcome.field.key)
                         old = outcome.field
                         if (
@@ -1093,15 +1152,18 @@ async def _drive_generic(
                             filled = await adapter.fill(tools, item, outcome.answer)
                             if filled.status not in FILLED:
                                 state, needs, error = _stopped(filled.code)
-                                return Result(state, needs=needs, error=error, cost=before)
+                                session.outcomes[item.key] = ats_base.Outcome(
+                                    item, outcome.answer, filled
+                                )
+                                return stopped(state, needs, error)
                             session.outcomes[item.key] = ats_base.Outcome(
                                 item, outcome.answer, filled
                             )
                 if session.clock() >= session.deadline:
-                    return Result(State.needs_person, needs="form_changed", cost=before)
+                    return stopped()
                 report, cost = await forms.fill(services.form_agent, session)
         except TimeoutError:
-            return Result(State.needs_person, needs="form_changed", cost=before)
+            return stopped()
         cost["input_tokens"] = int(before.get("input_tokens", 0)) + cost.get("input_tokens", 0)
         cost["output_tokens"] = int(before.get("output_tokens", 0)) + cost.get("output_tokens", 0)
         cost["fallback"] = strategy["vendor"]

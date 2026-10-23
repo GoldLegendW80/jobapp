@@ -87,6 +87,13 @@ def test_generic_form_wrappers_cannot_lend_another_fields_label_to_an_action(
         f'- {container}:\n  - generic: Application\n{indent(other)}\n  - button "Details" [ref=e9]'
     )
     found = discover(snapshot)
+    if container.startswith("group") and other.startswith(
+        ("- textbox", "- combobox", "- checkbox")
+    ):
+        # A named group with a direct companion control is also a possible local question.
+        # Accessible text alone cannot prove that Details is a footer action.
+        assert any(s.label == "Application" for s in found.skipped)
+        return
     assert all(
         s.label not in ("Application", "Application Resume", "Application Office")
         for s in found.skipped
@@ -100,7 +107,9 @@ def test_page_heading_is_not_a_loose_action_label(wrapper: str) -> None:
     snapshot = f'- {wrapper}:\n  - heading: Careers at Example\n  - button "Details" [ref=e9]'
     found = discover(snapshot)
     assert found.fields == []
-    assert found.skipped == []
+    assert [(s.label, s.reason) for s in found.skipped] == (
+        [("Application", "unsupported_widget")] if wrapper.startswith("group") else []
+    )
 
 
 @pytest.mark.parametrize("wrapper", ["main", "form", "contentinfo", "banner"])
@@ -262,4 +271,54 @@ def test_transparent_wrappers_keep_a_single_named_local_choice(
     else:
         body = f"- generic: {label}\n- generic:\n" + indent(f"{extra}\n{button}")
     found = discover(f'- group "{label}":\n{indent(body)}')
+    assert [(s.label, s.reason) for s in found.skipped] == [(label, "unsupported_widget")]
+
+
+@pytest.mark.parametrize("label", ["Application", "Formulaire", "希望する役割"])
+@pytest.mark.parametrize(
+    "actions", [("Details", "Subscribe"), ("Détails", "Aide"), ("追加情報", "ヘルプ")]
+)
+@pytest.mark.parametrize("depth", [0, 1, 2])
+@pytest.mark.parametrize("heading", ["", '- heading "Careers at Example"\n'])
+@pytest.mark.parametrize(
+    "independent",
+    [
+        '- group "Office":\n  - button "Paris" [ref=e3]',
+        '- generic:\n  - generic: Resume\n  - button "Upload File" [ref=e3]',
+    ],
+)
+@pytest.mark.parametrize("after", [False, True])
+def test_independent_field_branches_do_not_lend_form_names_to_loose_footer_peers(
+    label: str, actions: tuple[str, str], depth: int, heading: str, independent: str, after: bool
+) -> None:
+    footer = "\n".join(
+        f'- button "{name}" [ref=e{index + 8}]' for index, name in enumerate(actions)
+    )
+    for _ in range(depth):
+        footer = "- generic:\n" + indent(footer)
+    branches = "\n".join([footer, independent] if after else [independent, footer])
+    found = discover(
+        f'- group "{label}":\n'
+        + indent(
+            heading + '- textbox "First name" [ref=e1]\n- textbox "Email" [ref=e2]\n' + branches
+        )
+        + '\n  - button "Submit application" [ref=e10]'
+    )
+    assert [f.label for f in found.fields[:2]] == ["First name", "Email"]
+    assert not any(s.label == label for s in found.skipped)
+    assert found.submit_refs == ["e10"]
+    if 'group "Office"' in independent:
+        assert [(s.label, s.reason) for s in found.skipped] == [("Office", "unsupported_widget")]
+    else:
+        assert found.fields[-1].label == "Resume"
+
+
+@pytest.mark.parametrize("label", ["Application", "Team preference", "希望する役割"])
+@pytest.mark.parametrize("companion", ['- textbox "Email" [ref=e3]', '- heading "Choose a team"'])
+@pytest.mark.parametrize("repeat", [False, True])
+def test_isomorphic_named_single_choice_and_action_stay_unresolved(label, companion, repeat):
+    visible = f"- generic: {label}\n" if repeat else ""
+    found = discover(
+        f'- group "{label}":\n' + indent(visible + companion + '\n- button "Details" [ref=e9]')
+    )
     assert [(s.label, s.reason) for s in found.skipped] == [(label, "unsupported_widget")]
