@@ -164,11 +164,12 @@ class Stack:
         raise AssertionError("the lease did not end")
 
 
+# The real uid, as browserd reads it.
 PS = """
 import os, sys
 for pid in filter(str.isdigit, os.listdir("/proc")):
     try:
-        uid = os.stat(f"/proc/{pid}").st_uid
+        uid = [l for l in open(f"/proc/{pid}/status") if l.startswith("Uid:")][0].split()[1]
         cmd = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\\0")[0].decode()
     except OSError:
         continue
@@ -642,6 +643,41 @@ def test_processes_left_under_a_profile_uid_are_killed(stack: Stack) -> None:
     assert not [p for p in processes(stack) if p[0] == 20007]
     main = (ROOT / "browser/browserd/__main__.py").read_text(encoding="utf-8")
     assert main.index("reap_strays()") < main.index("start_display()")
+
+
+# A process that never keeps its pid: each one forks and exits, so a list of pids read before the
+# kill names only processes already gone.
+FORKER = """
+import os, time
+while True:
+    time.sleep(0.005)
+    if os.fork():
+        os._exit(0)
+"""
+
+
+def test_a_process_that_keeps_forking_is_reaped(stack: Stack) -> None:
+    """Review of PR #429: the reap killed a list of pids, which a forking process outran, so every
+    start was refused until browserd restarted. Now one kill(-1) sent as the uid."""
+    browser = stack.container("browser")
+    subprocess.run(
+        ["docker", "exec", "-d", "-u", "20008", browser, "python", "-c", FORKER], check=True
+    )
+    for _ in range(100):
+        if [p for p in processes(stack) if p[0] == 20008]:
+            break
+    else:
+        raise AssertionError("the forking process did not start")
+    stack.python(
+        "import asyncio; from browserd.chromium import clear_display; asyncio.run(clear_display())"
+    )
+    assert not [p for p in processes(stack) if p[0] == 20008]
+    # The kill(-1) is refused under any uid outside the profile range (here the display's).
+    refused = stack.execute(
+        "browser", "python", "-m", "browserd.prep", "killuid", user="1000", check=False
+    )
+    assert not refused.startswith("0:"), refused
+    assert [p for p in processes(stack) if p[0] == 1000]
 
 
 def test_idle_timeout_and_no_lease_across_a_restart(stack: Stack) -> None:

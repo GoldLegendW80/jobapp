@@ -173,7 +173,28 @@ def test_a_form_is_filled_and_read_back_and_submit_is_refused(lease: Lease) -> N
     assert base64.b64decode(shot["data"]).startswith(b"\x89PNG")
 
 
+COUNTS = (
+    "import urllib.request;"
+    " print(urllib.request.urlopen('http://127.0.0.1:8000/counts').read().decode())"
+)
+
+
+THROUGH_PROXY = """
+import sys, urllib.request
+proxy = urllib.request.ProxyHandler({"http": "http://127.0.0.1:3128"})
+urllib.request.build_opener(proxy).open(sys.argv[1], timeout=20).read()
+"""
+
+
+def reached(lease: Lease) -> dict[str, int]:
+    """What reached the off list host (`elsewhere`, the pages server under a name the proxy lets
+    through and the lease does not list), by key: a navigation the guard stops never gets there.
+    Without the guard the proxy would pass it, so a 403 of the proxy cannot hide a missing one."""
+    return json.loads(lease.stack.execute("pages", "python", "-I", "-c", COUNTS))
+
+
 def test_the_page_never_leaves_the_list(lease: Lease) -> None:
+    assert reached(lease) == {}
     assert lease.tool("browser_navigate", url="file:///etc/passwd")["error"] == "refused_scheme"
     assert lease.tool("browser_navigate", url="chrome://settings")["error"] == "refused_scheme"
     assert lease.tool("browser_navigate", url="http://evil.example/")["error"] == "host_not_allowed"
@@ -182,6 +203,7 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     away = lease.tool("browser_click", ref=ref(page, "link", "Away"))
     assert away["error"] == "host_not_allowed"
     assert away["url"] == FORM
+    assert reached(lease) == {}
     page = lease.snapshot()  # the aborted navigation went back: a new document, new refs
     # A new tab the page opens to a host off the list: closed.
     popup = lease.tool("browser_click", ref=ref(page, "button", "Open partner site"))
@@ -189,6 +211,7 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     lease.tool("browser_wait_for", time=2)
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
     assert [t["url"] for t in tabs] == [FORM]
+    assert reached(lease) == {}
     # A client side redirect off the list: stopped (reported by the call it happens in, or the
     # next), and the page stays where it was.
     redirect = "http://pages:8080/b5/redirect.html"
@@ -197,6 +220,7 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
     assert len(tabs) == 1
     assert tabs[0]["url"].startswith("http://pages:8080/b5/")
+    assert reached(lease) == {}
     # A server side 302 off the list (the route guard sees its first URL only): stopped too, and
     # nothing of the page it led to is answered.
     origin = lease.snapshot()
@@ -204,7 +228,7 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     results = [lease.tool("browser_navigate", url=hop), lease.tool("browser_snapshot")]
     assert "host_not_allowed" in [r.get("error") for r in results], results
 
-    # What is answered is the page the tab came from, as it was (the form links to evil.example
+    # What is answered is the page the tab came from, as it was (the form links off the list
     # itself, so the host cannot be the test): nothing of the landing page. Refs are renumbered.
     def bare(text: str) -> str:
         return re.sub(r" \[ref=e\d+\]", "", text)
@@ -214,6 +238,9 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     assert all(bare(s) == bare(origin) for s in shown), results
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
     assert [t["url"].startswith("http://pages:8080/") for t in tabs] == [True]
+    # The control: through the browser's own proxy, the off list host is reached.
+    lease.stack.python(THROUGH_PROXY, "http://elsewhere:8080/count/control")
+    assert reached(lease) == {"control": 1}
 
 
 def test_a_stale_ref_clicks_nothing(lease: Lease) -> None:
