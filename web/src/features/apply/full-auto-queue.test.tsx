@@ -230,6 +230,10 @@ describe("Full auto in the review queue", () => {
           count: 2,
         },
         { code: "safety_ceiling", sentence: null, count: 1 },
+        { code: "signin", sentence: null, count: 1 },
+        { code: "captcha", sentence: null, count: 1 },
+        { code: "other", sentence: null, count: 1 },
+        { code: "browser_gone", sentence: null, count: 1 },
       ],
     };
     renderApp(PATH);
@@ -237,7 +241,7 @@ describe("Full auto in the review queue", () => {
       name: "Full auto today",
     });
     expect(today).toHaveTextContent(
-      "2 submitted, 1 held, 3 sent to you for review.",
+      "2 submitted, 1 held, 7 sent to you for review.",
     );
     const why = within(today).getByRole("list", {
       name: "Why they were sent to you",
@@ -245,7 +249,17 @@ describe("Full auto in the review queue", () => {
     expect(why).toHaveTextContent(
       "This posting's fit is below your threshold for Full auto, so it waits for you. (2)",
     );
-    expect(why).toHaveTextContent("Safety ceiling. (1)");
+    const lines = within(why)
+      .getAllByRole("listitem")
+      .map((one) => one.textContent);
+    expect(lines.slice(1)).toEqual([
+      "The app stopped before the click, so it waits for you. (1)",
+      "The site asked you to sign in, so it waits for you. (1)",
+      "The site asked for a captcha, so it waits for you. (1)",
+      "Another reason: open it to see where it stopped. (1)",
+      "The app stopped before the click, so it waits for you. (1)",
+    ]);
+    expect(why).not.toHaveTextContent(/Signin|Captcha\.|Other\.|_/);
     expect(
       screen.getByText(/In Full auto your Like is your approval/),
     ).toBeVisible();

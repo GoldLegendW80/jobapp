@@ -14,6 +14,7 @@ import pytest
 from app.apply import guardrails, states
 from app.apply.guardrails import canonical_key, company_key, matching_rule, title_key
 from app.apply.models import ENDED, Application, Mode, State
+from app.jobs import never_apply
 from app.jobs.models import Job
 from app.jobs.sweep import NeverApplyRule
 
@@ -533,7 +534,7 @@ def test_the_company_key_reads_the_fold_too() -> None:
 
 
 def test_every_lookalike_reads_one_letter_in_every_case() -> None:
-    table = {chr(k): chr(v) for k, v in guardrails._LOOKALIKES.items()}
+    table = {chr(k): chr(v) for k, v in never_apply._LOOKALIKES.items()}
     # the table's letters and every letter whose case fold is one of them: their capitals
     letters = {c for c in map(chr, range(0x110000)) if c.isalpha() and c.casefold() in table}
     assert set(table) < letters

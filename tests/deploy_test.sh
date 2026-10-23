@@ -50,7 +50,20 @@ run() {
   [[ "$got" == "$want" ]] || fail "$* exited $got, expected $want: $(head -c 400 "$WORK/out")"
 }
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
-out_lacks() { ! grep -q -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -- "$1" "$WORK/out" | head -c 400)"; }
+out_lacks() { ! grep -Fq -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -F -- "$1" "$WORK/out" | head -c 400)"; }
+
+step "literal privacy assertions"
+# This filename used to match the planted IP as a regex through its 1021T203 fragment.
+printf '%s\n' 'alembic upgrade head failed (exit 1; the whole output is on this machine in migrate-20261021T203102Z-3194.log)' >"$WORK/out"
+out_lacks "10.1.2.3"
+ok "a redacted failure with the reported migration timestamp holds no planted address"
+for leak in rowvalue parameters DETAIL 10.1.2.3 "already exists" Traceback CANARYPASSWORD postgresql e2e-leak; do
+  printf 'planted value: %s\n' "$leak" >"$WORK/out"
+  if (out_lacks "$leak") >"$WORK/privacy-assertion" 2>&1; then
+    fail "the privacy assertion accepted the planted value '$leak'"
+  fi
+done
+ok "literal planted addresses, row values, SQL details and credentials are refused"
 
 step "shellcheck"
 SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
@@ -141,6 +154,12 @@ for args in "apply" "apply stop" "apply pause extra"; do
   out_has "usage: ./deploy.sh apply pause|resume|status"
 done
 ok "apply takes exactly pause, resume or status, before any network call"
+for args in "ingestion" "ingestion close-run" "ingestion close-run not-a-run-id" "ingestion close-run 3fa85f64-5717-4562-b3fc-2c963f66afa6 --apply" "ingestion close 3fa85f64-5717-4562-b3fc-2c963f66afa6" "ingestion close-run 3fa85f64-5717-4562-b3fc-2c963f66afa6x"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 ./deploy.sh $args
+  out_has "usage: ./deploy.sh ingestion close-run <run-id>"
+done
+ok "ingestion takes close-run, one run id and at most --dry-run, before any network call"
 for args in "admin" "admin create" "admin list x@y.z" "admin create a@b.c extra" "admin delete a@b.c"; do
   # shellcheck disable=SC2086 # word splitting wanted
   run 1 nohost ./deploy.sh $args
@@ -415,6 +434,11 @@ case "$cmd" in
     echo "Imported 0 CVs and 0 letters from 0 postings with legacy files."
     exit "${FAKE_CLI_EXIT:-0}"
     ;;
+  *"exec -T api python -m app.ingestion.cli close-run"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    echo "Run 3fa85f64-5717-4562-b3fc-2c963f66afa6 closed: failed, 2 planned steps cancelled."
+    exit "${FAKE_CLI_EXIT:-0}"
+    ;;
   *"exec -T api python -m app.identity.cli"*)
     echo "$cmd" >>"$FAKE_CALLS"
     echo "Setup link for zoe@example.org, valid 7 days, single use:"
@@ -642,6 +666,20 @@ grep -qF -- "--dry-run" "$WORK/calls" && fail "a run sent --dry-run: $(cat "$WOR
 grep -q "Imported 0 CVs" "$WORK/stdout" || fail "the CLI's summary is not shown: $(cat "$WORK/stdout")"
 run_split 1 fake FAKE_CLI_EXIT=1 ./deploy.sh documents import-legacy zoe@example.org
 ok "documents import-legacy runs app.documents.cli import-legacy in the api container, --dry-run passed on, exit code passed through"
+RUN_ID="3fa85f64-5717-4562-b3fc-2c963f66afa6"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh ingestion close-run "$RUN_ID" --dry-run
+grep -qF -- "exec -T api python -m app.ingestion.cli close-run $RUN_ID --dry-run" "$WORK/calls" ||
+  fail "close-run --dry-run remote command: $(cat "$WORK/calls")"
+grep -q "(dry run)" "$WORK/stdout" "$WORK/stderr" || fail "the dry run is not announced"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh ingestion close-run "$RUN_ID"
+grep -qF -- "exec -T api python -m app.ingestion.cli close-run $RUN_ID" "$WORK/calls" ||
+  fail "close-run remote command: $(cat "$WORK/calls")"
+grep -qF -- "--dry-run" "$WORK/calls" && fail "a close sent --dry-run: $(cat "$WORK/calls")"
+grep -q "closed: failed" "$WORK/stdout" || fail "the CLI's summary is not shown: $(cat "$WORK/stdout")"
+run_split 1 fake FAKE_CLI_EXIT=1 ./deploy.sh ingestion close-run "$RUN_ID"
+ok "ingestion close-run runs app.ingestion.cli close-run in the api container, --dry-run passed on, exit code passed through"
 : >"$WORK/calls"
 run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/empty-folder" ./deploy.sh jobs import zoe@example.org
 grep -q "is not a folder (set JOBAPP_SOURCE_DIR" "$WORK/stderr" || fail "missing source: $(cat "$WORK/stderr")"
@@ -2198,6 +2236,19 @@ case "$args" in
     if [[ -n "${FAKE_LEAK:-}" ]]; then
       echo "OperationalError: postgresql+psycopg://jobapp:CANARYPASSWORD@db:5432/jobapp refused" >&2
     fi
+    if [[ -n "${FAKE_LOCK_TIMEOUTS:-}" ]]; then
+      # The first FAKE_LOCK_TIMEOUTS runs wait on a lock of the running release: 55P03.
+      echo x >>"$FAKE_DIR/lock-tries"
+      if (($(wc -l <"$FAKE_DIR/lock-tries") <= FAKE_LOCK_TIMEOUTS)); then
+        echo "sqlalchemy.exc.OperationalError: (psycopg.errors.LockNotAvailable) canceling statement due to lock timeout" >&2
+        exit 1
+      fi
+    fi
+    if [[ -n "${FAKE_SAYS_55P03:-}" ]]; then
+      # A data migration that prints the words of a lock timeout, then one it caught itself.
+      echo "INFO  [migration] a row said: SQLSTATE 55P03 LockNotAvailable" >&2
+      echo "psycopg.errors.LockNotAvailable: canceling statement due to lock timeout" >&2
+    fi
     if [[ -n "${FAKE_FAIL_MIGRATE:-}" ]]; then
       # What a failing data migration prints: SQL with its parameters, Postgres' DETAIL with a
       # row's values, an address. None of it may reach the public run log.
@@ -2248,11 +2299,11 @@ in_dir() { # in_dir <dir> <cmd...>: run cmd there
 mig() {
   local want="$1"
   shift
-  rm -f "$MIG/calls" "$MIG/db-up" "$MIG/ups"
+  rm -f "$MIG/calls" "$MIG/db-up" "$MIG/ups" "$MIG/lock-tries"
   rm -rf "$MIG/logs"
   : >"$MIG/calls"
   run "$want" in_dir "$MIG/app" env -u COMPOSE -u MIGRATE_TIMEOUT_S -u MIGRATE_CONTAINER -u BACKUP_DIR \
-    MIGRATE_LOG_DIR="$MIG/logs" "$@" FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
+    -u MIGRATE_ATTEMPTS MIGRATE_RETRY_WAIT_S=0 MIGRATE_LOG_DIR="$MIG/logs" "$@" FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
 }
 # mig_log: the whole output the last run kept (one file)
 mig_log() { cat "$MIG"/logs/migrate-*.log; }
@@ -2301,6 +2352,43 @@ grep -q "migrations applied" "$WORK/out" && fail "a failed migration was reporte
 untouched "$MIG/calls"
 grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the one off container was not removed after a failure"
 ok "a failing migration: exit 1 with the step, the exception's class and what to do, no SQL, parameter, row value or address in the output (kept in a 600 file of a 700 folder), the stack untouched, the container removed"
+# Issue #408: a lock timeout (55P03) is the running release holding a lock, not a bad migration.
+mig 0 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=2
+out_has "lock timeout (SQLSTATE 55P03) in attempt 1 of 3: the upgrade was rolled back whole; trying again in 0s"
+out_has "lock timeout (SQLSTATE 55P03) in attempt 2 of 3"
+out_has "migrations applied: 1"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 3 ]] || fail "not three attempts: $(cat "$MIG/calls")"
+untouched "$MIG/calls"
+mig 1 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=3
+out_has "lock timeout: run the deploy again"
+out_has "in each of 3 attempts"
+out_has "   error: sqlalchemy.exc.OperationalError"
+out_lacks "Fix the migration"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 3 ]] || fail "not three attempts: $(cat "$MIG/calls")"
+untouched "$MIG/calls"
+mig 1 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=1 MIGRATE_ATTEMPTS=1
+out_has "lock timeout: run the deploy again"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "MIGRATE_ATTEMPTS=1 ran again: $(cat "$MIG/calls")"
+# Another failure after a lock timeout is that failure, never retried, never called a lock timeout.
+mig 1 FAKE_PENDING=1 FAKE_LOCK_TIMEOUTS=1 FAKE_FAIL_MIGRATE=1
+out_has "Fix the migration and deploy again"
+out_lacks "run the deploy again. A statement"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 2 ]] || fail "a failing migration was retried: $(cat "$MIG/calls")"
+mig 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "a failing migration was retried: $(cat "$MIG/calls")"
+# 55P03 earlier in the output, another error last: only the final exception line decides.
+mig 1 FAKE_PENDING=1 FAKE_SAYS_55P03=1 FAKE_FAIL_MIGRATE=1
+out_has "Fix the migration and deploy again"
+out_has "   error: psycopg.errors.DuplicateColumn"
+out_lacks "lock timeout (SQLSTATE 55P03) in attempt"
+[[ "$(grep -cx "$MIG_RUN" "$MIG/calls")" == 1 ]] || fail "55P03 before another error was retried: $(cat "$MIG/calls")"
+for bad in 0 10 x; do
+  mig 1 MIGRATE_ATTEMPTS="$bad"
+  out_has "MIGRATE_ATTEMPTS must be a whole number from 1 to 9"
+done
+mig 1 MIGRATE_RETRY_WAIT_S=-1
+out_has "MIGRATE_RETRY_WAIT_S must be a whole number of seconds"
+ok "a lock timeout (55P03) runs the upgrade again, at most MIGRATE_ATTEMPTS times, then says: lock timeout, run the deploy again; any other failure is never retried, even with 55P03 earlier in its output"
 mig 1 FAKE_TIMEOUT=1 MIGRATE_TIMEOUT_S=7
 out_has "did not finish within 7s and were stopped"
 out_has "nothing was restarted"
@@ -2483,7 +2571,7 @@ ok "browser_egress: a failed image build removes the previous browser (skip) and
 run 1 deploy_order "ops/migrate.sh"
 out_has "the migrations did not apply"
 out_has "the containers on fakejetson were not touched and still run the previous release"
-out_has "Fix the migration and run ./deploy.sh again"
+out_has "After a lock timeout, just run ./deploy.sh again; otherwise fix the migration and run ./deploy.sh again"
 untouched "$WORK/order"
 grep -qx "health" "$WORK/order" && fail "the deploy went on after a failed migration"
 ok "a failing migration stops ./deploy.sh before compose up: exit 1, nothing restarted, the message says what to do"

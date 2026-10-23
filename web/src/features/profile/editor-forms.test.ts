@@ -34,6 +34,27 @@ describe("round trips", () => {
     expect(fromSearchForm(toSearchForm(data.search))).toEqual(data.search);
   });
 
+  it("keeps the freelance feeds (O7) a save of this tab does not edit", () => {
+    const data = haraldLike();
+    const search = {
+      ...data.search,
+      feeds: [
+        {
+          kind: "remoteok" as const,
+          terms: { terms: ["python"], advanced_regex: false },
+          enabled: true,
+        },
+        {
+          kind: "hackernews_freelance" as const,
+          terms: { terms: [], advanced_regex: false },
+          enabled: false,
+        },
+      ],
+    };
+    expect(fromSearchForm(toSearchForm(search))).toEqual(search);
+    expect("feeds" in fromSearchForm(toSearchForm(data.search))).toBe(false);
+  });
+
   it("handles empty sections", () => {
     expect(fromFactsForm(toFactsForm(EMPTY.facts))).toEqual(EMPTY.facts);
     expect(fromSkillsForm(toSkillsForm(EMPTY.skills))).toEqual(EMPTY.skills);

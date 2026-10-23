@@ -35,6 +35,8 @@ import {
   saveLikeMode,
   type OnboardingState,
 } from "./onboarding-api";
+import { starterKey } from "./starter-api";
+import { StarterBoards } from "./starter-boards";
 import {
   StepApply,
   StepLooking,
@@ -170,14 +172,13 @@ function Wizard({
       ? "summary"
       : (STEP_IDS[STEP_IDS.indexOf(current) + 1] ?? "summary");
   /**
-   * Keep the step passed in the profile. A new step is one revision of the profile's
-   * preferences, so the profile is read again before the next save starts from it.
+   * Keep the step passed in the profile. A step passed is no revision of the profile (a save
+   * keeps the stored steps), so the next save starts from the revision this page already has,
+   * and a second tab editing the profile is not sent a 409 by it.
    */
   const recordPass = async (current: StepId) => {
-    const known = passed.includes(current);
     const found = await passStep(current);
     client.setQueryData(onboardingKey, found);
-    if (!known) await client.invalidateQueries({ queryKey: profileKey });
   };
   const change = (patch: Partial<Draft>) => {
     setProblem(null);
@@ -213,6 +214,8 @@ function Wizard({
     },
     onSuccess: async (saved, current) => {
       if (saved) client.setQueryData(profileKey, saved);
+      // The starter list is built from the saved answers: never show a stale one on step 7.
+      void client.invalidateQueries({ queryKey: starterKey });
       try {
         await recordPass(current);
       } catch (error) {
@@ -355,6 +358,7 @@ function Wizard({
             onChange={(changed) => {
               goTo(changed, true);
             }}
+            footer={<StarterBoards />}
           />
         ) : null}
       </section>

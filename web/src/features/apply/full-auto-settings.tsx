@@ -22,6 +22,7 @@ import {
   readMinutes,
   rehearsalsLeft,
   rehearsalsSentence,
+  waitsForYou,
 } from "./full-auto-state";
 import { queueKey } from "./queue-api";
 import {
@@ -156,11 +157,17 @@ export function FullAutoModeCard({ settings }: { settings: ApplySettings }) {
             className="flex flex-col gap-3 rounded-md border p-3 text-sm"
           >
             <p className="font-medium">{fullAutoSentence(settings)}</p>
-            <p>
-              A posting below your threshold, on a site Full auto does not
-              handle yet, with a question left, a captcha or a sign in, waits
-              for you in Applications instead.
+            <p id={`${id}-waits`}>
+              These wait for you in Applications instead:
             </p>
+            <ul
+              aria-labelledby={`${id}-waits`}
+              className="flex list-disc flex-col gap-1 pl-5"
+            >
+              {waitsForYou(settings).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
             <p>
               A company cap you set on this page replaces the one per company
               rule for that company.

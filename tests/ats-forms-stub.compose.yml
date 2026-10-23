@@ -28,6 +28,9 @@ services:
       - python
       - -I
       - /fake/ats_forms_stub.py
+      # The published port and the egress network reach the container's address, not its loopback.
+      - --host
+      - "0.0.0.0"
       - --port
       - "8080"
     volumes:
@@ -38,11 +41,12 @@ services:
     ports:
       - "127.0.0.1:${ATS_FORMS_STUB_PORT:-8100}:8080"
     healthcheck:
+      # On the container's own address: a stub that listens on its loopback only is unhealthy.
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+        - "import socket, urllib.request; urllib.request.urlopen(f'http://{socket.gethostname()}:8080/healthz', timeout=2)"
       interval: 5s
       timeout: 3s
       retries: 10
@@ -56,17 +60,16 @@ services:
     environment:
       BROWSER_PROXY_ALLOW_PRIVATE: atsforms
 
-  # Full auto's journey (apply A13b) waits through a hold and its rehearsals: on this stack the
-  # floor of the hold is the setting's own minimum, 60 s, and one rehearsal comes first.
+  # Full auto's journey (apply A13b) waits through a hold after its three rehearsals: on this
+  # stack the floor of the hold is 60 s (TEST_APPLY_HOLD_S, refused in production and without
+  # APPLY_STUB_BASE_URL; APPLY_HOLD_S itself is never under 900 s).
   api:
     environment:
-      APPLY_HOLD_S: "60"
-      APPLY_REHEARSALS: "1"
       APPLY_STUB_BASE_URL: http://atsforms:8080
+      TEST_APPLY_HOLD_S: "60"
 
   worker:
     environment:
-      APPLY_HOLD_S: "60"
       APPLY_HOST_MIN_INTERVAL_S: "10"
-      APPLY_REHEARSALS: "1"
       APPLY_STUB_BASE_URL: http://atsforms:8080
+      TEST_APPLY_HOLD_S: "60"

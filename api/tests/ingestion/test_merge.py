@@ -147,6 +147,60 @@ def test_a_removal_is_dropped_where_a_document_gives_a_value(
     assert "conflict" not in one.payload
 
 
+def test_a_list_removal_stored_before_the_tool_refused_it_is_dropped_by_the_merge(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    # #408: a step finished before PR #398 may hold the removal of an entry, which the write tool
+    # now refuses. Such a step is reused (EXTRACTOR_VERSION stays 1), so the merge drops the row.
+    saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
+    mh.save(factory, alice, "experience", {"employers": [saved]})
+    mh.save(factory, alice, "identity", {"headline": "Engineer"})
+    run_id, _ = mh.begin(factory, alice, settings, [mh.CV, mh.LETTER])
+    first = eh.running(factory, run_id)
+    mh.store(factory, alice, first, "experience", ACME_2021, None, "Acme Group", "remove")
+    mh.store(factory, alice, first, "identity", "headline", None, "Engineer", "remove")
+    mh.store(factory, alice, first, *name_fact())
+    eh.finish_step(factory, run_id, settings)
+    assert eh.running(factory, run_id).document_id != first.document_id
+    with factory() as db, db.begin():
+        run = db.get_one(IngestionRun, run_id, with_for_update=True)
+        result = merge.merge(db, run, now())
+    assert result.removals_refused == 1
+    found = {
+        (one.payload["key"], one.payload["action"])
+        for one in mh.proposals_of(factory, alice)
+        if one.payload["key"] != merge.YEARS_KEY  # derived from the employer the profile holds
+    }
+    # The removal of a field that holds one value is still proposed, as the tool still takes it.
+    assert found == {("full_name", "add"), ("headline", "remove")}
+
+
+def test_a_reused_step_with_a_list_removal_proposes_no_removal(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
+    mh.save(factory, alice, "experience", {"employers": [saved]})
+    first, documents = mh.merged(
+        factory,
+        alice,
+        settings,
+        [mh.CV],
+        [[("experience", ACME_2021, None, "Acme Group", "remove"), name_fact()]],
+    )
+
+    def keys(run_id: uuid.UUID, status: ProposalStatus | None) -> list[str]:
+        found = mh.proposals_of(factory, alice, run_id, status=status)
+        return [one.payload["key"] for one in found if one.payload["key"] != merge.YEARS_KEY]
+
+    assert keys(first, ProposalStatus.pending) == ["full_name"]
+    second = eh.start(factory, alice, documents)
+    eh.advance(factory, second, settings)
+    assert eh.run_of(factory, second).status is RunStatus.done
+    assert keys(second, None) == ["full_name"]
+    with factory() as db:  # the stored row is kept: only the merge leaves it out
+        assert db.scalar(sa.select(sa.func.count()).where(IngestionItem.action == "remove")) == 1
+
+
 # --- against the profile and earlier decisions ----------------------------------------------------
 
 
@@ -627,3 +681,76 @@ def test_a_citation_into_a_transcribed_page_flags_the_item(
     assert name.payload["flags"] == [items.FLAG_TRANSCRIBED]
     assert name.payload["citations"][0]["transcribed"] is True
     assert headline.payload["flags"] == []
+
+
+# --- follow ups of #174 ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "inside"),
+    [
+        (0, 10, False),  # ends where the page starts
+        (0, 11, True),  # one character into it
+        (10, 20, True),  # the page itself
+        (19, 25, True),  # its last character
+        (20, 30, False),  # starts where the page ends
+        (21, 30, False),
+        (5, 25, True),  # around it
+    ],
+)
+def test_a_citation_is_transcribed_only_when_it_overlaps_a_page(
+    start: int, end: int, inside: bool
+) -> None:
+    marks = {"doc": [(10, 20)]}
+    citation = {"document_id": "doc", "start": start, "end": end}
+    assert merge._is_transcribed(marks, citation) is inside
+    assert merge._is_transcribed({"doc": True}, citation) is True
+    assert merge._is_transcribed({}, citation) is False
+
+
+def test_the_item_kept_for_one_value_is_the_first_in_document_order() -> None:
+    first, second = uuid.uuid4(), uuid.uuid4()
+    rows = []
+    # one value (a list of words counts as a set) written in two orders, the second document's
+    # row written first
+    for row_id, document, words in ((1, second, ["Stage", "CDI"]), (2, first, ["CDI", "Stage"])):
+        item = items.build("search", "contract_types", "add", words)
+        rows.append(
+            IngestionItem(
+                id=row_id,
+                document_id=document,
+                section=item.section,
+                key=item.key,
+                action="add",
+                value=item.value,
+                value_hash=item.value_hash,
+                citations=[{"start": 0, "end": 3, "excerpt": "CDI"}],
+                flags=[],
+            )
+        )
+    order = {str(first): 0, str(second): 1}
+    groups, left_out, refused = merge._variants(rows, {}, order)
+    ((variant,),) = (list(one.values()) for one in groups.values())
+    assert (variant.item.value, left_out, refused) == (["CDI", "Stage"], 0, 0)
+    assert [one["document_id"] for one in variant.citations] == [str(first), str(second)]
+
+
+def test_a_second_merge_of_one_run_counts_the_conflict_it_replaced(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    run_id, _ = mh.merged(
+        factory,
+        alice,
+        settings,
+        [mh.CV, mh.LETTER],
+        [
+            [("experience", "employers", mh.employer("2021-03", "2023-06"), "March 2021")],
+            [("experience", "employers", mh.employer("2021-05", "2023-06"), "May 2021")],
+        ],
+    )
+    with factory() as db, db.begin():
+        run = db.get(IngestionRun, run_id)
+        assert run is not None
+        again = merge.merge(db, run, now())
+    # `supersede_older` keeps this run's items; the conflict is replaced at its key by `propose`
+    assert again.superseded == 1

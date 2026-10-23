@@ -39,16 +39,17 @@ export function HeldCountdown({
   const [asking, setAsking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const left = holdLeft(until, offset, pageNow);
+  const running = left > 0;
 
   useEffect(() => {
-    if (left <= 0) return;
+    if (!running) return;
     const timer = window.setInterval(() => {
       setPageNow(Date.now());
     }, TICK_MS);
     return () => {
       window.clearInterval(timer);
     };
-  }, [left]);
+  }, [running]);
 
   const cancel = useMutation({
     mutationFn: () => cancelApplication(applicationId),

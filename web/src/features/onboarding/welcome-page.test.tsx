@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { fakeDeck } from "@/features/opportunities/deck/deck-test-api";
 import { fakeSession, member } from "@/test/auth";
+import { fakeDocument, fakeDocuments, fakePrompt } from "@/test/ingestion";
+import { CONSENT_TEXT, fakeRuns, REMINDER } from "@/test/ingestion-runs";
 import { EMPTY, profileKey } from "@/features/profile/api";
 import { fakeProfile, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -31,9 +33,13 @@ const SETTINGS = {
   min_fit_chosen: false,
   safety_ceiling: 20,
   hold_s: 900,
+  hold_min_s: 900,
   company_days: 30,
   show_postings_from: null,
   write_documents_from: null,
+  rehearsals: 3,
+  rehearsals_done: 0,
+  full_auto_since: null,
 };
 
 interface StoredSearch {
@@ -53,8 +59,8 @@ function doneOf(profile: FakeProfile): string[] {
 }
 
 /**
- * The wizard's routes. With `profile`, `done` follows its saves and a step passed is one
- * revision of its preferences, as on the api.
+ * The wizard's routes. With `profile`, `done` follows its saves and a step passed is kept in
+ * its preferences without a new revision, as on the api.
  */
 function fakeOnboarding(
   initial = fresh,
@@ -80,7 +86,6 @@ function fakeOnboarding(
       if (!state.passed.includes(step)) {
         state = { ...state, passed: [...state.passed, step] };
         if (profile) {
-          profile.revision += 1;
           profile.sections.preferences = {
             ...EMPTY.preferences,
             onboarding: {
@@ -165,6 +170,38 @@ describe("the first login redirect", () => {
     expect(app.location()).toBe("/jobs");
   });
 
+  it("sends nobody anywhere and shows no card when the api fails", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    let asked = 0;
+    server.use(
+      http.get("*/api/opportunities/onboarding", () => {
+        asked += 1;
+        return HttpResponse.json(
+          { detail: "Internal Server Error" },
+          { status: 500 },
+        );
+      }),
+    );
+    const app = renderApp("/jobs?q=data");
+    // the page asked for shows, the decision reads stay
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
+    expect(app.location()).toBe("/jobs?q=data");
+    await waitFor(() => {
+      expect(document.documentElement.dataset.onboarding).toBe("stay");
+    });
+    expect(asked).toBeGreaterThan(0);
+    // the card stays hidden: no answer is no card
+    expect(screen.queryByText("Finish setting up")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Continue setup" })).toBeNull();
+    // and the gate does not ask again in this session
+    app.unmount();
+    const again = renderApp("/jobs");
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
+    expect(again.location()).toBe("/jobs");
+    expect(document.documentElement.dataset.onboarding).toBe("stay");
+  });
+
   it("shows the card on the home page while steps are left", async () => {
     fakeSession(member);
     fakeOnboarding({ ...fresh, open_wizard: false, dismissed_at: "x" });
@@ -221,9 +258,10 @@ describe("the wizard", () => {
     await user.click(screen.getByRole("radio", { name: "Hybrid" }));
     await user.click(next());
     await screen.findByText(/Step 4 of 7/);
-    // each step passed is kept in the profile (one revision): the next save starts after it
+    // each step passed is kept in the profile without a revision: the next save starts from
+    // the revision the last save gave, with no read of the profile in between
     expect(calls.steps).toEqual(["looking", "where"]);
-    expect(profile.saves[1]?.body.base_revision).toBe(2);
+    expect(profile.saves[1]?.body.base_revision).toBe(1);
 
     await user.click(screen.getByRole("button", { name: /Back/ }));
     await user.click(screen.getByRole("button", { name: /Back/ }));
@@ -330,6 +368,65 @@ describe("the wizard", () => {
     expect(calls.complete).toBe(1);
   });
 
+  it("offers the starter list on the summary, and its boards count in the first search", async () => {
+    fakeSession(member);
+    const profile = fakeProfile(null);
+    fakeOnboarding(withRoles, SETTINGS, profile);
+    const starter = {
+      targets: true,
+      entries: [
+        {
+          key: "ashby:fake-ok",
+          kind: "board",
+          company: "Example Robotics",
+          ats: "ashby",
+          org: "fake-ok",
+          source: null,
+          query: null,
+          location: null,
+          why: "Artificial intelligence, France",
+          added: false,
+        },
+      ],
+      unmatched: [],
+      blocked: 0,
+      version: 1,
+      checked_on: "2026-10-20",
+    };
+    server.use(
+      http.get("*/api/opportunities/starter", () => HttpResponse.json(starter)),
+      http.post("*/api/opportunities/starter", () => {
+        // as the api does: the board goes to the search section, enabled
+        profile.revision += 1;
+        profile.sections.search = {
+          ...EMPTY.search,
+          boards: [
+            {
+              company: "Example Robotics",
+              ats: "ashby",
+              org: "fake-ok",
+              enabled: true,
+              extra_exclude: { terms: [], advanced_regex: false },
+            },
+          ],
+        };
+        starter.entries = starter.entries.map((e) => ({ ...e, added: true }));
+        return HttpResponse.json({ list: starter, added: ["ashby:fake-ok"] });
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 7 of 7/);
+    const list = await screen.findByRole("region", {
+      name: "Boards and sites to search",
+    });
+    expect(await within(list).findByText("Example Robotics")).toBeVisible();
+    expect(screen.getByText(/covers 0 boards/)).toBeInTheDocument();
+    await user.click(within(list).getByRole("button", { name: "Add all" }));
+    expect(await screen.findByText(/covers 1 board from/)).toBeInTheDocument();
+    expect(within(list).getByText("Added")).toBeVisible();
+  });
+
   it("Skip for now puts it off and goes home", async () => {
     fakeSession(member);
     fakeProfile(null);
@@ -404,6 +501,40 @@ describe("the wizard", () => {
     );
   });
 
+  it("asks for the starter list again after a step saves, so step 7 is never stale", async () => {
+    fakeSession(member);
+    const profile = fakeProfile(null);
+    fakeOnboarding(withRoles, SETTINGS, profile);
+    let reads = 0;
+    server.use(
+      http.get("*/api/opportunities/starter", () => {
+        reads += 1;
+        return HttpResponse.json({
+          targets: true,
+          entries: [],
+          unmatched: [],
+          blocked: 0,
+          version: 1,
+          checked_on: "2026-10-20",
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 7 of 7/);
+    await screen.findByRole("region", { name: "Boards and sites to search" });
+    expect(reads).toBe(1);
+    await user.click(screen.getByRole("button", { name: "Change Where" }));
+    await screen.findByText(/Step 3 of 7/);
+    await user.click(screen.getByRole("checkbox", { name: "Anywhere" }));
+    await user.click(screen.getByRole("radio", { name: "Remote" }));
+    await user.click(next());
+    await screen.findByText(/Step 7 of 7/);
+    await waitFor(() => {
+      expect(reads).toBe(2);
+    });
+  });
+
   it("never reaches Start from the address while no role is saved", async () => {
     fakeSession(member);
     fakeProfile(null);
@@ -435,6 +566,59 @@ describe("the wizard", () => {
     await waitFor(() => {
       expect(app.location()).toBe("/applications?tab=sent");
     });
+  });
+
+  it("starts the reading of a ZIP or a pasted text from step 1", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding();
+    fakeDocuments([
+      fakeDocument({ id: "d1", name: "linkedin-export.zip" }),
+      fakeDocument({ id: "d2", name: "pasted.txt" }),
+    ]);
+    fakePrompt();
+    const runs = fakeRuns({
+      consent: {
+        version: 1,
+        text: CONSENT_TEXT,
+        reminder: REMINDER,
+        accepted: true,
+        accepted_at: "2026-10-01T08:00:00Z",
+      },
+    });
+    const user = userEvent.setup();
+    renderApp("/welcome?step=profile");
+    await screen.findByText(/Step 1 of 7/);
+    // nothing of the run is asked for while the disclosure is closed
+    expect(runs.calls).toEqual([]);
+    await user.click(
+      screen.getByText("Or add a LinkedIn data export (ZIP), or paste a text"),
+    );
+    const read = await screen.findByRole("region", {
+      name: "Read them into your profile",
+    });
+    await user.click(
+      await within(read).findByRole("checkbox", { name: /linkedin-export/ }),
+    );
+    await user.click(
+      within(read).getByRole("button", { name: "See the estimate" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Before the run starts",
+    });
+    await within(dialog).findByTestId("estimate");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Start the run" }),
+    );
+    await waitFor(() => {
+      expect(runs.sent("POST", "/api/ingestion/runs")).toHaveLength(1);
+    });
+    expect(runs.sent("POST", "/api/ingestion/runs")[0]?.body).toMatchObject({
+      document_ids: ["d1"],
+    });
+    // the wizard stays on its step, the next steps can be answered meanwhile
+    expect(stepHeading()).toHaveTextContent("Step 1 of 7");
+    expect(next()).toBeEnabled();
   });
 
   it("uses no dash as a separator in what it shows", async () => {

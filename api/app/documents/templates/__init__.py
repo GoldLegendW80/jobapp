@@ -16,7 +16,10 @@ document's content into the HTML the renderer receives:
 - the fixed facts (name, contact lines, employers, schools, languages) from the profile view,
   never from the content; an experience entry prints only when its employer is in the view;
 - the step's density as custom properties on `:root` (`--body-size`, `--line-height`,
-  `--section-gap`, `--item-gap`, `--margin`), read by the template's `style.css`;
+  `--section-gap`, `--item-gap`, `--margin`), read by the template's `style.css`; after it,
+  the app's rules that let no word be wider than its box (`template_css.ENFORCED_CSS`, at the
+  render and at D25b's render check alike; measured on PR #518, every bundled template prints
+  the same pixels with them on the sample);
 - the fonts of the bundled library (`documents/fonts/<family>/`) and the photo as `data:`
   addresses: nothing is ever fetched. Only the faces whose characters the page uses are
   embedded. A character none of the template's families has (Greek, an arrow, Hebrew, an
@@ -70,6 +73,7 @@ from app.documents import content as c
 from app.documents import corrections
 from app.documents.profile_view import ProfileView
 from app.documents.rules import SoftLimits
+from app.documents.template_css import ENFORCED_CSS
 
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "_base"
@@ -1004,6 +1008,7 @@ def build_html(
     if page.count(token) != 1:
         raise TemplateError(template.slug, "the style is not printed exactly once")
     css = step.css() + f":root{{--accent:{template.accent}}}" + template.files["style.css"]
+    css += ENFORCED_CSS
     faces, names = font_css(template.fonts, html.unescape(page.replace(token, "")) + css)
     page = page.replace(token, faces + with_fallbacks(css, names), 1)
     inspect(template.slug, page)

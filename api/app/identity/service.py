@@ -198,7 +198,8 @@ def clean_ip(ip: str | None) -> str | None:
     if not ip:
         return None
     try:
-        return str(ipaddress.ip_address(ip))
+        # Validate the whole address, then drop the IPv6 scope, which inet cannot store.
+        return str(ipaddress.ip_address(ip)).split("%", 1)[0]
     except ValueError:
         return None
 

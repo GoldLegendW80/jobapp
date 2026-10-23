@@ -1,5 +1,6 @@
 """app.identity.service against a real Postgres."""
 
+import ipaddress
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,64 @@ from app.identity.models import Session as UserSession
 from app.identity.service import InvalidEmailError, create_invite, lookup_invite, normalize_email
 
 T0 = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("192.0.2.7", "192.0.2.7"),
+        ("255.255.255.255", "255.255.255.255"),
+        ("2001:0DB8:0:0:0:0:0:7", "2001:db8::7"),
+        ("::1", "::1"),
+        ("fe80::1%eth0", "fe80::1"),
+        ("FE80:0:0:0:0:0:0:1%en0", "fe80::1"),
+        ("fe80::1%3", "fe80::1"),
+        ("2001:db8::7%eth0", "2001:db8::7"),
+        (None, None),
+        ("", None),
+        ("testclient", None),
+        ("unix:/tmp/test.sock", None),
+        ("192.0.2.999", None),
+        ("192.0.2.7%eth0", None),
+        ("fe80::1%", None),
+        ("fe80::1%eth0%extra", None),
+        ("fe80::zz%eth0", None),
+        ("[fe80::1%eth0]", None),
+        ("fe80::1/64", None),
+        ("192.0.2.7:80", None),
+        (" fe80::1%eth0", None),
+        ("fe80::1\x00%eth0", None),
+    ],
+)
+def test_clean_ip(raw: str | None, expected: str | None) -> None:
+    assert service.clean_ip(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["::ffff:192.0.2.7", "::ffff:192.0.2.7%en0"])
+def test_clean_ip_preserves_mapped_ipv6_without_scope(raw: str) -> None:
+    cleaned = service.clean_ip(raw)
+    assert cleaned is not None
+    address = ipaddress.ip_address(cleaned)
+    assert isinstance(address, ipaddress.IPv6Address)
+    assert address.scope_id is None
+    assert address.ipv4_mapped == ipaddress.IPv4Address("192.0.2.7")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("fe80::1%en0", "fe80::1"),
+        ("2001:0DB8::7", "2001:db8::7"),
+        ("192.0.2.7", "192.0.2.7"),
+        ("bad%en0", None),
+    ],
+)
+def test_create_session_persists_clean_ip(db: Session, raw: str, expected: str | None) -> None:
+    user = make_user(db, email="e2e-scoped-ip@example.org")
+    issued = service.create_session(db, user, now=T0, ip=raw)
+    db.commit()
+    db.refresh(issued.row)
+    assert (str(issued.row.ip) if issued.row.ip is not None else None) == expected
 
 
 def make_user(db: Session, email: str = "admin@example.org", role: Role = Role.admin) -> User:
