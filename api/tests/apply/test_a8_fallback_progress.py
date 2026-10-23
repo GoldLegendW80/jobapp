@@ -10,7 +10,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.apply import form_agent, run
-from app.apply.answers import Answer
+from app.apply.answers import Answer, Left
 from app.apply.ats import base, generic
 from app.apply.models import AnswerSource, Application, ApplicationAnswer, State
 from tests.apply.a8b_support import workable
@@ -19,7 +19,15 @@ from tests.apply.test_a5_run import started
 from tests.apply.test_a8_known_fallback import plan
 
 
-async def attempt(monkeypatch, phase, elapsed=1.0, interruption="", wizard=False, change=None):
+async def attempt(
+    monkeypatch,
+    phase,
+    elapsed=1.0,
+    interruption="",
+    wizard=False,
+    change=None,
+    without_previous=False,
+):
     now, events, models, timers = [99.0], [], [], []
     first = base.Field("text:first name#1", "First name", "text", ref="old1")
     second = base.Field("text:summary#1", "Summary", "text", ref="old2")
@@ -46,8 +54,12 @@ async def attempt(monkeypatch, phase, elapsed=1.0, interruption="", wizard=False
     if change:
         current[0] = replace(current[0], **change)
     extra = base.Field(("s2/" if wizard else "") + "text:extra#1", "Extra", "text", ref="live3")
-    if phase == "partial":
+    if phase in {"partial", "credential"}:
         current.append(extra)
+    if without_previous:
+        current.append(
+            base.Field("text:unknown#1", "Unknown question", "text", required=True, ref="live4")
+        )
     actual_timeout = asyncio.timeout
     crossed = False
 
@@ -77,17 +89,32 @@ async def attempt(monkeypatch, phase, elapsed=1.0, interruption="", wizard=False
             )
             return base.Discovery(current, [], [], [], root=base.Node("root")), ""
 
+        async def discover(self, tools, *args):
+            return await self.read(tools)
+
         async def fill(self, tools, item, answer):
             await boundary("refill:" + item.ref)
+            if isinstance(answer, Left):
+                return base.Filled("left", answer.reason)
             return base.Filled("filled")
 
         def resolve(self, item, context):
+            if without_previous:
+                return {
+                    first.key: Answer("Fresh identity", "identity.first_name"),
+                    second.key: Answer("Fresh document", "documents.letter_text"),
+                    extra.key: Answer("Fresh profile", "answers.work_auth"),
+                }.get(item.key, Left("unknown", (), True))
             return Answer("New verified progress", "identity.full_name")
 
     async def model(session):
         models.append(
             (session.clock(), session.deadline, session.token_budget, session.turn_budget)
         )
+        if phase == "credential":
+            await session.prefill()
+            await boundary("credential")
+            return form_agent.Ran(stopped="no_credential")
         if phase == "changed_model":
             current[0] = replace(
                 current[0], label="Changed live question", required=True, ref="new2"
@@ -133,7 +160,7 @@ async def attempt(monkeypatch, phase, elapsed=1.0, interruption="", wizard=False
         adapter,
         workable(),
         strategy={"vendor": "ashby"},
-        previous_report=previous,
+        previous_report=None if without_previous else previous,
         previous_cost=spent,
     )
     application = SimpleNamespace(id=current_plan.application_id, user_id=current_plan.user_id)
@@ -359,3 +386,57 @@ def test_real_finish_does_not_rebind_a_person_answer_to_a_changed_required_field
     assert changed.source is AnswerSource.left
     assert changed.value is None
     assert changed.approved is False
+
+
+@pytest.mark.parametrize("wizard", [False, True])
+@pytest.mark.parametrize("interruption", ["", "timeout", "cancel"])
+def test_actual_no_credential_prefill_attempts_new_source_resolvable_fields(
+    monkeypatch, wizard, interruption
+):
+    async def check():
+        if interruption == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await attempt(
+                    monkeypatch, "credential", elapsed=0, interruption=interruption, wizard=wizard
+                )
+            return
+        result, rows, events, models, old = await attempt(
+            monkeypatch, "credential", elapsed=0, interruption=interruption, wizard=wizard
+        )
+        by_key = {row.field_key: row for row in rows}
+        extra_key = ("s2/" if wizard else "") + "text:extra#1"
+        assert by_key[extra_key].value == "New verified progress"
+        assert by_key[extra_key].source is AnswerSource.identity
+        assert events.count("refill:live3") == 1
+        assert [by_key[o.field.key].value for o in old] == [o.answer.value for o in old]
+        assert models == [(99.0, 100.0, 33_863, 30)]
+        assert result.report.steps == (["Next"] if wizard else [])
+        assert result.report.designated == ""
+        assert generic.SUBMIT_KEY not in by_key
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("interruption", ["", "timeout"])
+def test_fresh_no_credential_prefill_attempts_each_resolvable_peer_and_keeps_true_left(
+    monkeypatch, interruption
+):
+    async def check():
+        result, rows, events, models, _ = await attempt(
+            monkeypatch, "credential", elapsed=0, interruption=interruption, without_previous=True
+        )
+        by_key = {row.field_key: row for row in rows}
+        assert by_key["text:first name#1"].value == "Fresh identity"
+        assert by_key["text:first name#1"].source is AnswerSource.identity
+        assert by_key["text:summary#1"].value == "Fresh document"
+        assert by_key["text:summary#1"].source is AnswerSource.document
+        assert by_key["text:extra#1"].value == "Fresh profile"
+        assert by_key["text:extra#1"].source is AnswerSource.answers
+        assert by_key["text:unknown#1"].value is None
+        assert by_key["text:unknown#1"].source is AnswerSource.left
+        assert by_key["text:unknown#1"].left_reason == "unknown"
+        assert all(events.count("refill:live" + str(i)) == 1 for i in range(1, 5))
+        assert models == [(99.0, 100.0, 33_863, 30)]
+        assert result.report.designated == ""
+
+    asyncio.run(check())

@@ -1034,7 +1034,7 @@ async def _type(
     return False
 
 
-def _fallback_progress(session: forms.FormSession) -> forms.FormReport:
+def _fallback_progress(session: "_FallbackSession") -> forms.FormReport:
     """The last established progress, without another read or a submit designation.
 
     A cancelled read cannot erase the earlier report. A completed preparation read replaces
@@ -1046,6 +1046,11 @@ def _fallback_progress(session: forms.FormSession) -> forms.FormReport:
         (key, outcome)
         for key, outcome in session.outcomes.items()
         if generic._step_of(outcome.field) == session.adapter.step
+    )
+    outcomes.update(
+        (item.key, session._outcome(item))
+        for item in session.visible.values()
+        if generic._step_of(item) == session.adapter.step
     )
     report = forms.FormReport(
         outcomes=list(outcomes.values()),
@@ -1059,11 +1064,15 @@ def _fallback_progress(session: forms.FormSession) -> forms.FormReport:
     return report
 
 
+@dataclass
 class _FallbackSession(forms.FormSession):
     """Retain current field evidence while the original attempt allowance is live."""
 
+    visible: dict[str, ats_base.Field] = field(default_factory=dict)
+
     def remember(self, found: ats_base.Discovery) -> None:
         known, self.outcomes = self.outcomes, {}
+        self.visible = {item.key: item for item in found.fields}
         for item in found.fields:
             outcome = known.get(item.key)
             old = outcome.field if outcome is not None else None
@@ -1074,8 +1083,6 @@ class _FallbackSession(forms.FormSession):
                 old.required,
             ):
                 self.outcomes[item.key] = ats_base.Outcome(item, outcome.answer, outcome.filled)
-            else:
-                self.outcomes[item.key] = self._outcome(item)
         self.skipped += found.skipped
 
     def expired(self) -> bool:
