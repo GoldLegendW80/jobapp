@@ -223,7 +223,7 @@ const sent = async () =>
     (one) => one.org === "custom-known-fallback",
   );
 
-async function cvMatches(where: Page, app: string, submission: Submission) {
+async function pinnedCv(where: Page, app: string) {
   const cv = audit(app).cv;
   const pdf = await where.request.get(
     `/api/documents/${cv.document_id}/versions/${cv.number}/pdf`,
@@ -231,6 +231,12 @@ async function cvMatches(where: Page, app: string, submission: Submission) {
   expect(pdf.status()).toBe(200);
   const bytes = await pdf.body();
   expect(bytes.length).toBeGreaterThan(0);
+  expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+  return bytes;
+}
+
+async function cvMatches(where: Page, app: string, submission: Submission) {
+  const bytes = await pinnedCv(where, app);
   expect(submission.accepted).toBe(true);
   expect(submission.files).toHaveLength(1);
   const uploaded = submission.files[0]!;
@@ -500,6 +506,16 @@ for (const framed of [true, false]) {
         const app = await latest(where, job.id);
         expect(app.mode).toBe("review");
         const view = await approval(where, app.id);
+        for (const [label, value, source] of [
+          ["First name", "Morgan", "identity"],
+          [framed ? "Family name" : "Last name", "Exampleton", "identity"],
+          ["Phone", "+33 6 00 00 00 00", "identity"],
+          ["How did you hear about us?", "Company website", "answers"],
+        ] as const) {
+          expect(
+            view.answers.find((one) => one.label.startsWith(label)),
+          ).toMatchObject({ value, source });
+        }
         expect(
           view.answers.find((one) => one.label.startsWith("Email")),
         ).toMatchObject({ value: who.email, source: "identity" });
@@ -521,6 +537,17 @@ for (const framed of [true, false]) {
         ).json()) as {
           events: Array<{ kind: string; data: Record<string, unknown> }>;
         };
+        expect(
+          detail.events.filter((one) => one.kind === "filled").at(-1)?.data,
+        ).toEqual({
+          filled: 6,
+          unverified: 0,
+          failed: 0,
+          left: 1,
+          agent: 0,
+          skipped: 0,
+        });
+        await pinnedCv(where, app.id);
         expect(detail.events.some((one) => one.kind === "click")).toBe(false);
         expect(audit(app.id).cost).toMatchObject({
           input_tokens: 0,
