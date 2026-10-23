@@ -206,7 +206,10 @@ all existing field and Submit checks. A second module attempt was intentionally 
 [native delta review](../evidence/apply604-native-delta-review.md) also requires verified fill
 counts and a nonempty pinned PDF in the frame/no-credential journeys; source labels alone
 permit unverified outcomes. A fresh continuation owns those proof assertions and the actual
-composed rerun. Rehearsals use normal person cancellation between attempts and a separate
+composed rerun. The fresh [proof recheck](../evidence/apply604-native-proof-recheck.md)
+closes that assertion defect at source: independent tests reject unverified fills, wrong
+values, missing events and empty/non-PDF/wrong-version files. Actual native counts and
+execution still need confirmation. Rehearsals use normal person cancellation between attempts and a separate
 Review account so the real duplicate-form guards remain in force.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
