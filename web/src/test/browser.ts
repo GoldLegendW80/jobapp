@@ -24,7 +24,7 @@ export function ownLease(purpose: "look" | "signin"): Lease {
     automation: false,
     state: "active",
     wait_reason: null,
-    wait_site: null,
+    wait_host: null,
     wait_deadline: null,
     started_at: "2026-10-19T10:00:00Z",
     active_s: 1,

@@ -47,15 +47,19 @@ def test_the_cron_runs_every_minute_on_the_ingestion_queue_and_keeps_no_result()
 
 
 def test_the_limits_of_the_agents_queue_count_the_ingestion_agents() -> None:
+    """The agents queue's limit is the longest agent of the queue plus the margin, whichever
+    module registers it (today apply's form agent, whose run holds a sign in hand off's wait).
+    The ingestion agents are counted in it and keep their own wall time: a longer agent elsewhere
+    raises the queue's limit, never the extract step's."""
     spec = worker.agents_queue()
     assert agents.EXTRACT_NAME in definitions.AGENTS  # registered by building the queue
-    assert spec.job_timeout_s == agents.EXTRACT_WALL_TIME_S + worker.AGENT_JOB_MARGIN_S
+    longest = max(agent.wall_time_s for agent in definitions.AGENTS.values())
+    assert definitions.AGENTS[agents.EXTRACT_NAME].wall_time_s == agents.EXTRACT_WALL_TIME_S
+    assert spec.job_timeout_s == longest + worker.AGENT_JOB_MARGIN_S
     assert all(agent.wall_time_s <= spec.job_timeout_s for agent in definitions.AGENTS.values())
     (run_agent,) = [one for one in spec.functions if one.name == "run_agent"]
     assert run_agent.timeout_s == spec.job_timeout_s
-    assert worker.agent_stale_running().total_seconds() == (
-        agents.EXTRACT_WALL_TIME_S + worker.AGENT_STALE_MARGIN_S
-    )
+    assert worker.agent_stale_running().total_seconds() == longest + worker.AGENT_STALE_MARGIN_S
 
 
 def test_an_agent_longer_than_the_job_timeout_registered_when_the_queue_is_built(
