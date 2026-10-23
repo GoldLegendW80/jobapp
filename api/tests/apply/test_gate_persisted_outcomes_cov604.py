@@ -6,13 +6,13 @@ import pytest
 import sqlalchemy as sa
 
 from app.apply import gate
-from app.apply.models import Application, Authorisation, Mode, State
+from app.apply.models import Application, Authorisation, State
 from app.mail.draft_models import MailDraft, MailSend
 from tests.apply.conftest import AT
 from tests.apply.test_a5_run import application, events
 from tests.apply.test_a6_gate import approve, frozen, ready
 from tests.apply.test_a9_manual import start_manual
-from tests.apply.test_a14_pacing import approved
+from tests.apply.test_a14_email import prepare
 
 
 def test_manual_application_cannot_mint_a_form_submit_approval(db, person_a):
@@ -43,7 +43,7 @@ def test_gate_does_not_mint_another_approval_for_an_already_approved_form(
 def test_email_unknown_retry_resolves_surviving_audit_and_reopens_only_its_draft(
     db, person_a, audit_present, draft_present
 ):
-    found, _ = approved(db, person_a, Mode.review, "e2e-recruiting@example.org")
+    found = prepare(db, person_a, text="Send your CV to e2e-recruiting@example.org")
     app_id = found.id
     draft = db.scalar(sa.select(MailDraft).where(MailDraft.application_id == app_id))
     assert draft is not None
@@ -64,6 +64,8 @@ def test_email_unknown_retry_resolves_surviving_audit_and_reopens_only_its_draft
     else:
         db.delete(draft)
     found.state, found.mail_send_id, found.error_code = State.submit_unknown, send_id, "unknown"
+    found.submitted_at, found.needs = AT, None
+    assert gate.freeze_sent(db, found, AT) == 2
     db.commit()
     recovered = gate.retry(db, person_a.user_id, app_id, AT)
     db.commit()
@@ -86,4 +88,4 @@ def test_email_unknown_retry_resolves_surviving_audit_and_reopens_only_its_draft
     assert [event.data for event in events(db, app_id) if event.kind == "retry"] == [
         {"previous": "submit_unknown"}
     ]
-    assert frozen(db, person_a.cv_version_id) == [None]
+    assert frozen(db, person_a.cv_version_id, person_a.letter_version_id) == ["apply", "apply"]
