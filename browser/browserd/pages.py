@@ -8,6 +8,8 @@
 """
 
 import contextlib
+import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +19,16 @@ from browserd.config import NAVIGATION_S
 PLAYWRIGHT_VERSION = "1.55.0"
 SNAPSHOT_METHOD = "snapshotForAI"
 REF_MARKER = "[ref=e"
+BUTTON_REF = re.compile(r"(?m)^ *- button[^\n]*\[ref=((?:f\d{1,4})?e\d{1,7})\]")
+NATIVE_FILES_JS = """elements => {
+  if (elements.length !== 1) throw new Error('snapshot_ref_changed');
+  const e = elements[0];
+  if (!(e instanceof HTMLInputElement) || e.type !== 'file') return null;
+  const files = e.files;
+  if (!files || files.length > 3) return [];
+  const names = Array.from(files, file => file.name);
+  return names.every(name => name.length <= 83) ? names : [];
+}"""
 
 
 class SnapshotUnavailable(RuntimeError):  # noqa: N818 - an outcome, not an error
@@ -46,6 +58,24 @@ async def snapshot_for_ai(page: Any) -> str:
     if REF_MARKER not in text:
         raise SnapshotUnavailable(f"{SNAPSHOT_METHOD} answered without any {REF_MARKER}N] ref")
     return text
+
+
+async def native_files(page: Any, snapshot: str) -> dict[str, list[str]]:
+    """Read current native FileLists at this snapshot's refs. Empty selections are explicit,
+    so a stale filename echoed by the page cannot hide a cleared or replaced input. Chooser
+    buttons are not native inputs and retain their existing visible readback path."""
+    from browserd.tools.policy import SNAPSHOT_MAX
+
+    selected: dict[str, list[str]] = {}
+    size = 2
+    for ref in dict.fromkeys(BUTTON_REF.findall(snapshot)):
+        names = await page.locator(f"aria-ref={ref}").evaluate_all(NATIVE_FILES_JS)
+        if names is not None:
+            size += len(json.dumps({ref: names}, ensure_ascii=True))
+            if size > SNAPSHOT_MAX:
+                raise SnapshotUnavailable("Native file metadata exceeds the snapshot budget")
+            selected[ref] = names
+    return selected
 
 
 async def front(page: Any) -> Any:
