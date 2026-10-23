@@ -153,3 +153,73 @@ def test_ambiguous_and_unlabelled_controls_stay_unresolved(cut: str) -> None:
 def test_local_unknown_labels_are_not_filtered_by_their_words(label: str, role: str) -> None:
     found = discover(f'- generic:\n  - {role}: {label}\n  - button "Choice" [ref=e1]')
     assert [(s.label, s.reason) for s in found.skipped] == [(label, "unsupported_widget")]
+
+
+@pytest.mark.parametrize("label", ["Team preference", "Équipe souhaitée", "Subscribe", "Details"])
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("depth", [0, 1])
+@pytest.mark.parametrize("repeated_label", [False, True])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '- link "About choices" [ref=e3]',
+        '- heading "Choose a team"',
+        '- textbox "Other details" [ref=e3]',
+    ],
+)
+def test_named_local_choices_remain_unresolved_beside_help_and_other_fields(
+    label: str, required: bool, depth: int, repeated_label: bool, extra: str
+) -> None:
+    name = label + (" *" if required else "")
+    buttons = '- button "Platform" [ref=e1]\n- button "Research" [ref=e2]'
+    if depth:
+        buttons = "- generic:\n" + indent(buttons)
+    visible_label = f"- generic: {name}\n" if repeated_label else ""
+    found = discover(
+        f'- main:\n  - group "{name}":\n' + indent(indent(f"{visible_label}{extra}\n{buttons}"))
+    )
+    assert [(s.label, s.role, s.reason) for s in found.skipped] == [
+        (label, "button", "unsupported_widget")
+    ]
+    assert [f.label for f in found.fields] == (["Other details"] if "textbox" in extra else [])
+
+
+@pytest.mark.parametrize("label", ["Team preference", "Subscribe", "Details", "希望するチーム"])
+@pytest.mark.parametrize("depth", [0, 1, 2])
+@pytest.mark.parametrize("extra", ['- link "About choices" [ref=e3]', '- heading "Choose a team"'])
+def test_a_single_local_choice_with_help_stays_unresolved(
+    label: str, depth: int, extra: str
+) -> None:
+    button = '- button "Choose an option" [ref=e1]'
+    for _ in range(depth):
+        button = "- generic:\n" + indent(button)
+    found = discover(
+        f'- group "{label} *":\n  - generic: {label} *\n{indent(extra)}\n{indent(button)}'
+    )
+    assert [(s.label, s.reason) for s in found.skipped] == [(label, "unsupported_widget")]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '- link "About choices" [ref=e3]',
+        '- heading "Choose a team"',
+        '- textbox "Other details" [ref=e3]',
+    ],
+)
+@pytest.mark.parametrize("kind", ["file", "yes_no"])
+def test_named_file_and_yes_no_groups_keep_their_local_label(extra: str, kind: str) -> None:
+    label = "Resume" if kind == "file" else "May we contact you?"
+    buttons = (
+        '- button "Upload File" [ref=e1]\n- button "Dropbox" [ref=e2]'
+        if kind == "file"
+        else '- button "Yes" [ref=e1]\n- button "No" [ref=e2]'
+    )
+    found = discover(
+        f'- group "{label} *":\n  - generic: {label} *\n{indent(extra)}\n'
+        f"  - generic:\n{indent(indent(buttons))}"
+    )
+    assert [(f.label, f.kind, f.required) for f in found.fields if f.ref != "e3"] == [
+        (label, kind, True)
+    ]
+    assert found.skipped == []

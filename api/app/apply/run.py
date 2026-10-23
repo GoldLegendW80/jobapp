@@ -1058,41 +1058,47 @@ async def _drive_generic(
         remaining = max(0.0, (session.deadline or session.clock()) - session.clock())
         if not session.token_budget or not remaining:
             return Result(State.needs_person, needs="form_changed", cost=before)
-        if previous_report is not None:
-            session.steps = list(getattr(previous_report, "steps", ()))
-            session.closed = [
-                outcome
-                for outcome in previous_report.outcomes
-                if generic._step_of(outcome.field) < adapter.step
-            ]
-            if adapter.step:
-                session.skipped = list(previous_report.skipped)
-            # Keep known progress only where the current page has the exact same field.
-            # Refill it by code, so a model may skip an already filled field safely.
-            found, code = await adapter.read(tools)
-            if found is None or code or found.pending:
-                state, needs, error = _stopped(
-                    code or "needs_person", found.pending if found else ""
-                )
-                return Result(state, needs=needs, error=error, cost=before)
-            current = {item.key: item for item in found.fields}
-            for outcome in previous_report.outcomes:
-                item = current.get(outcome.field.key)
-                old = outcome.field
-                if (
-                    item is not None
-                    and isinstance(outcome.answer, Answer)
-                    and outcome.filled.status in FILLED
-                    and (item.label, item.kind, item.options, item.required)
-                    == (old.label, old.kind, old.options, old.required)
-                ):
-                    filled = await adapter.fill(tools, item, outcome.answer)
-                    if filled.status not in FILLED:
-                        state, needs, error = _stopped(filled.code)
-                        return Result(state, needs=needs, error=error, cost=before)
-                    session.outcomes[item.key] = ats_base.Outcome(item, outcome.answer, filled)
         try:
             async with asyncio.timeout(remaining):
+                if previous_report is not None:
+                    session.steps = list(getattr(previous_report, "steps", ()))
+                    session.closed = [
+                        outcome
+                        for outcome in previous_report.outcomes
+                        if generic._step_of(outcome.field) < adapter.step
+                    ]
+                    if adapter.step:
+                        session.skipped = list(previous_report.skipped)
+                    # Keep known progress only where the current page has the exact same field.
+                    # Refill it by code, so a model may skip an already filled field safely.
+                    found, code = await adapter.read(tools)
+                    if found is None or code or found.pending:
+                        state, needs, error = _stopped(
+                            code or "needs_person", found.pending if found else ""
+                        )
+                        return Result(state, needs=needs, error=error, cost=before)
+                    current = {item.key: item for item in found.fields}
+                    for outcome in previous_report.outcomes:
+                        if session.clock() >= session.deadline:
+                            return Result(State.needs_person, needs="form_changed", cost=before)
+                        item = current.get(outcome.field.key)
+                        old = outcome.field
+                        if (
+                            item is not None
+                            and isinstance(outcome.answer, Answer)
+                            and outcome.filled.status in FILLED
+                            and (item.label, item.kind, item.options, item.required)
+                            == (old.label, old.kind, old.options, old.required)
+                        ):
+                            filled = await adapter.fill(tools, item, outcome.answer)
+                            if filled.status not in FILLED:
+                                state, needs, error = _stopped(filled.code)
+                                return Result(state, needs=needs, error=error, cost=before)
+                            session.outcomes[item.key] = ats_base.Outcome(
+                                item, outcome.answer, filled
+                            )
+                if session.clock() >= session.deadline:
+                    return Result(State.needs_person, needs="form_changed", cost=before)
                 report, cost = await forms.fill(services.form_agent, session)
         except TimeoutError:
             return Result(State.needs_person, needs="form_changed", cost=before)

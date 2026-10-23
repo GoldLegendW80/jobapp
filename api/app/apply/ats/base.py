@@ -338,9 +338,8 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
     for _ in range(3):
         if group is None or group.role not in ("generic", "group"):
             break
-        # A field may contain peer buttons (unknown choices or upload actions), but
-        # not another independently labelled field or page heading. Do not borrow
-        # an entire form's words for a loose action outside its actual fields.
+        # Unnamed wrappers cannot lend other fields' or page headings' words to a
+        # loose action. A named local choice can still contain help or companions.
         separate = False
         for sibling in group.children:
             if sibling is inner:
@@ -355,7 +354,7 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
             ):
                 separate = True
                 break
-        if separate:
+        if separate and not _named_choices(group):
             break
         before, after = _around(group, inner)
         if before:
@@ -368,6 +367,33 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
             return group, label[:NAME_MAX], required or "*" in before or "✱" in before, after
         inner, group = group, group.parent
     return None, "", False, []
+
+
+def _named_choices(group: Node) -> bool:
+    """A named local choice can include help content or a companion field. An isolated
+    action beside another field still cannot borrow a form wrapper's name."""
+    if group.role != "group" or not group.name:
+        return False
+    label = fold(label_of(group.name)[0])
+    repeated_label = False
+    buttons = 0
+    other_fields = False
+    for child in group.children:
+        nodes = list(child.walk())
+        controls = [node for node in nodes if node.role in CONTROLS]
+        if not controls:
+            repeated_label |= any(
+                node.role in ("generic", "text", "paragraph")
+                and fold(label_of(node.text or node.name)[0]) == label
+                for node in nodes
+            )
+        elif all(node.role == "button" for node in controls) and not any(
+            (node.name or node.text).strip() for node in nodes if node.role not in CONTROLS
+        ):
+            buttons += sum(fold(node.name) not in SUBMIT_NAMES for node in controls)
+        elif any(node.role != "link" for node in controls):
+            other_fields = True
+    return buttons > 1 or (buttons == 1 and repeated_label and not other_fields)
 
 
 def _is_yes_no(node: Node) -> dict[str, str] | None:

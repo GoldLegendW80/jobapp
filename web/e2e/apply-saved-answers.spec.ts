@@ -129,6 +129,9 @@ test("a fresh person adds reusable answers, sees worker reuse and keeps applicat
     await expect(page.getByText("No saved answer yet.")).toBeVisible();
     await add(page, QUESTION, "Referral");
     await add(page, "Email", "e2e-bank@example.org");
+    await expect(
+      page.getByText("Reusable answer saved.", { exact: true }),
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "Add answer", exact: true }).click();
     await page
       .getByRole("textbox", { name: "Question", exact: true })
