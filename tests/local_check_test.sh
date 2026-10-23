@@ -10,6 +10,11 @@
 # what the cleanup removes and what it leaves; without one that part is skipped and says so.
 set -euo pipefail
 
+# The enclosing gate's settings are not defaults for these throwaway scenarios.
+# Each scenario can still set its own values after this boundary.
+unset LOCAL_CHECK_FULL LOCAL_CHECK_INT_GRACE LOCAL_CHECK_JOURNEY_SHARDS LOCAL_CHECK_MIN_FREE_GB \
+  LOCAL_CHECK_NET_BASE LOCAL_CHECK_STACKS LOCAL_CHECK_STEP_TIMEOUT LOCAL_CHECK_STUB LOCAL_CHECK_VITEST_WORKERS
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 WORK="$(cd "$WORK" && pwd -P)"
