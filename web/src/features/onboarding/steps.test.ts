@@ -258,6 +258,7 @@ describe("nextPage", () => {
     ["/jobs/./42", "/jobs/42"],
     ["/jobs/../account", "/account"],
     ["/caf%C3%A9", "/caf%C3%A9"],
+    ["/jobs?q=a%2Fb%20c#part%20one", "/jobs?q=a%2Fb%20c#part%20one"],
     // a path of this origin, harmless: the router opens a page that does not exist
     ["/javascript:alert(1)//", "/javascript:alert(1)//"],
   ])("keeps the path of this app %j", (value, kept) => {
@@ -295,6 +296,12 @@ describe("nextPage", () => {
     "/welcome?step=pay",
     "/welcome/again",
     "/%77elcome",
+    "/Welcome",
+    "/%57elcome",
+    "/wElCoMe?step=pay#summary",
+    "/%57ELCOME/again",
+    "/WELCOME///",
+    "/jobs/../Welcome",
     "javascript:alert(1)",
   ])("refuses %j", (value) => {
     expect(nextPage(value)).toBeNull();
