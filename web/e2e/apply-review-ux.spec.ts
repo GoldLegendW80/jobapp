@@ -58,6 +58,7 @@ import hashlib, json, sys, uuid
 import sqlalchemy as sa
 from app.config import get_settings
 from app.db import build_engine, build_sessionmaker
+from app.models import Base  # register foreign-key targets before fixture commits
 from app.identity import service as identity
 from app.apply.models import Application, State
 from app.documents.models import Document, DocumentVersion, Kind
