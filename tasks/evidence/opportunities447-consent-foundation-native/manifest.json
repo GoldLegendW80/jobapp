@@ -1,0 +1,43 @@
+{
+  "tested_head": "180638809942ec6a9b4b63d722cabfcc6c4b6b6f",
+  "tested_tree": "af896088f08491e70cd314374e186c4b191acb9a",
+  "source_binding_sha256": "f2d74ca6f4779ef6953ad3cd05403606f3b6f00e13eedd83280b067e86aa67b5",
+  "tests": {
+    "expected": 37,
+    "unexpected": 0,
+    "skipped": 0,
+    "flaky": 0,
+    "workers": 1,
+    "retries": 0
+  },
+  "images": {
+    "desktop-light.png": {
+      "sha256": "30de2fd41adaa88c042ae8571bb738b63caca3ee4bb2e09d8c5124ffec838eea",
+      "bytes": 82324,
+      "width": 1280,
+      "height": 800,
+      "root_viewed": true
+    },
+    "desktop-dark.png": {
+      "sha256": "720dc361b804e24cae19def128de971876156e89b2a7971030dedc0570195e84",
+      "bytes": 85587,
+      "width": 1280,
+      "height": 800,
+      "root_viewed": true
+    },
+    "mobile-light.png": {
+      "sha256": "7c4ce84a7cd881a17850ce8f0bf42c5f3700e9737841307c0342df618dd59708",
+      "bytes": 53422,
+      "width": 375,
+      "height": 812,
+      "root_viewed": true
+    },
+    "mobile-dark.png": {
+      "sha256": "82bdb924aa1c8e6853f271d6da7d878a7522b727028632ed7b1fb1f23f7e12d1",
+      "bytes": 56876,
+      "width": 375,
+      "height": 812,
+      "root_viewed": true
+    }
+  }
+}
