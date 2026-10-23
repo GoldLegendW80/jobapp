@@ -7,11 +7,13 @@ gate result on that pull request identify the exact checked head and tree.
 
 Implementation and scoped source review cover A1 to A18. Composed runtime checkpoints are
 recorded below; PR #604 records the final combined gate and independent review on its exact
-head/tree. The application source was frozen at
+head/tree. The Apply source checkpoint at
 `0070e6202cfe983ab2b6136f29e154c87c16a67c`, tree
-`602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`. The complete composed Apply/browser suite
-passes 10,460 tests in 361.17 seconds on that source. Later documentation, fixture corrections
-and the tree-equivalent merge of upstream `8d9c8c68` do not change application code.
+`602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`, passes the complete composed Apply/browser
+suite, 10,460 tests in 361.17 seconds. Subsequent composition of current main `1244322c`
+into isolated `0b668519` preserves that Apply source while adding upstream worker, Jobs and
+Opportunities changes. The third full gate exposed two A18 UI races and fixture defects;
+these require fixes and a new final source checkpoint, gate and independent review.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
@@ -51,7 +53,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 
 | Capability | Implemented behavior | Runtime verification and final gate coverage |
 |---|---|---|
-| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Default generic worker, known fallback, framed recovery and explicit Saved answers are implemented. | The named-group checkpoint passes all 7,070 Apply tests and seven actual A5/A7 browser tests. Native file fix: 9,729 Apply/browser passes, three actual native file/iframe/chooser cases and all four actual A8 cases pass. Saved answers actual native acceptance passes. Known fallback actual acceptance and the final combined gate/review remain required. |
+| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Default generic worker, known fallback, framed recovery and explicit Saved answers are implemented. | The named-group checkpoint passes all 7,070 Apply tests and seven actual A5/A7 browser tests. Native file fix: 9,729 Apply/browser passes, three actual native file/iframe/chooser cases and all four actual A8 cases pass. Saved answers actual native acceptance passes. All six actual native known-fallback cases pass. The final combined gate/review remains required. |
 | A9: Apply myself | Native document picker ownership, immediate Submit-and-Close recording, ended-session queue/reopen/record, placed-document freezing, no app submit click. | Four new real browser recovery flows, original manual flows, six inherited native cases and distinct incidental-picker race pass. Whole Apply/Browser groups cover final integration. |
 | A10a: retries and person input | Immutable 1,800-second person wait outside active time; same adapter, attempt, earlier fields and steps survive captcha/email-code input. | Whole Apply/browser checkpoint: 7,167 passes, plus three real Redis/private-HTTP cases. Actual captcha/email-code flows pass before a fresh approval and one fake submission. |
 | A10b: sign-in | Watched and later owner-owned handoffs, registered typed callbacks and idempotent queueing; Full auto becomes Review first. | Both fake-site journeys and all 22 backend cases pass. Whole Apply/Browser groups cover final integration. |
@@ -247,6 +249,18 @@ exact evidence: baseline fails after twenty passes; the test-only environment bo
 passes all 51 scenarios under both inherited settings and clean defaults, plus 81 CI-plan
 checks. All original assertions remain and production gating is unchanged. The next exact-head
 quiet gate must run in full; the earlier partial results are not acceptance.
+
+The [third full gate](../evidence/apply604-gate3-result.md) completed with FAIL on
+`57c17cc0` / tree `61a4162b`, after 5,154 seconds. API passes 28,107 with 57 existing
+personal-source skips; frontend passes 2,748 across 117 files. All eight non-Apply groups
+and 19 of 21 complete Apply files pass. A18 fails the immediate Replace checkbox and exposes
+starting-lease live-ticket 403s; Review UX fails its editor row locator, leaving three later
+serial cases unrun. A16 passes after one internal stale-version retry caused by premature
+document readiness; Ingestion G10 separately passes after an estimate-change retry.
+Docker reports 2,366 passes, two durable-UID fixture collisions and eight existing no-photo-slot
+skips. Standalone timing and scoring pass. Coverage reports 94 percent against the unchanged
+95 percent requirement. The report retains all failures, emitted-image inspection and exact
+logs. Fresh authors own the fixes and measured coverage closure; this gate is not acceptance.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
