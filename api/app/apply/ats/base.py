@@ -336,7 +336,26 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
     visible label in their children; that text is not a second part of the field's name."""
     inner, group = control, control.parent
     for _ in range(3):
-        if group is None or group.role == "root":
+        if group is None or group.role not in ("generic", "group"):
+            break
+        # A field may contain peer buttons (unknown choices or upload actions), but
+        # not another independently labelled field or page heading. Do not borrow
+        # an entire form's words for a loose action outside its actual fields.
+        separate = False
+        for sibling in group.children:
+            if sibling is inner:
+                continue
+            nodes = list(sibling.walk())
+            controls = [n for n in nodes if n.role in CONTROLS]
+            if any(n.role == "heading" for n in nodes) or any(n.role != "button" for n in controls):
+                separate = True
+                break
+            if controls and any(
+                (n.name or n.text).strip() for n in nodes if n.role not in CONTROLS
+            ):
+                separate = True
+                break
+        if separate:
             break
         before, after = _around(group, inner)
         if before:
