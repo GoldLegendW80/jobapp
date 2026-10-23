@@ -6,6 +6,7 @@ import {
   closeRemoteWindow,
   remoteSpot,
 } from "./apply-a9-helpers";
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { stub } from "./apply-helpers";
 import {
   CSRF,
@@ -77,21 +78,7 @@ async function posting(reason: string): Promise<string> {
       })
     ).status(),
   ).toBe(202);
-  await expect
-    .poll(
-      async () => {
-        const read = await page.request.get(`/api/jobs/${job}/documents`);
-        const { documents } = (await read.json()) as {
-          documents: { latest: unknown }[];
-        };
-        return (
-          documents.length === 2 &&
-          documents.every((one) => one.latest !== null)
-        );
-      },
-      { timeout: 150_000 },
-    )
-    .toBe(true);
+  await waitForPostingDocuments(page.request, job);
   return job;
 }
 

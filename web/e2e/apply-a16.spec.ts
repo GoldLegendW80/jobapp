@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { stub } from "./apply-helpers";
 import {
   CSRF,
@@ -64,20 +65,7 @@ async function posting(number: number, variant = "plain") {
       })
     ).status(),
   ).toBe(202);
-  await expect
-    .poll(
-      async () => {
-        const read = await page.request.get(`/api/jobs/${id}/documents`);
-        const { documents } = (await read.json()) as {
-          documents: { latest: unknown }[];
-        };
-        return (
-          documents.length === 2 && documents.every((d) => d.latest !== null)
-        );
-      },
-      { timeout: 150_000 },
-    )
-    .toBe(true);
+  await waitForPostingDocuments(page.request, id);
   return id;
 }
 const accepted = async () =>

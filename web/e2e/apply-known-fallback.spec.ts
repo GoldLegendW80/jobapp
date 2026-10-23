@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub, type Submission } from "./apply-helpers";
 import {
   CSRF,
@@ -184,22 +185,7 @@ async function posting(
       })
     ).status(),
   ).toBe(202);
-  await expect
-    .poll(
-      async () => {
-        const body = (await (
-          await where.request.get(`/api/jobs/${id}/documents`)
-        ).json()) as {
-          documents: Array<{ latest: unknown }>;
-        };
-        return (
-          body.documents.length === 2 &&
-          body.documents.every((one) => one.latest !== null)
-        );
-      },
-      { timeout: 150_000 },
-    )
-    .toBe(true);
+  await waitForPostingDocuments(where.request, id);
   return { id, title };
 }
 

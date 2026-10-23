@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -102,22 +103,7 @@ test("A approves one fake submission; B and a signed-out person cannot read its 
         })
       ).status(),
     ).toBe(202);
-    await expect
-      .poll(
-        async () => {
-          const response = await page.request.get(
-            `/api/jobs/${posting}/documents`,
-          );
-          const { documents } = (await response.json()) as {
-            documents: Array<{ latest: unknown }>;
-          };
-          return (
-            documents.length === 2 && documents.every((d) => d.latest !== null)
-          );
-        },
-        { timeout: 150_000 },
-      )
-      .toBe(true);
+    await waitForPostingDocuments(page.request, posting);
 
     await page.goto(`/jobs/${posting}`);
     const section = page.getByRole("region", { name: "Apply", exact: true });
