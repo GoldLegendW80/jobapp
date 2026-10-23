@@ -596,6 +596,9 @@ def post(
     found = store.get(db, user_id, document_id)
     if found is None:
         raise store.NotFoundError(document_id)
+    # Lock 1b before lock 3: `_reads` reads the base CV's upload under lock 3.
+    if found.scope == Scope.base and found.source_document_id is not None:
+        store.lock_source(db, user_id, found.source_document_id)
     if found.posting_id is not None:
         store.lock_posting(db, user_id, found.posting_id)
     document = store.lock_document(db, user_id, document_id)

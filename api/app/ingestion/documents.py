@@ -29,7 +29,8 @@ Storing (`store_file`, `store_paste`), in one transaction that the caller commit
    `done` with a note): then the new upload takes the row over, same id, back to the start. A
    replacement empties the old text and page images, so it asks the replacement checks first:
    a row a check protects (G15: a run has read it) is returned as it is, with the check's
-   sentence.
+   sentence. An upload sent to become a base CV (`keep`, issue #519) also writes on a row it
+   finds: the mark `keep_bytes`, and the file again when the row's text had replaced it.
    For a new file the document count and the quota are checked here a first time, before a
    byte goes to Postgres: a user at the limit costs the database nothing. The check that
    decides is the one of step 3.
@@ -128,6 +129,10 @@ KIND_OF_MIME: dict[str, Kind] = {
     "image/png": Kind.image,
     "image/jpeg": Kind.image,
 }
+
+# The kinds whose file an upload for a base CV keeps (`keep_bytes`): a PDF, a ZIP that the
+# parser finds to be a Word document.
+KEPT_KINDS: frozenset[Kind] = frozenset({Kind.pdf, Kind.archive})
 
 # The kinds a reader exists for in this version (module docstring).
 READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text, Kind.pdf, Kind.archive, Kind.image})
@@ -518,15 +523,18 @@ def _store(
     payload: _Content | bytes | bytearray,
     now: datetime,
     spare: uuid.UUID | None = None,
+    keep: bool = False,
 ) -> Stored:
     """Steps 1 to 3 of the module docstring. `payload` is the file of a binary kind, kept as
     it is, or the text of a document that is complete at once. The room is counted without the
-    document `spare`."""
+    document `spare`. `keep`: the file is sent to become a base CV (`keep_bytes`), and a row
+    already there for it takes the mark and gets its file back (`_keep_file`)."""
     content = payload if isinstance(payload, _Content) else None
     body = None if isinstance(payload, _Content) else payload
+    keep = keep and body is not None
     cost = payload.stored_bytes if isinstance(payload, _Content) else len(payload)
     existing = _by_hash(db, user_id, digest)
-    if existing is not None and not replaceable(existing):
+    if existing is not None and not replaceable(existing) and not keep:
         _log("document duplicate", existing)
         return Stored(existing, created=False)
     if existing is None:
@@ -536,12 +544,16 @@ def _store(
     lock_user(db, user_id)
     document = _by_hash(db, user_id, digest, lock=True)
     if document is not None and not replaceable(document):
+        if keep:
+            _keep_file(db, document, len(body or b""), spare)
         _log("document duplicate", document)
         return Stored(document, created=False)
     replaced = document is not None
     if document is not None:
         refused = _refusal(db, document)
         if refused:
+            if keep:
+                _keep_file(db, document, len(body or b""), spare)
             _log("document replacement refused", document)
             return Stored(document, created=False, refused=refused)
         # The row starts over: what the failed or partial read left goes first, so the quota
@@ -572,6 +584,8 @@ def _store(
     document.attempts = 0
     document.secret_warning = content is not None and bool(content.secret_rules)
     document.secret_confirmed_at = None
+    # A kept row read again keeps its mark: the base CVs converted from it still need the file.
+    document.keep_bytes = keep or (replaced and body is not None and document.keep_bytes)
     if content is not None:
         document.text = content.text
     db.flush()
@@ -583,6 +597,44 @@ def _store(
         secret_rules=content.secret_rules if content else [],
     )
     return Stored(document, created=True)
+
+
+def _keep_file(
+    db: Session, document: IngestionDocument, size: int, spare: uuid.UUID | None
+) -> None:
+    """A file sent again to become a base CV, on the row it already has (locked, under the
+    user's lock): the row takes the mark, and a row whose file went when its text was stored
+    gets it back from the staged body, if the quota has room for it. A failed row has no use for
+    it (it is replaced, never converted)."""
+    if kind_of(document.mime) not in KEPT_KINDS or document.text_status is TextStatus.failed:
+        return
+    document.keep_bytes = True
+    gone = db.execute(
+        sa.select(IngestionDocument.raw.is_(None)).where(IngestionDocument.id == document.id)
+    ).scalar_one()
+    if gone:
+        _check_room(usage(db, document.user_id, spare), size, new=False)
+        _attach(db, document.id)
+    db.flush()
+    _log("document file kept", document, restored=bool(gone))
+
+
+def drop_kept_file(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+    """The file kept for a base CV goes: the documents module calls it in the transaction that
+    deletes the last base CV converted from this document, holding the row. The mark goes in
+    every case; a document still waiting for its reader keeps the file it is about to be read
+    from, and the reader drops it once the text is stored. True when the mark went."""
+    waiting = IngestionDocument.text_status == TextStatus.pending
+    gone = db.execute(
+        sa.update(IngestionDocument)
+        .where(
+            IngestionDocument.id == document_id,
+            IngestionDocument.user_id == user_id,
+            IngestionDocument.keep_bytes,
+        )
+        .values(raw=sa.case((waiting, IngestionDocument.raw), else_=None), keep_bytes=False)
+    )
+    return bool(gone.rowcount)
 
 
 def _guarded(store: Callable[[], Stored], db: Session, user_id: uuid.UUID, digest: bytes) -> Stored:
@@ -605,10 +657,13 @@ def store_file(
     body: bytes | bytearray,
     digest: bytes,
     now: datetime,
+    keep: bool = False,
 ) -> Stored:
     """Keep an uploaded file for `user_id`. `digest` is the SHA-256 of `body`, computed while the
-    body was read. Raises DocumentError: 413 over the file size or the user's quota, 415 for a
-    type that is not read, 422 for an empty file, a file without text or a 201st document."""
+    body was read. `keep`: the file is sent to become a base CV, so a PDF or a ZIP keeps its
+    bytes once its text is stored (`keep_bytes`); any other kind ignores it. Raises
+    DocumentError: 413 over the file size or the user's quota, 415 for a type that is not read,
+    422 for an empty file, a file without text or a 201st document."""
     if not body:
         raise DocumentError(422, EMPTY, "empty")
     if len(body) > FILE_MAX_BYTES:
@@ -633,6 +688,7 @@ def store_file(
             digest=digest,
             payload=content if content is not None else body,
             now=now,
+            keep=keep and kind_of(mime) in KEPT_KINDS,
         )
 
     return _guarded(store, db, user_id, digest)
