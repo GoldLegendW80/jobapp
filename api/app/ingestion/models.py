@@ -134,6 +134,10 @@ class IngestionDocument(Base):
     size: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     sha256: Mapped[bytes] = mapped_column(pg.BYTEA, nullable=False)
     raw: Mapped[bytes | None] = mapped_column("bytes", pg.BYTEA, deferred=True)
+    # Sent to become a base CV: `raw` outlives the text (SPEC-ingestion.md, "Text extraction").
+    keep_bytes: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.text("false")
+    )
     text: Mapped[str | None] = mapped_column(sa.Text, deferred=True)
     text_source: Mapped[TextSource] = mapped_column(TEXT_SOURCE_ENUM, nullable=False)
     text_status: Mapped[TextStatus] = mapped_column(

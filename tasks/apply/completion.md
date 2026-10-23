@@ -148,7 +148,11 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
   [quote ambiguity evidence](../../docs/evidence/apply604-quote-ambiguity.md).
 - Letter/rendering: adapter-owned classification, ordinary 5,000 and document-letter 10,000
   codepoint limits, exact shape binding and no truncation; an immutable hour per rendering
-  attempt. All 201 real database/API cases pass. Migration tests pass through one `0026` head.
+  attempt. All 201 real database/API cases passed at that checkpoint, with migration head `0026`.
+  Composing released ingestion migration `0024` renumbers the three unreleased Apply migrations
+  to `0025` through `0027`. This composition checkpoint passed 186 focused migration, retention,
+  upload and deletion tests, including real upgrade, downgrade, re-upgrade and model matching
+  at the single `0027` head.
   The final Apply group runs the five visible editor/render-wait tests.
 - Request boundaries: six request schemas have explicit bounds, with no registry exceptions
   or larger body classes. All 45 identity/body/schema cases pass, including escaped maxima
