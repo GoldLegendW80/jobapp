@@ -30,8 +30,12 @@ passes [fresh independent source closure](../evidence/apply604-ux-posting-source
 Its fresh native run on `f61962cb` fails the first fill when the unchanged browser memory
 guard closes the tab at 1,006 MiB: one pass, one failure, three not run, zero required layouts.
 This is an actual functional acceptance blocker under #605, beyond the earlier sustained-use
-concern. Memory diagnosis, fresh native acceptance, the complete quiet gate and final
-whole-PR review remain required.
+concern. The [fresh memory diagnosis](../evidence/apply604-memory-native-diagnosis.md) finds
+identical browser/Compose inputs but substantial pre-lease file-cache charges absent from
+earlier passing runs. Guard-time attribution is missing, so it does not justify a memory fix.
+Numeric decision diagnostics and a separate source-backed blank-replacement race probe are
+assigned before one bounded diagnostic run. Fresh native acceptance, the complete quiet
+gate and final whole-PR review remain required.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
