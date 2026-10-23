@@ -33,9 +33,15 @@ This is an actual functional acceptance blocker under #605, beyond the earlier s
 concern. The [fresh memory diagnosis](../evidence/apply604-memory-native-diagnosis.md) finds
 identical browser/Compose inputs but substantial pre-lease file-cache charges absent from
 earlier passing runs. Guard-time attribution is missing, so it does not justify a memory fix.
-Numeric decision diagnostics and a separate source-backed blank-replacement race probe are
-assigned before one bounded diagnostic run. Fresh native acceptance, the complete quiet
-gate and final whole-PR review remain required.
+The [numeric decision diagnostics](../evidence/apply604-guard-diagnostic-implementation.md)
+pass 31 final focused cases and the existing non-native browser module. A separate
+[source-backed blank-replacement correction](../evidence/apply604-guard-blank-implementation.md)
+passes 56 focused cases and 2,184 browser cases: exact internal blank tabs survive listener
+and settlement cleanup, while the original memory event, victim and navigation refusals stay
+unchanged. This preserves the replacement tab; the original form still closes at the guard.
+Both changes are composed on `9358e4eb` and await fresh independent source closure before
+one bounded diagnostic run. They do not identify or repair the memory spike. Fresh native
+acceptance, the complete quiet gate and final whole-PR review remain required.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
