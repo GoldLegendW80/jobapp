@@ -299,32 +299,57 @@ test("a person explicitly saves the grounded Summary and prepares the native fal
   ).toBe(200);
 });
 
-test("a changed hosted Ashby form uses the default worker and submits only after person approval", async () => {
-  const job = await hosted(page, person);
-  await start(page, job.id);
-  await expect
-    .poll(async () => (await latest(page, job.id)).state, { timeout: FILL })
-    .toBe("ready");
-  const app = await latest(page, job.id);
-  const view = await approval(page, app.id);
-  expect(app).toMatchObject({ mode: "review", ats: "ashby" });
-  expect(audit(app.id).strategy).toMatchObject({ vendor: "ashby" });
-  noLeft(view);
-  expect(await sent()).toEqual([]);
-  await page.goto(`/jobs/${job.id}`);
-  const section = page.getByRole("region", { name: "Apply" });
-  await shots(page, "hosted-review");
-  await section.getByRole("button", { name: "Approve and submit" }).click();
-  await page
-    .getByRole("alertdialog")
-    .getByRole("button", { name: "Approve and submit" })
-    .click();
-  await expect(section).toContainText("Applied.", { timeout: FILL });
-  const submissions = await sent();
-  expect(submissions).toHaveLength(1);
-  expect(submissions[0]!.fields.email).toBe(person.email);
-  await cvMatches(page, app.id, submissions[0]!);
-  await shots(page, "hosted-applied");
+test("a changed hosted Ashby form uses the default worker and submits only after person approval", async ({
+  browser,
+}) => {
+  const reviewPerson = invented("known-fallback-review");
+  const reviewContext = await newContext(browser);
+  const reviewPage = await reviewContext.newPage();
+  const reviewErrors = watchErrors(reviewPage);
+  try {
+    await prepare(reviewPage, reviewPerson);
+    expect(
+      (
+        await reviewPage.request.post("/api/apply/answer-bank", {
+          headers: CSRF,
+          data: { question: "Summary", answer: SUMMARY },
+        })
+      ).status(),
+    ).toBe(201);
+
+    const job = await hosted(reviewPage, reviewPerson);
+    await start(reviewPage, job.id);
+    await expect
+      .poll(async () => (await latest(reviewPage, job.id)).state, {
+        timeout: FILL,
+      })
+      .toBe("ready");
+    const app = await latest(reviewPage, job.id);
+    const view = await approval(reviewPage, app.id);
+    expect(app).toMatchObject({ mode: "review", ats: "ashby" });
+    expect(audit(app.id).strategy).toMatchObject({ vendor: "ashby" });
+    noLeft(view);
+    expect(await sent()).toEqual([]);
+    await reviewPage.goto(`/jobs/${job.id}`);
+    const section = reviewPage.getByRole("region", { name: "Apply" });
+    await shots(reviewPage, "hosted-review");
+    await section.getByRole("button", { name: "Approve and submit" }).click();
+    await reviewPage
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Approve and submit" })
+      .click();
+    await expect(section).toContainText("Applied.", { timeout: FILL });
+    const submissions = await sent();
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]!.fields.email).toBe(reviewPerson.email);
+    await cvMatches(reviewPage, app.id, submissions[0]!);
+    await shots(reviewPage, "hosted-applied");
+
+    expect(reviewErrors).toEqual([]);
+  } finally {
+    await reviewContext.close();
+    clearAttempts([reviewPerson.email]);
+  }
 });
 
 test("three real Full auto rehearsals of the hosted fallback send nothing", async () => {
