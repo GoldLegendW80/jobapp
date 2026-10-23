@@ -24,7 +24,7 @@ class ChangingPortal(Portal):
         if self.fault == "navigation_failed":
             return {"ok": False}
         if self.fault == "save_unknown" and self.clicks:
-            return {"ok": False}
+            return {"ok": False, "error": "navigation_failed"}
         result = await super().navigate(url)
         if self.fault == "site_value_changed":
             self.values["Full name"] = "A site edit"

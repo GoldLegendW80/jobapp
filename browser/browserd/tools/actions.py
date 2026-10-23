@@ -82,6 +82,14 @@ class PersonInput(Exception):  # noqa: N818  a control-flow signal
     """The person took back input during a paced action."""
 
 
+class RefusalRecoveryError(Exception):
+    """Keep a policy repair failure outside ordinary navigation normalization."""
+
+    def __init__(self, original: Exception):
+        super().__init__()
+        self.original = original
+
+
 @dataclass
 class State:
     """What the tools keep for one lease (Lease.scratch): the placed documents and the tab."""
@@ -198,18 +206,24 @@ class Tab:
             off = not self.allowed(other.url)
             if other is not self.state.page and off:
                 log.warning("lease %s: a tab outside the allow list closed", self.lease_tag)
-                await other.close()
+                try:
+                    await other.close()
+                except Exception as exc:
+                    raise RefusalRecoveryError(exc) from exc
         page = self.state.page
         left = page is not None and not page.is_closed() and not self.on_list(page)
-        if left:
-            with contextlib.suppress(Exception):  # no history, a timeout: the blank page then
-                await page.go_back(timeout=ACTION_S * 1000)
-            if not self.on_list(page):
-                await page.goto(ABOUT_BLANK)
         if left or self.state.blocked:
-            self.state.blocked.clear()
-            log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
-            return {**refused("host_not_allowed"), "url": page.url if page else None}
+            try:
+                if left:
+                    with contextlib.suppress(Exception):  # no history, a timeout: the blank then
+                        await page.go_back(timeout=ACTION_S * 1000)
+                    if not self.on_list(page):
+                        await page.goto(ABOUT_BLANK)
+                self.state.blocked.clear()
+                log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
+                return {**refused("host_not_allowed"), "url": page.url if page else None}
+            except Exception as exc:
+                raise RefusalRecoveryError(exc) from exc
         return result
 
     async def element(self, args: dict[str, Any]) -> tuple[Any, Any]:
@@ -269,13 +283,24 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
     it is taken back and the call answers host_not_allowed before the tool acts or reads further.
     A result is answered only while the tab is still on the list (settle)."""
     try:
-        result = await TOOLS[name](tab, args)
-    except OffList:
-        log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
-        return await tab.settle(refused("host_not_allowed"))
-    except PersonInput:
-        return failure("person_input", "Refused: the person holds the input.")
-    return await tab.settle(result) if result.get("ok") else result
+        try:
+            result = await TOOLS[name](tab, args)
+        except OffList:
+            log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
+            return await tab.settle(refused("host_not_allowed"))
+        except PersonInput:
+            return failure("person_input", "Refused: the person holds the input.")
+        return await tab.settle(result) if result.get("ok") else result
+    except RefusalRecoveryError as exc:
+        raise exc.original from None
+    except Exception as exc:
+        if name != "browser_navigate":
+            raise
+        from playwright.async_api import Error
+
+        if not isinstance(exc, Error):
+            raise
+        return failure("navigation_failed", "The page did not let this navigation finish.")
 
 
 async def close_off_list(tab: Any, hosts: tuple[str, ...], lease_tag: str) -> None:

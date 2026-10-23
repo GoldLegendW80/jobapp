@@ -71,6 +71,51 @@ def test_submit_crash_before_page_opens_returns_to_fresh_approval(
     assert frozen(db, person_a.cv_version_id, person_a.letter_version_id) == [None, None]
 
 
+def test_navigation_failure_before_arm_requires_fresh_approval_without_retry(
+    db, factory, person_a, forms_base_url, monkeypatch
+):
+    app_id = ready(db, factory, person_a, forms_base_url)
+    assert approve(factory, person_a, app_id).passed
+    form, leases = submit_ashby(), GateLeases()
+
+    async def unavailable(url):
+        return {"ok": False, "error": "navigation_failed"}
+
+    monkeypatch.setattr(form, "navigate", unavailable)
+    assert (
+        run_submit(submit_services(factory, form, forms_base_url, leases=leases), app_id) == "ready"
+    )
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.ready, "form_changed")
+    assert form.gate_clicks == []
+    assert len(leases.released) == 1
+    assert frozen(db, person_a.cv_version_id, person_a.letter_version_id) == [None, None]
+
+
+def test_navigation_failure_after_arm_keeps_unknown_outcome_without_second_click(
+    db, factory, person_a, forms_base_url, monkeypatch
+):
+    app_id = ready(db, factory, person_a, forms_base_url)
+    assert approve(factory, person_a, app_id).passed
+    form = submit_ashby(answer="silent")
+
+    original = form.snapshot
+
+    async def fail_after_click():
+        if form.gate_clicks:
+            return {"ok": False, "error": "navigation_failed"}
+        return await original()
+
+    monkeypatch.setattr(form, "snapshot", fail_after_click)
+    env = submit_services(factory, form, forms_base_url)
+    assert run_submit(env, app_id) == "submit_unknown"
+    assert run_submit(env, app_id) == "not_approved"
+    found = application(db, app_id)
+    assert found.state is State.submit_unknown
+    assert len(form.gate_clicks) == 1
+    assert frozen(db, person_a.cv_version_id, person_a.letter_version_id) == ["apply", "apply"]
+
+
 @pytest.mark.parametrize("error", [BrowserError("unavailable"), StoreUnavailableError()])
 def test_release_failure_preserves_a_confirmed_submission_and_cannot_replay(
     db, factory, person_a, forms_base_url, monkeypatch, error

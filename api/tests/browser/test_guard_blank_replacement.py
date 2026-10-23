@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 
+from tests.browser.test_navigation_failures import navigation_errors as navigation_errors
+
 ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.skipif(
     not (ROOT / "browser/browserd").is_dir(), reason="the repository root is not mounted here"
@@ -143,6 +145,59 @@ def test_guard_keeps_exact_blank_and_does_not_end_the_lease(listener_before_retu
         assert tab.on_list(replacement)
         assert await tab.settle({"ok": True}) == {"ok": True}
         assert context.pages == [replacement], "settle must retain the guard's replacement too"
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("boundary", ["front", "goto", "title"])
+@pytest.mark.parametrize("listener_before_return", [True, False])
+def test_memory_close_during_navigation_keeps_the_lease_and_reports_navigation_failure(
+    monkeypatch, navigation_errors, listener_before_return, boundary
+) -> None:
+    async def go() -> None:
+        tab, context = await setup(listener_before_return)
+        victim = context.pages[0]
+        events: list[dict[str, Any]] = []
+
+        async def close_target() -> None:
+            assert await chromium.guard_memory(
+                tab.browser.browser,
+                90,
+                lambda **event: events.append(event),
+                lambda: (1006 << 20, 1024 << 20),
+            )
+            await context.drain()
+
+        async def front() -> None:
+            if victim.closed:
+                raise navigation_errors.TargetClosedError("closed target")
+
+        async def dwell() -> None:
+            if boundary == "front":
+                await close_target()
+
+        async def goto(url, **kwargs):
+            assert url == ON
+            if boundary == "goto":
+                await close_target()
+                raise navigation_errors.TargetClosedError("closed target")
+
+        async def title():
+            await close_target()
+            raise navigation_errors.TargetClosedError("closed target")
+
+        monkeypatch.setattr(victim, "bring_to_front", front, raising=False)
+        monkeypatch.setattr(victim, "goto", goto, raising=False)
+        monkeypatch.setattr(victim, "title", title, raising=False)
+        monkeypatch.setattr(tab.pacer, "dwell", dwell)
+        result = await actions.run(tab, "browser_navigate", {"url": ON})
+        assert result["error"] == "navigation_failed"
+        assert victim.is_closed()
+        assert events == [{"event": "tab_closed", "reason": "memory", "used_mib": 1006}]
+        assert not context.exit.done()
+        assert len(context.pages) == 1
+        assert context.pages[0].url == "about:blank"
+        assert not context.pages[0].is_closed()
 
     asyncio.run(go())
 
