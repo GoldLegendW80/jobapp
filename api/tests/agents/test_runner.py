@@ -129,6 +129,9 @@ def test_env_carries_the_api_key_and_blanks_the_worker_secrets(
         assert env[name] == "1"
     assert env["CLAUDE_CONFIG_DIR"].endswith("/config")
     assert env["HOME"].endswith("/home")
+    session_max = Settings.model_fields["browser_session_max_s"].metadata
+    longest_s = max(m.le for m in session_max if hasattr(m, "le"))
+    assert int(env["MCP_TOOL_TIMEOUT"]) > longest_s * 1000  # a sign in hand off is never cut
 
 
 def test_subscription_token_goes_to_oauth_variable_and_is_verified_once(

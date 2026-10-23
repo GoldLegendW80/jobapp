@@ -5,6 +5,7 @@ the one handler of `configure_logging` is where all of them end. Every test here
 third party logger's name with made up credentials of the right shape (never a real one), and
 reads what the handler wrote."""
 
+import base64
 import io
 import json
 import logging
@@ -172,6 +173,35 @@ def test_the_hundred_first_characters_of_a_line_that_holds_the_credential(lines:
         assert PREFIX not in line["msg"], lead
         assert "Lg4_" not in line["msg"], lead
         assert REDACTED in line["msg"], lead
+
+
+def b64(text: str) -> str:
+    return base64.b64encode(text.encode()).decode()
+
+
+# What the module docstring names as out of reach (issue #155, point 3): (what a library logs,
+# what of it stays written).
+OUT_OF_REACH = {
+    "upper case": (API_KEY.upper(), API_KEY.upper()),
+    "whitespace inside the key": (API_KEY[:30] + " " + API_KEY[30:], API_KEY[30:]),
+    "the key without its head": (API_KEY[len(PREFIX) :], API_KEY[len(PREFIX) :]),
+    "base64 of the key": (b64(API_KEY), b64(API_KEY)),
+    "base64 of user:key": ("Basic " + b64(f"user:{API_KEY}"), b64(f"user:{API_KEY}")),
+    "hex": (API_KEY.encode().hex(), API_KEY.encode().hex()),
+    "another dash": (API_KEY.replace("-", "\u2010"), API_KEY.replace("-", "\u2010")),
+}
+
+
+@pytest.mark.parametrize(("logged", "stays"), list(OUT_OF_REACH.values()), ids=list(OUT_OF_REACH))
+def test_the_encodings_the_module_docstring_names_stay_out_of_reach(
+    lines: Lines, logged: str, stays: str
+) -> None:
+    """The documented limit, pinned: the credential in use and its shape on, each of these is
+    written as it is. A matcher for one of them changes this test and that line together."""
+    with hidden(API_KEY):
+        logging.getLogger("httpx").error("header %s", logged)
+    [line] = lines()
+    assert stays in line["msg"]
 
 
 def test_a_secret_of_no_known_shape_is_hidden_only_while_it_is_in_use(lines: Lines) -> None:

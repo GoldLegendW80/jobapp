@@ -6,13 +6,15 @@ the two bulk decisions.
   key now and what it would hold once accepted, its flags, its citations and the other values
   of a conflict. Nothing is stored about staleness: it is computed on every read against the
   profile as it is now (`item_proposals.review`), and for the derived years also against the
-  employer items they were counted from.
+  employer items they were counted from and against the employers the profile holds now (a hand
+  edit of an employer that changes the count shows them stale).
 - POST /api/ingestion/proposals/{id}/undo: takes back an accepted item, as one revision.
 - POST /api/ingestion/runs/{id}/accept-section {section, proposal_ids[]}: "Accept all in this
   section" (`review.accept_section`). The ids that are pending items of this run and section
   and that a bulk accept may take are applied in one profile save, so one revision. It answers
   what it accepted, what it left out with the reason of each (`locked`, `flagged`, `removal`,
-  `stale`, `not_pending`, `not_found`, `other_section`) and the count per reason. 409 when one
+  `replace`, `stale`, `typed_by_you`, `not_pending`, `not_found`, `other_section`) and the
+  count per reason. 409 when one
   item stops the section: nothing is applied and `proposal_id` names it (`reason` is `invalid`
   or `profile_conflict`), or when the profile is held by another request (`busy`).
 - POST /api/ingestion/runs/{id}/reject-section {section, proposal_ids[]}: "Reject the rest of
@@ -43,7 +45,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import deletion, item_proposals, items, review
+from app.ingestion import deletion, item_proposals, items, merge, review
 from app.ingestion.citations import FieldType
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus
@@ -161,9 +163,13 @@ class SectionOut(BaseModel):
 
 
 class ReviewOut(BaseModel):
+    """`newer_run`: another run of the user is running or paused. When it ends `done`, its merge
+    supersedes what is still undecided here (the page says so)."""
+
     run_id: str
     status: RunStatus
     partial: bool
+    newer_run: bool = False
     profile_revision: int
     counts: CountsOut
     documents: list[DocumentRef]
@@ -341,6 +347,43 @@ def _changed(found: Sequence[Proposal]) -> set[str]:
     return changed
 
 
+def _is_years(payload: Mapping[str, Any]) -> bool:
+    return (
+        payload.get("section") == merge.YEARS_SECTION
+        and payload.get("key") == merge.YEARS_KEY
+        and items.FLAG_DERIVED in (payload.get("flags") or ())
+    )
+
+
+def _years_moved(
+    found: Sequence[Proposal], profile_sections: Mapping[str, Any] | None, run: IngestionRun
+) -> bool:
+    """Whether the derived years of this run no longer match the employers: counted again from
+    the employers the profile holds now, with this run's employer items still pending applied,
+    as the merge counted them. A hand edit or removal of an employer that changes the count
+    shows the years stale; one that does not change it (a title, a location) does not."""
+    years = next(
+        (one for one in found if one.status is ProposalStatus.pending and _is_years(one.payload)),
+        None,
+    )
+    if years is None:
+        return False
+    depends = set(years.payload.get("depends_on") or ())
+    try:
+        experience = items.canonical(
+            merge.EMPLOYERS_SECTION, (profile_sections or {}).get(merge.EMPLOYERS_SECTION)
+        )
+        for one in found:
+            if one.status is ProposalStatus.pending and one.payload.get("key") in depends:
+                experience = items.apply(
+                    merge.EMPLOYERS_SECTION, experience, items.from_payload(one.payload)
+                )
+    except (ValueError, items.ItemError):  # ValidationError, ProfileConflict: cannot count
+        return True
+    counted = merge.years_of(experience.get(merge.EMPLOYERS_SLOT) or [], run.created_at)
+    return counted != years.payload.get("value")
+
+
 def _set_aside(proposal: Proposal) -> str | None:
     """Why the system set this item aside (G13 greys it with the reason): the sentence written
     when it was marked invalid, which names a rule and no value."""
@@ -352,6 +395,7 @@ def _item(
     stored: Mapping[str, Any] | None,
     known: Mapping[str, DocumentRef],
     changed: set[str],
+    years_moved: bool = False,
 ) -> ItemOut:
     payload = proposal.payload
     depends = [name for name in payload.get("depends_on") or () if isinstance(name, str)]
@@ -360,7 +404,7 @@ def _item(
     reason = None
     if seen is not None and seen.stale:
         reason = STALE_PROFILE
-    elif pending and changed.intersection(depends):
+    elif pending and (changed.intersection(depends) or (years_moved and _is_years(payload))):
         reason = STALE_DEPENDS
     applied = payload.get("applied_revision")
     base = payload.get("base_revision")
@@ -420,11 +464,12 @@ def list_proposals(run_id: str, user: CurrentUser, request: Request, db: Db) -> 
     cited = [one for proposal in found for one in _document_ids(proposal.payload)]
     known = _documents(db, user.id, [*selected, *cited])
     changed = _changed(found)
+    moved = _years_moved(found, profile.sections, run)
     by_section: dict[str, list[ItemOut]] = {}
     for proposal in found:
         section = str(proposal.payload.get("section"))
         stored = (profile.sections or {}).get(section)
-        by_section.setdefault(section, []).append(_item(proposal, stored, known, changed))
+        by_section.setdefault(section, []).append(_item(proposal, stored, known, changed, moved))
     order = {name: index for index, name in enumerate(items.SLOTS)}
     sections = [
         SectionOut(
@@ -436,10 +481,20 @@ def list_proposals(run_id: str, user: CurrentUser, request: Request, db: Db) -> 
             by_section.items(), key=lambda pair: (order.get(pair[0], len(order)), pair[0])
         )
     ]
+    newer = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(IngestionRun)
+        .where(
+            IngestionRun.user_id == user.id,
+            IngestionRun.id != run.id,
+            IngestionRun.status.in_((RunStatus.running, RunStatus.paused)),
+        )
+    )
     out = ReviewOut(
         run_id=str(run.id),
         status=run.status,
         partial=run.partial,
+        newer_run=bool(newer),
         profile_revision=profile.revision,
         counts=_counts([one for section in sections for one in section.items]),
         documents=[

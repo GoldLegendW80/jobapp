@@ -500,9 +500,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
   );
 }
 
-/** Cancel is offered where the api accepts it and no click happened yet. */
+/**
+ * Cancel is offered where the api accepts it and no click happened yet, a Full auto item the app
+ * still decides on included (a `ready` one in Review first has Reject instead).
+ */
 function canCancel(application: Application | null): boolean {
   if (!application) return false;
+  if (application.state === "ready") return application.mode === "full_auto";
   return ["queued", "filling", "needs_person", "approved", "held"].includes(
     application.state,
   );

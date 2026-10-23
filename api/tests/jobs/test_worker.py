@@ -7,7 +7,6 @@ import asyncio
 import gc
 import logging
 import os
-import sys
 import threading
 import time
 import uuid
@@ -29,6 +28,7 @@ from app.config import Settings
 from app.ingestion import jobs as ingestion_jobs
 from app.jobs import sweep
 from app.jobs.models import Job, Sweep, SweepStatus, SweepTrigger
+from app.logging_config import JsonFormatter
 from tests.conftest import make_settings
 from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import board, client, fake_ats, new_sweep, now, search, set_profile
@@ -226,29 +226,40 @@ def test_every_queue_is_healthy_right_at_start_and_unchanged_after_an_interval(
     assert "first" in seen
 
 
+@pytest.mark.parametrize("error_type", [ConnectionError, TimeoutError])
 def test_a_redis_error_in_the_startup_record_does_not_abort_the_start(
     settings: Settings,
     factory: sessionmaker[Session],
     fake_ats: FakeAts,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    error_type: type[Exception],
 ) -> None:
     """The first record, the one serve() makes at start, raises: the worker still starts, logs one
     warning without the error text, and the periodic record writes the health key later."""
     real = Worker.record_health
+    real_heartbeat = Worker.heart_beat
+    periodic_ready = asyncio.Event()
     failures: list[str] = []
+    secret = uuid.uuid4().hex
+
+    async def heartbeat(self: Worker) -> None:
+        # Let the explicit startup write run before arq's periodic write.
+        await periodic_ready.wait()
+        await real_heartbeat(self)
 
     async def flaky(self: Worker) -> None:
-        # Only the call of serve() fails, once; arq's own loop must not.
-        if sys._getframe(1).f_code.co_name == "serve" and not failures:
+        if not failures:
             failures.append(self.queue_name)
-            raise ConnectionError("redis://user:secret@redis:6379 went away")
+            raise error_type(f"redis://user:{secret}@redis:6379 went away")
         await real(self)
 
+    monkeypatch.setattr(Worker, "heart_beat", heartbeat)
     monkeypatch.setattr(Worker, "record_health", flaky)
     caplog.set_level(logging.WARNING, logger="app.worker")
 
     async def scenario(workers: list[Worker]) -> None:
+        periodic_ready.set()
         assert failures == [workers[0].queue_name]
         workers[0]._last_health_check -= worker.HEALTH_INTERVAL_S + 1
         await workers[0].record_health()  # the periodic record, an interval later
@@ -261,7 +272,10 @@ def test_a_redis_error_in_the_startup_record_does_not_abort_the_start(
     serve_until(settings, context(settings, fake_ats), scenario)
     warnings = [r for r in caplog.records if "startup health record failed" in r.getMessage()]
     assert len(warnings) == 1
-    assert "secret" not in caplog.text
+    assert vars(warnings[0])["error_type"] == error_type.__name__
+    assert warnings[0].exc_info is None
+    assert secret not in caplog.text
+    assert all(secret not in JsonFormatter().format(record) for record in caplog.records)
 
 
 def test_check_fails_for_a_queue_whose_worker_did_not_start(

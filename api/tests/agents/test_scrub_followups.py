@@ -284,22 +284,24 @@ def test_a_pump_that_ignores_its_cancellation_does_not_hold_the_end_of_the_run(
     save_credential(factory, keyring, alice)
     run_id = new_run(factory, alice, {"message": "hello"})
 
-    async def go() -> tuple[RunStatus | None, Deaf]:
+    async def go() -> tuple[RunStatus | None, int]:
         store = Deaf()
         rc = context(settings, factory, keyring, lambda: FakeBackend(speed=0.0))
         rc = replace(rc, live_store=store, live_flush_s=0.0, live_timeout_s=0.05, pump_stop_s=0.05)
         try:
-            return await asyncio.wait_for(runner.execute(rc, run_id), timeout=20), store
+            return await asyncio.wait_for(runner.execute(rc, run_id), timeout=20), store.calls
         finally:
             store.free.set()  # so that the test's own loop can end
 
     with caplog.at_level(logging.WARNING):
-        status, store = asyncio.run(go())
+        status, calls = asyncio.run(go())
     assert status is RunStatus.done
     row = run_row(factory, run_id)
     assert row.status is RunStatus.done
     assert row.finished_at is not None
-    assert store.calls == 1  # the one call that never ended: nothing waited for a second one
+    # The one call that never ended: nothing waited for a second one. (Once it comes back the
+    # pump clears behind it, test_live_followups.py.)
+    assert calls == 1
     assert caplog.text.count("live text pump did not stop") == 1
 
 
