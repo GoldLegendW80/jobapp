@@ -147,7 +147,8 @@ class Lease:
     token_hash: bytes = b""
     state: str = "active"  # or "waiting_person"
     wait_reason: str | None = None
-    wait_site: str | None = None
+    # B12b: the host of the noted address, shown to the person; never the model's site argument.
+    wait_host: str | None = None
     wait_deadline: float | None = None
     active_before: float = 0.0  # active seconds banked before the current active stretch
     active_since: float = 0.0
@@ -167,16 +168,16 @@ class Lease:
     def touch(self, now: float) -> None:
         self.last_input = now
 
-    def wait_person(self, now: float, reason: str, site: str, deadline_s: int) -> None:
+    def wait_person(self, now: float, reason: str, host: str, deadline_s: int) -> None:
         if self.state == "active":
             self.active_before = self.active_s(now)
-        self.state, self.wait_reason, self.wait_site = "waiting_person", reason, site
+        self.state, self.wait_reason, self.wait_host = "waiting_person", reason, host
         self.wait_deadline = now + deadline_s
 
     def resume(self, now: float) -> None:
         if self.state != "waiting_person":
             return
-        self.state, self.wait_reason, self.wait_site, self.wait_deadline = (
+        self.state, self.wait_reason, self.wait_host, self.wait_deadline = (
             "active",
             None,
             None,
@@ -212,7 +213,7 @@ class Lease:
             "state": self.state,
             "wait_reason": self.wait_reason,
             # B12: the api reads the wait back after a Redis restart, never a fresh deadline.
-            "wait_site": self.wait_site,
+            "wait_host": self.wait_host,
             "wait_left_s": self.wait_left_s(now),
             "active_s": round(self.active_s(now), 1),
             "max_s": self.max_s,

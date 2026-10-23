@@ -102,6 +102,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             result_pages=count(item, "result_pages"),
             found=count(item, "found"),
             new=count(item, "postings"),
+            skipped_by_rule=count(item, "skipped_by_rule"),
             error=item["error"] if isinstance(item.get("error"), str) else None,
         )
         for item in stats.get("sources") or []

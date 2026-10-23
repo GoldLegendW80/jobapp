@@ -27,7 +27,9 @@ so it refuses as a match would (`rules_unreadable`).
   title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
   way), or has an applied status with its `applied_on` in the last 180 days, counted from `now`:
   at exactly 180 days it is still refused. An applied status without `applied_on` counts too: its
-  date is unknown, so nothing shows it is older (fail closed).
+  date is unknown, so nothing shows it is older (fail closed);
+- `passed`: the posting's status is `skipped`. Apply myself only warns, after the other
+  duplicate protections have passed; automated starts, decisions and rechecks refuse it.
 
 **The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
 is the ATS and its id, wherever the form is shown: `ashby:<uuid>` from jobs.ashbyhq.com/<org>/<id>
@@ -101,6 +103,7 @@ SENTENCES = {
     "in_progress": "An application to this posting is already under way.",
     "already_applied": "This posting is marked as applied.",
     "posting_closed": "This posting is closed.",
+    "passed": "You passed this posting. Undo the Pass first if you want to apply.",
     "same_form": "This application form was already used for another of your postings.",
     "same_address": "Another of your postings with this address is marked as applied.",
     "same_role": "You applied to the same role at this company less than 180 days ago.",
@@ -111,6 +114,7 @@ WARNINGS = {
     "rules_unreadable": "Your never apply rules could not be read.",
     "same_address": SENTENCES["same_address"],
     "same_role": SENTENCES["same_role"],
+    "passed": SENTENCES["passed"],
 }
 
 
@@ -370,4 +374,6 @@ def duplicates(
     role = (company_key(posting.company), title_key(posting.title))
     if any((company_key(c), title_key(t)) == role for c, t in recent):
         return Refusal("same_role")
+    if status is JobStatus.skipped:
+        return Refusal("passed")
     return None

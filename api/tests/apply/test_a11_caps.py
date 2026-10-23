@@ -9,16 +9,18 @@ import itertools
 import random
 import secrets
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from alembic import command
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import bank, caps, gate
+from app.apply import bank, caps, gate, run
 from app.apply.caps_models import ApplySettings, CompanyCap
 from app.apply.models import AnswerBankEntry, Application, ApplicationEvent, Mode, State
 from app.documents.models import Kind
@@ -32,8 +34,11 @@ from tests.apply.test_a5_run import application
 from tests.apply.test_a6_gate import ON, TTL, approve, ready, run_submit, submit_services
 from tests.conftest import make_settings
 from tests.identity.api_helpers import PASSWORD, Api
+from tests.test_migrations import alembic_config, current_revision
 
 DAY = timedelta(days=1)
+ELSEWHERE = "https://careers.example.org/jobs/{n}"
+LINKEDIN = "https://www.linkedin.com/jobs/view/{n}"
 
 
 @pytest.fixture
@@ -270,6 +275,187 @@ def test_a_cap_set_after_two_approvals_lets_only_the_first_click(
     assert later.gate_clicks == []
 
 
+@contextmanager
+def statements(db: Session) -> Iterator[list[str]]:
+    """The SQL statements the session sends inside the block."""
+    sent: list[str] = []
+
+    def note(*args: Any) -> None:
+        sent.append(args[2])
+
+    bind = db.get_bind()
+    sa.event.listen(bind, "before_cursor_execute", note)
+    try:
+        yield sent
+    finally:
+        sa.event.remove(bind, "before_cursor_execute", note)
+
+
+def test_what_the_check_reads(db: Session, person_a: Person) -> None:
+    """The figures of the plan's A11 line: the settings row, the profile's search options and
+    the caps; the person's clicked applications when a cap names the company; the posting when
+    the caller has not loaded it (the gate and the submit lease have)."""
+    found = mine(db, person_a)
+    posting = db.get(Job, found.posting_id)
+    with statements(db) as sent:
+        assert caps.check(db, found, AT) is None
+    assert len(sent) == 3
+    a11.cap(db, person_a.user_id, max_count=2)
+    with statements(db) as sent:
+        assert caps.check(db, found, AT) is None
+    assert len(sent) == 4
+    db.expunge(posting)
+    with statements(db) as sent:
+        assert caps.check(db, found, AT) is None
+    assert len(sent) == 5
+
+
+# --- a cap names a company by its leading words --------------------------------------------------
+
+# (the cap's label, the posting's company, the cap names it): the key of one name is the key of
+# a leading run of the other's words, both ways. What it still refuses less is declared in caps.py.
+LEADING_WORDS = [
+    ("Example Robotics", "Example Robotics", True),
+    ("Example Robotics", "Example Robotics Paris", True),
+    ("Example Robotics", "Example Robotics France", True),
+    ("Example Robotics", "Example Robotics (Paris)", True),
+    ("Example Robotics", "Example Robotics, Paris", True),
+    ("Example Robotics", "Example Robotics - Paris", True),
+    ("Example Robotics", "Example Robotics/Paris office", True),
+    ("Example Robotics", "Example Robotics Paris SAS", True),
+    ("Example Robotics", "Example Robotics SAS Paris", True),
+    ("Example Robotics", "Example Robotics Europe GmbH", True),
+    ("Example Robotics", "Example Robotics UK Ltd", True),
+    ("Example Robotics", "Example Robotics Labs", True),
+    ("Example Robotics", "Example Robotics 2", True),
+    ("Example Robotics", "EXAMPLE ROBOTICS PARIS", True),
+    ("Example Robotics", "Exämple Röbotics Paris", True),
+    ("Example Robotics", "Еxample Robotics Paris", True),
+    ("Example Robotics", "ExampleRobotics Paris", True),
+    ("Example Robotics", "example-robotics paris", True),
+    ("Example Robotics", "Example Robotics​Paris", True),
+    ("Example Robotics", "Example Robotics­Paris", True),
+    ("Example Robotics", "Example & Robotics Paris", True),
+    ("Example Robotics", "The Example Robotics Company, Paris", True),
+    ("Example Robotics", "Example", True),
+    ("Example Robotics", "Example SAS", True),
+    ("Example Robotics SAS", "Example Robotics Paris", True),
+    ("ExampleRobotics", "Example Robotics Paris", True),
+    ("Example Robotics Paris", "Example Robotics", True),
+    ("Example Robotics Paris", "Example Robotics Paris SAS", True),
+    ("Example", "Example Robotics", True),
+    ("Example", "Example Bank", True),
+    ("Example " * 30, "Example " * 30 + "Paris", True),
+    ("Example Robotics", "Example Paris", False),
+    ("Example Robotics", "Example Robotic", False),
+    ("Example Robotics", "Example Robots Paris", False),
+    ("Example Robotics", "Examples Robotics", False),
+    ("Example Robotics", "Example Roboticsworld", False),
+    ("Example Robotics", "Example RoboticsParis", False),
+    ("Example Robotics", "ExampleRoboticsParis", False),
+    ("Example Robotics", "Groupe Example Robotics", False),
+    ("Example Robotics", "Robotics Example", False),
+    ("Example Robotics", "Northwind Labs", False),
+    ("Example Robotics", "", False),
+    ("Example Robotics", "!!!", False),
+    ("Example Robotics Paris", "Example Robotics London", False),
+    ("Example Robotics Paris", "Example Paris", False),
+    ("Example", "Examples", False),
+    ("Example", "Exampleco Robotics", False),
+    ("Example", "Northwind Example", False),
+    ("Company 0", "Company 1", False),
+    ("AB Testing", "AB Volvo", False),
+]
+
+
+def cap_of(label: str) -> caps.Names:
+    return caps.cap_names(CompanyCap(label=label, company_key=caps.company_key(label)))
+
+
+def elsewhere(company: str) -> caps.Names:
+    """The names of a posting at `company` whose form gives no ATS organisation."""
+    return caps.company_names(company, "other", ELSEWHERE.format(n=1))
+
+
+@pytest.mark.parametrize(("label", "company", "named"), LEADING_WORDS)
+def test_a_cap_names_a_company_by_its_leading_words(label: str, company: str, named: bool) -> None:
+    assert caps.same_company(cap_of(label), elsewhere(company)) is named
+    assert caps.same_company(elsewhere(company), cap_of(label)) is named
+
+
+@pytest.mark.parametrize(
+    ("org", "named"),
+    [
+        ("example-robotics", True),
+        ("example-robotics-paris", True),
+        ("example_robotics_uk", True),
+        ("exampleroboticsparis", False),
+        ("example", True),
+        ("northwind-labs", False),
+    ],
+)
+def test_the_ats_organisation_is_read_by_its_leading_words_too(org: str, named: bool) -> None:
+    posting = caps.company_names("ER Warehouse Systems", "ashby", a11.ASHBY.format(org=org, n=1))
+    assert caps.same_company(cap_of("Example Robotics"), posting) is named
+
+
+def test_the_leading_words_never_refuse_less_than_the_exact_key() -> None:
+    """The property, over 1,000 generated pairs of names: a cap whose key was one of the
+    posting's keys still names it, the rule reads the same both ways, and a name followed by a
+    place answers to a cap on that name."""
+    words = ["Example", "Robotics", "Paris", "Labs", "SAS", "Inc.", "Group", "and", "&", "the"]
+    words += ["E", "R", "2", "Exämple", "ROBOTICS", "Northwind", "S.A.S.", "​"]
+    separators = [" ", " ", "", "-", ", ", "​"]
+    draw = random.Random(362)  # noqa: S311 (test data, not a secret)
+
+    def name(first: str = "") -> str:
+        parts = [first]
+        for _ in range(draw.randint(1, 4)):
+            parts += [draw.choice(separators), draw.choice(words)]
+        return "".join(parts)
+
+    more = 0
+    for _ in range(1_000):
+        label, company = name(), name()
+        exact = caps.company_key(label) in caps.company_keys(company, "other", ELSEWHERE)
+        named = caps.same_company(cap_of(label), elsewhere(company))
+        assert named or not exact, (label, company)
+        assert named is caps.same_company(elsewhere(company), cap_of(label))
+        more += named and not exact
+        label = name(draw.choice(["Example", "Northwind", "Exämple"]))
+        place = draw.choice(["Paris", "London Office", "Europe GmbH", "(Remote)", "2"])
+        assert caps.same_company(cap_of(label), elsewhere(f"{label} {place}")), label
+    assert more > 0
+
+
+def test_a_huge_name_has_few_leading_keys() -> None:
+    names = caps.company_names("Example " * 100_000, "other", ELSEWHERE)
+    # one per word until the runs are cut at 200 characters: 29 words of 7 letters
+    assert len(names.leading) == 29
+    assert names.keys == {("example" * 29)[:200]}
+
+
+def test_a_cap_counts_and_refuses_the_company_followed_by_a_place(
+    db: Session, person_a: Person
+) -> None:
+    """Neither form gives an ATS organisation: the posting's company alone names the company."""
+    a11.cap(db, person_a.user_id, label="Example Robotics", max_count=1)
+    a11.clicked(
+        db,
+        person_a.user_id,
+        AT - DAY,
+        company="Example Robotics Paris",
+        ats="other",
+        form_url=ELSEWHERE.format(n=1),
+    )
+    assert caps.used(db, person_a.user_id, caps.caps_of(db, person_a.user_id), AT) == [1]
+    where = a11.posting(db, person_a.user_id, company="Example Robotics UK Ltd")
+    found = a11.application(
+        db, person_a.user_id, where, state=State.ready, ats="other", form_url=ELSEWHERE.format(n=2)
+    )
+    assert caps.check(db, found, AT) == "company_cap"
+
+
 # --- Full auto -----------------------------------------------------------------------------------
 
 
@@ -286,6 +472,39 @@ def test_full_auto_one_application_per_company_unless_a_cap_says_otherwise(
     a11.clicked(db, person_a.user_id, AT - DAY)
     a11.cap(db, person_a.user_id, max_count=2, window_days=30)
     assert caps.check(db, mine(db, person_a, mode=Mode.full_auto), AT) is None
+
+
+@pytest.mark.parametrize(
+    ("company", "code"),
+    [
+        ("Example Robotics Paris", "full_auto_company"),
+        ("Example", "full_auto_company"),
+        ("Example Paris", None),
+        ("Northwind Labs", None),
+    ],
+)
+def test_full_auto_reads_one_company_by_its_leading_words(
+    db: Session, person_a: Person, company: str, code: str | None
+) -> None:
+    a11.clicked(
+        db,
+        person_a.user_id,
+        AT - DAY,
+        company="Example Robotics",
+        ats="other",
+        form_url=ELSEWHERE.format(n=1),
+    )
+    where = a11.posting(db, person_a.user_id, company=company)
+    found = a11.application(
+        db,
+        person_a.user_id,
+        where,
+        state=State.ready,
+        mode=Mode.full_auto,
+        ats="other",
+        form_url=ELSEWHERE.format(n=2),
+    )
+    assert caps.check(db, found, AT) == code
 
 
 @pytest.mark.parametrize(
@@ -367,6 +586,51 @@ def test_two_sessions_reserve_one_slot_of_a_host(
         two.rollback()
 
 
+def test_a_lock_held_across_ticks_writes_one_waiting_event_per_wait(
+    db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person
+) -> None:
+    app_a = mine(db, person_a, state=State.approved)
+    app_b = mine(db, person_b, state=State.approved)
+    db.commit()
+    first = AT + timedelta(seconds=181)
+    with factory() as one, factory() as two:
+        found_a, found_b = one.get(Application, app_a.id), two.get(Application, app_b.id)
+        assert found_a is not None
+        assert found_b is not None
+        assert caps.reserve(one, found_a, AT) is None
+        a11.click(one, found_a, AT)
+
+        def tick(seconds: int) -> datetime | None:
+            """What the submit lease of the second does before its click, and its commit."""
+            now = AT + timedelta(seconds=seconds)
+            two.execute(sa.text("select set_config('lock_timeout', '50ms', true)"))
+            until = caps.reserve(two, found_b, now)
+            assert until is not None
+            run._wait(two, found_b, "host_pace", now, until=until.isoformat())
+            two.commit()
+            return until
+
+        # the first holds the host's lock over every tick: the time shown stays while it is ahead
+        assert [tick(s) for s in (1, 31, 61, 180)] == [first] * 4
+        # past it, the lock still held: a new wait, with its own time
+        assert tick(182) == AT + timedelta(seconds=362)
+        assert tick(212) == AT + timedelta(seconds=362)
+        one.commit()
+        waits = two.execute(
+            sa.select(ApplicationEvent.data)
+            .where(ApplicationEvent.application_id == app_b.id, ApplicationEvent.kind == "waiting")
+            .order_by(ApplicationEvent.id)
+        ).scalars()
+        assert list(waits) == [
+            {"needs": "host_pace", "until": first.isoformat()},
+            {"needs": "host_pace", "until": (AT + timedelta(seconds=362)).isoformat()},
+        ]
+        # once the first committed, the second reads its click again
+        two.execute(sa.text("select set_config('lock_timeout', '50ms', true)"))
+        assert caps.reserve(two, found_b, AT + timedelta(seconds=213)) is None
+        two.rollback()
+
+
 def test_the_daily_count_of_a_host_is_any_24_hours(db: Session, person_a: Person) -> None:
     other = a11.clicked(db, person_a.user_id, AT - DAY)
     first = AT - timedelta(hours=20)
@@ -381,6 +645,89 @@ def test_the_daily_count_of_a_host_is_any_24_hours(db: Session, person_a: Person
         db, person_a, state=State.approved, ats="lever", form_url="https://jobs.lever.co/x/1"
     )
     assert caps.next_slot(db, lever, AT) is None
+
+
+@pytest.mark.parametrize(
+    ("clicked", "asking", "interval_s"),
+    [
+        # A16 records LinkedIn's own forms under the ATS "linkedin": one host with "other"
+        (("linkedin", LINKEDIN), ("other", LINKEDIN), 600),
+        (("other", LINKEDIN), ("linkedin", LINKEDIN), 600),
+        (("greenhouse", LINKEDIN + "?gh_jid=1"), ("other", LINKEDIN), 600),
+        # an ATS without an adapter goes out through its form's host, as "other" does
+        (("workday", ELSEWHERE), ("other", ELSEWHERE), 180),
+        (("other", ELSEWHERE), ("workday", ELSEWHERE), 180),
+        (("ashby", a11.ASHBY.format(org="northwind-labs", n=1)), ("ashby", a11.ASHBY), 180),
+        (("lever", "https://jobs.lever.co/example-robotics/{n}"), ("other", LINKEDIN), None),
+        (("other", "https://jobs.example.net/{n}"), ("other", ELSEWHERE), None),
+        (("other", ELSEWHERE), ("ashby", ELSEWHERE + "?ashby_jid=1"), None),
+    ],
+)
+def test_the_pace_counts_the_clicks_of_a_host_whatever_their_ats(
+    db: Session,
+    person_a: Person,
+    clicked: tuple[str, str],
+    asking: tuple[str, str],
+    interval_s: int | None,
+) -> None:
+    at = AT - timedelta(seconds=60)
+    other = a11.clicked(
+        db, person_a.user_id, at, ats=clicked[0], form_url=clicked[1].format(org="x", n=1)
+    )
+    a11.click(db, other, at)
+    found = mine(
+        db, person_a, state=State.approved, ats=asking[0], form_url=asking[1].format(org="x", n=2)
+    )
+    assert (caps.host_of(*clicked) == caps.host_of(*asking)) is (interval_s is not None)
+    assert caps.next_slot(db, found, AT) == (
+        None if interval_s is None else at + timedelta(seconds=interval_s)
+    )
+
+
+def test_the_clicks_are_read_through_their_partial_index(db: Session) -> None:
+    query = caps.clicks_since(AT - DAY).compile(dialect=db.get_bind().dialect)
+    connection = db.connection()
+    connection.exec_driver_sql("SET LOCAL enable_seqscan = off")
+    plan = connection.exec_driver_sql(f"EXPLAIN {query}", query.params).scalars().all()
+    assert any("ix_application_events_click_at" in line for line in plan), plan
+
+
+CLICK_INDEX = (
+    "CREATE INDEX ix_application_events_click_at ON public.application_events "
+    "USING btree (at) WHERE (kind = 'click'::text)"
+)
+
+
+def test_0023_up_down_up(engine: sa.Engine) -> None:
+    """Migration 0023: the partial index of the clicks, down to 0022 and up again, twice."""
+    url = engine.url.render_as_string(hide_password=False)
+
+    def made() -> str | None:
+        with engine.connect() as conn:
+            return conn.execute(
+                sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = :n"),
+                {"n": "ix_application_events_click_at"},
+            ).scalar_one_or_none()
+
+    assert made() == CLICK_INDEX
+    command.downgrade(alembic_config(), "0022")
+    assert current_revision(url) == "0022"
+    assert made() is None
+    command.upgrade(alembic_config(), "head")
+    command.upgrade(alembic_config(), "head")
+    assert made() == CLICK_INDEX
+
+
+def test_0023_offline_sql(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@nowhere.invalid:5432/x")
+    command.upgrade(alembic_config(), "0022:0023", sql=True)
+    out = capsys.readouterr().out
+    assert (
+        "CREATE INDEX ix_application_events_click_at ON application_events (at) "
+        "WHERE kind = 'click'"
+    ) in out
 
 
 def test_the_pace_holds_for_any_sequence_of_attempts(db: Session, person_a: Person) -> None:

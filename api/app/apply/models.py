@@ -311,6 +311,10 @@ class ApplicationEvent(Base):
         sa.CheckConstraint("kind <> ''", name="kind_not_empty"),
         sa.Index("ix_application_events_application_id_at", "application_id", "at"),
         sa.Index("ix_application_events_user_id", "user_id"),
+        # the clicks the pace per ATS host reads on every tick (`caps.clicks_since`)
+        sa.Index(
+            "ix_application_events_click_at", "at", postgresql_where=sa.text("kind = 'click'")
+        ),
     )
 
     # bigserial

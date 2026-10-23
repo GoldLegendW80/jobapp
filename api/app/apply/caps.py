@@ -21,26 +21,37 @@ two approvals racing for the last slot one passes; before the click they do not,
 applications never refuse each other and the first to click takes the slot. A click exactly
 `window_days` days ago still counts.
 
-A company matches a cap by its key (`company_key`) on the posting's company or on the ATS
-organisation of the form address (jobs.ashbyhq.com/<org>/..., boards.greenhouse.io/<org>/...,
-jobs.lever.co/<org>/...).
+A company matches a cap, and two applications are one company for Full auto's rule, when the key
+(`company_key`) of a name of one is the key of a leading run of the words of a name of the other
+(`same_company`). The names are the posting's company and the ATS organisation of the form
+address (jobs.ashbyhq.com/<org>/..., boards.greenhouse.io/<org>/..., jobs.lever.co/<org>/...), and
+a cap's label: "Example Robotics Paris" and "Example" both answer to a cap on "Example Robotics".
+When in doubt the rule refuses more, and it refuses all that an exact key refused.
 
 The pace per ATS host (`next_slot`, `reserve`) is shared by every person, who all go out through
 the Jetson's one address: one click every `APPLY_HOST_MIN_INTERVAL_S` and at most
 `APPLY_HOST_DAILY_MAX` in any 24 hours per host (LinkedIn: its own two settings). A host is the ATS
-for the known ones (every Greenhouse form is one host), else the form address's host. The clicks
-are the `click` events the submit lease writes in the transaction that moves the application to
-`submitting`: `reserve` takes a transaction lock per host and reads them again under it, so two
-people's clicks go one at a time and the second sees the first. A paced application stays
-`approved` and waits, with the time it goes (`submit.py`).
+for the known ones (every Greenhouse form is one host), else the form address's host; the clicks
+of every ATS are read and kept by their host, so a form on LinkedIn counts as LinkedIn's whatever
+ATS it was recorded under. The clicks are the `click` events the submit lease writes in the
+transaction that moves the application to `submitting`: `reserve` takes a transaction lock per
+host and reads them again under it, so two people's clicks go one at a time and the second sees
+the first. A paced application stays `approved` and waits, with the time it goes (`submit.py`).
+When the lock is not free within the transaction's `lock_timeout`, the time is the one the wait
+already shows while it is ahead, else an interval from now: one `waiting` event per wait.
 
-Declared open points (`company_key`, each toward refusing more, except the last three):
+Declared open points (`same_company`, each toward refusing more, except the last four):
 - two different companies whose names differ only by legal forms, joining words or spacing are
   one company ("Example Group" and "Example");
+- a name and the same name followed by more words are one company, whatever the words
+  ("Example Robotics Labs" under a cap on "Example Robotics"; "Example" and "Example Bank");
 - a company written in two scripts ("Пример" and "Primer") or under an abbreviation ("P&G" and
   "Procter and Gamble") is two companies, unless the ATS organisation matches;
-- a name followed by a place or a division ("Example Robotics Paris") is another company than
-  the cap's, unless the ATS organisation matches;
+- a word before the name ("Groupe Example Robotics") or a name glued to the words after it
+  ("ExampleRoboticsParis", an organisation "exampleroboticsparis") is another company than the
+  cap's, unless another of its names matches;
+- two names that share only their first words ("Example Robotics Paris" and "Example Robotics
+  London") are two companies;
 - postings marked applied by hand, without an application of the app, are not counted (the spec
   counts `submitted` and `submit_unknown` rows).
 """
@@ -138,6 +149,12 @@ def company_key(text: str) -> str:
     letters and digits, runs of single letters joined ("S.A.S." is "sas"), joining words and
     trailing legal forms dropped, the rest glued: "Exämple Robotics, Inc." and "example-robotics"
     are "examplerobotics". Empty when nothing is left."""
+    return _glued(_words(text))
+
+
+def _words(text: str) -> list[str]:
+    """`text` cut as `company_key` cuts it, before the trailing legal forms go and the rest is
+    glued."""
     folded = guardrails.fold(text or "")
     words = "".join(c if c.isalnum() else " " for c in folded).split()
     merged: list[str] = []
@@ -149,10 +166,32 @@ def company_key(text: str) -> str:
         merged += [letters, word] if letters else [word]
         letters = ""
     merged += [letters] if letters else []
-    words = [w for w in merged if w not in _JOINING] or merged
-    while len(words) > 1 and words[-1] in _LEGAL_FORMS:
-        words.pop()
-    return "".join(words)[:LABEL_MAX]
+    return [w for w in merged if w not in _JOINING] or merged
+
+
+def _glued(words: list[str]) -> str:
+    """`words` without their trailing legal forms (the first word stays), glued, cut at
+    `LABEL_MAX`."""
+    end = len(words)
+    while end > 1 and words[end - 1] in _LEGAL_FORMS:
+        end -= 1
+    return "".join(words[:end])[:LABEL_MAX]
+
+
+def _leading(words: list[str]) -> set[str]:
+    """The `_glued` key of every leading run of `words`, the whole one included: the words of
+    "Example Robotics Paris SAS" lead with "example", "examplerobotics" and
+    "exampleroboticsparis". It stops once the runs are cut at `LABEL_MAX`."""
+    found: set[str] = set()
+    glued = ""
+    for n, word in enumerate(words):
+        glued += word
+        # a run that ends on a legal form has the key of the run before it
+        if n == 0 or word not in _LEGAL_FORMS:
+            found.add(glued[:LABEL_MAX])
+            if len(glued) >= LABEL_MAX:
+                break
+    return found
 
 
 def _org(ats: str, url: str) -> str | None:
@@ -173,14 +212,50 @@ def _spaced(text: str) -> str:
     return "".join(" " if unicodedata.category(c) in ("Cf", "Cc") else c for c in text)
 
 
-def company_keys(company: str, ats: str, form_url: str) -> frozenset[str]:
-    """The keys an application answers to: its posting's company, read both with the unseen
+@dataclass(frozen=True)
+class Names:
+    """What a company answers to: the key of each of its names, and the key of every leading run
+    of the words of each name (the whole one included)."""
+
+    keys: frozenset[str]
+    leading: frozenset[str]
+
+
+def _names(*texts: str) -> Names:
+    keys: set[str] = set()
+    leading: set[str] = set()
+    for text in texts:
+        words = _words(text)
+        keys.add(_glued(words))
+        leading |= _leading(words)
+    return Names(frozenset(keys - {""}), frozenset(leading - {""}))
+
+
+def same_company(one: Names, two: Names) -> bool:
+    """One company when a key of either is the key of a leading run of the other's words: a cap
+    on "Example Robotics" names "Example Robotics Paris" and "Example", not "Example Paris";
+    "Example Robotics Paris" and "Example Robotics London" are two companies."""
+    return bool(one.keys & two.leading or two.keys & one.leading)
+
+
+def company_names(company: str, ats: str, form_url: str) -> Names:
+    """The names an application answers to: its posting's company, read both with the unseen
     characters dropped and read as spaces (so "Example Robotics<ZWSP>Inc" answers to a cap on
     "Example Robotics"), and its form's ATS org."""
-    keys = {company_key(company), company_key(_spaced(company or ""))}
-    if (org := _org(ats, form_url)) is not None:
-        keys.add(company_key(org))
-    return frozenset(k for k in keys if k)
+    org = _org(ats, form_url)
+    return _names(company or "", _spaced(company or ""), *([] if org is None else [org]))
+
+
+def company_keys(company: str, ats: str, form_url: str) -> frozenset[str]:
+    """The keys of `company_names`, without their leading runs."""
+    return company_names(company, ats, form_url).keys
+
+
+def cap_names(cap: CompanyCap) -> Names:
+    """A cap's names: its label, read as a posting's company is, and the key stored with it."""
+    named = _names(cap.label, _spaced(cap.label))
+    stored = {cap.company_key} - {""}
+    return Names(named.keys | stored, named.leading | stored)
 
 
 # --- the person's settings -----------------------------------------------------------------------
@@ -269,7 +344,7 @@ def day_start(now: datetime, timezone: str) -> datetime:
 
 @dataclass(frozen=True)
 class Counted:
-    keys: frozenset[str]
+    names: Names
     role: str
     at: datetime
 
@@ -308,7 +383,7 @@ def counted(
     ).all()
     return [
         Counted(
-            company_keys(company, ats, url),
+            company_names(company, ats, url),
             guardrails.title_key(title),
             at if state in (S.submitted, S.submit_unknown) and at is not None else now,
         )
@@ -335,12 +410,13 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
     posting = db.get(Job, application.posting_id)
     if posting is None:
         return None
-    keys = company_keys(posting.company, application.ats, application.form_url)
-    caps = [cap for cap in caps_of(db, application.user_id) if cap.company_key in keys]
+    names = company_names(posting.company, application.ats, application.form_url)
+    named = [(cap, cap_names(cap)) for cap in caps_of(db, application.user_id)]
+    caps = [(cap, capped) for cap, capped in named if same_company(capped, names)]
     full_auto = application.mode is Mode.full_auto
     if not caps and not full_auto:
         return None
-    days = [cap.window_days for cap in caps] + [cap.same_role_days or 0 for cap in caps]
+    days = [cap.window_days for cap, _ in caps] + [cap.same_role_days or 0 for cap, _ in caps]
     days += [values.company_days] if full_auto else []
     # Two days more than the longest window: a day of the person's time zone can last 25 hours.
     others = counted(
@@ -352,8 +428,8 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
         deciding=application.state not in DECIDED,
     )
     role = guardrails.title_key(posting.title)
-    for cap in caps:
-        mine = [o for o in others if cap.company_key in o.keys]
+    for cap, capped in caps:
+        mine = [o for o in others if same_company(capped, o.names)]
         if sum(o.at >= now - timedelta(days=cap.window_days) for o in mine) >= cap.max_count:
             return "company_cap"
         role_since = now - timedelta(days=cap.same_role_days or 0)
@@ -362,7 +438,7 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
     if not full_auto:
         return None
     company_since = now - timedelta(days=values.company_days)
-    if not caps and any(o.keys & keys and o.at >= company_since for o in others):
+    if not caps and any(same_company(o.names, names) and o.at >= company_since for o in others):
         return "full_auto_company"
     today = day_start(now, values.timezone)
     if sum(o.at >= today for o in others) >= values.safety_ceiling:
@@ -405,9 +481,12 @@ def used(db: Session, user_id: uuid.UUID, caps: list[CompanyCap], now: datetime)
         return []
     longest = max(cap.window_days for cap in caps)
     others = counted(db, user_id, now, now - timedelta(days=longest))
+    named = [(cap, cap_names(cap)) for cap in caps]
     return [
-        sum(c.company_key in o.keys and o.at >= now - timedelta(days=c.window_days) for o in others)
-        for c in caps
+        sum(
+            same_company(n, o.names) and o.at >= now - timedelta(days=c.window_days) for o in others
+        )
+        for c, n in named
     ]
 
 
@@ -505,13 +584,10 @@ def pace_of(host: str) -> Pace:
     )
 
 
-def next_slot(db: Session, application: Application, now: datetime) -> datetime | None:
-    """When the application's host takes its next click, None when it takes one now. Reads every
-    person's clicks of the last 24 hours; only `reserve` makes the answer hold until the click."""
-    host = host_of(application.ats, application.form_url)
-    pace = pace_of(host)
-    rows = db.execute(
-        sa.select(ApplicationEvent.at, Application.form_url)
+def clicks_since(since: datetime) -> sa.Select[tuple[datetime, str, str]]:
+    """Every person's clicks after `since`, on every ATS, with what tells their host apart."""
+    return (
+        sa.select(ApplicationEvent.at, Application.ats, Application.form_url)
         .join(
             Application,
             sa.and_(
@@ -520,12 +596,21 @@ def next_slot(db: Session, application: Application, now: datetime) -> datetime 
             ),
         )
         .where(
-            ApplicationEvent.kind == "click",
-            ApplicationEvent.at > now - DAY,
-            Application.ats == application.ats,
+            # a literal, not a parameter: a generic plan must still match the partial index
+            ApplicationEvent.kind == sa.literal_column("'click'"),
+            ApplicationEvent.at > since,
         )
-    ).all()
-    clicks = sorted(at for at, url in rows if host_of(application.ats, url) == host)
+    )
+
+
+def next_slot(db: Session, application: Application, now: datetime) -> datetime | None:
+    """When the application's host takes its next click, None when it takes one now. Reads every
+    person's clicks of the last 24 hours and keeps those of the host, whatever their ATS; only
+    `reserve` makes the answer hold until the click."""
+    host = host_of(application.ats, application.form_url)
+    pace = pace_of(host)
+    rows = db.execute(clicks_since(now - DAY)).all()
+    clicks = sorted(at for at, ats, url in rows if host_of(ats, url) == host)
     waits = []
     if clicks and now < clicks[-1] + pace.interval:
         waits.append(clicks[-1] + pace.interval)
@@ -536,7 +621,10 @@ def next_slot(db: Session, application: Application, now: datetime) -> datetime 
 
 def reserve(db: Session, application: Application, now: datetime) -> datetime | None:
     """`next_slot` under the host's transaction lock: None means the caller's click event, written
-    in this transaction, takes the slot; another person's reserve waits for this commit."""
+    in this transaction, takes the slot; another person's reserve waits for this commit. A lock
+    still held at the transaction's `lock_timeout` keeps the time the application's wait shows
+    while it is ahead (one `waiting` event per wait, not one per tick), else an interval from
+    now."""
     host = host_of(application.ats, application.form_url)
     key = f"apply_pace:{host}"
     try:
@@ -545,5 +633,30 @@ def reserve(db: Session, application: Application, now: datetime) -> datetime | 
     except DBAPIError as exc:
         if not jobs_service.is_lock_timeout(exc):
             raise
-        return now + pace_of(host).interval
+        shown = _shown(db, application)
+        return shown if shown is not None and shown > now else now + pace_of(host).interval
     return next_slot(db, application, now)
+
+
+def _shown(db: Session, application: Application) -> datetime | None:
+    """The time the application's wait for its host shows (its last `waiting` event, as
+    `run._wait` writes it), None when it does not wait for its host."""
+    if application.needs != "host_pace":
+        return None
+    data = db.execute(
+        sa.select(ApplicationEvent.data)
+        .where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "waiting",
+        )
+        .order_by(ApplicationEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if not isinstance(data, dict) or data.get("needs") != "host_pace":
+        return None
+    try:
+        until = datetime.fromisoformat(str(data.get("until")))
+    except ValueError:
+        return None
+    return until if until.tzinfo is not None else None
