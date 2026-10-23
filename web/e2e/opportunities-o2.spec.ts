@@ -190,7 +190,11 @@ async function expectClearDeck(page: Page) {
       name: element.getAttribute("aria-keyshortcuts"),
       ...rectangle(element),
     }));
-    return { content, actions };
+    return { content, actions, scrollY: window.scrollY };
+  });
+  await test.info().attach("deck-layout", {
+    body: JSON.stringify({ viewport: page.viewportSize(), ...layout }),
+    contentType: "application/json",
   });
   expect(layout.actions).toHaveLength(3);
   for (const action of layout.actions) {
