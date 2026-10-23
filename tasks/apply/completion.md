@@ -18,9 +18,15 @@ The composed fixes on `67813bac` pass fresh
 typecheck and assertion-preservation audit. The unchanged four-case A18 native file now passes
 with zero retries on that candidate; root inspected all 20 required layouts and accounted for
 all 25 emitted images. A16, editor/render-wait and G10 native validation continue separately.
-New failure-path tests also reproduce an HTTP 403 person-wait crash: passive recovery calls
-interactive combobox discovery. Its production fix, coverage closure, a fresh complete gate
-and final independent review remain required.
+New failure-path tests also reproduce an HTTP 403 person-wait crash: passive recovery called
+interactive combobox discovery. A minimal correction and 34 persisted regressions now pass
+[fresh independent closure](../evidence/apply604-coverage-test-closure.md). The complete Apply
+module passes 8,573 tests without failures or skips on `593d2b91`. Its complete 301-file
+hash-safe coverage diagnostic is 95.0224466042898 percent; this combines fresh changed-file
+data with unchanged-source baseline data and is not a fresh full-suite gate result.
+The [failure-path evidence](../evidence/apply604-failure-path-coverage.md) preserves the baseline,
+all three test cohorts and earlier failures. Review UX's canonical-posting fixture repair,
+fresh native acceptance, a complete quiet gate and final whole-PR review remain required.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
@@ -67,7 +73,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 | A11 to A13c: caps, queue and Full auto | Holds, rehearsals, fit/caps/pacing, pauses, model check and repeated final guards. | Injected-clock and counted fake-send/submit tests; whole Apply group includes actual holds and rehearsals. |
 | A14: email | Immutable two-PDF mail, exact recipient and approval, code-owned send authority, coherent local stops/unknowns and shared confirmation. | Fake Gmail sends exactly one message with both PDFs; seven connection journeys pass. Lifecycle and final pacing checkpoints below. |
 | A15: Workday, Google Careers, VIE | Ordered review-only wizards; early required edits trigger a fresh fill; VIE reuses exact person messages. | Five real browser tests pass in 6.6 minutes, with four approved fake submissions. Final Apply group also captures review screens. |
-| A16: LinkedIn | Recorded opt-in, private pinned opener, modal replay, company-site fallback, production pacing of at least 600 seconds and at most 15 a day. | Eleven opener/refusal native cases pass. Consent, review and three rehearsals followed by held Full auto pass. Final Apply group runs all six flows, including corrected recovery/checkpoint cases. |
+| A16: LinkedIn | Recorded opt-in, private pinned opener, modal replay, company-site fallback, production pacing of at least 600 seconds and at most 15 a day. | Eleven opener/refusal native cases pass. The fresh composed six-case file passes in 949.762 seconds with zero retries, skips or flaky cases, including three rehearsals without sends and held Full auto submitting once. Root inspected all 12 review/held/checkpoint layouts. Final exact-tree Apply acceptance remains part of the complete gate. |
 | A17: privacy and retention | Owner-bound routes/callbacks, private no-store errors, deletion cascades, temporary image and mail-audit retention, privileged boundary checks and private worker IO. | Six actual canary workflows, 42 AST cases, real firewall namespace checks and registered-route/deletion tests. Final Apply group includes the two-user journey. |
 | A18: external profiles | Exact reviewed CV pin, section hash/one-use Save, explicit Replace, autosave consent and atomic empty-only writes, durable edits/Skip. Immediate field intent stays pending until authoritative response adoption; live viewing waits for a fresh ready owned profile-edit lease. | Earlier backend/route checkpoints remain separate. The corrected candidate passes 66 focused UI cases and 527 whole Apply/browser UI cases. All four unchanged real Chromium flows pass in 278.554 seconds with zero retries, skips or flaky cases; root inspected 20 required layouts plus the two distinct original images. The final exact-tree gate remains required. |
 
@@ -85,6 +91,11 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 - Answer edits: the owner confirmed on 2026-10-23 that application edits stay local. Reusable
   answers are explicitly saved separately in Saved answers. The specification's source and
   success wording now agrees with its existing application-edit API contract.
+- HTTP 403 recovery: the wait observes the captured page through passive adapter reads and
+  preserves pending, cut, frame, posting and anchor guards. Active discovery follows browser
+  and locked database resume. The independent cut-guard mutation fails the intended persisted
+  assertion; restoring exact source passes all 34 new cases. The complete 8,573-case Apply run
+  includes the final captured-snapshot binding and all new failure-path cohorts.
 - Reports/history: generic page parsing retains node boundaries for direct AI-reader
   warnings. Confirmed prior submissions are queried across roles and time for the owner and
   company; another person's history and rehearsed/uncertain attempts cannot establish Yes.
@@ -267,12 +278,21 @@ document readiness; Ingestion G10 separately passes after an estimate-change ret
 Docker reports 2,366 passes, two durable-UID fixture collisions and eight existing no-photo-slot
 skips. Standalone timing and scoring pass. Coverage reports 94 percent against the unchanged
 95 percent requirement. The report retains all failures, emitted-image inspection and exact
-logs. Fresh authors own the fixes and measured coverage closure; this gate is not acceptance.
+logs. This gate is not acceptance. Subsequent source closure fixes the A18 races, document/editor
+readiness, durable UID fixtures and G10 quote barrier. Fresh native A18, A16 and G10 files pass
+all 4, 6 and 8 cases respectively with zero retries. Their
+[actual captures and provenance](../evidence/apply604-composed-native/README.md) remain separate
+from final acceptance. Review UX first exposes a partial model-registry import; after its
+canonical-registry fix, it passes the earlier editor/render-failed assertions but a later
+fixture correctly receives a duplicate-posting 409. Both failed attempts and unrun cases are
+retained. A fresh author owns canonical posting reuse and new-generation document readiness;
+all five native cases and 16 final layouts still need acceptance. The complete Apply module
+and corrected coverage diagnostic above do not substitute for the final full gate.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
 lint, components and production build, migration upgrade/downgrade with one head, script and
-secret checks, and the scoped Apply/Browser/Opportunities/mail journeys. Review includes the
+secret checks, and all nine journey groups. Review includes the
 required desktop/mobile light/dark evidence and a write audit of protected source branches.
 The pull request records the final result, fixture-only skips, any retry/failure and the exact
 head/tree. No source-snapshot approval substitutes for that combined review.
