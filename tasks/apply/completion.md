@@ -12,8 +12,15 @@ head/tree. The Apply source checkpoint at
 `602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`, passes the complete composed Apply/browser
 suite, 10,460 tests in 361.17 seconds. Subsequent composition of current main `1244322c`
 into isolated `0b668519` preserves that Apply source while adding upstream worker, Jobs and
-Opportunities changes. The third full gate exposed two A18 UI races and fixture defects;
-these require fixes and a new final source checkpoint, gate and independent review.
+Opportunities changes. The third full gate exposed two A18 UI races and fixture defects.
+The composed fixes on `67813bac` pass fresh
+[scoped source closure](../evidence/apply604-gate3-source-closure.md), including an independent
+typecheck and assertion-preservation audit. The unchanged four-case A18 native file now passes
+with zero retries on that candidate; root inspected all 20 required layouts and accounted for
+all 25 emitted images. A16, editor/render-wait and G10 native validation continue separately.
+New failure-path tests also reproduce an HTTP 403 person-wait crash: passive recovery calls
+interactive combobox discovery. Its production fix, coverage closure, a fresh complete gate
+and final independent review remain required.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
@@ -62,7 +69,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 | A15: Workday, Google Careers, VIE | Ordered review-only wizards; early required edits trigger a fresh fill; VIE reuses exact person messages. | Five real browser tests pass in 6.6 minutes, with four approved fake submissions. Final Apply group also captures review screens. |
 | A16: LinkedIn | Recorded opt-in, private pinned opener, modal replay, company-site fallback, production pacing of at least 600 seconds and at most 15 a day. | Eleven opener/refusal native cases pass. Consent, review and three rehearsals followed by held Full auto pass. Final Apply group runs all six flows, including corrected recovery/checkpoint cases. |
 | A17: privacy and retention | Owner-bound routes/callbacks, private no-store errors, deletion cascades, temporary image and mail-audit retention, privileged boundary checks and private worker IO. | Six actual canary workflows, 42 AST cases, real firewall namespace checks and registered-route/deletion tests. Final Apply group includes the two-user journey. |
-| A18: external profiles | Exact reviewed CV pin, section hash/one-use Save, explicit Replace, autosave consent and atomic empty-only writes, durable edits/Skip. | Four real Chromium flows pass in 4.6 minutes; 5,278 affected backend and 429 frontend cases pass. Eight real-Postgres route/lock cases and 20 inspected screenshots. |
+| A18: external profiles | Exact reviewed CV pin, section hash/one-use Save, explicit Replace, autosave consent and atomic empty-only writes, durable edits/Skip. Immediate field intent stays pending until authoritative response adoption; live viewing waits for a fresh ready owned profile-edit lease. | Earlier backend/route checkpoints remain separate. The corrected candidate passes 66 focused UI cases and 527 whole Apply/browser UI cases. All four unchanged real Chromium flows pass in 278.554 seconds with zero retries, skips or flaky cases; root inspected 20 required layouts plus the two distinct original images. The final exact-tree gate remains required. |
 
 ## Shared contracts and checkpoint evidence
 
