@@ -886,6 +886,47 @@ describe("the saved answers", () => {
     expect(screen.getByRole("button", { name: "Add answer" })).toHaveFocus();
   });
 
+  it("protects the pending draft and keeps it available after a request failure", async () => {
+    fakeSettings();
+    fakeCaps([]);
+    fakeBank([]);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post("*/api/apply/answer-bank", async () => {
+        await held;
+        return HttpResponse.json(
+          { detail: "The saved answer could not be added." },
+          { status: 503 },
+        );
+      }),
+    );
+    const { user } = await openPage();
+    await user.click(await screen.findByRole("button", { name: "Add answer" }));
+    const question = screen.getByRole("textbox", { name: "Question" });
+    const answer = screen.getByRole("textbox", { name: "Reusable answer" });
+    await user.type(question, "An optional question?");
+    await user.type(answer, "My reusable answer");
+    await user.click(screen.getByRole("button", { name: "Save new answer" }));
+    expect(question).toHaveAttribute("readonly");
+    expect(answer).toHaveAttribute("readonly");
+    expect(
+      screen.getByRole("button", { name: "Save new answer" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    release();
+    expect(
+      await screen.findByText("The saved answer could not be added."),
+    ).toBeInTheDocument();
+    expect(question).toHaveValue("An optional question?");
+    expect(answer).toHaveValue("My reusable answer");
+    expect(
+      screen.getByRole("button", { name: "Save new answer" }),
+    ).toBeEnabled();
+  });
+
   it("changes one answer, and refuses an empty one before any call", async () => {
     fakeSettings();
     fakeCaps([]);

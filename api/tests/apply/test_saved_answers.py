@@ -118,7 +118,7 @@ def test_maximum_saved_answer_survives_json_surrogate_escapes(api: Api, person_a
     import json
 
     token = api.login_token(person_a.email)
-    body = {"question": "Q" * 200, "answer": "🤖" * 5000}
+    body = {"question": "Q" + "🤖" * 199, "answer": "🤖" * 5000}
     response = api.post(
         PATH,
         token=token,

@@ -168,13 +168,12 @@ Automatic runs share the person's daily cap of automatic runs and the person's a
 | GET /api/applications/{id}/manual ; POST .../manual/open ; POST .../manual/actions `{action}` ; POST .../manual/record `{seen}` ; POST .../manual/close | Apply myself (A9): the session's status (waiting with its place, open, ended; the documents placed, a confirmation seen, a file chooser waiting, the idle warning, the warnings of the start), asking for the session, "Attach my CV", "Attach my letter", "Fill my details", "Record as applied" and "I submitted it" (`submitted` without the gate, the placed versions frozen), closing it (`cancelled`; recorded instead once the page showed the confirmation) |
 | GET /api/applications/{id}/screenshots/{n} | one image, owner only |
 | GET/PUT /api/apply/settings ; GET/PUT /api/apply/caps ; GET/POST/PUT /api/apply/answer-bank | mode, Full auto settings (`min_fit`; Advanced: `safety_ceiling`, hold length), pause switch, company caps, saved answers |
-
 | POST /api/site-profiles `{url}` ; GET /api/site-profiles ; GET /api/site-profiles/{id} | start "Complete my profile on this site", list the person's runs, one run with its sections, fields and screenshots |
 | PUT /api/site-profiles/{id}/sections/{n}/fields/{field} ; POST /api/site-profiles/{id}/sections/{n}/approve `{values_hash}` ; POST .../skip ; POST /api/site-profiles/{id}/cancel | the person's decisions per section, with "Replace" chosen per field |
 
 Saved answers start empty. POST accepts only `{question, answer}`, with a question of 1 to 200
 characters and an answer of 1 to 5000 characters. The server trims surrounding whitespace,
-preserves Unicode and LF answer line breaks, and refuses empty values, control or format
+preserves Unicode and LF answer line breaks, and refuses empty values, other control or format
 characters and questions without a normalized key. The session supplies the owner and the
 server derives the question key. Creation returns 201 with the current list. A duplicate
 normalized question, including a concurrent creation, returns 409 `saved_question_exists`
