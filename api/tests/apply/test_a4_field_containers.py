@@ -172,6 +172,8 @@ def test_local_unknown_labels_are_not_filtered_by_their_words(label: str, role: 
     "extra",
     [
         '- link "About choices" [ref=e3]',
+        '- generic:\n  - generic: About choices\n  - link "Learn more" [ref=e3]',
+        '- group "About choices":\n  - link "Learn more" [ref=e3]',
         '- heading "Choose a team"',
         '- textbox "Other details" [ref=e3]',
     ],

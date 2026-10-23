@@ -392,7 +392,13 @@ def _named_choices(group: Node) -> bool:
         return False
     label = fold(label_of(group.name)[0])
     nodes = list(group.walk())
-    controlled = {id(node) for node in nodes if node.role in CONTROLS}
+    controlled = {
+        id(node)
+        for node in nodes
+        if node.role in CONTROLS
+        and node.role != "link"
+        and not (node.role == "button" and fold(node.name) in SUBMIT_NAMES)
+    }
     for node in reversed(nodes):
         if any(id(child) in controlled for child in node.children):
             controlled.add(id(node))
