@@ -618,8 +618,12 @@ def _stop_of(code: str, step: str = "") -> Stop:
 
 
 async def _open(services: Services, plan: Plan, tools: run.RunTools) -> ats_base.Adapter | Stop:
-    adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
-    if any(row.key == fallback.KEY for row in plan.rows):
+    has_strategy = any(row.key == fallback.KEY for row in plan.rows)
+    address = fallback.canonical_url(plan.form_url) if has_strategy else plan.form_url
+    if address is None:
+        return Stop(State.ready, "form_changed")
+    adapter = adapter_for(address, stub_base=services.stub_base)
+    if has_strategy:
         # A company page's framed adapter is recovered from the code-owned vendor, never
         # chosen by a model during replay. Framed bindings confer no Full auto exception.
         if adapter is None:

@@ -24,6 +24,12 @@ Source proofs:
 * E2E registry passed: 29 CI specs, 4 reasoned exclusions, 50 local group specs.
 * CI plan: 81 passed. Scoped pre-commit hooks passed, including the secret scan.
 
+The first composed whole Apply run at 8c1b9a59 had 7,663 passed and one failed in
+400.09 seconds. The failure was the revised test comparing the profile email with the
+different account email in the fixture; it now checks the profile's authoritative value.
+Self-review also reproduced default-port replay lookup refusal and malformed-port errors
+with six red pure cases. The adapter lookup now canonicalises only saved fallback addresses.
+
 Pending at this source checkpoint: real DB/Redis whole Apply module, composed actual browser
 journeys for default known fallback, framed takeover and credential-free filling, and final
 exact-tree gate. The root assigns the shared runtime resources and final acceptance owner.

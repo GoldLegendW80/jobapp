@@ -61,6 +61,55 @@ def test_origin_neighbours_refuse_without_raising(origin):
     assert fallback.binding([row(value={**row().value, "target": target})], URL, "ashby") is None
 
 
+@pytest.mark.parametrize("host", ["jobs.ashbyhq.com", "JOBS.ASHBYHQ.COM", "Jobs.Ashbyhq.Com"])
+@pytest.mark.parametrize("port", ["", ":443"])
+def test_saved_fallback_replay_uses_the_canonical_host_and_default_port(host, port):
+    async def check():
+        original = f"https://{host}{port}/example/role"
+        approved = row(value={**row().value, "form_url": original})
+        form = workable()
+        opened = await submit._open(
+            services(None), SimpleNamespace(form_url=original, rows=[approved]), form
+        )
+        assert isinstance(opened, fallback.Generic)
+        assert form.url == TARGET
+        assert not form.acted()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        "jobs.ashbyhq.com:wrong",
+        "jobs.ashbyhq.com:65536",
+        "jobs.ashbyhq.com:-1",
+        "jobs.ashbyhq.com:0",
+        "jobs.ashbyhq.com:444",
+        "jobs.ashbyhq.com:",
+        "person@jobs.ashbyhq.com",
+        "jobs.ashbyhq.com.evil.example",
+    ],
+)
+def test_invalid_saved_fallback_origins_refuse_before_navigation(authority):
+    async def check():
+        original = f"https://{authority}/example/role"
+        form = workable()
+        opened = await submit._open(
+            services(None),
+            SimpleNamespace(
+                form_url=original, rows=[row(value={**row().value, "form_url": original})]
+            ),
+            form,
+        )
+        assert isinstance(opened, submit.Stop)
+        assert opened.code == "form_changed"
+        assert not form.url
+        assert not form.acted()
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
 @pytest.mark.parametrize("phase", ["open", "fill"])
 def test_framed_known_recovery_fills_only_the_frame_and_replays_without_model(mode, phase):

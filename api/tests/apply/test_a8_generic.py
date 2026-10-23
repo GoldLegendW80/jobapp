@@ -648,7 +648,9 @@ def test_without_a_credential_the_form_agent_does_not_run(
     assert state == "needs_person"
     assert application(db, app_id).cost["stopped"] == "no_credential"
     rows = rows_of(db, app_id)
-    assert any(r.source.value == "identity" and r.value == person_a.email for r in rows.values())
+    assert any(
+        r.source.value == "identity" and r.value == full("identity")["email"] for r in rows.values()
+    )
     assert any(r.source.value == "document" and r.value == "cv.pdf" for r in rows.values())
     assert any(r.source.value == "answers" for r in rows.values())
     assert any(r.source.value == "left" for r in rows.values())
