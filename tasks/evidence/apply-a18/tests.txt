@@ -1,0 +1,287 @@
+A18 fresh debug continuation, 2026-10-22
+
+Proof source: composed e1d4904f, branch apply/254-runtime-debug. Later root
+integration changes require the root-owned final composed gate and browser rerun.
+All four required real-Chromium flows PASS on e1d4904f plus the lock correction.
+Full affected backend verification PASS: 5,278 tests in 220.53 seconds.
+The focused lock correction is committed as 85d0aca1e0b5d46b556b9d5061c0e728b1837179.
+
+Fresh first attempt on composed e1d4904f
+- Command: rtk proxy env E2E_CADDY_URL=http://127.0.0.1:63360
+  E2E_ATS_FORMS_URL=http://127.0.0.1:63361 E2E_COMPOSE_PROJECT=apply254
+  COMPOSE_ENV_FILES=/tmp/apply254-fixture.settings caffeinate -i ops/agent-test.sh
+  --name apply-254-debug --playwright -c e2e/apply-all.config.ts apply-a18.spec.ts
+- Result: 3 passed, 1 failed in 7.0 minutes. Account/sign-in/edit/Replace/Save/Skip
+  passed in 1.4 minutes; Workday Save/readback and LinkedIn opt-in refusal passed in
+  1.6 minutes; Chromium post-discovery pacing race passed in 50.3 seconds with the
+  exact site-profile-race marker, preserved site value and no Experience autosave.
+- Autosave failed because confirm-autosave waited on a retained database row lock.
+  Fresh run 552c9556-5c4e-4524-9ee9-5057374ff956 remained needs_person.
+  Browser POST at 12:33:23.615 UTC aborted after 5002.403 ms; Caddy recorded 499.
+  API at 12:33:38.669 UTC logged only retryable database error, SQLSTATE 57014.
+  Repeated fresh GETs returned the durable needs_person state. This is a product
+  lock-lifetime defect, separate from the prior host sleep, and is not waived.
+- Deterministic real-Postgres regression calls detail/screenshot/refusal handlers, retains the
+  read session as it is before dependency cleanup, and acquires the same row from a
+  second session with FOR UPDATE NOWAIT. Both cases failed with LockNotAvailable
+  before the fix (2 failed in 17.96 s); no sleep or elapsed-time assertion is used.
+  The refused-decision variant also failed independently before the fix (1 failed, 5.48 s).
+
+Lock-lifetime correction
+- The response helper materializes the owned detail while holding the existing row lock,
+  then rolls back its read transaction before returning. Screenshot bytes follow the same
+  order. Refused decisions also release their read transaction before returning.
+- Writes retain their existing explicit commit before queue or browser awaits. The edit
+  response's second owned detail read is covered by the same release helper. No owner
+  predicates, reviewed hashes, one-use authorization, CV version or Save guard was changed.
+- Red: detail/screenshot NOWAIT variants, 2 failures in 17.96 s; refused confirmation
+  NOWAIT variant, 1 failure in 5.48 s. Green: whole test_a18_routes.py, 8 passed in 9.52 s.
+  Commands used ops/agent-test.sh with -m 'not docker' -n 2, under foreground caffeinate -i.
+- Whole API Ruff check passed; format check passed, 714 files. Final runtime and whole
+  affected-module verification after this correction remain pending at this checkpoint.
+
+Fresh four-flow acceptance after the lock correction
+- Source: 85d0aca1e0b5d46b556b9d5061c0e728b1837179, based on e1d4904f.
+  API and worker rebuilt after the fix; Caddy and browser are the unchanged e1d4904f
+  build. This proves this source checkpoint, not later root-composed integration.
+- Command: rtk proxy env E2E_CADDY_URL=http://127.0.0.1:63360
+  E2E_ATS_FORMS_URL=http://127.0.0.1:63361 E2E_COMPOSE_PROJECT=apply254
+  COMPOSE_ENV_FILES=/tmp/apply254-fixture.settings caffeinate -i ops/agent-test.sh
+  --name apply-254-debug-fixed --playwright -c e2e/apply-all.config.ts apply-a18.spec.ts
+- Result: 4 passed in 4.6 minutes, one worker, no retries.
+  Account/sign-in/edit/Replace/explicit Save/Skip: 1.3 minutes.
+  Autosave consent, all three saved sections, complete source values including graduation,
+  unchanged old title/phone/email: 1.1 minutes.
+  Workday reopen/Save/readback and LinkedIn opt-in refusal: 1.5 minutes.
+  Chromium post-discovery pointermove race: 45.7 seconds, exact marker with the site's
+  nonempty Employer value preserved, value_differs and no Experience autosave.
+- All four flows assert an empty console/pageerror/unexpected-response collection.
+  Screenshot helper assertions cover desktop/mobile and light/dark without page overflow.
+  The eight existing review/Save images were regenerated; twelve added viewport images
+  cover autosave, the atomic race and LinkedIn refusal. Selected desktop/light race and
+  mobile/dark autosave screenshots were inspected locally. Trace archives stay private.
+
+Full affected backend completion
+- Command: rtk proxy caffeinate -i ops/agent-test.sh --name apply-254-debug-module
+  tests/apply tests/browser/test_b5_actions.py tests/browser/test_a18_empty.py
+  tests/browser/test_b12b_tool.py tests/browser/test_b12a_api.py tests/agents/test_runner.py
+  -m 'not docker' -n 2 -q --tb=short --junitxml=/tmp/apply254-debug-module.xml
+- Result: 5,278 passed in 220.53 s. The throwaway database and Redis were removed
+  by the wrapper; no interrupted or partial suite result is counted as this completion.
+- JUnit verification: test_a10b_signin.py 17 passed; test_a10b_later.py 5 passed,
+  22 combined. The exact apply queue allowlist/cron assertion passed once: seven
+  named jobs including site_profile_run/site_profile_save/prune_apply_screenshots,
+  max_jobs=1, zero result retention, one try, 30-second tick and daily prune schedule.
+- The earlier two A16 ats_of neighbour expectations pass on this composed checkpoint.
+- Remaining acceptance is root-owned: final later-composed integration gate, all Apply
+  journeys and independent review. Real model/site measurement and actual tenant
+  variations remain the owner's Checkpoint A. No real site/account/credential/mail,
+  submission to a company or deployment was used in this continuation.
+
+Cleanup and resource ledger
+- Transferred apply254 stack: docker compose down -v completed. Its containers,
+  networks and pgdata/redisdata/browserprofiles volumes were removed.
+- Removed only apply254-api:review, apply254-worker:review, apply254-caddy:review and
+  apply254-browser:review. The borrowed apply578-renderer:review image remains present,
+  ID sha256:95a287fd6ab2e53c62fc06fa1c08d97346039557bb3951b08626fb6b0e475610.
+- No apply254 or agent-apply-254 containers remain. No command-scoped sleep inhibitor,
+  test wrapper, browser job, watcher or image build remains active. Slot 2 was released.
+- Transferred temporary fixture settings, image override and port JSON were removed
+  without printing their contents. The temporary frontend dependency symlink was removed.
+  The worktree and private JUnit report remain available for root's independent review.
+- Old builder worktrees were read only; approved PRs and main-checkout source were not edited.
+
+Completed static/component checks on the correction
+- rtk proxy pnpm --dir web run typecheck: PASS.
+- rtk proxy pnpm --dir web run lint: PASS, max warnings 0.
+- rtk proxy pnpm --dir web exec vitest run src/features/apply src/features/browser:
+  19 files, 429 passed, 21.14 s.
+- rtk proxy python3 .github/scripts/ci_plan_test.py: 81 passed, 54.619 s.
+- rtk proxy python3 .github/scripts/e2e_groups.py: PASS, 29 CI specs, 4 excluded,
+  42 group-only specs. No CI registry file or dependency was changed.
+- Chrome DevTools MCP is unavailable in this session. Actual Chromium Playwright
+  flows collect console/page errors, failed API responses, screenshots and viewport
+  overflow assertions; retained private traces provide request/response diagnosis.
+
+Root cause of the prior timeout disagreement, diagnosed before retry
+- Private Playwright trace inspection selected only run IDs, state, section state,
+  request/response times and API Date headers. Trace archives remain local and uncommitted.
+- Workday run 37f84dfb-3d0b-4f8b-9e03-86393e81836d: POST at 11:22:52.669 UTC,
+  DB creation 11:22:52.678528. Final poll began 11:23:18.130 UTC, monotonic
+  179338.809 ms, and returned filling in 14.742 ms. The poll assertion ended at
+  monotonic 1211496.140 ms, about 1032 seconds after its last request. There were
+  no intervening poll requests. Earlier polls completed in tens of milliseconds.
+- Race run be0629f3-369c-4c69-8b61-fdf7b69bbdfb: POST client timestamp
+  11:40:35.122 UTC, API Date 11:23:22 UTC and DB creation 11:23:23.801377 UTC.
+  This demonstrates that the test host and Docker VM clocks diverged across the gap.
+- Read-only pmset -g log correlates the exact interval in Europe/Paris (+0200):
+  13:23:16, Entering Sleep, Idle Sleep, 1034 seconds;
+  13:40:30, DarkWake; 13:40:32, Entering Sleep, 1070 seconds;
+  13:58:22, DarkWake; 13:58:41, Sleep; 14:04:27, user-activity Wake.
+  Host sleep explains both the missing Workday polling interval and the race wait.
+  Healthy containers and the earlier CPU samples alone were insufficient evidence.
+- New acceptance uses foreground command-scoped caffeinate -i around agent-test.sh.
+  It exits with the test wrapper. No browser timeout, API state, conflict assertion,
+  atomic empty-only write or durability guarantee was relaxed.
+- All four owned images rebuilt from e1d4904f: apply254-api/worker/caddy/browser:review.
+  Transferred apply254 services were recreated, including atsforms bound to the fresh
+  debug worktree. Borrowed apply578-renderer:review was not rebuilt or retagged.
+  Build mutex was released after the successful build.
+
+Historical previous runtime continuation follows, retained for investigation.
+
+A18 fresh runtime continuation, 2026-10-22
+
+Runtime acceptance remains PENDING. The latest four-flow run was 1 passed, 3 failed
+(38.0 minutes as reported by Playwright). No complete four-flow proof is claimed.
+No real user data, real portal, Google host, mail, model credential or deployment was used.
+
+Immutable backend correction
+- Source checkpoint 0d2ed47946e5b2a8b5d0afe6065246d9741e7d9b, based on 7f62f2d8.
+- profile_router.edit flushed without committing; the response showed an edit/Replace
+  selection that a fresh request lost. profile_approve_router.skip also lacked a commit.
+- Both routes now commit. Request-boundary regressions went red on edit and Skip.
+- Five request-boundary cases then passed in 7.34 s. They verify a fresh GET of the
+  edited value, Replace and values_hash, approval plus an authorisation hash read in a
+  new DB session, Skip/done, autosave confirmation and Cancel. The Cancel test stubs
+  lease cancellation only; bound lease cancellation has its separate existing coverage.
+
+Latest real-browser result on the rebuilt correction
+- Account/sign-in/edit/Replace/explicit Save/Skip/Cancel: PASS, 1.3 minutes.
+  The fixture received one approved Save, including the edited name and replaced title.
+  Replay approval was refused; Skip persisted. Console/pageerror collection was empty.
+  Eight current-source screenshots are committed: section-review and saved-section,
+  desktop/mobile, light/dark. Their viewport checks passed; selected images were inspected.
+- Autosave: FAIL in an added stronger submission assertion after reaching done with all
+  three sections saved. The test mapped End date to input end, but the fixture names it
+  graduation. That test-only mapping is corrected in this checkpoint and has NOT rerun.
+  Earlier preservation assertions passed before this stronger assertion was added.
+- Workday/LinkedIn refusal: TIMEOUT while the last observed API state was filling.
+  Bounded post-run DB inspection later found both Workday sections ready, without errors.
+- Atomic race: TIMEOUT waiting for autosave consent. It never exercised the corrected
+  race trigger during the latest run. The pointermove/marker correction is NOT verified.
+- The earlier pre-correction run was 2 passed, 2 failed in 6.8 minutes: autosave and
+  Workday Save/readback plus LinkedIn refusal passed, Account exposed the durable edit
+  defect, and the race's old pointerenter trigger fired before discovery. Its stored
+  current_value already contained the site value, so empty-only correctly preserved it
+  and finished done. This was not proof of a pacing race.
+
+Bounded diagnostics, no cause inferred
+- api/worker/browser: running, healthy, OOM false, restart count zero.
+- API started 2026-10-22T11:19:59.200844299Z; worker 11:19:59.067164215Z;
+  browser 10:02:03.440250589Z.
+- Owned idle snapshot: API 0.10% CPU, 156.8 MiB/512 MiB; worker 0.25%,
+  177.6 MiB/1.5 GiB; browser 0.06%, 104.9 MiB/1 GiB. These do not prove a load cause.
+- Workday run 37f84dfb-3d0b-4f8b-9e03-86393e81836d: created 11:22:52.678528 UTC,
+  ready 11:23:39.117224 UTC. Experience ready 11:23:21.213262, education ready
+  11:23:36.720258. Compare these IDs/times with retained trace API poll responses.
+- Race run be0629f3-369c-4c69-8b61-fdf7b69bbdfb: created 11:23:23.801377 UTC,
+  reached needs_person/autosave_confirmation 11:58:43.489446 UTC, no error code.
+- Autosave run e0478541-5b1d-4b71-84de-699c5a3de1cf: done 11:22:48.194219 UTC,
+  all three sections saved with no error. Account run 38287f2a-e66a-4c69-955e-fa9f1d344206:
+  cancelled 11:21:41.938879 UTC after section 1 saved and section 2 skipped.
+- Timing disagreement between worker readiness and browser-observed filling remains
+  unexplained. No general machine stall, OOM or event-loop root cause is established.
+
+Checks in this continuation
+- Focused request-boundary backend: 5 passed, 7.34 s.
+- Whole API Ruff check passed; format check passed, 701 files.
+- Frontend typecheck and lint passed after the screenshot/marker assertions were added.
+  The final string-only end -> graduation correction was not rerun.
+- ci_plan_test: 81 passed. e2e_groups: passed, 29 CI specs, 4 excluded, 40 group-only.
+- Whole Apply plus affected browser/runner run: INTERRUPTED, exit 130, 1,463 passed,
+  2 real failures in 52.98 s before interruption. The failures were old test_a2_guardrails
+  expectations that LinkedIn URLs with gh_jid/ashby_jid should be other; actual linkedin.
+  Root and A16 owner were notified. No whole-module pass is claimed.
+- Final A10b test_a10b_signin.py + test_a10b_later.py (about 22 cases), exact queue/cron
+  assertion in test_a5_run.py, full affected backend completion and Apply/browser Vitest
+  remain pending in a completed run. Prior-builder results below are historical only.
+- Parent owns all Apply-group journeys on the final composed integration.
+
+Owned resources and resume commands: runtime-handoff.txt in this folder.
+
+Historical prior-builder evidence follows, not a final current-tree acceptance result.
+
+A18 continuation evidence, 2026-10-22
+
+Status: backend capability and UI are implemented, but A18 runtime acceptance is PENDING.
+No successful four-flow browser result or UI screenshot evidence is claimed.
+No real candidate portal, real user profile, model credential or production stack was used.
+
+Verified checks
+- Whole apply API folder plus runner/browser actions: 4,950 passed, 1 failed in 256.56 s.
+  The failure was the exact queue-function allowlist. This branch updated it for the two
+  profile jobs; parent integration separately adds prune_apply_screenshots.
+- Expanded A18/form-agent regressions: 250 passed.
+- Atomic browser write/cancellation and existing browser action regressions: 134 passed.
+- Focused profile/cancel/queue/browser regressions: 157 passed in 30.80 s.
+- Exact reviewed reference CV Save tests: newer default sends only old approved bytes;
+  missing or tampered approved version sends nothing and clicks nothing. Included in
+  profile tests, 29 passed in 12.18 s.
+- Final profile tests after multi-section autosave correction: 30 passed in 10.73 s.
+- Whole apply/browser Vitest: 421 passed in 23.00 s before final checkbox polling correction.
+  Focused final section-review suite: 4 passed. Typecheck passed; final lint recorded in handback.
+- Whole API Ruff check passed; format check passed, 678 files.
+- ci_plan_test: 81 passed. e2e_groups: passed.
+
+Real Chromium observations and corrected defects
+- Account start and real watched sign-in reached a three-section ready report. No Save
+  occurred before approval. Two completed fixture runs recorded zero model tokens/turns,
+  with a shared ceiling of 820,000 tokens and 30 turns. These used no model credential.
+  Actual model token measurement on a real site remains a human Checkpoint A task.
+- Initial browser query saw no lease and stopped polling, showing the wrong later-sign-in
+  banner. Run page now polls shared browser state throughout active work and uses one view.
+- The invented login had focus/keyboard timing problems. It now uses a cookie-backed login,
+  explicit focus and a visible-canvas-change wait before the person confirms sign-in.
+  The app rechecks the sign-in wall after confirmation rather than treating it as a form.
+- Replace API returned 200 and persisted, but polling could restore the old checkbox prop.
+  Final source keeps local person selection, stable field rows, and aborts stale reads before
+  applying mutation results. This final correction still needs the real first-flow rerun.
+- Real autosave saved its first section, then failed profile_run_failed. Exception-type-only
+  diagnosis showed RefusedError at the next authorisation: first-section finish_state had
+  marked the run done before remaining sections existed. Final source holds filling until
+  discovery finishes and closes readback dialogs before moving on. The new two-dialog
+  autosave regression passes. This final correction still needs real autosave reruns.
+
+Owned continuation stack and private artifacts
+- Worktree: .claude/worktrees/codex-apply-254
+- Branch: apply/254-site-profiles-complete
+- Compose project: apply254, healthy and left running for the next agent.
+- Own tags: apply254-api:review, apply254-worker:review, apply254-caddy:review,
+  apply254-browser:review. Borrowed read-only renderer: apply578-renderer:review.
+- Generated fixture-only settings: /tmp/apply254-fixture.settings. Never print or commit it.
+- Image/env override: /tmp/apply254-images.yml.
+- Public loopback ports only: /tmp/apply254-runtime.json.
+- Latest interrupted first-flow trace/error-context remain in
+  web/test-results/apply-a18-Account-starts-a-d285c-e-and-a-user-edit-save-once/.
+  Keep trace local: it may include synthetic session cookies, so do not commit it.
+- No Playwright or diagnostic process remains running. Compose services are the only
+  continuing processes. The parent controls assignment of heavy slot 2 and image-build mutex.
+- The last built images PRECEDE final local Replace/polling and multi-section autosave fixes.
+  Rebuild own API/worker/Caddy before browser rerun; browser image has final atomic write code.
+
+Continuation commands (all commands start rtk; use this worktree)
+- Obtain image-build mutex from parent/email agent, then:
+  rtk proxy docker compose -p apply254 --env-file /tmp/apply254-fixture.settings -f compose.yml -f compose.mac.yml -f tests/ats-stub.compose.yml -f tests/ats-forms-stub.compose.yml -f /tmp/apply254-images.yml build api worker caddy
+  rtk proxy docker compose -p apply254 --env-file /tmp/apply254-fixture.settings -f compose.yml -f compose.mac.yml -f tests/ats-stub.compose.yml -f tests/ats-forms-stub.compose.yml -f /tmp/apply254-images.yml up -d --no-build --wait api worker caddy
+- Read only /tmp/apply254-runtime.json to populate E2E_CADDY_URL/E2E_ATS_FORMS_URL. Set
+  E2E_COMPOSE_PROJECT=apply254 and COMPOSE_ENV_FILES=/tmp/apply254-fixture.settings, then:
+  rtk proxy ops/agent-test.sh --name apply-254 --playwright -c e2e/apply-all.config.ts apply-a18.spec.ts
+- Four flows: Account/sign-in/edit/Replace/approve/skip/mobile; autosave empty-only;
+  Workday dialog Save/readback plus LinkedIn opt-in refusal; Chromium pacing race preserving
+  a value that the site populates between discovery and atomic write.
+- If first fails, all other flows now run independently with one Playwright worker.
+- Complete mobile/light/dark evidence and inspect console/network when flows pass.
+- Run all apply-group journeys on final integration as required by implementer instructions;
+  only this new file was attempted here, and it has NOT yet passed end to end.
+- Cleanup only after continuation: same Compose recipe down -v, then remove only the four
+  apply254 tags. Never remove/retag borrowed apply578-renderer or another project's images.
+
+Declared unsupported cases for final independent review
+- Known helpers use bounded exact accessible Workday/LinkedIn section labels and fail closed
+  on ambiguous controls. A fake Workday/LinkedIn dialog suite passes, but this does not prove
+  every tenant variation. The real LinkedIn opt-in dialog fill still needs a browser proof.
+- Generic next_step currently refuses navigation; unknown multi-page profile flows need a
+  deliberate continuation review. No model-generated value or script is accepted.
+- Autosave intentionally supports only native text inputs through one atomic empty-check
+  and native setter with input/change events. Other control kinds are left for the person.

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
+import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import { describeError } from "@/lib/api";
 
 import {
@@ -39,6 +40,7 @@ import {
 } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
+import { EmailApplication } from "./email-application";
 import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
@@ -103,6 +105,30 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [unsaved, setUnsaved] = useState(0);
   const [asking, setAsking] = useState<DecisionKind | null>(null);
+  let onLinkedIn = false;
+  let linkedinPosting: string | null = null;
+  try {
+    const posting = new URL(job.url ?? "");
+    const host = posting.hostname.toLowerCase().replace(/\.$/, "");
+    onLinkedIn = host === "linkedin.com" || host.endsWith(".linkedin.com");
+    if (
+      posting.protocol === "https:" &&
+      !posting.username &&
+      !posting.password &&
+      ["linkedin.com", "www.linkedin.com"].includes(host) &&
+      /^\/jobs\/view\/\d{1,24}\/?$/.test(posting.pathname) &&
+      !posting.hash
+    )
+      linkedinPosting = posting.href;
+  } catch {
+    /* A posting without an address already has its normal refusal. */
+  }
+  const linkedin = useQuery({
+    queryKey: linkedinKey,
+    queryFn: ({ signal }) => getLinkedIn(signal),
+    enabled: onLinkedIn,
+  });
+  const linkedinBlocked = onLinkedIn && !linkedin.data?.allowed;
 
   const latest = useQuery({
     queryKey: applicationsKey(job.id),
@@ -245,8 +271,20 @@ export function ApplySection({ job }: { job: JobDetail }) {
     onError: failed,
   });
   const approve = useMutation({
-    mutationFn: (current: Approval) =>
-      approveApplication(id as string, current.answers_hash),
+    mutationFn: ({
+      current,
+      acknowledged,
+    }: {
+      current: Approval;
+      acknowledged: string[];
+    }) =>
+      approveApplication(
+        id as string,
+        current.answers_hash,
+        current.answers.find((answer) => answer.field_key === "email_to")
+          ?.value as string | undefined,
+        acknowledged,
+      ),
     onMutate: () => {
       setNotice(null);
     },
@@ -345,6 +383,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
+          {application?.ats === "email" && id ? (
+            <EmailApplication applicationId={id} />
+          ) : null}
           {!manual ? (
             <NeedsPerson
               application={application}
@@ -378,7 +419,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             />
           ) : null}
 
-          {application && hasForm(application) ? (
+          {application &&
+          application.needs !== "signin" &&
+          hasForm(application) ? (
             approval ? (
               <FormPanel
                 application={application}
@@ -423,31 +466,62 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             {phase === "idle" ? (
               <>
-                <Button
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("review");
-                  }}
-                >
-                  {start.isPending && start.variables === "review" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply (Review first)
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("manual");
-                  }}
-                >
-                  {start.isPending && start.variables === "manual" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply myself
-                </Button>
+                {linkedinBlocked ? (
+                  <p className="text-sm text-muted-foreground">
+                    Turn on LinkedIn in Account and accept its current sentence
+                    to use Easy Apply. You can also apply yourself.
+                  </p>
+                ) : (
+                  <Button
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("review");
+                    }}
+                  >
+                    {start.isPending && start.variables === "review" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply (Review first)
+                  </Button>
+                )}
+                {linkedinBlocked ? (
+                  linkedinPosting ? (
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-fit"
+                      asChild
+                    >
+                      <a
+                        href={linkedinPosting}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open LinkedIn and apply myself
+                      </a>
+                    </Button>
+                  ) : null
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("manual");
+                    }}
+                  >
+                    {start.isPending && start.variables === "manual" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply myself
+                  </Button>
+                )}
               </>
             ) : null}
             {phase === "review" && approval ? (
@@ -538,8 +612,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
               role={job.title}
               approval={approval}
               pending={approve.isPending}
-              onConfirm={() => {
-                approve.mutate(approval);
+              onConfirm={(acknowledged = []) => {
+                approve.mutate({ current: approval, acknowledged });
               }}
             />
           ) : null}

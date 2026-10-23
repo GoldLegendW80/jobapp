@@ -60,6 +60,7 @@ describe("the review queue page", () => {
     ).toHaveAttribute("href", `/jobs/${queueItem(1, "ready").posting_id}`);
     expect(ready).toHaveTextContent("Example Robotics");
     expect(ready).toHaveTextContent("waiting for your approval");
+    expect(ready).toHaveTextContent("Review these documents before approval.");
     expect(ready).toHaveTextContent(
       "Why it came back: A newer version of your documents was written",
     );
@@ -92,7 +93,7 @@ describe("the review queue page", () => {
     expect(
       within(queued).queryByRole("button", { name: "Approve and submit" }),
     ).toBeNull();
-    expect(document.title).toMatch(/^Applications/);
+    expect(document.title).toMatch(/^Application queue/);
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
@@ -166,6 +167,75 @@ describe("the review queue page", () => {
       name: "Under way (1)",
     });
     await within(underWay).findByText(/Approved\. The form is filled again/);
+  });
+
+  it.each([
+    [409, "stale", "This answer changed on another page."],
+    [422, "wrong_type", "That answer cannot be saved."],
+    [
+      422,
+      "email_subject",
+      "Use an email subject of at most 998 characters on one line.",
+    ],
+  ] as const)(
+    "keeps an unsaved answer and explains a %s refusal",
+    async (status, code, detail) => {
+      const item = queueItem(1, "ready", { left: 1, required_left: 1 });
+      fakeQueue([item], {
+        [item.id]: [
+          leftAnswer("why", "Why Example Robotics?", { required: true }),
+        ],
+      });
+      server.use(
+        http.put("*/api/applications/:id/answers/:field", () =>
+          HttpResponse.json({ detail, code }, { status }),
+        ),
+      );
+      const user = userEvent.setup();
+      renderApp(PATH);
+      const ready = await screen.findByRole("article", {
+        name: /Robotics Engineer 1/,
+      });
+      const answer = await within(ready).findByRole("textbox", {
+        name: "Answer for Why Example Robotics?",
+      });
+      await user.type(answer, "I build agents.");
+      await user.click(
+        within(ready).getByRole("button", { name: "Save answer" }),
+      );
+      await within(ready).findByText(detail);
+      expect(answer).toHaveValue("I build agents.");
+    },
+  );
+
+  it("moves focus to the next queue card after approval", async () => {
+    const first = queueItem(1, "ready");
+    const second = queueItem(2, "ready");
+    fakeQueue([first, second], {
+      [first.id]: [fakeAnswer("email", "Email", "e2e-alex@example.org")],
+      [second.id]: [fakeAnswer("email", "Email", "e2e-alex@example.org")],
+    });
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const firstCard = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    await user.click(
+      within(firstCard).getByRole("button", { name: "Approve and submit" }),
+    );
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Approve and submit",
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Robotics Engineer 2" }),
+      ).toHaveFocus();
+    });
   });
 
   it("shows the form as it is now when the approval is stale, and sends the new hash", async () => {
@@ -247,7 +317,9 @@ describe("the review queue page", () => {
         screen.queryByRole("article", { name: /Robotics Engineer 1/ }),
       ).toBeNull();
     });
-    expect(screen.getByRole("heading", { name: "Applications" })).toHaveFocus();
+    expect(
+      screen.getByRole("heading", { name: "Application queue" }),
+    ).toHaveFocus();
 
     // The next one opens with the box clear again: skipping is never carried over.
     const second = card("Robotics Engineer 2");

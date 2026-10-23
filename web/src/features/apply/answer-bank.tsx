@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { message } from "@/features/admin/errors";
 import { errorDetail, isApiError } from "@/lib/api";
@@ -20,6 +21,8 @@ import { errorDetail, isApiError } from "@/lib/api";
 import { ConfirmDialog } from "./confirm-dialog";
 import {
   ANSWER_MAX,
+  QUESTION_MAX,
+  addBankAnswer,
   answerBankKey,
   answerText,
   getAnswerBank,
@@ -44,6 +47,31 @@ export function AnswerBank() {
   const [editing, setEditing] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState<BankEntry | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const wasAdding = useRef(false);
+  const create = useMutation({
+    mutationFn: ({ question, answer }: { question: string; answer: string }) =>
+      addBankAnswer(question, answer),
+    onMutate: () => {
+      setNotice(null);
+    },
+    onSuccess: (bank) => {
+      client.setQueryData<Bank>(answerBankKey, bank);
+      setAdding(false);
+      toast.success("Reusable answer saved.");
+    },
+    onError: (error) => {
+      setNotice(message(error));
+      if (isApiError(error) && error.status === 409)
+        void client.invalidateQueries({ queryKey: answerBankKey });
+    },
+  });
+  useEffect(() => {
+    if (wasAdding.current && !adding && !create.isPending)
+      addButton.current?.focus();
+    if (!create.isPending) wasAdding.current = adding;
+  }, [adding, create.isPending]);
 
   const save = useMutation({
     mutationFn: ({ key, answer }: Change) => saveBankAnswer(key, answer),
@@ -79,12 +107,43 @@ export function AnswerBank() {
         </CardTitle>
         <CardDescription>
           Answers the app reuses when the same question comes back on another
-          form. Change one, or forget it.
+          form. Add one, change one, or forget it. Edits to an application stay
+          on that application. Current profile answers take priority.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <Button
+          ref={addButton}
+          variant="outline"
+          className="self-start"
+          disabled={
+            query.isPending ||
+            query.isError ||
+            save.isPending ||
+            create.isPending ||
+            adding
+          }
+          onClick={() => {
+            setNotice(null);
+            setEditing(null);
+            setAdding(true);
+          }}
+        >
+          Add answer
+        </Button>
+        {adding ? (
+          <AddAnswerForm
+            pending={create.isPending}
+            onCancel={() => {
+              setAdding(false);
+            }}
+            onSave={(question, answer) => {
+              create.mutate({ question, answer });
+            }}
+          />
+        ) : null}
         {notice ? (
-          <Alert variant="destructive">
+          <Alert variant="destructive" role="alert">
             <CircleAlert aria-hidden="true" />
             <AlertDescription>{notice}</AlertDescription>
           </Alert>
@@ -151,7 +210,7 @@ export function AnswerBank() {
                         variant="outline"
                         size="sm"
                         aria-label={`Edit the answer to ${entry.question}`}
-                        disabled={save.isPending}
+                        disabled={save.isPending || create.isPending || adding}
                         onClick={() => {
                           setEditing(entry.question_key);
                         }}
@@ -162,7 +221,7 @@ export function AnswerBank() {
                         variant="outline"
                         size="sm"
                         aria-label={`Forget the answer to ${entry.question}`}
-                        disabled={save.isPending}
+                        disabled={save.isPending || create.isPending || adding}
                         onClick={() => {
                           setForgetting(entry);
                         }}
@@ -248,6 +307,7 @@ function AnswerForm({
         id={id}
         value={text}
         maxLength={ANSWER_MAX}
+        readOnly={pending}
         aria-invalid={problem ? true : undefined}
         aria-describedby={problem ? `${id}-problem` : undefined}
         onChange={(event) => {
@@ -273,6 +333,101 @@ function AnswerForm({
             <LoaderCircle aria-hidden="true" className="animate-spin" />
           ) : null}
           Save answer
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function AddAnswerForm({
+  pending,
+  onCancel,
+  onSave,
+}: {
+  pending: boolean;
+  onCancel: () => void;
+  onSave: (question: string, answer: string) => void;
+}) {
+  const id = useId();
+  const questionBox = useRef<HTMLInputElement>(null);
+  const answerBox = useRef<HTMLTextAreaElement>(null);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [problem, setProblem] = useState<"question" | "answer" | null>(null);
+  useEffect(() => {
+    questionBox.current?.focus();
+  }, []);
+  return (
+    <form
+      aria-label="Add a saved answer"
+      noValidate
+      className="flex flex-col gap-2 rounded-md border p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (pending) return;
+        const missing = !question.trim()
+          ? "question"
+          : !answer.trim()
+            ? "answer"
+            : null;
+        setProblem(missing);
+        if (missing) {
+          (missing === "question"
+            ? questionBox.current
+            : answerBox.current
+          )?.focus();
+          return;
+        }
+        onSave(question.trim(), answer.trim());
+      }}
+    >
+      <Label htmlFor={`${id}-question`}>Question</Label>
+      <Input
+        ref={questionBox}
+        id={`${id}-question`}
+        value={question}
+        maxLength={QUESTION_MAX}
+        readOnly={pending}
+        aria-invalid={problem === "question" || undefined}
+        aria-describedby={problem === "question" ? `${id}-problem` : undefined}
+        onChange={(event) => {
+          setQuestion(event.target.value);
+        }}
+      />
+      <Label htmlFor={`${id}-answer`}>Reusable answer</Label>
+      <Textarea
+        ref={answerBox}
+        id={`${id}-answer`}
+        value={answer}
+        maxLength={ANSWER_MAX}
+        readOnly={pending}
+        aria-invalid={problem === "answer" || undefined}
+        aria-describedby={problem === "answer" ? `${id}-problem` : undefined}
+        onChange={(event) => {
+          setAnswer(event.target.value);
+        }}
+      />
+      {problem ? (
+        <p id={`${id}-problem`} className="text-sm text-destructive">
+          {problem === "question"
+            ? "Type the question as it appears on the form."
+            : "Type an answer to reuse on other forms."}
+        </p>
+      ) : null}
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={pending}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" disabled={pending} aria-busy={pending}>
+          {pending ? (
+            <LoaderCircle aria-hidden="true" className="animate-spin" />
+          ) : null}
+          Save new answer
         </Button>
       </div>
     </form>

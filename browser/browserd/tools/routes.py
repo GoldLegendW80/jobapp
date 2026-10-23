@@ -20,8 +20,13 @@ api's `client.gate_click` is its only sender (api/app/browser/client.py).
 
 Apply myself (A9): `browser_snapshot` with `{"passive": true}` on an `apply_manual` lease is the
 app's watch of the page the person fills; it does not count as activity (Manager.call). Outside
-the app's turn (`app_turn`, a "Fill my details") only PERSON_TIME's tools run there: a click, a
-key or a typed value is refused `person_input`, so a Take over during the fill stops it.
+the app's turn (`app_turn`, filling details or attaching a document) only PERSON_TIME's tools
+run there. Input ownership is checked again after pacing, so Take over stops an action already
+waiting to click or type. A chooser upload names the boundary returned by the passive watch.
+
+Ordinary live Take over pauses tool calls until Give back or expiry. The first call then
+returns person_used with the new page rather than executing its old action. Every paced input,
+including a gate click or private opener, also checks the live owner and takeover generation.
 
 Calls on one lease run one at a time, through `Manager.call` (the lease's idle timer and its end
 cancel them).
@@ -35,8 +40,8 @@ import re
 import secrets
 from typing import Any
 
-from browserd.leases import MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
-from browserd.tools import actions, pacing, policy
+from browserd.leases import APPLY_WAIT_S, APPLY_WAITS, MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
+from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
 GATE_PURPOSES = ("apply_submit", "profile_edit")
@@ -44,9 +49,9 @@ LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 LOCKS: dict[str, asyncio.Lock] = {}
 PACER = pacing.Pacer()
 # What the app may do on an `apply_manual` lease while the person holds the input: read, open the
-# form, answer a file chooser or a file input with a document of the lease.
+# form or inspect its controls. Attaching a document claims the app's input turn.
 PERSON_TIME = frozenset({
-    "browser_snapshot", "browser_navigate", "browser_file_upload", "browser_box",
+    "browser_snapshot", "browser_navigate", "browser_box",
     "browser_take_screenshot", "browser_wait_for",
 })  # fmt: skip
 
@@ -78,11 +83,58 @@ def _lock(lease: Lease) -> asyncio.Lock:
     return LOCKS.setdefault(lease.lease_id, asyncio.Lock())
 
 
-async def _run(svc: Any, lease_id: str, token: str, work: Any, *, touch: bool = True) -> Any:
+async def _run(
+    svc: Any,
+    lease_id: str,
+    token: str,
+    work: Any,
+    *,
+    touch: bool = True,
+    passive_wait: bool = False,
+) -> Any:
     try:
-        return await svc.manager.call(lease_id, token, work, touch=touch)
+        return await svc.manager.call(lease_id, token, work, touch=touch, passive_wait=passive_wait)
     except LeaseEnded as exc:
         raise LeaseError(410, "lease_ended", reason=exc.reason) from None
+
+
+def _tab(svc: Any, lease: Lease, *, gate: bool = False) -> actions.Tab:
+    from browserd.live import live_of
+
+    live = live_of(svc)
+    epoch = lease.scratch.get("input_epoch", 0)
+    return actions.Tab(
+        request=lease.request,
+        state=state_of(lease),
+        browser=svc.manager.browser,
+        pacer=PACER,
+        gate=gate,
+        lease_tag=lease.lease_id[:8],
+        input_allowed=lambda: (
+            svc.manager.current() is lease
+            and not lease.person_input
+            and live.holder(lease.lease_id) is None
+            and lease.scratch.get("input_epoch", 0) == epoch
+            and (lease.request.purpose != MANUAL_PURPOSE or lease.app_turn)
+        ),
+    )
+
+
+async def _turn(svc: Any, lease: Lease, tab: actions.Tab) -> dict[str, Any] | None:
+    from browserd.live import live_of
+
+    if lease.request.purpose == MANUAL_PURPOSE or lease.wait_reason in APPLY_WAITS:
+        return None
+    if await live_of(svc).agent_turn(lease.lease_id) is None:
+        return None
+    # The caller must inspect the new page before retrying. In particular, an old Submit or
+    # Save cannot resume after the person may have changed its approved fields.
+    page = await actions.run(tab, "browser_snapshot", {})
+    title = str(page.get("title") or "the current page")
+    return {
+        **actions.failure("person_used", f"The person used the browser; the page is now {title}."),
+        "page": page,
+    }
 
 
 async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
@@ -102,17 +154,12 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         if name != "browser_click" or not good:
             raise LeaseError(403, "bad_capability")
     manual = lease.request.purpose == MANUAL_PURPOSE
-    tab = actions.Tab(
-        request=lease.request,
-        state=state_of(lease),
-        browser=svc.manager.browser,
-        pacer=PACER,
-        gate=capability is not None,
-        lease_tag=lease_id[:8],
-    )
+    tab = _tab(svc, lease, gate=capability is not None)
 
     async def work() -> dict[str, Any]:
         async with _lock(lease):
+            if taken := await _turn(svc, lease, tab):
+                return taken
             if manual and not lease.app_turn and name not in PERSON_TIME:
                 log.info("lease %s: %s refused: person_input", lease_id[:8], name)
                 return actions.failure("person_input", "Refused: the person holds the input.")
@@ -126,8 +173,54 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
                 return actions.failure("page_error", "The page did not let this action finish.")
 
-    passive = manual and name == "browser_snapshot" and args.get("passive") is True
-    return 200, await _run(svc, lease_id, token, work, touch=not passive)
+    passive = name == "browser_snapshot" and args.get("passive") is True
+    wait_read = (
+        passive and lease.request.purpose == "apply_fill" and lease.wait_reason in APPLY_WAITS
+    )
+    passive = passive and (manual or wait_read)
+    return 200, await _run(svc, lease_id, token, work, touch=not passive, passive_wait=wait_read)
+
+
+async def apply_wait(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """Private Apply code path. No duration, arbitrary tool, or sign-in handoff is accepted."""
+    lease_id, action = match["lease_id"], match["action"]
+    lease = svc.manager.check_token(lease_id, req.headers.get("x-lease-token", ""))
+    if lease.request.purpose != "apply_fill" or not lease.request.automation:
+        raise LeaseError(403, "wrong_purpose")
+    body = req.json()
+    expected = {"reason"} if action == "begin" else set()
+    if not isinstance(body, dict) or set(body) != expected:
+        raise LeaseError(400, "bad_args")
+    if action == "begin" and (
+        not isinstance(body["reason"], str) or body["reason"] not in APPLY_WAITS
+    ):
+        raise LeaseError(400, "bad_args")
+    async with _lock(lease):
+        if svc.manager.current() is not lease:
+            raise LeaseError(410, "lease_ended")
+        now = svc.manager.clock()
+        if reason := lease.expired(now):
+            await svc.manager.release(lease_id, reason)
+            raise LeaseError(410, "lease_ended", reason=reason)
+        if action == "begin":
+            if lease.state == "waiting_person" and lease.wait_reason not in APPLY_WAITS:
+                raise LeaseError(409, "waiting_person")
+            # One immutable allowance for the lease, including repeated interruptions.
+            deadline = lease.scratch.setdefault("apply_wait_deadline", now + APPLY_WAIT_S)
+            if now >= deadline:
+                await svc.manager.release(lease_id, "person_timeout")
+                raise LeaseError(410, "lease_ended", reason="person_timeout")
+            lease.wait_person(now, body["reason"], "", deadline - now)
+            lease.person_input = True
+        elif lease.state != "waiting_person" or lease.wait_reason not in APPLY_WAITS:
+            raise LeaseError(409, "not_waiting")
+        elif action == "resume":
+            lease.person_input = False
+            from browserd.live import live_of
+
+            live_of(svc).give_back(lease_id)
+            lease.resume(now)
+        return 200, {"lease": lease.public(now)}
 
 
 async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
@@ -154,8 +247,44 @@ async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
     return 200, await _run(svc, lease_id, token, work)
 
 
+async def linkedin_open(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """Private application code endpoint, never dispatched as an agent tool."""
+    lease_id = match["lease_id"]
+    token = req.headers.get("x-lease-token", "")
+    lease = svc.manager.check_token(lease_id, token)
+    body = req.json()
+    if not isinstance(body, dict) or set(body) != {"job_id"} or not isinstance(body["job_id"], str):
+        raise LeaseError(400, "bad_args")
+    if not linkedin.JOB.fullmatch(body["job_id"]):
+        raise LeaseError(400, "bad_args")
+    tab = _tab(svc, lease)
+
+    async def work() -> dict[str, Any]:
+        async with _lock(lease):
+            if taken := await _turn(svc, lease, tab):
+                return taken
+            try:
+                tab.require_input()
+                result = await linkedin.open_modal(
+                    tab, body["job_id"], svc.manager.config.linkedin_stub_base_url
+                )
+            except actions.OffList:
+                return await tab.settle(actions.refused("host_not_allowed"))
+            except actions.PersonInput:
+                return actions.failure("person_input", "Refused: the person holds the input.")
+            except Exception:
+                # A detached element during approach is a refusal, never a replacement click.
+                result = actions.refused("linkedin_opener_refused")
+            return await tab.settle(result)
+
+    return 200, await _run(svc, lease_id, token, work)
+
+
 # (method, pattern, handler, body_max): browserd/app.py makes its Route of each.
 ROUTES = [
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/apply-wait/(?P<action>begin|read|resume)"),
+     apply_wait, 128),
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/linkedin/open"), linkedin_open, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/tools/(?P<name>[a-z_]{{1,48}})"), call_tool,
      64 * 1024),
     ("PUT", re.compile(rf"/leases/{LEASE_ID}/files/(?P<name>[^/]{{1,100}})"), put_file,

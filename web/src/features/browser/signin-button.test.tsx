@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -72,7 +73,11 @@ describe("sign in to a site", () => {
   it("opens the typed address in the live view, the person at the keyboard", async () => {
     const calls = fakeApi({ browser: FREE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     const field = within(dialog).getByLabelText("Address of the site");
     expect(field).toHaveFocus();
@@ -113,7 +118,11 @@ describe("sign in to a site", () => {
       }),
     );
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected(opened);
     // The session ends: browserd closes the socket before the page drops the view.
     act(() => {
@@ -127,7 +136,11 @@ describe("sign in to a site", () => {
   it("submits with Enter", async () => {
     const calls = fakeApi({ browser: FREE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     await user.type(
       within(dialog).getByLabelText("Address of the site"),
@@ -154,7 +167,11 @@ describe("sign in to a site", () => {
         ),
       );
       const user = userEvent.setup();
-      renderWithQuery(<BrowserCard />);
+      renderWithQuery(
+        <MemoryRouter>
+          <BrowserCard />
+        </MemoryRouter>,
+      );
       const dialog = await openDialog(user);
       const field = within(dialog).getByLabelText("Address of the site");
       if (typed) await user.type(field, typed);
@@ -182,7 +199,11 @@ describe("sign in to a site", () => {
       ),
     );
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     let dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Address of the site"), "x");
     await user.click(
@@ -208,7 +229,11 @@ describe("sign in to a site", () => {
       ),
     );
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Address of the site"), SITE);
     await user.click(
@@ -222,7 +247,11 @@ describe("sign in to a site", () => {
   it("Cancel sends nothing", async () => {
     const calls = fakeApi({ browser: FREE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Address of the site"), SITE);
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -247,7 +276,11 @@ describe("sign in to a site", () => {
       ),
     );
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Address of the site"), SITE);
     await user.click(
@@ -268,7 +301,11 @@ describe("sign in to a site", () => {
 
   it("is off while the browser is not available", async () => {
     fakeApi({ browser: { ...FREE, available: false } });
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     await screen.findByText("The browser is not available right now.");
     expect(
       screen.getByRole("button", { name: "Sign in to a site" }),
@@ -278,7 +315,11 @@ describe("sign in to a site", () => {
   it("takes an address as long as the api's cap, typed as an address", async () => {
     fakeApi({ browser: FREE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     const field = within(dialog).getByLabelText("Address of the site");
     expect(ADDRESS_MAX).toBe(2048);
@@ -295,7 +336,11 @@ describe("sign in to a site", () => {
       ),
     );
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await openDialog(user);
     await user.click(
       within(dialog).getByRole("button", { name: "Open the site" }),

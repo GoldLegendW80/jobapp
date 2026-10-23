@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { queueItem } from "@/test/apply-queue";
 
+import { serverOffset } from "./full-auto-state";
 import {
   canCancel,
   canReject,
@@ -10,6 +11,7 @@ import {
   leftLine,
   needsPostingPage,
   QUEUE_POLL_MS,
+  QUEUE_WAIT_POLL_MS,
   queuePoll,
   OTHER_REASON,
   reasonLine,
@@ -17,6 +19,17 @@ import {
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
 const SEPARATOR = /[–—]| - /;
+
+it("keeps an ended manual session waiting for explicit resolution on the posting page", () => {
+  const item = queueItem(1, "queued", {
+    mode: "manual",
+    needs: "session_ended",
+  });
+  expect(isWaiting(item)).toBe(true);
+  expect(canCancel(item)).toBe(false);
+  expect(canReject(item)).toBe(false);
+  expect(needsPostingPage(item)).toBe(true);
+});
 
 describe("the line of a document and its check", () => {
   it.each([
@@ -152,20 +165,166 @@ describe("the actions of each state", () => {
 });
 
 describe("how often the queue is read again", () => {
+  const now = Date.parse("2026-10-14T09:00:00Z");
+
   it("polls only while something is under way", () => {
-    expect(queuePoll(undefined)).toBe(false);
-    expect(queuePoll({ items: [], waiting_on_you: 0 })).toBe(false);
+    expect(queuePoll(undefined, now)).toBe(false);
+    expect(queuePoll({ items: [], waiting_on_you: 0 }, now)).toBe(false);
     expect(
-      queuePoll({
-        items: [queueItem(1, "ready"), queueItem(2, "needs_person")],
-        waiting_on_you: 2,
-      }),
+      queuePoll(
+        {
+          items: [queueItem(1, "ready"), queueItem(2, "needs_person")],
+          waiting_on_you: 2,
+        },
+        now,
+      ),
     ).toBe(false);
     expect(
-      queuePoll({
-        items: [queueItem(1, "ready"), queueItem(2, "submitting")],
-        waiting_on_you: 1,
-      }),
+      queuePoll(
+        {
+          items: [queueItem(1, "ready"), queueItem(2, "submitting")],
+          waiting_on_you: 1,
+        },
+        now,
+      ),
     ).toBe(QUEUE_POLL_MS);
   });
+
+  it("refreshes at the earliest hold expiry on the server's clock", () => {
+    const queue = {
+      now: "2001-02-03T10:00:00Z",
+      items: [
+        queueItem(1, "held", { hold_until: "2001-02-03T10:10:00Z" }),
+        queueItem(2, "held", { hold_until: "2001-02-03T10:05:00Z" }),
+        queueItem(3, "ready"),
+      ],
+      waiting_on_you: 1,
+    };
+    const offset = serverOffset(queue.now, now);
+
+    expect(queuePoll(queue, now, offset)).toBe(300_000);
+    expect(queuePoll(queue, now + 299_000, offset)).toBe(1_000);
+    expect(queuePoll(queue, now + 300_000, offset)).toBe(QUEUE_POLL_MS);
+    expect(queuePoll(queue, now + 301_000, offset)).toBe(QUEUE_POLL_MS);
+  });
+
+  it.each([undefined, null, "not a date"])(
+    "keeps checking a hold with no usable expiry (%s) at a slower rate",
+    (hold_until) => {
+      expect(
+        queuePoll(
+          {
+            items: [queueItem(1, "held", { hold_until })],
+            waiting_on_you: 0,
+          },
+          now,
+        ),
+      ).toBe(QUEUE_WAIT_POLL_MS);
+    },
+  );
+
+  it("keeps checking paced approvals at a slower rate because the api exposes no expiry", () => {
+    expect(
+      queuePoll(
+        {
+          items: [queueItem(1, "approved", { needs: "host_pace" })],
+          waiting_on_you: 0,
+        },
+        now,
+      ),
+    ).toBe(QUEUE_WAIT_POLL_MS);
+  });
+
+  it.each([
+    ["2001-02-03T09:59:59Z", QUEUE_WAIT_POLL_MS],
+    ["2001-02-03T10:00:00Z", QUEUE_WAIT_POLL_MS],
+    ["2001-02-03T10:00:01Z", 1_000],
+    ["2001-02-03T10:01:00Z", 60_000],
+    [undefined, QUEUE_WAIT_POLL_MS],
+    [null, QUEUE_WAIT_POLL_MS],
+    ["not a date", QUEUE_WAIT_POLL_MS],
+  ] as const)(
+    "follows a paced Full auto hold on the server's clock, then the pace fallback (%s)",
+    (hold_until, interval) => {
+      const queue = {
+        now: "2001-02-03T10:00:00Z",
+        items: [
+          queueItem(1, "held", {
+            mode: "full_auto",
+            needs: "host_pace",
+            hold_until,
+          }),
+        ],
+        waiting_on_you: 0,
+      };
+
+      expect(queuePoll(queue, now, serverOffset(queue.now, now))).toBe(
+        interval,
+      );
+    },
+  );
+
+  it.each(["queued", "filling", "ready", "approved", "submitting"])(
+    "keeps the active work interval for %s beside a paced Full auto item past its hold",
+    (state) => {
+      const queue = {
+        now: "2001-02-03T10:00:00Z",
+        items: [
+          queueItem(1, "held", {
+            mode: "full_auto",
+            needs: "host_pace",
+            hold_until: "2001-02-03T09:59:59Z",
+          }),
+          queueItem(2, state, { mode: "full_auto" }),
+        ],
+        waiting_on_you: 0,
+      };
+
+      expect(queuePoll(queue, now, serverOffset(queue.now, now))).toBe(
+        QUEUE_POLL_MS,
+      );
+    },
+  );
+
+  it.each([
+    ["2026-10-14T09:01:00Z", QUEUE_POLL_MS],
+    ["2026-10-14T09:00:01Z", 1_000],
+  ] as const)(
+    "uses the earliest refresh when active work and a hold coexist",
+    (hold_until, interval) => {
+      expect(
+        queuePoll(
+          {
+            items: [
+              queueItem(1, "held", { hold_until }),
+              queueItem(2, "submitting"),
+            ],
+            waiting_on_you: 0,
+          },
+          now,
+        ),
+      ).toBe(interval);
+    },
+  );
+
+  it.each([
+    ["2026-10-14T09:01:00Z", QUEUE_WAIT_POLL_MS],
+    ["2026-10-14T09:00:01Z", 1_000],
+  ] as const)(
+    "uses the earlier of a hold expiry and the pace fallback",
+    (hold_until, interval) => {
+      expect(
+        queuePoll(
+          {
+            items: [
+              queueItem(1, "held", { hold_until }),
+              queueItem(2, "approved", { needs: "host_pace" }),
+            ],
+            waiting_on_you: 0,
+          },
+          now,
+        ),
+      ).toBe(interval);
+    },
+  );
 });

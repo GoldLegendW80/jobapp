@@ -1,0 +1,86 @@
+A10b sign in recovery, measured 2026-10-22
+
+Only invented e2e accounts and the atsforms fixture were used. No real ATS, sign in provider,
+Google host or mail server was contacted. The fixture ignores and clears the typed word and
+persists only a boolean cookie. Evidence contains invented candidate and company details.
+
+Passed before the final follow-up:
+  rtk proxy ops/agent-test.sh --name apply-578 tests/apply tests/browser -m 'not docker' -n 2 -q
+  6604 passed in 214.37s.
+  rtk proxy ops/agent-test.sh --name apply-578 tests/apply/test_a10b_signin.py tests/apply/test_a10b_later.py -n 2 -q
+  18 passed (13 sign in and 5 later callback cases).
+  rtk pnpm --dir web exec vitest run src/features/apply src/features/browser
+  416 passed in 17 files.
+  rtk pnpm --dir web run typecheck
+  Passed.
+  rtk pnpm --dir web run lint
+  Passed.
+  rtk proxy python3 .github/scripts/ci_plan_test.py
+  81 passed in 51.792s.
+  rtk proxy python3 .github/scripts/e2e_groups.py
+  Passed.
+
+Follow-up verification:
+  rtk pnpm --dir web exec vitest run src/features/apply/needs-person.test.tsx
+  25 passed, including exactly one person-controlled view during watched sign in.
+  Own Caddy image build ran tsc -b and vite build successfully with the final runtime UI fixes.
+  rtk proxy .venv/bin/ruff check app tests (from api/)
+  Passed after the backend follow-up.
+  rtk proxy .venv/bin/ruff format --check app tests (from api/)
+  659 files already formatted after the backend follow-up.
+
+Real browser runs, own Compose project apply578:
+  rtk proxy env E2E_CADDY_URL=http://127.0.0.1:60366 E2E_ATS_FORMS_URL=http://127.0.0.1:60367 E2E_COMPOSE_PROJECT=apply578 E2E_EVIDENCE=apply-a10b ops/agent-test.sh --name apply-578 --playwright -c e2e/apply-all.config.ts apply-a10b.spec.ts --reporter=line
+  The preparation and watched scenario passed. The watched scenario used live keyboard input,
+  reread the signed-in form, reached ready with zero submissions, then submitted once only
+  after the explicit approval dialog. The later scenario exposed mobile overflow and was fixed.
+  rtk proxy env E2E_CADDY_URL=http://127.0.0.1:60366 E2E_ATS_FORMS_URL=http://127.0.0.1:60367 E2E_COMPOSE_PROJECT=apply578 E2E_EVIDENCE=apply-a10b ops/agent-test.sh --name apply-578 --playwright -c e2e/apply-all.config.ts apply-a10b.spec.ts --grep 'prepares documents|unwatched Like' --reporter=line
+  2 passed in 1.3m on the final UI. A Like with no browser watcher waited for sign in. A later
+  person-only browser session signed in, queued the fill and reached ready in review mode,
+  without increasing the submission count. Browser console/page error collection was empty.
+
+Captures (desktop/mobile, light/dark, with zero document overflow asserted):
+  watched-handoff-*.png
+  submitted-after-approval-*.png
+  later-session-*.png
+  later-ready-for-approval-*.png
+
+Pending integration validation, intentionally not claimed green:
+  The focused backend subset now has 22 cases. Four new cases assert that rendered forms do
+  not override HTTP 429/403/410, and a cancelled worker preserves and binds waiting_person.
+  The apply-section test hiding a login wall's Password from Fields filled was added after the
+  416-test web run. Run it with the final focused or full apply web subset.
+  No single final run of all three new scenarios, or the whole apply journey group, was run
+  after the final mobile overflow fix. Both new behavioral paths passed as recorded above.
+  API/worker runtime images preceded the final status/Redis error-path follow-up; those lines
+  need the integration backend rerun. Parent reserved that rerun after the next shared slot.
+
+Reproducible fixture stack recipe (all generated settings are synthetic; never use real .env):
+  Worktree: .claude/worktrees/codex-apply-578
+  Generated override: /tmp/apply578-images.yml
+  Generated settings: /tmp/apply578-fixture.settings (mode 0600, do not print or commit)
+  Ports metadata: /tmp/apply578-runtime.json
+  Generate settings with .github/scripts/ci_env.sh 60366 redirected to that settings path;
+  append AGENTS_FAKE_BACKEND=true, TEST_FAST_TIMERS=true, COMPOSE_PROFILES=browser and
+  ATS_FORMS_STUB_PORT=60367. The settings generator supplies the other fixture-only values.
+  Compose prefix:
+  rtk docker compose --env-file /tmp/apply578-fixture.settings -p apply578 -f compose.yml -f compose.mac.yml -f tests/ats-stub.compose.yml -f tests/ats-forms-stub.compose.yml -f /tmp/apply578-images.yml
+  Override services: api=apply578-api:review; worker/parser=apply578-worker:review;
+  caddy=apply578-caddy:review; browser=apply578-browser:review;
+  renderer=apply578-renderer:review. api and worker env_file use !override with the generated
+  settings path. Build each own tag sequentially after checking free disk, migrate the API,
+  then start db, redis, ats-stub, ats-forms, api, worker, browser, renderer and caddy.
+  Profile testing borrowed the browser/renderer tags read-only in a separate project. Those
+  tags remain available; cleanup of project apply578 must not remove their borrowed images.
+
+Self review:
+  Shared state: callbacks revalidate (user_id, module, UUID) ownership and lock the application
+  before its one-way transition from needs_person/signin to queued. Done is idempotent.
+  Boundary: body forbids extra fields and chooses only a registered module; the URL is read
+  from the owned subject and checked server-side, with the exact owned lease bound in Redis.
+  Credentials: the application never reads, supplies or stores a password or creates accounts.
+  Browser: real submit detection and live input were enabled; no privileged opener bypass.
+  UI: a waiting sign in replaces the ordinary live slot, so only one live stream is opened.
+  Scope: reusable later browser routes/banner were missing prerequisites for A10b and A18.
+  Small app-shell positioning and fields-list wrapping fixes resolve measured mobile overflow.
+  No migration, dependencies, existing approved PR, or main checkout was changed.

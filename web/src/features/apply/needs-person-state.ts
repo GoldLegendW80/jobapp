@@ -11,7 +11,7 @@ import type { Application, ApplicationEvent } from "./apply-api";
 import { queueKey } from "./queue-api";
 
 /** The steps the person takes in the live view while the assistant waits (api failures.WAIT_ON_PAGE). */
-export const ON_PAGE = new Set(["captcha", "email_code"]);
+export const ON_PAGE = new Set(["captcha", "email_code", "forbidden"]);
 
 export const PAYMENT_SENTENCE =
   "This site asked for a payment. Applications are free; this may not be a genuine posting.";
@@ -29,15 +29,20 @@ function siteOf(application: Application): string {
 /** The headline and what to do, for each reason the api writes in `needs`. */
 export function needOf(application: Application): Need {
   switch (application.needs) {
+    case "linkedin_paused":
+      return {
+        title: "LinkedIn is paused for seven days",
+        what: "LinkedIn showed a security check or unusual activity. Nothing was sent. All your LinkedIn work waits for seven days, then you can review this application again.",
+      };
     case "captcha":
       return {
         title: "A captcha needs you",
-        what: "Take over in the live view, solve the captcha, then give back. The assistant goes on by itself. If you do not come in time, the application waits here.",
+        what: "Solve the captcha in the live view. The assistant goes on by itself. If you do not come in time, the application waits here.",
       };
     case "email_code":
       return {
         title: "An e-mail code needs you",
-        what: "The site sent you a code by e-mail. Take over in the live view, type it, then give back.",
+        what: "The site sent you a code by e-mail. Type it in the live view. The assistant goes on by itself.",
       };
     case "required_left":
       return {
@@ -52,7 +57,12 @@ export function needOf(application: Application): Need {
     case "signin":
       return {
         title: `Needs you: sign in to ${siteOf(application)}`,
-        what: "The assistant never signs in for you. Sign in to the site yourself, then apply yourself or try again.",
+        what: "Open the live view to sign in or sign up yourself. The assistant then fills the form again and waits for your approval.",
+      };
+    case "forbidden":
+      return {
+        title: "The site blocked this page",
+        what: "The site refused the page. Open it in the live view to see what it needs from you.",
       };
     default:
       return {

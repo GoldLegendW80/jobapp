@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, LoaderCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { SiteProfileSlot } from "@/features/apply/site-profile/site-profile-slot";
+
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -17,6 +19,7 @@ import {
   browserQueryKey,
   endSession,
   getBrowser,
+  personOwnsInput,
   startSession,
   type Browser,
   type QueuePlace,
@@ -130,7 +133,10 @@ export function BrowserCard() {
             Your browser is starting.
           </p>
         ) : handoff ? null : lease ? (
-          <LiveBrowser key={lease.id} person={!lease.automation} />
+          <LiveBrowser
+            key={`${lease.id}:${personOwnsInput(lease)}`}
+            person={personOwnsInput(lease)}
+          />
         ) : place ? (
           <p role="status" className="text-sm text-muted-foreground">
             {waitText(place)}
@@ -151,6 +157,7 @@ export function BrowserCard() {
           </p>
         )}
         <LinkedInCard />
+        <SiteProfileSlot />
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2">
         {lease ? (

@@ -4,9 +4,11 @@ import { LoaderCircle } from "lucide-react";
 import {
   browserQueryKey,
   getBrowser,
+  personOwnsInput,
   type Browser,
 } from "@/features/browser/browser-api";
 import { LiveBrowser } from "@/features/browser/live-browser";
+import { HandoffBanner } from "@/features/browser/handoff-banner";
 
 // How often the slot reads whether the assistant holds the browser (it ends, or starts).
 const LEASE_POLL_MS = 3_000;
@@ -59,9 +61,21 @@ export function LiveViewSlot({
   });
   const lease = applicationLease(query.data, leaseOf);
   if (lease) {
+    if (lease.state === "waiting_person" && lease.wait_reason === "signin") {
+      return <HandoffBanner liveOpen />;
+    }
+    const person = personOwnsInput(lease);
     return (
       <div data-testid="live-view-slot">
-        <LiveBrowser key={lease.id} status={status} />
+        <LiveBrowser
+          key={`${lease.id}:${person}`}
+          person={person}
+          status={
+            person
+              ? "You have the keyboard and the mouse. Complete this step in the live view."
+              : status
+          }
+        />
       </div>
     );
   }

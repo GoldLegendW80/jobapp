@@ -1,0 +1,20 @@
+# Synthetic A14 stacks only. Every value is public fixture data, never production credentials.
+services:
+  api:
+    environment:
+      MAIL_SEND_KEY: e2e-only-mail-send-key-never-production
+      AGENTS_FAKE_BACKEND: 'true'
+  worker:
+    environment:
+      AGENTS_FAKE_BACKEND: 'true'
+  gmailmcp:
+    environment:
+      MAIL_SEND_KEY: e2e-only-mail-send-key-never-production
+      GMAIL_MCP_REDIS_PASSWORD_FILE: /fake/redis-password
+    volumes:
+      - ./tests/mail-send.redis-password:/fake/redis-password:ro
+  redis:
+    command: [redis-server, --appendonly, 'yes', --appendfsync, everysec, --maxmemory, 192mb, --maxmemory-policy, noeviction, --aclfile, /fake/redis.acl]
+    volumes:
+      - ./tests/mail-send.redis.acl:/fake/redis.acl:ro
+    networks: [default, mailmcp]

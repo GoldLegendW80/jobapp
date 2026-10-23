@@ -418,12 +418,13 @@ def test_an_answer_after_the_approval_voids_it_and_is_refilled_at_the_click(
     assert len(form.gate_clicks) == 1
 
 
+@pytest.mark.parametrize("value", [None, "  My exact answer.  ", "Remote, please", "I hold a PhD."])
 def test_a_refill_keeps_the_person_s_answer(
-    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, value: str | None
 ) -> None:
     app_id = ready(db, factory, person_a, stub)
     left = _row(factory, app_id, WHY)
-    mine = "Marker " + uuid.uuid4().hex
+    mine = value if value is not None else "Marker " + uuid.uuid4().hex
     with factory() as s:
         gate.set_answer(s, person_a.user_id, app_id, left.field_key, mine, AT)
         found = s.get(Application, app_id)
@@ -431,7 +432,10 @@ def test_a_refill_keeps_the_person_s_answer(
         states.move(found, State.queued, AT)
         s.commit()
     agent = FakeAgent(lambda q: ("The agent's answer", "motivation"))
-    assert fill(services(factory, run_ashby(), None, agent, stub_base=stub), app_id) == "ready"
+    form = run_ashby()
+    assert fill(services(factory, form, None, agent, stub_base=stub), app_id) == "ready"
+    assert not agent.requests
+    assert any(name == "type" and args.get("text") == mine for name, args in form.calls)
     with factory() as s:
         row = s.get(ApplicationAnswer, (app_id, left.field_key))
         assert row is not None

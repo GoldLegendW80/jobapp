@@ -35,8 +35,8 @@ For tests (JSON):
     GET  /_stub/postings       the catalogue: ats, org, job, variant, title, path
 
 Ashby's invisible check rejects a submit that comes less than --min-dwell-ms after the last input
-and one made with navigator.webdriver set. The browser-side signals are `_signal_dwell_ms` and
-`_signal_webdriver`; the page script sends them.
+and one made with navigator.webdriver set. A page-bound session must report its environment
+and input events; dwell uses the server monotonic receipt clock, not submit-supplied flags.
 
 These requests are answered, not dropped: 400 for a target that is no address or a
 Content-Length that is not one header of ASCII digits, 413 for a body over MAX_BODY (both
@@ -54,12 +54,15 @@ production.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import html
 import json
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -244,21 +247,21 @@ def _greenhouse_fields(variant: str) -> list[Field]:
         Field("resume", "Resume/CV", "file", True),
         Field("cover_letter", "Cover Letter", "file"),
         Field(
-            "q_authorised",
+            "question_1001",
             "Are you legally authorized to work in the country in which you are applying?",
             "combobox",
             True,
             authorised,
         ),
         Field(
-            "q_country",
+            "question_1002",
             "Country",
             "combobox",
             True,
             ("France", "Germany", "United Kingdom", "United States"),
         ),
         Field(
-            "q_hear",
+            "question_1003",
             "How did you hear about this job?",
             "combobox",
             False,
@@ -321,6 +324,12 @@ def _control(f: Field, ident: str, name: str, ats: str) -> str:
     if f.kind == "textarea":
         return f'<textarea id="{ident}" name="{name}" rows="5"{aria}></textarea>'
     if f.kind == "file":
+        if ats == "ashby":
+            return (
+                f'<input id="{ident}" name="{name}" type="file" hidden{aria}>'
+                f'<button type="button" data-upload-for="{ident}">Upload File</button>'
+                '<span class="file-name"></span>'
+            )
         return f'<input id="{ident}" name="{name}" type="file"{aria}><span class="file-name"></span>'
     if f.kind == "typeahead":
         return (
@@ -329,10 +338,11 @@ def _control(f: Field, ident: str, name: str, ats: str) -> str:
         )
     if f.kind == "yesno":
         return (
-            '<div class="ashby-application-form-input-yesno">'
+            f'<div class="ashby-application-form-input-yesno" role="group" '
+            f'aria-labelledby="{ident}_label" data-name="{name}"{aria}>'
             '<button type="button" data-option="yes" aria-pressed="false">Yes</button>'
             '<button type="button" data-option="no" aria-pressed="false">No</button>'
-            f'<input type="hidden" name="{name}"></div>'
+            "</div>"
         )
     if f.kind == "select":
         options = "".join(f"<option>{esc(o)}</option>" for o in f.options)
@@ -359,10 +369,11 @@ def render_field(f: Field, ats: str, name: str) -> str:
     star = ' <span class="req">*</span>' if f.required else ""
     help_ = f'<div class="help">{esc(f.help)}</div>' if f.help else ""
     control = _control(f, ident, name, ats)
-    label = f'<label for="{ident}">{esc(f.label)}{star}</label>'
+    label = f'<label id="{ident}_label" for="{ident}">{esc(f.label)}{star}</label>'
     body = control + label if f.kind == "checkbox" else label + help_ + control
     return (
-        f'<div class="field ashby-application-form-field-entry" data-field="{esc(name)}">{body}'
+        f'<div class="field ashby-application-form-field-entry" data-field="{esc(name)}" '
+        f'role="group" aria-labelledby="{ident}_label">{body}'
         f'<div class="field-error" role="alert" data-error-for="{esc(name)}" hidden></div></div>'
     )
 
@@ -385,7 +396,13 @@ def page(title: str, body: str, *, status_note: str = "") -> str:
 
 
 def form_page(
-    ats: str, org: str, job: str, variant: str, *, embed: bool = False
+    ats: str,
+    org: str,
+    job: str,
+    variant: str,
+    *,
+    embed: bool = False,
+    session: str = "",
 ) -> str:
     company, title, location = POSTINGS[ats][org][job]
     fields = fields_for(ats, variant)
@@ -416,6 +433,12 @@ def form_page(
         )
         submit_class = "submit-app"
     rows = [render_field(f, ats, prefix + f.name) for f in fields]
+    if ats == "ashby":
+        rows.insert(
+            0,
+            '<div role="group" aria-label="Autofill from resume">'
+            '<button type="button" data-autofill>Autofill from resume</button></div>',
+        )
     if variant == "hidden":
         rows.append(
             '<input type="hidden" name="source" value="careers-page">'
@@ -463,7 +486,7 @@ def form_page(
     body = (
         f"{head}{intro}"
         f'<form data-stub-form data-ats="{ats}" data-action="{esc(action)}"'
-        f' data-confirm="{esc(confirm)}"'
+        f' data-confirm="{esc(confirm)}" data-session="{esc(session)}"'
         f' enctype="multipart/form-data" novalidate{morph} onsubmit="return false">'
         + "".join(rows)
         + '<div class="form-error" role="alert" hidden></div>'
@@ -517,10 +540,42 @@ class Upload:
 def parse_body(
     content_type: str, body: bytes
 ) -> tuple[dict[str, list[str]], list[Upload]]:
-    """The text fields (a list per name) and the files of a form post, multipart or urlencoded."""
+    """Fields and files of board JSON, a multipart post, or a urlencoded custom form."""
     fields: dict[str, list[str]] = {}
     files: list[Upload] = []
-    if content_type.startswith("multipart/form-data"):
+    if content_type.split(";", 1)[0].strip() == "application/json":
+        payload = json.loads(body)
+        if not isinstance(payload, dict) or not isinstance(payload.get("fields"), dict):
+            raise ValueError("invalid application JSON")
+        for name, value in payload["fields"].items():
+            values = value if isinstance(value, list) else [value]
+            if (
+                not isinstance(name, str)
+                or not values
+                or not all(isinstance(v, str) for v in values)
+            ):
+                raise ValueError("invalid application field")
+            fields[name] = values
+        uploads = payload.get("files", [])
+        if not isinstance(uploads, list):
+            raise ValueError("invalid application files")
+        for upload in uploads:
+            if not isinstance(upload, dict) or not all(
+                isinstance(upload.get(k), str)
+                for k in ("field", "filename", "content_type", "data")
+            ):
+                raise ValueError("invalid application file")
+            data = base64.b64decode(upload["data"], validate=True)
+            if data or upload["filename"]:
+                files.append(
+                    Upload(
+                        upload["field"],
+                        upload["filename"],
+                        upload["content_type"],
+                        data,
+                    )
+                )
+    elif content_type.startswith("multipart/form-data"):
         raw = (
             b"Content-Type: "
             + content_type.encode()
@@ -571,11 +626,13 @@ class Stub:
         min_dwell_ms: int = MIN_DWELL_MS,
         slow_seconds: float = SLOW_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.min_dwell_ms = min_dwell_ms
         self.slow_seconds = slow_seconds
         self.sleep = sleep
-        self.lock = threading.Lock()
+        self.clock = clock
+        self.lock = threading.RLock()
         self.reset()
 
     def reset(self) -> None:
@@ -583,6 +640,59 @@ class Stub:
             self.submissions: list[dict[str, Any]] = []
             self.files: dict[str, bytes] = {}
             self.mailbox: list[dict[str, str]] = []
+            self.sessions: dict[str, dict[str, Any]] = {}
+
+    def begin(self, ats: str, org: str, job: str) -> str:
+        with self.lock:
+            token = secrets.token_urlsafe(24)
+            if len(self.sessions) >= 512:
+                self.sessions.pop(next(iter(self.sessions)))
+            self.sessions[token] = {
+                "key": (ats, org, job),
+                "webdriver": None,
+                "input": None,
+            }
+            return token
+
+    def observe(self, token: str, report: Any) -> bool:
+        with self.lock:
+            session = self.sessions.get(token)
+            if session is None:
+                return False
+            if not isinstance(report, dict):
+                session["invalid"] = True
+                return False
+            if report == {"event": "input"}:
+                session["input"] = self.clock()
+                return True
+            if (
+                set(report) == {"event", "webdriver"}
+                and report["event"] == "environment"
+                and type(report["webdriver"]) is bool
+            ):
+                session["webdriver"] = (
+                    session["webdriver"] is True or report["webdriver"]
+                )
+                return True
+            session["invalid"] = True
+            return False
+
+    def signals(self, token: str, ats: str, org: str, job: str) -> dict[str, Any]:
+        with self.lock:
+            session = self.sessions.get(token)
+            if (
+                session is None
+                or session.get("invalid")
+                or session["key"] != (ats, org, job)
+            ):
+                return {"dwell_ms": None, "webdriver": None}
+            last = session["input"]
+            dwell = (
+                None
+                if last is None or session["webdriver"] is None
+                else int((self.clock() - last) * 1000)
+            )
+            return {"dwell_ms": dwell, "webdriver": session["webdriver"]}
 
     def record(self, entry: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
@@ -619,10 +729,10 @@ class Stub:
         """Decide one post. Always records it, accepted or not, so a test sees what was tried."""
         base, _, variant = job.partition("--")
         known = POSTINGS.get(ats, {}).get(org, {})
-        signals = {
-            "dwell_ms": _int(fields.pop("_signal_dwell_ms", [""])[0]),
-            "webdriver": fields.pop("_signal_webdriver", ["0"])[0] == "1",
-        }
+        token = fields.pop("_session", [""])[0]
+        signals = self.signals(token, ats, org, job)
+        fields.pop("_signal_dwell_ms", None)
+        fields.pop("_signal_webdriver", None)
         step = fields.pop("_step", [""])[0]
         parent = fields.pop("_submission", [""])[0]
         entry: dict[str, Any] = {
@@ -647,7 +757,12 @@ class Stub:
             }
         if step == "code":
             return self._code(entry, parent)
-        return self._application(entry, ats, base, variant, fields, files)
+        with self.lock:
+            entry["signals"] = self.signals(token, ats, org, job)
+            result = self._application(entry, ats, base, variant, fields, files)
+            if entry["accepted"]:
+                self.sessions.pop(token, None)
+            return result
 
     def _application(
         self,
@@ -748,10 +863,6 @@ class Stub:
         )
         self.record(entry)
         return 200, {"ok": True, "redirect": entry["confirmation"]}
-
-
-def _int(text: str) -> int | None:
-    return int(text) if re.fullmatch(r"-?\d{1,9}", text or "") else None
 
 
 def _confirmation(ats: str, org: str, suffix: str) -> str:
@@ -861,6 +972,16 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                     return self._json(200, list(stub.mailbox))
             if path == "/_stub/postings":
                 return self._json(200, catalogue())
+            if path.startswith("/_stub/behaviour/"):
+                token = path.rsplit("/", 1)[1]
+                with stub.lock:
+                    session = stub.sessions.get(token)
+                    signals = (
+                        stub.signals(token, *session["key"])
+                        if session
+                        else {"dwell_ms": None, "webdriver": None}
+                    )
+                return self._json(200, signals)
             if path.startswith("/_stub/files/"):
                 with stub.lock:
                     found = stub.files.get(path.rsplit("/", 1)[1])
@@ -871,6 +992,8 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
             if path == "/ashby/_locations":
                 typed = (query.get("q") or [""])[0].lower()
                 return self._json(200, [x for x in LOCATIONS if typed in x.lower()])
+            if re.fullmatch(r"/linkedin/jobs/view/[0-9]{1,24}/?", path):
+                return self._static("a16/modal.html")
             if path.startswith("/forms/"):
                 return self._static(path[len("/forms/") :])
             found_page = self._form_page(path, query)
@@ -908,9 +1031,19 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                 if missing:
                     return missing
                 variant = job.partition("--")[2]
+                if variant == "known-fallback":
+                    return 200, (
+                        FORMS_DIR / "apply-fallback" / "hosted.html"
+                    ).read_text()
                 if variant == "slow":
                     stub.sleep(stub.slow_seconds)
-                return 200, form_page("ashby", org, job.partition("--")[0], variant)
+                return 200, form_page(
+                    "ashby",
+                    org,
+                    job.partition("--")[0],
+                    variant,
+                    session=stub.begin("ashby", org, job),
+                )
             if found := GH_HOSTED.match(path):
                 org, job, confirmation = found.groups()
                 if confirmation:
@@ -919,6 +1052,15 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                 if missing:
                     return missing
                 variant = job.partition("--")[2]
+                if variant == "signin":
+                    cookie = "a10b_" + re.sub(
+                        r"[^a-z0-9]", "_", path, flags=re.IGNORECASE
+                    )
+                    if cookie + "=signed" not in self.headers.get("Cookie", "").split(
+                        "; "
+                    ):
+                        return 200, (FORMS_DIR / "a10b" / "login.html").read_text()
+                    variant = "plain"
                 if variant == "slow":
                     stub.sleep(stub.slow_seconds)
                 return 200, form_page(
@@ -961,7 +1103,19 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
             if length > MAX_BODY:
                 return self._json(413, {"ok": False, "message": "too large"})
             body = self.rfile.read(length)
-            fields, files = parse_body(self.headers.get("Content-Type", ""), body)
+            if path.startswith("/_stub/behaviour/"):
+                try:
+                    report = json.loads(body)
+                except (ValueError, UnicodeError):
+                    return self._json(400, {"ok": False})
+                valid = stub.observe(path.rsplit("/", 1)[1], report)
+                return self._json(200 if valid else 400, {"ok": valid})
+            try:
+                fields, files = parse_body(self.headers.get("Content-Type", ""), body)
+            except (ValueError, TypeError, binascii.Error):
+                return self._json(
+                    400, {"ok": False, "message": "invalid application JSON"}
+                )
             if found := ASHBY_FORM.match(path):
                 org, job, _ = found.groups()
                 ats = "ashby"
@@ -1010,6 +1164,7 @@ def make_server(
     min_dwell_ms: int = MIN_DWELL_MS,
     slow_seconds: float = SLOW_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
     env: Mapping[str, str] | None = None,
 ) -> tuple[ThreadingHTTPServer, Stub]:
     """The server and its state. Refused when APP_ENV is production: a fake job site must never
@@ -1018,7 +1173,9 @@ def make_server(
         raise RuntimeError(
             "the fake ATS forms server refuses to start when APP_ENV is production"
         )
-    stub = Stub(min_dwell_ms=min_dwell_ms, slow_seconds=slow_seconds, sleep=sleep)
+    stub = Stub(
+        min_dwell_ms=min_dwell_ms, slow_seconds=slow_seconds, sleep=sleep, clock=clock
+    )
     server = ThreadingHTTPServer((host, port), make_handler(stub))
     server.daemon_threads = True
     return server, stub

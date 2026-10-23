@@ -225,6 +225,27 @@ def page_text(snapshot: str) -> str:
 # --- fields ------------------------------------------------------------------------------------
 
 YES_NO = ({"yes", "no"}, {"oui", "non"})
+
+
+def summary_answer(value: object, kind: str) -> object:
+    """A discovered yes/no's canonical option remains a typed boolean for summary comparison."""
+    return (value == "Yes") if kind == "yes_no" and value in ("Yes", "No") else value
+
+
+def summary_matches(value: object, shown: str) -> bool:
+    """Compare typed answers with a summary, including the yes/no vocabulary we discover."""
+    if isinstance(value, bool):
+        return fold(shown) in ({"yes", "oui"} if value else {"no", "non"})
+    return isinstance(value, str) and fold(value) == fold(shown)
+
+
+def summary_text(node: Node) -> str:
+    """The value of a named summary row: its inline text and child text, without its label."""
+    return " ".join(
+        [node.text, *(word for child in node.children for word in child.words())]
+    ).strip()
+
+
 UPLOAD_ACTIONS = frozenset(
     {
         "upload file", "upload", "attach", "attach file", "choose file", "choose a file",
@@ -310,19 +331,103 @@ def _around(group: Node, control: Node) -> tuple[list[str], list[str]]:
 
 
 def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
-    """The field group a control stands in (the nearest of three ancestors with words before
-    the control), its label (those words, marks off, cut at `NAME_MAX` as it makes the field's
-    key) and the words after the control (a chosen file's name)."""
+    """The nearest labelled ancestor, its accessible name (or preceding text when unnamed),
+    and the words after the control (a chosen file's name). Chromium repeats named groups'
+    visible label in their children; that text is not a second part of the field's name."""
     inner, group = control, control.parent
-    for _ in range(3):
-        if group is None or group.role == "root":
+    for level in range(3):
+        if group is None or group.role not in ("generic", "group"):
             break
+        # Unnamed wrappers cannot lend other fields' or page headings' words to a
+        # loose action. A named local choice can still contain help or companions.
+        separate = False
+        for sibling in group.children:
+            if sibling is inner:
+                continue
+            nodes = list(sibling.walk())
+            controls = [n for n in nodes if n.role in CONTROLS]
+            if any(n.role == "heading" for n in nodes) or any(n.role != "button" for n in controls):
+                separate = True
+                break
+            if controls and any(
+                (n.name or n.text).strip() for n in nodes if n.role not in CONTROLS
+            ):
+                separate = True
+                break
+        if separate:
+            # Help can be inside a transparent wrapper around a named local field.
+            # Keep the same ancestor bound and never cross another named group.
+            local, candidate = None, group
+            for _ in range(3 - level):
+                if candidate is None or candidate.role not in ("generic", "group"):
+                    break
+                if _named_choices(candidate):
+                    local = candidate
+                    break
+                if candidate.role == "group" and candidate.name:
+                    break
+                candidate = candidate.parent
+            if local is None:
+                break
+            group = local
         before, after = _around(group, inner)
         if before:
-            label, required = label_of(" ".join(w for w in before if w not in ("*", "✱")))
+            name = (
+                group.name
+                if group.role == "group" and group.name
+                else " ".join(w for w in before if w not in ("*", "✱"))
+            )
+            label, required = label_of(name)
             return group, label[:NAME_MAX], required or "*" in before or "✱" in before, after
         inner, group = group, group.parent
     return None, "", False, []
+
+
+def _named_choices(group: Node) -> bool:
+    """A named local group owns its loose controls through transparent wrappers, stopping
+    at independently labelled field branches. Direct companion controls and help do not
+    establish that boundary: their relationship is ambiguous, so keep the unknown field.
+    """
+    if group.role != "group" or not group.name:
+        return False
+    label = fold(label_of(group.name)[0])
+    nodes = list(group.walk())
+    controlled = {
+        id(node)
+        for node in nodes
+        if node.role in CONTROLS
+        and node.role != "link"
+        and not (node.role == "button" and fold(node.name) in SUBMIT_NAMES)
+    }
+    for node in reversed(nodes):
+        if any(id(child) in controlled for child in node.children):
+            controlled.add(id(node))
+    choices = False
+    independent = False
+    stack = list(group.children)
+    while stack:
+        node = stack.pop()
+        if node.role in CONTROLS:
+            if node.role == "button":
+                choices |= fold(node.name) not in SUBMIT_NAMES
+            continue
+        if node.role == "group" and node.name:
+            independent |= id(node) in controlled
+            continue
+        if node.role in ("generic", "group") and id(node) in controlled:
+            # A different visible label before its controls makes a sibling field,
+            # rather than part of this group's choices (for example a Resume row).
+            labels = [node.text] if node.text.strip() else []
+            for child in node.children:
+                if id(child) in controlled:
+                    break
+                if child.role in ("generic", "text", "paragraph") and (child.text or child.name):
+                    labels.append(child.text or child.name)
+            if any(fold(label_of(word)[0]) != label for word in labels):
+                independent = True
+                continue
+        stack.extend(node.children)
+    return choices and not independent
 
 
 def _is_yes_no(node: Node) -> dict[str, str] | None:
@@ -587,6 +692,14 @@ def _ok(result: Mapping[str, Any]) -> str:
 # --- the adapter ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class PersonAnswer:
+    label: str
+    kind: str
+    options: tuple[str, ...]
+    value: str | bool
+
+
 class Adapter:
     """One ATS strategy. Subclasses set the class attributes and may override `form_url`,
     `open` and `pending_step`."""
@@ -604,6 +717,7 @@ class Adapter:
         page, and reads only the iframe that holds the form (`adapter_for` sets it)."""
         self.stub_base = stub_base.rstrip("/") if stub_base else None
         self.framed = framed
+        self.person_answers: dict[str, PersonAnswer] = {}
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({'framed=True' if self.framed else ''})"
@@ -684,6 +798,21 @@ class Adapter:
         page = parse_snapshot(str(shot.get("snapshot") or ""))
         scope = self.scope(page)
         found = discover_fields(scope or Node("root"), self.submit_names)
+        native = shot.get("native_files", {})
+        if not isinstance(native, dict):
+            return None, "unreadable"
+        for index, item in enumerate(found.fields):
+            if item.kind == "file" and item.ref in native:
+                names = native[item.ref]
+                value = (
+                    names[0]
+                    if isinstance(names, list)
+                    and len(names) == 1
+                    and isinstance(names[0], str)
+                    and len(names[0]) <= 83
+                    else ""
+                )
+                found.fields[index] = replace(item, value=value)
         found.cut, found.root, found.pending = bool(shot.get("cut")), scope, self.pending_at(page)
         return found, ""
 
@@ -763,6 +892,17 @@ class Adapter:
         except _StopError as stop:
             return Filled("failed", stop.code)
 
+    def resolve(self, item: Field, context: answers.Context) -> answers.Answer | answers.Left:
+        own = self.person_answers.get(item.key)
+        if own is None:
+            return answers.resolve(item.form_field(), context)
+        if (own.label, own.kind, own.options) != (item.label, item.kind, tuple(item.options)):
+            return answers.Left("person_answer_changed", required=item.required)
+        if item.kind == "yes_no":
+            option = "Yes" if own.value is True else "No"
+            return answers.Answer(own.value, "person", option=option)
+        return answers.Answer(own.value, "person")
+
     async def fill_form(self, tools: Tools, context: answers.Context) -> Report:
         """Discovers the form, resolves every field from the profile (apply A3) and fills what
         is answered, in page order. Stops at the first `form_changed`, refused click or tool
@@ -779,7 +919,7 @@ class Adapter:
         for _ in range(2):
             for item in [f for f in found.fields if f.key not in done]:
                 done.add(item.key)
-                answer = answers.resolve(item.form_field(), context)
+                answer = self.resolve(item, context)
                 result = await self.fill(tools, item, answer)
                 report.outcomes.append(Outcome(item, answer, result))
                 if result.status == "failed" and result.code in PENDING_STEPS:
@@ -845,6 +985,11 @@ def _same(shown: str, wanted: str) -> bool:
 
 async def _fill_text(adapter: Adapter, tools: Tools, item: Field, answer: answers.Answer) -> Filled:
     wanted = _value(answer)
+    if answer.source == "documents.letter_text":
+        from app.apply.answer_limits import letter_issue
+
+        if issue := letter_issue(wanted):
+            return Filled("left", issue)
     if not wanted:
         return Filled("left", "empty_answer")
     if code := _ok(await tools.type(item.ref, wanted, item.label)):

@@ -11,6 +11,7 @@ test_browser_container.py (built under a tag of its own unless BROWSER_TEST_IMAG
 
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -103,18 +104,23 @@ def test_a_chooser_the_person_opens_is_answered_with_the_document_named(stack: S
         assert lease.put("letter.pdf")["status"] == 200
         assert lease.tool("browser_navigate", url=FORM)["ok"]
         assert lease.watch().get("chooser") is None
+        lease.turn(None)
         nothing = lease.tool("browser_file_upload", paths=["letter.pdf"])
         assert nothing["error"] == "no_chooser"
+        lease.turn(str(uuid.uuid4()))
 
         lease.person_clicks("#attach")
         for _ in range(60):  # each look is a docker exec round trip, no sleep
-            if lease.watch().get("chooser"):
+            if (watched := lease.watch()).get("chooser"):
                 break
         else:
             raise AssertionError("the watch never saw the file chooser")
         assert "Open File" not in window_titles(stack)  # intercepted: no dialog over a folder
 
-        done = lease.tool("browser_file_upload", paths=["letter.pdf"])
+        lease.turn(None)
+        done = lease.tool(
+            "browser_file_upload", paths=["letter.pdf"], chooser_id=watched["chooser_id"]
+        )
         assert done["ok"], done
         assert done["uploaded"] == ["letter.pdf"]
         assert f"letter.pdf:{len(PDF_OF)}" in lease.snapshot()
@@ -165,6 +171,7 @@ def test_the_chooser_the_apps_attach_click_opens_is_not_kept_for_the_next_docume
         assert lease.put("letter.pdf", letter)["status"] == 200
         assert lease.tool("browser_navigate", url=FORM)["ok"]
         attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        lease.turn(None)
         done = lease.tool("browser_file_upload", ref=attach, paths=["letter.pdf"])
         assert done["ok"], done
         assert "chooser" not in done
@@ -174,5 +181,101 @@ def test_the_chooser_the_apps_attach_click_opens_is_not_kept_for_the_next_docume
         page = lease.snapshot()
         assert f"letter.pdf:{len(letter)}" in page
         assert "cv.pdf" not in page
+    finally:
+        lease.end()
+
+
+def test_an_already_open_chooser_is_not_consumed_by_an_app_attach_button(stack: Stack) -> None:
+    lease = ManualLease(stack)
+    try:
+        assert lease.put("cv.pdf")["status"] == 200
+        assert lease.put("letter.pdf")["status"] == 200
+        assert lease.tool("browser_navigate", url=FORM)["ok"]
+        attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        lease.person_clicks("#attach")
+        for _ in range(60):
+            if (before := lease.watch()).get("chooser"):
+                break
+        else:
+            raise AssertionError("the person's chooser never opened")
+        lease.turn(None)
+        rejected = lease.tool("browser_file_upload", ref=attach, paths=["cv.pdf"])
+        assert rejected["error"] == "chooser_changed"
+        assert lease.watch()["chooser_id"] == before["chooser_id"]
+        accepted = lease.tool(
+            "browser_file_upload", paths=["letter.pdf"], chooser_id=before["chooser_id"]
+        )
+        assert accepted["ok"]
+        assert "cv.pdf" not in lease.snapshot()
+        assert f"letter.pdf:{len(PDF_OF)}" in lease.snapshot()
+    finally:
+        lease.end()
+
+
+def test_take_over_stops_real_chromium_typing_already_in_progress(stack: Stack) -> None:
+    lease = ManualLease(stack)
+    value = "A" * 199  # Below PASTE_FROM: exercise the paced per-character input checks.
+    read = """
+import asyncio
+from browserd import probe
+from playwright.async_api import async_playwright
+async def main():
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{probe.cdp_port()}")
+        print(await browser.contexts[0].pages[0].locator('#first_name').input_value())
+asyncio.run(main())
+"""
+    try:
+        assert lease.tool("browser_navigate", url=FORM)["ok"]
+        name = ref(lease.snapshot(), "textbox", "First name")
+        lease.turn(None)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            typing = pool.submit(lease.tool, "browser_type", ref=name, text=value)
+            for _ in range(60):
+                current = stack.python(read).strip()
+                if current:
+                    break
+            else:
+                raise AssertionError("typing never reached the native input")
+            assert len(current) < len(value)
+            lease.turn(str(uuid.uuid4()))
+            assert typing.result(timeout=120)["error"] == "person_input"
+        stopped = stack.python(read).strip()
+        assert stopped.startswith(current)
+        assert len(stopped) < len(value)
+        assert stack.python(read).strip() == stopped
+        assert "Not submitted" in lease.snapshot()
+    finally:
+        lease.end()
+
+
+def test_an_incidental_chooser_during_the_app_attach_click_uploads_neither_document(
+    stack: Stack,
+) -> None:
+    lease = ManualLease(stack)
+    try:
+        assert lease.put("cv.pdf")["status"] == 200
+        assert lease.put("letter.pdf")["status"] == 200
+        assert lease.tool("browser_navigate", url=FORM + "?chooser_race=1")["ok"]
+        attach = ref(lease.snapshot(), "button", "Attach cover letter")
+        assert lease.watch().get("chooser") is None
+        lease.person_clicks("#first_name")  # Fresh native activation, before app approach.
+        lease.turn(None)
+        rejected = lease.tool("browser_file_upload", ref=attach, paths=["cv.pdf"])
+        assert rejected.get("error") == "chooser_changed", rejected
+        waiting = lease.watch()
+        assert waiting.get("chooser")
+        untouched = lease.snapshot()
+        assert "cv.pdf" not in untouched
+        assert "letter.pdf" not in untouched
+        resolved = lease.tool(
+            "browser_file_upload", paths=["letter.pdf"], chooser_id=waiting["chooser_id"]
+        )
+        assert resolved["ok"]
+        assert lease.watch().get("chooser") is None
+        final = lease.snapshot()
+        assert "cv.pdf" not in final
+        assert f"letter.pdf:{len(PDF_OF)}" in final
+        assert "Not submitted" in final
     finally:
         lease.end()

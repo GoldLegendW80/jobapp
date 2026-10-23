@@ -1,0 +1,106 @@
+{
+  "command": [
+    "rtk",
+    "proxy",
+    "docker",
+    "image",
+    "inspect",
+    "--format",
+    "{\"id\":{{json .Id}},\"tags\":{{json .RepoTags}},\"created\":{{json .Created}},\"architecture\":{{json .Architecture}},\"rootfs\":{{json .RootFS}},\"entrypoint\":{{json .Config.Entrypoint}},\"cmd\":{{json .Config.Cmd}}}",
+    "codex-apply604-native-browser:review",
+    "codex-apply604-ux-final-browser:review",
+    "codex-apply604-ux-posting-native-browser:review"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "images": [
+    {
+      "id": "sha256:de0a03155846368253810d3a397151fb7d5639b965fc0009d279c4594fd0f3be",
+      "tags": [
+        "codex-apply604-native-browser:review"
+      ],
+      "created": "2026-10-23T02:10:18.53631875Z",
+      "architecture": "arm64",
+      "rootfs": {
+        "Layers": [
+          "sha256:3b7c7ecdb9b2a2a7651551c07dc748fee9e27902c8b88c25cb3af3fbbc0a4b87",
+          "sha256:56be9061bf0f8d9425c9b48d0105e30db60232d52d4c0f23ed7306ec214e13b8",
+          "sha256:9dbcf06dda70c7c91cb8e1ffacf379fd909ab62d14d313aa1e45b0d7f94707d7",
+          "sha256:dec3128e6a551fea77d54ecfe0b92aee6c107ad650797705e5e0b51654f04d6d",
+          "sha256:23019484f213b8285f53ba049000b837c6a397a98ab06a09fb69c81a5a2aefcb",
+          "sha256:3290ef692710b44eb12ad7102a6bba506497ebd82976947fcd08d5abe33768e6",
+          "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+        ],
+        "Type": "layers"
+      },
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "cmd": [
+        "python",
+        "-m",
+        "browserd"
+      ]
+    },
+    {
+      "id": "sha256:67801d2914856254c4f7f2cc7401ed152e3715e8fda426f612e9ffbdd27eef0b",
+      "tags": [
+        "codex-apply604-ux-final-browser:review"
+      ],
+      "created": "2026-10-23T02:10:18.53631875Z",
+      "architecture": "arm64",
+      "rootfs": {
+        "Layers": [
+          "sha256:3b7c7ecdb9b2a2a7651551c07dc748fee9e27902c8b88c25cb3af3fbbc0a4b87",
+          "sha256:56be9061bf0f8d9425c9b48d0105e30db60232d52d4c0f23ed7306ec214e13b8",
+          "sha256:9dbcf06dda70c7c91cb8e1ffacf379fd909ab62d14d313aa1e45b0d7f94707d7",
+          "sha256:dec3128e6a551fea77d54ecfe0b92aee6c107ad650797705e5e0b51654f04d6d",
+          "sha256:23019484f213b8285f53ba049000b837c6a397a98ab06a09fb69c81a5a2aefcb",
+          "sha256:3290ef692710b44eb12ad7102a6bba506497ebd82976947fcd08d5abe33768e6",
+          "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+        ],
+        "Type": "layers"
+      },
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "cmd": [
+        "python",
+        "-m",
+        "browserd"
+      ]
+    },
+    {
+      "id": "sha256:fe3f7a825b32d7a8e689d2464c984b717b1e5dbdc29e3d858cade655d478e80c",
+      "tags": [
+        "codex-apply604-ux-posting-native-browser:review"
+      ],
+      "created": "2026-10-23T02:10:18.53631875Z",
+      "architecture": "arm64",
+      "rootfs": {
+        "Layers": [
+          "sha256:3b7c7ecdb9b2a2a7651551c07dc748fee9e27902c8b88c25cb3af3fbbc0a4b87",
+          "sha256:56be9061bf0f8d9425c9b48d0105e30db60232d52d4c0f23ed7306ec214e13b8",
+          "sha256:9dbcf06dda70c7c91cb8e1ffacf379fd909ab62d14d313aa1e45b0d7f94707d7",
+          "sha256:dec3128e6a551fea77d54ecfe0b92aee6c107ad650797705e5e0b51654f04d6d",
+          "sha256:23019484f213b8285f53ba049000b837c6a397a98ab06a09fb69c81a5a2aefcb",
+          "sha256:3290ef692710b44eb12ad7102a6bba506497ebd82976947fcd08d5abe33768e6",
+          "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+        ],
+        "Type": "layers"
+      },
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "cmd": [
+        "python",
+        "-m",
+        "browserd"
+      ]
+    }
+  ],
+  "all_rootfs_identical": true
+}

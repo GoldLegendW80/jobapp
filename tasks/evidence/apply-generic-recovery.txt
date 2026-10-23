@@ -1,0 +1,50 @@
+Apply generic recovery source checkpoint, 2026-10-23
+
+Base: 7b7c1c1795340f1f8eaa2ccbef6764414c67714e. Local invented fakes only.
+
+Framed known ATS form_changed now invokes generic recovery in the existing attempt.
+The reserved hash-bound strategy adds an iframe ordinal. Existing per-step field shapes,
+recorded Next names and exact approved values govern model-free replay. A frame cannot
+use the hosted Full auto designation exception. Ready and needs-person outcomes hand
+Full auto to Review atomically through finish, retaining frame_origin_unverified in the
+sent_to_review event. Snapshots provide no trusted iframe origin, including same-origin
+appearance, so framed recovery requires Review. Hosted positive controls remain supported.
+
+The default RuntimeFormAgent with no credential now resolves and fills visible fields
+through existing adapter/resolver methods and paced lease tools. It does not advance steps,
+designate Submit, create an agent run or execute a model. Missing and policy-refused values
+remain Left. Exact application edits retain person provenance. The existing deadline,
+pending-step and interrupted lease controls stop this deterministic filling.
+
+Source proofs:
+* Focused recovery, hosted fallback, A18 budgets and worker binding: 163 passed.
+* Broader generic, fallback, budget, worker and person-answer pure selection: 431 passed,
+  44 database/runtime fixtures deselected because heavy slots were reserved.
+* Whole API Ruff check and Ruff format check passed (780 files).
+* E2E registry passed: 29 CI specs, 4 reasoned exclusions, 50 local group specs.
+* CI plan: 81 passed. Scoped pre-commit hooks passed, including the secret scan.
+
+The first composed whole Apply run at 8c1b9a59 had 7,663 passed and one failed in
+400.09 seconds. The failure was the revised test comparing the profile email with the
+different account email in the fixture; it now checks the profile's authoritative value.
+Self-review also reproduced default-port replay lookup refusal and malformed-port errors
+with six red pure cases. The adapter lookup now canonicalises only saved fallback addresses.
+
+Final source proof, f337da19 with native-file integration 747db486 merged:
+* Focused recovery, known fallback, A18 budget and worker-binding selection: 177 passed.
+* caffeinate -i ops/agent-test.sh --name genrec604final tests/apply -m 'not docker' -n 2
+  passed 7,678 tests in 337.59 seconds using owned temporary Postgres and Redis.
+* This whole-module run includes the default RuntimeFormAgent with no credential using
+  authoritative profile/document/answer values, unresolved fields Left, no designation,
+  zero AgentRun rows and zero Submit clicks.
+* Current API Ruff check and format check passed (780 files); scoped commit hooks passed.
+* CI-plan refresh: 81 passed. E2E registry refresh passed with the same 29/4/50 partition.
+* Owned genrec604 containers and volumes were absent after the wrapper exited. No images
+  were built or retagged, no image mutex was used, and the assigned heavy slot was released.
+  Disk free after cleanup: 45 GiB.
+
+Pending: composed actual browser journeys for default known fallback, framed takeover and
+credential-free filling, plus the final exact-tree gate and fresh review. This isolated
+module proof does not include the later Saved answers or parser-footer changes being
+composed by their separate owners. The root assigns those runtime resources and the final
+acceptance owner. This is evidence, not a public review verdict or whole-spec acceptance.

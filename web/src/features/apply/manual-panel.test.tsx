@@ -185,6 +185,27 @@ describe("starting Apply myself", () => {
 });
 
 describe("the open session", () => {
+  it("keeps manual needs_person controls in the manual panel", async () => {
+    const api = fakeApply({
+      application: fakeApplication("needs_person", {
+        mode: "manual",
+        needs: "captcha",
+      }),
+    });
+    const manual = fakeManual(api, status({ state: "needs_person" }));
+    const { section } = await openSection();
+    expect(
+      await within(await panel()).findByRole("button", {
+        name: "Close without submitting",
+      }),
+    ).toBeEnabled();
+    expect(within(section).queryByTestId("needs-person")).toBeNull();
+    expect(within(section).queryByTestId("live-view-slot")).toBeNull();
+    expect(manual.other).toEqual([]);
+    expect(api.approves).toEqual([]);
+    expect(api.decisions).toEqual([]);
+  });
+
   it("shows the live view with the keyboard and the mouse to the person, and attaches the CV", async () => {
     const opened = fakeScreens();
     const api = fakeApply({ application: manualApp("filling") });

@@ -577,6 +577,7 @@ DEGREE_LEVEL_TEXTS: dict[str, tuple[str, ...]] = {
         "Master degree",
         "Masters degree",
         "Master's degree",
+        "Master 2",
     ),
     "doctorate": ("Doctorate", "Doctorate degree", "Doctoral degree", "Doctorat"),
 }
@@ -1065,8 +1066,9 @@ LEVEL_WORDS: dict[str, tuple[str, ...]] = {
         "elementaire",
         "scolaire",
         "basique",
+        "basic user",
     ),
-    "intermediate": ("intermediate", "conversational", "intermediaire"),
+    "intermediate": ("intermediate", "conversational", "intermediaire", "independent user"),
     "fluent": (
         "fluent",
         "advanced",
@@ -1074,7 +1076,14 @@ LEVEL_WORDS: dict[str, tuple[str, ...]] = {
         "courant",
         "avance",
         "courante",
+        "business fluent",
+        "proficient user",
     ),
+    # These labels state their own band, without establishing a CEFR grade or fluency.
+    "professional": ("professional", "professionnel", "professionnelle"),
+    "professional_working": ("professional working",),
+    "limited_working": ("limited working",),
+    "business": ("business",),
     "native": (
         "native",
         "mother tongue",
@@ -1725,9 +1734,12 @@ def _latest_school(s: Sections) -> Any:
 def degree_of(text: str | None) -> tuple[str, int, str] | None:
     """A degree as (level, rank, name), from its whole text: "MSc" reads ("master", 0, "MSc"),
     "Master's" ("master", 1, "master"), "Licence (Bac+3)" ("bachelor", 0, "Licence"). None when
-    it is not wholly a degree ("MSc Computer Science", "Master's (in progress)") or its two
-    names disagree."""
+    it is not a degree with a recognised academic field, or its two names disagree. Ambiguous
+    MS and engineer qualifications establish no equivalence. Completion qualifiers stay unknown.
+    """
     whole = _DEGREE_OF.get(option_key(text))
+    if whole is None and (field := _degree_field(text)) is not None:
+        return field[0]
     named = re.fullmatch(r"([^()]+)\(([^()]+)\)", fold(text))
     if whole is not None or named is None:
         return whole
@@ -1739,6 +1751,51 @@ def degree_of(text: str | None) -> tuple[str, int, str] | None:
     return min(first, second, key=lambda read: read[1])
 
 
+# Field names are positive academic topics, rather than accepting every suffix after a degree
+# ("MSc expected" and "Master 2 student" must not establish a completed qualification).
+_DEGREE_FIELDS = frozenset(
+    {
+        "computer science",
+        "computing",
+        "informatics",
+        "informatique",
+        "mathematics",
+        "mathematiques",
+        "physics",
+        "physique",
+        "chemistry",
+        "chimie",
+        "biology",
+        "biologie",
+        "mechanical engineering",
+        "electrical engineering",
+        "software engineering",
+        "civil engineering",
+        "data science",
+        "economics",
+        "economie",
+        "history",
+        "histoire",
+        "business administration",
+        "psychology",
+        "psychologie",
+    }
+)
+
+
+def _degree_field(text: str | None) -> tuple[tuple[str, int, str], str] | None:
+    key = option_key(text)
+    for name in sorted(_DEGREE_OF, key=len, reverse=True):
+        read = _DEGREE_OF[name]
+        if read[1] == 2 or not key.startswith(name + " "):
+            continue
+        field = key[len(name) + 1 :]
+        field = field.removeprefix("in ").removeprefix("en ")
+        if field in _DEGREE_FIELDS:
+            return read, field
+    return None
+
+
 def _degree_option(stored: str, options: tuple[str, ...]) -> str | None:
     """The option for a stored degree: the one that reads the same, else the one of its own
     rank and name, else the one naming its level (`DEGREE_TEXTS`); one of each, or none. A
@@ -1748,7 +1805,9 @@ def _degree_option(stored: str, options: tuple[str, ...]) -> str | None:
     if picked is not None or have is None:
         return picked
     level, rank, name = have
-    read = [(option, degree_of(option)) for option in options]
+    # An option with a field is narrower than the stored degree. Only the exact match above
+    # can select it; sharing a degree title does not establish another academic discipline.
+    read = [(o, degree_of(o)) for o in options if _degree_field(o) is None]
     for wanted in range(rank, rank + 1 if name in LOCAL_DEGREES else 2):
         hits = [
             o
@@ -1981,6 +2040,8 @@ TEMPLATES: tuple[Template, ...] = (
         r"(?:will|would|do) you (?:now or in the future )?(?:require|need) (?:us |the company |an employer )?"
         r"to sponsor (?:a |an |your )?(?:work |employment )?visa(?: for you)?(?: to work in {C})?",
         r"(?:visa )?sponsorship (?:required|needed)(?: to work in {C})?|visa sponsorship",
+        rf"(?:is {_SPONSORSHIP}|will {_SPONSORSHIP} be) (?:required|needed)"
+        r"(?: to work in {C})?",
         rf"(?:avez|aurez) vous (?:maintenant ou a l avenir )?besoin (?:maintenant ou a l avenir )?d (?:un |une )?(?:parrainage|sponsoring)"
         rf"(?: de visa| pour un visa)?(?: maintenant ou a l avenir| maintenant ou dans le futur)?"
         rf"(?: pour travailler {_IN} {{C}})?",
@@ -2232,7 +2293,7 @@ _THIRD_PERSON = re.compile(
     r"|\brecommand|\bconjoint|\bresponsable\b|superieur hierarchique|\bguardian|\btuteur"
 )
 _HOW_HEARD = r"how did you (?:hear|find|learn)|where did you (?:hear|find)|source of application|comment avez-vous (?:entendu|connu|decouvert)|referral source"
-_REFERENCE_CHECK = r"reference check|references? (?:check|contact)|contacter vos references|contactions vos references"
+_REFERENCE_CHECK = r"reference check|references? (?:check|contact)|contacter vos references|contactions vos references|^may we contact your references\??(?: \(reference check\))?$"
 # A question about age: never read as years of experience, and the profile stores no age.
 _AGE = re.compile(
     r"\byears? old\b|\bold\b|\byears? of age\b|\bage of\b|legal age|age legal|age minimum"
@@ -2305,6 +2366,42 @@ def _leave_blank_hit(text: str, s: Sections) -> bool:
 # A checkbox that asks about the person (a yes or no in disguise) goes by the templates.
 _BOX_QUESTION = re.compile(r"relocat|on-?site|hybrid|authori[sz]ed|sponsor|willing|eligible")
 
+# Only an absent source permits a saved answer. Mapping failures, ambiguity and contextual
+# refusals keep the authoritative result. New handlers default to keeping their refusal.
+_BANK_FALLBACK = frozenset(
+    {
+        "not_a_known_question",
+        "no_full_name",
+        "no_last_name",
+        "no_email",
+        "no_phone",
+        "no_city",
+        "no_country",
+        "no_location",
+        "no_link",
+        "no_preferred_name",
+        "no_pronouns",
+        "no_notice_period",
+        "no_earliest_start",
+        "no_relocation",
+        "no_travel",
+        "no_willing_onsite",
+        "no_willing_hybrid",
+        "no_background_check_consent",
+        "no_reference_check_consent",
+        "no_previously_applied_default",
+        "no_languages",
+        "no_language_level",
+        "language_not_in_profile",
+        "years_not_stated",
+        "no_degree",
+        "no_graduation_year",
+        "no_school",
+        "no_heard_about",
+        "country_not_in_work_authorization",
+    }
+)
+
 
 def _checkbox(field: FormField) -> Answer | Left:
     box = terms.classify(field.label)
@@ -2331,6 +2428,20 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
     settled = _policies_first(field, sections, text)
     if isinstance(settled, Left):
         return settled
+    matched = match_template(field.label)
+    if isinstance(matched, str):
+        if field.kind == "checkbox":
+            return _checkbox(field)
+        result = Left(matched, field.options, field.required)
+    else:
+        template, found = matched
+        result = template.handler(field, context, sections, found)
+    # Current identity, documents and profile answers precede a separately saved answer.
+    # An authoritative value that cannot fit this widget stays left, rather than using stale data.
+    if isinstance(result, Answer):
+        return _fits_kind(field, result)
+    if result.reason not in _BANK_FALLBACK:
+        return result
     # The bank answers the exact question it was typed for (its normalised key), nothing else.
     bank = context.bank.lookup(field.label) if settled and context.bank else None
     if bank is not None and field.kind not in ("file", "checkbox"):
@@ -2342,13 +2453,7 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
         if field.kind == "yes_no" and option_key(bank) in YES_OPTIONS | NO_OPTIONS:
             return _boolean(field, option_key(bank) in YES_OPTIONS, "bank")
         return _fits_kind(field, Answer(bank, "bank"))
-    matched = match_template(field.label)
-    if isinstance(matched, str):
-        if field.kind == "checkbox":
-            return _checkbox(field)
-        return Left(matched, field.options, field.required)
-    template, found = matched
-    return _fits_kind(field, template.handler(field, context, sections, found))
+    return result
 
 
 def _fits_kind(field: FormField, result: Answer | Left) -> Answer | Left:

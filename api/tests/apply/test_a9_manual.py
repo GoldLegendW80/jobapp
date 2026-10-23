@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import gate, manual, manual_router, run, service, states
+from app.apply import gate, manual, manual_router, queue_router, run, service, states
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.browser.client import BrowserError
 from app.documents.models import DocumentVersion
@@ -58,11 +58,18 @@ class ManualForm(RunForm):
             self._log("watch", passive=args.get("passive"))
             if self.sent:
                 return {"ok": True, "url": self.url, "snapshot": CONFIRMED}
-            return {"ok": True, "url": self.url, "snapshot": self.render(), "chooser": self.chooser}
+            return {
+                "ok": True,
+                "url": self.url,
+                "snapshot": self.render(),
+                "chooser": self.chooser,
+                "chooser_id": 1 if self.chooser else None,
+            }
         if name == "browser_file_upload" and "ref" not in args:
             self._log("chooser", paths=args["paths"])
             if not self.chooser:
                 return {"ok": False, "error": "no_chooser"}
+            assert args.get("chooser_id") == 1
             self.chooser = False
             self.answered.append(list(args["paths"]))
             return {"ok": True}
@@ -425,6 +432,58 @@ def test_a_worker_restart_without_a_confirmation_leaves_it_open_to_the_person(
     assert status(db, person_a) is not JobStatus.applied
 
 
+def test_an_ended_manual_session_stays_visible_and_held_until_the_person_resolves_it(
+    db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person
+) -> None:
+    app_id = start_manual(db, person_a)
+    left_filling(factory, app_id, seen=False)
+    assert [row[0].id for row in db.execute(queue_router._queued(person_a.user_id))] == [app_id]
+    assert queue_router._waiting_count(db, person_a.user_id) == 1
+    assert queue_router._waiting_count(db, person_b.user_id) == 0
+    with pytest.raises(service.RefusedError):
+        service.start(db, person_a.user_id, person_a.posting_id, Mode.manual, False, now=AT)
+
+
+def test_busy_end_is_recovered_on_the_tick_without_resetting_a_live_session(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = start_manual(db, person_a)
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        s.commit()
+    close = manual.close
+
+    def busy(*args: Any, **kwargs: Any) -> str:
+        raise jobs_service.JobBusyError
+
+    monkeypatch.setattr(manual, "close", busy)
+    channel = FakeChannel()
+    svc = manual_services(factory, manual_ashby(), channel)
+    assert asyncio.run(manual._close(svc.fill, app_id, "interrupted", False)) == "recovery_pending"
+    monkeypatch.setattr(manual, "close", close)
+
+    class Browser:
+        live = True
+
+        async def current(self) -> dict[str, Any]:
+            return {"lease": {"purpose": manual.PURPOSE}} if self.live else {"lease": None}
+
+    browser = Browser()
+    svc.fill.leases.client = browser
+    assert asyncio.run(manual.recover_ended(svc.fill, [app_id])) == 0
+    assert application(db, app_id).state is State.filling
+    browser.live = False
+    assert asyncio.run(manual.recover_ended(svc.fill, [app_id])) == 1
+    assert (application(db, app_id).state, application(db, app_id).needs) == (
+        State.queued,
+        manual.ENDED,
+    )
+    assert asyncio.run(manual.recover_ended(svc.fill, [app_id])) == 0
+
+
 def test_closing_after_a_confirmation_records_it(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
@@ -437,6 +496,81 @@ def test_closing_after_a_confirmation_records_it(
     channel = FakeChannel([sent, None])  # then the person clicks Close
     assert session(manual_services(factory, form, channel, stub=stub), app_id) == "submitted"
     assert_recorded_by_the_confirmation(db, person_a, app_id)
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_submit_then_immediate_close_gets_one_final_page_watch(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    confirmed: bool,
+) -> None:
+    app_id = start_manual(db, person_a)
+    form = manual_ashby()
+
+    def close_immediately() -> None:
+        form.sent = confirmed
+        with factory() as s:
+            manual.cancel(s, person_a.user_id, app_id, AT, final_watch=True)
+            s.commit()
+
+    channel = FakeChannel([None, close_immediately])
+    # No periodic watch is due between the person's submit and close request.
+    ticks = iter(i / 100 for i in range(1000))
+    result = asyncio.run(
+        manual.session(
+            manual_services(factory, form, channel, stub=stub),
+            app_id,
+            monotonic=lambda: next(ticks),
+        )
+    )
+    assert result == ("submitted" if confirmed else "cancelled")
+    if confirmed:
+        assert_recorded_by_the_confirmation(db, person_a, app_id)
+        assert len([e for e in events(db, app_id) if e.kind == "recorded"]) == 1
+    else:
+        assert status(db, person_a) is not JobStatus.applied
+
+
+@pytest.mark.parametrize("seen", [True, False])
+def test_worker_death_keeps_the_durable_close_request_and_a_known_confirmation(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    seen: bool,
+) -> None:
+    app_id = start_manual(db, person_a)
+    with factory() as s:
+        assert isinstance(run.prepare(s, app_id, AT, manual=True), run.Plan)
+        s.commit()
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        s.commit()
+        if seen:
+            manual.saw(s, app_id, AT)
+            s.commit()
+        manual.cancel(s, person_a.user_id, app_id, AT, final_watch=True)
+        s.commit()
+    with factory() as s:
+        assert manual.reset_interrupted(s, AT) == 1
+        s.commit()
+    assert application(db, app_id).state is (State.submitted if seen else State.cancelled)
+
+
+def test_a_recovery_read_cannot_close_a_new_live_attempt(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+) -> None:
+    app_id = start_manual(db, person_a)
+    with factory() as s:
+        assert manual.begin(s, app_id, AT)
+        s.flush()
+        # The old marker was cleared when the new session began. Recheck under the gate lock.
+        assert manual.close(s, app_id, "interrupted", AT, ended_only=True) == "filling"
+        s.commit()
+    assert application(db, app_id).state is State.filling
 
 
 def test_the_watch_reads_the_state_while_the_posting_is_locked(

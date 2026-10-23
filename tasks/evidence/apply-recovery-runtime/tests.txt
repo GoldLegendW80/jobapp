@@ -1,0 +1,81 @@
+Recovery runtime acceptance, own branch apply/recovery-runtime from f1e21489.
+
+Production fix4c9d38cfb2c936b01ea5993a9200cfeefb726bbb:
+Actual later-step captcha initially stayed needs_person after240s: server already owned
+person input, UI remained view-only and Take over correctly refused person_session.
+Seven frontend regressions reproduced RED. Job and Account live viewers now follow exact
+server apply_fill/waiting_person captcha/email_code/forbidden state; ownership key remounts
+on entering/leaving the same-lease wait. Sign-in keeps its existing handoff, normal filling
+and unsupported reasons remain view-only. Hints describe direct live input.
+
+Source tests/fixtures:
+d5f48ef68fe6d1627a27f4aff3fd25bdff9f64c0 native distinct chooser race.
+d0ed795318c488d2b6af8d7875ce2c2325f6bb08 actual A10a and A9 recovery journeys/fixtures.
+Final follow-up uses the prescribed person-opened chooser for both manual attachments.
+
+Final actual UI evidence, through Caddy/API/worker/browser and local fake ATS only:
+1. Original apply-a9.spec.ts:3passed in1.1m initially and3passed again in composed run.
+   Native canvas typing and CV attachment, person Submit, frozen CV, no app Submit event.
+2. apply-a10a.spec.ts: both full later Workday journeys passed, captcha1.8m and email_code1.5m,
+   with prep and no-page-error checks. Same attempt survives the live input; earlier name/email,
+   both ordered Save and Continue steps and final designation remain. Wait deadline and active
+   seconds stay fixed across passive polling/screenshots. No sign-in banner, no preapproval
+   submission, new exact UI approval, exactly one counted fake submit, repeat approval409.
+3. Final screenshot-timing captcha subset passed again in1.6m, plus prep and no-page-error.
+   It waits for direct Keyboard/noTakeover and painted noVNC canvas before screenshots.
+4. Final apply-a9-recovery.spec.ts:4passed in1.1m. Immediate personSubmit+Close case37.6s:
+   selected native CV/letter choosers via live canvas, attached named PDFs, observed fresh
+   unconfirmed passive boundary, person clicked Submit, immediate Close, durable close request,
+   exactly one confirmation record, both document versions frozen exactly once, no app click.
+   Ended-session case21.2s: cross-user application/manual reads404 and live ticket403, native
+   Browser.close, queued/session_ended held card without generic Cancel, same application
+   reopens, second native close, explicit I submitted it→Record as sent, no fake submit and
+   one person record. No page errors.
+
+UI command prefix (all three runs, fake-only own project):
+rtk proxy env E2E_CADDY_URL=http://127.0.0.1:64165
+ E2E_ATS_FORMS_URL=http://127.0.0.1:64166 E2E_COMPOSE_PROJECT=apply-recovery-runtime-563
+ E2E_EVIDENCE=apply-recovery-runtime caffeinate -i ops/agent-test.sh
+ --name apply-recovery-runtime --playwright -c e2e/apply-all.config.ts
+First composed selection:apply-a10a.spec.ts apply-a9-recovery.spec.ts apply-a9.spec.ts
+ (8passed/1fixture-failed/2notrun,6.1m). Final captcha subset:
+ apply-a10a.spec.ts apply-a9-recovery.spec.ts -g
+ 'candidate|captcha|immediate Close|uncertain ended|no page error'
+ (4passed/1fixture-failed/2notrun,3.3m; captcha final capture passed).
+Final manual selection:apply-a9-recovery.spec.ts --reporter=list (4passed,1.1m).
+The new tiny generic fake correctly asked the person to pick an input; the final test follows
+that offered live chooser path. Original automatic-attachment assertions were retained.
+A failed earlier run's generic /browser/sessions/current cleanup excluded Apply leases;
+corrected afterAll to cancel its own applications and reset only the owned stack once.
+No app guard or timeout was weakened.
+
+Native:
+rtk proxy env BROWSER_TEST_IMAGE=jobapp-browser:apply-person-wait-247 caffeinate -i
+ ops/agent-test.sh --name apply-recovery-native tests/browser/test_a9_container.py
+ tests/browser/test_a10a_container.py -q --tb=short
+6inherited cases passed; one new initial fixture failed because Chromium coalesced two picker
+calls in one click and it did not model a distinct boundary. Reduced exact native case:
+ --name apply-recovery-race
+ tests/browser/test_a9_container.py::test_an_incidental_chooser_during_the_app_attach_click_uploads_neither_document
+ -q --tb=short:1passed in22.12s. Fresh native activation; incidental pointerenter picker during
+paced Attach approach before app click; chooser_changed; neither PDF uploaded; explicit same-ID
+choice resolves held picker. Includes unchanged actual-browser person-wait/same-tab/input guards.
+
+Final checks:
+Whole web Apply/browser:441passed,19files,19.90s. Focused initial50pass and final needs32pass.
+Typecheck and ESLint passed. Normal hooks including secret scan, prettier and e2e registry passed.
+API/browser ruff clean; format740files clean. Staged-newpath CIplan81passed in40.186s;
+e2e_groups.py registry passed. Backend production source unchanged by runtime worker.
+
+Visual review:
+Inspected all4captcha wait screenshots and all4manual unknown queue screenshots: desktop/mobile,
+light/dark, real challenge/direct input, held manual card, readable controls and no overflow.
+Removed only4transitional email waiting images; its completed full journey and ready/submitted
+images remain. All data are invented e2e-*@example.org fixtures; no real credentials/accounts,
+mail/sites/submits, deployment or approved-branch edits. No new private values in logs/job args.
+
+Resources:
+Own project apply-recovery-runtime-563, own API/worker/Caddy tags apply-recovery-runtime-*:563.
+Transferred own browser tag jobapp-browser:apply-person-wait-247. Borrowed renderer
+apply578-renderer:review was read-only and must never be removed/rebuilt/retagged.
+Cleanup verification recorded in final handoff. Root owns final composed all-Apply gate/reviews.

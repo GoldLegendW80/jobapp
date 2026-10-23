@@ -1,0 +1,157 @@
+# Apply gate ownership fix handoff
+
+Worktree: /Users/h.hautin/Documents/Discoveries/AI/jobapp/.claude/worktrees/codex-apply-gate-ownership
+Branch: apply/gate-ownership-fix
+Base: 0abe439d
+Commits, in order: faa2e857, 2a81971b. Final evidence commit follows.
+No remote push, main edit, approved PR/source branch edit, deployment, real account/site or credentials.
+
+## Implemented
+
+B1: submit.recheck calls gate.documents_code in Review first and Full auto, at prepare and arm.
+Real PostgreSQL tests cover CV/letter changes approved/rendered/queued/rendering before acquiring
+a lease, after a real host-pacing wait, and during the final dwell. Refusals do not click or freeze.
+Unchanged documents still submit once. Full auto hand_over paths are preserved.
+
+B2 core: actual browserd tools wait in Live.agent_turn while the live holder owns input. Give back
+returns person_used plus a fresh snapshot/title rather than executing the old action. Every
+existing native input check now includes the holder, current lease and takeover generation, so
+a paced act stops even if Give back happens during its dwell. The private LinkedIn opener uses
+the same Tab and a final input check after its awaited structural validation. Submit and profile
+Save gate capabilities do not override person ownership. Manual app_turn and passive captcha/
+email-code snapshots keep their existing paths. Lease end cancels waiting calls.
+
+A definite pre-click Submit ownership refusal now returns to ready/form_changed with its original
+authorization still spent, and no sent-version freeze or submit_unknown. Other uncertain click
+failures retain their old conservative behavior. Save refusal stays ready/save_refused, spends
+its one authorization and never claims saved/replays it; real DB tests cover both refusal codes.
+
+Ordinary takeover banks browserd active/idle time and the actual Redis API mirror. Owner Give back,
+foreign viewer attempts, 900-second expiry and unchanged ordinary active hard limits have real
+Manager/Redis/control-route coverage. The API mirrors state after the Take over/Give back call.
+Tool/gate/opener read deadlines and Apply fill/submit aggregate worker budgets include the spec's
+bounded pause through app.browser.client.TAKEOVER_WAIT_S = 900. Active browser limits, connection
+and control deadlines, token limits and turn limits are unchanged.
+
+## Verification
+
+Document freshness RED: 18 failed, 1 passed (15.97 s).
+Core ownership RED: 12 failures before the fix (4.71 s), including intended original ownership
+failures and an initial private-opener fake-context teardown error; not all twelve were clean
+behavior-only failures.
+First focused core GREEN: 133 passed (18.02 s).
+Definite Submit refusal RED: 2 failed (7.47 s), incorrectly submit_unknown.
+Final focused documents/outcomes: 21 passed (14.53 s), plus a browser import collection error
+that was fixed by an explicit browser path before imports and independently covered below.
+Mirror/transport RED: 3 failed, 1 passed (4.50 s), missing paused state/120-second tool deadline.
+Mirror/opener GREEN: 21 passed (4.57 s).
+Whole Apply plus browser checkpoint: 7,975 passed, 2 failed (430.47 s). Both failures were an old
+opener Tab double missing require_input; its contract is corrected and a new final-check race
+regression added. No Apply tests failed.
+Final whole browser plus affected Apply gate/outcome modules: 2,221 passed (109.19 s).
+Native initial: one pytest test passed in 11.29 s, containing seven real Chromium checks with zero
+native clicks across Fill, Submit, Save and private opener before/during takeover. The sandboxed
+browser is started by the normal isolated Docker fixture; the injected Manager uses the attached
+real browser with no-op stop/kill lifecycle methods. Manager/Live/routes/actions/capabilities and
+native input are real; only pacing sleep is injected at an exact takeover boundary. No real ATS.
+Final exact-source native: rebuilt committed browser source, one pytest test containing all
+seven checks passed in 11.31 s. Owned image, containers, volumes and networks removed afterward.
+Ruff check app/tests/browserd passed; all 760 Python files formatted.
+CI plan: 81 passed (86.544 s). E2E registry: 29 CI, 4 reasoned exclusions, 46 local-group specs.
+Normal commit hooks passed on both source commits.
+
+Logs: /tmp/jobapp-gate-document-red.log, /tmp/jobapp-gate-live-red.log,
+/tmp/jobapp-gate-green.log, /tmp/jobapp-gate-click-red.log,
+/tmp/jobapp-gate-final-focused.log, /tmp/jobapp-gate-ownership-full.log,
+/tmp/jobapp-gate-mirror-red.log, /tmp/jobapp-gate-mirror-green.log,
+/tmp/jobapp-gate-browser-final.log, /tmp/jobapp-gate-live-native.log,
+/tmp/jobapp-gate-live-native-final.log, /tmp/jobapp-gate-browser-build-final.log.
+
+## Remaining fresh continuation, already agreed with root
+
+1. form_agent._definition's aggregate runtime must include TAKEOVER_WAIT_S alongside its unchanged
+900-second active wall budget and sign-in allowance. FormSession.deadline uses the aggregate as
+well. Reuse app.browser.client.TAKEOVER_WAIT_S; do not alter agent.py grounding, token or turn caps.
+2. actions.navigate awaits pacer.dwell and then navigates without require_input. actions.tabs can
+select/close without require_input. Add action-level ownership checks for takeover arriving during
+these awaits, with meaningful RED/GREEN. Preserve the existing manual PERSON_TIME navigation
+allowance. The shared route correctly waits before these calls, but the action-level late check
+is still missing. This prevents treating B2 as wholly closed yet.
+3. Fresh independent recheck and root's final quiet composed Apply gate/journeys remain. A full
+suite on the composed final root tree is not claimed by this handoff.
+
+No worker registry conflict: mail lifecycle agent confirmed it does not touch worker.py. Changes
+there are one client constant import and two Apply timeout formula changes only.
+
+
+## B2 continuation, 2026-10-22
+
+Worktree: .claude/worktrees/codex-apply-takeover-continuation
+Base: 40e021bf. Source commit: 7d54b7fd.
+
+The Form agent aggregate is 900 active seconds + 1800 sign-in seconds +
+app.browser.client.TAKEOVER_WAIT_S (900 seconds). Its active wall constant remains 900,
+its token budget remains 820000 and its turn cap remains 30. RuntimeFormAgent initializes
+FormSession.deadline from this definition; runner._run_stream uses definition.wall_time_s
+for asyncio.wait while its cancellation watcher remains a separate FIRST_COMPLETED task.
+The runtime tests exercise the actual session registration/deadline setup and cancellation
+release/cleanup without replacing those lifecycle paths.
+
+Automated navigation passes a synchronous ownership check into pages.navigate, before its
+awaited focus and immediately before goto. The optional callback preserves the helper's
+existing defaults. This justified pages.py helper extension closes the second awaited gap.
+Apply myself retains its existing PERSON_TIME navigation allowance. Tab select and close
+check ownership after awaited page/settle setup. Selection checks again after awaited focus
+before committing its selected-tab state. Passive tab listing remains readable.
+
+Meaningful source RED: 15 failed, 46 passed in 6.42 seconds. All 15 failures assert the
+missing pause allowance or the navigation/tab ownership behavior. Earlier fixture setup
+iterations lacked Playwright exception types or the manual file-chooser listener; those
+setup failures were corrected before this RED result.
+Focused GREEN: 181 passed in 7.48 seconds, across live ownership, sign-in/runtime,
+B5 actions and manual-browser actions.
+The broad checkpoint found 3272 passed and one stale pre-existing worker timeout assertion
+in test_a5_guards (50.40 seconds). Its expectation now includes the worker's existing
+TAKEOVER_WAIT_S. No client, worker, agent.py, mail, approvals or file behavior changed.
+
+Static checks: ruff app/tests/browserd passed; all 761 Python files passed format checks.
+CI plan: 81 passed in 51.207 seconds. E2E registry: 29 CI specs, 4 reasoned exclusions,
+46 local-group specs. Normal source-commit hooks passed, including the secret scan.
+
+Native final: the owned browser image was rebuilt from browser source at 7d54b7fd.
+Two pytest tests passed in 14.84 seconds, containing 21 real Chromium checks: the earlier
+seven Fill/Submit/Save/private-opener cases plus 14 navigation/tab cases. Four refused
+navigations preserve both the original URL and a planted page marker: takeover at dwell
+or the awaited focus, with the holder retained or Give back already completed. Four tab
+selection/close attempts are refused after awaited settle while two passive list reads
+remain available. The same native paths allow unchanged and manual PERSON_TIME navigation,
+and unchanged tab selection and closing. The initial native run passed the earlier seven
+checks but the new test fixture's transient blank second tab was closed by the production
+off-list listener. Creating both fixture tabs before installing per-lease listeners fixed
+that setup failure; no production change was needed.
+
+Owned tag: jobapp-browser:takeover-continuation-7d54b7fd. The wrapper's throwaway services,
+normal fixture stacks and the owned image were removed after both native runs. The borrowed
+apply578-renderer:review image and other agents' resources were not modified.
+
+Logs: /tmp/jobapp-takeover-continuation-red.log,
+/tmp/jobapp-takeover-continuation-green.log,
+/tmp/jobapp-takeover-continuation-regression.log,
+/tmp/jobapp-takeover-continuation-budget-green.log,
+/tmp/jobapp-takeover-continuation-regression-final.log,
+/tmp/jobapp-takeover-continuation-checks.log,
+/tmp/jobapp-takeover-continuation-build.log,
+/tmp/jobapp-takeover-continuation-native.log,
+/tmp/jobapp-takeover-continuation-native-final.log.
+
+Root's final composed Apply/API gate and independent fresh recheck remain outside this
+continuation. No remote push, main edit, approved source branch modification, real account,
+site, environment or credential access, production setup, merge or deployment occurred.
+
+Final whole browser plus affected Apply generic/follow-up/guard modules: 3273 passed in
+50.71 seconds, through ops/agent-test.sh with caffeinate -i and at most two workers. An
+intermediate recheck had 3272 passes and one test-only AttributeError because the worker
+imports TAKEOVER_WAIT_S locally; the assertion now imports the shared client constant.
+Its focused correction passed (1 test in 3.90 seconds), followed by this full green run.
+The resource check found no agent-takeover containers, networks or volumes and no owned
+browser image. No temporary services or background watchers remain from this continuation.

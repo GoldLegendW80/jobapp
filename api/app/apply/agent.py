@@ -1,139 +1,58 @@
-"""The answer agent of an application (SPEC-apply, "Answers to standard questions", source 5): the
-questions neither the adapter nor the resolver answered, put to one model call, and what code
-keeps of its answers.
+"""The answer agent's boundaries (SPEC-apply, A5).
 
-This file is the part of the agent that decides, and it is pure (no store, no clock, no model):
+`eligible` asks only unresolved, open job questions in `AGENT_REASONS`, once per key. It leaves
+legal choices, EEO, identity, pay, authorization, employment history, practicalities and closed
+questions with the person. Standard fields and document boxes belong to the resolver;
+`letter_boxes` copies a prepared document, never a model's substitute. `profile_for` sends an
+allowlist of profile sections and answer fields, excluding private practical answers.
 
-- `eligible`: which left fields go to the agent. A closed list: only a field the resolver left
-  because it knows no such question (`not_a_known_question`) or because it is free text written
-  for this company (`free_text_for_the_agent`), of a kind the adapter can type (text, select,
-  combobox with its options), each key once. Then `refusal` fails closed: what the owner keeps
-  for the person stays left whatever a model would say (test_what_the_agent_is_never_asked).
-  The resolver's default for a label it does not know is `not_a_known_question`, so three lines
-  close the door, in any widget, each reading the label through `_plain` (compatibility forms
-  folded, invisible characters and marks dropped, a Cyrillic, Greek or small capital letter drawn
-  like a Latin one read as that letter, as the never apply rules read a title):
-  1. the shape (`not_open`): a question the resolver does not know is asked only when its label
-     reads as an open question or a prompt to write: it opens on why, what, which, how,
-     describe, tell us, explain, share, walk us through, give an example (pourquoi, quel,
-     comment, qu'est-ce, décrivez, parlez-nous, expliquez, partagez; warum, wie, welche,
-     beschreiben; por qué, qué, cuál, cómo, describa), after an optional "please", "briefly" or
-     numbering, or it is a whole prompt noun (Motivation, Cover letter, Additional information,
-     Lettre de motivation). A bare noun phrase ("Work permit", "Pending charges", "Total comp",
-     "Team preference") or a statement stays the person's, whatever its options. A3's free
-     text questions (`free_text_for_the_agent`) were already read as prompts and skip this line;
-  2. the topic (`off_topic`): every question, A3's free text included (issue #317), is asked
-     only when the allowlist of topics reads it (`_on_topic`): a subject of the person's
-     (`_SUBJECT`: a project, experience, skills, motivation, the field, a time they led or
-     disagreed), or an employer word (the company, the role, the team, joining, working here)
-     inside a question of motivation (`_MOTIVATION`: why, what attracts you, what you would
-     bring, what you look for), or a short "Why <name>?". An employer word alone is no topic:
-     "How soon could you join?", "Which office would you join?" and "Team preference" stay the
-     person's; "Why do you want to join us?", "Tell us about a project" and "Share your
-     portfolio" are asked. The name of "Why <name>?" is checked twice: here it must not be a
-     place of the gazetteer or a time ("Why Berlin?", "Why now?": `practical`), and at the judge
-     it must be the posting's company (`off_topic` otherwise: "Why Lisbon?"). "us" is no
-     employer word: only the whole short "Why us?" (`_US_ONLY`) is asked, as the company, so
-     "Why us and are you over 18?" or "What do you know about us?" stay the person's;
-  3. the vocabularies, in any wording, open or not:
-  - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
-    accuracy statement (arbitration, background checks, marketing, data retention, a
-    non-compete, a signature, the terms);
-  - a consent to share, keep or contact (`consent_topic`: data sharing with partners or a group,
-    retention, offers and communications, privacy choices);
-  - pay, wanted or received, in any form (salary, OTE, package, rate, bonus, equity, comp, TC,
-    income, base, budget, how much, range, ballpark, target; Gehalt, salario, sueldo, pretensión);
-  - work authorization and immigration (a visa, sponsorship, a permit, the right to work, a
-    green card, residency, citizenship, a passport, H-1B, OPT; titre de séjour, Arbeitserlaubnis,
-    permiso de trabajo);
-  - a document asked for as text (`document`: the CV or the cover letter): a letter box gets the
-    letter's own text by code (`letter_boxes`, SPEC-apply source 2), a CV box stays the person's;
-  - criminal and employment history (charges, arrests, convictions, offences, a DBS check, a
-    dismissal, being let go, a gap, disciplinary action, a notice period; casier,
-    condamnation, un trou, préavis), and leaving a job in any wording, even one that names the
-    role or the company ("Why did you leave your last role?", "Pourquoi voulez-vous quitter
-    votre poste ?", "Warum wollen Sie wechseln?");
-  - sensitive personal data and where the person lives (`personal`: religion, marital status,
-    a divorce, children, health, medication, accommodation, caste, politics, pronouns, age,
-    family, where the person lives or moved to);
-  - the person's practicalities (`practical`: when they could start or join in any verb, a
-    notice, availability, relocation, remote, hybrid or on site work, an arrangement, hours,
-    weekends, a commute, travel, other applications or offers, a place word (an office, a
-    location, a city, a time zone), working in a place the jobs gazetteer knows ("Why do you
-    want to work in the US?"), and in a question of motivation a capitalised name of the
-    gazetteer anywhere ("Why do you want to join our Berlin team?"));
-  - leaving a job in any verb (exit, move on, step away), looking for a new role, a return to
-    work or a career break, and in a question of motivation the person's own current or last
-    job ("Why do you want to exit your last role?": `history`);
-  - the person's identity or a credential (a password, a social security, tax or ID number, an
-    address, a phone, an e-mail, a name, a signature, a birth date): the agent never receives
-    the identity section, so any value would be invented;
-  - a qualification code cannot prove from the profile (a PhD, a clearance, export control
-    status, fine-tuning, a certification or a licence);
-  - a select whose options speak of work authorization, criminal history or pay ("Citizen",
-    "Permanent resident", "Needs a visa"), whatever its label (`option_topic`);
-  - a yes or no: a `yes_no` field, a select whose options say yes or no, or a label worded as a
-    closed question. Code cannot prove a yes from the profile, and a no can be a false legal
-    statement (sponsorship in a wording the resolver does not know).
-  Never a box (terms are the person's), a file, an EEO topic, never a field a policy or a
-  missing profile value left (age, citizenship, current pay, a years question the profile does
-  not settle).
-- `judge`: what is kept of the agent's reply. The same `refusal` first, so a question that
-  reaches it by another path is still left. Each proposal must name a question it was asked and
-  a source of the person's (`facts`, `experience`, `skills`, `answers`, `motivation`, `letter`):
-  one without is dropped (`no_source`). The source is DECLARED by the model, a string it writes
-  itself, and nothing here proves it: the only check of what is said is `factcheck_rules`
-  below. So the refusals above are the guard of the closed topics, and an answer to an open
-  question the vocabularies miss is the model's own text, its numbers, links, employers and
-  titles excepted. A choice must be one of the field's options exactly
-  (`answers.match_option`); a typed value that is a bare yes or no is dropped (`yes_or_no`), so
-  is one that is a bare negation or a non answer ("None", "N/A", "Not applicable", "No pending
-  charges", "I do not require sponsorship", "Aucun", "Néant": `bare_negation`), and a value that
-  speaks of work authorization, criminal history, how a job ended or pay (`legal_statement`): a
-  missed label cannot be answered "None" or "I hold the right to work" on the person's behalf.
-  A typed value that states sensitive personal data (gender, sexuality, pronouns, disability,
-  health, pregnancy, religion, ethnicity, age, family) is dropped too (`personal_statement`),
-  whatever the question: the model never reads an EEO answer, so such a value is invented or
-  steered by the page. So is a typed practicality (`practical_statement`: "I can start
-  immediately", "I am based in Berlin", "I prefer to work remotely", a notice, travel, a time
-  zone, other offers): the model never reads the profile's answers on these. Each typed value is
-  read through `_plain`, so a Cyrillic letter inside "permit" changes nothing. A dash used
-  as a separator in a typed value is replaced by code first (`undashed`: the owner's rule, no
-  dashes as separators). A typed value then goes through mail M9's `factcheck_rules.check`
-  against the profile: a number, a duration, a link, an employer or a title that the profile
-  does not hold leaves the field (`fact_check`). So a posting that tells the model to add a
-  link changes nothing on the form.
-- `Request` and `Reply`: what the model call receives (the questions as data, the profile's
-  allowlist `profile_for`, the posting, the letter) and gives back. `profile_for` keeps the
-  facts, experience and skills sections and, of `answers`, only `ANSWER_FIELDS` (motivation,
-  stated years, highest degree and its year): never identity, an EEO answer, pay, work
-  authorization, pronouns, a consent or a practicality.
+Question topics are positive anchors: motivation, the job/company/team, experience and technical
+projects. A destination after working/living/joining is unknown unless it names a recognised
+professional field; a qualified team is likewise unknown unless its qualifier names a field.
+This does not depend on a place gazetteer. Technical noun phrases such as Microsoft Office,
+location service and exit strategy retain their ordinary reading. Team preference and Why now
+can ask for job motivation, while their proposed answers still need a supported job claim.
+The pronoun alone in a short "Why us?" names the posting's company. It does not make a
+compound label such as "Why us and are you over 18?" an open job question.
 
-The call itself is an `AnswerAgent`: in the worker, `app.apply.agents.RuntimeAnswerAgent`, the
-`apply_answer` agent of the agents runtime (internal, private_io, model_by_credential, the
-`TOKEN_BUDGET` below, one submit tool). A run without one, or a person without a credential,
-skips the agent: every question it would have asked stays left.
+`judge` repeats the question guards, checks the declared source against PERSON_SOURCES, matches
+choices to options and applies the legal, personal, practical and fact-check guards. A model's
+source label alone establishes nothing. Every sentence, including personal motivation and
+preference, retains a complete permitted personal source sentence under bounded technical
+predicate equivalences. An achievement does not establish a desire. Unknown paraphrases stay
+left, and conjunctions inside an object or name never establish an action by themselves.
+Ambiguous arrangement vocabulary needs
+a complete sourced technical past action; consent and other closed statements stay refused.
+Locative complements in every claim frame retain their full source clause, including actor,
+predicate, object and preposition. Entity or skill words alone do not establish that
+relationship, even when they happen to contain the whole proposed clause. Coordinated
+predicates retain their subject, and coordinated objects retain their list context.
+The prepared letter enters these sources through the immutable run context, rather than an
+edited answer. `undashed` applies the owner's separator rule before matching and checking text.
+Fact checking remains independent; Full auto's model check still applies to the resulting text.
 
-Declared open points (test_a5_agent_filters.py holds the families these rules are tested over):
-- a place the gazetteer does not know reaches the model in "Why Lisbon?" (its answer is dropped
-  unless Lisbon is the posting's company) and in "Why do you want to join us in Lisbon?" (its
-  answer is kept unless it states a practicality); "US" in capitals inside a question of
-  motivation is read as the country ("our US team", `practical`), and so is a label written
-  wholly in capitals ("WHY US?");
-- a practicality typed without a first person or a time to come ("Berlin suits me", "Remote,
-  please") is typed;
-- what is refused though it is about the job: an employer word outside a question of motivation
-  ("Team preference" written by A3), "Why now?", a technical word that is also a place or an
-  arrangement word ("Microsoft Office", "a location service", "an exit strategy", "full-time"),
-  a project named like a city ("Phoenix") in a question of motivation, and a label written
-  wholly in Cyrillic or Greek letters.
+The runtime call is an internal, private_io AnswerAgent with TOKEN_BUDGET. Posting and page text
+remain data. No credential or agent means these questions stay left.
+
+Declared open points:
+- Unrecognised professional fields or team qualifiers can leave a valid question with the person.
+- New technical terms and paraphrases outside the positive vocabulary need supporting profile
+  or prepared-letter words. Non-Latin wording without such support is conservative as well.
+- Factual paraphrases outside the finite action equivalences and rearranged coordinated
+  sentences stay left. This intentionally prefers explicit source wording to inference.
+- Typed employment and education metadata only support independent fact checking. Complete
+  personal assertions require profile prose, answers or the prepared letter. Incomplete or
+  ambiguous quoted spans prove no extracted assertion. Complete personal source copies retain
+  their context. Approval and the Full auto model check remain separate checks.
+- Short company questions still need the posting's company at the judge. Existing lexical
+  guards can refuse technical words whose ordinary reading is not recognised here.
 """
 
 import functools
 import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from app.apply import answers, guardrails, terms
@@ -320,8 +239,8 @@ _PRACTICAL = re.compile(
 # living or moving ("Why do you want to work in the US?", "travailler à Paris"). "Work in
 # robotics" names no place, and is a question about the field.
 _WHERE = re.compile(
-    r"\b(?:work\w*|liv(?:e|es|ed|ing)|based|located|stay\w*|mov(?:e|es|ed|ing)|relocat\w*"
-    r"|join\w*(?: (?:us|the \w+|our \w+))?|travailler|vivre|habiter|rejoindre|trabajar|vivir)"
+    r"\b(?:(?:work\w*|travailler|trabajar)(?!\s+to\b)|liv(?:e|es|ed|ing)|based|located|stay\w*|mov(?:e|es|ed|ing)|relocat\w*"
+    r"|join\w*(?: (?:us|the \w+|our \w+))?|vivre|habiter|rejoindre|vivir)"
     r"\s+(?:in|from|to|at|out of|near|a|au|aux|en|dans)\s+(.{1,80})"
 )
 # A short "why <name>" question (`_WHY_NAME`) whose name is a time or a move, not an employer.
@@ -447,6 +366,25 @@ _WHY_US = re.compile(
 _WHY_NAME = re.compile(
     r"^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
     r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)(\w+(?:\s+\w+){0,2})\W*$"
+)
+# These positive structures describe work, rather than the person's arrangements. Ambiguous
+# labels can reach the judge, which still requires each proposed claim to trace to sources.
+_FACT_QUESTION = re.compile(
+    r"\b(?:projects?|software|services?|algorithms?|strateg(?:y|ies)|integrations?|systems?"
+    r"|tools?|technolog\w*|microsoft office|projets?|logiciels?)\b"
+)
+_FIELD_TOPIC = re.compile(
+    r"^(?:robotics|ai|artificial intelligence|software|engineering|research|this field"
+    r"|this industry|this sector|this domain|robotique|informatique)\b"
+)
+_PURPOSE_ACTION = r"(?:build|design|develop|create|improve|reach)"
+_PURPOSE = re.compile(rf"^{_PURPOSE_ACTION}\b")
+_WORK_PURPOSE = re.compile(rf"\bwork to {_PURPOSE_ACTION}\b")
+_TEAM_DETAIL = re.compile(r"\b(?:our|your|notre|votre) (.+?) (?:team|equipe)\b")
+_SHORT_TOPICS = frozenset({"team preference", "why now", "pourquoi maintenant"})
+_TECHNICAL_TEXT = re.compile(
+    r"\bmicrosoft office\b|\blocation services?\b|\bexit strateg(?:y|ies)\b"
+    r"|\bfull-? ?time (?:(?:\w+ )?projects?|algorithms?|software)\b"
 )
 # A document asked for as text: the whole label names the CV or the cover letter (A3's `resume`
 # and `cover_letter` templates, which leave such a text field when there is no letter text), or
@@ -608,9 +546,12 @@ def _plain(text: str) -> str:
 
 
 def _names_where(text: str) -> bool:
-    """A place of the gazetteer where the person would work, live or move to."""
+    """A working/living destination is unknown unless it names an allowed professional field.
+    This depends on the sentence structure, rather than whether a gazetteer knows the place."""
     found = _WHERE.search(text)
-    return bool(found and places_of(found.group(1)))
+    if found and text[: found.start(1)].endswith(" to ") and _PURPOSE.search(found.group(1)):
+        return False
+    return bool(found and not _FIELD_TOPIC.search(found.group(1)))
 
 
 def _names_a_place(label: str) -> bool:
@@ -628,7 +569,11 @@ def _names_a_place(label: str) -> bool:
 def _named_only(text: str) -> str | None:
     """The name of a "why <name>" question that no subject and no employer word puts on topic,
     else None: the one topic the label alone cannot settle."""
-    if _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)):
+    if (
+        text.strip(" ?.!:") in _SHORT_TOPICS
+        or _SUBJECT.search(text)
+        or (_EMPLOYER.search(text) and _MOTIVATION.search(text))
+    ):
         return None
     found = _WHY_US.search(text) or _WHY_NAME.search(text)
     return found.group(1) if found else None
@@ -644,8 +589,11 @@ def _not_an_employer(text: str) -> bool:
 
 
 def _on_topic(text: str) -> bool:
-    return _named_only(text) is not None or bool(
-        _SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text))
+    return (
+        text.strip(" ?.!:") in _SHORT_TOPICS
+        or _named_only(text) is not None
+        or bool(_WORK_PURPOSE.search(text))
+        or bool(_SUBJECT.search(text) or (_EMPLOYER.search(text) and _MOTIVATION.search(text)))
     )
 
 
@@ -725,12 +673,16 @@ def refusal(
     text = _plain(label)
     if not text:
         return "no_label"
+    fact_question = bool(_FACT_QUESTION.search(text))
     for code, refuses in REFUSALS:
-        if refuses(text, kind, options):
+        reading = _TECHNICAL_TEXT.sub("project", text) if code in ("practical", "history") else text
+        if refuses(reading, kind, options):
             return code
-    if _MOTIVATION.search(text) and _names_a_place(label):
-        return "practical"
-    if reason != "free_text_for_the_agent" and not _OPEN.search(text):
+    if _MOTIVATION.search(text) and not fact_question:
+        team = _TEAM_DETAIL.search(text)
+        if _names_a_place(label) or (team and not _FIELD_TOPIC.fullmatch(team.group(1))):
+            return "practical"
+    if reason != "free_text_for_the_agent" and not _OPEN.search(text) and text not in _SHORT_TOPICS:
         return "not_open"
     if not _on_topic(text):
         return "off_topic"
@@ -786,18 +738,27 @@ def profile_for(sections: Mapping[str, Any]) -> dict[str, Any]:
     return kept
 
 
+@dataclass(frozen=True, slots=True)
+class AnswerSources(factcheck_rules.Sources):
+    # Typed titles, organisations and dates can support the independent fact
+    # checker, but are not sentences asserting a personal achievement or desire.
+    metadata: tuple[str, ...] = ()
+
+
 def sources_of(
-    sections: Mapping[str, Any], posting_title: str, company: str
-) -> factcheck_rules.Sources:
-    """What an answer may claim: the person's own profile (facts, experience, answers), its
-    employers, schools and titles. The posting legitimises its own title and company only."""
-    view = profile_view.build(sections, 0)
+    sections: Mapping[str, Any], posting_title: str, company: str, letter_text: str = ""
+) -> AnswerSources:
+    """Personal prose and independent typed facts, retaining their distinct provenance.
+    The posting legitimises its own title and company only."""
+    view = profile_view.build(profile_for(sections), 0)
     own = [body for _, body in view.facts_blocks]
-    own += [f"{e.title} {e.organisation} {e.start or ''} {e.end or ''}" for e in view.employers]
-    own += [f"{s.degree} {s.school} {s.start or ''} {s.end or ''}" for s in view.schools]
+    metadata = [f"{e.title} {e.organisation} {e.start or ''} {e.end or ''}" for e in view.employers]
+    metadata += [f"{s.degree} {s.school} {s.start or ''} {s.end or ''}" for s in view.schools]
     if view.motivation:
         own.append(view.motivation)
-    return factcheck_rules.Sources(
+    if letter_text:
+        own.append(letter_text)
+    return AnswerSources(
         profile=tuple(text for text in own if text.strip()),
         answers=tuple(view.answers),
         employers=tuple(e.organisation for e in view.employers),
@@ -805,6 +766,7 @@ def sources_of(
         titles=(*(e.title for e in view.employers), posting_title),
         participants=(company,) if company else (),
         known_terms=tuple(view.skills_terms),
+        metadata=tuple(metadata),
     )
 
 
@@ -818,7 +780,195 @@ def undashed(text: str) -> str:
 
 
 def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
+    if isinstance(sources, AnswerSources):
+        sources = replace(sources, profile=(*sources.profile, *sources.metadata))
     return sorted({issue.code for issue in factcheck_rules.check(text, sources)})
+
+
+# Keep original case until predicate positions are established: "Test It" is a name.
+_CLAIM_TOKEN = re.compile(r"[.!?;\n]+|\w+(?:['\u2019]\w+)*|[^\w\s]")
+_QUOTE_ENDS = {"'": "'", '"': '"', "\u2018": "\u2019", "\u201c": "\u201d"}
+_QUOTE_MARKS = frozenset((*_QUOTE_ENDS, *_QUOTE_ENDS.values()))
+_SENTENCE_END = re.compile(r"[.!?;\n]+")
+_RELATION_VERBS = {
+    **dict.fromkeys(("build", "develop", "create", "design"), "build"),
+    **dict.fromkeys(("built", "developed", "created", "designed"), "built"),
+    **dict.fromkeys(("test", "evaluate"), "test"),
+    **dict.fromkeys(("tested", "evaluated"), "tested"),
+}
+# Only this small, complete nominal grammar can close an object before another
+# predicate. Unknown nouns, lists and names remain opaque, while the main predicate
+# can still map. No conjunction inside an arbitrary object is treated as an action.
+_COORDINATE_NOMINAL = re.compile(
+    r"(?:(?:a|an|the|this|that|these|those) )?"
+    r"(?:(?:robot|robotics|agent|ai|software|design|build|test|evaluation) )?"
+    r"(?:robots?|agents?|software|tools?|systems?|it|them)"
+)
+_PREDICATE_OBJECT_START = frozenset(
+    ("a", "an", "the", "this", "that", "these", "those", "it", "them")
+)
+_COORDINATE_COMPLEMENT = re.compile(
+    r"(?:it|them)(?: (?:in|at|near|from|with|for|by) \w+)?"
+    r"|(?:a|an|the|this|that|these|those) (?:\S+ )*"
+    r"(?:robots?|agents?|software|tools?|systems?|platforms?)"
+)
+
+
+def _word_apostrophe(text: str, token: re.Match[str]) -> bool:
+    return (
+        token.group() in ("'", "\u2019")
+        and token.start() > 0
+        and (text[token.start() - 1].isalnum() or text[token.start() - 1] == "_")
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _QuotedSpan:
+    start: int
+    end: int
+    previous: "_QuotedSpan | None"
+
+
+def _claim_quotes(text: str) -> list[tuple[int, int]] | None:
+    # A word-final quote may instead be a possessive apostrophe. Count complete
+    # interpretations, saturating at two, with only outside plus four quote states.
+    # Persistent span links retain the unique parse without copying its history.
+    paths: dict[str, tuple[int, int, _QuotedSpan | None]] = {"": (1, 0, None)}
+    for token in _CLAIM_TOKEN.finditer(text):
+        lexeme = token.group()
+        if lexeme not in _QUOTE_MARKS:
+            continue
+        apostrophe = _word_apostrophe(text, token)
+        following: dict[str, tuple[int, int, _QuotedSpan | None]] = {}
+        for closing, (count, start, spans) in paths.items():
+            if closing:
+                if lexeme != closing:
+                    options = ((closing, start, spans),)
+                else:
+                    options = (("", 0, _QuotedSpan(start, token.end(), spans)),)
+                    if apostrophe:
+                        options += ((closing, start, spans),)
+            elif apostrophe:
+                options = (("", start, spans),)
+            elif lexeme in _QUOTE_ENDS:
+                options = ((_QUOTE_ENDS[lexeme], token.start(), spans),)
+            else:
+                options = ()
+            for state, opened, history in options:
+                prior = following.get(state)
+                ways = min(2, count + (prior[0] if prior else 0))
+                following[state] = (ways, opened, history)
+        paths = following
+        if not paths:
+            return None
+    complete = paths.get("")
+    if complete is None or complete[0] != 1:
+        # Ambiguous sources support whole copies, but cannot supply fragments.
+        return None
+    result = []
+    span = complete[2]
+    while span is not None:
+        result.append((span.start, span.end))
+        span = span.previous
+    result.reverse()
+    return result
+
+
+def _claim_sentences(text: str) -> list[tuple[str, ...]]:
+    text = undashed(text)
+    quoted = _claim_quotes(text)
+    if quoted is None:
+        return []
+    quotes = iter(quoted)
+    quote = next(quotes, None)
+    sentences, parts = [], []
+    tokens = iter(_CLAIM_TOKEN.finditer(text))
+    for token in tokens:
+        lexeme = token.group()
+        if quote is not None and token.start() == quote[0]:
+            for closing in tokens:
+                if closing.end() == quote[1]:
+                    break
+            lexeme = text[quote[0] : quote[1]]
+            quote = next(quotes, None)
+        if _SENTENCE_END.fullmatch(lexeme):
+            if parts:
+                sentences.append(tuple(parts))
+                parts = []
+        elif lexeme != ",":
+            parts.append(lexeme)
+    if parts:
+        sentences.append(tuple(parts))
+    return sentences
+
+
+def _predicate_at(parts: Sequence[str], start: int = 0) -> int | None:
+    """Recognise a direct finite predicate, including a bounded nominal relative frame."""
+    if parts[start : start + 1] in (["notably"], ["nonetheless"]):
+        start += 1
+    if parts[start : start + 1] in (["i"], ["we"]):
+        start += 1
+    elif parts[start : start + 2] in (["my", "work"], ["our", "work"]):
+        start += 2
+    elif (
+        parts[start : start + 1] == ["the"]
+        and parts[start + 1 : start + 2] in (["robot"], ["robots"], ["software"], ["agents"])
+        and parts[start + 2 : start + 3] in (["i"], ["we"])
+    ):
+        start += 3
+    else:
+        return None
+    return start if start < len(parts) and parts[start] in _RELATION_VERBS else None
+
+
+def _claim_relation(parts: tuple[str, ...], *, exact: bool = False) -> tuple[str, ...]:
+    """Map clear action positions, retaining every object, qualifier and logical word."""
+    normalized = [answers.fold(part) for part in parts]
+    first = None if exact else _predicate_at(normalized)
+    if first is None:
+        return tuple(normalized)
+    normalized[first] = _RELATION_VERBS[normalized[first]]
+    object_start = first + 1
+    for index in range(object_start, len(parts)):
+        if normalized[index] not in ("and", "but"):
+            continue
+        if not _COORDINATE_NOMINAL.fullmatch(" ".join(parts[object_start:index])):
+            break
+        following = index + 1
+        predicate = _predicate_at(normalized, following)
+        if predicate is None:
+            if (
+                following + 1 >= len(parts)
+                or normalized[following] not in _RELATION_VERBS
+                or normalized[following + 1] not in _PREDICATE_OBJECT_START
+            ):
+                break
+            predicate = following
+        if not parts[predicate].islower() or not _COORDINATE_COMPLEMENT.fullmatch(
+            " ".join(parts[predicate + 1 :])
+        ):
+            break
+        normalized[predicate] = _RELATION_VERBS[normalized[predicate]]
+        object_start = predicate + 1
+    return tuple(normalized)
+
+
+def _supported_claims(value: str, sources: factcheck_rules.Sources, *, exact: bool = False) -> bool:
+    # Personal facts and preferences have the same provenance requirement. Neither
+    # achievement nouns nor a company, title or skill prove a desire or a relationship.
+    personal = (*sources.profile, *sources.answers)
+    complete = undashed(value).strip()
+    if complete and any(complete == undashed(text).strip() for text in personal):
+        return True
+    relations = {
+        _claim_relation(sentence, exact=exact)
+        for text in personal
+        for sentence in _claim_sentences(text)
+    }
+    proposed = _claim_sentences(value)
+    return bool(proposed) and all(
+        _claim_relation(sentence, exact=exact) in relations for sentence in proposed
+    )
 
 
 def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.Sources) -> Verdict:
@@ -834,13 +984,12 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         return Verdict(key, None, "no_source")
     value = value.strip()
     source = f"agent.{proposal.source}"
+    picked = None
     if question.kind in ("select", "combobox"):
         picked = answers.match_option(value, question.options)
         if picked is None:
             return Verdict(key, None, "no_matching_option")
-        if _issues(picked, sources):
-            return Verdict(key, None, "fact_check")
-        return Verdict(key, answers.Answer(picked, source, picked), "accepted")
+        value = picked
     value = undashed(value)
     if len(value) > VALUE_MAX:
         return Verdict(key, None, "too_long")
@@ -853,20 +1002,40 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         return Verdict(key, None, "legal_statement")
     if _PERSONAL_STATEMENT.search(plain):
         return Verdict(key, None, "personal_statement")
+    if _CONSENT.search(plain):
+        return Verdict(key, None, "legal_statement")
+    supported = _supported_claims(value, sources)
     if _PRACTICAL_STATEMENT.search(plain):
+        return Verdict(key, None, "practical_statement")
+    # Ambiguous arrangement words need an actual technical fact, rather than a new preference
+    # assembled from individually known words. Recognised technical noun phrases retain their
+    # ordinary reading; other overlaps are allowed only as a complete sourced past action.
+    reading = _TECHNICAL_TEXT.sub("project", plain)
+    team = _TEAM_DETAIL.search(plain)
+    practical = (
+        _PRACTICAL.search(reading)
+        or _names_where(reading)
+        or (team and not _FIELD_TOPIC.fullmatch(team.group(1)))
+    )
+    if practical and not (
+        re.match(r"^(?:i|we) (?:built|developed|designed|created|implemented|led)\b", plain)
+        and _FACT_QUESTION.search(plain)
+        and _supported_claims(value, sources, exact=True)
+    ):
         return Verdict(key, None, "practical_statement")
     if _issues(value, sources):
         return Verdict(key, None, "fact_check")
-    return Verdict(key, answers.Answer(value, source), "accepted")
+    if not supported:
+        return Verdict(key, None, "unsupported_claim")
+    return Verdict(key, answers.Answer(value, source, picked), "accepted")
 
 
 def judge(
     questions: Sequence[Question], reply: Reply, sources: factcheck_rules.Sources
 ) -> list[Verdict]:
     """One verdict per question asked, in their order: a question the reply does not answer, or
-    answers twice, stays left; a proposal for a question not asked is ignored. The `source` of a
-    proposal is declared by the model and checked only by `factcheck_rules` (see the module
-    docstring), not against the profile text."""
+    answers twice, stays left; a proposal for a question not asked is ignored. Topic structure,
+    provenance and fact checking apply regardless of the model's declared `source`."""
     by_key: dict[str, list[Proposal]] = {}
     for proposal in reply.proposals:
         by_key.setdefault(proposal.key, []).append(proposal)

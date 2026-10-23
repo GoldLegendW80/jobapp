@@ -45,9 +45,8 @@ fact check (`agent.judge` keeps only what passes it): `checks` lets it go on onl
 `passed` for the current answers hash, so submit services without a checker still send it to
 the queue (`model_check_not_run`).
 
-Declared open points (each toward the review queue):
-- a submit element the generic form agent designated (#343's hand over on `form_changed`) goes to
-  the queue as well (`agent_designated`): no person saw the highlighted screenshot;
+The generic agent may replace a changed known ATS form only with its code-owned strategy
+binding. Unknown sites and unbound agent designations still go to the review queue.
 - any field left, optional ones and widgets the app cannot fill included, goes to the queue.
 """
 
@@ -60,7 +59,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.apply import caps, guardrails, model_check, service, states
+from app.apply import caps, fallback, guardrails, model_check, service, states
 from app.apply.caps_models import ApplySettings, LikeMode
 from app.apply.models import (
     AnswerSource,
@@ -74,11 +73,14 @@ from app.apply.models import (
 )
 from app.jobs.models import Job
 
-FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever"})
+FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever", "email", "linkedin"})
 LIKE_VALID = timedelta(days=7)
 DESIGNATED = "designated"
 
 SENTENCES = {
+    "linkedin_daily": (
+        "LinkedIn's limit of applications in 24 hours is reached. This one waits for you."
+    ),
     "below_min_fit": (
         "This posting's fit is below your threshold for Full auto, so it waits for you."
     ),
@@ -196,23 +198,49 @@ def _captcha_seen(db: Session, application: Application) -> bool:
     return found is not None
 
 
-def checks(db: Session, application: Application, posting: Job) -> str | None:
+def checks(
+    db: Session, application: Application, posting: Job, now: datetime | None = None
+) -> str | None:
     """Full auto's own checks (SPEC-apply, "Guardrails" 6 and 7), the code of the first that
     fails, or None. The documents' rule is the gate's (`gate.documents_need_review`)."""
+    if application.ats == "email":
+        from app.apply.email import addresses, own_company
+
+        selected = next(
+            (
+                r.value
+                for r in db.scalars(
+                    sa.select(ApplicationAnswer).where(
+                        ApplicationAnswer.application_id == application.id,
+                        ApplicationAnswer.field_key == "email_to",
+                    )
+                )
+            ),
+            None,
+        )
+        if selected not in addresses(posting) or not own_company(posting, selected):
+            return "email_company_domain"
     if application.ats not in FULL_AUTO_SOURCES:
         return "unsupported_source"
+    if caps.linkedin_daily(db, application, now or application.updated_at):
+        return "linkedin_daily"
     values = caps.settings_of(db, application.user_id)
     if posting.fit is None or posting.fit < values.min_fit:
         return "below_min_fit"
-    rows = db.execute(
-        sa.select(ApplicationAnswer.kind, ApplicationAnswer.source).where(
-            ApplicationAnswer.application_id == application.id,
-            ApplicationAnswer.user_id == application.user_id,
+    answers = list(
+        db.scalars(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == application.user_id,
+            )
         )
-    ).all()
+    )
+    rows = [(row.kind, row.source) for row in answers]
     if any(source is AnswerSource.left for _, source in rows):
         return "fields_left"
-    if any(source is AnswerSource.agent and kind == DESIGNATED for kind, source in rows):
+    if any(source is AnswerSource.agent and kind == DESIGNATED for kind, source in rows) and (
+        fallback.binding(answers, application.form_url, application.ats) is None
+    ):
         return "agent_designated"
     if _captcha_seen(db, application):
         return "captcha_seen"
@@ -229,7 +257,7 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
 
     if not is_on(caps.settings_of(db, application.user_id), application.created_at):
         return "full_auto_off"
-    return gate.documents_code(db, application) or checks(db, application, posting)
+    return gate.documents_code(db, application) or checks(db, application, posting, now)
 
 
 def expired(application: Application, spent: Authorisation, now: datetime) -> bool:
@@ -239,10 +267,13 @@ def expired(application: Application, spent: Authorisation, now: datetime) -> bo
     a Full auto Like's row already expires `LIKE_VALID` after the Like."""
     if spent.kind is not gate_kind(application.mode):
         return True
-    if now < spent.expires_at:
-        return False
+    return now >= deadline(application, spent)
+
+
+def deadline(application: Application, spent: Authorisation) -> datetime:
+    """The exact spent approval's effective end, before its pace wait is cleared."""
     paced = spent.kind is AuthorisationKind.person_approval and application.needs == "host_pace"
-    return not (paced and now < spent.created_at + LIKE_VALID)
+    return spent.created_at + LIKE_VALID if paced else spent.expires_at
 
 
 def gate_kind(mode: Mode) -> AuthorisationKind | None:

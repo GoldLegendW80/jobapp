@@ -14,7 +14,9 @@
 # throwaway container's own network namespace (never the host's): apply twice gives one jump per
 # chain and the same rules, a user rule of DOCKER-USER kept, a new bridge replaces the old jump,
 # check passes then fails on a removed rule, on a rule put above the jump and on a bridge that
-# moved, --boot applies the recorded bridge with no Docker, uninstall leaves nothing.
+# moved, --boot applies the recorded bridge with no Docker, uninstall leaves nothing. The mail
+# kind is installed alongside the browser in that namespace: both checks pass, reapply is
+# idempotent, mail drift is detected, and either uninstall preserves the other's rules.
 # Set EGRESS_TEST_DOCKER=0 to skip the Docker part.
 # Behind a TLS inspecting proxy, JOBAPP_EXTRA_CA (README) reaches the package install of that part
 # alone, as the BuildKit secret of a throwaway image build; a line planted in it is then looked for
@@ -91,6 +93,13 @@ for bad in 256.1.1.1 010.1.1.1 1.2.3 1.2.3.4.5 "1.2.3.4;id" ::1 fd00::1 " 1.2.3.
   out_has "bad resolver"
 done
 ok "bad bridge names (too long, spaces, shell, slash) and bad resolvers (out of range, IPv6, junk) refused"
+
+step "mail has its own firewall chains"
+JOBAPP_EGRESS_KIND=mail bash "$SCRIPT" rules br-0123456789ab 1.1.1.1 >"$WORK/mail-rules"
+grep -q -- '-j JOBAPP-MAIL-EGRESS$' "$WORK/mail-rules" || fail "mail does not have its own egress chain"
+grep -q -- '-j JOBAPP-MAIL-EGRESS-IN$' "$WORK/mail-rules" || fail "mail does not have its own host-input chain"
+grep -q -- '-d 169.254.0.0/16 -j DROP' "$WORK/mail-rules" || fail "mail can reach metadata"
+ok "mail and browser chains are distinct, with the same private-address refusals"
 
 step "resolvers: as Docker reads them"
 funcs="$WORK/funcs.sh"
@@ -251,7 +260,7 @@ step "boot: the browser has no restart policy and nothing at boot starts it"
 restart="$(awk '/^  browser:$/ { f = 1; next } f && /^  [a-z]/ { exit } f && /^    restart:/ { print }' compose.yml)"
 [[ "$restart" == '    restart: "no"' ]] || fail "the browser service restart policy is '$restart', not \"no\""
 unit_start="$(sed -n 's/^ExecStart=//p' "$SCRIPT")"
-[[ "$unit_start" == "/usr/local/sbin/jobapp-browser-egress apply --boot" ]] || fail "the boot unit runs '$unit_start'"
+[[ "$unit_start" == "/usr/local/sbin/jobapp-\$EGRESS_NAME-egress apply --boot" ]] || fail "the boot unit runs '$unit_start'"
 grep -n "profile browser\|compose.* up\|create browser" tests/reboot_check.sh && fail "tests/reboot_check.sh starts the browser"
 ok "compose: browser restart is \"no\"; the boot unit only applies the rules; the reboot check never starts the browser"
 
@@ -316,7 +325,10 @@ case "$(/fake/bin/iptables -V)" in *legacy*) ;; *) echo "iptables is not legacy"
 cat >/fake/bin/docker <<'D'
 #!/bin/sh
 case "$*" in
-  "network inspect"*) [ -s /fake/bridge ] && printf '%s|0123456789abcdef\n' "$(cat /fake/bridge)" || exit 1 ;;
+  "network inspect"*)
+    file=/fake/bridge
+    case "$*" in *gmail_egress*) file=/fake/mail-bridge ;; esac
+    [ -s "$file" ] && printf '%s|0123456789abcdef\n' "$(cat "$file")" || exit 1 ;;
   info) exit 0 ;;
 esac
 D
@@ -374,6 +386,48 @@ done
 : >/fake/bridge
 "$C" apply --boot >/dev/null
 [ "$(jumps)" = 4 ] && saved | grep 'br-ffffffffffff' >/dev/null && say "boot applies the recorded bridge without docker"
+# Both kinds use real legacy iptables here, exclusively in this disposable network namespace.
+# Different bridges model Compose's browser egress and isolated Gmail provider network.
+printf 'br-ffffffffffff' >/fake/bridge
+printf 'br-111111111111' >/fake/mail-bridge
+M=/fake/root/usr/local/sbin/jobapp-mail-egress
+JOBAPP_EGRESS_KIND=mail bash "$S" install >/dev/null
+"$M" check >/dev/null && "$C" check >/dev/null && say "mail and browser coexist"
+mail_jumps() { saved | grep -c -- '-j JOBAPP-MAIL-EGRESS' || true; }
+[ "$(jumps)" = 4 ] && [ "$(mail_jumps)" = 4 ] && say "mail has four distinct jumps"
+first="$(saved)"
+"$M" apply >/dev/null
+"$M" apply >/dev/null
+[ "$(saved)" = "$first" ] && "$C" check >/dev/null && say "mail second apply identical with browser retained"
+iptables -D JOBAPP-MAIL-EGRESS -d 169.254.0.0/16 -j DROP
+if "$M" check >/dev/null 2>&1; then exit 1; fi
+"$C" check >/dev/null && say "mail drift fails while browser passes"
+"$M" apply >/dev/null && "$M" check >/dev/null && say "mail apply repairs"
+ip6tables -I DOCKER-USER 1 -i br-111111111111 -j JOBAPP-MAIL-EGRESS
+if "$M" check >/dev/null 2>&1; then exit 1; fi
+"$M" apply >/dev/null
+[ "$(mail_jumps)" = 4 ] && "$M" check >/dev/null && say "mail duplicate jump repaired"
+iptables -I INPUT 1 -j ACCEPT
+if "$M" check >/dev/null 2>&1; then exit 1; fi
+if "$C" check >/dev/null 2>&1; then exit 1; fi
+iptables -D INPUT -j ACCEPT
+"$M" check >/dev/null && "$C" check >/dev/null && say "both detect unmanaged rule above jumps"
+printf 'br-222222222222' >/fake/mail-bridge
+if "$M" check >/dev/null 2>&1; then exit 1; fi
+"$M" apply >/dev/null
+[ "$(mail_jumps)" = 4 ] && ! saved | grep br-111111111111 >/dev/null &&
+  "$C" check >/dev/null && "$M" check >/dev/null && say "mail bridge change preserves browser"
+# Removing either kind must preserve the other, including its installed copy and record.
+"$C" uninstall >/dev/null
+[ "$(jumps)" = 0 ] && [ "$(mail_jumps)" = 4 ] && "$M" check >/dev/null &&
+  [ -e "$M" ] && [ -e /fake/root/etc/jobapp-mail-egress.conf ] && say "browser uninstall preserves mail"
+bash "$S" install >/dev/null
+"$C" check >/dev/null && "$M" check >/dev/null
+"$M" uninstall >/dev/null
+[ "$(mail_jumps)" = 0 ] && ! saved | grep JOBAPP-MAIL >/dev/null &&
+  [ ! -e "$M" ] && [ ! -e /fake/root/etc/jobapp-mail-egress.conf ] &&
+  [ ! -e /fake/root/etc/systemd/system/jobapp-mail-egress.service ] &&
+  "$C" check >/dev/null && say "mail uninstall preserves browser and removes mail files"
 "$C" uninstall >/dev/null
 [ "$(jumps)" = 0 ] && ! saved | grep JOBAPP >/dev/null && [ ! -e "$C" ] && [ ! -e /fake/root/etc/jobapp-browser-egress.conf ] && say "uninstall leaves nothing"
 iptables -S DOCKER-USER | grep -- '-s 203.0.113.9/32 -j DROP' >/dev/null && say "user rule kept after uninstall"
@@ -385,10 +439,14 @@ EOF
     "ip6 DOCKER-USER made" "check fails on a removed rule" "apply repairs" "check fails on a rule above the jump" \
     "apply puts the jump first again" "check fails when the bridge moved" "new bridge replaces the old jumps" \
     "recorded" "boot unit" "no name option: the bridge from the id" "boot applies the recorded bridge without docker" "uninstall leaves nothing" \
-    "user rule kept after uninstall"; do
+    "user rule kept after uninstall" "mail and browser coexist" "mail has four distinct jumps" \
+    "mail second apply identical with browser retained" "mail drift fails while browser passes" \
+    "mail apply repairs" "mail duplicate jump repaired" "both detect unmanaged rule above jumps" \
+    "mail bridge change preserves browser" "browser uninstall preserves mail" \
+    "mail uninstall preserves browser and removes mail files"; do
     grep -qx "STEP $s" "$WORK/out" || fail "real iptables: '$s' missing: $(tail -n 30 "$WORK/out")"
   done
-  ok "real iptables (legacy, as the Jetson): idempotent, user rule kept, check catches drift, bridge change, boot and uninstall"
+  ok "real iptables (legacy, as the Jetson): browser and mail coexist, idempotence, drift, bridge change, boot and independent uninstall"
 fi
 
 printf '\n%d checks passed\n' "$passed"

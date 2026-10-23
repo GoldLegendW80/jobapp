@@ -36,7 +36,7 @@ import {
  * values (the hold length is changed there), the company caps and the saved answers.
  */
 export function ApplicationsSettingsPage() {
-  useTitle("Applications");
+  useTitle("Application settings");
   const query = useQuery({
     queryKey: applySettingsKey,
     queryFn: ({ signal }) => getApplySettings(signal),
@@ -46,7 +46,9 @@ export function ApplicationsSettingsPage() {
     <div className="mx-auto flex max-w-xl flex-col gap-8">
       <header className="flex flex-col gap-1">
         <p className="text-sm font-medium text-muted-foreground">Settings</p>
-        <h1 className="text-2xl font-semibold tracking-tight">Applications</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Application settings
+        </h1>
         <p className="text-muted-foreground">
           How the app applies for you: the mode, the pause switch, your fit
           thresholds, your company caps and your saved answers.

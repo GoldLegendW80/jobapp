@@ -77,17 +77,19 @@ from app.apply import (
     agent,
     caps,
     failures,
+    fallback,
     full_auto,
     guardrails,
     model_check,
     shots,
+    signin,
     states,
 )
 from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
-from app.apply.bank import AnswerBank
+from app.apply.bank import AnswerBank, question_key
 from app.apply.models import (
     AnswerBankEntry,
     AnswerSource,
@@ -120,7 +122,7 @@ FILLED = frozenset({"filled", "unverified"})
 INTERRUPTED = "interrupted"
 DUE_LIMIT = 200
 # A step the person takes on the page: what the page shows wins over its HTTP status.
-_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT})
+_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT, "linkedin_paused"})
 
 
 class RunTools(ats_base.Tools, Protocol):
@@ -154,10 +156,10 @@ class Services:
     stub_base: str | None = None
     before_tool: Callable[[], Awaitable[None]] | None = None  # B4's Live.agent_turn
     form_agent: forms.FormAgent | None = None  # the generic strategy's (A8)
-    check: model_check.Checker | None = None  # the check by model before a Full auto decision
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     retry_delays_s: tuple[int, ...] | None = None  # None: APPLY_RETRY_DELAYS_S
     needs_person_wait_s: int | None = None  # None: APPLY_NEEDS_PERSON_WAIT_S
+    check: model_check.Checker | None = None  # the check by model before a Full auto decision
 
     def delays(self) -> tuple[int, ...]:
         return self.retry_delays_s if self.retry_delays_s is not None else failures.retry_delays()
@@ -178,6 +180,11 @@ class Plan:
     letter_text: str
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
     mode: Mode = Mode.review
+    person_answers: dict[str, generic.PersonAnswer] = field(default_factory=dict, repr=False)
+    person_shapes: dict[str, str] = field(default_factory=dict, repr=False)
+    person_target: str = field(default="", repr=False)
+    fallback_used: bool = False
+    form_deadline: float | None = None
 
 
 @dataclass
@@ -188,6 +195,9 @@ class Result:
     report: ats_base.Report = field(default_factory=ats_base.Report)
     shot: bytes | None = field(default=None, repr=False)
     cost: dict[str, Any] = field(default_factory=dict)
+    company_url: str | None = None
+    strategy: dict[str, Any] | None = None
+    review_reason: str | None = None
 
 
 class _Watched:
@@ -294,6 +304,27 @@ def _letter_text(db: Session, user_id: uuid.UUID, version_id: uuid.UUID) -> str:
     return "\n\n".join(str(p) for p in paragraphs if isinstance(p, str) and p.strip())
 
 
+def _applied_before(db: Session, user_id: uuid.UUID, company: str, now: datetime) -> bool:
+    """Confirmed submissions at this company, across roles and without another person's history.
+    A rehearsal or an uncertain click cannot establish that the person applied."""
+    key = guardrails.company_key(company)
+    if not key:
+        return False
+    companies = db.scalars(
+        sa.select(Job.company)
+        .join(Application, Application.posting_id == Job.id)
+        .where(
+            Application.user_id == user_id,
+            Job.user_id == user_id,
+            Application.state == State.submitted,
+            Application.dry_run.is_(False),
+            Application.submitted_at <= now,
+        )
+        .distinct()
+    )
+    return any(guardrails.company_key(prior) == key for prior in companies)
+
+
 def _bank(db: Session, user_id: uuid.UUID) -> AnswerBank:
     rows = db.execute(
         sa.select(AnswerBankEntry.question_key, AnswerBankEntry.answer).where(
@@ -311,21 +342,23 @@ RENDERING_CODE = "documents_rendering"
 
 def _render_wait_began(db: Session, application: Application, kind: str, now: datetime) -> datetime:
     """When the application began to wait on the render of its `kind` document: the time of
-    that wait's `waiting` event, else `now` (this ask begins the wait and writes the event). A
-    wait the application left (`needs` took another value) and took again begins anew, though
-    its last `waiting` event reads the same."""
-    wanted = {"needs": RENDERING, "document": kind}
+    that wait's `waiting` event, else `now`. Only a new fill attempt gets a new bound; polling,
+    a changed `needs` or releasing a dead browser lease does not restart the same wait."""
+    wanted = {"needs": RENDERING, "document": kind, "attempt": application.attempt}
     last = db.execute(
         sa.select(ApplicationEvent.at, ApplicationEvent.data)
         .where(
             ApplicationEvent.application_id == application.id,
             ApplicationEvent.user_id == application.user_id,
             ApplicationEvent.kind == "waiting",
+            ApplicationEvent.data["needs"].astext == RENDERING,
+            ApplicationEvent.data["document"].astext == kind,
         )
         .order_by(ApplicationEvent.id.desc())
         .limit(1)
     ).first()
-    if application.needs == RENDERING and last is not None and last.data == wanted:
+    # Legacy waits have no attempt marker: retain their original deadline conservatively.
+    if last is not None and last.data.get("attempt", application.attempt) == application.attempt:
         return last.at
     _event(db, application, "waiting", now, **wanted)
     # `_wait` reads the last event next, and the sessions do not autoflush.
@@ -388,6 +421,12 @@ def prepare(
         _end(db, application, State.blocked, code, now)
         return "blocked"
 
+    known_adapter = adapter_for(
+        application.form_url, stub_base=caps._setting("apply_stub_base_url")
+    )
+    if application.mode is Mode.full_auto and getattr(known_adapter, "review_only", False):
+        full_auto.hand_over(db, application, "unsupported_source", now)
+
     current = documents.current(db, user_id, posting.id)
     if current.cv.version is None and current.cv.coming is None and not manual:
         _end(db, application, State.blocked, "no_documents", now)
@@ -404,7 +443,12 @@ def prepare(
             if (now - began).total_seconds() >= RENDER_WAIT_S:
                 _end(db, application, State.failed, RENDERING_CODE, now)
                 return "failed"
-        _wait(db, application, needs, now, document=kind)
+            # The clock helper owns this wait's single event. A second event here would
+            # move its deadline when another waiting reason briefly took `needs`.
+            application.needs = needs
+            application.updated_at = now
+        else:
+            _wait(db, application, needs, now, document=kind)
         return "waiting_documents"
     versions: dict[str, Any] = {}
     pdfs: dict[str, bytes] = {}
@@ -437,6 +481,15 @@ def prepare(
             letter_text=letter_text or None,
         ),
         _bank(db, user_id),
+        applied_before=_applied_before(db, user_id, posting.company, now),
+    )
+    person_rows = list(
+        db.scalars(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == user_id,
+            )
+        )
     )
     return Plan(
         user_id=user_id,
@@ -450,6 +503,19 @@ def prepare(
         letter_text=letter_text,
         pdfs=pdfs,
         mode=application.mode,
+        person_answers={
+            r.field_key: generic.PersonAnswer(r.label, r.kind, tuple(r.options or ()), r.value)
+            for r in person_rows
+            if r.source is AnswerSource.person
+        },
+        person_shapes={
+            r.field_key.removeprefix("designated:shape:"): r.value
+            for r in person_rows
+            if r.field_key.startswith("designated:shape:")
+        },
+        person_target=next(
+            (r.value for r in person_rows if r.field_key == "designated:target"), ""
+        ),
     )
 
 
@@ -510,6 +576,7 @@ def _source(answer: Answer | Left, status: str) -> AnswerSource:
         "identity": AnswerSource.identity,
         "documents": AnswerSource.document,
         "bank": AnswerSource.bank,
+        "person": AnswerSource.person,
         "agent": AnswerSource.agent,
     }.get(head, AnswerSource.answers)  # answers.*, terms.*: the person's profile and rules
 
@@ -523,12 +590,14 @@ def _value(answer: Answer | Left, status: str) -> Any:
     return list(value) if isinstance(value, tuple) else value
 
 
-def _answer_rows(application: Application, report: ats_base.Report) -> list[ApplicationAnswer]:
+def _answer_rows(
+    application: Application, report: ats_base.Report, strategy: dict[str, Any] | None = None
+) -> list[ApplicationAnswer]:
     rows: list[ApplicationAnswer] = []
     seen: set[str] = set()
     for outcome in report.outcomes:
         item = outcome.field
-        if item.key in seen:
+        if item.key in seen or item.key.startswith("designated:"):
             continue
         seen.add(item.key)
         rows.append(
@@ -541,6 +610,12 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 options=list(item.options) or None,
                 value=_value(outcome.answer, outcome.filled.status),
                 source=_source(outcome.answer, outcome.filled.status),
+                document_letter=(
+                    item.kind in {"text", "textarea"}
+                    and isinstance(outcome.answer, Answer)
+                    and outcome.answer.source == "documents.letter_text"
+                ),
+                left_reason=outcome.filled.code if outcome.filled.status == "left" else None,
                 required=item.required,
                 approved=False,
             )
@@ -563,12 +638,29 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 approved=False,
             )
         )
-    if isinstance(report, forms.FormReport) and report.designated:
-        marks = [
-            (generic.SUBMIT_KEY, "Submit button, clicked after your approval", report.designated)
-        ]
+    if isinstance(report, forms.FormReport):
+        marks = []
+        if report.designated:
+            marks.append(
+                (
+                    generic.SUBMIT_KEY,
+                    "Submit button, clicked after your approval",
+                    report.designated,
+                )
+            )
+        elif (
+            isinstance(report, generic.DeterministicReport)
+            and report.needs_person == "required_left"
+        ):
+            marks.append(("designated:incomplete", "More application steps remain", "true"))
         for i, name in enumerate(report.steps, start=1):
             marks.append((f"{generic.STEP_KEY}{i}", f"Step {i}: the button to the next step", name))
+        for step, shape in getattr(report, "shapes", {}).items():
+            marks.append(
+                (f"designated:shape:{step}", f"Step {int(step) + 1}: field structure", shape)
+            )
+        if getattr(report, "target", ""):
+            marks.append(("designated:target", "Application link from the job page", report.target))
         rows += [
             ApplicationAnswer(
                 application_id=application.id,
@@ -577,12 +669,28 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 label=label,
                 kind="designated",
                 value=name,
-                source=AnswerSource.agent,
+                source=AnswerSource.identity
+                if isinstance(report, generic.DeterministicReport)
+                else AnswerSource.agent,
                 required=False,
                 approved=False,
             )
             for key, label, name in marks
         ]
+    if strategy is not None:
+        rows.append(
+            ApplicationAnswer(
+                application_id=application.id,
+                user_id=application.user_id,
+                field_key=fallback.KEY,
+                label="Application form",
+                kind="designated",
+                value=strategy,
+                source=AnswerSource.identity,
+                required=False,
+                approved=False,
+            )
+        )
     return rows
 
 
@@ -598,6 +706,47 @@ def _counts(report: ats_base.Report) -> dict[str, int]:
             counts["agent"] += 1
     counts["skipped"] = len(report.skipped)
     return counts
+
+
+def _record_bank_use(
+    db: Session,
+    application: Application,
+    rows: list[ApplicationAnswer],
+    report: ats_base.Report,
+    now: datetime,
+) -> None:
+    """Count a verified bank fill once per application field, including across refills."""
+    verified = {o.field.key for o in report.outcomes if o.filled.status == "filled"}
+    eligible = [
+        row for row in rows if row.source is AnswerSource.bank and row.field_key in verified
+    ]
+    if not eligible:
+        return
+    counted = {
+        data.get("field_key")
+        for data in db.scalars(
+            sa.select(ApplicationEvent.data).where(
+                ApplicationEvent.application_id == application.id,
+                ApplicationEvent.user_id == application.user_id,
+                ApplicationEvent.kind == "saved_answer_used",
+            )
+        )
+    }
+    for row in eligible:
+        if row.field_key in counted:
+            continue
+        key = db.execute(
+            sa.update(AnswerBankEntry)
+            .where(
+                AnswerBankEntry.user_id == application.user_id,
+                AnswerBankEntry.question_key == question_key(row.label),
+            )
+            .values(used_count=AnswerBankEntry.used_count + 1)
+            .returning(AnswerBankEntry.question_key)
+        ).scalar_one_or_none()
+        if key is not None:
+            _event(db, application, "saved_answer_used", now, field_key=row.field_key)
+            counted.add(row.field_key)
 
 
 def finish(
@@ -618,26 +767,46 @@ def finish(
     if application.state is not State.filling:
         _event(db, application, "fill_superseded", now, state=application.state.value)
         return "superseded"
+    if result.company_url:
+        from app.apply.linkedin import follow_company
+
+        return follow_company(db, application, posting, result.company_url, now)
     # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
     # replaces them, for a field the form still has.
-    mine = db.execute(
-        sa.select(ApplicationAnswer.field_key, ApplicationAnswer.value).where(
-            ApplicationAnswer.application_id == application.id,
-            ApplicationAnswer.user_id == application.user_id,
-            ApplicationAnswer.source == AnswerSource.person,
+    mine = (
+        db.execute(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == application.user_id,
+                ApplicationAnswer.source == AnswerSource.person,
+            )
         )
-    ).all()
-    theirs = {key: value for key, value in mine}
+        .scalars()
+        .all()
+    )
+    theirs = {row.field_key: row for row in mine}
     db.execute(
         sa.delete(ApplicationAnswer).where(
             ApplicationAnswer.application_id == application.id,
             ApplicationAnswer.user_id == application.user_id,
         )
     )
-    rows = _answer_rows(application, result.report)
+    rows = _answer_rows(application, result.report, result.strategy)
     for row in rows:
-        if row.field_key in theirs and not row.field_key.startswith("skipped:"):
-            row.value, row.source = theirs[row.field_key], AnswerSource.person
+        if row.field_key in theirs and not row.field_key.startswith(("skipped:", "designated:")):
+            old = theirs[row.field_key]
+            # A reused key on a changed form must not transfer the old field's allowance.
+            same_shape = (row.label, row.kind, row.options, row.required) == (
+                old.label,
+                old.kind,
+                old.options,
+                old.required,
+            )
+            if same_shape:
+                row.value, row.source = old.value, AnswerSource.person
+                row.document_letter = bool(row.document_letter or old.document_letter)
+                row.left_reason = None
+    _record_bank_use(db, application, rows, result.report, now)
     db.add_all(rows)
     counts = _counts(result.report)
     _event(db, application, "filled", now, **counts)
@@ -675,9 +844,9 @@ def finish(
         dry_run=application.dry_run,
         **retry,
     )
-    if result.state is State.needs_person:
+    if result.state is State.needs_person or (result.state is State.ready and result.review_reason):
         # Full auto (A13a): what needs the person, a sign in wall included, is a review item.
-        full_auto.hand_over(db, application, result.needs, now)
+        full_auto.hand_over(db, application, result.review_reason or result.needs, now)
     filled_any = counts["filled"] + counts["unverified"] > 0
     if result.state in (State.ready, State.needs_person) and filled_any:
         if posting.status in STAGE_FROM:
@@ -722,8 +891,8 @@ def interrupt(
 
 def reset_interrupted(db: Session, now: datetime, delays: Sequence[int] | None = None) -> int:
     """At the worker's start no fill runs: every application left `filling` by a dead process
-    ends `failed` with `interrupted`, or is queued for its retry (Apply myself's sessions:
-    `manual.reset_interrupted`). Answers a count."""
+    ends `failed` with `interrupted`, or is queued for its retry. Apply myself's sessions use
+    `manual.reset_interrupted`. Answers a count."""
     ids = (
         db.execute(
             sa.select(Application.id).where(
@@ -776,7 +945,13 @@ def _stopped(code: str, step: str = "") -> tuple[State, str | None, str | None]:
     if code == "posting_closed":
         return State.posting_closed, None, code
     if code == "needs_person":
-        return State.needs_person, step or code, None
+        return (
+            State.needs_person,
+            step or code,
+            "linkedin_paused" if step == "linkedin_paused" else None,
+        )
+    if code == "linkedin_paused":
+        return State.needs_person, code, code
     if code in ("form_changed", "no_adapter", "snapshot_cut", *ats_base.PENDING_STEPS):
         return State.needs_person, code, None
     return State.failed, None, code or "failed"
@@ -817,7 +992,9 @@ async def _answer_left(
         # No credential, or the person's runs are all busy: as a run without the agent.
         return {"agent": "skipped", "questions": len(questions), "reason": reply.stopped}
     verdicts = agent.judge(
-        questions, reply, agent.sources_of(plan.sections, plan.posting_title, plan.posting_company)
+        questions,
+        reply,
+        agent.sources_of(plan.sections, plan.posting_title, plan.posting_company, plan.letter_text),
     )
     cost = {
         "agent": "stopped" if reply.stopped else "ran",
@@ -857,20 +1034,216 @@ async def _type(
     return False
 
 
+def _fallback_progress(session: "_FallbackSession") -> forms.FormReport:
+    """The last established progress, without another read or a submit designation.
+
+    A cancelled read cannot erase the earlier report. A completed preparation read replaces
+    this page's evidence, retaining answers only for fields with the same key and structure.
+    Closed wizard pages remain their original record.
+    """
+    outcomes = {outcome.field.key: outcome for outcome in session.closed}
+    outcomes.update(
+        (key, outcome)
+        for key, outcome in session.outcomes.items()
+        if generic._step_of(outcome.field) == session.adapter.step
+    )
+    outcomes.update(
+        (item.key, session._outcome(item))
+        for item in session.visible.values()
+        if generic._step_of(item) == session.adapter.step
+    )
+    report = forms.FormReport(
+        outcomes=list(outcomes.values()),
+        skipped=list(dict.fromkeys(session.skipped)),
+        steps=list(session.steps),
+        stopped="form_changed",
+        refused=dict(session.refused),
+        addressed=session.addressed,
+    )
+    report.shapes = dict(getattr(session.adapter, "shapes", {}))
+    return report
+
+
+@dataclass
+class _FallbackSession(forms.FormSession):
+    """Retain current field evidence while the original attempt allowance is live."""
+
+    visible: dict[str, ats_base.Field] = field(default_factory=dict)
+
+    def remember(self, found: ats_base.Discovery) -> None:
+        known, self.outcomes = self.outcomes, {}
+        self.visible = {item.key: item for item in found.fields}
+        for item in found.fields:
+            outcome = known.get(item.key)
+            old = outcome.field if outcome is not None else None
+            if old is not None and (item.label, item.kind, item.options, item.required) == (
+                old.label,
+                old.kind,
+                old.options,
+                old.required,
+            ):
+                self.outcomes[item.key] = ats_base.Outcome(item, outcome.answer, outcome.filled)
+        self.skipped += found.skipped
+
+    def expired(self) -> bool:
+        return self.deadline is not None and self.clock() >= self.deadline
+
+    async def _read(self):
+        if self.expired():
+            self.stopped = "form_changed"
+            return None, "The fill allowance has ended. Stop now."
+        shapes = dict(getattr(self.adapter, "shapes", {}))
+        found, problem = await super()._read()
+        if found is not None:
+            self.remember(found)
+        else:
+            self.adapter.shapes = shapes
+        if self.expired():
+            self.stopped = "form_changed"
+            return None, "The fill allowance has ended. Stop now."
+        return found, problem
+
+    async def finish(self):
+        if self.expired():
+            return _fallback_progress(self)
+        report = await super().finish()
+        if self.expired():
+            report.stopped = "form_changed"
+            report.designated = report.designated_ref = ""
+        return report
+
+
 async def _drive_generic(
-    services: Services, plan: Plan, adapter: generic.Generic, tools: RunTools
+    services: Services,
+    plan: Plan,
+    adapter: generic.Generic,
+    tools: RunTools,
+    *,
+    strategy: dict[str, Any] | None = None,
+    previous_cost: dict[str, Any] | None = None,
+    previous_report: ats_base.Report | None = None,
 ) -> Result:
-    """The generic strategy (A8): Review first only, so Full auto hands the form to the person
-    (`no_adapter`, as before the strategy existed). The form agent fills; the "before" screenshot
-    outlines the submit it designated, and without both the person is needed."""
-    if plan.mode is not Mode.review or services.form_agent is None:
+    """Unknown forms require Review first. Known fallback keeps its remaining allowance,
+    original lease and gate checks; an unverified frame is handed to Review."""
+    if strategy is None and (plan.mode is not Mode.review or services.form_agent is None):
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
-    session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
-    report, cost = await forms.fill(services.form_agent, session)
+    adapter.person_answers = plan.person_answers
+    factory = _FallbackSession if strategy is not None else forms.FormSession
+    session = factory(adapter, tools, plan.context, str(plan.user_id))
+    session.clock = lambda: services.clock().timestamp()
+    session.deadline = plan.form_deadline
+    review_reason = "frame_origin_unverified" if strategy and "frame" in strategy else None
+    if strategy is not None:
+        before = previous_cost or {}
+        used = int(before.get("input_tokens", 0)) + int(before.get("output_tokens", 0))
+        session.token_budget = max(0, agent.TOKEN_BUDGET - used)
+        if before.get("stopped") == "token_budget":
+            session.token_budget = 0
+        adapter.person_shapes = plan.person_shapes
+        if previous_report is not None:
+            adapter.shapes = {
+                **getattr(previous_report, "shapes", {}),
+                **getattr(adapter, "shapes", {}),
+            }
+            session.steps = list(getattr(previous_report, "steps", ()))
+            session.closed = [
+                outcome
+                for outcome in previous_report.outcomes
+                if generic._step_of(outcome.field) < adapter.step
+            ]
+            session.outcomes = {
+                outcome.field.key: outcome
+                for outcome in previous_report.outcomes
+                if generic._step_of(outcome.field) == adapter.step
+            }
+            session.skipped = list(previous_report.skipped)
+
+        def stopped(state=State.needs_person, needs="form_changed", error=None):
+            return Result(
+                state,
+                needs=needs,
+                error=error,
+                report=_fallback_progress(session),
+                cost=before,
+                strategy=strategy,
+                review_reason=review_reason,
+            )
+
+        if services.form_agent is None:
+            return stopped(needs="no_adapter")
+        remaining = max(0.0, (session.deadline or session.clock()) - session.clock())
+        if not session.token_budget or not remaining:
+            return stopped()
+        try:
+            async with asyncio.timeout(remaining):
+                if previous_report is not None:
+                    # Keep known progress only where the current page has the exact same field.
+                    # Refill it by code, so a model may skip an already filled field safely.
+                    shapes = dict(getattr(adapter, "shapes", {}))
+                    found, code = await adapter.read(tools)
+                    if found is None or code or found.pending:
+                        adapter.shapes = shapes
+                        state, needs, error = _stopped(
+                            code or "needs_person", found.pending if found else ""
+                        )
+                        return stopped(state, needs, error)
+                    current = {item.key: item for item in found.fields}
+                    session.remember(found)
+                    for outcome in previous_report.outcomes:
+                        if session.clock() >= session.deadline:
+                            return stopped()
+                        item = current.get(outcome.field.key)
+                        old = outcome.field
+                        if (
+                            item is not None
+                            and isinstance(outcome.answer, Answer)
+                            and outcome.filled.status in FILLED
+                            and (item.label, item.kind, item.options, item.required)
+                            == (old.label, old.kind, old.options, old.required)
+                        ):
+                            filled = await adapter.fill(tools, item, outcome.answer)
+                            if filled.status not in FILLED:
+                                state, needs, error = _stopped(filled.code)
+                                session.outcomes[item.key] = ats_base.Outcome(
+                                    item, outcome.answer, filled
+                                )
+                                return stopped(state, needs, error)
+                            session.outcomes[item.key] = ats_base.Outcome(
+                                item, outcome.answer, filled
+                            )
+                if session.clock() >= session.deadline:
+                    return stopped()
+                report, cost = await forms.fill(services.form_agent, session)
+        except TimeoutError:
+            return stopped()
+        cost["input_tokens"] = int(before.get("input_tokens", 0)) + cost.get("input_tokens", 0)
+        cost["output_tokens"] = int(before.get("output_tokens", 0)) + cost.get("output_tokens", 0)
+        cost["fallback"] = strategy["vendor"]
+        report.shapes = adapter.shapes
+        if session.expired():
+            return Result(
+                State.needs_person,
+                needs="form_changed",
+                report=report,
+                cost=cost,
+                strategy=strategy,
+                review_reason=review_reason,
+            )
+    else:
+        report, cost = await forms.fill(services.form_agent, session)
     shot = await shots.take(tools)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
-        return Result(state, needs=needs, error=error, report=report, shot=shot, cost=cost)
+        return Result(
+            state,
+            needs=needs,
+            error=error,
+            report=report,
+            shot=shot,
+            cost=cost,
+            strategy=strategy,
+            review_reason=review_reason,
+        )
     needs = _needs(report)
     if not report.designated:
         needs = "submit_not_designated"
@@ -879,15 +1252,94 @@ async def _drive_generic(
     else:
         shot = lit
     state = State.needs_person if needs else State.ready
-    return Result(state, needs=needs, report=report, shot=shot, cost=cost)
+    return Result(
+        state,
+        needs=needs,
+        report=report,
+        shot=shot,
+        cost=cost,
+        strategy=strategy,
+        review_reason=review_reason,
+    )
 
 
-async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
+async def _known_fallback(
+    services: Services,
+    plan: Plan,
+    adapter: ats_base.Adapter,
+    tools: RunTools,
+    report: ats_base.Report | None = None,
+    cost: dict[str, Any] | None = None,
+) -> Result:
+    """One attempt only, on the already open page. A changed submit readback never calls this."""
+    stopped = Result(
+        State.needs_person,
+        needs="form_changed",
+        report=report or ats_base.Report(),
+        cost=cost or {},
+    )
+    if plan.fallback_used:
+        return stopped
+    plan.fallback_used = True
+    shot = await tools.snapshot()
+    if _card_asked(shot):
+        return await _payment_asked(tools)
+    if not shot.get("ok"):
+        return stopped
+    if pending := adapter.pending_step(str(shot.get("snapshot") or "")):
+        return Result(State.needs_person, needs=pending, shot=await shots.take(tools))
+    target = fallback.target(adapter, plan.form_url, str(shot.get("url") or ""))
+    if target is None:
+        return stopped
+    frame = None
+    root = ats_base.parse_snapshot(str(shot.get("snapshot") or ""))
+    scope = ats_base.form_frame(root, generic.SUBMIT_NAMES | generic.NEXT_NAMES)
+    frames = [node for node in root.walk() if node.role == "iframe"]
+    if adapter.framed and scope is None:
+        candidates = [
+            node
+            for node in frames
+            if ats_base.discover_fields(node, generic.SUBMIT_NAMES | generic.NEXT_NAMES).fields
+        ]
+        scope = candidates[0] if len(candidates) == 1 else None
+    if adapter.framed or scope is not None:
+        if scope is None or scope not in frames or frames.index(scope) >= 100:
+            return stopped
+        frame = frames.index(scope)
+    prepared = fallback.Generic(services.stub_base, known=adapter, frame=frame)
+    prepared.step = len(getattr(report, "steps", ()))
+    if prepared.step:
+        # The replay starts at the original form and follows the recorded earlier Nexts.
+        target = adapter.form_url(fallback.canonical_url(plan.form_url) or "") or target
+        prepared.shapes = {
+            key: value
+            for key, value in getattr(adapter, "seen_shapes", {}).items()
+            if int(key) < prepared.step
+        }
+    strategy = {"version": 1, "vendor": adapter.name, "form_url": plan.form_url, "target": target}
+    if frame is not None:
+        strategy["frame"] = frame
+    return await _drive_generic(
+        services,
+        plan,
+        prepared,
+        tools,
+        strategy=strategy,
+        previous_cost=cost,
+        previous_report=report,
+    )
+
+
+async def _drive(
+    services: Services, plan: Plan, tools: RunTools, adapter: ats_base.Adapter | None = None
+) -> Result:
+    if plan.form_deadline is None:
+        plan.form_deadline = services.clock().timestamp() + forms.APPLY_FORM.wall_time_s
     for name, data in plan.pdfs.items():
         put = await tools.put_file(name, data)
         if not put.get("ok"):
             return Result(State.failed, error=str(put.get("error") or "put_file_failed"))
-    adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
+    adapter = adapter or adapter_for(plan.form_url, stub_base=services.stub_base)
     if adapter is None:
         opened = await tools.navigate(plan.form_url)
         if not opened.get("ok"):
@@ -904,6 +1356,10 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
             return await _drive_generic(services, plan, adapter, tools)
     else:
         code = await adapter.open(tools, plan.form_url)
+        if code == "company_site" and isinstance(adapter, generic.Deterministic):
+            return Result(State.queued, company_url=adapter.company_url)
+        if code == "form_changed":
+            return await _known_fallback(services, plan, adapter, tools)
         if code:
             state, needs, error = _stopped(code)
             return Result(state, needs=needs, error=error, shot=await shots.take(tools))
@@ -917,18 +1373,34 @@ async def _fill_on_page(
     that asks for a card ends here, before anything is typed."""
     if _card_asked(await tools.snapshot()):
         return await _payment_asked(tools)
+    adapter.person_answers = plan.person_answers
+    if isinstance(adapter, generic.Deterministic):
+        if plan.person_target and getattr(adapter, "target", "") != plan.person_target:
+            return Result(State.needs_person, needs="form_changed", shot=await shots.take(tools))
+        adapter.person_shapes = plan.person_shapes
+        if getattr(adapter, "_waiting_report", None) is None:
+            adapter.seen_shapes = {}
     report = await adapter.fill_form(tools, plan.context)
+    if isinstance(adapter, generic.Deterministic):
+        report.shapes = adapter.seen_shapes
     cost: dict[str, Any] = {"agent": "not_run"}
-    if not report.stopped:
+    if not report.stopped and not isinstance(adapter, generic.Deterministic):
         cost = await _answer_left(services, plan, adapter, tools, report)
+    if report.stopped == "form_changed":
+        return await _known_fallback(services, plan, adapter, tools, report, cost)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)
     else:
         needs = _needs(report)
         state, error = (State.needs_person if needs else State.ready), None
-    return Result(
-        state, needs=needs, error=error, report=report, shot=await shots.take(tools), cost=cost
-    )
+    shot = await shots.take(tools)
+    if isinstance(adapter, generic.Deterministic) and getattr(report, "designated_ref", ""):
+        lit = await generic.highlighted(tools, report.designated_ref, shot)
+        if lit is None:
+            state, needs = State.needs_person, "submit_not_highlighted"
+        else:
+            shot = lit
+    return Result(state, needs=needs, error=error, report=report, shot=shot, cost=cost)
 
 
 def _card_asked(shot: dict[str, Any]) -> bool:
@@ -946,10 +1418,14 @@ async def _checked(result: Result, tools: _Watched) -> Result:
     frame on the page after the fill asks for payment, whatever state the fill reached."""
     if result.needs in _ON_PAGE:
         return result
-    if result.state is not State.ready and tools.status == 404:
+    if tools.status == 410 or (result.state is not State.ready and tools.status == 404):
         return replace(result, state=State.posting_closed, needs=None, error="posting_closed")
     if result.state is not State.ready and tools.status is not None and tools.status >= 500:
         return replace(result, state=State.failed, needs=None, error=failures.HTTP_5XX)
+    if tools.status == 429:
+        return replace(result, state=State.failed, needs=None, error=failures.HTTP_429)
+    if tools.status == 403:
+        return replace(result, state=State.needs_person, needs="forbidden", error=None)
     if result.state is State.posting_closed or result.error in failures.RETRYABLE:
         return result
     try:
@@ -979,6 +1455,7 @@ async def _wait_for_person(
     tools: _Watched,
     started: datetime,
     reason: str,
+    report: ats_base.Report | None = None,
 ) -> str:
     """Review first, a step on the page (`failures.WAIT_ON_PAGE`): the lease is kept while the
     person takes the step in the live view, at most `needs_person_wait_s` by the clock. Once the
@@ -986,8 +1463,16 @@ async def _wait_for_person(
     app (answered, rejected, cancelled) or the time is up, the run ends and the application keeps
     its state."""
     application_id = plan.application_id
+    if isinstance(adapter, generic.Deterministic) and isinstance(
+        report, generic.DeterministicReport
+    ):
+        adapter._waiting_report = report
     wait_s = services.needs_person_wait_s or failures.needs_person_wait_s()
-    deadline = services.clock() + timedelta(seconds=wait_s)
+    try:
+        waiting = await tools._apply_wait("begin", reason)
+    except BrowserError:
+        return State.needs_person.value
+    deadline = services.clock() + timedelta(seconds=min(wait_s, waiting["wait_left_s"]))
     written = State.needs_person.value
 
     def db(step: Callable[[Session], Any]) -> Awaitable[Any]:
@@ -1002,12 +1487,30 @@ async def _wait_for_person(
         if not await db(partial(still_needs, application_id=application_id, reason=reason)):
             return "person_acted"
         try:
-            shot = await tools.snapshot()
+            waiting = await tools._apply_wait("read")
+            if not waiting.get("wait_left_s"):
+                return written
+            shot = await tools._person_snapshot()
         except BrowserError:
             return written  # the lease ended (its maximum, browserd gone): the item waits
         page = str(shot.get("snapshot") or "")
         if not shot.get("ok") or adapter.pending_step(page) == reason:
             continue
+        if reason == "forbidden":
+
+            class Passive:
+                async def snapshot(self, current=shot):
+                    return current
+
+            # Discovery opens empty comboboxes. Inspect only this passive snapshot until
+            # the browser wait and the database transition have both resumed the run.
+            found, code = await adapter.read(Passive())
+            if found is None or code or found.pending or found.cut or adapter.anchor_problem(found):
+                continue
+        try:
+            await tools._apply_wait("resume")
+        except BrowserError:
+            return written
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
             return "person_acted"
@@ -1034,6 +1537,14 @@ async def _wait_for_person(
         if written != State.needs_person.value or result.needs not in failures.WAIT_ON_PAGE:
             return written
         reason = result.needs
+        if isinstance(adapter, generic.Deterministic) and isinstance(
+            result.report, generic.DeterministicReport
+        ):
+            adapter._waiting_report = result.report
+        try:
+            await tools._apply_wait("begin", reason)
+        except BrowserError:
+            return written
 
 
 async def fill(services: Services, application_id: uuid.UUID) -> str:
@@ -1076,6 +1587,9 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         return "waiting_lease"
     lease_id = acquired.lease.lease_id
     if acquired.token is None:
+        if getattr(acquired.lease, "state", None) == "waiting_person":
+            await wait("browser_signin")
+            return "waiting_person"
         # Ours, from a job that died: nothing can drive it. Let the next tick start a fresh one.
         await services.leases.release(user, lease_id, "apply_restart")
         return "lease_restarted"
@@ -1094,8 +1608,20 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
-        tools = _Watched(lease_tools)
-        result = await _guarded(_drive(services, plan, tools), tools)
+        from app.apply.linkedin import watched
+
+        tools = _Watched(
+            watched(
+                services,
+                plan,
+                signin.Tools(
+                    lease_tools, plan.form_url, pending=adapter.pending_step if adapter else None
+                ),
+            )
+        )
+        result = await _guarded(_drive(services, plan, tools, adapter), tools)
+        if result.company_url:
+            await services.leases.release(user, lease_id, "company_site")
         try:
             written = await asyncio.to_thread(
                 _in_db,
@@ -1112,18 +1638,42 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             and plan.mode is Mode.review
             and result.needs in failures.WAIT_ON_PAGE
             and adapter is not None
-            and not isinstance(adapter, generic.Generic)
+            and (
+                not isinstance(adapter, generic.Generic)
+                or isinstance(adapter, generic.Deterministic)
+            )
         ):
             written = await _wait_for_person(
-                services, plan, adapter, tools, started, str(result.needs)
+                services, plan, adapter, tools, started, str(result.needs), result.report
             )
     except asyncio.CancelledError:
         # docker stop, or the job's timeout: the application never stays `filling`.
-        await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
+        if await asyncio.shield(signin.waiting(services.leases, user, lease_id)):
+            await asyncio.shield(
+                asyncio.to_thread(
+                    _in_db,
+                    services.sessions,
+                    lambda db: finish(
+                        db,
+                        application_id,
+                        Result(State.needs_person, needs="signin"),
+                        services.clock(),
+                        started,
+                        services.delays(),
+                    ),
+                )
+            )
+        else:
+            await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
         raise
     finally:
         try:
-            await services.leases.release(user, lease_id, "apply_fill_done")
+            if await signin.waiting(services.leases, user, lease_id):
+                from app.browser.later_handoff import bind_wait
+
+                await bind_wait(services.leases, user, "application", application_id, lease_id)
+            else:
+                await services.leases.release(user, lease_id, "apply_fill_done")
         except (BrowserError, StoreUnavailableError):
             logger.warning("apply.release_failed", extra={"application_id": str(application_id)})
     logger.info("apply.filled", extra={"application_id": str(application_id), "state": written})

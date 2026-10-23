@@ -62,11 +62,12 @@ from sqlalchemy.orm import Session
 
 from app.agents import credentials, definitions, runs
 from app.agents.failures import TOKEN_LIMIT, TURN_LIMIT
-from app.agents.models import CredentialKind, RunStatus
+from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.apply import agents as answer_agents
 from app.apply import answers
 from app.apply.ats import base as ats_base
 from app.apply.ats import generic
+from app.browser.client import TAKEOVER_WAIT_S
 from app.config import Settings
 
 if TYPE_CHECKING:
@@ -107,6 +108,7 @@ class FormInput(BaseModel):
 
     request: str = Field(pattern=r"^[0-9a-f]{32}$")
     token_budget: int = Field(ge=0)
+    turn_budget: int = Field(default=MAX_TURNS, ge=1, le=MAX_TURNS)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
 
@@ -130,6 +132,7 @@ class FormSession:
     context: answers.Context
     user_id: str
     token_budget: int = TOKEN_BUDGET
+    turn_budget: int = MAX_TURNS
     outcomes: dict[str, ats_base.Outcome] = field(default_factory=dict)
     closed: list[ats_base.Outcome] = field(default_factory=list)  # fields of earlier steps
     skipped: list[ats_base.Skipped] = field(default_factory=list)
@@ -143,6 +146,36 @@ class FormSession:
     deadline: float | None = None  # on `clock`: the end of the run's wall time
     clock: Callable[[], float] = time.monotonic
 
+    async def prefill(self) -> None:
+        """With no credential, fill this visible step using the shared source resolver.
+
+        Discovery, live readback, person answers and pending-step refusals remain the
+        adapter's. This path neither advances a wizard nor designates a submit.
+        """
+        remaining = (self.deadline or self.clock()) - self.clock()
+        if remaining <= 0 or self.stopped or self.signin_over:
+            self.stopped = self.stopped or "budget_exceeded"
+            return
+        try:
+            async with asyncio.timeout(remaining):
+                found, code = await self.adapter.discover(self.tools)
+                for _ in range(2):
+                    if found is None or code:
+                        self.stopped = code
+                        self.pending = found.pending if found else ""
+                        return
+                    for item in found.fields:
+                        if item.key not in self.outcomes:
+                            if self.clock() >= (self.deadline or self.clock()):
+                                self.stopped = "budget_exceeded"
+                                return
+                            await self.fill_field(item.ref)
+                            if self.stopped or self.pending:
+                                return
+                    found, code = await self.adapter.discover(self.tools, frozenset(self.outcomes))
+        except TimeoutError:
+            self.stopped = "budget_exceeded"
+
     async def _read(self) -> tuple[ats_base.Discovery | None, str]:
         if self.signin_over:
             return None, SIGNIN_OVER
@@ -154,7 +187,7 @@ class FormSession:
             if found.pending == "signin":
                 return None, WALL
             return None, "A step only the person can take is shown. Stop now."
-        if found.root is not None and generic.addressed(" ".join(found.root.words())):
+        if found.root is not None and generic.addressed("\n".join(found.root.words())):
             self.addressed = True
         return found, ""
 
@@ -206,7 +239,7 @@ class FormSession:
         item, problem = await self._field(ref)
         if item is None:
             return problem, True
-        answer = answers.resolve(item.form_field(), self.context)
+        answer = self.adapter.resolve(item, self.context)
         if isinstance(answer, answers.Left):
             return json.dumps(
                 {"label": item.label, "answer": "left", "reason": answer.reason}
@@ -221,7 +254,7 @@ class FormSession:
         item, problem = await self._field(ref)
         if item is None:
             return problem, True
-        answer = answers.resolve(item.form_field(), self.context)
+        answer = self.adapter.resolve(item, self.context)
         filled = await self.adapter.fill(self.tools, item, answer)
         self.outcomes[item.key] = ats_base.Outcome(item, answer, filled)
         if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
@@ -344,6 +377,7 @@ class Ran:
     input_tokens: int = 0
     output_tokens: int = 0
     stopped: str = ""  # "", no_credential, busy, token_budget, turn_limit, cancelled, error
+    turns: int = 0
 
 
 FormAgent = Callable[[FormSession], Awaitable[Ran]]
@@ -381,7 +415,7 @@ def _definition() -> FormDefinition:
         model=MODEL,
         model_by_credential={CredentialKind.anthropic_api_key.value: MODEL_API_KEY},
         max_turns=MAX_TURNS,
-        wall_time_s=WALL_TIME_S + SIGNIN_WAIT_S,
+        wall_time_s=WALL_TIME_S + SIGNIN_WAIT_S + TAKEOVER_WAIT_S,
         effort="medium",
         internal=True,
         live_text=False,
@@ -411,13 +445,20 @@ class RuntimeFormAgent:
     script: str | None = None
 
     async def __call__(self, session: FormSession) -> Ran:
+        if session.token_budget <= 0 or session.turn_budget <= 0:
+            return Ran(stopped="token_budget" if session.token_budget <= 0 else "turn_limit")
+        if session.deadline is None:
+            session.deadline = session.clock() + APPLY_FORM.wall_time_s
         from app.agents import runner  # the SDK: the worker's image only
 
         context = self.context()
         key = secrets.token_hex(16)
         user_id = uuid.UUID(session.user_id)
         data = FormInput(
-            request=key, token_budget=session.token_budget, script=self.script
+            request=key,
+            token_budget=session.token_budget,
+            turn_budget=session.turn_budget,
+            script=self.script,
         ).model_dump(exclude_none=True)
 
         def create(db: Session) -> uuid.UUID | str:
@@ -441,8 +482,9 @@ class RuntimeFormAgent:
                     await answer_agents._release(context, made)
             raise
         if isinstance(created, str):
+            if created == "no_credential":
+                await session.prefill()
             return Ran(stopped=created)
-        session.deadline = session.clock() + APPLY_FORM.wall_time_s
         with _LOCK:
             _KEYS.add(key)
             _SESSIONS[created] = session
@@ -458,7 +500,13 @@ class RuntimeFormAgent:
         ended = await asyncio.to_thread(
             answer_agents._in_db, context.sessions, lambda db: answer_agents._ended(db, created)
         )
-        return Ran(ended.input_tokens, ended.output_tokens, _stopped(ended))
+
+        def measured(db: Session) -> int:
+            run = db.get(AgentRun, created)
+            return int((run.output or {}).get("turns", 0)) if run else 0
+
+        turns = await asyncio.to_thread(answer_agents._in_db, context.sessions, measured)
+        return Ran(ended.input_tokens, ended.output_tokens, _stopped(ended), turns)
 
 
 async def fill(agent: FormAgent, session: FormSession) -> tuple[FormReport, dict[str, Any]]:

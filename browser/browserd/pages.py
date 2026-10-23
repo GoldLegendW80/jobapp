@@ -8,6 +8,9 @@
 """
 
 import contextlib
+import json
+import re
+from collections.abc import Callable
 from typing import Any
 
 from browserd.config import NAVIGATION_S
@@ -16,6 +19,14 @@ from browserd.config import NAVIGATION_S
 PLAYWRIGHT_VERSION = "1.55.0"
 SNAPSHOT_METHOD = "snapshotForAI"
 REF_MARKER = "[ref=e"
+BUTTON_REF = re.compile(r"(?m)^ *- button[^\n]*\[ref=((?:f\d{1,4})?e\d{1,7})\]")
+NATIVE_FILES_JS = """e => {
+  if (!(e instanceof HTMLInputElement) || e.type !== 'file') return null;
+  const files = e.files;
+  if (!files || files.length > 3) return [];
+  const names = Array.from(files, file => file.name);
+  return names.every(name => name.length <= 83) ? names : [];
+}"""
 
 
 class SnapshotUnavailable(RuntimeError):  # noqa: N818 - an outcome, not an error
@@ -47,18 +58,51 @@ async def snapshot_for_ai(page: Any) -> str:
     return text
 
 
+async def native_files(page: Any, snapshot: str) -> dict[str, list[str]]:
+    """Read current native FileLists at this snapshot's refs. Empty selections are explicit,
+    so a stale filename echoed by the page cannot hide a cleared or replaced input. Chooser
+    buttons are not native inputs and retain their existing visible readback path."""
+    from browserd.tools.policy import SNAPSHOT_MAX
+
+    selected: dict[str, list[str]] = {}
+    size = 2
+    for ref in dict.fromkeys(BUTTON_REF.findall(snapshot)):
+        locator = page.locator(f"aria-ref={ref}")
+        if await locator.count() != 1:
+            raise SnapshotUnavailable("Native file snapshot ref changed")
+        # evaluate_all resolves refs in the main world, which lacks snapshotForAI's cache.
+        # The single-element path resolves in Playwright's isolated selector world first.
+        names = await locator.evaluate(NATIVE_FILES_JS, timeout=5000)
+        if names is not None:
+            size += len(json.dumps({ref: names}, ensure_ascii=True))
+            if size > SNAPSHOT_MAX:
+                raise SnapshotUnavailable("Native file metadata exceeds the snapshot budget")
+            selected[ref] = names
+    return selected
+
+
 async def front(page: Any) -> Any:
     await page.bring_to_front()
     return page
 
 
-async def navigate(page: Any, url: str, timeout_s: float = NAVIGATION_S) -> dict[str, Any]:
+async def navigate(
+    page: Any,
+    url: str,
+    timeout_s: float = NAVIGATION_S,
+    *,
+    before_input: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     """Navigates the tab (brought to the front first) and waits for `load`, at most timeout_s.
     Past it, or on a network error, the page is stopped and a failure result is returned."""
     from playwright.async_api import Error
     from playwright.async_api import TimeoutError as PlaywrightTimeout
 
+    if before_input is not None:
+        before_input()
     await front(page)
+    if before_input is not None:
+        before_input()
     try:
         response = await page.goto(url, wait_until="load", timeout=timeout_s * 1000)
     except PlaywrightTimeout:
