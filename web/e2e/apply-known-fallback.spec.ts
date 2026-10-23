@@ -93,7 +93,9 @@ let errors: string[];
 let serial = 0;
 
 async function latest(where: Page, job: string): Promise<App> {
-  const response = await where.request.get(`/api/postings/${job}/applications`);
+  const response = await where.request.get(
+    `/api/applications?posting_id=${job}&limit=1`,
+  );
   expect(response.status()).toBe(200);
   const { items } = (await response.json()) as { items: App[] };
   return (
