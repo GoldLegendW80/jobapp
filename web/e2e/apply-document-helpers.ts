@@ -2,10 +2,12 @@ import { expect, type APIRequestContext } from "@playwright/test";
 
 import type { DocumentOut } from "./documents-helpers";
 
-/** The finished CV and letter share the fixture's original 150 second render budget. */
+/** The finished CV and letter share the fixture's original 150 second render budget.
+ * A regeneration waits for both versions to advance beyond the previous ready pair. */
 export async function waitForPostingDocuments(
   request: APIRequestContext,
   posting: string,
+  previous: Partial<Record<DocumentOut["kind"], number>> = {},
 ): Promise<void> {
   let documents: DocumentOut[] = [];
   await expect
@@ -20,13 +22,16 @@ export async function waitForPostingDocuments(
           documents.some(
             (document) =>
               document.render.state === "idle" &&
-              document.render.error !== null,
+              document.render.error !== null &&
+              (previous[document.kind] === undefined ||
+                (document.latest?.number ?? 0) >
+                  (previous[document.kind] ?? 0)),
           ) ||
           (documents.length === 2 &&
             documents.every(
               (document) =>
                 document.latest !== null &&
-                document.latest.number >= 1 &&
+                document.latest.number > (previous[document.kind] ?? 0) &&
                 document.render.state === "idle" &&
                 document.render.error === null &&
                 document.latest.has_pdf,

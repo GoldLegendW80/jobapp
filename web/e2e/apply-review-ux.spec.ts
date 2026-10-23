@@ -17,6 +17,7 @@ import {
   invented,
   signUp,
   waitForRender,
+  type DocumentOut,
   type Person,
 } from "./documents-helpers";
 import {
@@ -40,6 +41,8 @@ let person: Person;
 let context: BrowserContext;
 let page: Page;
 let errors: string[];
+let canonicalPosting: string | undefined;
+const applications = new Set<string>();
 type Answer = {
   field_key: string;
   label: string;
@@ -77,6 +80,8 @@ try:
             doc = db.scalar(sa.select(Document).where(Document.user_id == user.id, Document.posting_id == posting, Document.kind == Kind.letter))
             version = db.scalar(sa.select(DocumentVersion).where(DocumentVersion.document_id == doc.id).order_by(DocumentVersion.number.desc()).limit(1))
             assert version.frozen_at is None
+            attempts = db.scalars(sa.select(Application).where(Application.user_id == user.id, Application.posting_id == posting))
+            assert not any(record.get("version_id") == str(version.id) for app in attempts for record in (app.document_versions or {}).values())
             text = "L" * 10001 if variant == "long" else "Original letter\\twith a tab"
             version.content = {**version.content, "paragraphs": [text]}
             raw = json.dumps(version.content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
@@ -120,20 +125,34 @@ async function approval(id: string): Promise<Approval> {
 }
 
 async function posting(variant = "normal"): Promise<string> {
-  const job = await addPosting(page.request, {
-    ...person,
-    posting: { ...person.posting, title: `${person.posting.title} ${variant}` },
-  });
-  const read = await page.request.get(`/api/jobs/${job}`);
-  const { updated_at } = (await read.json()) as { updated_at: string };
-  expect(
-    (
-      await page.request.patch(`/api/jobs/${job}`, {
-        headers: CSRF,
-        data: { url: LEVER, fit: 90, updated_at },
-      })
-    ).status(),
-  ).toBe(200);
+  // The fake ATS serves one canonical posting. Reuse it after each terminal attempt.
+  if (!canonicalPosting) {
+    const job = await addPosting(page.request, {
+      ...person,
+      posting: {
+        ...person.posting,
+        title: `${person.posting.title} ${variant}`,
+      },
+    });
+    const read = await page.request.get(`/api/jobs/${job}`);
+    const { updated_at } = (await read.json()) as { updated_at: string };
+    expect(
+      (
+        await page.request.patch(`/api/jobs/${job}`, {
+          headers: CSRF,
+          data: { url: LEVER, fit: 90, updated_at },
+        })
+      ).status(),
+    ).toBe(200);
+    canonicalPosting = job;
+  }
+  const job = canonicalPosting;
+  const read = await page.request.get(`/api/jobs/${job}/documents`);
+  expect(read.status()).toBe(200);
+  const { documents } = (await read.json()) as { documents: DocumentOut[] };
+  const previous = Object.fromEntries(
+    documents.map((document) => [document.kind, document.latest?.number ?? 0]),
+  );
   expect(
     (
       await page.request.post(`/api/jobs/${job}/documents/write`, {
@@ -142,7 +161,7 @@ async function posting(variant = "normal"): Promise<string> {
       })
     ).status(),
   ).toBe(202);
-  await waitForPostingDocuments(page.request, job);
+  await waitForPostingDocuments(page.request, job, previous);
   return job;
 }
 
@@ -159,6 +178,8 @@ async function fill(job: string): Promise<string> {
     `/api/applications?posting_id=${job}&limit=1`,
   );
   const { items } = (await response.json()) as { items: { id: string }[] };
+  expect(applications.has(items[0]!.id)).toBe(false);
+  applications.add(items[0]!.id);
   return items[0]!.id;
 }
 
