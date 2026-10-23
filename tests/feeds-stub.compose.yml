@@ -1,0 +1,39 @@
+# Scratch stacks of the opportunities module only: the fake feeds server, so no test and no
+# journey ever reads Remote OK, We Work Remotely or Hacker News (tasks/opportunities/todo.md, O7).
+#   docker compose -p jobapp-o7 -f compose.yml -f tests/ats-stub.compose.yml \
+#     -f tests/ats-forms-stub.compose.yml -f tests/feeds-stub.compose.yml up -d --build --wait
+# - feedsstub (tests/feeds_stub.py, the same code pytest runs in process): recorded shapes of the
+#   three sources with invented companies, and their failure variants. The worker's sweeps read
+#   every feed from it (FEEDS_STUB_BASE_URL, refused in production by the api); its `ok` variant
+#   is the one a journey sweeps. Nothing publishes it: only the worker reads it, on the stack's
+#   default network.
+# - It starts with APP_ENV unset: the server refuses to run under APP_ENV=production.
+services:
+  feedsstub:
+    # Standard library only: the same pinned base image as the other stubs.
+    image: python:3.12.15-slim-trixie
+    command: ["python", "-I", "/fake/feeds_stub.py", "--port", "8098", "--slow", "30"]
+    volumes:
+      # Relative to the project directory, the folder of compose.yml.
+      - ./tests/feeds_stub.py:/fake/feeds_stub.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8098/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+    mem_limit: 128m
+    expose:
+      - "8098"
+
+  worker:
+    environment:
+      FEEDS_STUB_BASE_URL: http://feedsstub:8098/ok
+    depends_on:
+      feedsstub:
+        condition: service_healthy

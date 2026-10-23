@@ -14,6 +14,7 @@ import {
   COMPANY_TYPES,
   CONTRACT_TYPES,
   CURRENCIES,
+  FEED_KINDS,
   INDUSTRIES_MAX,
   PAY_MAX,
   REMOTE_STANCES,
@@ -419,6 +420,15 @@ export const searchSchema = z
       salary: payFormSchema,
       daily_rate: payFormSchema,
     }),
+    // O7: not edited here yet (O8 adds the card): carried through unchanged so a save never
+    // resets the person's freelance feeds.
+    feeds: z.array(
+      z.object({
+        kind: z.enum(FEED_KINDS),
+        terms: z.object(termListShape),
+        enabled: z.boolean(),
+      }),
+    ),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -474,6 +484,10 @@ export const toSearchForm = (search: Search): SearchForm => ({
     salary: toPayForm(search.compensation.salary),
     daily_rate: toPayForm(search.compensation.daily_rate),
   },
+  feeds: (search.feeds ?? []).map((f) => ({
+    ...f,
+    terms: { ...f.terms, terms: [...f.terms.terms] },
+  })),
 });
 
 export const fromSearchForm = (values: SearchForm): Search => ({
@@ -521,4 +535,6 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     salary: fromPayForm(values.compensation.salary),
     daily_rate: fromPayForm(values.compensation.daily_rate),
   },
+  // Left out when empty: the api's default, so a section saved before O7 round trips as it was.
+  ...(values.feeds.length > 0 ? { feeds: values.feeds } : {}),
 });

@@ -296,7 +296,7 @@ jobs:
           # anything restarts; ops/migrate.sh says why, and never downgrades.
           echo "::group::migrations (one off container of the new api image, before the new code starts)"
           if ! MIGRATE_LOG_DIR="$logdir" bash ops/migrate.sh; then
-            echo "::error::the migrations did not apply: the deploy stopped before starting the new code, the running stack was not touched and still runs the previous release. Fix the migration and deploy again"
+            echo "::error::the migrations did not apply: the deploy stopped before starting the new code, the running stack was not touched and still runs the previous release. The reason is above: after a lock timeout run the deploy again, otherwise fix the migration and deploy again"
             restore_previous
             exit 1
           fi

@@ -248,6 +248,22 @@ test("a zip bomb says why it was not read", async () => {
   });
 });
 
+test("with documents, the page opens on them and the prompt stays one click away", async () => {
+  // Issue #114 (owner, 2026-10-21): a user who has documents lands on Documents.
+  await page.goto("/profile/fill");
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Step 2: Add your documents" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/profile\/fill\?step=documents$/);
+  const steps = page.getByRole("navigation", { name: "Steps" });
+  await steps.getByRole("button", { name: /Step 1: Prepare/ }).click();
+  await expect(
+    page.getByRole("heading", { level: 2, name: /^Step 1: Prepare/ }),
+  ).toBeVisible();
+  await steps.getByRole("button", { name: /Step 2: Documents/ }).click();
+  await expect(documents(page).getByRole("listitem")).toHaveCount(6);
+});
+
 test("no log holds a word of a document or the name of a file, and the page raised no error", async () => {
   // The four documents, the bomb and the file read after it.
   await expect(documents(page).getByRole("listitem")).toHaveCount(6);

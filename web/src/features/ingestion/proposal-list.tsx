@@ -5,9 +5,10 @@ import {
   LoaderCircle,
   Pencil,
   RotateCw,
+  Undo2,
   X,
 } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,8 @@ import {
   proposalsKey,
   rejectProposal,
   type Review,
+  type SectionDecided,
+  undoProposal,
 } from "./proposals-api";
 
 /**
@@ -48,8 +51,10 @@ import {
  * section". Nothing reaches the profile before a decision, and every decision is the server's:
  * the list is read again after each one, so what it shows is what was kept.
  *
- * What "accept all" leaves out (a locked fact, a flagged item, a removal, an item to check
- * again) keeps its badge and its own Accept button, and the section says how many were left.
+ * What "accept all" leaves out (a locked fact, a flagged item, a removal, a replace, an item to
+ * check again, one that would change a value the profile holds) keeps its badge or its line and
+ * its own Accept button, and the section says how many were left, from the server's answer. An
+ * accepted proposal can be taken back here ("Take back"), as from the History drawer.
  *
  * `runId` is the run to show. Without it the list finds the user's latest finished run by
  * itself, and renders nothing while no run has finished.
@@ -91,6 +96,24 @@ export const FREE_TEXT_NOTE =
   "The quote shows where this comes from. The wording is the agent's own, so read it before you accept.";
 export const EMPTY_NOTE =
   "Nothing new to propose. What these documents say is already in your profile.";
+export const NEWER_RUN_NOTE =
+  "A new run is in progress. When it ends, what you have not decided here is replaced by what it proposes.";
+export const TYPED_NOTE =
+  "Your profile already holds your own value here, typed by you or kept from an earlier decision. Accept all leaves it for you: accept this one on its own if the document is right.";
+export const REPLACE_NOTE =
+  "This replaces the whole entry: what it leaves empty is cleared. Accept all leaves it for you to accept on its own.";
+export const TWO_ENTRIES_NOTE =
+  " These may be two entries: two positions, or two degrees, that started the same year at one place show here together. Keep one here and add the other in your profile.";
+
+/** Why "accept all" left a proposal for the user to accept on its own (the server's reasons). */
+const ONE_BY_ONE = new Set([
+  "locked",
+  "flagged",
+  "removal",
+  "replace",
+  "stale",
+  "typed_by_you",
+]);
 
 function plural(count: number, one: string, many: string): string {
   return `${String(count)} ${count === 1 ? one : many}`;
@@ -222,14 +245,47 @@ function refusal(error: unknown): string {
   return describeError(error);
 }
 
-/** Read the list and the profile again: after a decision both may have moved. */
+/**
+ * Read the list and the profile again: after a decision both may have moved. The promise ends
+ * once both are read, so a mutation that returns it stays pending, and its buttons disabled,
+ * until the list shows what was kept.
+ */
 function useRefresh(runId: string) {
   const client = useQueryClient();
-  return () => {
-    void client.invalidateQueries({ queryKey: proposalsKey(runId) });
-    // The profile, its completeness and the revisions of the History drawer.
-    void client.invalidateQueries({ queryKey: ["profile"] });
-  };
+  return () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: proposalsKey(runId) }),
+      // The profile, its completeness and the revisions of the History drawer.
+      client.invalidateQueries({ queryKey: ["profile"] }),
+    ]);
+}
+
+/** The proposal a refused bulk accept names (`proposal_id` of its 409), if any. */
+function stoppedBy(error: unknown): string | undefined {
+  if (!isApiError(error) || error.status !== 409 || !isRecord(error.body))
+    return undefined;
+  const id = error.body.proposal_id;
+  return typeof id === "string" ? id : undefined;
+}
+
+/** What a bulk decision did, from the server's answer: what it decided and what it left. */
+function outcomeOf(done: SectionDecided, what: "accept" | "reject"): string {
+  const count = done.decided.length;
+  const oneByOne = done.skipped.filter((one) =>
+    ONE_BY_ONE.has(one.reason),
+  ).length;
+  const gone = done.skipped.length - oneByOne;
+  return [
+    `${what === "reject" ? "Rejected" : "Accepted"} ${String(count)}.`,
+    oneByOne > 0
+      ? `${String(oneByOne)} left for you to accept one by one.`
+      : "",
+    gone > 0
+      ? `${plural(gone, "was", "were")} decided elsewhere meanwhile or no longer here.`
+      : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
 }
 
 interface Context {
@@ -239,10 +295,14 @@ interface Context {
   onOpen: (citation: Citation) => void;
   /** Said to a screen reader once a decision is kept. */
   onSaid: (sentence: string) => void;
+  /** A bulk decision of this section is in flight: the single buttons wait for it. */
+  sectionBusy: boolean;
+  /** The proposal that stopped the last bulk accept of this section, with the server's words. */
+  stopped?: { id: string; message: string };
 }
 
 function Item({ item, context }: { item: ProposalItem; context: Context }) {
-  const { runId, revision, onOpen, onSaid } = context;
+  const { runId, revision, onOpen, onSaid, sectionBusy, stopped } = context;
   const title = itemTitle(item);
   const decided = STATUS_LABELS[item.status];
   const pending = item.status === "pending";
@@ -257,12 +317,17 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
   const [problem, setProblem] = useState<string>();
   const [refused, setRefused] = useState<string>();
   const refresh = useRefresh(runId);
+  const stoppedHere = stopped?.id === item.id ? stopped.message : undefined;
+  // A bulk accept this proposal stopped: the focus goes to it, where the alert says why.
+  useEffect(() => {
+    if (stoppedHere) heading.current?.focus();
+  }, [stoppedHere]);
   const kept = (sentence: string) => {
     setEditing(false);
     onSaid(sentence);
-    refresh();
     // The buttons go with the decision: the focus stays on the proposal.
     heading.current?.focus();
+    return refresh();
   };
   const failed = (error: unknown) => {
     const detail = errorDetail(error);
@@ -271,7 +336,8 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
     else setProblem(refusal(error));
     // Decided elsewhere, or the profile moved: show what is true now.
     if (isApiError(error) && (error.status === 409 || error.status === 404))
-      refresh();
+      return refresh();
+    return undefined;
   };
   const accept = useMutation({
     mutationFn: (edited?: { value: unknown }) =>
@@ -283,9 +349,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
       setProblem(undefined);
       setRefused(undefined);
     },
-    onSuccess: () => {
-      kept(`Accepted: ${title}.`);
-    },
+    onSuccess: () => kept(`Accepted: ${title}.`),
     onError: failed,
   });
   const reject = useMutation({
@@ -293,12 +357,19 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
     onMutate: () => {
       setProblem(undefined);
     },
-    onSuccess: () => {
-      kept(`Rejected: ${title}.`);
-    },
+    onSuccess: () => kept(`Rejected: ${title}.`),
     onError: failed,
   });
-  const busy = accept.isPending || reject.isPending;
+  const takeBack = useMutation({
+    mutationFn: () => undoProposal(item.id),
+    onMutate: () => {
+      setProblem(undefined);
+    },
+    onSuccess: () => kept(`Taken back: ${title}.`),
+    onError: failed,
+  });
+  const busy =
+    accept.isPending || reject.isPending || takeBack.isPending || sectionBusy;
   const invalid = item.status === "invalid" || item.bulk === "invalid";
   // The profile cannot take it as it is: an edit may fit, the value as proposed cannot.
   const blocked = invalid || item.bulk === "profile_conflict";
@@ -326,6 +397,9 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
         {item.locked ? (
           <Badge variant="outline">Accepted one by one</Badge>
         ) : null}
+        {pending && item.bulk === "typed_by_you" ? (
+          <Badge variant="outline">Your own value</Badge>
+        ) : null}
         {item.flags.map((flag) => (
           <Badge key={flag} variant="outline">
             {FLAG_LABELS[flag] ?? words(flag)}
@@ -338,9 +412,11 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
             {pending
               ? "Your documents give different values. Pick the one to keep."
               : "Your documents gave different values."}
-            {pending && isRecord(item.value)
-              ? " If these are two different entries, keep one here and add the other in your profile."
-              : ""}
+            {pending && item.section === "experience"
+              ? TWO_ENTRIES_NOTE
+              : pending && isRecord(item.value)
+                ? " If these are two different entries, keep one here and add the other in your profile."
+                : ""}
           </p>
           <div
             role="radiogroup"
@@ -413,6 +489,12 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
             ? "This was calculated from a proposal you have since rejected or changed. Check it again."
             : "Your profile changed here since this was proposed. Check it again."}
         </p>
+      ) : null}
+      {pending && item.bulk === "typed_by_you" ? (
+        <p className="text-sm text-muted-foreground">{TYPED_NOTE}</p>
+      ) : null}
+      {pending && item.bulk === "replace" ? (
+        <p className="text-sm text-muted-foreground">{REPLACE_NOTE}</p>
       ) : null}
       {item.free_text ? (
         <p className="text-xs text-muted-foreground">{FREE_TEXT_NOTE}</p>
@@ -488,6 +570,26 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
           </Button>
         </div>
       ) : null}
+      {item.status === "accepted" ? (
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={`Take back: ${title}`}
+            disabled={busy}
+            onClick={() => {
+              takeBack.mutate();
+            }}
+          >
+            {takeBack.isPending ? (
+              <LoaderCircle aria-hidden="true" className="animate-spin" />
+            ) : (
+              <Undo2 aria-hidden="true" />
+            )}
+            Take back
+          </Button>
+        </div>
+      ) : null}
       {pending && choices.length > 0 && picked === undefined && !editing ? (
         <p className="text-xs text-muted-foreground">
           Pick a value to accept it.
@@ -496,6 +598,11 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
       {problem ? (
         <p role="alert" className="text-sm text-destructive">
           {problem}
+        </p>
+      ) : null}
+      {stoppedHere && !problem ? (
+        <p role="alert" className="text-sm text-destructive">
+          {stoppedHere}
         </p>
       ) : null}
     </li>
@@ -514,6 +621,8 @@ function Section({
   const [shown, setShown] = useState(PAGE);
   const [outcome, setOutcome] = useState<string>();
   const [problem, setProblem] = useState<string>();
+  const [stopped, setStopped] = useState<{ id: string; message: string }>();
+  const heading = useRef<HTMLHeadingElement>(null);
   const refresh = useRefresh(context.runId);
   // The two bulk decisions are about what is on the screen, never about a proposal the user
   // has not been shown yet.
@@ -549,36 +658,39 @@ function Section({
     onMutate: () => {
       setOutcome(undefined);
       setProblem(undefined);
+      setStopped(undefined);
     },
-    onSuccess: (done, what) => {
-      const count = done.decided.length;
-      const left = pending.length - count;
+    onSuccess: async (done, what) => {
       setOutcome(
-        `${
-          what === "reject"
-            ? `Rejected ${String(count)}.`
-            : `Accepted ${String(count)}.${
-                left > 0
-                  ? ` ${String(left)} left for you to accept one by one.`
-                  : ""
-              }`
-        }${
+        `${outcomeOf(done, what)}${
           behind > 0
             ? ` ${String(behind)} more in this section are not shown yet and still undecided. Show more brings them.`
             : ""
         }`,
       );
-      refresh();
+      await refresh();
+      // The buttons may be gone with what they decided: the focus goes to the section.
+      heading.current?.focus();
     },
-    onError: (error) => {
-      setProblem(refusal(error));
-      refresh();
+    onError: async (error) => {
+      const id = stoppedBy(error);
+      // The proposal that stopped it carries the alert, and takes the focus.
+      if (id && pending.some((item) => item.id === id))
+        setStopped({ id, message: refusal(error) });
+      else setProblem(refusal(error));
+      await refresh();
     },
   });
+  const inner: Context = { ...context, sectionBusy: decide.isPending, stopped };
   return (
     <section aria-labelledby={id} className="flex flex-col gap-2">
       <div className="flex flex-wrap items-baseline gap-2">
-        <h4 id={id} className="font-medium">
+        <h4
+          id={id}
+          ref={heading}
+          tabIndex={-1}
+          className="font-medium outline-none focus-visible:underline"
+        >
           {name}
         </h4>
         <p className="text-sm text-muted-foreground tabular-nums">
@@ -633,7 +745,7 @@ function Section({
       ) : null}
       <ul className="flex flex-col gap-2">
         {listed.map((item) => (
-          <Item key={item.id} item={item} context={context} />
+          <Item key={item.id} item={item} context={inner} />
         ))}
       </ul>
       {section.items.length > shown ? (
@@ -775,6 +887,7 @@ function Loaded({ review }: { review: Review }) {
     revision: review.profile_revision,
     onOpen: setOpened,
     onSaid: setSaid,
+    sectionBusy: false,
   };
   return (
     <div className="flex flex-col gap-4">
@@ -795,6 +908,11 @@ function Loaded({ review }: { review: Review }) {
             {review.counts.pending === 0
               ? "Every proposal is decided."
               : `${String(review.counts.pending)} left to review, ${String(review.counts.accepted)} accepted, ${String(review.counts.rejected)} rejected.`}
+          </p>
+        ) : null}
+        {review.newer_run ? (
+          <p className="text-sm text-muted-foreground" data-testid="newer-run">
+            {NEWER_RUN_NOTE}
           </p>
         ) : null}
         {review.partial ? (

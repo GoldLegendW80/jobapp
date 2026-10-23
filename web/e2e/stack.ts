@@ -193,6 +193,8 @@ export type Shots = (
   page: Page,
   name: string,
   fullPage?: boolean,
+  /** run before each screenshot, after the resize (a viewport shot scrolls its subject in) */
+  prepare?: () => Promise<void>,
 ) => Promise<void>;
 
 async function screenshotReady(page: Page): Promise<void> {
@@ -241,7 +243,7 @@ export function makeShots(defaultEvidence: string, spec = ""): Shots {
     process.env.E2E_EVIDENCE ?? defaultEvidence,
   );
   const prefix = (process.env.E2E_SHOT_PREFIX ?? "").replace("{spec}", spec);
-  return async (page, name, fullPage = true) => {
+  return async (page, name, fullPage = true, prepare) => {
     fs.mkdirSync(evidence, { recursive: true });
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({
@@ -257,6 +259,7 @@ export function makeShots(defaultEvidence: string, spec = ""): Shots {
             document.documentElement.clientWidth,
         );
         expect(overflow, `${name} ${viewport.name} ${scheme}`).toBe(0);
+        await prepare?.();
         await page.screenshot({
           path: path.join(
             evidence,

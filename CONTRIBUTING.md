@@ -259,7 +259,9 @@ release runs on the new schema**. A migration must leave it able to.
 - A migration is one transaction and must be quick: a statement waits at most `LOCK_TIMEOUT`
   (5 seconds, `api/alembic/env.py`) for a lock the running release holds. Past that the migration
   fails, is rolled back whole and stops the deploy before the new code starts (`ops/migrate.sh`):
-  run the deploy again. Nothing retries it by itself. The whole migration is stopped after
+  run the deploy again. `ops/migrate.sh` runs it again by itself on such a lock timeout
+  (SQLSTATE 55P03), three attempts in all, then says "lock timeout: run the deploy again"; any
+  other failure is never retried. The whole migration is stopped after
   `MIGRATE_TIMEOUT_S` (300 seconds), rolled back.
 - `downgrade()` is still written and tested, for a human who decides to go back; no deploy runs it.
 

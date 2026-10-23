@@ -207,7 +207,9 @@ def _list(
         search = sweep.user_search(db, user_id)
         plan = sweep.schedule_of(search)
         active = plan.enabled and bool(
-            sweep.enabled_boards(search) or sweep.enabled_sources(search)
+            sweep.enabled_boards(search)
+            or sweep.enabled_sources(search)
+            or sweep.enabled_feeds(search)
         )
         return SweepList(
             items=[sweep_out(row) for row in rows],

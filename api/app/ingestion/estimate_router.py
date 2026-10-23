@@ -78,6 +78,16 @@ CONSENT_TEXTS: dict[int, str] = {
         "Deleting a document here removes it from this app. It does not delete what Anthropic "
         "has already received."
     ),
+    # #115, owner 2026-10-21: version 1 and one sentence on what the app keeps. Every user who
+    # accepted version 1 is asked once again.
+    2: (
+        "When you start a run, the app sends the text and the page images of the documents you "
+        "selected, and the current sections of your profile without your contact details, to "
+        "Anthropic. They are sent through your own Claude subscription or Anthropic API key. "
+        "The proposals it writes are stored in your account until you accept or reject them. "
+        "Deleting a document here removes it from this app. It does not delete what Anthropic "
+        "has already received."
+    ),
 }
 CONSENT_VERSION = max(CONSENT_TEXTS)
 CONSENT_TEXT = CONSENT_TEXTS[CONSENT_VERSION]
