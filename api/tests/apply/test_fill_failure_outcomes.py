@@ -86,6 +86,17 @@ def test_http_refusal_has_the_correct_person_or_retry_outcome(
 ):
     form = run_ashby()
     with_status(form, status)
+    if status == 403:
+
+        async def still_forbidden():
+            return {
+                "ok": True,
+                "url": form.url,
+                "snapshot": '- heading "Access denied" [ref=e1]',
+                "cut": False,
+            }
+
+        form._person_snapshot = still_forbidden
     app_id = started(db, person_a)
     leases = FakeLeases()
     env = services(

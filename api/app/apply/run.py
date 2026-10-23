@@ -1499,11 +1499,13 @@ async def _wait_for_person(
         if reason == "forbidden":
 
             class Passive:
-                async def snapshot(self):
-                    return await tools._person_snapshot()
+                async def snapshot(self, current=shot):
+                    return current
 
-            found, code = await adapter.discover(Passive())
-            if found is None or code:
+            # Discovery opens empty comboboxes. Inspect only this passive snapshot until
+            # the browser wait and the database transition have both resumed the run.
+            found, code = await adapter.read(Passive())
+            if found is None or code or found.pending or found.cut or adapter.anchor_problem(found):
                 continue
         try:
             await tools._apply_wait("resume")
