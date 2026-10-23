@@ -61,7 +61,9 @@ RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbi
 # RemoteDebuggingAllowed and DeveloperToolsAvailability would also take CDP from the agents'
 # leases. No extension may be installed (Debian's wrapper adds --enable-remote-extensions, and
 # chrome://extensions is blocked). Chromium never offers to save a password
-# (PasswordManagerEnabled): the app stores none.
+# (PasswordManagerEnabled): the app stores none. No Labs button (BrowserLabsEnabled). No file
+# dialog (AllowFileSelectionDialogs): "Save page as" saves into the lease's download folder,
+# never into the profile, and no dialog browses the container's files.
 COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json
 
 COPY browserd /opt/browserd/browserd

@@ -291,6 +291,39 @@ describe("your browser card", () => {
     expect(calls.givebacks).toEqual([]);
   });
 
+  it("a view that opens after the page is gone is closed once, or not at all when it closed itself", async () => {
+    fakeServer({ browser: MINE });
+    for (const closedItself of [false, true]) {
+      let resolve: (screen: Screen) => void = () => undefined;
+      const pending: Array<{
+        screen: FakeScreen;
+        events: { disconnect(): void };
+      }> = [];
+      vi.spyOn(screenFactory, "open").mockImplementation(
+        (_target, _url, events) => {
+          pending.push({ screen: new FakeScreen(), events });
+          return new Promise<Screen>((done) => {
+            resolve = done;
+          });
+        },
+      );
+      const disconnect = vi.spyOn(FakeScreen.prototype, "disconnect");
+      const { unmount } = renderWithQuery(<BrowserCard />);
+      await waitFor(() => {
+        expect(pending).toHaveLength(1);
+      });
+      const view = only(pending);
+      unmount();
+      if (closedItself) view.events.disconnect();
+      await act(async () => {
+        resolve(view.screen);
+        await Promise.resolve();
+      });
+      expect(disconnect).toHaveBeenCalledTimes(closedItself ? 0 : 1);
+      vi.restoreAllMocks();
+    }
+  });
+
   it("says why when the ticket is refused", async () => {
     fakeServer({ browser: MINE });
     server.use(
