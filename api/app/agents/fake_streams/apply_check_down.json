@@ -1,0 +1,8 @@
+{
+ "description": "The check by model (apply A13c): the model backend cannot be reached; Claude Code fails to start.",
+ "steps": [
+  {
+   "raise": "connection"
+  }
+ ]
+}

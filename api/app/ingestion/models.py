@@ -13,7 +13,8 @@ How a document's content is kept:
 - `text` holds the pages of a PDF in order, joined by a form feed (U+000C); a page waiting for
   its transcription is the empty string between two form feeds.
 - `ingestion_images.position` is the zero based page index of a PDF page, 0 for an uploaded image.
-- `transcribed_pages` lists the page indexes whose text a model wrote from an image. The images
+- `transcribed_pages` lists the pages whose text a model wrote from an image, as 0 based indexes
+  of the parts of `text` split at form feeds (the merge reads them so). The images
   are deleted once transcribed, so this is what still says, afterwards, which pages of a
   mixed PDF to show as "transcribed, check it".
 - `pending_since` is when the document last started to wait for its reader: the upload, a

@@ -6,11 +6,13 @@
     An empty section is not printed. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{% import "_base/layout.html.j2" as layout with context %}
 {% block body %}
 <header class="head">
 <div class="headtext">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+{{ layout.contact_across() }}
 </div>
 {{ base.portrait() }}
 </header>
@@ -38,12 +40,7 @@
 {% endif %}
 </main>
 <aside class="side">
-{% if contact %}
-<section class="block">
-<h2 class="side-label">{{ base.label("contact") }}</h2>
-{{ base.contact_lines() }}
-</section>
-{% endif %}
+{{ layout.contact_column("side-label") }}
 {% if content.competencies %}
 <section class="block">
 <h2 class="side-label">{{ base.label("competencies") }}</h2>

@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.orm import Session
 
 from app import queue as queues
-from app.apply import admin, gate, service, shots
+from app.apply import admin, gate, model_check, service, shots
 from app.apply.models import AnswerSource, Application
 from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
 from app.db import get_session
@@ -94,6 +94,21 @@ class ShotOut(BaseModel):
     created_at: datetime
 
 
+class ClaimOut(BaseModel):
+    field: str | None  # the answer's field_key; None for an answer the checker was not given
+    code: str
+    start: int | None  # where the flagged words stand in the answer's value, when found
+    end: int | None
+
+
+class CheckOut(BaseModel):
+    """The last check by model of this item's free text (A13c, `model_check.view`)."""
+
+    verdict: str
+    current: bool  # it covers the answers shown now
+    claims: list[ClaimOut]
+
+
 class ApprovalView(BaseModel):
     state: str
     dry_run: bool
@@ -101,6 +116,7 @@ class ApprovalView(BaseModel):
     answers: list[AnswerOut]
     documents: dict[str, dict[str, Any]]
     screenshots: list[ShotOut]
+    check: CheckOut | None = None
 
 
 class GateRefusalOut(BaseModel):
@@ -207,6 +223,7 @@ def read_approval(application_id: str, user: CurrentUser, db: Db) -> ApprovalVie
             ShotOut(id=s.id, kind=s.kind.value, created_at=s.created_at)
             for s in shots.of_application(db, user.id, application.id)
         ],
+        check=model_check.view(db, application),
     )
 
 

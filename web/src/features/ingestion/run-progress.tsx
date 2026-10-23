@@ -483,6 +483,8 @@ function whyUnread(run: Run, documentId: string): string {
   const steps = run.steps.filter((step) => step.document_id === documentId);
   if (steps.some((step) => step.document_name === null))
     return "it was deleted before it was read.";
+  if (run.secret_document_ids.includes(documentId))
+    return "its text may hold a secret, such as a password or a key, so it was not read. Check it under Documents, confirm it, then start a new run.";
   const failed = steps.find((step) => step.error);
   if (failed?.error) return failed.error;
   if (run.status === "cancelled") return "the run was cancelled before it.";

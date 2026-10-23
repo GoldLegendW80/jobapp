@@ -8,7 +8,8 @@ that) are rehearsals (`dry_run`).
 
 The order, after the documents and the fill (A5), every step through the gate:
 
-1. `decide`, which the submit job runs for a `ready` Full auto item (`submit.due` lists them):
+1. `decide`, which the decision job (`submit.decision`, on the agents queue) runs for a `ready`
+   Full auto item (`submit.due` lists them):
    under the gate's locks, the Like never decided before (a `full_auto_like` row of this
    application already written sends it to the review queue with `authorisation_used`: one Like
    gives at most one click), still valid (`LIKE_VALID` after it, and Full auto on since
@@ -38,10 +39,13 @@ Rehearsals: the Yes (`confirm_rehearsal`) is the one way out of `rehearsed`, to 
 took the posting or the form address since; it counts one rehearsal done. The No records itself
 and changes nothing: Full auto stays in rehearsal.
 
+Any free text the agent wrote (an answer of source `agent` and kind text or textarea) is judged
+by the check by model (A13c, `model_check`) before the decision, beside the answer agent's own
+fact check (`agent.judge` keeps only what passes it): `checks` lets it go on only on a stored
+`passed` for the current answers hash, so submit services without a checker still send it to
+the queue (`model_check_not_run`).
+
 Declared open points (each toward the review queue):
-- until the check by model (A13c) lands, any free text the agent wrote (an answer of source
-  `agent` and kind text or textarea) goes to the queue; the fact check of that text is the
-  answer agent's own (`agent.judge` keeps only what passes it), so this rule covers it;
 - a submit element the generic form agent designated (#343's hand over on `form_changed`) goes to
   the queue as well (`agent_designated`): no person saw the highlighted screenshot;
 - any field left, optional ones and widgets the app cannot fill included, goes to the queue.
@@ -56,7 +60,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.apply import caps, guardrails, service, states
+from app.apply import caps, guardrails, model_check, service, states
 from app.apply.caps_models import ApplySettings, LikeMode
 from app.apply.models import (
     AnswerSource,
@@ -72,7 +76,6 @@ from app.jobs.models import Job
 
 FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever"})
 LIKE_VALID = timedelta(days=7)
-FREE_TEXT = frozenset({"text", "textarea"})
 DESIGNATED = "designated"
 
 SENTENCES = {
@@ -95,6 +98,7 @@ SENTENCES = {
         "Another application to this posting or this form started since the rehearsal."
     ),
     "hold_too_short": "The hold cannot be shorter than the server's minimum.",
+    **model_check.SENTENCES,
 }
 
 
@@ -152,7 +156,7 @@ def blocking_mode(mode: Mode) -> Mode:
 
 
 def hold_s(values: caps.Values) -> int:
-    return max(values.hold_s, int(_setting("apply_hold_s")))
+    return max(values.hold_s, caps.hold_floor_s())
 
 
 # --- the review queue ----------------------------------------------------------------------------
@@ -208,8 +212,6 @@ def checks(db: Session, application: Application, posting: Job) -> str | None:
     ).all()
     if any(source is AnswerSource.left for _, source in rows):
         return "fields_left"
-    if any(source is AnswerSource.agent and kind in FREE_TEXT for kind, source in rows):
-        return "agent_text"
     if any(source is AnswerSource.agent and kind == DESIGNATED for kind, source in rows):
         return "agent_designated"
     if _captcha_seen(db, application):
@@ -217,7 +219,7 @@ def checks(db: Session, application: Application, posting: Job) -> str | None:
     rules = service._rules(db, application.user_id)
     if guardrails.never_apply(posting, rules, swept=False, mode=Mode.full_auto) is not None:
         return "never_apply_text"
-    return None
+    return model_check.code(db, application, list(rows))
 
 
 def recheck(db: Session, application: Application, posting: Job, now: datetime) -> str | None:
@@ -254,7 +256,8 @@ def gate_kind(mode: Mode) -> AuthorisationKind | None:
 
 
 def undecided(db: Session, application_id: uuid.UUID) -> bool:
-    """A `ready` Full auto item: the submit job runs its decision first."""
+    """A `ready` Full auto item: its decision job (`submit.decision`) decides it, the submit job
+    leaves it."""
     found = db.execute(
         sa.select(Application.state, Application.mode).where(Application.id == application_id)
     ).one_or_none()
@@ -279,6 +282,18 @@ def _decided(db: Session, application: Application) -> bool:
     return found is not None
 
 
+def before_gate(db: Session, application: Application, now: datetime) -> str | None:
+    """The refusals `decide` makes before the gate's own: the Like decided once already, too old,
+    or Full auto off since before it. The check by model reads them too, to spare its call."""
+    if _decided(db, application):
+        return "authorisation_used"
+    if now >= application.created_at + LIKE_VALID:
+        return "authorisation_expired"
+    if not is_on(caps.settings_of(db, application.user_id), application.created_at):
+        return "full_auto_off"
+    return None
+
+
 def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any) -> str:
     """Step 1 of the module docstring. Returns what was written (a code, no value); the caller
     commits."""
@@ -295,14 +310,7 @@ def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any)
         return "superseded"
     liked_at = application.created_at
     expires = liked_at + LIKE_VALID
-    code = None
-    if _decided(db, application):
-        code = "authorisation_used"
-    elif now >= expires:
-        code = "authorisation_expired"
-    elif not is_on(caps.settings_of(db, user_id), liked_at):
-        code = "full_auto_off"
-    if code is not None:
+    if (code := before_gate(db, application, now)) is not None:
         to_review(db, application, code, now)
         gate._event(db, application, "decision", now, outcome="refused", code=code)
         return code

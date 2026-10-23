@@ -1,10 +1,12 @@
+import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { useCallback, type ComponentType } from "react";
+import { useCallback, useEffect, type ComponentType } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { useTitle } from "@/lib/use-title";
 import { cn } from "@/lib/utils";
 
+import { documentsKey, listDocuments } from "./documents-api";
 import { StepDocuments } from "./step-documents";
 import { PROMPT_READY, StepPrompt } from "./step-prompt";
 import { REVIEW_READY, StepReview } from "./step-review";
@@ -54,15 +56,22 @@ const STEPS: readonly Step[] = [
   },
 ];
 
-/** The step the page opens on without `?step=`: the first one that is ready. */
-function defaultStep(): Step {
-  return STEPS.find((step) => step.ready) ?? (STEPS[1] as Step);
+const DOCUMENTS = STEPS[1] as Step;
+
+/**
+ * The step the page opens on without `?step=`: Documents for a user who already has a document
+ * (issue #114, owner 2026-10-21: the optional prompt stays one click away in the list of
+ * steps), else the first one that is ready.
+ */
+function defaultStep(hasDocuments: boolean): Step {
+  if (hasDocuments) return DOCUMENTS;
+  return STEPS.find((step) => step.ready) ?? DOCUMENTS;
 }
 
 /**
  * /profile/fill, "Fill my profile with an agent": three steps, one open at a time, the open one
  * in `?step=`. An address that names a step that does not exist, or is not ready, opens the
- * default one. The profile itself is never changed from this page without the user's decision.
+ * default one (`defaultStep`), once the list of documents says which. The profile itself is never changed from this page without the user's decision.
  */
 export function FillPage() {
   useTitle("Fill my profile");
@@ -71,7 +80,15 @@ export function FillPage() {
   const wanted = isStepId(requested)
     ? STEPS.find((step) => step.id === requested && step.ready)
     : undefined;
-  const current = wanted ?? defaultStep();
+  // Asked only to choose the landing step; the Documents step shares this query.
+  const listed = useQuery({
+    queryKey: documentsKey,
+    queryFn: ({ signal }) => listDocuments(signal),
+    enabled: wanted === undefined,
+  });
+  const deciding = wanted === undefined && listed.isPending;
+  const hasDocuments = (listed.data?.items.length ?? 0) > 0;
+  const current = wanted ?? defaultStep(hasDocuments);
 
   const goTo = useCallback(
     (id: StepId) => {
@@ -87,6 +104,13 @@ export function FillPage() {
     },
     [setParams],
   );
+
+  // Landed on Documents: the address names it, so deleting the last document keeps the page
+  // where it is.
+  useEffect(() => {
+    if (wanted === undefined && !deciding && current.id === "documents")
+      goTo("documents");
+  }, [wanted, deciding, current.id, goTo]);
 
   const number = STEPS.indexOf(current) + 1;
   const Panel = current.Panel;
@@ -118,7 +142,7 @@ export function FillPage() {
               <StepLink
                 step={step}
                 number={index + 1}
-                current={step.id === current.id}
+                current={!deciding && step.id === current.id}
                 onOpen={goTo}
               />
             </li>
@@ -126,17 +150,26 @@ export function FillPage() {
         </ol>
       </nav>
 
-      <section
-        aria-labelledby="step-heading"
-        className="flex flex-col gap-5"
-        data-step={current.id}
-      >
-        <h2 id="step-heading" className="text-lg font-semibold tracking-tight">
-          <span className="text-muted-foreground">Step {number}:</span>{" "}
-          {current.heading}
-        </h2>
-        <Panel goTo={goTo} />
-      </section>
+      {deciding ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading your documents.
+        </p>
+      ) : (
+        <section
+          aria-labelledby="step-heading"
+          className="flex flex-col gap-5"
+          data-step={current.id}
+        >
+          <h2
+            id="step-heading"
+            className="text-lg font-semibold tracking-tight"
+          >
+            <span className="text-muted-foreground">Step {number}:</span>{" "}
+            {current.heading}
+          </h2>
+          <Panel goTo={goTo} />
+        </section>
+      )}
     </div>
   );
 }
