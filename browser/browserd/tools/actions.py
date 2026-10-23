@@ -269,13 +269,22 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
     it is taken back and the call answers host_not_allowed before the tool acts or reads further.
     A result is answered only while the tab is still on the list (settle)."""
     try:
-        result = await TOOLS[name](tab, args)
-    except OffList:
-        log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
-        return await tab.settle(refused("host_not_allowed"))
-    except PersonInput:
-        return failure("person_input", "Refused: the person holds the input.")
-    return await tab.settle(result) if result.get("ok") else result
+        try:
+            result = await TOOLS[name](tab, args)
+        except OffList:
+            log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
+            return await tab.settle(refused("host_not_allowed"))
+        except PersonInput:
+            return failure("person_input", "Refused: the person holds the input.")
+        return await tab.settle(result) if result.get("ok") else result
+    except Exception as exc:
+        if name != "browser_navigate":
+            raise
+        from playwright.async_api import Error
+
+        if not isinstance(exc, Error):
+            raise
+        return failure("navigation_failed", "The page did not let this navigation finish.")
 
 
 async def close_off_list(tab: Any, hosts: tuple[str, ...], lease_tag: str) -> None:
