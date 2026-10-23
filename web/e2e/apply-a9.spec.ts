@@ -194,16 +194,22 @@ test("the person applies in the live view, submits on the form and records it", 
   await expect.poll(() => fieldValue("#q_why"), { timeout: 15_000 }).toBe(WHY);
   await clickInView(page, "#consent");
   // The fake Ashby flags a submit that comes under 3 s after the last input as spam, as the real
-  // one does: the person clicks Submit again until the site takes it.
-  const accepted = async () =>
-    (await stub.submissions()).filter(
-      (one) => one.ats === "ashby" && one.accepted,
-    );
+  // one does: the person clicks Submit again until the site takes it. Each click posts once and the
+  // fake records every post, taken or flagged: the next click waits for the last one's record, or
+  // it may come while the taken post is still on its way and find the confirmation page instead
+  // of the button (it did under load).
+  const posts = async () =>
+    (await stub.submissions()).filter((one) => one.ats === "ashby");
+  const accepted = async () => (await posts()).filter((one) => one.accepted);
   await expect
     .poll(
       async () => {
-        if ((await accepted()).length === 0)
-          await clickInView(page, "button[data-submit]");
+        const before = await posts();
+        if (before.some((one) => one.accepted)) return 1;
+        await clickInView(page, "button[data-submit]");
+        await expect
+          .poll(async () => (await posts()).length, { timeout: 20_000 })
+          .toBeGreaterThan(before.length);
         return (await accepted()).length;
       },
       { timeout: 60_000 },
