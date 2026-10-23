@@ -288,6 +288,20 @@ describe("search schema", () => {
 });
 
 describe("browser sources (browser B8)", () => {
+  it("accepts a protected Free-Work entry through form validation and round trip", () => {
+    const source = {
+      kind: "freework" as const,
+      query: "Robotics Engineer",
+      location: null,
+      enabled: false,
+    };
+    const search = { ...haraldLike().search, browser_sources: [source] };
+    const parsed = searchSchema.safeParse(toSearchForm(search));
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+    expect(fromSearchForm(parsed.data).browser_sources).toEqual([source]);
+  });
+
   const withSources = () => {
     const profile = haraldLike();
     return {

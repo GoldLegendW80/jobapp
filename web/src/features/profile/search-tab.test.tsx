@@ -771,6 +771,91 @@ describe("search tab: add company with the board check", () => {
 });
 
 describe("search tab: job sites in your browser (browser B8)", () => {
+  const protectedSource = {
+    kind: "freework" as const,
+    query: "Robotics Engineer",
+    location: null,
+    enabled: false,
+  };
+
+  it("saves an unrelated field while retaining a protected Free-Work entry", async () => {
+    const initial = haraldLike();
+    const { user, state } = await openSearch({
+      ...initial,
+      search: { ...initial.search, browser_sources: [protectedSource] },
+    });
+    await user.clear(screen.getByLabelText("Posting age window (days)"));
+    await user.type(screen.getByLabelText("Posting age window (days)"), "14");
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).browser_sources).toEqual([protectedSource]);
+    expect(saved(state).days).toBe(14);
+  });
+
+  it("hides protected rows and chooser entries while moving and removing visible rows", async () => {
+    const initial = haraldLike();
+    const first = {
+      kind: "vie" as const,
+      query: "first",
+      location: null,
+      enabled: true,
+    };
+    const last = { ...first, query: "last" };
+    const { user, state } = await openSearch({
+      ...initial,
+      search: {
+        ...initial.search,
+        browser_sources: [first, protectedSource, last],
+      },
+    });
+    const sites = screen.getByRole("list", {
+      name: "Job sites in your browser",
+    });
+    expect(within(sites).getAllByRole("combobox")).toHaveLength(2);
+    expect(within(sites).queryByDisplayValue("Robotics Engineer")).toBeNull();
+    for (const kind of within(sites).getAllByRole("combobox")) {
+      expect(
+        within(kind).queryByRole("option", { name: /Free.Work/i }),
+      ).toBeNull();
+    }
+    await user.click(
+      within(sites).getByRole("button", { name: "Move site 2 up" }),
+    );
+    expect(screen.getByLabelText("Search words of site 1")).toHaveValue("last");
+    await user.click(screen.getByRole("button", { name: "Move site 1 down" }));
+    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
+      "first",
+    );
+    await user.click(screen.getByRole("button", { name: "Move site 2 up" }));
+    await user.click(screen.getByRole("button", { name: "Remove site 2" }));
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).browser_sources).toEqual([last, protectedSource]);
+  });
+
+  it("counts hidden protected entries toward the ten-source limit", async () => {
+    const initial = haraldLike();
+    const visible = Array.from({ length: 9 }, (_, n) => ({
+      kind: "vie" as const,
+      query: `words ${n}`,
+      location: null,
+      enabled: true,
+    }));
+    await openSearch({
+      ...initial,
+      search: {
+        ...initial.search,
+        browser_sources: [protectedSource, ...visible],
+      },
+    });
+    const sites = screen.getByRole("list", {
+      name: "Job sites in your browser",
+    });
+    expect(within(sites).getAllByRole("combobox")).toHaveLength(9);
+    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
+    expect(screen.getByText("At most 10 sites.")).toBeVisible();
+  });
+
   it("adds, edits, turns off and removes a site, and saves them", async () => {
     const { user, state } = await openSearch();
     const card = () =>
