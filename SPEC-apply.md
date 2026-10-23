@@ -34,6 +34,11 @@ The owner's answer on issue #464: “no limit.” Likes have no per-click, sessi
 Application guardrails remain in force, including fit checks, company caps, pacing, holds and the
 safety ceiling.
 
+## Owner decision (taken on 2026-10-23)
+
+Application answer edits stay local to that application. Reusable answers are saved separately
+in **Saved answers**. Editing an application does not add or change an answer-bank entry.
+
 **Owner answers of 2026-10-19** (issue #405; [docs/decisions.md](docs/decisions.md) holds them whole). Full auto ships first for Ashby, Greenhouse and Lever, before the sign in hand off (browser B12, apply A10b): until then a sign in wall sends the item to the review queue as "Needs you". The check by model is apply's own single call per item (A13c, about 6,500 tokens), since mail's M20 is paused: until it lands, an item with free text written by the agent goes to the review queue. A rehearsal answered Yes lands in the review queue, ready for a one click Approve. The generic form agent takes over by itself on `form_changed` in both modes, within the run's token budget and every guardrail. Planner default, which the owner may change: an approval or a Full auto Like that only the pace per host holds back stays valid, at most 7 days after it was given, and is checked again before the click; a Full auto Like stays valid at most 7 days in any case, and only while Full auto stays on.
 
 ## Modes, and who clicks Submit
@@ -96,7 +101,7 @@ The person asks the agent to fill the candidate profile that a site keeps (Workd
 
 ## Answers to standard questions
 
-- **Sources, in this order:** (1) the identity section (names, e-mail, phone, city and country, links, languages); (2) the documents (the CV and letter PDFs, the letter's text for a cover letter box); (3) the `answers` section of the profile; (4) the person's **answer bank**: every answer the person typed or corrected in a review is kept with its question, reused when the same question comes back, editable in Settings; (5) the agent, only for what is left, and only from the profile, the posting and the documents.
+- **Sources, in this order:** (1) the identity section (names, e-mail, phone, city and country, links, languages); (2) the documents (the CV and letter PDFs, the letter's text for a cover letter box); (3) the `answers` section of the profile; (4) the person's **answer bank**: answers explicitly saved in Settings' Saved answers are kept with their questions and reused when the same question comes back; application edits stay local (owner, 2026-10-23); (5) the agent, only for what is left, and only from the profile, the posting and the documents.
 - **Profile fields** (the `answers` section has today: work authorisation per country with sponsorship, notice period, earliest start, salary policy, relocation, travel, motivation, how they heard, what to leave blank). This module adds, all optional: preferred name, pronouns (empty by default), years of experience as the person states them, highest degree and graduation year, willingness to work on site or hybrid, the default answer to "previously applied or worked here" (computed from the app's own applications first), consent to background and reference checks (a person's choice, never a default), the EEO policy, and the salary stance. `salary_policy` already exists on main as a free paragraph (`AnswersSection.salary_policy`) and stays untouched, valid as the sentence form: the stance is a new optional field (`leave_blank`, `range`, `sentence`), defaulting to `sentence` for a profile whose paragraph is filled and to `leave_blank` otherwise, and the ranges are a second new field. The owner's answers stay his: nothing of the parent folder's practicalities is copied into the app; he fills his profile or imports it.
 - **Work authorisation** is answered from the person's list for the country of the posting's location (the posting's location parsed by the jobs module's gazetteer); a country not in the list is left.
 - **EEO questions** (gender, ethnicity, race, disability, veteran status, sexual orientation, age): the policy `decline` by default chooses "I don't wish to answer" or its equivalent when the form offers it and leaves the field otherwise. An actual answer is given only if the person stored that exact answer in the profile. Never inferred.
@@ -188,7 +193,7 @@ Job page: an **Apply** section (Apply, Apply myself, the live view while it runs
 ## Success criteria
 
 1. On the Jetson, the owner clicks Apply on a real Greenhouse or Ashby posting he chose, watches the form fill, approves, and the posting is `applied` with both screenshots and the frozen documents.
-2. The review queue holds the applications of his Likes, and an edit there is reused next time.
+2. The review queue holds the applications of his Likes. An answer edited there stays local to that application; an answer separately saved in Saved answers is reused when the same question comes back (owner, 2026-10-23).
 3. In Full auto, rehearsals, then real submissions, stay within the fit threshold, the one per company rule and the safety ceiling; a captcha or a left field lands in the queue; the pause switch stops everything at once (tests and one manual check).
 4. On a site that needs an account, the run waits, the owner signs in himself in the live view, the run continues, and the next day's application there is already signed in.
 5. The owner asks the agent to complete his profile on a site, reviews a section, approves it, and finds it saved with only values from his profile.

@@ -49,6 +49,9 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
   with `person_answer_changed`. Related checkpoints pass 1,045 and 268 cases. An independent
   pure complete-run probe preserves the full letter, performs zero gate clicks and does not
   expose its text through model tool responses.
+- Answer edits: the owner confirmed on 2026-10-23 that application edits stay local. Reusable
+  answers are explicitly saved separately in Saved answers. The specification's source and
+  success wording now agrees with its existing application-edit API contract.
 - Reports/history: generic page parsing retains node boundaries for direct AI-reader
   warnings. Confirmed prior submissions are queried across roles and time for the owner and
   company; another person's history and rehearsed/uncertain attempts cannot establish Yes.
@@ -156,7 +159,9 @@ acceptance will use a fixed partition with a fresh stack per Apply file, keeping
 cases together and preserving browser restart/cookie checks. The exact Playwright partition
 must prove every test is collected once with no new skips. This isolation does not establish
 long-lived production capacity or resolve the observed memory pressure; the guard formula,
-service caps and host target remain unchanged.
+service caps and host target remain unchanged. The sustained-service experiment and physical
+capacity acceptance are tracked by
+[browser follow-up #605](https://github.com/GoldLegendW80/jobapp/issues/605).
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,

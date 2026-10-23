@@ -213,6 +213,13 @@ choice made by the build that stands until the owner says otherwise.
   guardrails remain in force, including fit checks, company caps, pacing, holds and the safety
   ceiling.
 
+## Application answers (2026-10-23)
+
+The owner confirmed: keep application edits local; save reusable answers separately in Saved
+answers. Editing an application does not add or change an answer-bank entry. This resolves the
+conflict between the former source/success wording and the explicit answer-edit API contract
+in [SPEC-apply.md](../SPEC-apply.md).
+
 ## The short path to Full auto (2026-10-19)
 
 The owner's answers of 2026-10-19 (issue #405). The plans and specs of browser and apply follow
