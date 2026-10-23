@@ -33,7 +33,9 @@ do not substitute for combined acceptance. Independent review has since reproduc
 edge case where a genuine named unsupported group with a help link or inline heading disappears
 from Left. It also reproduced fallback preparation using a stale remaining timeout before
 starting the model at or beyond the original deadline. Both require fresh corrections and
-independent rechecks before acceptance.
+independent rechecks before acceptance. The first corrections pass 886 focused cases;
+a nested generic-wrapper neighbor found during self-review is being completed before the
+fresh recheck and final combined runtime proof.
 
 ## Integration boundary
 
@@ -191,6 +193,16 @@ long-lived production capacity or resolve the observed memory pressure; the guar
 service caps and host target remain unchanged. The sustained-service experiment and physical
 capacity acceptance are tracked by
 [browser follow-up #605](https://github.com/GoldLegendW80/jobapp/issues/605).
+
+The new known-fallback native fixture checkpoint first reported 9,905 passes and one stale
+six-versus-seven-field recording assertion. That assertion now includes Summary while retaining
+all existing field and Submit checks. A second module attempt was intentionally interrupted
+(exit 130) to wait for the latest source fixes. These are not native acceptance. The
+[native delta review](../evidence/apply604-native-delta-review.md) also requires verified fill
+counts and a nonempty pinned PDF in the frame/no-credential journeys; source labels alone
+permit unverified outcomes. A fresh continuation owns those proof assertions and the actual
+composed rerun. Rehearsals use normal person cancellation between attempts and a separate
+Review account so the real duplicate-form guards remain in force.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
