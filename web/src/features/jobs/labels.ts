@@ -3,6 +3,7 @@
  * labels, contract types, sort orders, and the colour tone of a fit score. A value the api adds
  * later and this build does not know still gets a readable label (see `statusLabel`).
  */
+import { feedSourceName } from "@/features/opportunities/sources/source-words";
 
 export const STATUSES = [
   "found",
@@ -179,15 +180,21 @@ export function sourceName(source: {
 /** A browser source as the sweep names it ("<kind>:<query>[/<location>]": its `current_board`
  * while it runs, and the `source` of the postings it found), in words; any other name as it is.
  * A posting found by several sources names each, joined by ", " (browser B10, sweep.SOURCES_SEP):
- * each is read on its own and the names are joined by "; ". */
+ * each is read on its own and the names are joined by "; ". A feed's source has its name too
+ * ("remoteok" is "Remote OK", opportunities O8). */
 export function sourceLabel(current: string): string {
-  const names = current.split(/, (?=(?:[a-z_]+):)/);
+  const names = current.split(
+    /, (?=[a-z_]+:|(?:remoteok|weworkremotely)(?:, |$))/,
+  );
   return names.length > 1
     ? names.map(oneSource).join("; ")
     : oneSource(current);
 }
 
 function oneSource(current: string): string {
+  // Opportunities O8: a freelance and project feed ("remoteok", "hackernews:freelance").
+  const feed = feedSourceName(current);
+  if (feed) return feed;
   const match = /^(google_careers|vie|site|linkedin):(.*)$/s.exec(current);
   if (!match) return current;
   const [, kind = "", rest = ""] = match;
