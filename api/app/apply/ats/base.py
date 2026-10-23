@@ -335,7 +335,7 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
     and the words after the control (a chosen file's name). Chromium repeats named groups'
     visible label in their children; that text is not a second part of the field's name."""
     inner, group = control, control.parent
-    for _ in range(3):
+    for level in range(3):
         if group is None or group.role not in ("generic", "group"):
             break
         # Unnamed wrappers cannot lend other fields' or page headings' words to a
@@ -354,8 +354,22 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
             ):
                 separate = True
                 break
-        if separate and not _named_choices(group):
-            break
+        if separate:
+            # Help can be inside a transparent wrapper around a named local field.
+            # Keep the same ancestor bound and never cross another named group.
+            local, candidate = None, group
+            for _ in range(3 - level):
+                if candidate is None or candidate.role not in ("generic", "group"):
+                    break
+                if _named_choices(candidate):
+                    local = candidate
+                    break
+                if candidate.role == "group" and candidate.name:
+                    break
+                candidate = candidate.parent
+            if local is None:
+                break
+            group = local
         before, after = _around(group, inner)
         if before:
             name = (
@@ -375,24 +389,41 @@ def _named_choices(group: Node) -> bool:
     if group.role != "group" or not group.name:
         return False
     label = fold(label_of(group.name)[0])
+    nodes = list(group.walk())
+    controlled = {id(node) for node in nodes if node.role in CONTROLS}
+    for node in reversed(nodes):
+        if any(id(child) in controlled for child in node.children):
+            controlled.add(id(node))
     repeated_label = False
     buttons = 0
     other_fields = False
-    for child in group.children:
-        nodes = list(child.walk())
-        controls = [node for node in nodes if node.role in CONTROLS]
-        if not controls:
-            repeated_label |= any(
-                node.role in ("generic", "text", "paragraph")
-                and fold(label_of(node.text or node.name)[0]) == label
-                for node in nodes
-            )
-        elif all(node.role == "button" for node in controls) and not any(
-            (node.name or node.text).strip() for node in nodes if node.role not in CONTROLS
-        ):
-            buttons += sum(fold(node.name) not in SUBMIT_NAMES for node in controls)
-        elif any(node.role != "link" for node in controls):
+    stack = list(group.children)
+    while stack:
+        node = stack.pop()
+        if node.role in CONTROLS:
+            if node.role == "button":
+                buttons += fold(node.name) not in SUBMIT_NAMES
+            elif node.role != "link":
+                other_fields = True
+            continue
+        if node.role == "group" and node.name:
             other_fields = True
+            continue
+        if node.role in ("generic", "group") and id(node) in controlled:
+            # A different visible label before its controls makes a sibling field,
+            # rather than part of this group's choices (for example a Resume row).
+            labels = [node.text] if node.text.strip() else []
+            for child in node.children:
+                if id(child) in controlled:
+                    break
+                if child.role in ("generic", "text", "paragraph") and (child.text or child.name):
+                    labels.append(child.text or child.name)
+            if any(fold(label_of(word)[0]) != label for word in labels):
+                other_fields = True
+                continue
+        if node.role in ("generic", "text", "paragraph"):
+            repeated_label |= fold(label_of(node.text or node.name)[0]) == label
+        stack.extend(node.children)
     return buttons > 1 or (buttons == 1 and repeated_label and not other_fields)
 
 

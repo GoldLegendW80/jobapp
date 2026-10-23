@@ -223,3 +223,43 @@ def test_named_file_and_yes_no_groups_keep_their_local_label(extra: str, kind: s
         (label, kind, True)
     ]
     assert found.skipped == []
+
+
+@pytest.mark.parametrize("label", ["Team preference", "Subscribe", "Details", "Équipe souhaitée"])
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("layout", ["whole_field", "choices_and_help"])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '- link "About choices" [ref=e3]',
+        '- heading "Choose a team"',
+        '- textbox "Other details" [ref=e3]',
+    ],
+)
+def test_transparent_wrappers_do_not_hide_named_local_unknown_choices(
+    label: str, required: bool, layout: str, extra: str
+) -> None:
+    name = label + (" *" if required else "")
+    buttons = '- button "Platform" [ref=e1]\n- button "Research" [ref=e2]'
+    if layout == "whole_field":
+        body = "- generic:\n" + indent(f"- generic: {name}\n{extra}\n- generic:\n{indent(buttons)}")
+    else:
+        body = f"- generic: {name}\n- generic:\n" + indent(f"{extra}\n{buttons}")
+    found = discover(f'- group "{name}":\n{indent(body)}')
+    assert [(s.label, s.reason) for s in found.skipped] == [(label, "unsupported_widget")]
+    assert [f.label for f in found.fields] == (["Other details"] if "textbox" in extra else [])
+
+
+@pytest.mark.parametrize("label", ["Team preference", "Subscribe", "Details", "Équipe souhaitée"])
+@pytest.mark.parametrize("extra", ['- link "About choices" [ref=e3]', '- heading "Choose a team"'])
+@pytest.mark.parametrize("layout", ["whole_field", "choices_and_help"])
+def test_transparent_wrappers_keep_a_single_named_local_choice(
+    label: str, extra: str, layout: str
+) -> None:
+    button = '- button "Choose an option" [ref=e1]'
+    if layout == "whole_field":
+        body = "- generic:\n" + indent(f"- generic: {label}\n{extra}\n- generic:\n{indent(button)}")
+    else:
+        body = f"- generic: {label}\n- generic:\n" + indent(f"{extra}\n{button}")
+    found = discover(f'- group "{label}":\n{indent(body)}')
+    assert [(s.label, s.reason) for s in found.skipped] == [(label, "unsupported_widget")]
