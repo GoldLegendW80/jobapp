@@ -91,6 +91,7 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 let serial = 0;
+let fullAutoJob: { id: string; title: string };
 
 async function latest(where: Page, job: string): Promise<App> {
   const response = await where.request.get(
@@ -369,8 +370,10 @@ test("three real Full auto rehearsals of the hosted fallback send nothing", asyn
       })
     ).status(),
   ).toBe(200);
+  // The catalogue has one canonical Ashby posting. Reuse it after each person cancellation.
+  const job = (fullAutoJob = await hosted(page, person));
+  const rehearsals = new Set<string>();
   for (let index = 0; index < 3; index += 1) {
-    const job = await hosted(page, person);
     expect(
       (
         await page.request.post(`/api/postings/${job.id}/like`, {
@@ -382,6 +385,8 @@ test("three real Full auto rehearsals of the hosted fallback send nothing", asyn
       .poll(async () => (await latest(page, job.id)).state, { timeout: FILL })
       .toBe("rehearsed");
     const app = await latest(page, job.id);
+    expect(rehearsals.has(app.id)).toBe(false);
+    rehearsals.add(app.id);
     noLeft(await approval(page, app.id));
     expect(await sent()).toHaveLength(1);
     expect(
@@ -396,7 +401,7 @@ test("three real Full auto rehearsals of the hosted fallback send nothing", asyn
       mode: "review",
       state: "ready",
     });
-    // The fake catalogue has one Ashby form. Cancel the completed rehearsal before reusing it.
+    // Yes makes this a live Review item. The person cancels it before the next Like.
     expect(
       (
         await page.request.post(`/api/applications/${app.id}/cancel`, {
@@ -406,13 +411,14 @@ test("three real Full auto rehearsals of the hosted fallback send nothing", asyn
     ).toBe(200);
     expect(await latest(page, job.id)).toMatchObject({ state: "cancelled" });
   }
+  expect(rehearsals.size).toBe(3);
   expect(
     await (await page.request.get("/api/apply/settings")).json(),
   ).toMatchObject({ rehearsals: 3, rehearsals_done: 3 });
 });
 
 test("eligible hosted fallback waits for its hold and submits exactly once", async () => {
-  const job = await hosted(page, person);
+  const job = fullAutoJob;
   expect(
     (
       await page.request.post(`/api/postings/${job.id}/like`, { headers: CSRF })
