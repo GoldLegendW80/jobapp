@@ -62,4 +62,9 @@ remain. Production mail is unchanged.
 
 The corrected lifecycle file, all 72 new boundary cases and the requested ingestion
 worker/parser/renderer contract files passed together: 179 tests in 63.23 seconds, through
-ops/agent-test.sh with -n 2 and not docker. A full repeat is pending at this checkpoint.
+ops/agent-test.sh with -n 2 and not docker. The full repeat then passed all 8,744 tests in
+596.84 seconds, exit 0: whole Apply/mail plus ingestion/test_engine_worker.py,
+ingestion/parser/test_compose_parser.py and documents/test_compose_renderer.py. All owned
+agent-guard604r2 services were removed and the builder's worktree was clean at handoff.
+This is the backend guard checkpoint before the subsequent generic-runtime/fallback slices;
+their regression runs and the final composed gate remain separate requirements.

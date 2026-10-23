@@ -7,9 +7,12 @@ gate result on that pull request identify the exact checked head and tree.
 
 Implementation is still in progress. The capability audit found that the default worker did
 not construct the generic form agent and its custom-site journey was permanently skipped.
-Known-ATS `form_changed` also did not hand over automatically in both modes. Separate slices
-are completing that wiring, model-free approved replay and the original-budget fallback.
-The existing pure generic-run tests did not establish default-worker execution.
+Known-ATS `form_changed` also did not hand over automatically in both modes. The original-budget
+fallback source is now integrated, with 86 focused backend and 56 frontend cases passing;
+whole-module and actual acceptance remain pending. The default worker's actual custom fill
+now works, but approved replay exposed missing native file-input readback. A fresh fix is
+addressing that gap without weakening exact approved-value checks. The existing pure generic-run
+tests did not establish default-worker execution.
 
 ## Integration boundary
 
@@ -27,7 +30,7 @@ heavy jobs run together; the final batch gate runs on a quiet machine.
 
 | Capability | Implemented behavior | Runtime verification and final gate coverage |
 |---|---|---|
-| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Default generic-worker wiring and known-ATS fallback remain in progress. | Fidelity checkpoint: 5,478 Apply passes. The named-group label fix passes all 7,070 Apply tests and seven actual A5/A7 browser tests, including exactly one approved fake submission each for Ashby and Greenhouse. Generic default-worker and fallback execution need their own actual journeys and independent review. |
+| A1 to A8: forms, answers, fill, approval and reports | Source-bound answers, ATS adapters, exact person values, approved document/field binding, one-use submission and reports. Generic replay's native file readback is in progress; known-ATS fallback source is integrated. | Fidelity checkpoint: 5,478 Apply passes. The named-group label fix passes all 7,070 Apply tests and seven actual A5/A7 browser tests, including exactly one approved fake submission each for Ashby and Greenhouse. Generic default-worker replay and fallback execution still need passing actual journeys and independent review. |
 | A9: Apply myself | Native document picker ownership, immediate Submit-and-Close recording, ended-session queue/reopen/record, placed-document freezing, no app submit click. | Four new real browser recovery flows, original manual flows, six inherited native cases and distinct incidental-picker race pass. Whole Apply/Browser groups cover final integration. |
 | A10a: retries and person input | Immutable 1,800-second person wait outside active time; same adapter, attempt, earlier fields and steps survive captcha/email-code input. | Whole Apply/browser checkpoint: 7,167 passes, plus three real Redis/private-HTTP cases. Actual captcha/email-code flows pass before a fresh approval and one fake submission. |
 | A10b: sign-in | Watched and later owner-owned handoffs, registered typed callbacks and idempotent queueing; Full auto becomes Review first. | Both fake-site journeys and all 22 backend cases pass. Whole Apply/Browser groups cover final integration. |
@@ -151,7 +154,9 @@ Independent source review also found final expiry/pause checks preceding blockin
 the last commit. Fixes and a second recheck exposed paced-approval and last-commit edge cases;
 the latest fix passes 252 real-Postgres/Redis regression cases. Its broader Apply/mail run
 reported 8,739 passes and five lifecycle-fixture failures caused by repeated injected state
-mutations; those fixtures and the full rerun are still in progress.
+mutations. The fixture-only repair preserves repeated guard reads and all original assertions;
+179 lifecycle/contracts/boundary cases and the full 8,744-case repeat pass. Generic-runtime and
+fallback changes require subsequent regression runs and the final composed gate.
 
 Two composed A18 cases hit the unchanged browser memory guard at 923/941 MiB. Idle cgroup
 measurements retained substantial active file cache even after Chromium exited. Functional
