@@ -227,3 +227,7 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
    only the pace per host holds back stays valid, at most 7 days after it was given, and the gate
    checks everything again before the click; a Full auto Like stays valid at most 7 days in any
    case, and only while Full auto stays on.
+
+- 2026-10-21 (#528): a skipped (passed) posting is refused with `passed` at start, at the
+  decision and at both submission rechecks, in Review first and Full auto. Apply myself only
+  warns; the other duplicate refusals still apply. Undo the Pass before asking the app to apply.
