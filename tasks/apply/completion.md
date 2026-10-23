@@ -177,7 +177,10 @@ the latest fix passes 252 real-Postgres/Redis regression cases. Its broader Appl
 reported 8,739 passes and five lifecycle-fixture failures caused by repeated injected state
 mutations. The fixture-only repair preserves repeated guard reads and all original assertions;
 179 lifecycle/contracts/boundary cases and the full 8,744-case repeat pass. Generic-runtime and
-fallback changes require subsequent regression runs and the final composed gate.
+fallback changes require subsequent regression runs and the final composed gate. A fresh narrow
+[closure review](../evidence/apply604-final-guard-closure.md) at `97c650d8` now closes both final
+guard blockers: 168 independent pure cases pass, six regressions are caught by mutations, and
+90 real-database boundary/host-expiry cases pass. This is scoped closure, not whole-PR approval.
 
 Two composed A18 cases hit the unchanged browser memory guard at 923/941 MiB. Idle cgroup
 measurements retained substantial active file cache even after Chromium exited. Functional
