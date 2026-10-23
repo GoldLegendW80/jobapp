@@ -363,6 +363,15 @@ test("three real Full auto rehearsals of the hosted fallback send nothing", asyn
       mode: "review",
       state: "ready",
     });
+    // The fake catalogue has one Ashby form. Cancel the completed rehearsal before reusing it.
+    expect(
+      (
+        await page.request.post(`/api/applications/${app.id}/cancel`, {
+          headers: CSRF,
+        })
+      ).status(),
+    ).toBe(200);
+    expect(await latest(page, job.id)).toMatchObject({ state: "cancelled" });
   }
   expect(
     await (await page.request.get("/api/apply/settings")).json(),
@@ -437,9 +446,10 @@ for (const framed of [true, false]) {
             })
           ).status(),
         ).toBe(204);
-        const runs = (await (
+        const runList = (await (
           await where.request.get("/api/agents/runs")
-        ).json()) as unknown;
+        ).json()) as { items: Array<{ id: string }> };
+        const runs = runList.items.map((one) => one.id);
         if (framed) {
           expect(
             (
@@ -477,9 +487,10 @@ for (const framed of [true, false]) {
         expect(
           view.answers.some((one) => one.field_key === "designated:submit"),
         ).toBe(false);
-        expect(
-          await (await where.request.get("/api/agents/runs")).json(),
-        ).toEqual(runs);
+        const after = (await (
+          await where.request.get("/api/agents/runs")
+        ).json()) as { items: Array<{ id: string }> };
+        expect(after.items.map((one) => one.id)).toEqual(runs);
         const detail = (await (
           await where.request.get(`/api/applications/${app.id}`)
         ).json()) as {
