@@ -15,6 +15,7 @@ import {
 } from "./documents-api";
 import { isOpen } from "./labels";
 import { galleryPath } from "./template-choice";
+import { CaptureConsent } from "./capture-consent";
 
 function sentence(capture: BaseCv["design_generation"]): string {
   if (capture === null) return "Your CV's design has not been copied yet.";
@@ -31,7 +32,7 @@ function sentence(capture: BaseCv["design_generation"]): string {
       return "The design copy stopped. Your current template and content are still available.";
     case "waiting":
       if (capture.wait_reason === "consent")
-        return "To copy your CV's design, confirm what is sent in the CV tab.";
+        return "To copy your CV's design, use Confirm what is sent below.";
       if (capture.wait_reason === "credential")
         return "To copy your CV's design, add a model credential in your account.";
       if (capture.wait_reason === "daily_ceiling")
@@ -84,9 +85,7 @@ export function CaptureStatus({ cv }: { cv: BaseCv }) {
           <p>Other changes may wait while the design is copied.</p>
         ) : null}
         {capture?.status === "waiting" && capture.wait_reason === "consent" ? (
-          <Link to="/profile/cv" className="underline underline-offset-4">
-            Confirm what is sent
-          </Link>
+          <CaptureConsent documentId={cv.id} />
         ) : null}
         {capture?.status === "waiting" &&
         capture.wait_reason === "credential" ? (
