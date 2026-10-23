@@ -34,8 +34,13 @@ edge case where a genuine named unsupported group with a help link or inline hea
 from Left. It also reproduced fallback preparation using a stale remaining timeout before
 starting the model at or beyond the original deadline. Both require fresh corrections and
 independent rechecks before acceptance. The first corrections pass 886 focused cases;
-a nested generic-wrapper neighbor found during self-review is being completed before the
-fresh recheck and final combined runtime proof.
+the nested generic-wrapper follow-up passes 950 focused cases. The fresh
+[recheck](../evidence/apply604-parser-budget-recheck.md) closes the original disappearance and
+late-model-start defects but finds two further issues: two loose actions can fabricate a
+whole-form question, and early budget stops can discard prior person answers and closed wizard
+progress. A fresh fix round owns structural field-branch boundaries and conservative progress
+reporting. The 10,049-case whole Apply/browser pass at the earlier fix checkpoint does not
+close these independently reproduced gaps.
 
 ## Integration boundary
 
