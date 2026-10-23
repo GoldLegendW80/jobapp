@@ -90,6 +90,13 @@ class Opened:
     stale: bool = False
 
 
+@dataclass(frozen=True)
+class OpenedBytes:
+    plaintext: bytes = field(repr=False)
+    # As with Opened, the caller decides whether to re-encrypt a stale value.
+    stale: bool = False
+
+
 @dataclass(frozen=True, repr=False)
 class Keyring:
     """The current key (writes and reads) and optionally the previous one (reads only)."""
@@ -119,13 +126,33 @@ class Keyring:
         return fingerprint(self.current)
 
     def encrypt(self, plaintext: str, user_id: uuid.UUID, kind: str) -> Sealed:
+        return self.encrypt_bytes(plaintext.encode("utf-8"), user_id, kind)
+
+    def encrypt_bytes(self, plaintext: bytes | bytearray, user_id: uuid.UUID, kind: str) -> Sealed:
+        """Seal bytes with the existing layout and owner/kind binding.
+
+        For originals, callers supply an ASCII purpose and final document UUID as kind,
+        for example ``cv_original/v1/<upload_id.hex>``. This method does not store a file.
+        """
         nonce = os.urandom(NONCE_BYTES)
-        body = AESGCM(self.current).encrypt(
-            nonce, plaintext.encode("utf-8"), associated_data(user_id, kind)
-        )
+        body = AESGCM(self.current).encrypt(nonce, plaintext, associated_data(user_id, kind))
         return Sealed(nonce + body, self.version)
 
     def decrypt(self, ciphertext: bytes, key_version: int, user_id: uuid.UUID, kind: str) -> Opened:
+        opened = self.decrypt_bytes(ciphertext, key_version, user_id, kind)
+        try:
+            plaintext = opened.plaintext.decode("utf-8")
+        except UnicodeDecodeError:
+            # Raise outside the handler: UnicodeDecodeError itself carries the plaintext.
+            pass
+        else:
+            return Opened(plaintext, stale=opened.stale)
+        raise DecryptError("not UTF-8 text") from None
+
+    def decrypt_bytes(
+        self, ciphertext: bytes, key_version: int, user_id: uuid.UUID, kind: str
+    ) -> OpenedBytes:
+        """Authenticate bytes using the writing key; previous-key reads are marked stale."""
         key = self._by_version.get(key_version)
         if key is None:
             raise DecryptError("written with a key this server does not hold")
@@ -136,4 +163,4 @@ class Keyring:
             plain = AESGCM(key).decrypt(nonce, body, associated_data(user_id, kind))
         except InvalidTag:
             raise DecryptError("fails authentication") from None
-        return Opened(plain.decode("utf-8"), stale=key_version != self.version)
+        return OpenedBytes(plain, stale=key_version != self.version)
