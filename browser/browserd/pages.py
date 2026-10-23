@@ -19,9 +19,7 @@ PLAYWRIGHT_VERSION = "1.55.0"
 SNAPSHOT_METHOD = "snapshotForAI"
 REF_MARKER = "[ref=e"
 BUTTON_REF = re.compile(r"(?m)^ *- button[^\n]*\[ref=((?:f\d{1,4})?e\d{1,7})\]")
-NATIVE_FILES_JS = """elements => {
-  if (elements.length !== 1) throw new Error('snapshot_ref_changed');
-  const e = elements[0];
+NATIVE_FILES_JS = """e => {
   if (!(e instanceof HTMLInputElement) || e.type !== 'file') return null;
   const files = e.files;
   if (!files || files.length > 3) return [];
@@ -68,7 +66,12 @@ async def native_files(page: Any, snapshot: str) -> dict[str, list[str]]:
     selected: dict[str, list[str]] = {}
     size = 2
     for ref in dict.fromkeys(BUTTON_REF.findall(snapshot)):
-        names = await page.locator(f"aria-ref={ref}").evaluate_all(NATIVE_FILES_JS)
+        locator = page.locator(f"aria-ref={ref}")
+        if await locator.count() != 1:
+            raise SnapshotUnavailable("Native file snapshot ref changed")
+        # evaluate_all resolves refs in the main world, which lacks snapshotForAI's cache.
+        # The single-element path resolves in Playwright's isolated selector world first.
+        names = await locator.evaluate(NATIVE_FILES_JS, timeout=5000)
         if names is not None:
             size += len(json.dumps({ref: names}, ensure_ascii=True))
             if size > SNAPSHOT_MAX:
