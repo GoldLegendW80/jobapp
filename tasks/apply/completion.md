@@ -8,7 +8,9 @@ gate result on that pull request identify the exact checked head and tree.
 Implementation and scoped source review now cover A1 to A18. Runtime acceptance and the final
 combined gate are still in progress. The current application source is frozen at
 `0070e6202cfe983ab2b6136f29e154c87c16a67c`, tree
-`602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`, for the composed Apply/browser and native rerun.
+`602166af9b30a4cde220d9ac38ac4a0fcdbfffd8`. The complete composed Apply/browser suite
+passes 10,460 tests in 361.17 seconds on that source. Later documentation, fixture corrections
+and the tree-equivalent merge of upstream `8d9c8c68` do not change application code.
 
 The default-worker audit found missing generic wiring, known-ATS fallback, framed recovery,
 credential-free fills and explicit Saved answers creation. These are implemented. Current
@@ -196,8 +198,26 @@ permit unverified outcomes. A fresh continuation owns those proof assertions and
 composed rerun. The fresh [proof recheck](../evidence/apply604-native-proof-recheck.md)
 closes that assertion defect at source: independent tests reject unverified fills, wrong
 values, missing events and empty/non-PDF/wrong-version files. Actual native counts and
-execution still need confirmation. Rehearsals use normal person cancellation between attempts and a separate
-Review account so the real duplicate-form guards remain in force.
+execution still need confirmation. Rehearsals use normal person cancellation between attempts
+and a separate Review account so the real duplicate-form guards remain in force.
+
+The composed native attempt ran ten tests with one worker. Two setup tests passed, the
+unchanged A8 Lever journey stopped at the real memory guard (1,015 MiB, before filling), and
+the new hosted-form fixture called a nonexistent application-list route (405). Six serial
+followups did not run. The fixture now uses the existing owner-bound
+`GET /api/applications?posting_id=...` route; typecheck, focused lint and hooks pass. All owned
+resources from this failed attempt were removed. One fresh unchanged-limit retry uses a
+separate fixed stack for each whole test file. All four unchanged A8 cases pass in 4.1
+minutes; root inspected the fresh Lever/custom Review and Applied images. Hosted known-ATS
+Review also passes in 2.1 minutes, including zero submissions before approval, exactly one
+afterward and full-byte/SHA equality with the approved CV. The rehearsal fixture then
+attempted to create a second posting at the same canonical URL and correctly received 409
+(`This posting is already in your list.`); this is not an optimistic-version conflict. Two
+known-fallback tests passed, one failed, and three did not run. A fresh agent owns legitimate
+posting reuse and the remaining native acceptance; no application duplicate guard is changed.
+All retry resources were cleaned. The [native attempt record](../evidence/apply604-native-attempts.md)
+preserves exact logs, traces, cgroup figures and screenshot paths. These checkpoints do not
+close production memory #605.
 
 Before merging, require a passing exact-tree batch gate and fresh independent review on #604.
 The gate covers complete API suites and coverage, Docker/native tests, frontend typecheck,
