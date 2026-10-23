@@ -289,17 +289,118 @@ def test_the_steps_survive_a_save_and_an_import_and_a_save_never_writes_them(
     events = _ignored_events(caplog)
     assert len(events) == 2  # the import adds no ignored-save event
     for event in events:
-        payload = json.loads(JsonFormatter().format(event))
-        assert set(payload) == {"ts", "level", "logger", "msg"}
-        assert {key: value for key, value in payload.items() if key != "ts"} == {
-            "level": "info",
-            "logger": "app.profile.service",
-            "msg": "profile_onboarding_steps_ignored",
-        }
-        output = f"{vars(event)} {payload}"
-        for private in (marker, NEW_A, str(new_a.user_id), "looking", "pay", "stale base revision"):
-            assert private not in output
+        _assert_ignored_event_private(event, marker, NEW_A, str(new_a.user_id))
     assert marker not in caplog.text
+
+
+def _assert_ignored_event_private(event: logging.LogRecord, *private_values: str) -> None:
+    assert not event.args
+    payload = json.loads(JsonFormatter().format(event))
+    assert set(payload) == {"ts", "level", "logger", "msg"}
+    assert {key: value for key, value in payload.items() if key != "ts"} == {
+        "level": "info",
+        "logger": "app.profile.service",
+        "msg": "profile_onboarding_steps_ignored",
+    }
+    output = f"{vars(event)} {payload}"
+    for private in (*private_values, "stale base revision"):
+        assert private not in output
+    # Source locations describe the code, not the person's steps. Unique private values
+    # still stay out of the complete record, including these source fields.
+    content = {
+        key: value
+        for key, value in vars(event).items()
+        if key not in {"pathname", "filename", "module"}
+    }
+    for step_name in ("looking", "pay"):
+        assert step_name not in f"{content} {payload}"
+
+
+@pytest.mark.parametrize(
+    "source_path",
+    [
+        "/workspace/neutral/api/app/profile/service.py",
+        "/workspace/pay/api/app/profile/service.py",
+        "/workspace/looking/api/app/profile/service.py",
+        "/workspace/neutral/pay.py",
+        "/workspace/neutral/looking.py",
+    ],
+)
+def test_ignored_event_privacy_is_independent_of_source_path(source_path: str) -> None:
+    event = logging.LogRecord(
+        "app.profile.service",
+        logging.INFO,
+        source_path,
+        1,
+        "profile_onboarding_steps_ignored",
+        (),
+        None,
+    )
+    _assert_ignored_event_private(event)
+
+
+@pytest.mark.parametrize(
+    "field", ["msg", "args", "steps_passed", "_steps_passed", "funcName", "stack_info", "exc_text"]
+)
+@pytest.mark.parametrize("private", ["looking", "pay", "marker", "email", "user_id", "revision"])
+def test_ignored_event_privacy_refuses_content_in_every_logging_surface(
+    field: str, private: str
+) -> None:
+    marker, user_id = f"marker-{uuid.uuid4().hex}", str(uuid.uuid4())
+    value = {
+        "marker": marker,
+        "email": NEW_A,
+        "user_id": user_id,
+        "revision": "stale base revision",
+    }.get(private, private)
+    event = logging.LogRecord(
+        "app.profile.service",
+        logging.INFO,
+        "/workspace/pay/looking.py",
+        1,
+        "profile_onboarding_steps_ignored",
+        (),
+        None,
+    )
+    if field == "args":
+        value = (value,)
+    elif field in {"steps_passed", "_steps_passed"}:
+        value = [value]
+    setattr(event, field, value)
+    with pytest.raises(AssertionError):
+        _assert_ignored_event_private(event, marker, NEW_A, user_id)
+
+
+@pytest.mark.parametrize("field", ["pathname", "filename", "module"])
+def test_ignored_event_privacy_keeps_unique_canaries_out_of_source_metadata(field: str) -> None:
+    marker = f"marker-{uuid.uuid4().hex}"
+    event = logging.LogRecord(
+        "app.profile.service",
+        logging.INFO,
+        "/workspace/pay/looking.py",
+        1,
+        "profile_onboarding_steps_ignored",
+        (),
+        None,
+    )
+    setattr(event, field, marker)
+    with pytest.raises(AssertionError):
+        _assert_ignored_event_private(event, marker)
+
+
+def test_ignored_event_privacy_refuses_arguments_even_when_the_message_is_constant() -> None:
+    event = logging.LogRecord(
+        "app.profile.service",
+        logging.INFO,
+        "/workspace/pay/looking.py",
+        1,
+        "%s",
+        ("profile_onboarding_steps_ignored",),
+        None,
+    )
+    assert event.getMessage() == "profile_onboarding_steps_ignored"
+    with pytest.raises(AssertionError):
+        _assert_ignored_event_private(event)
 
 
 def _ignored_events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
