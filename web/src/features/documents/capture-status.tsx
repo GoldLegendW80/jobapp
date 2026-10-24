@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useId, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,6 +10,7 @@ import {
   baseCvsKey,
   captureDesign,
   documentKey,
+  failureSentence,
   type BaseCv,
   type BaseCvs,
 } from "./documents-api";
@@ -42,10 +43,24 @@ function sentence(capture: BaseCv["design_generation"]): string {
   }
 }
 
+/** The api's own sentence for a refusal (409, 422); a fixed one for any other failure. */
+function retryFailure(error: unknown): string {
+  return isApiError(error) && (error.status === 409 || error.status === 422)
+    ? failureSentence(error)
+    : "The design could not be started. Try again.";
+}
+
+const stampOf = (capture: BaseCv["design_generation"]) =>
+  capture === null ? "" : `${capture.id} ${capture.status}`;
+
 /** Capture errors and progress belong to this CV, independently of its converted content. */
 export function CaptureStatus({ cv }: { cv: BaseCv }) {
   const client = useQueryClient();
   const inFlight = useRef(false);
+  const titleId = useId();
+  const errorId = useId();
+  // The capture the refresh after the last attempt returned: its error describes only that one.
+  const [settledOn, setSettledOn] = useState<string>();
   const refresh = () =>
     Promise.all([
       client.invalidateQueries({ queryKey: baseCvsKey }),
@@ -70,19 +85,33 @@ export function CaptureStatus({ cv }: { cv: BaseCv }) {
         await refresh();
       } finally {
         inFlight.current = false;
+        const list = client.getQueryData<BaseCvs>(baseCvsKey);
+        const mine = list?.base_cvs.find((one) => one.id === cv.id);
+        setSettledOn(stampOf(mine?.design_generation ?? null));
       }
     },
   });
   const capture = cv.design_generation;
+  const error =
+    retry.isError && settledOn === stampOf(capture) ? retry.error : null;
+  // A 422 is not transient: this CV no longer has the uploaded file a capture reads.
+  const refused = isApiError(error) && error.status === 422;
   const busy = retry.isPending || isOpen(cv.generation) || isOpen(capture);
   return (
-    <Alert role="status" aria-live="polite">
-      <AlertTitle>CV design</AlertTitle>
+    <Alert role="group" aria-labelledby={titleId}>
+      <AlertTitle id={titleId}>CV design</AlertTitle>
       <AlertDescription className="flex flex-col gap-2">
-        <p>{sentence(capture)}</p>
-        {isOpen(capture) ? (
-          <p>Other changes may wait while the design is copied.</p>
-        ) : null}
+        <div role="status" aria-live="polite" className="flex flex-col gap-2">
+          <p>{sentence(capture)}</p>
+          {isOpen(capture) ? (
+            <p>Other changes may wait while the design is copied.</p>
+          ) : null}
+          {error !== null ? (
+            <p id={errorId} className="text-destructive">
+              {retryFailure(error)}
+            </p>
+          ) : null}
+        </div>
         {capture?.status === "waiting" && capture.wait_reason === "consent" ? (
           <Link to="/profile/cv" className="underline underline-offset-4">
             Confirm what is sent
@@ -94,22 +123,17 @@ export function CaptureStatus({ cv }: { cv: BaseCv }) {
             Add a model credential
           </Link>
         ) : null}
-        {retry.isError ? (
-          <p className="text-destructive">
-            {isApiError(retry.error) && retry.error.status === 409
-              ? "Another change is in progress for this CV. Its latest state has been refreshed."
-              : "The design could not be started. Try again."}
-          </p>
-        ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             variant="outline"
             size="sm"
-            aria-disabled={busy}
+            aria-label={`Try the design again for ${cv.name}`}
+            aria-disabled={busy || refused}
+            aria-describedby={refused ? errorId : undefined}
             className="aria-disabled:opacity-50"
             onClick={() => {
-              if (inFlight.current || busy) return;
+              if (inFlight.current || busy || refused) return;
               inFlight.current = true;
               retry.mutate();
             }}
@@ -117,7 +141,12 @@ export function CaptureStatus({ cv }: { cv: BaseCv }) {
             Try the design again
           </Button>
           <Button asChild variant="link" size="sm">
-            <Link to={galleryPath(cv.id)}>Choose a template</Link>
+            <Link
+              to={galleryPath(cv.id)}
+              aria-label={`Choose a template for ${cv.name}`}
+            >
+              Choose a template
+            </Link>
           </Button>
         </div>
       </AlertDescription>

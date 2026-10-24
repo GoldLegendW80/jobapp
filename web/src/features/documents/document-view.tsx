@@ -88,11 +88,7 @@ export function DocumentView({
     queryKey: documentKey(documentId),
     queryFn: ({ signal }) => getDocument(documentId, signal),
     refetchInterval: (current) =>
-      pollInterval(
-        current.state.data?.render.state ?? "idle",
-        generation,
-        capture,
-      ),
+      pollInterval(current.state.data?.render.state ?? "idle", generation),
   });
 
   // The generation prop comes from another poll than the document's own: when it ends between two
