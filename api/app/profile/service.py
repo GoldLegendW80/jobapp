@@ -27,6 +27,9 @@ section's `linkedin` entry, `enabled`, `accepted_at` and `text_version` keep the
 `linkedin_consent=True`, which only PUT /api/browser/linkedin does (it shows the sentence and
 records the person's accept). The words and the location of the entry are saved as sent, and an
 entry left out removes it, which turns LinkedIn off.
+Free-Work consent follows the same dedicated-route rule, but an omitted Free-Work entry is
+retained: generic Search saves and imports cannot remove its protected settings. Restoring it
+must still satisfy the Search rules, including the ten-source limit, before anything is written.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -36,12 +39,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
+from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
 from app.profile.photo import Photo
-from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS
+from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS, validate_section
 
 REVISIONS_PAGE_MAX = 100
 
@@ -51,6 +55,14 @@ ONBOARDING_FIELDS = ("completed_at", "dismissed_at")
 
 class ReservedFieldError(Exception):
     """A save tried to change a field only the app writes (preferences.onboarding)."""
+
+
+class PreservedSearchError(Exception):
+    """Restoring protected settings would break a Search rule, before any profile write."""
+
+    def __init__(self, error: ValidationError) -> None:
+        super().__init__("preserved search does not validate")
+        self.error = error
 
 
 class StaleRevisionError(Exception):
@@ -98,11 +110,13 @@ def sections_view(profile: Profile) -> dict[str, dict[str, Any] | None]:
 
 CONSENT_FIELDS = ("enabled", "accepted_at", "text_version")
 LINKEDIN = "linkedin"
+PROTECTED_SOURCES = frozenset({LINKEDIN, "freework"})
 
 
-def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
-    """`data` (a validated search section) with its linkedin entry's consent fields put back to
-    the stored ones: off and none when no linkedin entry is stored."""
+def _keep_consent(
+    stored: dict[str, Any] | None, data: dict[str, Any], trusted: str | None = None
+) -> dict[str, Any]:
+    """Keep each protected source's own consent; only its dedicated route may change it."""
     # Old editors and imports cannot accidentally erase the new saved search fields.
     data = {
         **{
@@ -113,32 +127,36 @@ def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[s
         **data,
     }
     sources = data.get("browser_sources")
-    if not isinstance(sources, list) or not any(
-        isinstance(s, dict) and s.get("kind") == LINKEDIN for s in sources
-    ):
+    if not isinstance(sources, list):
         return data
-    before = next(
-        (
-            s
-            for s in (stored or {}).get("browser_sources") or []
-            if isinstance(s, dict) and s.get("kind") == LINKEDIN
-        ),
-        None,
+    previous = {
+        s["kind"]: s
+        for s in (stored or {}).get("browser_sources") or []
+        if isinstance(s, dict) and s.get("kind") in PROTECTED_SOURCES
+    }
+    restored = "freework" in previous and not any(
+        isinstance(source, dict) and source.get("kind") == "freework" for source in sources
     )
-    kept = {
-        "enabled": bool(before.get("enabled")) if before else False,
-        "accepted_at": before.get("accepted_at") if before else None,
-        "text_version": before.get("text_version") if before else None,
-    }
-    if (kept["accepted_at"] is None) != (kept["text_version"] is None):
-        kept = {"enabled": False, "accepted_at": None, "text_version": None}
-    return {
-        **data,
-        "browser_sources": [
-            {**s, **kept} if isinstance(s, dict) and s.get("kind") == LINKEDIN else s
-            for s in sources
-        ],
-    }
+    if restored:
+        sources = [*sources, previous["freework"]]
+    kept = []
+    for source in sources:
+        if not isinstance(source, dict) or source.get("kind") not in PROTECTED_SOURCES - {trusted}:
+            kept.append(source)
+            continue
+        before = previous.get(source["kind"], {})
+        consent = {key: before.get(key) for key in CONSENT_FIELDS}
+        consent["enabled"] = consent["enabled"] is True
+        if (consent["accepted_at"] is None) != (consent["text_version"] is None):
+            consent = {"enabled": False, "accepted_at": None, "text_version": None}
+        kept.append({**source, **consent})
+    result = {**data, "browser_sources": kept}
+    if restored:
+        try:
+            return validate_section("search", result)
+        except ValidationError as exc:
+            raise PreservedSearchError(exc) from None
+    return result
 
 
 def save_section(
@@ -150,6 +168,7 @@ def save_section(
     now: datetime,
     *,
     linkedin_consent: bool = False,
+    platform_consent: str | None = None,
     onboarding_sent: frozenset[str] | None = None,
 ) -> Profile:
     """Replace one section with already validated `data` and record the revision.
@@ -166,8 +185,13 @@ def save_section(
     profile = _locked(db, user_id, now)
     if profile.revision != base_revision:
         raise StaleRevisionError(profile)
-    if section == "search" and not linkedin_consent:
-        data = _keep_consent((profile.sections or {}).get("search"), data)
+    if platform_consent not in (None, "freework"):
+        raise ValueError("unknown platform consent")
+    if linkedin_consent and platform_consent is not None:
+        raise ValueError("one dedicated consent route per save")
+    if section == "search":
+        trusted = LINKEDIN if linkedin_consent else platform_consent
+        data = _keep_consent((profile.sections or {}).get("search"), data, trusted)
     if section == "preferences":
         data = _keep_onboarding(profile, data, onboarding_sent)
         if data.get("onboarding") != _onboarding(profile):

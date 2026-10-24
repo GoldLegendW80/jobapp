@@ -765,13 +765,14 @@ class BrowserSource(_Section):
     """A job source read through the person's browser (browser B8, app/browser/sources): the
     words typed in the site's search box, and its location box when the site has one. B8 runs
     `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
-    finder agent), B10 `linkedin`. Off until the person turns it on.
+    finder agent), B10 `linkedin`. The `freework` entry stores O7b consent; its reader is a
+    separate slice. Off until the person turns it on.
 
-    A `linkedin` source (B10) also records the acceptance of the risk sentence: when
+    A protected source (`linkedin`, `freework`) records the risk sentence's acceptance: when
     (`accepted_at`, ISO 8601 with its offset) and which version (`text_version`), written by
-    PUT /api/browser/linkedin; the other kinds have neither."""
+    its dedicated consent route; the other kinds have neither."""
 
-    kind: Literal["google_careers", "vie", "site", "linkedin"]
+    kind: Literal["google_careers", "vie", "site", "linkedin", "freework"]
     query: Line
     location: OptLine = None
     enabled: bool = False
@@ -780,8 +781,11 @@ class BrowserSource(_Section):
 
     @model_validator(mode="after")
     def _acceptance(self) -> "BrowserSource":
-        if self.kind != "linkedin" and (self.accepted_at, self.text_version) != (None, None):
-            raise ValueError("only a linkedin source records an acceptance")
+        if self.kind not in ("linkedin", "freework") and (self.accepted_at, self.text_version) != (
+            None,
+            None,
+        ):
+            raise ValueError("only a protected browser source records an acceptance")
         if (self.accepted_at is None) != (self.text_version is None):
             raise ValueError("accepted_at and text_version go together")
         if self.accepted_at is not None:
@@ -985,10 +989,11 @@ class SearchSection(_Section):
 
     @field_validator("browser_sources")
     @classmethod
-    def _one_linkedin(cls, value: list[BrowserSource]) -> list[BrowserSource]:
-        # The LinkedIn switch is one per person (browser B10): one entry holds it.
-        if sum(source.kind == "linkedin" for source in value) > 1:
-            raise ValueError("at most one linkedin source")
+    def _one_protected_source(cls, value: list[BrowserSource]) -> list[BrowserSource]:
+        # A protected switch is one per person: one entry holds each kind's consent.
+        for kind in ("linkedin", "freework"):
+            if sum(source.kind == kind for source in value) > 1:
+                raise ValueError(f"at most one {kind} source")
         return value
 
     @field_validator("interactive_sites")
