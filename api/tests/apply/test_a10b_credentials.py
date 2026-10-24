@@ -22,6 +22,7 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.apply import agent as answer_agent
 from app.apply import answers, form_agent, gate, run, signin
 from app.apply.ats import base, generic
 from app.apply.ats.ashby import Ashby
@@ -367,6 +368,16 @@ def test_a_credential_row_of_an_older_fill_is_never_shown_hashed_refilled_or_ans
     with pytest.raises(gate.InvalidAnswerError, match="unknown_field"):
         gate.set_answer(db, person_a.user_id, ref, f"text:{base.fold(label)}#1", "x", AT)
     db.rollback()
+
+
+def test_no_model_is_asked_about_a_credential_box() -> None:
+    left = answers.Left("not_a_known_question", (), True)
+    boxes = [
+        base.Field("text:secret word#1", "Secret word", "text", required=True, credential=True),
+        base.Field("text:tell us#1", "Tell us about a project", "text", required=True),
+    ]
+    outcomes = [base.Outcome(b, left, base.Filled("left", "not_a_known_question")) for b in boxes]
+    assert [q.label for q in answer_agent.eligible(outcomes)] == ["Tell us about a project"]
 
 
 def test_a_box_browserd_reads_as_a_credential_is_never_written_whatever_its_label(db, person_a):

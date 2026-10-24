@@ -39,7 +39,9 @@ that); nor is `<a href="javascript:...">`; Enter in a single text input outside 
 through; a name written in another language than English or French is not read; a closed shadow
 root is not entered (its host is judged); a page script that moves or inserts a submit under
 the click point between the facts read and the click, or moves the focus between a typing and
-its Enter.
+its Enter. A credential input is read from its own attributes: a password box drawn as a plain
+text box with no autocomplete is not one (the app's label rule reads it), nor is a user name box
+whose form keeps its password box inside a shadow root, nor a page's plain user name box.
 """
 
 import re
