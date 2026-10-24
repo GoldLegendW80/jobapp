@@ -451,7 +451,8 @@ def test_the_end_runs_every_step_when_the_reap_fails(monkeypatch: pytest.MonkeyP
     assert helpers.seen == ["killuid", "rmtree"]
 
 
-def test_the_manager_ends_a_lease_whose_browser_failed_to_stop() -> None:
+@pytest.mark.parametrize("reason", ["released", "browser_crashed"])
+def test_the_manager_ends_a_lease_whose_browser_failed_to_stop(reason: str) -> None:
     class Failing:
         async def stop(self) -> None:
             raise OSError("quit could not start")
@@ -468,11 +469,10 @@ def test_the_manager_ends_a_lease_whose_browser_failed_to_stop() -> None:
     mgr = Manager(Config(secret=b"s"), start, Clock(), measure=measure)
 
     async def go() -> None:
-        for reason in ("released", "browser_crashed"):
-            lease, _ = await mgr.acquire(request("signin"))
-            assert await mgr.release(lease.lease_id, reason)
-            assert mgr.last_end == {"lease_id": lease.lease_id, "reason": reason, "size_bytes": 12}
-            assert (mgr.current(), mgr.ending) == (None, None)
+        lease, _ = await mgr.acquire(request("signin"))
+        assert await mgr.release(lease.lease_id, reason)
+        assert mgr.last_end == {"lease_id": lease.lease_id, "reason": reason, "size_bytes": 12}
+        assert (mgr.current(), mgr.ending) == (None, None)
 
     run(go())
 
