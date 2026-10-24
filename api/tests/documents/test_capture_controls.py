@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import socket
+import threading
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from threading import Barrier
 from typing import Any
 
+import httpx
 import pytest
 import sqlalchemy as sa
+import uvicorn
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app import queue as queues
@@ -23,20 +31,60 @@ from app.documents import (
 )
 from app.documents.models import (
     BaseSource,
+    Document,
     DocumentGeneration,
     GenerationMode,
     GenerationStatus,
     GenerationTrigger,
 )
 from app.ingestion.models import IngestionDocument
-from tests.documents.canary import marker
+from app.logging_config import SafeStreamHandler
+from tests.documents.canary import find, marker
 from tests.documents.capture_support import captures, world
 from tests.documents.test_base_api import alex, queue
-from tests.identity.api_helpers import Api
+from tests.identity.api_helpers import Api, make_user
 from tests.identity.conftest import api, app, clock, engine, factory, migrated_url
 
 __all__ = ["alex", "api", "app", "clock", "engine", "factory", "migrated_url", "queue", "world"]
 BASES = "/api/documents/base-cvs"
+
+
+@contextmanager
+def served(app: FastAPI) -> Iterator[httpx.Client]:
+    """A client of the app behind a real uvicorn on a loopback socket, as the image runs it."""
+    # Already listening: a request waits in the backlog until the server accepts it.
+    listener = socket.create_server(("127.0.0.1", 0))
+    server = uvicorn.Server(uvicorn.Config(app, log_config=None, lifespan="off"))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    thread.start()
+    try:
+        port = listener.getsockname()[1]
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30) as client:
+            yield client
+    finally:
+        server.should_exit = True
+        thread.join(timeout=30)
+        listener.close()
+    assert not thread.is_alive()
+
+
+def file_gone(world: Any, how: str) -> None:
+    """The original's bytes dropped by ingestion, or the ingestion document deleted."""
+    if how == "bytes":
+        with world.factory() as db:
+            db.execute(
+                sa.text("UPDATE ingestion_documents SET bytes=NULL WHERE id=:i"),
+                {"i": world.upload},
+            )
+            db.commit()
+        return
+    deleted = world.api.request(
+        "DELETE", f"/api/ingestion/documents/{world.upload}", token=world.token
+    )
+    assert deleted.status_code == 204, deleted.text
+    with world.factory() as db:
+        document = db.get(Document, world.base)
+        assert (document.base_source, document.source_document_id) == (BaseSource.uploaded, None)
 
 
 def response_generation(world: Any, response: Any) -> DocumentGeneration:
@@ -109,6 +157,57 @@ def test_retry_waits_or_fails_without_starting_a_model(world: Any, queue: Any, r
     )
 
 
+@pytest.mark.parametrize("how", ["bytes", "original"])
+def test_clicks_while_the_file_is_gone_answer_one_failed_capture(
+    world: Any, queue: Any, how: str
+) -> None:
+    file_gone(world, how)
+    answers = [
+        response_generation(world, world.api.post(world.url, token=world.token)) for _ in range(3)
+    ]
+    (made,) = captures(world)
+    assert [answer.id for answer in answers] == [made.id] * 3
+    assert (made.status, made.error, made.run_id) == (GenerationStatus.failed, "binding_gone", None)
+    with world.factory() as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(AgentRun)) == 0
+    assert queue.jobs == []
+
+
+def test_a_file_given_back_is_captured_by_the_next_click(world: Any, queue: Any) -> None:
+    file_gone(world, "bytes")
+    failed = response_generation(world, world.api.post(world.url, token=world.token))
+    with world.factory() as db:
+        db.execute(
+            sa.text("UPDATE ingestion_documents SET bytes=:b WHERE id=:i"),
+            {"b": b"%PDF-1.7 invented scheduler fixture", "i": world.upload},
+        )
+        db.commit()
+    started = response_generation(world, world.api.post(world.url, token=world.token))
+    assert (failed.error, started.status) == ("binding_gone", GenerationStatus.running)
+    assert {made.id for made in captures(world)} == {failed.id, started.id}
+    assert len(queue.jobs) == 1
+
+
+def test_an_open_generation_refuses_while_the_file_is_gone(world: Any) -> None:
+    file_gone(world, "bytes")
+    response_generation(world, world.api.post(world.url, token=world.token))
+    with world.factory() as db:
+        store.create_generation(
+            db,
+            world.user,
+            world.base,
+            GenerationMode.chat,
+            GenerationTrigger.click,
+            at=world.clock(),
+            estimate={},
+            token_ceiling=1,
+        )
+        db.commit()
+    answer = world.api.post(world.url, token=world.token)
+    assert answer.status_code == 409, answer.text
+    assert len(captures(world)) == 1
+
+
 @pytest.mark.parametrize(
     "mode", [GenerationMode.base_profile, GenerationMode.chat, GenerationMode.template_capture]
 )
@@ -130,17 +229,11 @@ def test_any_open_generation_refuses_retry(world: Any, mode: GenerationMode) -> 
     assert answer.headers.get("cache-control") == "private, no-store"
 
 
-def test_missing_and_other_person_have_the_same_private_404(world: Any) -> None:
-    other = world.api.login_token("e2e-docs-base-alex@example.org")
-    # A distinct user's document, not a guessed source identifier.
-    from tests.identity.api_helpers import make_user
-
-    stranger = make_user(world.factory, email="e2e-capture-stranger@example.org", name="Invented")
-    with world.factory() as db:
-        base = store.create_base(db, stranger.id, "Other", BaseSource.built, at=world.clock())
-        db.commit()
-    missing = world.api.post(f"/api/documents/{uuid.uuid4()}/design/capture", token=other)
-    foreign = world.api.post(f"/api/documents/{base.id}/design/capture", token=other)
+def test_another_person_gets_the_missing_404_on_an_uploaded_cv(world: Any, queue: Any) -> None:
+    make_user(world.factory, email="e2e-capture-stranger@example.org", name="Invented")
+    stranger = world.api.login_token("e2e-capture-stranger@example.org")
+    missing = world.api.post(f"/api/documents/{uuid.uuid4()}/design/capture", token=stranger)
+    foreign = world.api.post(world.url, token=stranger)
     assert missing.status_code == foreign.status_code == 404
     assert missing.json() == foreign.json()
     assert (
@@ -148,6 +241,12 @@ def test_missing_and_other_person_have_the_same_private_404(world: Any) -> None:
         == foreign.headers.get("cache-control")
         == "private, no-store"
     )
+    assert captures(world) == []
+    with world.factory() as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(AgentRun)) == 0
+    assert queue.jobs == []
+    owned = response_generation(world, world.api.post(world.url, token=world.token))
+    assert owned.status is GenerationStatus.running
 
 
 def test_owned_non_upload_is_422(world: Any) -> None:
@@ -156,6 +255,7 @@ def test_owned_non_upload_is_422(world: Any) -> None:
         db.commit()
     answer = world.api.post(f"/api/documents/{built.id}/design/capture", token=world.token)
     assert answer.status_code == 422, answer.text
+    assert answer.json() == {"detail": "This CV was not converted from an uploaded file."}
     assert answer.headers.get("cache-control") == "private, no-store"
 
 
@@ -174,6 +274,25 @@ def test_early_errors_are_private_and_create_nothing(world: Any, kind: str, expe
     assert captures(world) == []
 
 
+@pytest.mark.parametrize(
+    ("method", "target", "signed", "csrf", "expected"),
+    [
+        ("GET", "{id}", False, True, 401),
+        ("GET", "not-a-uuid", True, True, 422),
+        ("POST", "{id}/cancel", True, False, 403),
+        ("POST", "{id}", True, True, 405),
+    ],
+)
+def test_early_generation_refusals_are_private(
+    world: Any, method: str, target: str, signed: bool, csrf: bool, expected: int
+) -> None:
+    path = "/api/document-generations/" + target.format(id=uuid.uuid4())
+    token = world.token if signed else None
+    answer = world.api.request(method, path, token=token, csrf=csrf)
+    assert answer.status_code == expected, answer.text
+    assert answer.headers.get("cache-control") == "private, no-store"
+
+
 def test_unhandled_response_is_private_and_fixed(
     world: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -181,8 +300,12 @@ def test_unhandled_response_is_private_and_fixed(
         raise RuntimeError("synthetic boundary failure")
 
     monkeypatch.setattr(store, "lock_document", broken)
-    with TestClient(world.app, raise_server_exceptions=False) as client:
+    # Raises here what would leave the app, as uvicorn would then log it.
+    client = TestClient(world.app, raise_server_exceptions=True)
+    try:
         answer = Api(client).post(world.url, token=world.token)
+    finally:
+        client.close()
     assert answer.status_code == 500, answer.text
     assert answer.json() == {"detail": "internal server error"}
     assert answer.headers.get("cache-control") == "private, no-store"
@@ -252,37 +375,39 @@ def test_original_canary_is_absent_from_retry_sinks(
     assert planted not in json.dumps([vars(record) for record in caplog.records], default=str)
 
 
-def test_unhandled_document_exception_keeps_private_context_out_of_full_logs(
-    world: Any, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("prefix", ["/api/documents", "/api/document-generations"])
+def test_an_unhandled_error_stays_out_of_the_server_log(
+    world: Any, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str], prefix: str
 ) -> None:
     planted = marker()
-    path = "/api/documents/test-capture/error"
+    path = f"{prefix}/test-capture/error"
 
     def broken() -> None:
         raise RuntimeError(planted)
 
     world.app.add_api_route(path, broken, methods=["GET"])
     caplog.set_level(logging.INFO)
-    with TestClient(world.app, raise_server_exceptions=False) as client:
-        answer = Api(client).get(path, token=world.token)
+    # The app's own handler, as configured by create_app: what the container log receives.
+    (handler,) = [one for one in logging.getLogger().handlers if isinstance(one, SafeStreamHandler)]
+    written = io.StringIO()
+    kept = handler.setStream(written)
+    try:
+        with served(world.app) as client:
+            answer = Api(client).get(path, token=world.token)
+    finally:
+        handler.setStream(kept)
+    output = capfd.readouterr()
     assert answer.status_code == 500
     assert answer.json() == {"detail": "internal server error"}
-    assert any(
-        record.name == "app" and record.levelno >= logging.ERROR for record in caplog.records
-    )
-    recorded = json.dumps([vars(record) for record in caplog.records], default=str)
-    output = capfd.readouterr()
-    assert {
-        "cache": answer.headers.get("cache-control"),
-        "private_context_in_records": planted in recorded,
-        "private_context_in_output": planted in output.out + output.err,
-        "private_context_in_response": planted in answer.text,
-    } == {
-        "cache": "private, no-store",
-        "private_context_in_records": False,
-        "private_context_in_output": False,
-        "private_context_in_response": False,
-    }
+    assert answer.headers.get("cache-control") == "private, no-store"
+    assert [one for one in caplog.records if one.name.startswith("uvicorn") and one.exc_info] == []
+    logs = [*caplog.records, *written.getvalue().splitlines(), output.out, output.err]
+    assert find([planted], logs=logs, values=[answer.text, dict(answer.headers)]) == []
+    failed = [one for one in caplog.records if one.getMessage() == "documents.request.failed"]
+    assert [(one.name, one.levelno, getattr(one, "error", None)) for one in failed] == [
+        ("app.documents", logging.ERROR, "RuntimeError")
+    ]
+    assert "documents.request.failed" in written.getvalue()
     assert captures(world) == []
 
 
@@ -293,6 +418,9 @@ def test_unhandled_document_exception_keeps_private_context_out_of_full_logs(
         ("/api/documents/", True),
         ("/api/documents/anything/deeper", True),
         ("/api/documentsx", False),
+        ("/api/document-generations", True),
+        ("/api/document-generations/anything/cancel", True),
+        ("/api/document-generationsx", False),
         ("/api/document-templates", False),
         ("/api/document-templates/classic/thumbnail", False),
         ("/api/jobs", False),
@@ -312,11 +440,21 @@ def test_private_cache_rule_covers_only_the_documents_prefix(path: str, private:
     async def next_response(_: Request) -> Response:
         return Response(headers={"Cache-Control": "public, max-age=60"})
 
+    async def failing(_: Request) -> Response:
+        raise RuntimeError("synthetic boundary failure")
+
     request = Request({"type": "http", "method": "GET", "path": path, "headers": []})
     response = asyncio.run(routers.no_store(request, next_response))
     assert response.headers["cache-control"] == (
         "private, no-store" if private else "public, max-age=60"
     )
+    if not private:
+        with pytest.raises(RuntimeError):
+            asyncio.run(routers.no_store(request, failing))
+        return
+    failed = asyncio.run(routers.no_store(request, failing))
+    assert (failed.status_code, failed.body) == (500, b'{"detail":"internal server error"}')
+    assert failed.headers["cache-control"] == "private, no-store"
 
 
 def test_bundled_thumbnail_stays_publicly_cached(world: Any) -> None:

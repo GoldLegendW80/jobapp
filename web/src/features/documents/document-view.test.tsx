@@ -16,7 +16,12 @@ import { server } from "@/test/server";
 import { createQueryClient } from "@/lib/query";
 
 import { DocumentView } from "./document-view";
-import { templatesKey, versionsKey, type Generation } from "./documents-api";
+import {
+  documentKey,
+  templatesKey,
+  versionsKey,
+  type Generation,
+} from "./documents-api";
 import { pollInterval, POLL_MS, WAITING_POLL_MS } from "./labels";
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
@@ -376,7 +381,7 @@ afterEach(() => {
 
 describe("the independent capture lifecycle", () => {
   it.each(["done", "failed"] as const)(
-    "polls capture then performs the final owned refresh on %s after content ended",
+    "leaves the document unread during capture, then reads it once on %s",
     async (terminal) => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       const api = fakeDocuments();
@@ -402,10 +407,9 @@ describe("the independent capture lifecycle", () => {
         ).length;
       expect(reads()).toBe(1);
       view.rerender(ui(open("running")));
-      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
-      await waitFor(() => {
-        expect(reads()).toBe(2);
-      });
+      await act(() => vi.advanceTimersByTimeAsync(WAITING_POLL_MS));
+      expect(client.isFetching({ queryKey: documentKey("a") })).toBe(0);
+      expect(reads()).toBe(1);
       api.documents.set(
         "a",
         fakeDocumentOf(cv, {
@@ -418,7 +422,7 @@ describe("the independent capture lifecycle", () => {
       expect(
         await screen.findByRole("img", { name: "Page 1 of version 2" }),
       ).toBeVisible();
-      expect(reads()).toBe(3);
+      expect(reads()).toBe(2);
       if (terminal === "done") {
         expect(client.getQueryState(templatesKey)?.isInvalidated).toBe(true);
         expect(
@@ -432,7 +436,7 @@ describe("the independent capture lifecycle", () => {
       expect(screen.getByRole("tab", { name: "Edit" })).toBeEnabled();
       expect(screen.getByRole("link", { name: "Download PDF" })).toBeVisible();
       await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
-      expect(reads()).toBe(3);
+      expect(reads()).toBe(2);
     },
   );
 });
