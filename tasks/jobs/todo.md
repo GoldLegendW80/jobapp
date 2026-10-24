@@ -103,7 +103,7 @@ Task [#629](https://github.com/GoldLegendW80/jobapp/issues/629). Acceptance, own
 
 ### J10: run selected websites through the interactive finder
 
-Task [#630](https://github.com/GoldLegendW80/jobapp/issues/630). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+Task [#630](https://github.com/GoldLegendW80/jobapp/issues/630). Acceptance, owned files and verification are in that issue and the linked plan. Status: building on the reviewed search checkpoints, not merged or deployed. Truthful incremental persistence remains J11.
 
 ### J11: save verified search findings incrementally
 

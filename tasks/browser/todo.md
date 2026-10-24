@@ -278,6 +278,8 @@ Task [#628](https://github.com/GoldLegendW80/jobapp/issues/628). Acceptance, own
 
 Task [#631](https://github.com/GoldLegendW80/jobapp/issues/631). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
 
+Prerequisites are tracked separately: API-only Free-Work extraction [#643](https://github.com/GoldLegendW80/jobapp/issues/643), optional generic Search client compatibility [#645](https://github.com/GoldLegendW80/jobapp/issues/645), and Indeed/WTTJ consent [#644](https://github.com/GoldLegendW80/jobapp/issues/644). The extracted consent portion overlaps draft #619 but excludes its unrelated unmerged ancestry; that existing draft stays untouched. A future gate must select or reconcile the foundation lineage.
+
 ### B15: watched sign-in and takeover during manual search
 
 Task [#634](https://github.com/GoldLegendW80/jobapp/issues/634). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
