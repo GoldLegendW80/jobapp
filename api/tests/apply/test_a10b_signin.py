@@ -5,14 +5,16 @@ import uuid
 from functools import wraps
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
 from app.apply import run, signin
 from app.apply.models import Mode, State
 from app.browser.handoff import Outcome
-from tests.apply.a5_support import FakeLeases, run_ashby
-from tests.apply.test_a5_run import application, fill, services, started
+from tests.apply.a5_support import FakeAgent, FakeLeases, RunForm, run_ashby
+from tests.apply.test_a5_run import application, fill, services, started, why_answer
+from tests.apply.test_a13_full_auto import liked, turn_on
 
 WALL = (
     '- heading "Sign in" [ref=e1]\n- textbox "Email" [ref=e2]\n'
@@ -120,6 +122,83 @@ def test_owned_signin_callback_queues_once_and_full_auto_stays_review(db, person
     assert application(db, ref).mode is Mode.review
     assert application(db, ref).state is State.queued
     assert not signin.signed_in(db, person_a.user_id, ref, AT)
+
+
+def walled(form: RunForm) -> list[str]:
+    """`form` behind the login wall until a hand off is answered; returns the sites asked."""
+    shown = form.snapshot
+    asked: list[str] = []
+
+    async def snapshot() -> dict[str, Any]:
+        if not asked:
+            return {"ok": True, "url": form.url, "snapshot": WALL}
+        return await shown()
+
+    form.snapshot = snapshot  # type: ignore[method-assign]
+    return asked
+
+
+def test_a_watched_fill_asks_once_at_the_wall_and_fills_the_form_behind_it(
+    db, factory, person_a, forms_base_url, monkeypatch
+):
+    form = run_ashby()
+    asked = walled(form)
+
+    async def request(tools: Any, site: str, reason: str) -> Outcome:
+        asked.append(site)
+        return Outcome("signed_in")
+
+    form.ask_signin = request  # type: ignore[attr-defined]
+    monkeypatch.setattr(signin, "request_signin", request)
+    ref = started(db, person_a)
+    leases = FakeLeases()
+    agent = FakeAgent(why_answer)
+    assert fill(services(factory, form, leases, agent, stub_base=forms_base_url), ref) == "ready"
+    assert asked == [urlsplit(application(db, ref).form_url).hostname]
+    assert len(leases.released) == 1
+
+
+def test_a_fill_nobody_watches_waits_for_a_later_sign_in_without_asking(
+    db, factory, person_a, forms_base_url, monkeypatch
+):
+    form = run_ashby()
+    walled(form)
+
+    async def request(*_: Any) -> Outcome:
+        pytest.fail("a lease nobody can watch starts no hand off")
+
+    monkeypatch.setattr(signin, "request_signin", request)
+    ref = started(db, person_a)
+    leases = FakeLeases()
+    assert fill(services(factory, form, leases, stub_base=forms_base_url), ref) == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs, found.mode) == (State.needs_person, "signin", Mode.review)
+    assert len(leases.released) == 1
+
+
+def test_a_full_auto_fill_at_a_wall_goes_to_the_review_queue_as_needs_you(
+    db, factory, person_a, forms_base_url, monkeypatch
+):
+    turn_on(db, person_a)
+    ref = liked(db, person_a, forms_base_url)
+    form = run_ashby()
+    asked = []
+
+    async def snapshot() -> dict[str, Any]:
+        return {"ok": True, "url": form.url, "snapshot": WALL}
+
+    async def request(tools: Any, site: str, reason: str) -> Outcome:
+        asked.append(site)  # browserd answers at once for a `full_auto` lease
+        return Outcome("nobody_watching")
+
+    form.snapshot, form.ask_signin = snapshot, request  # type: ignore[method-assign]
+    monkeypatch.setattr(signin, "request_signin", request)
+    leases = FakeLeases()
+    assert fill(services(factory, form, leases, stub_base=forms_base_url), ref) == "needs_person"
+    assert leases.acquired[0]["purpose"] == run.FULL_AUTO_PURPOSE
+    assert len(asked) == 1
+    found = application(db, ref)
+    assert (found.state, found.needs, found.mode) == (State.needs_person, "signin", Mode.review)
 
 
 def test_a_tokenless_waiting_lease_survives_the_next_fill(db, factory, person_a, forms_base_url):
