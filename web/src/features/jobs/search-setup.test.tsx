@@ -1158,3 +1158,258 @@ it("requires a new explicit checkbox action when the current disclosure changes"
   ).toBeDisabled();
   expect(writes).toEqual([]);
 });
+
+const FINAL_PERMISSION_UPDATES = [
+  "newer Off and profile",
+  "permission-only Off",
+  "equal Off on a frozen clock",
+  "unrelated profile edit",
+  "newer Enabled after Disable",
+  "recreated permission cache",
+  "recreated profile cache",
+  "unmount",
+  "unchanged",
+] as const;
+
+it.each(
+  MAP_PERMISSIONS.flatMap(([kind, label]) =>
+    FINAL_PERMISSION_UPDATES.map((update) => ({ kind, label, update })),
+  ),
+)(
+  "guards final $kind permission GET after $update",
+  async ({ kind, label, update }) => {
+    const { profile, starts, user, dialog, client, router } = await open();
+    const disabling = update === "newer Enabled after Disable";
+    const writes = permissionApi(profile, disabling);
+    const card = await reviewPermission(user, dialog, label);
+    const key = ["search-permission", kind];
+    const initial = client.getQueryData<typeof confirmedPermission>(key)!;
+    const instructions = within(dialog).getByRole("textbox", {
+      name: "Instructions for this search",
+    });
+    await user.type(instructions, "Keep this final GET draft.");
+    await user.click(within(dialog).getByRole("checkbox", { name: label }));
+    const entered = deferred();
+    const release = deferred();
+    const consumed = deferred();
+    const snapshot = {
+      ...confirmedPermission,
+      enabled: !disabling,
+      allowed: !disabling,
+      text: `Current ${kind} risk sentence.`,
+    };
+    server.use(
+      http.get(
+        permissionPath(kind),
+        async () => {
+          entered.resolve();
+          await release.promise;
+          return HttpResponse.json(snapshot);
+        },
+        { once: true },
+      ),
+    );
+    const fetch = globalThis.fetch;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (...args) => {
+        const response = await fetch(...args);
+        if (
+          typeof args[0] === "string" &&
+          args[0].endsWith(`/opportunities/platforms/${kind}`) &&
+          args[1]?.method === "GET"
+        ) {
+          const text = response.text.bind(response);
+          response.text = async () => {
+            try {
+              return await text();
+            } finally {
+              consumed.resolve();
+            }
+          };
+        }
+        return response;
+      });
+    let frozen: { mockRestore: () => void } | undefined;
+    let active = dialog;
+    let expected = initial;
+    try {
+      if (disabling)
+        await user.click(
+          within(card).getByRole("button", {
+            name: `Disable ${label} browsing`,
+          }),
+        );
+      else await acceptPermission(user, card, label);
+      await entered.promise;
+      expect(profile.revision).toBe(7);
+      expect(
+        within(dialog).getByRole("button", { name: "Save and Start" }),
+      ).toBeDisabled();
+      expect(instructions).toBeDisabled();
+      expect(writes).toEqual([
+        {
+          kind,
+          body: disabling
+            ? { enabled: false, base_revision: 6 }
+            : { enabled: true, base_revision: 6, accept_version: 4 },
+        },
+      ]);
+      if (
+        ["newer Off and profile", "permission-only Off", "unmount"].includes(
+          update,
+        )
+      ) {
+        expected = {
+          ...initial,
+          enabled: false,
+          accepted: true,
+          allowed: false,
+        };
+        act(() => {
+          client.setQueryData(key, expected);
+        });
+      }
+      if (
+        ["newer Off and profile", "unrelated profile edit", "unmount"].includes(
+          update,
+        )
+      ) {
+        profile.revision = 8;
+        if (update === "unrelated profile edit")
+          profile.sections.identity = {
+            ...EMPTY.identity,
+            headline: "Newer profile headline",
+          };
+        const newer = await getProfile();
+        act(() => {
+          client.setQueryData(profileKey, newer);
+        });
+      }
+      if (update === "equal Off on a frozen clock") {
+        const before = client.getQueryState(key)!;
+        frozen = vi.spyOn(Date, "now").mockReturnValue(before.dataUpdatedAt);
+        act(() => {
+          client.setQueryData(key, structuredClone(initial));
+        });
+        expect(client.getQueryData(key)).toBe(before.data);
+        expect(client.getQueryState(key)!.dataUpdatedAt).toBe(
+          before.dataUpdatedAt,
+        );
+        expect(client.getQueryState(key)!.dataUpdateCount).toBe(
+          before.dataUpdateCount + 1,
+        );
+      }
+      if (disabling)
+        act(() => {
+          client.setQueryData(key, structuredClone(initial));
+        });
+      if (
+        update === "recreated permission cache" ||
+        update === "recreated profile cache"
+      ) {
+        const changedKey =
+          update === "recreated profile cache" ? profileKey : key;
+        const before = client.getQueryState(changedKey)!;
+        act(() => {
+          client.removeQueries({ queryKey: changedKey, exact: true });
+          for (let count = 0; count < before.dataUpdateCount; count += 1)
+            client.setQueryData(changedKey, before.data, {
+              updatedAt: before.dataUpdatedAt,
+            });
+        });
+        expect(client.getQueryState(changedKey)!.dataUpdateCount).toBe(
+          before.dataUpdateCount,
+        );
+        expect(client.getQueryState(changedKey)!.dataUpdatedAt).toBe(
+          before.dataUpdatedAt,
+        );
+        expect(client.getQueryData(changedKey)).toBe(before.data);
+      }
+      if (update === "unmount") {
+        await act(async () => {
+          await router.navigate("/privacy");
+        });
+        await act(async () => {
+          await router.navigate("/jobs");
+        });
+        await screen.findByRole("table", { name: "Postings" });
+        await user.click(screen.getByRole("button", { name: "Find jobs" }));
+        active = await screen.findByRole("dialog", { name: "Find jobs setup" });
+        await user.type(
+          within(active).getByRole("textbox", {
+            name: "Instructions for this search",
+          }),
+          "New mounted draft.",
+        );
+      }
+      const currentProfile = client.getQueryData<Profile>(profileKey)!;
+      await act(async () => {
+        release.resolve();
+        await consumed.promise;
+      });
+      expect(client.getQueryData<Profile>(profileKey)).toBe(currentProfile);
+      expect(client.getQueryData(key)).toEqual(
+        update === "unchanged" ? snapshot : expected,
+      );
+      expect(writes).toHaveLength(1);
+      expect(profile.saves).toEqual([]);
+      expect(starts).toEqual([]);
+      const draft = within(active).getByRole("textbox", {
+        name: "Instructions for this search",
+      });
+      expect(draft).toHaveValue(
+        update === "unmount"
+          ? "New mounted draft."
+          : "Keep this final GET draft.",
+      );
+      expect(draft).toBeEnabled();
+      if (update !== "unmount")
+        expect(
+          within(dialog).getByRole("checkbox", { name: label }),
+        ).toBeChecked();
+      if (update === "unchanged") {
+        expect(within(card).getByText("Browsing allowed")).toBeVisible();
+        await user.click(
+          within(dialog).getByRole("button", { name: "Save and Start" }),
+        );
+        await waitFor(() => {
+          expect(starts).toEqual([{ profile_revision: 8 }]);
+        });
+        expect(profile.saves[0]!.body.base_revision).toBe(7);
+        expect(writes).toHaveLength(1);
+      } else if (update !== "unmount") {
+        expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+          "browser permission changed",
+        );
+        expect(
+          within(dialog).getByRole("button", { name: "Save and Start" }),
+        ).toBeDisabled();
+        expect(
+          within(dialog).getByRole("button", { name: "Load current settings" }),
+        ).toBeEnabled();
+        if (update === "unrelated profile edit")
+          expect(
+            client.getQueryData<Profile>(profileKey)!.sections.identity
+              .headline,
+          ).toBe("Newer profile headline");
+        if (disabling)
+          expect(within(card).getByText("Browsing allowed")).toBeVisible();
+        else
+          expect(
+            within(card).queryByText("Browsing allowed"),
+          ).not.toBeInTheDocument();
+      } else {
+        expect(
+          within(active).getByRole("button", { name: "Save and Start" }),
+        ).toBeEnabled();
+        expect(within(active).queryByRole("alert")).not.toBeInTheDocument();
+        expect(client.getQueryData<Profile>(profileKey)!.revision).toBe(8);
+      }
+    } finally {
+      release.resolve();
+      fetchSpy.mockRestore();
+      frozen?.mockRestore();
+    }
+  },
+);

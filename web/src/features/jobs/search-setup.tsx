@@ -652,10 +652,22 @@ function PermissionCard({
       committed = true;
       if (!isMounted()) return;
       if (!(await onChanged())) return;
+      const profileState = client.getQueryState(profileKey);
+      const permissionState = client.getQueryState(key);
       const data = await request(path, {
         validate: (value) => permissionSchema.parse(value),
       });
       if (!isMounted()) return;
+      if (
+        !profileState ||
+        !permissionState ||
+        client.getQueryState(profileKey) !== profileState ||
+        client.getQueryState(key) !== permissionState
+      ) {
+        setStale(true);
+        onStale();
+        return;
+      }
       client.setQueryData(key, data);
       setAcceptedVersion(null);
     } catch (failure) {
