@@ -11,9 +11,13 @@ id would answer 422.
 
 import importlib
 import importlib.util
+import logging
 from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Request, Response
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger("app.documents")
 
 # (module of app.documents, its attribute), in the order they are included.
 ROUTERS: tuple[tuple[str, str], ...] = (
@@ -27,21 +31,28 @@ ROUTERS: tuple[tuple[str, str], ...] = (
     ("router", "router"),  # D6: /api/jobs/{id}/documents, /api/documents/{id} and below, last
 )
 
-PREFIX = "/api/documents"
+PREFIXES = ("/api/documents", "/api/document-generations")
 
 
 def private(path: str) -> bool:
-    """Match the documents prefix while leaving bundled template thumbnails outside it."""
-    return path == PREFIX or path.startswith(f"{PREFIX}/")
+    """Match the documents and generation prefixes, leaving bundled template thumbnails out."""
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in PREFIXES)
 
 
 async def no_store(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    """Private cache headers for documents answers, including early refusals."""
-    response = await call_next(request)
-    if private(request.url.path):
-        response.headers["Cache-Control"] = "private, no-store"
+    """Private cache headers for documents answers, including early refusals. An unhandled
+    error under these prefixes is answered here, a fixed 500 logged by its class only: one that
+    left the app would be logged whole by the server, its message and traceback included."""
+    if not private(request.url.path):
+        return await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.error("documents.request.failed", extra={"error": type(exc).__name__})
+        response = JSONResponse(status_code=500, content={"detail": "internal server error"})
+    response.headers["Cache-Control"] = "private, no-store"
     return response
 
 

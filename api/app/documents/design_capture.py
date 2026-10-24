@@ -73,6 +73,7 @@ from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, RunStatus
 from app.documents import design_check, font_map, store, template_rules, templates
 from app.documents.models import (
+    BaseSource,
     Document,
     DocumentGeneration,
     DocumentUserTemplate,
@@ -464,6 +465,37 @@ class CaptureRefusedError(Exception):
     """`not_uploaded`: the document is not a base CV converted from an upload of the person."""
 
 
+def _kept(db: Session, document: Document) -> int:
+    """The size of the base CV's original file still kept, 0 once it is gone."""
+    kept = db.scalar(
+        sa.select(sa.func.coalesce(sa.func.octet_length(IngestionDocument.raw), 0)).where(
+            IngestionDocument.id == document.source_document_id,
+            IngestionDocument.user_id == document.user_id,
+        )
+    )
+    return kept or 0
+
+
+def _failed_for_gone_file(db: Session, document: Document) -> DocumentGeneration | None:
+    """The base CV's last capture, when it failed for a file that is still gone and nothing
+    else of the document is open."""
+    if _kept(db, document) or store.open_generation(db, document.user_id, document.id):
+        return None
+    last = db.scalars(
+        sa.select(DocumentGeneration)
+        .where(
+            DocumentGeneration.user_id == document.user_id,
+            DocumentGeneration.document_id == document.id,
+            DocumentGeneration.mode == GenerationMode.template_capture,
+        )
+        .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
+        .limit(1)
+    ).first()
+    if last is None or (last.status, last.error) != (GenerationStatus.failed, "binding_gone"):
+        return None
+    return last
+
+
 def _prepare(
     db: Session,
     document: Document,
@@ -476,12 +508,7 @@ def _prepare(
 
     user_id = document.user_id
     figures = design_estimate.for_capture(db, user_id, document)
-    kept = db.scalar(
-        sa.select(sa.func.coalesce(sa.func.octet_length(IngestionDocument.raw), 0)).where(
-            IngestionDocument.id == document.source_document_id,
-            IngestionDocument.user_id == user_id,
-        )
-    )
+    kept = _kept(db, document)
     reason = writer_base.wait_reason(db, user_id)
     if not kept:
         # Nothing left to read: failed at once, no model is called (`binding_gone`).
@@ -543,10 +570,14 @@ def request(
     script: str | None = None,
     settings: Any = None,
 ) -> tuple[DocumentGeneration, uuid.UUID | None]:
-    """Prepare and attempt a capture; the caller commits before enqueueing its run ID."""
+    """Prepare and attempt a capture; the caller commits before enqueueing its run ID. While the
+    original file is still gone, the capture that failed for it is answered again, unchanged."""
     document = store.lock_document(db, user_id, document_id)
-    if document.scope != Scope.base or document.source_document_id is None:
+    if document.scope != Scope.base or document.base_source is not BaseSource.uploaded:
         raise CaptureRefusedError("not_uploaded")
+    failed = _failed_for_gone_file(db, document)
+    if failed is not None:
+        return failed, None
     generation = _prepare(db, document, at=at, trigger=trigger)
     return generation, start_prepared(
         db, user_id, generation.id, at=at, script=script, settings=settings
@@ -580,12 +611,7 @@ def start_prepared(
     db.refresh(generation)
     if generation.status not in (GenerationStatus.waiting, GenerationStatus.queued):
         return None
-    kept = db.scalar(
-        sa.select(sa.func.coalesce(sa.func.octet_length(IngestionDocument.raw), 0)).where(
-            IngestionDocument.id == document.source_document_id,
-            IngestionDocument.user_id == user_id,
-        )
-    )
+    kept = _kept(db, document)
     reason = writer_base.wait_reason(db, user_id)
     if not kept:
         generation.status, generation.wait_reason = GenerationStatus.failed, None
