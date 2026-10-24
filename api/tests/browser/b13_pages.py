@@ -91,7 +91,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 )
         elif path.path == "/b13/jobs/robot":
             body = (
-                "<main><h1>Robot Engineer</h1><p>Observed employer and duties</p></main>"
+                "<main><article><h1>Robot Engineer</h1><p>Employer: Example Robotics</p>"
+                "<p>Published: 2026-10-20</p><p>Observed employer and duties</p>"
+                '<ul><li>Build and test robot arms. <a href="/b13/documentation">'
+                "Tool documentation</a></li></ul></article></main>"
                 if READY
                 else "<main>No observed search yet</main>"
             )
