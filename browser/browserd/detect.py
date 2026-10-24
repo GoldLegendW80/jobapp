@@ -15,6 +15,10 @@ in plain Python, from those facts alone:
 - **danger**: delete, remove, withdraw, pay, buy and their French forms, and every field of a
   payment card (autocomplete `cc-*`, or a name, id or label that says card number, CVC, CVV,
   expiry) or a control in a form that has one. Refused whatever the call carries.
+- **credential**: a typing into a credential input (CREDENTIAL_FN: a password box, an autocomplete
+  of `current-password`, `new-password` or `one-time-code`, a `webauthn` box, or a `username` box
+  of a form that holds one of those, hidden or not, as a two step login's first page does), read
+  from the element, never from its label. The person types those, in the sign in hand off.
 
 Names are every text a person or a screen reader could take for the element's name: aria-label,
 aria-labelledby, title, alt, value of a button input, the visible text, the labels, and the same
@@ -35,7 +39,9 @@ that); nor is `<a href="javascript:...">`; Enter in a single text input outside 
 through; a name written in another language than English or French is not read; a closed shadow
 root is not entered (its host is judged); a page script that moves or inserts a submit under
 the click point between the facts read and the click, or moves the focus between a typing and
-its Enter.
+its Enter. A credential input is read from its own attributes: a password box drawn as a plain
+text box with no autocomplete is not one (the app's label rule reads it), nor is a user name box
+whose form keeps its password box inside a shadow root, nor a page's plain user name box.
 """
 
 import re
@@ -108,6 +114,24 @@ CARD = re.compile(
 )
 NAMES_MAX = 60
 NAME_MAX = 500
+# Whether an element is a credential input (the module docstring), from its type and its
+# autocomplete tokens. A form of more than CREDENTIAL_SCAN boxes is not read past them: a user
+# name box there is read as a credential (fail closed).
+CREDENTIAL_SCAN = 500
+CREDENTIAL_FN = """e => {
+  const SECRET = ["current-password", "new-password", "one-time-code"];
+  const tokens = n => String((n.getAttribute && n.getAttribute("autocomplete")) || "")
+    .toLowerCase().split(/\\s+/);
+  const secret = n => (n.tagName === "INPUT" && String(n.type).toLowerCase() === "password")
+    || tokens(n).some(t => SECRET.includes(t));
+  if (secret(e)) return true;
+  const own = tokens(e);
+  if (own.includes("webauthn")) return true;
+  if (!own.includes("username")) return false;
+  const scope = e.form || (e.closest && e.closest("form")) || e.ownerDocument;
+  const boxes = Array.from(scope.querySelectorAll("input, textarea"));
+  return boxes.length > SCAN || boxes.some(secret);
+}""".replace("SCAN", str(CREDENTIAL_SCAN))
 
 # What the page tells about the element a ref names, `opts.sels` being the lease's submit selectors.
 # The control is the element itself, or the button or link it sits in, or a label's control; every
@@ -121,6 +145,7 @@ NAME_MAX = 500
 FACTS_JS = r"""
 (el, opts) => {
   const sels = (opts && opts.sels) || [];
+  const isCredential = /*credential*/;
   const clickable = "button, input, select, textarea, a[href], label, summary, [role=button]," +
     " [role=link], [role=menuitem], [role=checkbox], [role=radio], [role=switch], [role=tab]," +
     " [role=option], [role=combobox]";
@@ -189,6 +214,7 @@ FACTS_JS = r"""
       editable: !!(control.isContentEditable || el.isContentEditable),
       field: fieldText(control),
       form_fields: fields.map(fieldText),
+      credential: isCredential(control),
     };
   };
   const facts = describe(el);
@@ -210,7 +236,7 @@ FACTS_JS = r"""
   }
   return facts;
 }
-"""  # noqa: E501  JS source run in the page, kept as written
+""".replace("/*credential*/", CREDENTIAL_FN)  # noqa: E501  JS source run in the page, kept as written
 
 
 def words(text: str) -> list[str]:
@@ -326,6 +352,8 @@ def _own(facts: Any, action: str, profile_edit: bool) -> str | None:
         return "card_field"
     if action != "type" and any(is_card(f) for f in fields):
         return "card_field"
+    if action == "type" and facts.get("credential") is not False:
+        return "credential"
     # A name is read on buttons and links only: a consent box saying "you may ask for the
     # deletion of your data" or "I confirm what I submit is accurate" is ticked, not refused.
     button = button_like(facts)

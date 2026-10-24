@@ -378,7 +378,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             />
           ) : null}
 
-          {application && hasForm(application) ? (
+          {application &&
+          application.needs !== "signin" &&
+          hasForm(application) ? (
             approval ? (
               <FormPanel
                 application={application}
