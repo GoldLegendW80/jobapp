@@ -529,8 +529,8 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
     seen: set[str] = set()
     for outcome in report.outcomes:
         item = outcome.field
-        if item.key in seen or ats_base.secret(item.label):
-            continue
+        if item.key in seen or item.credential or ats_base.secret(item.label):
+            continue  # a credential's box is the person's sign in, never a field
         seen.add(item.key)
         rows.append(
             ApplicationAnswer(
@@ -548,7 +548,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
         )
     for i, skipped in enumerate(report.skipped):
         key = f"skipped:{i}:{ats_base.fold(skipped.label)}"[:500]
-        if key in seen:
+        if key in seen or ats_base.secret(skipped.label):
             continue
         seen.add(key)
         rows.append(
@@ -1008,8 +1008,7 @@ async def _wait_for_person(
             shot = await tools.snapshot()
         except BrowserError:
             return written  # the lease ended (its maximum, browserd gone): the item waits
-        page = str(shot.get("snapshot") or "")
-        if not shot.get("ok") or adapter.pending_step(page) == reason:
+        if not shot.get("ok") or adapter.pending_of(shot) == reason:
             continue
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
@@ -1100,7 +1099,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
-        tools = _Watched(signin.Tools(lease_tools, plan.form_url))
+        tools = _Watched(signin.Tools(lease_tools, plan.form_url, adapter=adapter))
         result = await _guarded(_drive(services, plan, tools), tools)
         try:
             written = await asyncio.to_thread(

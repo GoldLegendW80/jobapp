@@ -19,11 +19,11 @@ from app.browser.leases import StoreUnavailableError
 Request = Callable[..., Awaitable[Outcome]]
 
 
-def walled(shot: dict[str, Any]) -> bool:
-    """The page read shows a sign in wall (`base.Adapter.pending_step`)."""
-    return bool(shot.get("ok")) and (
-        base.Adapter().pending_step(str(shot.get("snapshot") or "")) == "signin"
-    )
+def walled(shot: dict[str, Any], adapter: base.Adapter | None = None) -> bool:
+    """The page read shows a sign in wall (`base.Adapter.pending_of`): a credential box, by
+    browserd's read of the page or by its label. The adapter of the form's address, when there
+    is one, reads it with its own steps (Greenhouse's e-mail code is no sign in)."""
+    return bool(shot.get("ok")) and (adapter or base.Adapter()).pending_of(shot) == "signin"
 
 
 class Tools:
@@ -37,8 +37,16 @@ class Tools:
     person), so a sign in done since, through the form agent's own tool too, hands the page back.
     """
 
-    def __init__(self, tools: Any, url: str, *, request: Request | None = None) -> None:
+    def __init__(
+        self,
+        tools: Any,
+        url: str,
+        *,
+        request: Request | None = None,
+        adapter: base.Adapter | None = None,
+    ) -> None:
         self._tools, self.host, self.request = tools, urlsplit(url).hostname or "", request
+        self.adapter = adapter
         self.outcome: Outcome | None = None
         self.attempts = 0
         self.blocked: dict[str, Any] | None = None
@@ -51,7 +59,7 @@ class Tools:
             return await self._again(self.blocked)
         shot = await self._tools.snapshot()
         while (
-            walled(shot)
+            walled(shot, self.adapter)
             and (self.outcome is None or self.outcome.code == "signed_in")
             and self.attempts < 3
         ):
@@ -76,7 +84,7 @@ class Tools:
             return wall
         if not shot.get("ok"):
             return wall
-        if walled(shot):
+        if walled(shot, self.adapter):
             self.blocked = shot
             return shot
         self.blocked = self.outcome = None

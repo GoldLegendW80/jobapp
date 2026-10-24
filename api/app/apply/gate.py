@@ -220,7 +220,8 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
 
 
 def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
-    """The form's fields, as shown, hashed, checked and refilled; never a password's box."""
+    """The form's fields, as shown, hashed, checked and refilled; never a credential's box (a
+    row of an older fill whose label is `ats_base.secret`: a fill records none)."""
     rows = db.execute(
         sa.select(ApplicationAnswer)
         .where(
@@ -648,7 +649,7 @@ def set_answer(
     matches; an `approved` application goes back to `ready` (its approval spent, a new one
     needed); a `needs_person` one that waited only for required fields goes to `ready` once the
     last of them is answered. The submit lease refills and reads back this value as any other;
-    a refill by the run keeps it (`run.finish`). A password's box is no field (`unknown_field`),
+    a refill by the run keeps it (`run.finish`). A credential's box is no field (`unknown_field`),
     and an application waiting for a sign in takes no answer until the fill after it
     (`signin_first`). Raises NotFoundError, RefusedError (`not_editable`, `signin_first`) or
     InvalidAnswerError. The caller commits. No value goes into the event."""

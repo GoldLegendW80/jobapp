@@ -18,7 +18,8 @@ profile, moves through its steps and names its submit element. It asks of the ru
   * `resolve_answer(ref)`: `answers.resolve` on that field: whether the profile answers it and from
     which source, never the value;
   * `fill_field(ref)`: that field filled by code with the resolver's answer (`Adapter.fill`); a
-    field the resolver leaves stays for the person;
+    field the resolver leaves stays for the person, and a credential's box
+    (`ats_base.Field.credential`) is refused here as in `resolve_answer`;
   * `next_step(ref)`: a button named as a step (`generic.NEXT_NAMES`) clicked through the tool
     layer, which refuses a submit; the step and its fields recorded for the refill;
   * `designate_submit(ref)`: the designation, accepted only when `generic.check_designation` and
@@ -91,6 +92,7 @@ WALL = (
     "why, then read the form again."
 )
 SIGNIN_OVER = "The person was not signed in. Stop now."
+CREDENTIAL = "Refused: this box belongs to a sign in, which only the person fills. Leave it."
 TEXT_MAX = 4_000
 BUTTONS_MAX = 40
 FIRST_MESSAGE = (
@@ -200,6 +202,9 @@ class FormSession:
         if found is None:
             return None, problem
         item = next((f for f in found.fields if f.ref == ref), None)
+        if item is not None and item.credential:
+            self.refused["credential"] += 1
+            return None, CREDENTIAL
         return item, "" if item is not None else "No field has this ref. Read the form again."
 
     async def resolve_answer(self, ref: str) -> tuple[str, bool]:
