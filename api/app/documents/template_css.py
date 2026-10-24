@@ -46,14 +46,15 @@ everything is held to allow lists:
 - the fonts: a `font-family` starts with a family of the manifest;
 - the contrast: a rule that sets both a text colour and a background holds them at 4.5:1 (WCAG 2
   AA). A colour on a background another rule sets is the render check's;
+- text may wrap (`white-space` normal, pre-line or pre-wrap), so overflow-wrap can break a long
+  word; no inline-size containment, which lets a box ignore its text's intrinsic width;
 - no `!important` on a property of ENFORCED: the app appends ENFORCED_CSS after every sheet
   (templates.build_html), so no word is wider than its box, whatever box the sheet draws.
 
 Declared open points, left to D25b's render check: a text colour on a background set by another
-rule (the page's white, a band, a column); a line that may not wrap (`white-space: nowrap`)
-in a box narrower than it, whose text, a `::before` or `::after` too, then runs over its
-neighbours, under the background of a later flex or grid item or of a `position: relative` box;
-the vertical padding or border of an inline box, which paints over the line above; a size made
+rule (the page's white, a band, a column); text in a box narrower than it, a `::before` or
+`::after` too, under the background of a later flex or grid item or of a `position: relative`
+box; the vertical padding or border of an inline box, which paints over the line above; a size made
 small or large by nesting `em` sizes; a box pushed off the page by its margins; the one glyph of
 an outside marker, at the size of its item (any box with `display: list-item`), beside a box
 without padding.
@@ -668,7 +669,7 @@ VALUES = {
     "text-align": _kw("left", "right", "center", "justify", "start", "end"),
     "text-decoration": _kw("none", "underline"),
     "vertical-align": _kw("baseline", "top", "middle", "bottom", "super", "sub"),
-    "white-space": _kw("normal", "pre-line", "pre-wrap", "nowrap"),
+    "white-space": _kw("normal", "pre-line", "pre-wrap"),
     "overflow-wrap": _kw("normal", "anywhere", "break-word"),
     "word-break": _kw("normal", "break-word", "keep-all"),
     "align-items": _kw(*ALIGN),
@@ -688,7 +689,7 @@ VALUES = {
     "grid-auto-rows": _tracks(row=True),
     "grid-auto-flow": _kw("row", "column", "dense"),
     "grid-column": _grid_line,
-    "contain": _kw("none", "inline-size"),
+    "contain": _kw("none"),
     "columns": _columns,
     "column-count": _columns,
     **dict.fromkeys(("break-inside", "page-break-inside"), _kw("auto", "avoid")),

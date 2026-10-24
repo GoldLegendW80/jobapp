@@ -20,6 +20,7 @@ import pytest
 from app.documents import design_capture, design_check, render_client, template_rules, templates
 from app.documents.render_client import Checked, RenderError
 from app.ingestion.parser_client import DesignPdf
+from app.profile.schemas import URL_MAX, IdentitySection
 from tests.documents.test_renderer_container import Stack, stack
 
 __all__ = ["stack"]
@@ -316,3 +317,80 @@ def test_the_reviewers_long_email_prints_inside_its_cell_left_of_the_phone(stack
     rightmost = max(box[2] for _, box in glyphs[at : at + len(email)])
     leftmost = min(box[0] for _, box in glyphs[phone_at : phone_at + len(phone)])
     assert rightmost < leftmost
+
+
+# Issue #575, the approving review's sheet: the 55 character canary fits but real URLs need
+# more room. Render the refused variant deliberately too, to prove the PDF bounds detect it.
+HEADER_125_SHEET = (
+    ".headtext { flex: 0 0 125mm; } .photo { order: 2; }"
+    " .contact { display: block; } .contact li { white-space: nowrap; }"
+)
+
+
+def _website_in_125mm_header(
+    stack: Stack, kind: str, step: int, length: int, whitespace: str
+) -> tuple[list[tuple[float, float, float, float]], float, float, float]:
+    printed = "example.org/" + "a" * (length - len("example.org/"))
+    address = "https://" + printed
+    assert len(printed) == length
+    assert IdentitySection(website=address).website == address
+    sample = design_check.canary(kind)
+    view = dataclasses.replace(
+        sample.view, identity=dataclasses.replace(sample.view.identity, website=address)
+    )
+    # A flex basis alone can grow to its automatic content minimum. Keep the measured box at
+    # 125 mm for both variants, so the hostile address cannot move the photo out of its way.
+    css = HEADER_125_SHEET.replace("white-space: nowrap", f"white-space: {whitespace}")
+    template = probe(css + " .headtext { min-width: 0; }")
+    html = templates.build_html(
+        template,
+        kind,
+        sample.content,
+        view,
+        "en",
+        step,
+        sample.rendered_on,
+        photo=design_check.grey_photo(),
+    )
+    rendered = stack.render(html)
+    glyphs = _glyphs(rendered.pdf)
+    text = "".join(char for char, _ in glyphs)
+    assert text.count(printed) == 1, (length, whitespace, text)
+    at = text.index(printed)
+    boxes = [box for _, box in glyphs[at : at + length]]
+    document = pdfium.PdfDocument(rendered.pdf)
+    try:
+        page = document[0]
+        images = list(page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]))
+        assert len(images) == 1
+        photo_left = images[0].get_bounds()[0]
+    finally:
+        document.close()
+    left = template.steps(kind)[step].margin * 72 / 25.4
+    right = left + 125 * 72 / 25.4
+    assert abs(photo_left - right - 14) < 0.5  # the actual photo follows the 14 pt header gap
+    return boxes, left, right, photo_left
+
+
+@pytest.mark.parametrize("kind", ["cv", "letter"])
+@pytest.mark.parametrize("step", [0, -1])
+@pytest.mark.parametrize("length", [77, 80, URL_MAX - len("https://")])
+@pytest.mark.parametrize("whitespace", ["normal", "pre-line", "pre-wrap"])
+def test_a_valid_long_website_prints_completely_inside_125mm_before_the_photo(
+    stack: Stack, kind: str, step: int, length: int, whitespace: str
+) -> None:
+    boxes, left, right, photo_left = _website_in_125mm_header(stack, kind, step, length, whitespace)
+    assert all(left - 0.5 <= box[0] and box[2] <= right + 0.5 for box in boxes), boxes
+    assert all(box[2] < photo_left for box in boxes)
+    if step == 0:
+        assert boxes[-1][3] < boxes[0][1]  # the end of the address is on a later printed line
+
+
+@pytest.mark.parametrize("length", [77, 80])
+def test_the_pdf_bounds_detect_the_refused_nowrap_website_beyond_125mm(
+    stack: Stack, length: int
+) -> None:
+    boxes, _, right, photo_left = _website_in_125mm_header(stack, "cv", 0, length, "nowrap")
+    assert any(box[2] > right + 0.5 for box in boxes)
+    if length == 80:
+        assert any(box[2] > photo_left for box in boxes)
