@@ -11,8 +11,9 @@ id would answer 422.
 
 import importlib
 import importlib.util
+from collections.abc import Awaitable, Callable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response
 
 # (module of app.documents, its attribute), in the order they are included.
 ROUTERS: tuple[tuple[str, str], ...] = (
@@ -25,6 +26,23 @@ ROUTERS: tuple[tuple[str, str], ...] = (
     ("design_router", "router"),  # D25b
     ("router", "router"),  # D6: /api/jobs/{id}/documents, /api/documents/{id} and below, last
 )
+
+PREFIX = "/api/documents"
+
+
+def private(path: str) -> bool:
+    """Match the documents prefix while leaving bundled template thumbnails outside it."""
+    return path == PREFIX or path.startswith(f"{PREFIX}/")
+
+
+async def no_store(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Private cache headers for documents answers, including early refusals."""
+    response = await call_next(request)
+    if private(request.url.path):
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 def load(
