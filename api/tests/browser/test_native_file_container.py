@@ -63,3 +63,26 @@ def test_native_file_selection_without_an_echo_tracks_replace_clear_and_rejectio
     )
     assert denied["status"] == 403
     assert "native_files" not in str(denied["body"])
+
+
+@pytest.mark.parametrize("hostile", ["churn", "text"])
+def test_a_button_the_read_cannot_resolve_never_refuses_the_snapshot(
+    stack: Stack,
+    hostile: str,
+) -> None:
+    lease = Lease(stack, "apply_fill")
+    assert lease.put("cv.pdf")["status"] == 200
+    url = f"http://pages:8080/b5/native-files-hostile.html#{hostile}"
+    assert lease.tool("browser_navigate", url=url)["ok"]
+    for _ in range(15):
+        shot = lease.tool("browser_snapshot")
+        assert shot["ok"], shot
+        resume = ref(shot["snapshot"], "button", "Resume")
+        assert shot["native_files"][resume] == []
+        assert all(names == [] for names in shot["native_files"].values())
+        assert "e9999" not in shot["native_files"]
+    assert (hostile == "text") == ("Choose x [ref=e9999]" in shot["snapshot"])
+    assert lease.tool("browser_file_upload", ref=resume, paths=["cv.pdf"])["ok"]
+    shot = lease.tool("browser_snapshot")
+    assert shot["ok"], shot
+    assert shot["native_files"][ref(shot["snapshot"], "button", "Resume")] == ["cv.pdf"]
