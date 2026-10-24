@@ -48,7 +48,7 @@ from tests.apply.a5_support import FakeAgent, FakeLeases, run_ashby
 from tests.apply.a6_support import SubmitForm, submit_ashby
 from tests.apply.a8b_support import WORKABLE_PATH, ScriptedFormAgent, workable
 from tests.apply.conftest import AT
-from tests.apply.test_a5_run import application, fill, services, started, why_answer
+from tests.apply.test_a5_run import WHY, application, fill, services, started, why_answer
 from tests.apply.test_a6_gate import _password, api_app, approve, run_submit, stub, submit_services
 from tests.apply.test_a8_generic import WORKABLE_SCRIPT, on_custom, rows_of
 from tests.identity.api_helpers import Api
@@ -685,13 +685,16 @@ def appears(spec: Spec) -> Any:
     return on_call
 
 
-@pytest.mark.parametrize("added", [True, False], ids=["added after the read", "made one since"])
+@pytest.mark.parametrize(
+    ("label", "added"),
+    [("Email address", True), ("Email", False), (WHY, False)],
+    ids=["added after the read", "made one since", "typed by the answer agent"],
+)
 def test_a_typing_browserd_refuses_as_a_credential_is_a_wall_and_its_box_never_answerable(
-    db, factory, person_a, stub, added
+    db, factory, person_a, stub, label, added
 ):
     """The re-check's follow up 3: the box browserd refused at the typing is no field the person
     answers; its page is a wall (`needs_person: signin`), never `required_left`."""
-    label = "Email address" if added else "Email"
     form = run_ashby()
     if added:
         form.on_call = appears(Spec(label, "text", True))
