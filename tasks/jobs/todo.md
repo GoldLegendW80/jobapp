@@ -107,7 +107,7 @@ Task [#630](https://github.com/GoldLegendW80/jobapp/issues/630). Acceptance, own
 
 ### J11: save verified search findings incrementally
 
-Task [#632](https://github.com/GoldLegendW80/jobapp/issues/632). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+Task [#632](https://github.com/GoldLegendW80/jobapp/issues/632). Acceptance, ownership and verification are in that issue and the linked plan. The observed-finding foundation and storage lifecycle follow-up [#655](https://github.com/GoldLegendW80/jobapp/issues/655) are separate reviewable slices, preserving all tests. Status: implementation and verification in progress; full #632 remains open until both slices compose and integration passes.
 
 ### J12: cancel searches and restore persisted progress
 
