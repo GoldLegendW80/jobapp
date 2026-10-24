@@ -170,8 +170,12 @@ describe("the review queue page", () => {
   });
 
   it.each([
-    [409, "stale", "This answer changed on another page."],
-    [422, "wrong_type", "That answer cannot be saved."],
+    [
+      409,
+      "not_editable",
+      "The answers of this application can no longer be changed.",
+    ],
+    [422, "wrong_type", "This answer does not fit the question."],
   ] as const)(
     "keeps an unsaved answer and explains a %s refusal",
     async (status, code, detail) => {
@@ -191,7 +195,7 @@ describe("the review queue page", () => {
       const ready = await screen.findByRole("article", {
         name: /Robotics Engineer 1/,
       });
-      const answer = within(ready).getByRole("textbox", {
+      const answer = await within(ready).findByRole("textbox", {
         name: "Answer for Why Example Robotics?",
       });
       await user.type(answer, "I build agents.");

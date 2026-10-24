@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { jobsKey } from "@/features/jobs/api";
-import { describeError } from "@/lib/api";
+import { describeError, errorDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -128,7 +128,8 @@ export function QueueCard({
     void queryClient.invalidateQueries({ queryKey: approvalKey(item.id) });
   };
   const failed = (error: unknown) => {
-    setNotice(refusalOf(error)?.detail ?? describeError(error));
+    // The api's `detail` (a 409, or a 422 for an answer) is a sentence for the person, shown as is.
+    setNotice(errorDetail(error) ?? describeError(error));
     refresh();
   };
 
