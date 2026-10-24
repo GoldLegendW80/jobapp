@@ -1,0 +1,37 @@
+Apply recovery #573, under whole specification #563
+
+Source slices
+601038550eaec39325e647df6a4b6b2bda4d1f1c: durable ended manual recovery,
+isolated startup reset transactions and held manual queue visibility.
+b8a1a50393d40dad54208355f5c8442e039fd6e2: worker-mediated final passive
+confirmation watch before an explicit Close.
+Current continuation: Attach owns input, paced actions recheck ownership,
+chooser uploads bind to the observed chooser, preexisting chooser refusal,
+ended-marker check under the posting lock, durable Close on worker death.
+
+Passing verification
+Pure recovery: three tests, each failure reproduced before the fix.
+Pure browser/action/recovery: 123 passed, including five new input/chooser
+failures reproduced before their fixes.
+Focused real PostgreSQL/Redis wrapper:
+ops/agent-test.sh --name apply-recovery tests/apply/test_a9_manual.py
+  tests/apply/test_a9_recovery_pure.py tests/apply/test_a12_likes.py
+  -m 'not docker' -n 2 -q --tb=short
+90 passed in 27.32 seconds. Own disposable containers removed by the wrapper.
+The three final worker-death/exact-marker cases were added afterwards;
+they still need the next database run.
+Frontend queue state: 63 passed. Frontend typecheck passed.
+Changed Python lint/format passed. CI plan: 81 passed.
+E2E registry passed. No image built and no real site/provider contacted.
+
+Pending implementation and verification
+A10a captcha/email-code/forbidden 1800-second wait outside active/idle lease
+time is not implemented by these slices. It needs a private code-owned wait
+primitive, immutable deadline and browserd readback after Redis restart,
+same-lease resume, worker timeout, passive guards and known-wizard reports.
+Keep A10b HTTP 410/sign-in behavior and A15/A16 partial wizard contracts.
+Run the whole affected apply/browser folders, all touched frontend checks,
+and actual A9/A10a isolated fake journeys. New test_a9_container.py regression
+for an already-open chooser is source only: native Chromium execution remains.
+Add a deterministic real Chromium mid-pacing takeover/racing-chooser proof.
+No independent review, deployment or approved-PR/source-branch write claimed.

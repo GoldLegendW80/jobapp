@@ -131,15 +131,22 @@ def start(
     if code is not None:
         _refuse(code, mode, warnings)
 
+    from app.apply.email import addresses
+
+    email_application = bool(addresses(posting))
+    if email_application and mode is Mode.manual:
+        raise RefusedError(guardrails.Refusal("email_manual"))
     form_url = (posting.url or "").strip()
     read_as = guardrails.unstub(form_url, stub_base)
-    key = guardrails.canonical_key(read_as)
+    key = f"email:{posting.id}" if email_application else guardrails.canonical_key(read_as)
     if key is None:
         raise RefusedError(guardrails.Refusal("no_address"))
 
     refusal = guardrails.duplicates(db, user_id, posting, key, now)
     if refusal is not None:
         _refuse(refusal.code, mode, warnings, refusal.application_id)
+        for code in refusal.also:
+            _refuse(code, mode, warnings)
 
     application = Application(
         id=uuid.uuid4(),
@@ -148,8 +155,8 @@ def start(
         mode=mode,
         dry_run=dry_run,
         state=State.queued,
-        ats=guardrails.ats_of(read_as),
-        form_url=form_url,
+        ats="email" if email_application else guardrails.ats_of(read_as),
+        form_url=form_url or f"mailto:{addresses(posting)[0]}",
         canonical_key=key,
         created_at=now,
         updated_at=now,

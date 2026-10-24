@@ -69,7 +69,14 @@ export function remoteSpot(selector: string): { x: number; y: number } {
  * point, scaled to the canvas noVNC draws it on.
  */
 export async function clickInView(page: Page, selector: string): Promise<void> {
-  const spot = remoteSpot(selector);
+  await clickAtInView(page, remoteSpot(selector));
+}
+
+/** Click an already observed screen point, including a submit immediately before Close. */
+export async function clickAtInView(
+  page: Page,
+  spot: { x: number; y: number },
+): Promise<void> {
   const canvas = page.getByTestId("live-screen").locator("canvas").first();
   // A point of the canvas outside the window reaches nothing: the whole canvas is shown first.
   await canvas.scrollIntoViewIfNeeded();
@@ -90,4 +97,26 @@ export async function clickInView(page: Page, selector: string): Promise<void> {
 export async function typeInView(page: Page, text: string): Promise<void> {
   await page.getByRole("button", { name: "Keyboard" }).click();
   await page.getByLabel("Type into your browser").pressSequentially(text);
+}
+
+/** Close the journey's native browser window to exercise ended-session recovery. */
+export function closeRemoteWindow(): void {
+  compose(
+    "exec",
+    "-T",
+    "browser",
+    "python",
+    "-c",
+    `
+import asyncio
+from browserd import probe
+from playwright.async_api import async_playwright
+async def main():
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{probe.cdp_port()}")
+        session = await browser.new_browser_cdp_session()
+        await session.send("Browser.close")
+asyncio.run(main())
+`,
+  );
 }

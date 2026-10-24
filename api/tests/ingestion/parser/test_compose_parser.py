@@ -117,21 +117,42 @@ def test_the_parser_is_on_the_internal_network_and_only_the_worker_shares_it() -
     services = document["services"]
     # `rendering` is the renderer's own (documents D3, tests/documents/test_compose_renderer.py).
     assert document["networks"] == {
+        "mailmcp": {"internal": True},
+        "gmail_egress": {},  # the account-bound Gmail provider's own way out
         "parsing": {"internal": True},
         "rendering": {"internal": True},
         "browsing": {"internal": True},  # browser B2
         "egress": {},  # browser B2: the browser's own way out
     }
     assert services["parser"]["networks"] == ["parsing"]
-    assert services["worker"]["networks"] == ["default", "parsing", "rendering", "browsing"]
+    assert services["worker"]["networks"] == [
+        "default",
+        "parsing",
+        "rendering",
+        "browsing",
+        "mailmcp",
+    ]
     assert services["renderer"]["networks"] == ["rendering"]
     # browser B2: the api and caddy also join `browsing`, the browser is on `browsing` and `egress`.
-    assert services["api"]["networks"] == services["caddy"]["networks"] == ["default", "browsing"]
+    assert services["api"]["networks"] == ["default", "browsing", "mailmcp"]
+    assert services["caddy"]["networks"] == ["default", "browsing"]
     assert services["browser"]["networks"] == ["browsing", "egress"]
+    assert services["gmailmcp"]["networks"] == ["mailmcp", "gmail_egress"]
+    # Check membership as well as each service's list: another service cannot join an
+    # isolated parser, renderer or provider network while leaving those lists unchanged.
+    for network, members in {
+        "parsing": {"parser", "worker"},
+        "rendering": {"renderer", "worker"},
+        "mailmcp": {"api", "worker", "gmailmcp"},
+        "gmail_egress": {"gmailmcp"},
+    }.items():
+        assert {
+            name for name, service in services.items() if network in service.get("networks", [])
+        } == members
     for name, service in services.items():
-        if name not in ("parser", "renderer", "worker", "api", "caddy", "browser"):
+        assert "network_mode" not in service, name
+        if name not in ("parser", "renderer", "worker", "api", "caddy", "browser", "gmailmcp"):
             assert "networks" not in service, f"{name} must stay on the default network alone"
-            assert "network_mode" not in service, name
 
 
 def test_no_other_service_depends_on_the_parser() -> None:
@@ -197,11 +218,13 @@ def test_the_ci_stack_probes_the_parser_as_soon_as_it_starts() -> None:
     }
 
 
-def test_the_memory_limits_of_the_stack_stay_within_the_budget_of_the_jetson() -> None:
-    """5 GiB for the whole stack on the 7.4 GiB Jetson (SPEC-platform, Target host), 128m over
-    it with the browser until the parser is sized (the budget decision of B2)."""
-    limits = {name: service["mem_limit"] for name, service in compose()["services"].items()}
-    assert limits == {
+def test_the_memory_limits_keep_the_core_exception_and_optional_mail_cost_explicit() -> None:
+    """Keep the 5 GiB target and B2's 128 MiB core exception; mail adds another 128 MiB.
+    Declared limits do not establish physical Jetson capacity acceptance."""
+    services = compose()["services"]
+    limits = {name: service["mem_limit"] for name, service in services.items()}
+    core_limits = {name: limit for name, limit in limits.items() if name != "gmailmcp"}
+    assert core_limits == {
         "caddy": "128m",
         "tailscale": "128m",
         "api": "512m",
@@ -214,7 +237,10 @@ def test_the_memory_limits_of_the_stack_stay_within_the_budget_of_the_jetson() -
     }
     # 128m over the 5G budget with the browser (B2) until G8 sets the parser's limit from its
     # Jetson peaks: the parser at 512m brings the stack to 5120m (compose.yml, budget comment).
-    assert sum(int(limit[:-1]) for limit in limits.values()) == 5248 == 5 * 1024 + 128
+    assert sum(int(limit[:-1]) for limit in core_limits.values()) == 5248 == 5 * 1024 + 128
+    assert services["gmailmcp"]["profiles"] == ["mail"]
+    assert limits["gmailmcp"] == "128m"
+    assert sum(int(limit[:-1]) for limit in limits.values()) == 5376 == 5 * 1024 + 256
 
 
 def test_the_test_stack_takes_the_service_from_compose_yml_and_adds_no_privilege() -> None:

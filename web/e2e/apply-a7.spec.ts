@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -19,8 +20,9 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * by the documents pipeline on the fake backend, opens the job page, clicks Apply (Review first),
  * waits for the fill (the worker's 30 second tick starts it), types an answer for every field
  * the assistant left for them, approves behind the confirmation that names the company, the role
- * and both documents, and sees Applied, both screenshots and the run report. The fake server holds
- * exactly one accepted submission for that posting.
+ * and both documents, watches the submit lease fill the form again in the live view (watch only),
+ * and sees Applied, both screenshots and the run report. The fake server holds exactly one
+ * accepted submission for that posting.
  *
  * Locally, as apply-all.config.ts says (the fake forms compose file, AGENTS_FAKE_BACKEND=1 on
  * the worker), with the stack's browser up (COMPOSE_PROFILES=browser and a
@@ -45,18 +47,6 @@ let person: Person;
 let context: BrowserContext;
 let page: Page;
 let errors: string[];
-
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(job: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${job}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
 
 /** A posting of the person whose address is the fake form of `ats`, with its two documents. */
 async function postingOn(ats: "greenhouse" | "ashby"): Promise<string> {
@@ -87,7 +77,7 @@ async function postingOn(ats: "greenhouse" | "ashby"): Promise<string> {
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
   return job;
 }
 
@@ -180,6 +170,21 @@ for (const ats of ["greenhouse", "ashby"] as const) {
     await expect(dialog).toContainText("CV version");
     await expect(dialog).toContainText("Letter version");
     await dialog.getByRole("button", { name: "Approve and submit" }).click();
+
+    // The submit lease types the form again for about two minutes, and the stack spaces clicks
+    // on one host by 10 s only (APPLY_HOST_MIN_INTERVAL_S), so the page shows it well before the
+    // click. Its status line replaces "Connecting to your browser." once the screen connected.
+    const live = section.getByRole("region", {
+      name: "Live view of your browser",
+    });
+    await expect(live.getByRole("status")).toHaveText(
+      "The assistant fills the form again with your approved answers, then submits it.",
+      { timeout: 90_000 },
+    );
+    await expect(live.getByRole("button", { name: "Take over" })).toHaveCount(
+      0,
+    );
+    await expect(live.getByLabel("Type into your browser")).toHaveCount(0);
 
     await expect(section).toContainText("Applied.", { timeout: 180_000 });
     await expect(

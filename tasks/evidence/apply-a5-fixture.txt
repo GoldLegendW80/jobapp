@@ -1,0 +1,45 @@
+Apply A5 recorded-answer source fixture, issue 563, PR 604
+Date: 2026-10-22
+Base: 1b3642e3
+
+Change: supply both unchanged recorded apply_answer sentences in the invented A5
+profile motivation. ANSWERED also remains the positive UI assertion, so it now
+requires the complete answer. No production code, model stream, refusal cases,
+service limits, test timeouts or positive assertions changed.
+
+Pure RED: evaluated the actual TypeScript invented() fixture, current A5 motivation,
+unchanged apply_answer.json and actual documents_letter_journey letter paragraphs.
+The complete recorded answer was unsupported_claim. The prepared letter contains
+no support for the missing agent/evaluation contribution sentence.
+Pure GREEN: after completing motivation, the same full answer was accepted; also
+accepted against the orchestrator's integrated source-boundary fix on 2026-10-22.
+Probe driver: /tmp/a5604-probe.py, uses actual fixture and stream files.
+
+Passed: web typecheck, web lint, CI planner 81 tests, e2e group registry, diff check.
+
+Runtime limits: unchanged browser 1024m, one Playwright worker, original 240s image
+wait and 15s row assertion. Invented e2e account, fake ATS and fake model only.
+Own API, worker, Caddy and browser images built from base plus this fixture change;
+borrowed apply578-renderer:review was neither rebuilt nor modified.
+Initial setup did not start tests: API fake fast-timer setting was absent. Generated
+synthetic settings then explicitly supplied TEST_FAST_TIMERS=true.
+
+Configured attempt 1: setup passed. Browser guard ended first fill after 3.28s,
+used_mib=1018. Cgroup memory peak 1073770496 bytes, 122 max-pressure events, zero
+OOM/kill. Afterward memory() working set 114397184 of limit 1073741824 bytes;
+inactive_file 740081664 bytes. Positive image assertion failed at its original 240s.
+Artifacts: /tmp/a5604-attempt1/results; logs /tmp/a5604-attempt1/*.log.
+
+Configured attempt 2, fresh stack with cached image layers: setup passed and browser
+guard did not stop the fill. Fill ended normally after 3.88s but exposed a separate
+adapter integration failure: approval contains only Autofill from resume, no actual
+question or application fields. UI needs_person, form_changed; Why Example Robotics
+row count 0 failed at the original 15s. apply_answer was never invoked.
+Artifacts: /tmp/a5604-results; complete stack log /tmp/a5604-stack.log;
+API approval /tmp/a5604-approval.json; actual ATS screenshot /tmp/a5604-before-click.jpg.
+Both failed UI screenshots were inspected. Trace retained in each results directory.
+No further runtime retries. A fresh adapter fix agent must resolve extraction and
+rerun the unchanged positive A5 journey before final acceptance.
+
+Cleanup: own a5604-runtime containers, networks and volumes removed; own a5604
+API/worker/Caddy/browser image tags removed. Borrowed renderer retained.

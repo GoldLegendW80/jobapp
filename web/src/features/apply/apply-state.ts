@@ -92,9 +92,15 @@ const NEEDS: Record<string, string> = {
   required_left: "A required question is left for you to answer.",
   payment_requested: "The site asks for a payment, so the assistant stopped.",
   no_adapter: "The assistant does not know this form yet.",
+  submit_not_designated:
+    "The assistant could not identify the form's Submit button.",
+  submit_not_highlighted:
+    "The assistant could not show the Submit button for your review.",
 };
 
 const FAILURES: Record<string, string> = {
+  documents_rendering:
+    "your CV or letter was still being prepared after an hour",
   interrupted: "it was interrupted",
   internal_error: "something went wrong on our side",
   form_changed: "the form changed while it was being filled",
@@ -204,7 +210,7 @@ export const leftFields = (answers: readonly Answer[]) =>
   answers.filter(isOpenField);
 
 /** The kinds the api takes no value for: a file and a list of choices (`set_answer` of A6). */
-const NOT_TYPED_KINDS = new Set(["file", "multi"]);
+const NOT_TYPED_KINDS = new Set(["file", "multi", "designated"]);
 
 /**
  * Whether the person can type this answer here. It mirrors the api's refusal: a skipped widget
@@ -212,7 +218,9 @@ const NOT_TYPED_KINDS = new Set(["file", "multi"]);
  * no input is offered for them and they never block Approve; they are answered on the site.
  */
 export const isEditable = (answer: Answer) =>
-  !answer.field_key.startsWith("skipped:") && !NOT_TYPED_KINDS.has(answer.kind);
+  !answer.field_key.startsWith("skipped:") &&
+  !answer.field_key.startsWith("designated:") &&
+  !NOT_TYPED_KINDS.has(answer.kind);
 
 /** Left, required, still empty and answerable here: the form cannot go without it, so Approve waits. */
 export const blockingFields = (answers: readonly Answer[]) =>
@@ -259,6 +267,7 @@ const EVENTS: Record<string, string> = {
   waiting: "Waiting for the documents",
   lease: "Browser ready",
   filled: "Form filled",
+  saved_answer_used: "Saved answer reused",
   decision: "Your approval checked",
   click: "Submit clicked",
   cancelled: "Cancelled",

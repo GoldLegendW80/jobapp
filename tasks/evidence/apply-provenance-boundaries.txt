@@ -1,0 +1,69 @@
+Apply answer provenance boundaries, issue #563, PR #604
+Measured locally on 2026-10-22 with invented profile and posting data.
+
+Change
+  A forward token iterator retains a complete quoted name as one opaque span,
+  including LF, CRLF, CR and word apostrophes. An unmatched or mismatched span
+  provides no claim sentences. Each token is consumed once by this quote pass.
+  Typed employment and education rows live in an Apply-local metadata field.
+  They still support independent entity, number and date fact checking, but
+  cannot prove a personal achievement or preference merely by containing it.
+  FactBlock bodies, motivation, permitted answers and the immutable prepared
+  letter remain personal prose sources. FactBlock titles are not prose sources.
+  The shared mail Sources type and recorded model streams are unchanged.
+
+Regression tables
+  test_a5_provenance_boundaries.py:
+    240 complete quoted-name combinations, each refusing an extracted inner
+    claim, retaining the exact complete source, and accepting the inner claim
+    when it also has its own explicit personal source.
+    20 incomplete quote spans and 12 mismatched delimiter pairs refuse.
+    2 near-200,000-byte accepted FactBlock bodies with unmatched curly openers.
+    2 trailing word apostrophe controls retain the complete personal source.
+    20 actual sources_of typed metadata cases plus explicit facts companions.
+    20 actual FactBlock title cases, retaining the actual project body.
+    15 actual facts, motivation and prepared-letter positive controls.
+    1 independent metadata entity/date check with unsourced refusal controls.
+  Original boundary RED: 70 failures, 66 passes.
+  First minimal GREEN: 136 passes.
+  Apostrophe and incomplete span RED: 62 failures, 256 passes.
+  Expanded GREEN before removing four empty parameter combinations: 336 passes.
+  Final whole Apply suite: 6,969 passed, one inherited fixture failure in
+  365.92 seconds. All 332 final nonempty boundary cases passed in this run.
+  The failure is test_a13c_check.py::
+  test_b_s_check_never_reads_a_s_profile_or_posting. It replaces motivation
+  with a canary sentence and removes the source required by filled()'s fixed
+  WHY_TEXT. Both baseline 1a67e024 and this fix return unsupported_claim for
+  that setup. The fixture needs to retain the complete personal intent source
+  alongside its planted canary, so the test can reach its isolation assertions.
+
+Independent prior review probe
+  /tmp/jobapp-apply604-sourceclaims-recheck.py: 440 checks, zero errors.
+  Includes the original factual and coordinated refusal controls, compound
+  names, noun lists, preference polarity, entity-field provenance, bounded
+  predicate equivalences and all quoted multiline refusal/copy controls.
+
+Bounded quote pass measurement, three samples, best reported, no wall-time test
+  16,000 unmatched openers, 48,024 UTF-8 bytes: 0.003802 seconds.
+  32,000 unmatched openers, 96,024 UTF-8 bytes: 0.007601 seconds.
+  64,000 unmatched openers, 192,024 UTF-8 bytes: 0.014902 seconds.
+
+Static checks
+  Ruff check: passed. Ruff format: 747 files already formatted.
+  CI plan: 81 tests passed. Journey registry: passed.
+  Repository hooks including secret scan: passed on source, test and evidence.
+
+Separate fixture finding reported to the orchestrator
+  The actual apply-a5 journey stores only the first sentence of the unchanged
+  apply_answer stream as motivation. Its prepared documents_letter_journey
+  paragraphs do not contain the second agent/evaluation intent sentence.
+  The full recorded value is refused with unsupported_claim; sentence one is
+  supported and sentence two is unsupported. The journey fixture and the
+  A13c canary fixture are outside this fix's ownership and were reported to
+  the orchestrator. No judge weakening or stream edit is appropriate.
+
+Declared scope
+  This change preserves quotation structure and typed provenance. It does not
+  infer personal intent from achievements or broaden paraphrase equivalences.
+  Unrecognised paraphrases and malformed quoted prose remain conservative.
+  Browser journeys and the final composed gate belong to the orchestrator.

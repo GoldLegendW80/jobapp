@@ -1,0 +1,47 @@
+{
+  "source_head": "60ad5cad43a71801e31026585b8cf68c2469230c",
+  "source_tree": "45d1749634345a5755238e0d42b5ea04e5715265",
+  "result": "2 PASS, 1 FAIL, 2 NOT RUN; zero retries",
+  "files": [
+    {
+      "path": "letter-overflow-desktop-dark.png",
+      "sha256": "6480e6f01b533792aaaaa3ee8da48f60cd447c07339710c61d869d6b1598f3e9",
+      "bytes": 462543
+    },
+    {
+      "path": "letter-overflow-desktop-light.png",
+      "sha256": "47e7decc329b6f6fd3d2a277754d787aae8f74f91e1f78395e848978803a4273",
+      "bytes": 455809
+    },
+    {
+      "path": "letter-overflow-mobile-dark.png",
+      "sha256": "e518b0ce02ff73d508f75c703a4f932f07160754b6d2d1f4a770ea4957bffe19",
+      "bytes": 408601
+    },
+    {
+      "path": "letter-overflow-mobile-light.png",
+      "sha256": "8c7325c9ff370d136e1e426b522a76d5a01f248d2d6b403cf35f782db77de17f",
+      "bytes": 403837
+    },
+    {
+      "path": "render-failed-desktop-dark.png",
+      "sha256": "321205bc493b214a2b155a0f85fe4ade9bc44ae8f8d78b649595d7aa20172b0e",
+      "bytes": 227619
+    },
+    {
+      "path": "render-failed-desktop-light.png",
+      "sha256": "2d226cc90587f473b12b29045cd8fb9104a3827b9cdb3d8342799e31f7c9b313",
+      "bytes": 224950
+    },
+    {
+      "path": "render-failed-mobile-dark.png",
+      "sha256": "5dc4ac61266951b37b4acae4749d89f8e4d0194b1d22cca2fb49a663cdb06d83",
+      "bytes": 212707
+    },
+    {
+      "path": "render-failed-mobile-light.png",
+      "sha256": "011c67c712d54c9b109ba71de8d0d3a569cbd14a3de477b2bc7e0f43365babca",
+      "bytes": 209225
+    }
+  ]
+}

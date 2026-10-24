@@ -1,0 +1,32 @@
+A18 completed debug handoff, 2026-10-22
+
+Source correction: 85d0aca1e0b5d46b556b9d5061c0e728b1837179, based on e1d4904f.
+Worktree: .claude/worktrees/codex-apply-254-debug
+Branch: apply/254-runtime-debug
+The parent owns draft 604, final combined integration gate, all Apply journeys and
+fresh independent review. This proof does not cover later root integration changes.
+
+Completed proof
+- All four required actual Chromium flows: 4 passed in 4.6 minutes.
+- Whole Apply plus affected browser/agent files: 5278 passed in 220.53 seconds.
+- A10b signin/later: 17 plus 5 passed; exact seven-job/two-cron registry passed.
+- Typecheck, lint, Apply/browser Vitest 429, Ruff/format 714, CI plan 81 and e2e groups pass.
+- Twenty desktop/mobile, light/dark screenshot artifacts are committed as evidence.
+- Exact commands, red/green lock tests, retained-trace timing and pmset correlation:
+  tasks/evidence/apply-a18/tests.txt. Private JUnit: /tmp/apply254-debug-module.xml.
+
+Resources
+- Heavy slot 2 released; no image-build mutex held; no test/build/browser job or watcher.
+- Transferred compose project apply254 was removed with its volumes and networks.
+- Four transferred apply254-api/worker/caddy/browser:review tags were removed.
+- Borrowed apply578-renderer:review remains unchanged and present, image ID
+  sha256:95a287fd6ab2e53c62fc06fa1c08d97346039557bb3951b08626fb6b0e475610.
+- No apply254 or agent-apply-254 containers remain.
+- Transferred synthetic settings /tmp/apply254-fixture.settings, image override
+  /tmp/apply254-images.yml and loopback ports /tmp/apply254-runtime.json were removed.
+- The temporary node_modules symlink was removed. The worktree and private JUnit remain.
+- Old builder worktrees and their private traces were read only, never committed or edited.
+
+Remaining human acceptance
+Real model/site measurement and actual tenant variations remain Checkpoint A. No real
+site/account/credential/mail, submission to a company or deployment was used here.

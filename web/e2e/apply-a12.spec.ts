@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -63,18 +64,6 @@ const KEYS = Object.keys(FORMS) as Key[];
 const postings: Record<Key, string> = { greenhouse: "", slow: "", ashby: "" };
 const titles: Record<Key, string> = { greenhouse: "", slow: "", ashby: "" };
 
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(job: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${job}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
-
 /** A posting of the person whose address is the fake form of `key`, with its two documents. */
 async function postingOn(key: Key): Promise<string> {
   const form = FORMS[key];
@@ -103,7 +92,7 @@ async function postingOn(key: Key): Promise<string> {
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
   return job;
 }
 
@@ -192,7 +181,7 @@ test("Like the three postings on the jobs list: all three appear in the queue", 
     .getByRole("link", { name: /^Applications/ })
     .click();
   await expect(
-    page.getByRole("heading", { level: 1, name: "Applications" }),
+    page.getByRole("heading", { level: 1, name: "Application queue" }),
   ).toBeVisible();
   for (const key of KEYS) await expect(cardOf(key)).toBeVisible();
 });
@@ -305,7 +294,7 @@ test("the Ashby item: rejected on a phone by keyboard, the posting skipped, noth
   await expect(dialog).toBeHidden();
   await expect(card).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { level: 1, name: "Applications" }),
+    page.getByRole("heading", { level: 1, name: "Application queue" }),
   ).toBeFocused();
   await expect(page.getByText(/Your queue is empty/)).toBeVisible();
   await expect(

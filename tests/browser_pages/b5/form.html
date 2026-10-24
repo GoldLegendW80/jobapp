@@ -43,6 +43,13 @@
   };
   document.getElementById("resume").addEventListener("change", shown);
   document.getElementById("letter").addEventListener("change", shown);
+  // A recent person gesture allows a page's hover handler to open an incidental picker
+  // while the app approaches Attach, before the app's own click opens its intended picker.
+  if (new URLSearchParams(location.search).has("chooser_race")) {
+    document.getElementById("attach").addEventListener("pointerenter", () => {
+      document.getElementById("resume").click();
+    }, {once: true});
+  }
   document.getElementById("attach").addEventListener("click", () => document.getElementById("letter").click());
   document.getElementById("rerender").addEventListener("click", () => {
     const old = document.getElementById("submit");

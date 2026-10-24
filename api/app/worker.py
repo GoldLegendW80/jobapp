@@ -106,6 +106,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+import sqlalchemy as sa
 from arq import cron, func
 from arq.connections import ArqRedis, create_pool
 from arq.constants import result_key_prefix
@@ -619,10 +620,11 @@ APPLY_JOB_MARGIN_S = 120
 
 def apply_services(ctx: dict[str, Any]) -> Any:
     """The fill's services: tests put theirs in the context; else the lease store and the tools
-    of browser B3 and B5 on this worker's Redis, and the answer agent (`apply_answer`, run in
-    this process on the runner's context of `agent_context`). B4's `Live.agent_turn` goes in
-    `before_tool` once B4 is merged."""
+    of browser B3 and B5 on this worker's Redis, and the answer and generic form agents
+    (`apply_answer`, `apply_form`, run in this process on `agent_context`). B4's
+    `Live.agent_turn` goes in `before_tool` once B4 is merged."""
     from app.apply import agents as apply_agents
+    from app.apply import form_agent as apply_forms
     from app.apply import model_check as apply_check
     from app.apply import run as apply_run
 
@@ -658,14 +660,27 @@ def apply_services(ctx: dict[str, Any]) -> Any:
         leases=leases,
         tools_for=lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         answer_agent=apply_agents.RuntimeAnswerAgent(lambda: agent_context(ctx)),
+        form_agent=apply_forms.RuntimeFormAgent(lambda: agent_context(ctx)),
         check=apply_check.RuntimeCheck(lambda: agent_context(ctx)),
         stub_base=settings.apply_stub_base_url,
     )
 
 
 async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
+    from app.apply import email as apply_email
     from app.apply import run as apply_run
+    from app.apply.models import Application
 
+    given = ctx.get("apply_services")
+    sessions = given.sessions if given is not None else sessions_of(ctx)
+    with sessions() as db:
+        application = db.get(Application, uuid.UUID(application_id))
+        if application and application.ats == "email":
+            apply_email.prepare(
+                db, application.id, (given.clock if given is not None else clock_of(ctx))()
+            )
+            db.commit()
+            return
     await apply_run.fill(apply_services(ctx), uuid.UUID(application_id))
 
 
@@ -712,9 +727,14 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     """Queues a fill for every application waiting for one, the submit of every approved one
     (apply A6) and the decision of every `ready` Full auto one on the agents queue (A13c).
     Answers a count, nothing else."""
+    from app.apply import manual as apply_manual
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
 
+    with sessions_of(ctx)() as db:
+        ended = apply_manual.ended_ids(db)
+    if ended:
+        await apply_manual.recover_ended(apply_services(ctx), ended)
     with sessions_of(ctx)() as db:
         due = apply_run.due(db)
         approved = apply_submit_run.due(db)
@@ -722,6 +742,18 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     redis: ArqRedis | None = ctx.get("redis")
     if redis is None:
         return 0
+    # Email dispatch belongs to the API process, whose send key the worker cannot hold.
+    from app.apply.models import Application
+
+    with sessions_of(ctx)() as db:
+        email_ids = set(
+            db.scalars(
+                sa.select(Application.id).where(
+                    Application.ats == "email", Application.id.in_(approved)
+                )
+            )
+        )
+    approved = [item for item in approved if item not in email_ids or item in deciding]
     queued = 0
     for application_id in due:
         job = await redis.enqueue_job(
@@ -748,6 +780,9 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
                 _queue_name=queue.APPLY,
             )
         queued += job is not None
+    from app.apply import site_profile
+
+    queued += await site_profile.tick(ctx)
     return queued
 
 
@@ -761,21 +796,39 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
 
     clock = clock_of(ctx)
 
-    def step(db: Session) -> int:
-        # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
-        return (
-            apply_run.reset_interrupted(db, clock())
-            + apply_submit_run.reset_interrupted(db, clock())
-            + apply_manual.reset_interrupted(db, clock())
+    count = 0
+    # A busy manual posting must never roll back an already reset fill or uncertain submit.
+    for reset in (
+        apply_run.reset_interrupted,
+        apply_submit_run.reset_interrupted,
+        apply_manual.reset_interrupted,
+    ):
+        count += await asyncio.to_thread(
+            apply_run._in_db, sessions_of(ctx), lambda db, step=reset: step(db, clock())
         )
-
-    count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
     if count:
         logger.info("apply.fill.reset", extra={"count": count})
     return count
 
 
+async def prune_apply_screenshots(ctx: dict[str, Any]) -> int:
+    """Daily A17 retention: counts only, no screenshot bytes in logs or job results."""
+    from app.apply import privacy
+    from app.apply import run as apply_run
+
+    now = clock_of(ctx)()
+    days = ctx["settings"].apply_step_shots_keep_days
+
+    def step(db: Session) -> int:
+        removed = privacy.prune(db, now, keep_days=days)
+        return removed.applications + removed.site_profiles
+
+    return await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
+
+
 def apply_queue(settings: Settings | None = None) -> QueueSpec:
+    from app.apply import site_profile
+    from app.browser.client import TAKEOVER_WAIT_S
     from app.browser.leases import LEASE_MAX_S, lease_max_table
 
     # The lease's own ceiling, BROWSER_LEASE_MAX_S included, and a margin to write the end.
@@ -786,12 +839,15 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         else Settings.model_fields["browser_session_max_s"].default
     )
     # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
-    fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
-    submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
+    fill_timeout_s = (
+        table["apply_fill"] + session_max_s + 1800 + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
+    )
+    submit_timeout_s = table["apply_submit"] + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
     manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,
         functions=[
+            *site_profile.queue_functions(fill_timeout_s),
             # keep_result=0: nothing of a fill is left in Redis, and the tick can queue the same
             # application again under its id once the job ended.
             func(apply_fill, name="apply_fill", timeout=fill_timeout_s, max_tries=1, keep_result=0),
@@ -803,6 +859,13 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 keep_result=0,
             ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
+            func(
+                prune_apply_screenshots,
+                name="prune_apply_screenshots",
+                timeout=60,
+                max_tries=1,
+                keep_result=0,
+            ),
             func(
                 apply_manual,
                 name="apply_manual",
@@ -818,7 +881,16 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 second=APPLY_TICK_SECONDS,
                 timeout=60,
                 keep_result=0,
-            )
+            ),
+            cron(
+                prune_apply_screenshots,
+                name="cron:prune_apply_screenshots",
+                hour=3,
+                minute=17,
+                second=0,
+                timeout=60,
+                keep_result=0,
+            ),
         ],
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
@@ -898,6 +970,8 @@ class QueueWorker(Worker):
 def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
     """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
     agent registered since the agents queue was built can outlive its job timeout."""
+    if settings is not None and settings.mail_send_key is not None:
+        raise RuntimeError("MAIL_SEND_KEY must never be set in the worker")
     specs = queues(settings)
     for spec in specs:
         if spec.name == queue.AGENTS:

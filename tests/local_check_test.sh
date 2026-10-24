@@ -10,6 +10,11 @@
 # what the cleanup removes and what it leaves; without one that part is skipped and says so.
 set -euo pipefail
 
+# The enclosing gate's settings are not defaults for these throwaway scenarios.
+# Each scenario can still set its own values after this boundary.
+unset LOCAL_CHECK_FULL LOCAL_CHECK_INT_GRACE LOCAL_CHECK_JOURNEY_SHARDS LOCAL_CHECK_MIN_FREE_GB \
+  LOCAL_CHECK_NET_BASE LOCAL_CHECK_STACKS LOCAL_CHECK_STEP_TIMEOUT LOCAL_CHECK_STUB LOCAL_CHECK_VITEST_WORKERS
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 WORK="$(cd "$WORK" && pwd -P)"
@@ -649,7 +654,7 @@ grep -qE 'build api worker caddy renderer browser$' "$ROOT/ops/local-check.sh" |
 ok "the docker marked tests use the images the check built (worker, renderer, browser), else their own, on -n 2 by file"
 
 # --- the networks of the journey stacks: subnets of their own (issue #280) -------------------------
-# Twelve stacks claim slots: their 60 networks get distinct /27 subnets of 10.213.0.0/16, outside
+# Twelve stacks claim slots: their 84 networks get distinct /27 subnets of 10.213.0.0/16, outside
 # Docker's predefined pools, and a slot freed by a stack that ended is taken again.
 cat >"$WORK/nets.sh" <<'EOF'
 docker() { return 0; } # no network of the daemon is in use
@@ -667,10 +672,10 @@ stub_plan() {
 EOF
 run 0 env LOCAL_CHECK_STUB="$WORK/nets.sh" "$CHECK" --only checks
 subnets="$(sed -n 's/^ *- subnet: //p' "$STUB_CALLS.nets")"
-[[ "$(wc -l <<<"$subnets" | tr -d ' ')" == 60 ]] || fail "not five subnets per stack: $subnets"
-[[ "$(sort -u <<<"$subnets" | wc -l | tr -d ' ')" == 60 ]] || fail "two networks share a subnet: $(sort <<<"$subnets" | uniq -d)"
+[[ "$(wc -l <<<"$subnets" | tr -d ' ')" == 84 ]] || fail "not seven subnets per stack: $subnets"
+[[ "$(sort -u <<<"$subnets" | wc -l | tr -d ' ')" == 84 ]] || fail "two networks share a subnet: $(sort <<<"$subnets" | uniq -d)"
 if grep -vE '^10\.213\.([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9])\.0/27$' <<<"$subnets"; then fail "a subnet outside 10.213.0.0/16"; fi
-[[ "$(grep -c '^  [a-z]*:$' "$STUB_CALLS.nets")" == 60 ]] || fail "the overrides do not name the five networks of each stack"
+[[ "$(grep -c '^  [a-z_]*:$' "$STUB_CALLS.nets")" == 84 ]] || fail "the overrides do not name the seven networks of each stack"
 [[ "$(cat "$STUB_CALLS.reused")" == 3 ]] || fail "a freed slot was not taken again: $(cat "$STUB_CALLS.reused")"
 ok "each journey stack's networks get /27 subnets of their own out of 10.213.0.0/16, a freed slot is reused"
 
@@ -713,7 +718,7 @@ stub_plan() {
   find "$WORK/nets" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ' >"$STUB_CALLS.nets"
 }
 EOF2
-NET0=10.213.0.0/27 NET1=10.213.5.0/27
+NET0=10.213.0.0/27 NET1=10.213.7.0/27
 subnets_up() { grep '^up ' "$STUB_CALLS" | awk '{print $2}' | tr '\n' ' '; }
 nets_left() { cat "$STUB_CALLS.nets"; }
 
@@ -760,7 +765,7 @@ run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="172.17.0.0/16 $NET0" "
 [[ "$(subnets_up)" == "$NET1 $NET1 " ]] || fail "10.213.0.0/27 in use: subnets $(subnets_up), expected slot 1 twice"
 : >"$STUB_CALLS"
 run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="$NET0 10.213.9.0/27 192.168.0.0/20" "$CHECK" --only journeys
-[[ "$(subnets_up)" == "10.213.10.0/27 10.213.10.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
+[[ "$(subnets_up)" == "10.213.14.0/27 10.213.14.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
 ok "a slot whose subnets a network already holds is skipped, and Pool overlaps moves the stack to another slot, three starts at most"
 
 # A shard and its run again, with the same fake docker: each its own compose project, stack log and

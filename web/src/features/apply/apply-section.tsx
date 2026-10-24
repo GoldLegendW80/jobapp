@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
+import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import { describeError } from "@/lib/api";
 
 import {
@@ -39,10 +40,11 @@ import {
 } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
+import { EmailApplication } from "./email-application";
 import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
-import { LiveViewSlot } from "./live-view-slot";
+import { LiveViewSlot, type LeaseOf } from "./live-view-slot";
 import { ManualPanel } from "./manual-panel";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
@@ -90,6 +92,16 @@ const POLL_RETRY_MS = 1000;
 const STALE_NOTICE =
   "The form or your documents changed since you looked. Check the answers shown now and approve again.";
 
+/** The submit lease in the live view, and the words before it starts. */
+const SUBMIT_STATUS =
+  "The assistant fills the form again with your approved answers, then submits it.";
+const REHEARSAL_STATUS =
+  "A rehearsal: the assistant fills the form again with your approved answers, then stops without submitting it.";
+const SUBMIT_WAITS =
+  "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn. Then you can watch the assistant fill the form again here.";
+const HOLD_WAITS =
+  "After the hold, you can watch the assistant fill the form again here.";
+
 /**
  * The "Apply" section of the job page (SPEC-apply.md, "Frontend"): Apply with Review first, the
  * state of the fill, the answers and what is left for the person, the screenshots and documents,
@@ -103,6 +115,30 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [unsaved, setUnsaved] = useState(0);
   const [asking, setAsking] = useState<DecisionKind | null>(null);
+  let onLinkedIn = false;
+  let linkedinPosting: string | null = null;
+  try {
+    const posting = new URL(job.url ?? "");
+    const host = posting.hostname.toLowerCase().replace(/\.$/, "");
+    onLinkedIn = host === "linkedin.com" || host.endsWith(".linkedin.com");
+    if (
+      posting.protocol === "https:" &&
+      !posting.username &&
+      !posting.password &&
+      ["linkedin.com", "www.linkedin.com"].includes(host) &&
+      /^\/jobs\/view\/\d{1,24}\/?$/.test(posting.pathname) &&
+      !posting.hash
+    )
+      linkedinPosting = posting.href;
+  } catch {
+    /* A posting without an address already has its normal refusal. */
+  }
+  const linkedin = useQuery({
+    queryKey: linkedinKey,
+    queryFn: ({ signal }) => getLinkedIn(signal),
+    enabled: onLinkedIn,
+  });
+  const linkedinBlocked = onLinkedIn && !linkedin.data?.allowed;
 
   const latest = useQuery({
     queryKey: applicationsKey(job.id),
@@ -154,6 +190,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
 
   const holdUntil =
     application?.state === "held" ? detail.data?.hold_until : undefined;
+  const submitLease = submitLeaseOf(application);
 
   // The state moved: read the form, the report and the posting (it may have become `applied`).
   const state = application?.state;
@@ -245,8 +282,20 @@ export function ApplySection({ job }: { job: JobDetail }) {
     onError: failed,
   });
   const approve = useMutation({
-    mutationFn: (current: Approval) =>
-      approveApplication(id as string, current.answers_hash),
+    mutationFn: ({
+      current,
+      acknowledged,
+    }: {
+      current: Approval;
+      acknowledged: string[];
+    }) =>
+      approveApplication(
+        id as string,
+        current.answers_hash,
+        current.answers.find((answer) => answer.field_key === "email_to")
+          ?.value as string | undefined,
+        acknowledged,
+      ),
     onMutate: () => {
       setNotice(null);
     },
@@ -345,6 +394,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
+          {application?.ats === "email" && id ? (
+            <EmailApplication applicationId={id} />
+          ) : null}
           {!manual ? (
             <NeedsPerson
               application={application}
@@ -370,6 +422,15 @@ export function ApplySection({ job }: { job: JobDetail }) {
               leaseOf="none"
             />
           ) : null}
+          {submitLease && !manual ? (
+            <LiveViewSlot
+              idle={application?.state === "held" ? HOLD_WAITS : SUBMIT_WAITS}
+              leaseOf={submitLease}
+              status={application?.dry_run ? REHEARSAL_STATUS : SUBMIT_STATUS}
+              stopped={application?.state === "held"}
+              submit
+            />
+          ) : null}
           {application && manual ? (
             <ManualPanel
               application={application}
@@ -378,7 +439,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             />
           ) : null}
 
-          {application && hasForm(application) ? (
+          {application &&
+          application.needs !== "signin" &&
+          hasForm(application) ? (
             approval ? (
               <FormPanel
                 application={application}
@@ -423,31 +486,62 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             {phase === "idle" ? (
               <>
-                <Button
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("review");
-                  }}
-                >
-                  {start.isPending && start.variables === "review" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply (Review first)
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("manual");
-                  }}
-                >
-                  {start.isPending && start.variables === "manual" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply myself
-                </Button>
+                {linkedinBlocked ? (
+                  <p className="text-sm text-muted-foreground">
+                    Turn on LinkedIn in Account and accept its current sentence
+                    to use Easy Apply. You can also apply yourself.
+                  </p>
+                ) : (
+                  <Button
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("review");
+                    }}
+                  >
+                    {start.isPending && start.variables === "review" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply (Review first)
+                  </Button>
+                )}
+                {linkedinBlocked ? (
+                  linkedinPosting ? (
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-fit"
+                      asChild
+                    >
+                      <a
+                        href={linkedinPosting}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open LinkedIn and apply myself
+                      </a>
+                    </Button>
+                  ) : null
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("manual");
+                    }}
+                  >
+                    {start.isPending && start.variables === "manual" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply myself
+                  </Button>
+                )}
               </>
             ) : null}
             {phase === "review" && approval ? (
@@ -538,8 +632,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
               role={job.title}
               approval={approval}
               pending={approve.isPending}
-              onConfirm={() => {
-                approve.mutate(approval);
+              onConfirm={(acknowledged = []) => {
+                approve.mutate({ current: approval, acknowledged });
               }}
             />
           ) : null}
@@ -559,6 +653,17 @@ function canCancel(application: Application | null): boolean {
   return ["queued", "filling", "needs_person", "approved", "held"].includes(
     application.state,
   );
+}
+
+/**
+ * This application's submit lease among the person's leases: the one the api names for it, as the
+ * person may have several applications approved or held; null in a state without one.
+ */
+function submitLeaseOf(application: Application | null): LeaseOf | null {
+  if (!application || application.ats === "email") return null;
+  return ["approved", "held", "submitting"].includes(application.state)
+    ? { application: application.id }
+    : null;
 }
 
 function ReviewButtons({

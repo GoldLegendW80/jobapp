@@ -27,7 +27,7 @@ import { caddyUrl, makeShots, root } from "./stack";
  * address does not exist yet (M4 builds it), so the journey asserts the address only. This
  * proves the browser can reach the fake, which M4 needs. Then the other two legs M4 will lean
  * on: the code is good for tokens (PKCE verified), and the api container reaches the fake with
- * the app's own Google client.
+ * the app's OAuth client and account-bound Gmail MCP client.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   GMAIL_STUB_PORT=8098 HTTP_PORT=8097 docker compose -p jobapp-m1 -f compose.yml \
@@ -189,19 +189,36 @@ test("a user who unticks sending is granted the rest, and one who denies comes b
   ).toBeVisible();
 });
 
-test("the api container reaches the fake with the app's own Google client", async () => {
+test("the api container reaches the fake through the app's account-bound Gmail MCP client", async () => {
   test.skip(!project, "set E2E_COMPOSE_PROJECT to run a command in the api");
   const { refresh_token: refresh } = await stub.grant(ALICE);
-  // The settings of the running api, its client, a real socket to gmailstub: what M4 and M7 use.
+  // The running api's OAuth and MCP clients use the real sidecar, which reaches gmailstub.
+  // The synthetic account is kept in memory, with the refresh token sealed to its UUID.
   const script = [
-    "import asyncio, sys",
+    "import asyncio, os, sys",
+    "from uuid import uuid4",
+    "from app.agents.crypto import Keyring",
     "from app.config import get_settings",
-    "from app.mail.google import GoogleClient, Grant",
-    "client = GoogleClient(get_settings())",
-    "grant = Grant('e2e-user', sys.stdin.read().strip())",
-    "profile = asyncio.run(client.get_profile(grant))",
-    "page = asyncio.run(client.list_messages(grant, q='from:ashbyhq.com'))",
-    "print(client.endpoints.gmail_url, profile.email, [ref.id for ref in page.refs])",
+    "from app.mail.google import GoogleClient",
+    "from app.mail.mcp_client import GmailMcp",
+    "from app.mail.models import TOKEN_KIND, MailAccount",
+    "async def scenario():",
+    "    settings = get_settings()",
+    "    oauth = GoogleClient(settings)",
+    "    keyring = Keyring(os.urandom(32))",
+    "    user_id = uuid4()",
+    "    sealed = keyring.encrypt(sys.stdin.read().strip(), user_id, TOKEN_KIND)",
+    "    account = MailAccount(",
+    "        user_id=user_id,",
+    `        email=${JSON.stringify(ALICE)},`,
+    "        refresh_token_encrypted=sealed.ciphertext,",
+    "        key_version=sealed.key_version,",
+    "    )",
+    "    profile = await oauth.connection_profile(account, keyring)",
+    "    client = GmailMcp(settings, oauth, keyring)",
+    "    page = await client.list_messages(account, q='from:ashbyhq.com')",
+    "    print(oauth.endpoints.gmail_url, profile.email, [ref['id'] for ref in page['messages']])",
+    "asyncio.run(scenario())",
   ].join("\n");
   const out = execFileSync(
     "docker",
@@ -230,7 +247,12 @@ test("the api container reaches the fake with the app's own Google client", asyn
       ["messages.list", 200],
     ]),
   );
-  // Neither the api nor the worker wrote the token anywhere in its logs.
-  const logs = compose("logs", "--no-color", "api", "worker");
+  expect(
+    calls
+      .filter((call) => call.endpoint === "messages.list")
+      .map((call) => call.query.q),
+  ).toContain("from:ashbyhq.com");
+  // The api, worker and MCP sidecar keep the refresh token out of their logs.
+  const logs = compose("logs", "--no-color", "api", "worker", "gmailmcp");
   expect(logs).not.toContain(refresh);
 });

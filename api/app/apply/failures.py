@@ -44,19 +44,21 @@ from app.apply.models import Application, Mode, State
 
 RETRY = "retry"
 HTTP_5XX = "http_5xx"
+HTTP_429 = "http_429"
 PAYMENT = "payment_requested"
 RETRYABLE = frozenset(
     {
         "navigation_timeout",
         "navigation_failed",
         HTTP_5XX,
+        HTTP_429,
         "unavailable",
         "ended",
         "interrupted",
     }
 )
 # The steps the person takes on the page itself, for which a Review first run keeps the lease.
-WAIT_ON_PAGE = frozenset({"captcha", "email_code"})
+WAIT_ON_PAGE = frozenset({"captcha", "email_code", "forbidden"})
 WAIT_POLL_S = 5.0
 
 

@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -74,7 +75,11 @@ describe("forget all logins", () => {
   it("asks first and names what is lost, with the profile's size", async () => {
     const calls = fakeApi({ browser: USED });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await ask(user);
     expect(dialog).toHaveTextContent(`${FORGET_LOST} It holds about 34 MB.`);
     expect(dialog).toHaveTextContent(FORGET_ENDS);
@@ -85,7 +90,11 @@ describe("forget all logins", () => {
   it("names no size when there is no profile yet", async () => {
     fakeApi({ browser: EMPTY });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await ask(user);
     expect(dialog).toHaveTextContent(FORGET_LOST);
     expect(dialog).not.toHaveTextContent("It holds");
@@ -94,7 +103,11 @@ describe("forget all logins", () => {
   it("Keep my logins sends nothing", async () => {
     const calls = fakeApi({ browser: USED });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await ask(user);
     await user.click(
       within(dialog).getByRole("button", { name: "Keep my logins" }),
@@ -111,7 +124,11 @@ describe("forget all logins", () => {
       browser: { ...USED, lease: ownLease("signin"), holder: "you" },
     });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const view = await connected(opened);
     const dialog = await ask(user);
     await user.click(
@@ -129,7 +146,11 @@ describe("forget all logins", () => {
   it("forgets twice without complaint", async () => {
     const calls = fakeApi({ browser: EMPTY });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     for (let round = 0; round < 2; round += 1) {
       const dialog = await ask(user);
       await user.click(
@@ -151,7 +172,11 @@ describe("forget all logins", () => {
       ),
     );
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await ask(user);
     await user.click(
       within(dialog).getByRole("button", { name: "Forget all logins" }),
@@ -176,7 +201,11 @@ describe("forget all logins", () => {
       }),
     );
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await ask(user);
     await user.click(
       within(dialog).getByRole("button", { name: "Forget all logins" }),
@@ -192,7 +221,11 @@ describe("forget all logins", () => {
   it("has no dashes in its copy", async () => {
     fakeApi({ browser: USED });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
     const dialog = await ask(user);
     expect(dialog.textContent).not.toMatch(/[–—]| - /);
     expect(FORGOTTEN).not.toMatch(/[–—]| - /);

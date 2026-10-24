@@ -28,6 +28,7 @@ services:
     image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
     environment:
       BROWSER_PROXY_ALLOW_PRIVATE: pages,elsewhere
+      BROWSER_LINKEDIN_STUB_BASE_URL: http://pages:8080/linkedin
 
   pages:
     image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}

@@ -20,7 +20,7 @@ from browserd.tools import actions  # noqa: E402
 
 from app.browser import leases as api_leases  # noqa: E402
 from tests.browser.test_b4_live_unit import VIEWER, World, run  # noqa: E402
-from tests.browser.test_b5_actions import Page, tab_of  # noqa: E402
+from tests.browser.test_b5_actions import Page, acted, facts, tab_of  # noqa: E402
 from tests.browser.test_b5_actions import Request as ToolRequest  # noqa: E402
 
 
@@ -106,6 +106,8 @@ class Chooser:
 
 
 def _manual_tab(page: Page) -> actions.Tab:
+    if not hasattr(page, "on"):
+        page.on = lambda event, handler: None
     tab = tab_of(page)
     tab.request = ManualRequest()
     tab.state.files["cv.pdf"] = b"%PDF-1.4 e2e"
@@ -120,7 +122,16 @@ def test_a_chooser_the_person_opened_is_answered_with_a_document_of_the_lease() 
     assert callable(page.chooser_handler)  # type: ignore[attr-defined]
     chooser = Chooser()
     page.chooser_handler(chooser)  # type: ignore[attr-defined]
-    done = asyncio.run(actions.run(tab, "browser_file_upload", {"paths": ["cv.pdf"]}))
+    done = asyncio.run(
+        actions.run(
+            tab,
+            "browser_file_upload",
+            {
+                "paths": ["cv.pdf"],
+                "chooser_id": actions._chooser(tab)["chooser_id"],
+            },
+        )
+    )
     assert done["ok"] is True
     assert done["uploaded"] == ["cv.pdf"]
     assert chooser.files[0][0]["name"] == "cv.pdf"
@@ -140,6 +151,58 @@ def test_only_apply_myself_intercepts_the_file_chooser() -> None:
     assert not hasattr(page, "chooser_handler")
     with pytest.raises(ValueError, match="ref"):  # bad_args, as before A9 (tools/routes.py)
         asyncio.run(actions.run(tab, "browser_file_upload", {"paths": ["cv.pdf"]}))
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "target"),
+    [
+        ("browser_click", {"ref": "e1"}, facts("Next", tag="button", kind="button")),
+        ("browser_type", {"ref": "e1", "text": "Example"}, facts("Name")),
+        ("browser_check", {"ref": "e1"}, facts("Remote", kind="checkbox")),
+        ("browser_press_key", {"key": "Tab"}, facts("Name")),
+    ],
+)
+def test_a_takeover_during_pacing_prevents_the_already_started_action(
+    tool: str,
+    args: dict[str, Any],
+    target: dict[str, Any],
+) -> None:
+    page = Page()
+    page.add("e1", target)
+    tab = _manual_tab(page)
+    held = True
+
+    async def takeover(seconds: float) -> None:
+        nonlocal held
+        held = False
+
+    tab.pacer.sleep = takeover
+    tab.input_allowed = lambda: held
+    result = asyncio.run(actions.run(tab, tool, args))
+    assert result["error"] == "person_input"
+    assert acted(page) == []
+
+
+def test_a_stale_chooser_boundary_cannot_receive_the_next_documents() -> None:
+    page = Page()
+    tab = _manual_tab(page)
+    first, second = Chooser(), Chooser()
+    tab._chosen(first)
+    boundary = actions._chooser(tab).get("chooser_id")
+    tab._chosen(second)
+    result = asyncio.run(
+        actions.run(
+            tab,
+            "browser_file_upload",
+            {
+                "paths": ["cv.pdf"],
+                "chooser_id": boundary,
+            },
+        )
+    )
+    assert result["error"] == "chooser_changed"
+    assert first.files == second.files == []
+    assert tab.state.chooser is second
 
 
 @pytest.mark.parametrize("purpose", ["apply_fill", "takeover", "signin"])
@@ -194,14 +257,15 @@ def test_a_take_over_during_the_apps_turn_stops_the_apps_next_key(
         made, token = await w.manager.acquire(manual_request())
         lease_id = made.lease_id
         tool, live = _tool_route(w), _input_route(w)
-        # The person's time: the app reads and answers a chooser, never types nor clicks.
+        # Attaching a document owns the app turn, just like typing identity details.
         for name in ("browser_type", "browser_click", "browser_press_key",
-                     "browser_select_option", "browser_check", "browser_tabs"):  # fmt: skip
+                     "browser_select_option", "browser_check", "browser_tabs",
+                     "browser_file_upload"):  # fmt: skip
             status, found = await tool(lease_id, token, name)
             assert (status, found["ok"], found["error"]) == (200, False, "person_input")
-        for name in ("browser_snapshot", "browser_file_upload", "browser_navigate"):
+        for name in ("browser_snapshot", "browser_navigate"):
             assert (await tool(lease_id, token, name))[1] == {"ok": True}
-        assert ran == ["browser_snapshot", "browser_file_upload", "browser_navigate"]
+        assert ran == ["browser_snapshot", "browser_navigate"]
         # "Fill my details": the app's turn, its keys reach the page.
         await live(lease_id, b'{"viewer": null}')
         assert (await tool(lease_id, token, "browser_type"))[1] == {"ok": True}

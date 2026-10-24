@@ -18,7 +18,9 @@ from app.apply.ats import ADAPTERS, adapter_for, base
 from app.apply.ats.ashby import Ashby
 from app.apply.ats.generic import Generic
 from app.apply.ats.greenhouse import Greenhouse
+from app.apply.ats.lever import Lever
 from tests.apply.a4_support import FakeForm, Spec, ashby_form, greenhouse_form
+from tests.apply.a8_support import lever_form
 from tests.profile.conftest import full
 
 SNAPSHOTS = Path(__file__).resolve().parents[3] / "tests" / "ats_forms" / "a4" / "snapshots"
@@ -46,6 +48,48 @@ def fill(adapter: base.Adapter, form: FakeForm, ctx: answers.Context | None = No
 
 def by_label(report: base.Report) -> dict[str, base.Outcome]:
     return {o.field.label: o for o in report.outcomes}
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "form_factory"),
+    [(Ashby, ashby_form), (Greenhouse, greenhouse_form), (Lever, lever_form)],
+)
+@pytest.mark.parametrize("value", ["  My exact answer.  ", "Remote, please", "I hold a PhD."])
+def test_single_page_refills_type_the_exact_person_answer(
+    adapter_type, form_factory, value
+) -> None:
+    adapter, form = adapter_type(), form_factory()
+    label = "Why do you want to join this team?"
+    form.fields.append(Spec(label, "text", required=True))
+    found, code = asyncio.run(adapter.discover(form))
+    assert found is not None and not code
+    item = next(f for f in found.fields if f.label == label)
+    adapter.person_answers[item.key] = base.PersonAnswer(item.label, item.kind, item.options, value)
+    report = fill(adapter, form)
+    outcome = by_label(report)[label]
+    assert outcome.answer == answers.Answer(value, "person")
+    assert outcome.filled.status == "filled"
+    assert form.fields[-1].value == value
+    assert any(name == "type" and args.get("text") == value for name, args in form.calls)
+
+
+@pytest.mark.parametrize("adapter_type", [Ashby, Greenhouse, Lever])
+@pytest.mark.parametrize("changed", ["label", "kind", "options"])
+def test_single_page_refill_does_not_transfer_a_person_answer_to_another_shape(
+    adapter_type, changed
+) -> None:
+    adapter = adapter_type()
+    item = base.Field("same-key", "Why this team?", "text", required=True, ref="e1")
+    shape = {"label": item.label, "kind": item.kind, "options": item.options}
+    shape[changed] = {
+        "label": "I consent to a background check",
+        "kind": "checkbox",
+        "options": ("Yes", "No"),
+    }[changed]
+    adapter.person_answers[item.key] = base.PersonAnswer(**shape, value="My exact answer")
+    result = adapter.resolve(item, context())
+    assert isinstance(result, answers.Left)
+    assert result.reason == "person_answer_changed"
 
 
 # --- reading recorded snapshots ----------------------------------------------------------------
@@ -413,7 +457,16 @@ def test_without_a_stub_base_the_stub_addresses_are_nobodys() -> None:
         f"{STUB}/greenhouse/northwind-labs/jobs/4012345",
     ):
         assert adapter_for(url) is None
-    assert [cls.name for cls in ADAPTERS] == ["ashby", "greenhouse", "lever", "generic"]
+    assert [cls.name for cls in ADAPTERS] == [
+        "ashby",
+        "greenhouse",
+        "lever",
+        "workday",
+        "google_careers",
+        "vie",
+        "linkedin",
+        "generic",
+    ]
 
 
 def test_an_unknown_page_with_a_field_gets_the_generic_strategy() -> None:

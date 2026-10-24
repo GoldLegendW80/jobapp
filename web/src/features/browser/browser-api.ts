@@ -22,8 +22,20 @@ const leaseSchema = z.object({
   started_at: z.string(),
   active_s: z.number(),
   max_s: z.number(),
+  // The id of the application a submit lease sends (apply), else null.
+  application_id: z.string().nullable().optional(),
 });
 export type Lease = z.infer<typeof leaseSchema>;
+
+/** Input already belongs to the person in their own session or a private Apply page wait. */
+export function personOwnsInput(lease: Lease): boolean {
+  return (
+    !lease.automation ||
+    (lease.purpose === "apply_fill" &&
+      lease.state === "waiting_person" &&
+      ["captcha", "email_code", "forbidden"].includes(lease.wait_reason ?? ""))
+  );
+}
 
 const queueSchema = z.object({
   purpose: z.string(),

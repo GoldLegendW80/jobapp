@@ -126,21 +126,34 @@ function FieldRow({
   const [editing, setEditing] = useState(false);
   const text = valueText(answer.value);
   const typing = editable && typed && (open || editing);
+  const reason = open
+    ? {
+        letter_too_long:
+          "The letter has more than 10000 characters, so the assistant left this box empty. Shorten it here or answer on the site.",
+        letter_control_character:
+          "The letter contains a tab, carriage return or another control character the browser cannot type, so the assistant left this box empty. Correct it here or answer on the site.",
+      }[answer.left_reason ?? ""]
+    : undefined;
   return (
     <li
       data-left={open ? "true" : undefined}
       className={cn(
-        "flex flex-col gap-1 rounded-md border p-3 text-sm sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-start sm:gap-4",
+        "flex min-w-0 flex-col gap-1 rounded-md border p-3 text-sm sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-start sm:gap-4",
         open &&
           "border-2 border-amber-600 bg-amber-50 dark:border-amber-500 dark:bg-amber-950/40",
       )}
     >
-      <span className="font-medium break-words">
+      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
         {answer.label}
         {answer.required ? (
           <span className="text-muted-foreground"> (required)</span>
         ) : null}
       </span>
+      {reason ? (
+        <p className="text-amber-950 dark:text-amber-100 sm:col-span-3">
+          {reason}
+        </p>
+      ) : null}
       {typing ? (
         <AnswerEditor
           key={`${answer.source}:${text}`}
@@ -163,7 +176,7 @@ function FieldRow({
       ) : (
         <span
           className={cn(
-            "break-words whitespace-pre-wrap",
+            "min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]",
             text === "" && "text-muted-foreground italic",
           )}
         >

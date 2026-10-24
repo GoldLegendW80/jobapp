@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -52,18 +53,6 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(job: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${job}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
-
 /** A posting of the person on the fake Ashby form `variant`, with its two documents. */
 async function postingOn(variant: "" | "slow", role: string): Promise<string> {
   const job = await addPosting(page.request, {
@@ -86,7 +75,7 @@ async function postingOn(variant: "" | "slow", role: string): Promise<string> {
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
   return job;
 }
 
@@ -179,7 +168,7 @@ test("the person adds a cap of 1 for the company on the Applications page", asyn
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/settings\/applications$/);
   await expect(
-    page.getByRole("heading", { name: "Applications", level: 1 }),
+    page.getByRole("heading", { name: "Application settings", level: 1 }),
   ).toBeVisible();
   await expect(
     page.getByRole("radio", { name: "Full auto" }),

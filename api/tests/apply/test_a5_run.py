@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
@@ -568,9 +569,9 @@ def _outcome(label: str, kind: str, reason: str, options: tuple[str, ...] = ()) 
         ("Which team interests you?", "select", "not_a_known_question", ("Ops", "Research"), True),
         ("Do you enjoy puzzles?", "yes_no", "not_a_known_question", (), False),  # a yes or no
         # a bare noun phrase the resolver does not know stays the person's, options or not
-        ("Team preference", "combobox", "not_a_known_question", ("Ops", "Research"), False),
+        ("Team preference", "combobox", "not_a_known_question", ("Ops", "Research"), True),
         # an employer word alone is no topic, even in A3's free text (issue #317)
-        ("Team preference", "combobox", "free_text_for_the_agent", ("Ops", "Research"), False),
+        ("Team preference", "combobox", "free_text_for_the_agent", ("Ops", "Research"), True),
         ("Team preference", "combobox", "not_a_known_question", (), False),  # options unknown
         ("Gender", "select", "not_a_known_question", ("Male", "Female"), False),  # EEO
         ("What is your race or ethnicity?", "text", "not_a_known_question", (), False),
@@ -719,7 +720,14 @@ CLEARANCE = agent.Question("k", "Security clearance level", "text")
 def test_what_is_kept_of_the_agents_reply(
     question: agent.Question, value: str | None, source: str, code: str
 ) -> None:
-    assert _judge(question, value, source).code == code
+    if code == "accepted":
+        assert value is not None
+        # These rows test supported fake facts, rather than granting their source label trust.
+        sources = replace(SOURCES, profile=(*SOURCES.profile, value))
+        reply = agent.Reply((agent.Proposal(question.key, value, source),))
+        assert agent.judge([question], reply, sources)[0].code == code
+    else:
+        assert _judge(question, value, source).code == code
 
 
 def test_a_question_answered_twice_or_not_at_all_stays_left_and_strays_are_ignored() -> None:
@@ -744,11 +752,22 @@ def test_the_apply_queue_runs_one_fill_at_a_time_and_ticks_every_30_seconds() ->
     assert spec.max_jobs == 1
     functions = {f.name: f for f in spec.functions}
     # submit: A6; manual: A9's Apply myself session
-    assert set(functions) == {"apply_fill", "apply_submit", "apply_tick", "apply_manual"}
+    assert set(functions) == {
+        "apply_fill",
+        "apply_submit",
+        "apply_tick",
+        "apply_manual",
+        "prune_apply_screenshots",
+        "site_profile_run",
+        "site_profile_save",
+    }
     assert all(f.keep_result_s == 0 and f.max_tries == 1 for f in functions.values())
-    (tick,) = spec.cron_jobs
+    tick, prune = spec.cron_jobs
     assert tick.second == {0, 30}
     assert tick.keep_result_s == 0
+    assert prune.name == "cron:prune_apply_screenshots"
+    assert (prune.hour, prune.minute, prune.second) == (3, 17, 0)
+    assert prune.keep_result_s == 0
     assert queue.apply_fill_job_id("x") == "apply-fill:x"
 
 

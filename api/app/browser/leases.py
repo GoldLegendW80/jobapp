@@ -197,7 +197,9 @@ def lease_max_table(raw: str) -> dict[str, int]:
 @dataclass
 class Lease:
     """The holder's turn. `lease_id` is browserd's lease id once it started (`starting:<uuid>`
-    before). Times are seconds of the store's clock."""
+    before). Times are seconds of the store's clock. `application_id`: the application the call
+    that started the lease named (apply's submit lease); None otherwise, and on a lease taken back
+    from browserd after Redis lost it."""
 
     lease_id: str
     user_id: str
@@ -214,6 +216,7 @@ class Lease:
     active_before: float = 0.0  # active seconds banked before the current active stretch
     active_since: float = 0.0
     last_input: float = 0.0
+    application_id: str | None = None
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
@@ -368,12 +371,14 @@ class Leases:
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
         address: str | None = None,
+        application_id: str | None = None,
     ) -> Acquired:
         """The caller's lease, started now or already held, or its place in the queue. Raises
         BrowserError when browserd cannot start it, StoreUnavailableError without Redis.
         `hosts` and `submit_selectors` (B5) are given to browserd by the call that starts the
         lease: the hosts its tools may open, the adapter's own submit elements; `address` (B7)
-        is where a person's own session opens."""
+        is where a person's own session opens. `application_id` is written on the lease this
+        call starts, never on one it finds held."""
         if purpose not in TIERS:
             raise ValueError(purpose)
         try:
@@ -405,6 +410,7 @@ class Leases:
                 started_at=now,
                 active_since=now,
                 last_input=now,
+                application_id=application_id,
             )
             raw = turn.dumps()
             for _ in range(2):
@@ -540,6 +546,31 @@ class Leases:
     async def resume(self, user_id: str, lease_id: str) -> Lease | None:
         return await self._update(user_id, lease_id, lambda lease, now: lease.resume(now))
 
+    async def apply_wait(self, user_id: str, lease_id: str, found: dict[str, Any]) -> Lease | None:
+        """Mirror the private browser-owned Apply wait, with no refresh on readback."""
+
+        def sync(lease: Lease, now: float) -> None:
+            if lease.purpose != "apply_fill" or found.get("lease_id") != lease_id:
+                raise BrowserError("refused")
+            if found.get("state") == "active":
+                lease.resume(now)
+            elif found.get("wait_reason") in {"captcha", "email_code", "forbidden"}:
+                left = max(0, min(float(found.get("wait_left_s") or 0), 1800))
+                deadline = now + left
+                if lease.state == "waiting_person" and lease.wait_deadline is not None:
+                    deadline = min(deadline, lease.wait_deadline)
+                lease.active_before = float(found.get("active_s") or 0)
+                lease.state, lease.wait_reason, lease.wait_host = (
+                    "waiting_person",
+                    found["wait_reason"],
+                    "",
+                )
+                lease.wait_deadline = deadline
+            else:
+                raise BrowserError("refused")
+
+        return await self._update(user_id, lease_id, sync)
+
     # --- inside ----------------------------------------------------------------------------------
 
     async def _start(
@@ -610,11 +641,11 @@ class Leases:
         if lease.state == "starting":
             reason = lease.expired(now)
         else:
-            # browserd decides while it answers, within this copy's bound; this copy's idle
-            # timer only when it cannot be asked, counted from browserd's last sign of the lease.
-            reason = lease.overdue(now)
-            if reason is None:
-                reason, size = await self._gone_in_browserd(lease)
+            # Read browserd before the local ceiling: a verified live takeover banks active
+            # time in both stores. An ordinary active browser still obeys the hard ceiling.
+            reason, size = await self._gone_in_browserd(lease)
+            if reason is None or reason == _CANNOT_ASK:
+                reason = lease.overdue(now) or reason
             if reason is None or reason == _CANNOT_ASK:
                 answer = "held" if reason is None else "unanswered"
                 seen = await r.eval(SIGHT, 1, SEEN + lease.lease_id, answer, now, SEEN_TTL_S)
@@ -622,6 +653,8 @@ class Leases:
                     alive_at = max((float(_text(x) or 0.0) for x in seen), default=0.0)
                     reason = lease.expired(now, alive_at)
         if reason is None:
+            if lease.dumps() != raw:
+                await r.eval(CAS, 1, HOLDER, raw, lease.dumps())
             return lease
         await self._end(r, raw, lease, reason, now, size)
         return None
@@ -665,7 +698,17 @@ class Leases:
                         now,
                         str(found.get("wait_reason") or "signin"),
                         host[:HOST_MAX] if isinstance(host, str) else "",
-                        max(0, min(left, self.session_max_s)),
+                        max(
+                            0,
+                            min(
+                                left,
+                                1800
+                                if lease.purpose == "apply_fill"
+                                and found.get("wait_reason")
+                                in {"captcha", "email_code", "forbidden"}
+                                else self.session_max_s,
+                            ),
+                        ),
                     )
                 if await r.set(HOLDER, lease.dumps(), nx=True):
                     logger.info("browser lease taken back from browserd: purpose=%s", lease.purpose)
@@ -696,6 +739,20 @@ class Leases:
             return _CANNOT_ASK, None
         current = found["lease"]
         if current is not None and current.get("lease_id") == lease.lease_id:
+            now = self.clock()
+            if current.get("wait_reason") == "takeover":
+                from app.browser.client import TAKEOVER_WAIT_S
+
+                left = max(0, min(float(current.get("wait_left_s") or 0), TAKEOVER_WAIT_S))
+                deadline = now + left
+                if lease.wait_reason == "takeover" and lease.wait_deadline is not None:
+                    deadline = min(deadline, lease.wait_deadline)
+                lease.wait_person(now, "takeover", "", 0)
+                lease.active_before = float(current.get("active_s") or 0)
+                lease.wait_deadline = deadline
+            elif lease.wait_reason == "takeover" and current.get("state") == "active":
+                lease.active_before = float(current.get("active_s") or 0)
+                lease.resume(now)
             return None, None
         last = found["last_end"]
         if last is not None and last.get("lease_id") == lease.lease_id:

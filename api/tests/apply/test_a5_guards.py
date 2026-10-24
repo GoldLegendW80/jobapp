@@ -427,8 +427,8 @@ def test_a_question_not_about_the_job_stays_the_persons_in_any_widget(
         # not an open question nor a prompt: a bare noun phrase, a statement, a question whose
         # opener is not on the list. Declared over-refusals: "Team preference" with its options,
         # "Anything else you'd like to share?".
-        ("Team preference", "combobox", ("Ops", "Research"), "not_open"),
-        ("Team preference", "select", THREE, "not_open"),
+        ("Team preference", "combobox", ("Ops", "Research"), None),
+        ("Team preference", "select", THREE, None),
         ("Favourite colour", "text", (), "not_open"),
         ("Availability", "text", (), "practical"),
         ("Comments", "text", (), "not_open"),
@@ -549,7 +549,11 @@ def test_a_question_of_unknown_origin_must_read_as_open() -> None:
     assert agent.Question("k", "Favourite colour", "text").reason == "not_a_known_question"
     assert agent.refusal("Favourite colour", "text") == "not_open"
     assert agent.refusal("Favourite colour", "text", (), "free_text_for_the_agent") is None
-    sources = agent.sources_of({}, "Engineer", "Example Robotics")
+    sources = agent.sources_of(
+        {"answers": {"motivation": "Green, I like building agents."}},
+        "Engineer",
+        "Example Robotics",
+    )
     reply = agent.Reply((agent.Proposal("k", "Green, I like building agents.", "facts"),))
     unknown = agent.Question("k", "Favourite colour", "text")
     (verdict,) = agent.judge([unknown], reply, sources)
@@ -710,6 +714,8 @@ def test_the_queue_start_ends_fills_left_by_a_dead_worker_and_nothing_else(
 
 
 def test_the_fill_timeout_is_the_leases_ceiling_and_the_queue_resets_at_start() -> None:
+    from app.browser.client import TAKEOVER_WAIT_S
+
     # Browser B12a: plus the wait of a sign in hand off, which stops the lease's clock.
     default = worker.apply_queue()
     longer = worker.apply_queue(
@@ -717,7 +723,7 @@ def test_the_fill_timeout_is_the_leases_ceiling_and_the_queue_resets_at_start() 
     )
     for spec, lease_s, wait_s in ((default, 900, 1800), (longer, 1200, 2400)):
         (filling,) = [f for f in spec.functions if f.name == "apply_fill"]
-        expected = lease_s + wait_s + worker.APPLY_JOB_MARGIN_S
+        expected = lease_s + wait_s + 1800 + TAKEOVER_WAIT_S + worker.APPLY_JOB_MARGIN_S
         assert filling.timeout_s == spec.job_timeout_s == expected
         # A whole lease of work and a wait of 25 minutes fit (the edge case of B12a).
         assert filling.timeout_s > lease_s + 25 * 60
@@ -831,7 +837,7 @@ FREE_TEXT_ROUTE = [
     ("Why should we trust you?", "text", "off_topic"),
     ("Décrivez votre situation", "textarea", "off_topic"),
     # a time is no employer: the reason to move now is not in the profile (issue #317)
-    ("Why now?", "text", "practical"),
+    ("Why now?", "text", None),
     # what this route still asks
     ("Why Example Robotics?", "textarea", None),
     ("Why Example Robotics?", "text", None),
@@ -911,7 +917,12 @@ def test_the_free_text_route_holds_the_topic_anchor(
     reply = agent.Reply(
         (agent.Proposal("k", "Example Robotics builds the robots I want.", "motivation"),)
     )
-    (verdict,) = agent.judge([asked], reply, agent.sources_of({}, "Engineer", "Example Robotics"))
+    sources = agent.sources_of(
+        {"answers": {"motivation": "Example Robotics builds the robots I want."}},
+        "Engineer",
+        "Example Robotics",
+    )
+    (verdict,) = agent.judge([asked], reply, sources)
     assert verdict.code == (code or "accepted")
 
 
@@ -934,7 +945,8 @@ def test_no_dash_separator_in_an_answer_the_agent_writes(typed: str, kept: str) 
     """The owner's rule, by code: whatever the model wrote, no dash used as a separator is typed."""
     asked = agent.Question("k", "Why Example Robotics?", "text", reason="free_text_for_the_agent")
     reply = agent.Reply((agent.Proposal("k", typed, "motivation"),))
-    (verdict,) = agent.judge([asked], reply, agent.sources_of({}, "Engineer", "Example Robotics"))
+    sources = agent.sources_of({"answers": {"motivation": kept}}, "Engineer", "Example Robotics")
+    (verdict,) = agent.judge([asked], reply, sources)
     assert verdict.code == "accepted"
     assert verdict.answer is not None
     assert verdict.answer.value == kept
@@ -1025,6 +1037,10 @@ TYPED_VALUES = [
 def test_the_judge_drops_a_value_on_personal_data_or_how_a_job_ended(typed: str, code: str) -> None:
     asked = agent.Question("k", "Why Example Robotics?", "text", reason="free_text_for_the_agent")
     reply = agent.Reply((agent.Proposal("k", typed, "motivation"),))
-    (verdict,) = agent.judge([asked], reply, agent.sources_of({}, "Engineer", "Example Robotics"))
+    # Positive rows explicitly test grounded job facts; refusal rows receive no invented source.
+    sections = {"answers": {"motivation": typed}} if code == "accepted" else {}
+    (verdict,) = agent.judge(
+        [asked], reply, agent.sources_of(sections, "Engineer", "Example Robotics")
+    )
     assert verdict.code == code
     assert (verdict.answer is None) is (code != "accepted")

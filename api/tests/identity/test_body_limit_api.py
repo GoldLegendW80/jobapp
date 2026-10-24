@@ -9,6 +9,7 @@ import select
 import socket
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -275,6 +276,74 @@ def test_the_hand_kept_lists_name_routes_that_exist(app: FastAPI) -> None:
     served = set(served_routes(app))
     assert set(SIZED) <= served, set(SIZED) - served
     assert served >= SELF_LIMITED, SELF_LIMITED - served
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "field", "too_long"),
+    [
+        (
+            "/api/applications/{ref}/approve",
+            {
+                "answers_hash": "a" * 64,
+                "confirmed_email_recipient": "\U0001f4bc" * 254,
+                "acknowledged_email_issues": ["\U0001f4bc" * 64] * 1000,
+            },
+            "acknowledged_email_issues",
+            ["x" * 65],
+        ),
+        (
+            "/api/site-profiles/{ref}/sections/1/approve",
+            {"values_hash": "a" * 64},
+            "values_hash",
+            "a" * 65,
+        ),
+        *[
+            (
+                "/api/browser/handoff/later" + suffix,
+                {"module": "a" * 40, "ref": str(uuid.uuid4())},
+                "module",
+                "a" * 41,
+            )
+            for suffix in ("", "/done", "/cancel")
+        ],
+        (
+            "/api/mail/drafts/{ref}/send",
+            {
+                "content_hash": "a" * 64,
+                "confirmed_new_recipients": ["\U0001f4bc" * 254] * 20,
+                "acknowledged_issues": ["\U0001f4bc" * 64] * 1000,
+            },
+            "acknowledged_issues",
+            ["x" * 65],
+        ),
+    ],
+)
+def test_bounded_decision_bodies_fit_the_class_and_validate_before_any_decision(
+    api: Api, factory: sessionmaker[Session], path, body, field, too_long
+) -> None:
+    make_user(factory, email="e2e-schema-bounds@example.org")
+    token = api.login_token("e2e-schema-bounds@example.org")
+    path = path.format(ref=uuid.uuid4())
+    # Escaped surrogate pairs cost twelve bytes per codepoint. Even the complete maximum
+    # accepted shape must reach ownership/registry lookup inside the unchanged byte cap.
+    raw = json.dumps(body, ensure_ascii=True).encode()
+    assert len(raw) <= limit_for("POST", path) == DEFAULT_MAX_BYTES
+    response = api.post(
+        path, token=token, content=raw, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 404, response.text[:300]
+    invalid = api.post(path, token=token, json={**body, field: too_long})
+    assert invalid.status_code == 422, invalid.text[:300]
+    assert invalid.json()["detail"].startswith(field + ":") or invalid.json()["detail"].startswith(
+        field + ".0:"
+    )
+    oversized = api.post(
+        path,
+        token=token,
+        content=raw + b" " * (DEFAULT_MAX_BYTES - len(raw) + 1),
+        headers={"Content-Type": "application/json"},
+    )
+    assert oversized.status_code == 413
 
 
 def test_a_posting_at_the_schema_maximum_in_four_byte_characters_is_saved(

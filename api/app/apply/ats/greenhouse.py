@@ -30,6 +30,11 @@ _CODE_LABELS = frozenset(
 )
 
 
+def email_code(root: base.Node, submit_names: frozenset[str]) -> bool:
+    found = base.discover_fields(root, submit_names)
+    return any(f.kind == "text" and base.fold(f.label) in _CODE_LABELS for f in found.fields)
+
+
 class Greenhouse(base.Adapter):
     name = "greenhouse"
     hosts = HOSTS
@@ -72,7 +77,6 @@ class Greenhouse(base.Adapter):
         a security or verification code, shown with a button to send it)."""
         if step := super().pending_at(root):
             return step
-        found = base.discover_fields(root, self.submit_names)
-        if any(f.kind == "text" and base.fold(f.label) in _CODE_LABELS for f in found.fields):
+        if email_code(root, self.submit_names):
             return "email_code"
         return ""

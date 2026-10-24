@@ -9,6 +9,7 @@ import {
   type JobDetail,
 } from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
+import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
 
 import type { Application, ApplicationEvent } from "./apply-api";
 import { LiveViewSlot } from "./live-view-slot";
@@ -50,6 +51,13 @@ export function NeedsPerson({
         <AlertTitle>{need.title}</AlertTitle>
         <AlertDescription>{need.what}</AlertDescription>
       </Alert>
+      {application.needs === "signin" ? (
+        <LaterHandoffBanner
+          module="application"
+          refId={application.id}
+          address={application.form_url}
+        />
+      ) : null}
       {ON_PAGE.has(application.needs ?? "") ? (
         <OnPageSlot events={events} />
       ) : null}
@@ -57,7 +65,8 @@ export function NeedsPerson({
   );
 }
 
-const WAITS = "The assistant waits for you. Take over to finish this step.";
+const WAITS =
+  "The assistant waits for you. Complete this step in the live view.";
 
 /** The live view while the run waits for the person on the page, and words once it stopped. */
 function OnPageSlot({ events }: { events?: readonly ApplicationEvent[] }) {

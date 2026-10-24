@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -60,18 +61,6 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(job: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${job}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
-
 test.beforeAll(async ({ browser }) => {
   person = invented("a8");
   context = await newContext(browser);
@@ -123,7 +112,7 @@ test("apply on the fake Lever form: the parse corrected, approve, submitted once
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
 
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
@@ -202,10 +191,14 @@ async function outlinedPixels(shot: Locator): Promise<number> {
   });
 }
 
-// Skipped until worker.apply_services passes the form agent (held for the owner): without it the
-// fill of an unknown form ends needs_person (no_adapter) and no submit is outlined.
-test.skip("apply on the fake custom form: the submit designated and outlined, submitted once", async () => {
-  const job = await addPosting(page.request, person);
+test("apply on the fake custom form: the submit designated and outlined, submitted once", async () => {
+  const job = await addPosting(page.request, {
+    ...person,
+    posting: {
+      ...person.posting,
+      title: `${person.posting.title} (custom form)`,
+    },
+  });
   const read = await page.request.get(`/api/jobs/${job}`);
   const { updated_at } = (await read.json()) as { updated_at: string };
   const patched = await page.request.patch(`/api/jobs/${job}`, {
@@ -218,7 +211,7 @@ test.skip("apply on the fake custom form: the submit designated and outlined, su
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
 
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
@@ -229,6 +222,9 @@ test.skip("apply on the fake custom form: the submit designated and outlined, su
   // its outline on the "before" screenshot.
   expect(await outlinedPixels(before)).toBeGreaterThan(200);
   await expect(section).toContainText("Submit application");
+  expect(
+    (await stub.submissions()).filter((one) => one.org === CUSTOM_FORM),
+  ).toHaveLength(0);
   await page.screenshot({
     path: test.info().outputPath("custom-review.png"),
     fullPage: true,
@@ -265,7 +261,11 @@ test.skip("apply on the fake custom form: the submit designated and outlined, su
     (one) => one.org === CUSTOM_FORM,
   );
   expect(sent).toHaveLength(1);
+  expect(sent[0]!.accepted).toBe(true);
   expect(sent[0]!.fields["email"]).toBe(person.email);
+  expect(sent[0]!.files).toHaveLength(1);
+  expect(sent[0]!.files[0]!.field).toBe("resume");
+  expect(sent[0]!.files[0]!.size).toBeGreaterThan(0);
 });
 
 test("no page error was logged", () => {

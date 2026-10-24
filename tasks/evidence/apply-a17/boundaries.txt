@@ -1,0 +1,61 @@
+A17 private-data and privileged-boundary proof, 2026-10-22
+Base: 7f51168b. Branch: apply/257-private-boundaries.
+All accounts, sites, mail and markers are invented or local fakes.
+
+Executed:
+  caffeinate -i ops/agent-test.sh --name apply-257-boundaries
+    tests/apply/test_private_canaries.py tests/apply/test_privileged_boundaries.py
+    -m 'not docker' -n 2
+  48 passed in 12.43s. Real disposable Postgres and Redis, actual arq workers.
+  Six full fake journeys: manual, review, full_auto, dry_run, site profile, email.
+  Private profile fields, application answers, source screenshots and fake email carry
+  random planted markers. Logs, stdout, stderr, pending Redis metadata, retained arq
+  result records and application/profile audit events are checked for those markers.
+  Production job functions retain no result. Tests retain their actual arq results
+  temporarily and assert successful None payloads, identifiers-only arguments and no kwargs.
+  Both the API and worker source configuration are used for real queue execution;
+  the full_auto decision runs on the agents queue.
+  Initial harness failures were corrected before this passing run: pytest logging
+  call-phase retrieval, queue selection, explicit fake profile agent, and a random
+  alphabetic email marker without unsupported numeric claims.
+
+  The 42 AST scanner cases include renamed imports, local/method aliases, tuple and
+  annotated aliases, typed provider aliases, module re-exports, aliased MCP tool names,
+  constant getattr and functools.partial. All api/app Python sources are scanned.
+  Browser and Gmail transport exceptions are scoped to their declarations; chat
+  send_message declarations and imported chat actions remain legitimate.
+  This is a source boundary regression guard; arbitrary runtime reflection is outside scope.
+
+  Ruff check app/tests and Ruff format check: passed (731 files formatted).
+  Frontend typecheck and lint: passed.
+  pre-commit on the six changed source/test files: passed.
+  CI plan: 81 tests passed. E2E group registry: passed, A17 belongs to the Apply group.
+  Playwright --list: one A17 journey discovered.
+  EGRESS_TEST_DOCKER=0 tests/browser_egress_test.sh: 14 checks passed.
+
+Pending final composed runtime:
+  Execute web/e2e/apply-a17.spec.ts with the complete Apply group on final images.
+  The authored journey fills a fake Greenhouse form, saves a private canary answer,
+  probes A's detail, approval and screenshots as B and signed out, explicitly approves
+  through the UI, and requires exactly one accepted fake submission.
+  Browser journey authoring/discovery is not a runtime pass.
+
+Kernel namespace probe:
+  First default Docker attempt stopped before iptables execution because Alpine apk
+  rejected this machine's TLS proxy certificate. No host namespace or firewall was used.
+  Rerun with the README-configured public extra CA bundle, supplied through the existing
+  JOBAPP_EXTRA_CA BuildKit secret branch: 16 checks passed, exit 0.
+  Real legacy iptables in a disposable Docker network namespace verified browser and
+  mail coexistence, four jumps per kind, repeated-apply idempotence, independent missing
+  rule detection, IPv6 duplicate-jump repair, an unmanaged rule above both jumps, mail
+  bridge changes, and uninstall of either kind preserving the other kind and its files.
+  Original browser assertions, including its recorded bridge boot path, still pass.
+  The CA canary is absent from image files, variables, labels and history.
+  No host network or PID namespace was entered, and no host firewall was changed.
+  Verified no owned database/Redis containers or harness temporary images remain.
+
+Local transient logs (not committed, may contain synthetic markers in failed assertions):
+  /tmp/jobapp-apply-257-boundaries-focused.log
+  /tmp/jobapp-apply-257-boundaries-focused2.log
+  /tmp/jobapp-apply-257-boundaries-egress.log
+  /tmp/jobapp-apply-257-boundaries-egress-ca.log
