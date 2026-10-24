@@ -3,6 +3,8 @@
 - `snapshot_for_ai`, the ONE call of Playwright's private AI snapshot (refs `[ref=eN]`);
 - `native_files`, the names in each native file input among a snapshot's buttons, which the AI
   snapshot does not show;
+- `credentials`, whether each text entry of a snapshot is a credential input (detect.py), which the
+  AI snapshot does not show either;
 - `front`, the tab the tool acts on brought to the front (B1: Chromium throttles background
   tabs, a 0.9 s fill took 5.9 s in a background tab);
 - `navigate`, a navigation with its own timeout that answers a failure result instead of hanging
@@ -15,6 +17,7 @@ import re
 from typing import Any
 
 from browserd.config import NAVIGATION_S
+from browserd.detect import CREDENTIAL_FN
 
 # browser/Dockerfile pins the same; bump both on purpose only.
 PLAYWRIGHT_VERSION = "1.55.0"
@@ -22,11 +25,18 @@ SNAPSHOT_METHOD = "snapshotForAI"
 REF_MARKER = "[ref=e"
 # api/app/apply/ats/base.py's _LINE: the ref is in the attributes before the colon, never after.
 BUTTON_LINE = re.compile(r'button(?: "(?:[^"\\]|\\.)*")?(?P<attrs>(?: \[[^\]]*\])*)(?::(?: .*)?)?')
+ENTRY_LINE = re.compile(
+    r'(?:textbox|searchbox|spinbutton|combobox)(?: "(?:[^"\\]|\\.)*")?(?P<attrs>(?: \[[^\]]*\])*)'
+    r"(?::(?: .*)?)?"
+)
 ATTR = re.compile(r"\[([^\]=]+)(?:=([^\]]*))?\]")
 REF = re.compile(r"(?:f\d{1,4})?e\d{1,7}")
 # A read costs about 2.6 ms per ref in the image on a Mac: the refs past it read [] unread.
 NATIVE_REFS_MAX = 200
 NAMES_MAX, NAME_MAX = 3, 83
+# The text entries read for a credential: one call each, as for the native files.
+CREDENTIAL_REFS_MAX = 200
+CREDENTIAL_JS = f"e => e.isConnected ? ({CREDENTIAL_FN})(e) : null"
 NATIVE_FILES_JS = """e => {
   if (!e.isConnected) return [];
   if (!(e instanceof HTMLInputElement) || e.type !== 'file') return null;
@@ -66,17 +76,27 @@ async def snapshot_for_ai(page: Any) -> str:
     return text
 
 
-def button_refs(snapshot: str) -> list[str]:
-    """The refs of the snapshot's button lines in page order, each read where base.py's
-    parse_snapshot reads it, so the page's text after a colon never names one."""
+def _line_refs(snapshot: str, line: re.Pattern[str]) -> list[str]:
     refs: dict[str, None] = {}
-    for line in snapshot.splitlines():
-        stripped = line.lstrip(" ")
-        found = BUTTON_LINE.fullmatch(stripped[2:].rstrip()) if stripped.startswith("- ") else None
+    for raw in snapshot.splitlines():
+        stripped = raw.lstrip(" ")
+        found = line.fullmatch(stripped[2:].rstrip()) if stripped.startswith("- ") else None
         ref = dict(ATTR.findall(found["attrs"])).get("ref", "") if found else ""
         if REF.fullmatch(ref):
             refs[ref] = None
     return list(refs)
+
+
+def button_refs(snapshot: str) -> list[str]:
+    """The refs of the snapshot's button lines in page order, each read where base.py's
+    parse_snapshot reads it, so the page's text after a colon never names one."""
+    return _line_refs(snapshot, BUTTON_LINE)
+
+
+def entry_refs(snapshot: str) -> list[str]:
+    """The refs of the snapshot's text entries (textbox, searchbox, spinbutton, combobox), read
+    as `button_refs` reads a button's."""
+    return _line_refs(snapshot, ENTRY_LINE)
 
 
 async def _names(page: Any, ref: str) -> list[str] | None:
@@ -114,6 +134,26 @@ async def native_files(page: Any, snapshot: str) -> dict[str, list[str]]:
             names, cost = [], 0
         selected[ref], size = names, size + cost
     return selected
+
+
+async def credentials(page: Any, snapshot: str) -> dict[str, bool]:
+    """Whether each text entry of this snapshot is a credential input (detect.CREDENTIAL_FN), by
+    its ref. A ref this read cannot hold (gone since the snapshot, past CREDENTIAL_REFS_MAX, a
+    read that raises or answers no boolean) is left out: the app reads it as unknown, and falls
+    back on its label. Never fails the snapshot."""
+    found: dict[str, bool] = {}
+    for ref in entry_refs(snapshot)[:CREDENTIAL_REFS_MAX]:
+        if (kind := await _credential(page, ref)) is not None:
+            found[ref] = kind
+    return found
+
+
+async def _credential(page: Any, ref: str) -> bool | None:
+    try:
+        kind = await page.eval_on_selector(f"aria-ref={ref}", CREDENTIAL_JS)
+    except Exception:
+        return None
+    return kind if isinstance(kind, bool) else None
 
 
 async def front(page: Any) -> Any:

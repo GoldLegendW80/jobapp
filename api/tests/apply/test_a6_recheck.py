@@ -513,7 +513,11 @@ def test_an_answer_does_not_end_a_step_that_is_not_a_left_field(
     key = _left(factory, app_id).field_key
     _waiting_for_required(factory, app_id, needs, [key])
     with factory() as s:
-        gate.set_answer(s, person_a.user_id, app_id, key, "Paris", AT)
+        if needs == "signin":  # behind a sign in wall, no answer before the fill after it
+            with pytest.raises(gate.RefusedError, match="signin_first"):
+                gate.set_answer(s, person_a.user_id, app_id, key, "Paris", AT)
+        else:
+            gate.set_answer(s, person_a.user_id, app_id, key, "Paris", AT)
         s.commit()
     found = application(db, app_id)
     assert (found.state, found.needs) == (State.needs_person, needs)

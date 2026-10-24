@@ -81,6 +81,7 @@ from app.apply import (
     guardrails,
     model_check,
     shots,
+    signin,
     states,
 )
 from app.apply import form_agent as forms
@@ -528,8 +529,8 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
     seen: set[str] = set()
     for outcome in report.outcomes:
         item = outcome.field
-        if item.key in seen:
-            continue
+        if item.key in seen or ats_base.credential_outcome(outcome):
+            continue  # a credential's box is the person's sign in, never a field
         seen.add(item.key)
         rows.append(
             ApplicationAnswer(
@@ -547,7 +548,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
         )
     for i, skipped in enumerate(report.skipped):
         key = f"skipped:{i}:{ats_base.fold(skipped.label)}"[:500]
-        if key in seen:
+        if key in seen or skipped.credential:
             continue
         seen.add(key)
         rows.append(
@@ -848,8 +849,8 @@ async def _type(
     item = report.outcomes[index].field
     filled = await adapter.fill(tools, item, answer)
     report.outcomes[index] = ats_base.Outcome(item, answer, filled)
-    if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
-        report.stopped, report.needs_person = "needs_person", filled.code
+    if step := ats_base.step_of(filled):
+        report.stopped, report.needs_person = "needs_person", step
         return True
     if filled.status == "failed" and filled.code in ats_base.STOPPING:
         report.stopped = filled.code
@@ -895,6 +896,8 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
         shot = await tools.snapshot()
         if _card_asked(shot):
             return await _payment_asked(tools)
+        if signin.walled(shot):  # a wall the hand off did not get past: never read as a form
+            return Result(State.needs_person, needs="signin", shot=await shots.take(tools))
         adapter = adapter_for(
             plan.form_url, str(shot.get("snapshot") or ""), stub_base=services.stub_base
         )
@@ -1005,8 +1008,7 @@ async def _wait_for_person(
             shot = await tools.snapshot()
         except BrowserError:
             return written  # the lease ended (its maximum, browserd gone): the item waits
-        page = str(shot.get("snapshot") or "")
-        if not shot.get("ok") or adapter.pending_step(page) == reason:
+        if not shot.get("ok") or adapter.pending_of(shot) == reason:
             continue
         went_on = partial(resume, application_id=application_id, reason=reason)
         if not await db(partial(went_on, now=services.clock())):
@@ -1076,6 +1078,9 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         return "waiting_lease"
     lease_id = acquired.lease.lease_id
     if acquired.token is None:
+        if getattr(acquired.lease, "state", None) == "waiting_person":
+            await wait("browser_signin")
+            return "waiting_person"
         # Ours, from a job that died: nothing can drive it. Let the next tick start a fresh one.
         await services.leases.release(user, lease_id, "apply_restart")
         return "lease_restarted"
@@ -1094,7 +1099,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
-        tools = _Watched(lease_tools)
+        tools = _Watched(signin.Tools(lease_tools, plan.form_url, adapter=adapter))
         result = await _guarded(_drive(services, plan, tools), tools)
         try:
             written = await asyncio.to_thread(
@@ -1119,11 +1124,32 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             )
     except asyncio.CancelledError:
         # docker stop, or the job's timeout: the application never stays `filling`.
-        await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
+        if await asyncio.shield(signin.waiting(services.leases, user, lease_id)):
+            await asyncio.shield(
+                asyncio.to_thread(
+                    _in_db,
+                    services.sessions,
+                    lambda db: finish(
+                        db,
+                        application_id,
+                        Result(State.needs_person, needs="signin"),
+                        services.clock(),
+                        started,
+                        services.delays(),
+                    ),
+                )
+            )
+        else:
+            await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
         raise
     finally:
         try:
-            await services.leases.release(user, lease_id, "apply_fill_done")
+            if await signin.waiting(services.leases, user, lease_id):
+                from app.browser.later_handoff import bind_wait
+
+                await bind_wait(services.leases, user, "application", application_id, lease_id)
+            else:
+                await services.leases.release(user, lease_id, "apply_fill_done")
         except (BrowserError, StoreUnavailableError):
             logger.warning("apply.release_failed", extra={"application_id": str(application_id)})
     logger.info("apply.filled", extra={"application_id": str(application_id), "state": written})
