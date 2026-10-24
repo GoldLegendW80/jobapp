@@ -68,7 +68,7 @@ class ReservedFieldError(Exception):
 
 
 class PreservedSearchError(Exception):
-    """Restoring protected settings would break a Search rule, before any profile write."""
+    """Preserving protected settings would break a Search rule, before any profile write."""
 
     def __init__(self, error: ValidationError) -> None:
         super().__init__("preserved search does not validate")
@@ -171,12 +171,10 @@ def _keep_consent(
             browser.update(enabled=False, accepted_at=None, text_version=None)
         kept.append({**source, **browser})
     result = {**data, "browser_sources": kept}
-    if restored:
-        try:
-            return validate_section("search", result)
-        except ValidationError as exc:
-            raise PreservedSearchError(exc) from None
-    return result
+    try:
+        return validate_section("search", result)
+    except ValidationError as exc:
+        raise PreservedSearchError(exc) from None
 
 
 def save_section(
