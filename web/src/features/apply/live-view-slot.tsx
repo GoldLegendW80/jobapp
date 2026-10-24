@@ -35,6 +35,19 @@ function applicationLease(browser: Browser | undefined, of: LeaseOf) {
   return started <= by ? lease : null;
 }
 
+const signingIn = (lease: ReturnType<typeof applicationLease>) =>
+  lease?.state === "waiting_person" && lease.wait_reason === "signin";
+
+function useApplicationLease(leaseOf: LeaseOf) {
+  const query = useQuery({
+    queryKey: browserQueryKey,
+    queryFn: ({ signal }) => getBrowser(signal),
+    refetchInterval: LEASE_POLL_MS,
+    enabled: leaseOf !== "none",
+  });
+  return applicationLease(query.data, leaseOf);
+}
+
 /**
  * Where the live view of the browser goes while the assistant fills this application's form, or
  * waits for the person (browser B4's LiveBrowser, apply A10a). Without this application's lease
@@ -52,15 +65,9 @@ export function LiveViewSlot({
   status?: string;
   stopped?: boolean;
 }) {
-  const query = useQuery({
-    queryKey: browserQueryKey,
-    queryFn: ({ signal }) => getBrowser(signal),
-    refetchInterval: LEASE_POLL_MS,
-    enabled: leaseOf !== "none",
-  });
-  const lease = applicationLease(query.data, leaseOf);
+  const lease = useApplicationLease(leaseOf);
   if (lease) {
-    if (lease.state === "waiting_person" && lease.wait_reason === "signin") {
+    if (signingIn(lease)) {
       return <HandoffBanner liveOpen />;
     }
     return (
@@ -80,4 +87,14 @@ export function LiveViewSlot({
       <p>{idle}</p>
     </div>
   );
+}
+
+/**
+ * The sign in hand off of the application that fills, on its queue card (browser B12b's banner,
+ * the live view closed until the person opens it): only while the person's own fill lease waits
+ * for them to sign in. Nothing otherwise.
+ */
+export function FillHandoff() {
+  const lease = useApplicationLease("any");
+  return signingIn(lease) ? <HandoffBanner /> : null;
 }

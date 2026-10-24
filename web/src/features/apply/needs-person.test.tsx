@@ -149,6 +149,25 @@ describe("the job page", () => {
     expect(screen.getAllByTestId("live-screen")).toHaveLength(1);
   });
 
+  it("names the site of a sign in wall once, above the later sign in", () => {
+    renderWithQuery(
+      <NeedsPerson
+        application={fakeApplication("needs_person", { needs: "signin" })}
+        job={makeDetail()}
+      />,
+    );
+    expect(
+      screen.getAllByText(/sign in to boards\.example\.org/i),
+    ).toHaveLength(1);
+    expect(screen.getAllByText(/sign up yourself/)).toHaveLength(1);
+    const banner = screen.getByRole("region", {
+      name: "Sign in to boards.example.org",
+    });
+    expect(banner).toContainElement(
+      screen.getByRole("button", { name: "Open the live view to sign in" }),
+    );
+  });
+
   it("says a captcha needs the person and opens the live view of the assistant's lease", async () => {
     const opened = fakeScreens();
     leaseOf("apply_fill");

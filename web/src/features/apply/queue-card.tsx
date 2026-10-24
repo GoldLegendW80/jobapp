@@ -37,6 +37,7 @@ import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { HeldCountdown } from "./held-countdown";
+import { FillHandoff } from "./live-view-slot";
 import { queueKey, rejectQueued, type QueueItem } from "./queue-api";
 import {
   canCancel,
@@ -93,11 +94,14 @@ export function QueueCard({
   const [cancelling, setCancelling] = useState(false);
   const reviewable = isReviewable(item);
   const rehearsal = item.rehearsal === true;
+  // Behind a sign in wall the answers wait for the fill after the sign in, which replaces them.
+  const signingIn = item.state === "needs_person" && item.needs === "signin";
+  const withAnswers = (reviewable || rehearsal) && !signingIn;
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(item.id),
     queryFn: ({ signal }) => getApproval(item.id, signal),
-    enabled: reviewable || rehearsal,
+    enabled: withAnswers,
   });
   const approval = approvalQuery.data;
 
@@ -249,7 +253,10 @@ export function QueueCard({
       </header>
 
       <p className="text-sm">{statusLine(item)}</p>
-      {item.state === "needs_person" && item.needs === "signin" ? (
+      {item.state === "filling" && item.mode !== "manual" ? (
+        <FillHandoff />
+      ) : null}
+      {signingIn ? (
         <LaterHandoffBanner
           module="application"
           refId={item.id}
@@ -299,7 +306,9 @@ export function QueueCard({
         )}
       </section>
 
-      {left ? <p className="text-sm font-medium">{left}</p> : null}
+      {left && !signingIn ? (
+        <p className="text-sm font-medium">{left}</p>
+      ) : null}
 
       {isHeld(item) && item.hold_until ? (
         <HeldCountdown
@@ -327,7 +336,7 @@ export function QueueCard({
         </div>
       ) : null}
 
-      {reviewable || rehearsal ? (
+      {withAnswers ? (
         <div className="flex flex-col gap-3">
           <Button
             variant="outline"

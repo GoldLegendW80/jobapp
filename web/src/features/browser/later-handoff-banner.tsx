@@ -13,15 +13,21 @@ const sessionSchema = z.object({
   queue: z.object({ position: z.number() }).nullable(),
 });
 
-/** Only the server's registered owner supplies the address and resumes the waiting work. */
+/**
+ * Only the server's registered owner supplies the address and resumes the waiting work.
+ * `heading` false: no line of its own naming the site and what to do, for a place that already
+ * says both above it (the job page's Needs you alert).
+ */
 export function LaterHandoffBanner({
   module,
   refId,
   address,
+  heading = true,
 }: {
   module: string;
   refId: string;
   address: string;
+  heading?: boolean;
 }) {
   const client = useQueryClient();
   const [leaseId, setLeaseId] = useState<string | null>(null);
@@ -73,11 +79,15 @@ export function LaterHandoffBanner({
       aria-label={`Sign in to ${host}`}
       className="flex min-w-0 flex-col gap-3 rounded-md border border-amber-500/60 p-3 [overflow-wrap:anywhere]"
     >
-      <p className="font-medium">Needs you: sign in to {host}</p>
-      <p className="text-sm">
-        Sign in or sign up yourself in the live view, then click I&apos;m signed
-        in. The form fills again and waits for your approval.
-      </p>
+      {heading ? (
+        <>
+          <p className="font-medium">Needs you: sign in to {host}</p>
+          <p className="text-sm">
+            Sign in or sign up yourself in the live view, then click I&apos;m
+            signed in. The form fills again and waits for your approval.
+          </p>
+        </>
+      ) : null}
       {live ? (
         <LiveBrowser person status="Sign in, then click I'm signed in." />
       ) : null}

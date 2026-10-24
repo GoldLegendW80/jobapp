@@ -108,6 +108,9 @@ function waitingLine(needs: string | null): string {
   if (needs === "retry") {
     return "The last attempt did not finish, so the assistant tries again later by itself. Nothing was sent.";
   }
+  if (needs === "browser_signin") {
+    return "Waiting for you to finish signing in to a site in your browser. The form is filled after that.";
+  }
   return "Waiting for a browser. Starting in a few seconds, and it can take up to a minute.";
 }
 
