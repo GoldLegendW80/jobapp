@@ -103,7 +103,7 @@ Task [#629](https://github.com/GoldLegendW80/jobapp/issues/629). Acceptance, own
 
 ### J10: run selected websites through the interactive finder
 
-Task [#630](https://github.com/GoldLegendW80/jobapp/issues/630). Acceptance, owned files and verification are in that issue and the linked plan. Status: building on the reviewed search checkpoints, not merged or deployed. Truthful incremental persistence remains J11.
+Task [#630](https://github.com/GoldLegendW80/jobapp/issues/630). Acceptance, owned files and verification are in that issue and the linked plan. Status: [draft #652](https://github.com/GoldLegendW80/jobapp/pull/652), not merged or deployed. Truthful incremental persistence remains J11.
 
 ### J11: save verified search findings incrementally
 
@@ -115,7 +115,7 @@ Task [#633](https://github.com/GoldLegendW80/jobapp/issues/633). Acceptance, own
 
 ### J13: choose websites and criteria from Find jobs
 
-Task [#636](https://github.com/GoldLegendW80/jobapp/issues/636). The core setup and explicit permission follow-up [#651](https://github.com/GoldLegendW80/jobapp/issues/651) form separate reviewable slices. Acceptance, ownership transfer and verification are in the linked plan. Status: open, implementation in progress; full J13 acceptance remains pending.
+Task [#636](https://github.com/GoldLegendW80/jobapp/issues/636). The core setup and explicit permission follow-up [#651](https://github.com/GoldLegendW80/jobapp/issues/651) form separate reviewable slices. Acceptance, ownership transfer and verification are in the linked plan. Status: core [draft #654](https://github.com/GoldLegendW80/jobapp/pull/654) is open; #651 and integration remain pending for full J13 acceptance.
 
 ### J14: show live browsing progress and partial search results
 
