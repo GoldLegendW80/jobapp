@@ -8,7 +8,12 @@ import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { emptySweeps, server } from "@/test/server";
 
-import type { ScheduleState, Sweep, SweepDetail } from "./sweeps-api";
+import type {
+  ScheduleState,
+  Sweep,
+  SweepDetail,
+  SweepSource,
+} from "./sweeps-api";
 import { sweepTiming } from "./sweeps-api";
 
 const ID = "11111111-2222-4333-8444-555555555555";
@@ -283,6 +288,93 @@ describe("Find jobs", () => {
       "Business France VIE, ml: 1 posting found, 1 new. You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
       "Business France VIE, cv: not read this time, it comes at the next search.",
     ]);
+  });
+
+  it("separates API sources and explains interactive sites that were not searched", async () => {
+    const source = (kind: string, overrides: Partial<SweepSource> = {}) => ({
+      kind,
+      query: "ai",
+      location: null,
+      result_pages: 0,
+      found: 0,
+      new: 0,
+      skipped_by_rule: 0,
+      error: null,
+      ...overrides,
+    });
+    fakeSweeps({
+      states: [
+        finished({
+          sources: [
+            source("api_board", { mode: "api", outcome: "complete", found: 3 }),
+            source("api_failed", {
+              mode: "api",
+              outcome: "failed",
+              error: "not_found",
+            }),
+            source("google_careers"),
+            source("linkedin", {
+              mode: "llm_browser",
+              query: "pending",
+              phase: "pending",
+            }),
+            source("linkedin", {
+              mode: "llm_browser",
+              query: "not attempted",
+              phase: "done",
+              outcome: "not_attempted",
+            }),
+            source("linkedin", {
+              mode: "llm_browser",
+              query: "waiting",
+              phase: "done",
+              reason: "interactive_executor_pending",
+              error: "interactive_executor_pending",
+            }),
+            source("linkedin", {
+              mode: "llm_browser",
+              query: "searched",
+              phase: "done",
+              outcome: "no_matches",
+            }),
+            source("remoteok", { mode: "feed", query: "", found: 2, new: 1 }),
+          ],
+        }),
+      ],
+    });
+    await openJobs();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Find jobs" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    const sites = within(dialog).getByRole("region", {
+      name: "Job sites in your browser",
+    });
+    expect(
+      within(sites)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([
+      "Google Careers, ai: 0 postings found, 0 new.",
+      "LinkedIn, pending: not searched this time.",
+      "LinkedIn, not attempted: not searched this time.",
+      "LinkedIn, waiting: not searched this time.",
+      "LinkedIn, searched: 0 postings found, 0 new.",
+    ]);
+    expect(dialog).not.toHaveTextContent(
+      /api_board|api_failed|interactive_executor_pending|It stopped early/,
+    );
+    expect(dialog).toHaveTextContent("2 boards read, 120 postings seen");
+    expect(
+      within(dialog).getByRole("region", { name: "Failed boards" }),
+    ).toHaveTextContent("Gone Corp (lever, gone): board not found");
+    expect(
+      within(dialog).getByRole("region", {
+        name: "Freelance and project sources",
+      }),
+    ).toHaveTextContent("Remote OK: 2 postings found, 1 new.");
   });
 
   it("says it reads the freelance and project sources while it does (O8)", async () => {

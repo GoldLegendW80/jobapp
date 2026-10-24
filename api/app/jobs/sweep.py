@@ -8,7 +8,7 @@ One sweep, `run_sweep(sweep_id)`:
    message. New runs use the search and skills frozen under the profile row lock at creation;
    pre-v1 rows without `stats.search_scope` explicitly retain claim-time profile reads.
    Without an enabled source the sweep fails with a clear message. Selected interactive sites
-   currently report `interactive_executor_pending`; their runtime wiring belongs to J10.
+   run through the bounded interactive finder. Verified persistence is supplied by J11.
 2. Fetch. Boards are read through ats.AtsClient, CONCURRENCY at a time, each failure recorded
    with its code; the others go on.
 3. Keep. For each posting, in the engine's order: the title matches `title_include` (an empty
@@ -378,7 +378,7 @@ def initial_sources(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
             "kind": source.get("kind", source.get("platform", "")),
             "phase": "pending",
             "outcome": "not_attempted",
-            "reason": "interactive_executor_pending" if source["mode"] == "llm_browser" else None,
+            "reason": None,
         }
         for source in (scope or {}).get("sources", [])
     ]
@@ -1023,7 +1023,8 @@ async def run_sweep(
                         )
 
                     await feeds(plan, stats, store_feed, progress, started + timeout_s)
-                if plan.sources and browser is not None:
+                interactive = plan.search and any(s.enabled for s in plan.search.interactive_sites)
+                if (plan.sources or interactive) and browser is not None:
                     # Browser B8: the person's browser sources, after the boards.
 
                     async def store_found(
