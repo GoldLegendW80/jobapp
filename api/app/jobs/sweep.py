@@ -67,6 +67,7 @@ import asyncio
 import contextlib
 import copy
 import hashlib
+import json
 import logging
 import re
 import time
@@ -302,8 +303,9 @@ def has_sources(search: SearchSection | None) -> bool:
     )
 
 
-def _source_id(mode: str, key: str) -> str:
-    return hashlib.sha256(f"{mode}:{key}".encode()).hexdigest()[:24]
+def _source_id(mode: str, *key: str) -> str:
+    encoded = json.dumps([mode, *key], ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
 def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) -> dict[str, Any]:
@@ -322,17 +324,25 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
     if search is not None:
         raw = search.model_dump(mode="json")
         sources.extend(
-            {"source_id": _source_id("api", f"{board.ats}:{board.org}"), "mode": "api"}
+            {
+                "source_id": _source_id("api", board.ats, board.org),
+                "mode": "api",
+                "kind": board.ats,
+                "query": board.org,
+            }
             for board in enabled_boards(search)
         )
         sources.extend(
-            {"source_id": _source_id("feed", feed.kind), "mode": "feed"}
+            {"source_id": _source_id("feed", feed.kind), "mode": "feed", "kind": feed.kind}
             for feed in enabled_feeds(search)
         )
         sources.extend(
             {
-                "source_id": _source_id("legacy_browser", f"{s.kind}:{s.query}:{s.location}"),
+                "source_id": _source_id("legacy_browser", s.kind, s.query, s.location or ""),
                 "mode": "legacy_finder" if s.kind == "site" else "fixed_reader",
+                "kind": s.kind,
+                "query": s.query,
+                "location": s.location,
             }
             for s in enabled_sources(search)
         )
@@ -357,19 +367,20 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
     }
 
 
-def interactive_status(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
+def initial_sources(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [
         {
-            "source_id": source["source_id"],
-            "kind": source["platform"],
-            "host": source["host"],
-            "mode": "llm_browser",
+            **{
+                key: source[key]
+                for key in ("source_id", "mode", "host", "query", "location")
+                if key in source
+            },
+            "kind": source.get("kind", source.get("platform", "")),
             "phase": "pending",
             "outcome": "not_attempted",
-            "reason": "interactive_executor_pending",
+            "reason": "interactive_executor_pending" if source["mode"] == "llm_browser" else None,
         }
         for source in (scope or {}).get("sources", [])
-        if source.get("mode") == "llm_browser"
     ]
 
 
@@ -395,11 +406,38 @@ class Stats:
     # The slot of a scheduled sweep (schedule.Slot.key), kept for its whole life: what makes
     # a slot fire once.
     schedule_slot: str | None = None
-    # One entry per browser source run after the boards (browser B8, app/browser/sources).
+    # One entry per frozen selected source; pre-v1 rows retain reader-only entries.
     sources: list[dict[str, Any]] = field(default_factory=list)
 
     def as_json(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def bind_source(
+    stats: Stats, mode: str, key: Sequence[str], entry: dict[str, Any]
+) -> dict[str, Any]:
+    """Reuse the frozen slot; pre-v1 readers keep their original unbound entry format."""
+    source_id = _source_id(mode, *key)
+    for selected in stats.sources:
+        if selected.get("source_id") == source_id:
+            selected.update(entry, phase="running", outcome=None, reason=None)
+            return selected
+    stats.sources.append(entry)
+    return entry
+
+
+def finish_source(entry: dict[str, Any]) -> None:
+    if not entry.get("source_id"):
+        return
+    error = entry.get("error")
+    found = entry.get("found", 0)
+    if error == "not_started":
+        outcome = "not_attempted"
+    elif error:
+        outcome = "partial" if found else "failed"
+    else:
+        outcome = "complete" if found else "no_matches"
+    entry.update(phase="done", outcome=outcome, reason=error)
 
 
 # --- duplicates ---------------------------------------------------------------------------------
@@ -700,13 +738,21 @@ def _finish(sweep: Sweep, status: SweepStatus, now: datetime, error: str | None 
     sweep.status = status
     sweep.finished_at = max(now, sweep.started_at)
     sweep.error = error
-    if any(s.get("mode") == "llm_browser" for s in sweep.stats.get("sources", [])):
+    if any(s.get("source_id") for s in sweep.stats.get("sources", [])):
+        sources = copy.deepcopy(sweep.stats["sources"])
+        for source in sources:
+            if not source.get("source_id") or source.get("phase") == "done":
+                continue
+            if source.get("phase") == "running":
+                source["error"] = (
+                    "sweep_failed" if status is SweepStatus.failed else "reader_interrupted"
+                )
+                finish_source(source)
+            else:
+                source.update(phase="done", reason=source.get("reason") or "reader_not_attempted")
         sweep.stats = {
             **sweep.stats,
-            "sources": [
-                {**s, "phase": "done"} if s.get("mode") == "llm_browser" else s
-                for s in sweep.stats["sources"]
-            ],
+            "sources": sources,
         }
 
 
@@ -717,12 +763,17 @@ def _stats_json(sweep: Sweep, stats: Stats) -> dict[str, Any]:
     for name in ("search_scope", "schedule_slot"):
         if name in stored:
             data[name] = copy.deepcopy(stored[name])
-    ids = {s.get("source_id") for s in data["sources"]}
-    data["sources"].extend(
-        copy.deepcopy(s)
-        for s in stored.get("sources", [])
-        if s.get("mode") == "llm_browser" and s.get("source_id") not in ids
-    )
+    if isinstance(stored.get("search_scope"), dict):
+        previous = {s.get("source_id"): s for s in stored.get("sources", [])}
+        updates = {s.get("source_id"): s for s in data["sources"]}
+        data["sources"] = [
+            {
+                **source,
+                **previous.get(source["source_id"], {}),
+                **updates.get(source["source_id"], {}),
+            }
+            for source in initial_sources(stored["search_scope"])
+        ]
     return data
 
 
@@ -872,7 +923,7 @@ async def run_sweep(
         boards_total=len(plan.boards),
         picked_at=clock().isoformat(),
         schedule_slot=plan.schedule_slot,
-        sources=interactive_status(plan.search_scope),
+        sources=initial_sources(plan.search_scope),
     )
     lock = asyncio.Lock()
 
@@ -892,6 +943,8 @@ async def run_sweep(
                 await slots.acquire()
                 try:
                     stats.current_board = board.company
+                    if plan.search_scope is not None:
+                        bind_source(stats, "api", (board.ats, board.org), {"kind": board.ats})
                     await progress()
                     try:
                         outcome: ats.BoardResult | ats.BoardError = await client.fetch_board(
@@ -914,6 +967,15 @@ async def run_sweep(
             try:
                 for _ in plan.boards:
                     board, outcome = await done.get()
+                    entry = next(
+                        (
+                            s
+                            for s in stats.sources
+                            if s.get("source_id") == _source_id("api", board.ats, board.org)
+                        ),
+                        None,
+                    )
+                    before = stats.new, stats.skipped_by_rule
                     if isinstance(outcome, ats.BoardError):
                         stats.boards_failed.append(_failure(board, outcome.code))
                     else:
@@ -928,6 +990,23 @@ async def run_sweep(
                                 extra={"sweep_id": str(sweep_id), "board": board.org},
                             )
                             stats.boards_failed.append(_failure(board, "store_failed"))
+                    if entry is not None:
+                        entry.update(
+                            found=len(outcome.postings)
+                            if isinstance(outcome, ats.BoardResult)
+                            else 0,
+                            postings=stats.new - before[0],
+                            skipped_by_rule=stats.skipped_by_rule - before[1],
+                            error=next(
+                                (
+                                    failure["error"]
+                                    for failure in stats.boards_failed
+                                    if failure["ats"] == board.ats and failure["org"] == board.org
+                                ),
+                                None,
+                            ),
+                        )
+                        finish_source(entry)
                     stats.boards_done += 1
                     del outcome
                     slots.release()
@@ -1198,7 +1277,7 @@ def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime)
     reap_stale(db, now, user_id)
     row = service.start_sweep(db, user_id, trigger, now)
     scope = freeze_scope(profile, trigger, now)
-    row.stats = {**row.stats, "search_scope": scope, "sources": interactive_status(scope)}
+    row.stats = {**row.stats, "search_scope": scope, "sources": initial_sources(scope)}
     db.flush()
     return row
 

@@ -666,7 +666,7 @@ class BoardFailureOut(BaseModel):
 
 
 class SourceOut(BaseModel):
-    """One browser source of the sweep (browser B8, app/browser/sources): the postings it read
+    """One selected source of the sweep: API boards, feeds and browser readers. The postings it read
     completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
     layout_changed, store_failed, lease_budget, lease_ended, time_budget, page_failed,
     browser_busy, browser_unavailable, or not_started for a source after one that stopped the
