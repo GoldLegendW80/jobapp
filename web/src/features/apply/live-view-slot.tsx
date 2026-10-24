@@ -38,7 +38,7 @@ function applicationLease(
     return null;
   if (!purposes.has(lease.purpose)) return null;
   if (of === "any") return lease;
-  // browserd's started_at against the api's times: right only while both share the host clock.
+  // The lease store's started_at against the application's times: right only on one host clock.
   const started = Date.parse(lease.started_at);
   if ("startedAfter" in of)
     return started >= Date.parse(of.startedAfter) ? lease : null;
