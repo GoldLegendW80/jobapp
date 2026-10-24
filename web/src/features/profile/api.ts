@@ -199,13 +199,99 @@ export const BROWSER_KINDS = [
   "vie",
   "site",
   "linkedin",
+  "freework",
 ] as const;
 export interface BrowserSource {
   kind: (typeof BROWSER_KINDS)[number];
   query: string;
   location: string | null;
   enabled: boolean;
+  /** Browser-owned intent: permission without activating the existing reader. */
+  interactive_only?: boolean;
 }
+export const INTERACTIVE_PLATFORMS = [
+  "linkedin",
+  "welcome_to_the_jungle",
+  "indeed",
+  "freework",
+  "custom",
+] as const;
+const interactiveSiteSchema = z.strictObject({
+  platform: z.enum(INTERACTIVE_PLATFORMS),
+  url: z
+    .url()
+    .trim()
+    .min(1)
+    .max(2000)
+    .refine((value) => {
+      try {
+        const url = new URL(value);
+        const host = url.hostname.replace(/\.$/, "");
+        return (
+          ["http:", "https:"].includes(url.protocol) &&
+          !url.username &&
+          !url.password &&
+          !value.includes("\\") &&
+          host.includes(".") &&
+          host
+            .split(".")
+            .every((label) =>
+              /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),
+            ) &&
+          !/^\d+(?:\.\d+)*$/.test(host) &&
+          !["localhost", "local", "internal", "lan", "home", "onion"].includes(
+            host.split(".").at(-1) ?? "",
+          )
+        );
+      } catch {
+        return false;
+      }
+    }, "Enter a public HTTP or HTTPS website without sign-in details."),
+  enabled: z.boolean(),
+  mode: z.literal("llm_browser"),
+});
+export type InteractiveSite = z.infer<typeof interactiveSiteSchema>;
+export const interactiveSettingsSchema = z
+  .object({
+    interactive_sites: z
+      .array(interactiveSiteSchema)
+      .max(10, "Choose at most 10 websites."),
+    interactive_instructions: z
+      .string()
+      .refine(
+        (value) =>
+          !Array.from(value).some((character) => {
+            const code = character.charCodeAt(0);
+            return (code < 32 && ![9, 10, 13].includes(code)) || code === 127;
+          }),
+        "Remove control characters from the instructions.",
+      )
+      .transform((value) =>
+        value.replace(/\r\n?/g, "\n").normalize("NFC").trim(),
+      )
+      .pipe(z.string().max(2000, "Keep instructions within 2,000 characters.")),
+  })
+  .superRefine((settings, context) => {
+    const seen = new Set<string>();
+    settings.interactive_sites.forEach((site, index) => {
+      let key = site.url;
+      try {
+        const url = new URL(key);
+        url.hash = "";
+        url.hostname = url.hostname.replace(/\.$/, "");
+        key = url.href;
+      } catch {
+        /* The field reports an invalid URL. */
+      }
+      if (seen.has(key))
+        context.addIssue({
+          code: "custom",
+          path: ["interactive_sites", index, "url"],
+          message: "This website is already selected.",
+        });
+      seen.add(key);
+    });
+  });
 export interface Search {
   title_include: TermList;
   title_exclude: TermList;
@@ -218,6 +304,9 @@ export interface Search {
   never_apply: string[];
   /** browser B8: job sites read in the person's browser (browser-sources-card.tsx) */
   browser_sources?: BrowserSource[];
+  /** Saved intent; browser consent remains owned by the browser API. */
+  interactive_sites?: InteractiveSite[];
+  interactive_instructions?: string | null;
   /** when the boards are swept automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */
@@ -444,6 +533,13 @@ export function readSections(raw: z.infer<typeof sectionsSchema>): {
     (sections as Record<SectionName, unknown>)[name] = {
       ...EMPTY[name],
       ...value,
+      ...(name === "search" &&
+      ("interactive_sites" in value || "interactive_instructions" in value)
+        ? interactiveSettingsSchema.parse({
+            interactive_sites: value.interactive_sites ?? [],
+            interactive_instructions: value.interactive_instructions ?? "",
+          })
+        : {}),
     };
   }
   return { sections, unsaved };
