@@ -19,18 +19,27 @@ from app.browser.leases import StoreUnavailableError
 Request = Callable[..., Awaitable[Outcome]]
 
 
+def walled(shot: dict[str, Any]) -> bool:
+    """The page read shows a sign in wall (`base.Adapter.pending_step`)."""
+    return bool(shot.get("ok")) and (
+        base.Adapter().pending_step(str(shot.get("snapshot") or "")) == "signin"
+    )
+
+
 class Tools:
     """Re-read a login wall after a handoff, at the current wizard page, for every adapter.
 
     The same wrapper covers an adapter discovered from the page and the form agent's reads.
     An unsuccessful handoff leaves the wall visible to the caller's normal pending-step rule.
     Three repeated uncompleted walls stop the run rather than starting an unlimited wait.
+    After such a handoff every snapshot reads the page again: the wall read then is kept only
+    while the page shows it or cannot be read (the lease gone after a Cancel, or waiting for the
+    person), so a sign in done since, through the form agent's own tool too, hands the page back.
     """
 
     def __init__(self, tools: Any, url: str, *, request: Request | None = None) -> None:
         self._tools, self.host, self.request = tools, urlsplit(url).hostname or "", request
         self.outcome: Outcome | None = None
-        self.keep_lease = False
         self.attempts = 0
         self.blocked: dict[str, Any] | None = None
 
@@ -39,11 +48,10 @@ class Tools:
 
     async def snapshot(self) -> dict[str, Any]:
         if self.blocked is not None:
-            return self.blocked
+            return await self._again(self.blocked)
         shot = await self._tools.snapshot()
         while (
-            shot.get("ok")
-            and base.Adapter().pending_step(str(shot.get("snapshot") or "")) == "signin"
+            walled(shot)
             and (self.outcome is None or self.outcome.code == "signed_in")
             and self.attempts < 3
         ):
@@ -55,11 +63,23 @@ class Tools:
                 self.outcome = await ask(
                     self._tools, self.host, "This application needs you to sign in."
                 )
-            self.keep_lease = self.outcome.code == "turn_ended"
             if self.outcome.code != "signed_in":
                 self.blocked = shot
                 break
             shot = await self._tools.snapshot()
+        return shot
+
+    async def _again(self, wall: dict[str, Any]) -> dict[str, Any]:
+        try:
+            shot = await self._tools.snapshot()
+        except (BrowserError, StoreUnavailableError):
+            return wall
+        if not shot.get("ok"):
+            return wall
+        if walled(shot):
+            self.blocked = shot
+            return shot
+        self.blocked = self.outcome = None
         return shot
 
 

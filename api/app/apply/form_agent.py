@@ -315,6 +315,10 @@ class FormSession:
         if found is None:
             report.stopped = code
             return report
+        if found.pending in ats_base.CREDENTIAL_STEPS:
+            # A wall's boxes (an e-mail, a password, a code) are the person's sign in, not the form.
+            report.stopped, report.needs_person = "needs_person", found.pending
+            return report
         report.outcomes += [self._outcome(f) for f in found.fields]
         report.skipped += found.skipped
         if self.pending or found.pending:

@@ -529,7 +529,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
     seen: set[str] = set()
     for outcome in report.outcomes:
         item = outcome.field
-        if item.key in seen:
+        if item.key in seen or ats_base.secret(item.label):
             continue
         seen.add(item.key)
         rows.append(
@@ -896,6 +896,8 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
         shot = await tools.snapshot()
         if _card_asked(shot):
             return await _payment_asked(tools)
+        if signin.walled(shot):  # a wall the hand off did not get past: never read as a form
+            return Result(State.needs_person, needs="signin", shot=await shots.take(tools))
         adapter = adapter_for(
             plan.form_url, str(shot.get("snapshot") or ""), stub_base=services.stub_base
         )

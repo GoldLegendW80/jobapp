@@ -1,20 +1,38 @@
 """Sign in recovery at the shared snapshot boundary, without touching credentials."""
 
 import asyncio
+import json
 import uuid
 from functools import wraps
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import pytest
+import sqlalchemy as sa
+from fastapi.testclient import TestClient
 
-from app.apply import run, signin
-from app.apply.models import Mode, State
+from app.apply import answers, form_agent, gate, run, signin
+from app.apply.ats import base, generic
+from app.apply.models import AnswerBankEntry, AnswerSource, ApplicationAnswer, Mode, State
+from app.browser.client import BrowserError
 from app.browser.handoff import Outcome
 from tests.apply.a5_support import FakeAgent, FakeLeases, RunForm, run_ashby
+from tests.apply.a8b_support import (
+    STEPS_PATH,
+    WORKABLE_PATH,
+    ScriptedFormAgent,
+    two_steps,
+    workable,
+)
+from tests.apply.conftest import AT
 from tests.apply.test_a5_run import application, fill, services, started, why_answer
+from tests.apply.test_a6_gate import _password, api_app, stub
+from tests.apply.test_a8_generic import WORKABLE_SCRIPT, on_custom, rows_of
 from tests.apply.test_a13_full_auto import liked, turn_on
+from tests.identity.api_helpers import Api
+
+__all__ = ["api_app", "stub"]
 
 WALL = (
     '- heading "Sign in" [ref=e1]\n- textbox "Email" [ref=e2]\n'
@@ -74,7 +92,6 @@ async def test_an_unfinished_signin_waits_and_is_asked_only_once(code: str) -> N
     assert (await tools.snapshot())["snapshot"] == WALL
     assert (await tools.snapshot())["snapshot"] == WALL
     assert asked == [True]
-    assert tools.keep_lease is (code == "turn_ended")
 
 
 @run_async
@@ -112,7 +129,6 @@ def test_owned_signin_callback_queues_once_and_full_auto_stays_review(db, person
     app.mode = Mode.full_auto
     app.state, app.needs = State.needs_person, "signin"
     db.commit()
-    from tests.apply.conftest import AT
 
     assert signin.address(db, person_b.user_id, ref) is None
     assert not signin.signed_in(db, person_b.user_id, ref, AT)
@@ -277,3 +293,219 @@ def test_a_cancelled_fill_keeps_the_person_signing_in_and_binds_the_later_callba
             "kind": "handoff",
         }
     ]
+
+
+# --- the wall read after a hand off that did not end signed in ----------------------------------
+
+
+async def _nobody(*_: Any) -> Outcome:
+    return Outcome("nobody_watching")
+
+
+@run_async
+async def test_a_sign_in_through_the_form_agents_own_tool_hands_the_form_back() -> None:
+    """Nobody watched the wrapper's ask; the person then opened the live view and signed in
+    through the form agent's own tool: the next read is the form, never the wall read before."""
+    pages = Pages()
+    tools = run._Watched(
+        signin.Tools(pages, "https://careers.example.org/apply/42", request=_nobody)
+    )
+    session = form_agent.FormSession(generic.Generic(), tools, None, str(uuid.uuid4()))  # type: ignore[arg-type]
+    assert await session.read_form() == (form_agent.WALL, True)
+    assert session.signin_wall()
+    pages.page = FORM
+    session.signin_ended(Outcome("signed_in"))
+    view, error = await session.read_form()
+    assert not error
+    assert [f["label"] for f in json.loads(view)["fields"]] == ["First name"]
+    assert not session.signin_wall()
+
+
+@run_async
+async def test_a_page_handed_back_asks_again_at_a_later_wall() -> None:
+    pages = Pages()
+    codes = ["nobody_watching", "signed_in"]
+
+    async def ask(*_: Any) -> Outcome:
+        code = codes.pop(0)
+        if code == "signed_in":
+            pages.page = FORM
+        return Outcome(code)
+
+    tools = signin.Tools(pages, "https://jobs.example.org/form", request=ask)
+    assert (await tools.snapshot())["snapshot"] == WALL
+    pages.page = FORM  # signed in meanwhile, outside this wrapper
+    assert (await tools.snapshot())["snapshot"] == FORM
+    pages.page = WALL  # the session ended on the next step
+    assert (await tools.snapshot())["snapshot"] == FORM
+    assert codes == []
+
+
+@run_async
+@pytest.mark.parametrize(
+    ("code", "reread"),
+    [
+        ("signin_cancelled", BrowserError("ended")),  # browserd released the lease
+        ("turn_ended", {"ok": False, "error": "waiting_person"}),  # the lease waits for the person
+        ("nobody_watching", None),  # the page still shows the wall
+    ],
+)
+async def test_the_wall_stays_while_the_page_cannot_be_read_or_still_shows_it(
+    code: str, reread: Any
+) -> None:
+    pages = Pages()
+    asked = []
+
+    async def ask(*_: Any) -> Outcome:
+        asked.append(True)
+        return Outcome(code)
+
+    async def unreadable() -> dict[str, Any]:
+        if isinstance(reread, BaseException):
+            raise reread
+        return reread
+
+    tools = signin.Tools(pages, "https://jobs.example.org/form", request=ask)
+    assert (await tools.snapshot())["snapshot"] == WALL
+    if reread is not None:
+        pages.snapshot = unreadable  # type: ignore[method-assign]
+    for _ in range(2):
+        assert (await tools.snapshot())["snapshot"] == WALL
+    assert asked == [True]
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+def test_a_wall_at_an_address_no_adapter_knows_waits_for_a_later_sign_in(
+    db, factory, person_a, forms_base_url, monkeypatch, mode
+):
+    form, agent = workable(), ScriptedFormAgent(WORKABLE_SCRIPT)
+    asked: list[str] = []
+
+    async def snapshot() -> dict[str, Any]:
+        return {"ok": True, "url": form.url, "snapshot": WALL}
+
+    async def request(tools: Any, site: str, reason: str) -> Outcome:
+        asked.append(site)  # browserd's answer for a `full_auto` lease or nobody at the live view
+        return Outcome("nobody_watching")
+
+    form.snapshot, form.ask_signin = snapshot, request  # type: ignore[method-assign,attr-defined]
+    monkeypatch.setattr(signin, "request_signin", request)
+    on_custom(db, person_a, forms_base_url, WORKABLE_PATH)
+    ref = started(db, person_a, mode)
+    filled = fill(
+        services(factory, form, FakeLeases(), stub_base=forms_base_url, form_agent=agent), ref
+    )
+    assert filled == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs, found.mode) == (State.needs_person, "signin", Mode.review)
+    assert asked == [urlsplit(found.form_url).hostname]
+    assert agent.answers == []  # no model reads a login form as the application's
+
+
+# --- what a person types to sign in never reaches the app ---------------------------------------
+
+
+@run_async
+async def test_a_form_agents_run_ended_at_a_wall_records_none_of_its_boxes() -> None:
+    """The run ended (an error, the turn or the token limit) on a wall it never asked about."""
+    session = form_agent.FormSession(generic.Generic(), Pages(), None, str(uuid.uuid4()))  # type: ignore[arg-type]
+    report = await session.finish()
+    assert (report.stopped, report.needs_person) == ("needs_person", "signin")
+    assert (report.outcomes, report.skipped) == ([], [])
+
+
+async def _wall_keys(step: int) -> dict[str, str]:
+    adapter = generic.Generic()
+    adapter.step = step
+    found, _ = await adapter.read(Pages())
+    assert found is not None
+    return {item.label: item.key for item in found.fields}
+
+
+def test_a_fill_stopped_at_a_wall_keeps_none_of_its_boxes_and_takes_no_answer_before_signin(
+    db, factory, person_a, stub, api_app
+):
+    form = two_steps()
+    shown = form.snapshot
+
+    async def snapshot() -> dict[str, Any]:
+        if form.step >= 1:  # the second step is behind a login wall
+            return {"ok": True, "url": form.url, "snapshot": WALL}
+        return await shown()
+
+    form.snapshot = snapshot  # type: ignore[method-assign]
+    script = [
+        ("fill_field", "First name"),
+        ("fill_field", "Last name"),
+        ("fill_field", "Email"),
+        ("next_step", "Next"),
+        ("fill_field", "Phone"),
+    ]
+    on_custom(db, person_a, stub, STEPS_PATH)
+    ref = started(db, person_a)
+    agent = ScriptedFormAgent(script)
+    filled = fill(services(factory, form, FakeLeases(), stub_base=stub, form_agent=agent), ref)
+    assert filled == "needs_person"
+    assert application(db, ref).needs == "signin"
+    wall = asyncio.run(_wall_keys(1))
+    rows = rows_of(db, ref)
+    assert sorted(row.label for row in rows.values()) == ["Email", "First name", "Last name"]
+    assert not set(wall.values()) & set(rows)
+
+    typed = "Marker " + uuid.uuid4().hex
+    _password(factory, person_a)
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        token = api.login_token(person_a.email)
+        path = f"/api/applications/{ref}"
+        view = api.get(f"{path}/approval", token=token).json()
+        assert sorted(a["label"] for a in view["answers"]) == ["Email", "First name", "Last name"]
+        for key in wall.values():
+            refused = api.request(
+                "PUT", f"{path}/answers/{quote(key, safe='')}", token=token, json={"value": typed}
+            )
+            assert (refused.status_code, refused.json()["code"]) == (422, "unknown_field")
+        first = quote("text:first name#1", safe="")
+        early = api.request("PUT", f"{path}/answers/{first}", token=token, json={"value": typed})
+        assert (early.status_code, early.json()["code"]) == (409, "signin_first")
+    db.expire_all()
+    values = db.execute(sa.select(ApplicationAnswer.value)).scalars().all()
+    assert typed not in json.dumps(values)
+    assert db.scalar(sa.select(sa.func.count()).select_from(AnswerBankEntry)) == 0
+
+
+def test_a_password_box_is_never_written_shown_hashed_refilled_or_answered(db, person_a):
+    ref = started(db, person_a)
+    found = application(db, ref)
+    password = base.Field("text:password#1", "Password *", "text", required=True)
+    name = base.Field("text:first name#1", "First name", "text", required=True)
+    left = answers.Left("not_filled", (), True)
+    report = base.Report(
+        outcomes=[
+            base.Outcome(password, left, base.Filled("left", "not_filled")),
+            base.Outcome(name, left, base.Filled("left", "not_filled")),
+        ]
+    )
+    assert [row.label for row in run._answer_rows(found, report)] == ["First name"]
+
+    # A row no fill writes any more (one of an older fill) is still never shown nor answered.
+    found.state = State.ready
+    for item in (password, name):
+        db.add(
+            ApplicationAnswer(
+                application_id=ref,
+                user_id=person_a.user_id,
+                field_key=item.key,
+                label=item.label,
+                kind="text",
+                value=None,
+                source=AnswerSource.left,
+                required=True,
+                approved=False,
+            )
+        )
+    db.commit()
+    assert [row.label for row in gate.rows_of(db, application(db, ref))] == ["First name"]
+    with pytest.raises(gate.InvalidAnswerError, match="unknown_field"):
+        gate.set_answer(db, person_a.user_id, ref, password.key, "x", AT)
+    db.rollback()

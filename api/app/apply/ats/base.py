@@ -819,6 +819,8 @@ STOPPING = frozenset(
 )
 # The steps only the person can take (`pending_step`); the fill stops on them with `needs_person`.
 PENDING_STEPS = frozenset({"captcha", "signin", "email_code"})
+# The steps whose page asks for what only the person types: no box of such a read is a field.
+CREDENTIAL_STEPS = frozenset({"signin", "email_code"})
 
 
 def _stopped(report: Report, code: str, step: str = "") -> Report:
@@ -1085,10 +1087,13 @@ _PASSWORD = re.compile(
 )
 
 
+def secret(label: str) -> bool:
+    """A password's label: never a field of an application, whatever the page around it."""
+    return _PASSWORD.fullmatch(fold(label_of(label)[0])) is not None
+
+
 def _sign_in(root: Node) -> bool:
-    return any(
-        n.role == "textbox" and _PASSWORD.fullmatch(fold(label_of(n.name)[0])) for n in root.walk()
-    )
+    return any(n.role == "textbox" and secret(n.name) for n in root.walk())
 
 
 # --- the form's frame and its anchors ----------------------------------------------------------
