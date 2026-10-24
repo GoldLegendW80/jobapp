@@ -1,12 +1,16 @@
 """The design capture of an uploaded CV (task D25b; SPEC-documents.md, "Design capture of an
 upload", steps 1 to 6): the second step of a conversion, after its content.
 
-**The request.** `enqueue(final, document_id)` is the hook the base writer's final hook calls once
-an upload's content conversion is done (D24); `request` makes one `template_capture` generation of
-the base CV, `queued`, or `waiting` with `consent` or `credential` (`writer_base.wait_reason`),
-and starts its run (`writer_design`); `start_ready`, which `writer_base.start_ready` calls, starts
-a waiting one once its reason is gone (D10's tick). Its estimate and ceiling are
-`design_estimate`'s. The run's input holds ids, the file's kind and numbers only.
+**The request.** `prepare_after_conversion` records the capture of an upload whose content
+conversion is done (D24) in the conversion's own transaction, under a savepoint: one
+`template_capture` generation of the base CV, `queued`, `waiting` with `consent` or `credential`
+(`writer_base.wait_reason`), or `failed` with `binding_gone` when the file's bytes are gone.
+`start_prepared` starts that generation's run (`writer_design`) once the bytes and the reason to
+wait are read again under the document lock: `enqueue(final, generation_id)` calls it after the
+conversion's commit, `request` right after preparing one, and `start_ready`, which
+`writer_base.start_ready` calls, for each open one (D10's tick); one that meets the person's
+limit of active runs stays `queued`. Its estimate and ceiling are `design_estimate`'s. The run's
+input holds ids, the file's kind and numbers only.
 
 **The inputs** (`read_inputs`), read by the run's tools from the ingestion document's bytes,
 never stored: for a PDF the sandbox's layout extraction (`design_pdf`) and its page render of the
@@ -507,15 +511,26 @@ def _prepare(
 
 def prepare_after_conversion(
     db: Session, conversion: DocumentGeneration, *, at: datetime
-) -> DocumentGeneration:
-    """Intent in a fresh conversion's completion transaction, even if its source is gone."""
+) -> DocumentGeneration | None:
+    """Intent in a fresh conversion's completion transaction, even if its source is gone. It
+    has its own savepoint: a preparation that fails records no intent, logs its class and
+    returns None, and the converted content still commits (SPEC-documents.md, Failure modes)."""
     if (
         conversion.mode is not GenerationMode.base_upload
         or conversion.status is not GenerationStatus.done
     ):
         raise ValueError("not a completed upload conversion")
-    document = store.lock_document(db, conversion.user_id, conversion.document_id)
-    return _prepare(db, document, at=at)
+    try:
+        with db.begin_nested():
+            document = store.lock_document(db, conversion.user_id, conversion.document_id)
+            return _prepare(db, document, at=at)
+    except Exception as exc:
+        # The class only: a database error's message can carry values.
+        logger.error(
+            "documents.design.not_prepared",
+            extra={"generation_id": str(conversion.id), "error": type(exc).__name__},
+        )
+        return None
 
 
 def request(
@@ -575,14 +590,15 @@ def start_prepared(
     if not kept:
         generation.status, generation.wait_reason = GenerationStatus.failed, None
         generation.error, generation.finished_at = "binding_gone", at
+        logger.info("documents.design.no_bytes", extra={"generation_id": str(generation.id)})
     elif reason is not None:
         generation.status, generation.wait_reason = GenerationStatus.waiting, reason
     else:
-        generation.status, generation.wait_reason = GenerationStatus.queued, None
         try:
             return writer_design.start(db, generation, at=at, script=script, settings=settings).id
         except agent_runs.ActiveRunsError:
-            pass  # Keep the prepared identity and budget queued for the next tick.
+            # Set here, not before the start: its refresh drops changes not yet flushed.
+            generation.status, generation.wait_reason = GenerationStatus.queued, None
     db.flush()
     return None
 
