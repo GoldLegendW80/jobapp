@@ -108,21 +108,14 @@ def test_cancelled_initial_caller_cannot_install_a_late_browser(fail_close: bool
             await asyncio.gather(record.task, return_exceptions=True)
         assert installed == [None]
         assert record.revoked
-        assert record.bound
         assert record.task is None
-        if fail_close:
-            assert record.browser is factory.browsers[0]
-            assert record.cleanup_failed
-            await busy(manager)
-            assert len(factory.ids) == 1
-        else:
-            assert factory.browsers[0].stopped
-            assert record.browser is None
-            other, token = await manager.acquire(request("b"))
-            assert not await manager.release(factory.ids[0], "released")
-            assert manager.check_token(other.lease_id, token) is other
-            assert not factory.browsers[1].stopped
-            assert await manager.release(other.lease_id, "released")
+        assert record.browser is None
+        assert factory.browsers[0].stopped is not fail_close
+        other, token = await manager.acquire(request("b"))
+        assert not await manager.release(factory.ids[0], "released")
+        assert manager.check_token(other.lease_id, token) is other
+        assert not factory.browsers[1].stopped
+        assert await manager.release(other.lease_id, "released")
 
     asyncio.run(go())
 
@@ -214,18 +207,76 @@ def test_cancelled_swap_generation_cannot_install_after_revocation(shielded: boo
     asyncio.run(go())
 
 
-def test_ordinary_failed_close_retains_ownership_and_refuses_other_person() -> None:
+def test_a_failed_close_keeps_the_exclusion_only_until_its_end_returns() -> None:
     async def go() -> None:
-        factory = Factory(pause=-1, fail_close=True)
+        factory = Factory(fail_close=True)
+        factory.hold_close = True
+        factory.allow.set()
         manager = Manager(Config(secret=b"s"), factory)
         lease, _ = await manager.acquire(request())
-        assert await manager.release(lease.lease_id, "released")
+        ending = asyncio.create_task(manager.release(lease.lease_id, "released"))
+        await factory.browsers[0].closing.wait()
+        await busy(manager)
+        assert manager.uses(lease.request.profile_id)
+        factory.browsers[0].finish.set()
+        assert await ending
         assert manager.last_end == {"lease_id": lease.lease_id, "reason": "released"}
         assert (manager.current(), manager.ending) == (None, None)
-        await busy(manager)
-        assert len(factory.ids) == 1
         assert not factory.browsers[0].stopped
+        assert not manager.uses(lease.request.profile_id)
+        other, token = await manager.acquire(request("b"))
+        assert manager.check_token(other.lease_id, token) is other
+        assert len(factory.ids) == 2
+        assert await manager.release(other.lease_id, "released")
+
+    asyncio.run(go())
+
+
+def test_a_swap_cancelled_while_the_old_browser_closes_frees_admission_after_its_end() -> None:
+    async def go() -> None:
+        class Old(Browser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.killing = asyncio.Event()
+                self.killed = False
+
+            async def kill(self) -> None:
+                self.killing.set()
+                await self.finish.wait()
+                self.killed = True
+
+        old, later = Old(), Browser()
+        later.finish.set()
+        queue: list[Browser] = [old, later]
+
+        async def start(_: Request, __: str) -> Browser:
+            return queue.pop(0)
+
+        manager = Manager(Config(secret=b"s"), start)
+        lease, _ = await manager.acquire(request())
+        caller = asyncio.create_task(manager.swap(lease, replace(lease.request, automation=False)))
+        await old.closing.wait()
+        caller.cancel()
+        outcome = (await asyncio.gather(caller, return_exceptions=True))[0]
+        assert isinstance(outcome, asyncio.CancelledError)
+        await old.killing.wait()  # the owned swap kills what its interrupted stop left
+        record = manager._records[lease.lease_id]
+        await busy(manager)
         assert manager.uses(lease.request.profile_id)
+        old.finish.set()
+        if record.task is not None:
+            await asyncio.gather(record.task, return_exceptions=True)
+        assert old.killed
+        assert not old.stopped
+        assert queue == [later]
+        assert manager.current() is None
+        assert manager.last_end == {"lease_id": lease.lease_id, "reason": "browser_failed"}
+        assert (record.task, record.browser) == (None, None)
+        assert not manager.uses(lease.request.profile_id)
+        other, token = await manager.acquire(request("b"))
+        assert manager.check_token(other.lease_id, token) is other
+        assert await manager.release(other.lease_id, "released")
+        assert later.stopped
 
     asyncio.run(go())
 
@@ -242,8 +293,8 @@ def test_records_evict_only_terminal_history_and_drop_consumed_references() -> N
         assert factory.ids[0] not in records
         assert list(records) == factory.ids[1:]
         assert all(r.task is None and r.browser is None and r.revoked for r in records.values())
-        assert all(r.request == request() and r.bound for r in records.values())
-        # Exercise the defensive full-live bound without creating concurrent real browsers.
+        assert all(r.request == request() for r in records.values())
+        # Records made live again: admission is refused before any record is evicted.
         for record in records.values():
             record.revoked = False
         await busy(manager)

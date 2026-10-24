@@ -21,8 +21,11 @@ to its end like a person's own session, except during the app's turn (`app_turn`
 sets and clears through the live view's input route, browserd/live.py). A watch of the page
 (`touch=False`) is not activity: the idle timer still ends a session nobody uses.
 
-While a lease ends (its Chromium closing, the profile measured) browserd is still busy: a new
-lease is refused 409 and the profile is not removed until the end is done.
+While a lease starts or ends (its Chromium starting or closing, the profile measured) browserd is
+still busy, also when the caller went away: a new lease is refused 409 and the profile is not
+removed until that work is done, and a start or swap revoked meanwhile never installs its
+Chromium. An end that fails is done all the same: Chromium's end reaps every process of the
+profile's uid even then, and every start reaps again first (chromium.py, B7).
 """
 
 import asyncio
@@ -242,10 +245,8 @@ class _Record:
     request: Request
     lease_id: str
     revoked: bool = False
-    bound: bool = False  # The factory returned after its prepare/bind_uid path.
     task: asyncio.Task[Any] | None = None
     browser: Browser | None = None
-    cleanup_failed: bool = False
 
     @property
     def terminal(self) -> bool:
@@ -320,10 +321,9 @@ class Manager:
             return
         try:
             await (browser.kill() if crash else browser.stop())
-        except BaseException:
-            record.cleanup_failed = True
-            raise
-        record.browser = None
+        finally:
+            # An end that raises has still reaped the uid, and every start reaps it again (B7).
+            record.browser = None
 
     async def acquire(self, request: Request) -> tuple[Lease, str]:
         # A second lease is refused with the holder's purpose, never its id or its person.
@@ -362,7 +362,6 @@ class Manager:
                 if record.revoked:
                     raise asyncio.CancelledError
                 record.browser = await self._start(record.request, record.lease_id)
-                record.bound = True
                 async with self._lock:
                     if record.revoked:
                         raise asyncio.CancelledError
@@ -452,11 +451,10 @@ class Manager:
             # After a swap under way (B12): it starts nothing more once the lease is gone.
             async with self._swap:
                 self.browser = None
-                if not record.cleanup_failed:
-                    try:
-                        await self._close(record, crash=reason == "browser_crashed")
-                    except Exception as exc:  # the browser finished its end anyway (chromium.py)
-                        log.warning("lease %s: end failed: %s", lease.lease_id, type(exc).__name__)
+                try:
+                    await self._close(record, crash=reason == "browser_crashed")
+                except Exception as exc:  # the browser finished its end anyway (chromium.py)
+                    log.warning("lease %s: end failed: %s", lease.lease_id, type(exc).__name__)
             if self._measure is not None and reason != "shutdown":
                 try:
                     end["size_bytes"] = await self._measure(lease.request)
