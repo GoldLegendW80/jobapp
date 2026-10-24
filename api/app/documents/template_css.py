@@ -54,9 +54,14 @@ everything is held to allow lists:
 Declared open points, left to D25b's render check: a text colour on a background set by another
 rule (the page's white, a band, a column); text in a box narrower than it, a `::before` or
 `::after` too, under the background of a later flex or grid item or of a `position: relative`
-box; the vertical padding or border of an inline box, which paints over the line above; a size made
-small or large by nesting `em` sizes; a box pushed off the page by its margins; the one glyph of
-an outside marker, at the size of its item (any box with `display: list-item`), beside a box
+box; a box sized by its unwrapped text (`flex: none`, `flex-shrink: 0`, a `max-content` column)
+or wider than its column or the page (a `width`, `min-width` or `flex-basis` up to CAPS), whose
+long line runs over its neighbour, and past the page makes print shrink the whole page: the
+render check prints the name and contact lines at the profile's maximum (design_check's
+`identity` shape) and refuses text past a box that holds it and a page wider than its text; the
+vertical padding or border of an inline box, which paints over the line above; a size made small
+or large by nesting `em` sizes; a box pushed off the page by its margins; the one glyph of an
+outside marker, at the size of its item (any box with `display: list-item`), beside a box
 without padding.
 """
 

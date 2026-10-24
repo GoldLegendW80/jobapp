@@ -5,22 +5,31 @@ of an upload", step 4; issue #220).
 what the browser paints. Whether every field is truly shown is judged here, on the page the
 renderer's own Chromium lays out (renderer/server.py, POST /check):
 
-- the canary pages, two content shapes (SHAPES) of `_base/sample.json`'s invented CV and letter
-  ("Alex Example"): the sample as it is, every list at two items or more, and `lone`, every
+- the canary pages, three content shapes (SHAPES) of `_base/sample.json`'s invented CV and
+  letter ("Alex Example"): the sample as it is, every list at two items or more; `lone`, every
   list at one item (one employer with one bullet, one school, one language, one skill group of
   one item, one highlight, one competency, one paragraph), every text at its hard limit (the
   paragraph at LONE_PARAGRAPH) and led by a word of LONG_WORD's length, the name's two words 30
   letters long, these words without a break opportunity, an e-mail address (LONG_EMAIL) and a
   web address (LONG_WEBSITE) as long as real ones, so a box sized for the sample's texts or
-  words, or a rule that only a lone item meets, shows. Every text
-  of the content and of the profile is led by a token of its own (`Q`, three letters, `Z`), so
-  each needle names one field; the contact lines, the periods and the letter's date as printed.
+  words, or a rule that only a lone item meets, shows; and `identity`, every list at one item
+  with the sample's texts, and every printed identity field at the profile's maximum
+  (IDENTITY_MAX: the name, the e-mail address, the phone, the city and the country, the LinkedIn
+  and web addresses), so a box sized by its unwrapped text, or wider than its column, shows
+  before real data is that long. Every text of the content and of the profile is led by a token
+  of its own (`Q`, three letters, `Z`), so each needle names one field; the contact lines, the
+  periods and the letter's date as printed.
   A grey photo when the template has a slot, so a photo laid over a text is seen too;
 - each kind and shape at its loosest and its tightest step, laid out for print on a page as wide
   as an A4 page's text at the step's margin (`text_width`): `template_css` holds the template's
   `@page` to `size: A4` and `margin: var(--margin)`, so this is the page box print uses;
+- the page is no wider than its text (`scaled`: print shrinks a page a box overflows, and cuts
+  what is wider still);
 - for every glyph of every needle: it has a box (`hidden` otherwise), inside the paper, the page
-  box and its margin, and above the measured height (`outside`), in a font of at least
+  box and its margin (`outside`), inside the left and right edges of its element and of each box
+  that holds it up to the body (`overflow`: a box wider than its column, or sized by its
+  unwrapped text), above the measured height (`outside`; at the `identity` shape, which may
+  make a page longer, a glyph lower down is judged on these widths alone), in a font of at least
   MIN_SIZE_PX (`small`), the element at its centre is the one that holds the text (`covered`: a
   box, a photo or a pseudo element of another element over it), and its pixels differ from the
   same page with that text painted transparent by at least CONTRAST to one, on MIN_PIXELS
@@ -64,14 +73,17 @@ from app.documents import photo as photos
 from app.documents import profile_view, render_client, templates
 from app.documents.render_client import Checked, RenderError
 from app.documents.template_css import Problem
+from app.profile import schemas as profile_schemas
 
 CODES = (
-    "unprinted", "hidden", "outside", "small", "covered", "contrast", "density_unread", "render",
+    "unprinted", "hidden", "outside", "overflow", "scaled", "small", "covered", "contrast",
+    "density_unread", "render",
 )  # fmt: skip
 CONTRAST = 3.0
 MIN_PIXELS = 2  # device pixels of one glyph at CONTRAST or more
 MIN_SIZE_PX = 7.0  # 5.25 pt: the tightest body (7.6 pt) at 0.7 em still passes
 EDGE_PX = 0.5
+WIDTH_SLACK_PX = 1  # the scroll width is a whole number of pixels
 PROBLEMS_MAX = 24  # what one answer to the model lists
 CSS_PX_PER_MM = 96 / 25.4
 A4_WIDTH_MM = 210.0
@@ -80,7 +92,12 @@ _OFFSET = round(0.05 * 255)  # WCAG's 0.05, in the 8 bit scale of the luminance 
 Check = Callable[[str, tuple[str, ...], int, str], Awaitable[Checked]]
 
 
-SHAPES = ("sample", "lone")
+SHAPES = ("sample", "lone", "identity")
+WHERE = {
+    "sample": "",
+    "lone": ", one item per list and long texts",
+    "identity": ", the name and contact lines at their longest",
+}
 UNAVAILABLE = frozenset(("renderer_unavailable", "timeout"))
 # Words without a `q` or a `z`, so no filler holds a token.
 _FILLER = (
@@ -92,6 +109,18 @@ _TOKENED = 6  # a token and its space
 LONG_WORD = "observabilityplatformengineeringservices"
 LONG_EMAIL = "e2e-alexandra.martin.consulting.engineering.lyon@example.org"
 LONG_WEBSITE = "https://example.org/alexandramartinplatformengineeringportfolio"
+# Each printed identity field at the most the profile accepts (app.profile.schemas: LINE_MAX,
+# URL_MAX, the phone's 40 characters, and the 254 of an address email_validator accepts).
+EMAIL_MAX, PHONE_MAX = 254, 40
+IDENTITY_MAX = {
+    "full_name": profile_schemas.LINE_MAX,
+    "email": EMAIL_MAX,
+    "phone": PHONE_MAX,
+    "city": profile_schemas.LINE_MAX,
+    "country": profile_schemas.LINE_MAX,
+    "linkedin_url": profile_schemas.URL_MAX,
+    "website": profile_schemas.URL_MAX,
+}
 # The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter (sidebar's) passes
 # CHECK_MAX_HEIGHT; a text box has no fixed height (template_css), so length beyond is pages.
 LONE_PARAGRAPH = 1_200
@@ -152,17 +181,57 @@ def _filler(length: int, lead: str = "") -> str:
     return " ".join(words)
 
 
+def _letters(length: int) -> str:
+    """`length` letters of LONG_WORD over and over: no break opportunity, no token."""
+    return (LONG_WORD * (1 + length // len(LONG_WORD)))[:length]
+
+
+def _words(length: int) -> str:
+    """Words of _FILLER, exactly `length` characters, no token."""
+    text = " ".join(_FILLER[n % len(_FILLER)] for n in range(length))[:length]
+    return text[:-1] + "s" if text.endswith(" ") else text
+
+
+def _one_each(data: dict[str, Any]) -> None:
+    """`data` cut to one item per list (module docstring)."""
+    profile, cv = data["profile"], data["cv"]
+    profile["identity"]["languages"] = profile["identity"]["languages"][:1]
+    for key in ("employers", "education"):
+        profile["experience"][key] = profile["experience"][key][:1]
+    for key in ("highlights", "competencies", "skills", "experience"):
+        cv[key] = cv[key][:1]
+    cv["skills"][0]["items"] = cv["skills"][0]["items"][:1]
+    cv["experience"][0]["bullets"] = cv["experience"][0]["bullets"][:1]
+    data["letter"]["paragraphs"] = data["letter"]["paragraphs"][:1]
+
+
+def _identity(data: dict[str, Any]) -> None:
+    """`data` cut to one item per list, each printed identity field but the name at IDENTITY_MAX
+    (`canary` writes the name)."""
+    _one_each(data)
+    # a local part of 64 characters and domain labels of 63, the most email_validator accepts
+    local, labels = "e2e-" + _letters(60), f"{_letters(63)}.{_letters(63)}"
+    rest = IDENTITY_MAX["email"] - len(f"{local}@{labels}..example.org")
+    linkedin, website = "https://example.net/in/", "https://example.org/"
+    data["profile"]["identity"].update(
+        email=f"{local}@{labels}.{_letters(rest)}.example.org",
+        phone=("+33 (0)6" + " 00" * 20)[: IDENTITY_MAX["phone"]],
+        city=_words(IDENTITY_MAX["city"]),
+        country=_words(IDENTITY_MAX["country"]),
+        linkedin_url=linkedin + _letters(IDENTITY_MAX["linkedin_url"] - len(linkedin)),
+        website=website + _letters(IDENTITY_MAX["website"] - len(website)),
+    )
+
+
 def _lone(data: dict[str, Any]) -> None:
     """`data` cut to one item per list, each text at its hard limit and led by a long word,
     long addresses (module docstring)."""
+    _one_each(data)
     filler = partial(_filler, lead=LONG_WORD)
     profile = data["profile"]
     identity = profile["identity"]
     identity.update(email=LONG_EMAIL, website=LONG_WEBSITE)
-    identity["languages"] = identity["languages"][:1]
     identity["languages"][0].update(name=filler(c.LINE_MAX), level=filler(c.LINE_MAX))
-    for key in ("employers", "education"):
-        profile["experience"][key] = profile["experience"][key][:1]
     employer = profile["experience"]["employers"][0]
     school = profile["experience"]["education"][0]
     employer.update({key: filler(c.LINE_MAX) for key in ("organisation", "title", "location")})
@@ -190,6 +259,8 @@ def canary(kind: str, shape: str = "sample") -> Canary:
     data = _sample()
     if shape == "lone":
         _lone(data)
+    elif shape == "identity":
+        _identity(data)
     t = _Tokens()
     profile = data["profile"]
     identity = profile["identity"]
@@ -200,9 +271,13 @@ def canary(kind: str, shape: str = "sample") -> Canary:
         first, last = first + LONG_WORD[: 30 - len(first)], last + LONG_WORD[len(last) - 30 :]
     t.count += 2
     identity["full_name"] = f"{first} {last}"
+    if shape == "identity":
+        middle = _words(IDENTITY_MAX["full_name"] - len(first) - len(last) - 2)
+        identity["full_name"] = f"{first} {middle} {last}"
     t.needles += [("name", first), ("name", last)]
     # A contact line holds no token: its city is one no other field contains.
-    identity["city"] = "Villeurbanne"
+    if shape != "identity":
+        identity["city"] = "Villeurbanne"
     for n, item in enumerate(identity.get("languages", [])):
         item["name"] = t.mark(f"languages[{n}].name", item["name"], cv)
         item["level"] = t.mark(f"languages[{n}].level", item.get("level", ""), cv)
@@ -291,9 +366,11 @@ def problems_of(
     file: str,
     where: str,
     margin: float = 0.0,
+    lower: bool = False,
 ) -> list[Problem]:
     """The fields of one check that the page does not truly show (module docstring). `margin`:
-    the page's margin in CSS pixels, where print still shows a glyph that reaches into it."""
+    the page's margin in CSS pixels, where print still shows a glyph that reaches into it;
+    `lower`: a glyph below the measured height is judged on widths alone."""
     size = (checked.width * checked.scale, checked.shown * checked.scale)
     strong = strong_pixels(_open(checked.before, size), _open(checked.after, size))
     found: dict[tuple[str, str], None] = {}
@@ -303,7 +380,8 @@ def problems_of(
             if occurrence.size < MIN_SIZE_PX:
                 codes.append("small")
             for x, y, w, h, own in occurrence.glyphs:
-                codes.append(_glyph(checked, strong, (x, y, w, h), own, margin))
+                box = (x, y, w, h)
+                codes.append(_glyph(checked, strong, box, own, margin, occurrence.within, lower))
         for code in codes:
             if code:
                 found[(path, code)] = None
@@ -319,6 +397,8 @@ def _glyph(
     box: tuple[float, float, float, float],
     own: bool,
     margin: float,
+    within: tuple[float, float],
+    lower: bool,
 ) -> str:
     x, y, w, h = box
     if w <= 0 or h <= 0:
@@ -326,8 +406,10 @@ def _glyph(
     edge = margin + EDGE_PX
     if x < -edge or y < -edge or x + w > checked.width + edge:
         return "outside"
+    if x < within[0] - EDGE_PX or x + w > within[1] + EDGE_PX:
+        return "overflow"
     if y + h > checked.shown + EDGE_PX:
-        return "outside"
+        return "" if lower else "outside"
     if not own:
         return "covered"
     s = checked.scale
@@ -354,7 +436,7 @@ async def _one(
     )
     texts = tuple(text for _, text in sample.needles)
     file = f"{kind}.html.j2"
-    where = f"the {label} step" + (", one item per list and long texts" if shape == "lone" else "")
+    where = f"the {label} step{WHERE[shape]}"
     try:
         checked = await check(html, texts, text_width(step), "jc" + secrets.token_hex(8))
     except RenderError as error:
@@ -363,9 +445,14 @@ async def _one(
         return [Problem(file, 0, "render", f"{where}: it does not lay out")], 0
     try:
         margin = step.margin * CSS_PX_PER_MM
-        found = await asyncio.to_thread(problems_of, checked, sample.needles, file, where, margin)
+        found = await asyncio.to_thread(
+            problems_of, checked, sample.needles, file, where, margin, shape == "identity"
+        )
     except (RenderError, OSError, Image.DecompressionBombError):
         return [Problem(file, 0, "render", f"{where}: it does not lay out")], 0
+    if checked.scroll_width > checked.width + WIDTH_SLACK_PX:
+        # first: it explains the glyphs past the page, and PROBLEMS_MAX cuts the list
+        found.insert(0, Problem("style.css", 0, "scaled", f"the page at {where}"))
     return found, checked.height
 
 

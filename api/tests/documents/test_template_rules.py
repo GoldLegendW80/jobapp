@@ -51,9 +51,9 @@ WHOLE = {"classic", "compact", "grid"}
 _CUT = ("literal", "markup cut by a Jinja construct")
 _OUTSIDE = ("property", "a property outside the allowed list")
 _SELECTOR = ("selector", "a selector outside the allowed forms")
-# A full bleed sheet sets its own page margin, executive's band a fixed height and sidebar's
-# column a page high minimum: a template from an upload may not, the render check lays out the
-# step's page box and one content shape.
+# A full bleed sheet sets its own page margin, executive's band a fixed height and its headline
+# an inline size containment, sidebar's column a page high minimum: a template from an upload may
+# not, the render check lays out the step's page box and its canary shapes only.
 _PAGE = ("page", "@page: margin: var(--margin)")
 _HEIGHT = ("property", "height: auto, a length only on the photo (img or .photo)")
 _MIN_HEIGHT = ("property", "min-height: auto, a length only on the photo (img or .photo)")
@@ -775,6 +775,7 @@ def test_whatever_the_sheet_the_check_ends_with_problems_of_its_codes_not_an_err
 
 # --- round 3: a static filter of allow lists, the browser not modelled (issue #220) -------------
 
+_HEAD_125 = ".headtext { flex: 0 0 125mm; min-width: 0; } .photo { order: 2; }"
 LEFT_TO_THE_RENDER_CHECK = [
     # a colour on a background another rule sets: since round 3 the static filter holds only a
     # rule's own pair, and D25b's render check judges the rest; these rows were refused before
@@ -793,6 +794,20 @@ LEFT_TO_THE_RENDER_CHECK = [
     # smaller than its text lets it run under a later positioned box
     "span { padding: 30mm 0; background: #ffffff; }",
     ".summary { width: 1mm; } .row { position: relative; background: #ffffff; }",
+    # the review of #613: a box sized by its unwrapped text, or wider than its column or the
+    # page, under #575's 125 mm header; the render check's identity shape refuses each
+    # (test_design_check_docker.py)
+    *(
+        f"{_HEAD_125} {contact}"
+        for contact in (
+            ".contact li { flex: none; }",
+            ".contact li { flex-shrink: 0; }",
+            ".contact { display: grid; grid-template-columns: max-content; }",
+            ".contact { display: grid; grid-template-columns: minmax(max-content, 1fr); }",
+            ".contact { display: block; } .contact li { width: 150mm; }",
+            ".contact { display: block; } .contact li { min-width: 300mm; }",
+        )
+    ),
 ]
 
 
