@@ -551,7 +551,7 @@ def _run_feed(kind: str, parse: Any) -> dict[str, Any]:
 
     stats = SimpleNamespace(sources=[], new=0, skipped_by_rule=0, current_board="")
     hook = sources.FeedRunner(lambda: Client(), {kind: reader})  # type: ignore[arg-type,return-value]
-    plan = SimpleNamespace(feeds=[Feed(**feed(kind))])
+    plan = SimpleNamespace(feeds=[Feed(**feed(kind))], sweep_id="e2e-parser-count")
     asyncio.run(hook(plan, stats, store, progress, time.monotonic() + 600))
     return {**stats.sources[0], "stored": stats.new}
 
@@ -669,30 +669,51 @@ def test_the_comment_setting_is_capped_at_the_item_limit(migrated_url: str) -> N
         Settings(database_url=migrated_url, feeds_hn_max_comments=sources.ITEMS_MAX + 1)  # type: ignore[call-arg]
 
 
-def test_a_thread_larger_than_the_limit_reads_no_comment() -> None:
+@pytest.mark.parametrize("thread", ["freelance", "hiring"])
+@pytest.mark.parametrize("count", [0, 2, 3, 4, 1200])
+def test_hacker_news_reads_only_the_first_valid_ids_up_to_the_cap(thread: str, count: int) -> None:
     reads: list[int] = []
-
-    async def comment(item_id: int, options: dict[str, Any]) -> bytes:
-        reads.append(item_id)
-        return b"{}"
-
-    client = _thread_client(comment)
-    real_get = client.get
+    ids = list(range(1, count + 1))
+    title = (
+        "Ask HN: Freelancer? Seeking freelancer? (May)"
+        if thread == "freelance"
+        else "Ask HN: Who is hiring? (May)"
+    )
 
     async def get(url: str, hosts: frozenset[str], **options: Any) -> bytes:
+        if url.endswith("whoishiring.json"):
+            return b'{"submitted": [3002]}'
         if url.endswith("/3002.json"):
             return json.dumps(
-                {"by": "whoishiring", "type": "story", "id": 3002,
-                 "kids": list(range(1, sources.ITEMS_MAX + 50)),
-                 "title": "Ask HN: Freelancer? Seeking freelancer? (May)"}
-            ).encode()  # fmt: skip
-        return await real_get(url, hosts, **options)
+                {
+                    "by": "whoishiring",
+                    "type": "story",
+                    "id": 3002,
+                    "kids": [True, "4", None, False, *ids],
+                    "title": title,
+                }
+            ).encode()
+        item_id = int(url.rsplit("/", 1)[1].removesuffix(".json"))
+        reads.append(item_id)
+        assert options == {"max_body": sources.HN_ITEM_MAX_BODY, "retry_rate_limited": False}
+        return json.dumps(
+            stub.hn_comment(
+                item_id,
+                3002,
+                f"SEEKING FREELANCER | Example {item_id} | AI engineer"
+                if thread == "freelance"
+                else f"Example {item_id} | AI engineer",
+            )
+        ).encode()
 
+    client = FeedClient(stub_base_url="http://feeds.invalid")
     client.get = get  # type: ignore[method-assign]
-    with pytest.raises(FeedError) as caught:
-        asyncio.run(hackernews.read(client, "freelance", sources.ITEMS_MAX + 50))
-    assert caught.value.code == "too_many"
-    assert reads == []
+    found = asyncio.run(hackernews.read(client, thread, 3))
+    assert reads == ids[:3]
+    assert [posting.url for _, posting in found] == [
+        f"https://news.ycombinator.com/item?id={item_id}" for item_id in ids[:3]
+    ]
+    assert found.skipped == 0
 
 
 def test_the_wait_asked_by_a_429_is_kept_when_a_comment_stops_the_feed() -> None:
