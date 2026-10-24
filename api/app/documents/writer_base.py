@@ -242,7 +242,8 @@ async def _on_final(final: definitions.FinalRun) -> None:
     def after_finish(db: Session, generation: DocumentGeneration) -> None:
         nonlocal prepared
         if generation.mode is GenerationMode.base_upload:
-            prepared = design_capture.prepare_after_conversion(db, generation, at=final.clock()).id
+            intent = design_capture.prepare_after_conversion(db, generation, at=final.clock())
+            prepared = intent.id if intent is not None else None
 
     taken = _with_fixed(submit.take(final.run_id), take_fixed(final.run_id))
     render = await asyncio.to_thread(
