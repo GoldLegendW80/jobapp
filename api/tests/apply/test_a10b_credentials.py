@@ -77,6 +77,9 @@ SECRET = [
     # sign in codes and an account's secrets
     "2FA code", "Two-factor authentication code", "OTP", "SMS code", "Enter the code we sent",
     "Security question", "Secret answer", "Code PIN", "Mot de passe à usage unique",
+    "Authenticator code", "Enter the code from your authenticator app", "Backup code",
+    "Recovery code", "Passkey", "Clave de acceso", "Saisissez le code à 6 chiffres",
+    "6-stelliger Code", "Código de 6 dígitos", "Codice a 6 cifre", "6-cijferige code",
 ]  # fmt: skip
 # An application's own fields, a card's codes (the payment page's) and near misses: no credential.
 PLAIN = [
@@ -89,7 +92,9 @@ PLAIN = [
     "Security clearance", "Card security code", "Card verification code",
     "Code de sécurité de la carte", "Email", "E-mail", "Username", "GitHub username",
     "LinkedIn profile", "First name", "Phone", "Secret word", "Why Example Robotics?",
-    "What is your notice period?", "",
+    "What is your notice period?", "Enter your 5-digit zip code", "Accessibility code",
+    "Two factors that motivate you", "Pinyin name", "Code of conduct", "Dress code", "Tax code",
+    "Social security number", "Background verification consent", "",
 ]  # fmt: skip
 # The stated cost of failing closed: no credential, read as one (the PR's declared open points).
 FAIL_CLOSED = ["PIN code", "Which password manager do you use?"]

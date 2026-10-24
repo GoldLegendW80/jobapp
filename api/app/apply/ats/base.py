@@ -1135,8 +1135,8 @@ _PASSWORD_WORDS = tuple(
     for word in (
         "password", "passwd", "passcode", "passphrase", "pass phrase", "passwort", "kennwort",
         "wachtwoord", "contraseña", "mot de passe", "mots de passe", "motdepasse",
-        "palavra passe", "parola d ordine", "lösenord", "passord", "adgangskode", "salasana",
-        "пароль", "パスワード", "密码", "密碼", "비밀번호",
+        "palavra passe", "parola d ordine", "clave de acceso", "passkey", "lösenord", "passord",
+        "adgangskode", "salasana", "пароль", "パスワード", "密码", "密碼", "비밀번호",
     )
 )  # fmt: skip
 _PASSWORD_START = re.compile(r"\bsenha|\bpwd\b")  # "resenha" and "desenhar" are no password
@@ -1145,9 +1145,10 @@ _CODE_PHRASES = (
     "one time code", "one time pin", "one time password", "one time token", "otp", "totp", "2fa",
     "two factor", "2 factor", "two step verification", "2 step verification", "pin", "pin code",
     "pincode", "verification code", "security code", "confirmation code", "validation code",
-    "authentication code", "auth code", "login code", "log in code", "sign in code",
-    "signin code", "access code", "sms code", "temporary code", "magic code", "mfa code",
-    "digit code", "code we sent", "code you received", "code sent", "code received",
+    "authentication code", "auth code", "authenticator", "backup code", "recovery code",
+    "login code", "log in code", "sign in code", "signin code", "access code", "sms code",
+    "temporary code", "magic code", "mfa code", "digit code", "code we sent",
+    "code you received", "code sent", "code received",
     "security question", "security answer", "secret question", "secret answer",
     "code de vérification", "code de sécurité", "code de confirmation", "code de validation",
     "code d authentification", "code à usage unique", "code temporaire", "code d accès",
@@ -1163,7 +1164,14 @@ _CODE_PHRASES = (
     "beveiligingscode", "bevestigingscode", "eenmalige code", "toegangscode", "inlogcode",
     "beveiligingsvraag",
 )  # fmt: skip
-_CODE = re.compile(r"\b(?:" + "|".join(re.escape(fold(p)) for p in _CODE_PHRASES) + r")\b")
+# A code of N digits, as the other languages write it ("code à 6 chiffres", "6-stelliger Code").
+_CODE_SHAPES = (
+    r"code a \d+ chiffres", r"\d+ stellige[nr]? code", r"codigo de \d+ digitos",
+    r"codice (?:a|di) \d+ cifre", r"\d+ cijferige code",
+)  # fmt: skip
+_CODE = re.compile(
+    r"\b(?:" + "|".join([*(re.escape(fold(p)) for p in _CODE_PHRASES), *_CODE_SHAPES]) + r")\b"
+)
 # A card's code is the payment page's (app/apply/failures.py), never a sign in's.
 _CARD = re.compile(r"\b(?:card|carte|karte|tarjeta|carta|cartao|kaart|cvv|cvc|cryptogramme)s?\b")
 ENTRY_ROLES = frozenset({*TEXT_ROLES, "combobox"})  # what browserd reads for a credential
