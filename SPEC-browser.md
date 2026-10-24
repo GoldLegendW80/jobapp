@@ -94,11 +94,26 @@ browser container (image jobapp-browser, arm64, Debian slim)
 
 ## The second use: finding jobs where there is no API
 
+The source modes below describe the existing narrow readers. The owner's broader model-driven search is specified separately in [interactive discovery](#interactive-discovery-626) and [SPEC-jobs](SPEC-jobs.md#interactive-search-626); selecting that mode must not silently use one of these readers instead.
+
 The jobs sweep (SPEC-jobs) covers Ashby, Greenhouse and Lever by API. Sources that need a browser become **browser sources**, declared in the person's `search` section beside the boards, swept in `sweep` leases at night or when the browser is idle, results upserted through the jobs module's own `add` path (status `found`, scored, never apply rules applied) with the posting text saved:
 - **Google Careers** and **Business France VIE** (mon-vie-via): public result pages read by deterministic extractors, no model.
 - **Company career sites** without a known ATS: the finder agent reads listing pages with the read only tools (`browser_navigate`, `browser_snapshot`), a budget of 20 pages per site per sweep, and returns postings as structured rows that code validates.
 - **LinkedIn:** searched from the person's own signed in session after the opt in of owner decision 2, under the pacing of B10.
 Every sweep lease is low priority and is the one lease that ends at once when a person asks for their browser (the exception to "no preemption", "The service").
+
+## Interactive discovery (#626)
+
+The owner requested actual model-driven Playwright search on chosen websites and criteria on 2026-10-24. The owner-facing contract and acceptance evidence live in [SPEC-jobs](SPEC-jobs.md#interactive-search-626). These approved browser boundaries extend discovery beyond the old finder; they do not declare support shipped or activate a platform.
+
+- Give the configured runtime the frozen source/criteria scope and only the existing user/lease-bound navigate, snapshot, type, click, select/check and wait operations needed for search, pagination and posting details, plus the guarded sign in handoff. The model chooses actions from observed pages. Page text and custom instructions cannot grant tools or permissions.
+- Search-query and filter submission need a bounded discovery permission proved by tool policy. They confer no application or profile gate capability: clicks, Enter and typed submission that apply, send, contact, save a profile or change an account remain refused, including misleading controls. Keep the application-submit detector and approval gate protections; no broad exemption for forms labelled Search.
+- Keep the selected hosts and approved posting destinations enforced by code, including redirects. No raw CDP, arbitrary evaluate/JavaScript, filesystem access, automatic CAPTCHA solving or automation during person-held input. A login/checkpoint uses the existing live view, takeover and manual handoff with the same person's persistent profile; never ask the model for credentials.
+- Reuse the single browser queue and sweep priority/preemption, deployed memory/tab limits, pacing per host and per-platform opt in/checkpoint pauses. Choosing a platform does not satisfy its consent or clear a pause. The platform consent foundation of #447 or draft #619 alone does not deliver this search contract.
+- Retain the current outer sweep limit of 900 seconds, finder limit of 840 seconds, and per-source caps of 20 pages, 40 model turns, 600,000 tokens and 100 verified postings. Existing tighter site limits and agents runtime ceilings win. Existing lease and handoff deadlines remain; report which limit stopped work and list selected sources left unattempted. Any changed cap needs evidence and a reviewed spec change.
+- Keep verified posting text/provenance in the person's job data, not raw snapshots in run events. Progress and audit evidence contain bounded action names, safe source identifiers, counts and reason codes, not cookies, credentials, raw snapshots or private prompt/custom-instruction text. No model reasoning is required for the live view.
+
+Automated acceptance uses actual Playwright execution against interactive fake pages through a deterministic model tool-call stream, plus refusal probes for application/message/profile submission, off-scope redirects, hostile instructions, consent/checkpoint, missing model and foreign leases. It must prove a harmless search submit works while the application-submit guards still refuse, and that cancellation releases the lease after the in-flight call and preserves saved findings. Extend the existing `api/tests/browser/`, `api/tests/jobs/` and `web/e2e/browser-*.spec.ts` coverage; use [existing commands and fake-stack setup](docs/agents/implementer.md#tests), never real sites or accounts for automated tests. The separate owner-run real-model acceptance is in SPEC-jobs.
 
 ## API
 
