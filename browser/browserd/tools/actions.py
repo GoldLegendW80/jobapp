@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from browserd import detect, pages
-from browserd.tools import pacing, policy, request_signin
+from browserd.tools import discovery, pacing, policy, request_signin
 
 log = logging.getLogger("browserd")
 
@@ -86,6 +86,7 @@ class State:
     page: Any = None
     guarded: Any = None  # the context the navigation guard is installed on
     blocked: list[str] = field(default_factory=list)
+    discovery: bool = False
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     # The app's own click on an Attach button is waiting for its chooser: that one is not kept.
@@ -110,6 +111,7 @@ class Tab:
     pacer: pacing.Pacer
     gate: bool = False
     lease_tag: str = ""
+    discovery: bool = False
 
     @property
     def hosts(self) -> tuple[str, ...]:
@@ -128,7 +130,22 @@ class Tab:
     async def _guard(self, route: Any, request: Any) -> None:
         # A navigation of a tab's main frame to a host outside the list (a link, a redirect, a
         # window.open) never leaves: it is aborted here, and settle() reports it.
+        if self.state.discovery and (
+            request.method not in {"GET", "HEAD"}
+            or not discovery.read_url(request.url, self.state.page.url)
+        ):
+            self.state.blocked.append(request.url[:200])
+            await route.abort("blockedbyclient")
+            return
         frame = request.frame if request.is_navigation_request() else None
+        if (
+            self.state.discovery
+            and frame is not None
+            and not discovery.read_url(request.url, self.state.page.url)
+        ):
+            self.state.blocked.append(request.url[:200])
+            await route.abort("blockedbyclient")
+            return
         if frame is not None and frame.parent_frame is None and not self.allowed(request.url):
             self.state.blocked.append(request.url[:200])
             await route.abort("blockedbyclient")
@@ -142,7 +159,10 @@ class Tab:
             if request.redirected_from is None or not request.is_navigation_request():
                 return
             frame = request.frame
-            if frame.parent_frame is not None or self.allowed(request.url):
+            safe = self.allowed(request.url) and (
+                not self.state.discovery or discovery.read_url(request.url, self.state.page.url)
+            )
+            if frame.parent_frame is not None or safe:
                 return
         except Exception:
             return
@@ -228,6 +248,13 @@ class Tab:
             return None
 
     def judge(self, facts: Any, action: str, tool: str) -> dict[str, Any] | None:
+        if self.discovery:
+            code = discovery.verdict(facts, tool, self.state.page.url)
+            return (
+                failure(code, "Refused: this native discovery control is unsupported.")
+                if code
+                else None
+            )
         code = detect.verdict(
             facts, action=action, profile_edit=self.request.purpose == "profile_edit"
         )
@@ -257,6 +284,28 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
     (Tab.page) checks the tab: off the list (a redirect that committed, a hop seen between calls)
     it is taken back and the call answers host_not_allowed before the tool acts or reads further.
     A result is answered only while the tab is still on the list (settle)."""
+    marker = args.get("_discovery")
+    if (
+        tab.state.discovery
+        and marker is None
+        and name not in {"browser_snapshot", "browser_wait_for"}
+    ):
+        return failure(
+            "unsupported_discovery", "Refused: this lease requires discovery permission."
+        )
+    if marker is not None:
+        if (
+            marker != discovery.MARKER
+            or tab.request.purpose != "sweep"
+            or tab.gate
+            or name not in discovery.TOOLS
+        ):
+            return failure(
+                "unsupported_discovery", "Refused: discovery is limited to a search sweep."
+            )
+        if args.get("submit"):
+            return refused("submit")
+        tab.discovery = tab.state.discovery = True
     try:
         result = await TOOLS[name](tab, args)
     except OffList:

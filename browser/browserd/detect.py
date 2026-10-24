@@ -176,6 +176,14 @@ FACTS_JS = r"""
       n.getAttribute("aria-label"), n.getAttribute("placeholder"),
       ...Array.from(n.labels || []).map(l => l.textContent)].filter(Boolean).join(" ").toLowerCase();
     const fields = form && form.elements ? Array.from(form.elements).slice(0, 300) : [];
+    // Initial discovery supports native forms only. Scripted pages and event handlers are
+    // unsupported, even when their labels promise Search. Inspect a bounded whole document.
+    const all = [], walker = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT);
+    while (all.length <= 3000 && walker.nextNode()) all.push(walker.currentNode);
+    const native = all.length <= 3000 && !all.some(n =>
+      ["IFRAME", "FRAME"].includes(n.tagName) ||
+      (n.tagName === "SCRIPT" && !["application/json", "application/ld+json"].includes(n.type)) ||
+      Array.from(n.attributes).some(a => a.name.toLowerCase().startsWith("on")));
     return {
       tag: control.tagName.toLowerCase(),
       type: kindOf(control),
@@ -189,6 +197,14 @@ FACTS_JS = r"""
       editable: !!(control.isContentEditable || el.isContentEditable),
       field: fieldText(control),
       form_fields: fields.map(fieldText),
+      discovery: {
+        native, method: control.hasAttribute("formmethod") ? control.formMethod : form ? form.method : "",
+        action: (control.hasAttribute("formaction") ? control.formAction : form ? form.action : "").slice(0, 2001),
+        target: control.getAttribute("formtarget") || (form && form.target) || control.target || "",
+        name: (control.name || "").slice(0, 501), href: (control.href || "").slice(0, 2001),
+        fields: fields.filter(n => !["submit", "button", "reset"].includes(kindOf(n))).map(n =>
+          ({tag: n.tagName.toLowerCase(), type: kindOf(n), name: (n.name || "").slice(0, 501)})),
+      },
     };
   };
   const facts = describe(el);
