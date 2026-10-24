@@ -529,14 +529,16 @@ describe("capture completion across CV navigation", () => {
     await user.click(screen.getByRole("link", { name: "All my CVs" }));
     await user.click(await screen.findByRole("link", { name: "My CV" }));
     expect(await screen.findByText("Copying your CV's design.")).toBeVisible();
+    const gets = (path: string) =>
+      api.requests.filter((one) => one.method === "GET" && one.path === path)
+        .length;
+    const polls = gets("/api/documents/base-cvs");
     await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    // The list polls the capture; the opened document is read again only once it ends.
     await waitFor(() => {
-      expect(
-        api.requests.filter(
-          (one) => one.method === "GET" && one.path === "/api/documents/cv-1",
-        ).length,
-      ).toBe(2);
+      expect(gets("/api/documents/base-cvs")).toBe(polls + 1);
     });
+    expect(gets("/api/documents/cv-1")).toBe(1);
     const cv = {
       ...api.cvs[0]!,
       template_slug: "upload-new",
