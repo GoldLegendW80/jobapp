@@ -103,6 +103,15 @@ LINKEDIN = "linkedin"
 def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
     """`data` (a validated search section) with its linkedin entry's consent fields put back to
     the stored ones: off and none when no linkedin entry is stored."""
+    # Old editors and imports cannot accidentally erase the new saved search fields.
+    data = {
+        **{
+            name: (stored or {})[name]
+            for name in ("interactive_sites", "interactive_instructions")
+            if name not in data and name in (stored or {})
+        },
+        **data,
+    }
     sources = data.get("browser_sources")
     if not isinstance(sources, list) or not any(
         isinstance(s, dict) and s.get("kind") == LINKEDIN for s in sources
