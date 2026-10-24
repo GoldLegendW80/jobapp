@@ -1,6 +1,7 @@
 """Conservative native GET discovery. Labels alone never grant a search submission."""
 
-from urllib.parse import parse_qsl, unquote, urlsplit
+from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlsplit
 
 from browserd import detect
 
@@ -18,57 +19,117 @@ TOOLS = frozenset(
 QUERY = frozenset({"q", "query", "search", "keyword", "keywords"})
 FIELDS = QUERY | {"location", "remote", "contract", "category", "page", "sort"}
 ENDPOINTS = frozenset({"search", "jobs", "careers", "vacancies"})
-WRITES = frozenset(
-    {
-        "apply",
-        "application",
-        "applications",
-        "contact",
-        "message",
-        "messages",
-        "profile",
-        "account",
-        "login",
-        "signin",
-        "register",
-        "payment",
-        "delete",
-        "withdraw",
-        "subscribe",
-        "save",
-        "update",
-        "send",
-    }
-)
 UNSUPPORTED = "unsupported_discovery"
+ACCOUNT_STEMS = (
+    "account",
+    "application",
+    "contact",
+    "message",
+    "profile",
+    "login",
+    "logout",
+    "signin",
+    "signout",
+    "signup",
+    "register",
+    "subscrib",
+    "credential",
+    "buy",
+    "payment",
+    "paiement",
+)
+CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
 
 
-def read_url(url: str, current: str, *, form: bool = False) -> bool:
+@dataclass(frozen=True)
+class Scope:
+    start: str
+    query: str
+    filters: tuple[tuple[str, str], ...]
+
+    @classmethod
+    def parse(cls, raw: object) -> "Scope | None":
+        if not isinstance(raw, dict) or set(raw) != {"start", "query", "filters"}:
+            return None
+        start, query, filters = raw["start"], raw["query"], raw["filters"]
+        if (
+            not isinstance(start, str)
+            or not read_url(start, start)
+            or not isinstance(query, str)
+            or not query.strip()
+            or len(query) > 2000
+            or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in query)
+            or not isinstance(filters, dict)
+            or len(filters) > 6
+            or any(
+                k not in FIELDS - QUERY - {"page"} or not isinstance(v, str) or len(v) > 300
+                for k, v in filters.items()
+            )
+        ):
+            return None
+        return cls(start, query, tuple(sorted(filters.items())))
+
+    def criteria(self, pairs: list[tuple[str, str]], *, complete: bool) -> bool:
+        keys = [k for k, _ in pairs]
+        if len(keys) != len(set(keys)) or sum(k in QUERY for k in keys) > 1:
+            return False
+        expected = dict(self.filters)
+        for key, value in pairs:
+            if key in QUERY:
+                if value != self.query:
+                    return False
+            elif key == "page":
+                if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 1000:
+                    return False
+            elif key not in expected or value != expected[key]:
+                return False
+        return not complete or (sum(k in QUERY for k in keys) == 1 and expected.keys() <= set(keys))
+
+
+def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None = None) -> bool:
     if not isinstance(url, str) or len(url) > 2000:
         return False
     try:
-        parts, here = urlsplit(url), urlsplit(current)
+        parts, here = urlsplit(url), urlsplit(scope.start if scope else current)
         if (
             parts.scheme not in {"http", "https"}
             or parts.username
             or parts.password
             or "%" in parts.path
+            or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url)
         ):
             return False
         if (parts.scheme, parts.hostname, parts.port) != (here.scheme, here.hostname, here.port):
             return False
-        segments = unquote(parts.path).casefold().strip("/").split("/")
+        segments = parts.path.strip("/").split("/")
+        tokens = [word for segment in segments for word in detect.words(segment)]
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+        keys = [k for k, _ in pairs]
+        destructive = (
+            detect.says_submit(segments, profile_edit=True)
+            or detect.says_danger(segments)
+            or any(t.startswith(ACCOUNT_STEMS) for t in tokens)
+        )
+        complete = bool(pairs) or (
+            url != (scope.start if scope else url) and segments[-1] in ENDPOINTS
+        )
         return (
             not parts.fragment
-            and not WRITES.intersection(segments)
+            and not destructive
             and (not form or segments[-1] in ENDPOINTS)
-            and all(k in FIELDS for k, _ in parse_qsl(parts.query, keep_blank_values=True))
+            and (not form or not parts.query)
+            and len(keys) == len(set(keys))
+            and sum(k in QUERY for k in keys) <= 1
+            and all(k in FIELDS for k in keys)
+            and (scope is None or form or scope.criteria(pairs, complete=complete))
         )
     except (ValueError, TypeError):
         return False
 
 
-def verdict(facts: object, tool: str, current: str) -> str | None:
+def verdict(
+    facts: object, tool: str, current: str, *, scope: Scope | None = None, args: dict | None = None
+) -> str | None:
     if not isinstance(facts, dict):
         return UNSUPPORTED
     action = (
@@ -91,12 +152,12 @@ def verdict(facts: object, tool: str, current: str) -> str | None:
     if d.get("target") not in {"", "_self"}:
         return UNSUPPORTED
     if tool == "browser_click" and facts.get("tag") == "a":
-        allowed = read_url(d.get("href", ""), current)
+        allowed = read_url(d.get("href", ""), current, scope=scope)
     else:
         fields = d.get("fields")
         allowed = (
             d.get("method") == "get"
-            and read_url(d.get("action", ""), current, form=True)
+            and read_url(d.get("action", ""), current, form=True, scope=scope)
             and isinstance(fields, list)
             and 0 < len(fields) <= 100
         )
@@ -117,18 +178,29 @@ def verdict(facts: object, tool: str, current: str) -> str | None:
                 allowed
                 and facts.get("tag") == "input"
                 and facts.get("type") in {"text", "search"}
-                and d.get("name") in FIELDS
+                and d.get("name") in QUERY
+                and (scope is None or (args or {}).get("text") == scope.query)
             )
         elif tool == "browser_select_option":
-            allowed = allowed and facts.get("tag") == "select" and d.get("name") in FIELDS
+            allowed = allowed and facts.get("tag") == "select" and d.get("name") in FIELDS - QUERY
+            if scope is not None:
+                expected = dict(scope.filters).get(d.get("name"))
+                allowed = (
+                    allowed and expected is not None and (args or {}).get("values") == [expected]
+                )
         elif tool == "browser_click":
             allowed = (
                 allowed
                 and facts.get("tag") in {"button", "input"}
                 and facts.get("type") == "submit"
+                and not d.get("name")
             )
+            if allowed and scope is not None:
+                allowed = all(isinstance(f.get("value"), str) for f in fields) and scope.criteria(
+                    [(f["name"], f["value"]) for f in fields], complete=True
+                )
         else:
             allowed = False
     if allowed and "point" in facts:
-        return verdict(facts["point"], tool, current)
+        return verdict(facts["point"], tool, current, scope=scope, args=args)
     return None if allowed else UNSUPPORTED

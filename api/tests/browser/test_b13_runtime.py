@@ -41,6 +41,11 @@ class InteractiveTools(Tools):
 
     async def call(self, name, args):
         assert args.pop("_discovery") == "native_get"
+        assert args.pop("_discovery_scope") == {
+            "start": BASE,
+            "query": "robot",
+            "filters": {"remote": "1"},
+        }
         self.actions.append(name)
         if name == "browser_navigate":
             return await self.navigate(args["url"])
@@ -99,6 +104,7 @@ def test_scope_is_immutable_and_legacy_tools_and_model_schemas_stay_restricted()
     assert "browser_click" not in finder.BROWSER_FINDER.tools
     for name in finder.INTERACTIVE_TOOLS:
         assert "_discovery" not in finder_tools.SCHEMAS[name]["properties"]
+        assert "_discovery_scope" not in finder_tools.SCHEMAS[name]["properties"]
     assert finder.INTERACTIVE_FINDER.internal
     assert finder.INTERACTIVE_FINDER.private_io
     assert not finder.INTERACTIVE_FINDER.live_text

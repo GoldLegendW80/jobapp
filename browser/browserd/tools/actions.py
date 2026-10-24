@@ -15,6 +15,10 @@ redirected request is caught by the context's request listener, which stops the 
 could refuse a host off the lease's list, while B6's host rule drops private ranges only), but its
 page is never read nor acted on.
 
+Discovery instead uses an anonymous context with JavaScript disabled before any navigation.
+CDP Fetch holds requests before sending and responses before receiving their bodies. Redirect
+responses are refused before Chromium follows them. Authenticated discovery is not supported.
+
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
 """
@@ -78,6 +82,10 @@ class OffList(Exception):  # noqa: N818  a control-flow signal, not an error
     answers host_not_allowed, whatever the tool had done or read."""
 
 
+class UnsupportedDiscovery(Exception):  # noqa: N818
+    """A discovery execution boundary could not be established or was lost."""
+
+
 @dataclass
 class State:
     """What the tools keep for one lease (Lease.scratch): the placed documents and the tab."""
@@ -87,6 +95,10 @@ class State:
     guarded: Any = None  # the context the navigation guard is installed on
     blocked: list[str] = field(default_factory=list)
     discovery: bool = False
+    scope: "discovery.Scope | None" = None
+    native_context: Any = None
+    native_cdp: Any = None
+    native_failed: bool = False
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     # The app's own click on an Attach button is waiting for its chooser: that one is not kept.
@@ -98,6 +110,7 @@ class State:
         self.files.clear()
         self.blocked.clear()
         self.page = self.guarded = self.chooser = None
+        self.native_context = self.native_cdp = self.scope = None
 
 
 @dataclass
@@ -127,25 +140,114 @@ class Tab:
         except Exception:
             return False
 
+    async def begin_discovery(self, scope: "discovery.Scope", name: str, args: dict) -> None:
+        if self.state.native_failed:
+            raise UnsupportedDiscovery
+        if self.state.scope is not None:
+            if self.state.scope != scope:
+                raise UnsupportedDiscovery
+            return
+        # Loaded pages may already have installed listeners or workers. Never upgrade them.
+        # The anonymous context deliberately does not copy the person's persistent profile.
+        browser = self.browser.browser
+        if (
+            name != "browser_navigate"
+            or args.get("url") != scope.start
+            or any(p.url != ABOUT_BLANK for c in browser.contexts for p in c.pages)
+        ):
+            raise UnsupportedDiscovery
+        self.state.discovery = True
+        try:
+            async with asyncio.timeout(ACTION_S):
+                context = await browser.new_context(
+                    java_script_enabled=False, service_workers="block", accept_downloads=False
+                )
+                self.state.native_context = context
+                context.on("page", self.extra_page)
+                page = await context.new_page()
+                client = await context.new_cdp_session(page)
+                self.state.scope, self.state.page = scope, page
+                self.state.native_cdp, self.state.guarded = client, context
+                client.on("Fetch.requestPaused", self.intercept)
+                await client.send(
+                    "Fetch.enable",
+                    {
+                        "patterns": [
+                            {"urlPattern": "*", "requestStage": "Request"},
+                            {"urlPattern": "*", "requestStage": "Response"},
+                        ]
+                    },
+                )
+        except Exception as exc:
+            await self.close_discovery()
+            raise UnsupportedDiscovery from exc
+
+    async def close_discovery(self) -> None:
+        self.state.native_failed = True
+        if self.state.native_context is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self.state.native_context.close(), ACTION_S)
+
+    async def extra_page(self, page: Any) -> None:
+        if len(page.context.pages) > 1:
+            try:
+                await asyncio.wait_for(page.close(), ACTION_S)
+            except Exception:
+                await self.close_discovery()
+
+    async def intercept(self, event: dict) -> None:
+        # CDP Fetch RequestStage and requestPaused include redirect response headers. This
+        # session never fetches a response body; Chromium keeps its normal egress and limits.
+        try:
+            async with asyncio.timeout(ACTION_S):
+                client, scope = self.state.native_cdp, self.state.scope
+                request, request_id = event["request"], event["requestId"]
+                status = event.get("responseStatusCode")
+                if (
+                    self.state.native_failed
+                    or scope is None
+                    or request["method"] not in {"GET", "HEAD"}
+                    or not self.allowed(request["url"])
+                    or not discovery.read_url(request["url"], scope.start, scope=scope)
+                    or (status is not None and 300 <= status < 400)
+                    or event.get("responseErrorReason")
+                ):
+                    if not self.state.blocked:
+                        self.state.blocked.append("discovery")
+                    await client.send(
+                        "Fetch.failRequest",
+                        {"requestId": request_id, "errorReason": "BlockedByClient"},
+                    )
+                elif status is not None:
+                    # A separate CSP restricts scripts and child targets while retaining
+                    # every original header, including multiple original CSP headers.
+                    await client.send(
+                        "Fetch.continueResponse",
+                        {
+                            "requestId": request_id,
+                            "responseCode": status,
+                            "responseHeaders": [
+                                *event.get("responseHeaders", []),
+                                {"name": "Content-Security-Policy", "value": discovery.CSP},
+                            ],
+                        },
+                    )
+                else:
+                    await client.send("Fetch.continueRequest", {"requestId": request_id})
+        except Exception:
+            await self.close_discovery()
+
     async def _guard(self, route: Any, request: Any) -> None:
         # A navigation of a tab's main frame to a host outside the list (a link, a redirect, a
         # window.open) never leaves: it is aborted here, and settle() reports it.
         if self.state.discovery and (
             request.method not in {"GET", "HEAD"}
-            or not discovery.read_url(request.url, self.state.page.url)
+            or not discovery.read_url(request.url, self.state.page.url, scope=self.state.scope)
         ):
             self.state.blocked.append(request.url[:200])
             await route.abort("blockedbyclient")
             return
         frame = request.frame if request.is_navigation_request() else None
-        if (
-            self.state.discovery
-            and frame is not None
-            and not discovery.read_url(request.url, self.state.page.url)
-        ):
-            self.state.blocked.append(request.url[:200])
-            await route.abort("blockedbyclient")
-            return
         if frame is not None and frame.parent_frame is None and not self.allowed(request.url):
             self.state.blocked.append(request.url[:200])
             await route.abort("blockedbyclient")
@@ -172,6 +274,10 @@ class Tab:
     async def guard(self) -> Any:
         """The context the lease's tabs live in, with the navigation guard installed on it once
         (a Chromium started again, browserd/handoff.py, is a new context: guarded again)."""
+        if self.state.discovery:
+            if self.state.native_context is None or self.state.native_failed:
+                raise UnsupportedDiscovery
+            return self.state.native_context
         context = self.browser.browser.contexts[0]
         if self.state.guarded is not context:
             await context.route("**/*", self._guard)
@@ -196,6 +302,8 @@ class Tab:
     async def page(self) -> Any:
         context = await self.guard()
         current = self.state.page
+        if self.state.discovery and (current is None or current.is_closed()):
+            raise UnsupportedDiscovery
         if current is None or current.is_closed() or current not in context.pages:
             current = context.pages[0] if context.pages else await context.new_page()
             self.state.page = current
@@ -205,7 +313,9 @@ class Tab:
         return page
 
     async def settle(self, result: dict[str, Any]) -> dict[str, Any]:
-        context = self.browser.browser.contexts[0]
+        if self.state.native_failed:
+            return failure(discovery.UNSUPPORTED, "Refused: native discovery is unavailable.")
+        context = self.state.native_context or self.browser.browser.contexts[0]
         for other in list(context.pages):
             off = policy.url_verdict(other.url, self.hosts) is not None
             if other is not self.state.page and off:
@@ -247,9 +357,13 @@ class Tab:
         except Exception:
             return None
 
-    def judge(self, facts: Any, action: str, tool: str) -> dict[str, Any] | None:
+    def judge(
+        self, facts: Any, action: str, tool: str, args: dict | None = None
+    ) -> dict[str, Any] | None:
         if self.discovery:
-            code = discovery.verdict(facts, tool, self.state.page.url)
+            code = discovery.verdict(
+                facts, tool, self.state.page.url, scope=self.state.scope, args=args
+            )
             return (
                 failure(code, "Refused: this native discovery control is unsupported.")
                 if code
@@ -305,9 +419,16 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             )
         if args.get("submit"):
             return refused("submit")
-        tab.discovery = tab.state.discovery = True
     try:
+        if marker is not None:
+            scope = discovery.Scope.parse(args.get("_discovery_scope"))
+            if scope is None:
+                raise UnsupportedDiscovery
+            await tab.begin_discovery(scope, name, args)
+            tab.discovery = True
         result = await TOOLS[name](tab, args)
+    except UnsupportedDiscovery:
+        return failure(discovery.UNSUPPORTED, "Refused: this native discovery flow is unsupported.")
     except OffList:
         log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
         return await tab.settle(refused("host_not_allowed"))
@@ -372,6 +493,8 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     button = args.get("button", "left")
     if button not in ("left", "right", "middle") or args.get("modifiers"):
         return failure("bad_args", "Only a plain click is allowed, with no modifier key.")
+    if tab.discovery and (button != "left" or args.get("doubleClick")):
+        return failure(discovery.UNSUPPORTED, "Refused: discovery requires one plain click.")
     locator, gone = await tab.element(args)
     if gone:
         return gone
@@ -405,7 +528,7 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     # The field is clicked before the keys: judged as a text entry and at its click point.
     await tab.approach(locator)
     facts = await tab.facts(locator, point=True)
-    no = tab.judge(facts, "type", "browser_type")
+    no = tab.judge(facts, "type", "browser_type", args)
     if no is None and args.get("submit"):
         no = tab.judge(facts, "key", "browser_type")  # Enter after the text
     if no:
@@ -444,7 +567,7 @@ async def select_option(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     locator, gone = await tab.element(args)
     if gone:
         return gone
-    no = tab.judge(await tab.facts(locator), "check", "browser_select_option")
+    no = tab.judge(await tab.facts(locator), "check", "browser_select_option", args)
     if no:
         return no
     await tab.approach(locator)

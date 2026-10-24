@@ -17,7 +17,7 @@ from app.browser.client import BrowserdClient, BrowserError
 from app.browser.tools import LeaseTools
 from tests.browser.b3_support import World, flush, redis_url  # noqa: F401
 from tests.browser.b13_runtime import Recording
-from tests.browser.test_b5_container import TOOL_CALL, ref
+from tests.browser.test_b5_container import TOOL_CALL, Lease, ref
 from tests.browser.test_b9_runtime import (  # noqa: F401
     Runtime,
     alice,
@@ -65,7 +65,7 @@ def native(tmp_path):
     stack.compose[8:8] = ["-f", str(override)]
     try:
         stack.run("up", "-d", "--wait", "--wait-timeout", "120", "--no-build", "--pull", "never")
-        for path in ("detect.py", "tools/actions.py", "tools/discovery.py"):
+        for path in ("chromium.py", "detect.py", "tools/actions.py", "tools/discovery.py"):
             expected = hashlib.sha256((ROOT / "browser/browserd" / path).read_bytes()).hexdigest()
             actual = stack.python(
                 "import hashlib,pathlib,sys; "
@@ -127,12 +127,26 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
             assert got.capability is None
             tools = LeaseTools(store, client, str(alice), got.lease.lease_id, got.token)
             try:
-                await tools.navigate(START)
+                scope = finder.InteractiveScope(START, "robot", (("remote", "1"),))
+                opened = await tools.call(
+                    "browser_navigate",
+                    {
+                        "url": START,
+                        "_discovery": "native_get",
+                        "_discovery_scope": scope.tool_scope(),
+                    },
+                )
+                assert opened["ok"], opened
                 first = await tools.snapshot()
                 assert "Robot Engineer" not in first["snapshot"]
                 button = ref(first["snapshot"], "button", "Search application")
                 refused = await tools.call(
-                    "browser_click", {"ref": button, "_discovery": "native_get"}
+                    "browser_click",
+                    {
+                        "ref": button,
+                        "_discovery": "native_get",
+                        "_discovery_scope": scope.tool_scope(),
+                    },
                 )
                 assert not refused["ok"]
                 pages = sources.Pages(
@@ -147,7 +161,7 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
                     START,
                     first["snapshot"],
                     str(alice),
-                    interactive=finder.InteractiveScope(START, "robot", (("remote", "1"),)),
+                    interactive=scope,
                 )
                 ran = await finder.RuntimeFinder(lambda: context)(one)
                 from tests.browser.test_b9_runtime import runs_of
@@ -185,4 +199,53 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
         {"q": ["robot"], "remote": ["1"], "page": ["2"]},
     ]
     assert not any(p["path"] in {"/apply", "/escape"} for p in observed)
+    native.completed = True
+
+
+def test_native_hostile_controls_and_redirects(native):
+    failures = []
+    for legacy in (True, False):
+        for path in (
+            "handler",
+            "shadow",
+            "named",
+            "hidden",
+            "default",
+            "base",
+            "redirect-off",
+            "redirect-write",
+        ):
+            lease = Lease(native, "sweep")
+            native.redactions.append(lease.token)
+            scope = {"start": START + path, "query": "robot", "filters": {}}
+            marker = {"_discovery": "native_get", "_discovery_scope": scope}
+            try:
+                assert lease.capability is None
+                opened = lease.tool(
+                    "browser_navigate", url=scope["start"], **({} if legacy else marker)
+                )
+                assert opened["ok"], (legacy, path, opened)
+                button = ref(lease.snapshot(), "button", "Search")
+                answer = lease.tool("browser_click", ref=button, **marker)
+                if answer.get("ok"):
+                    failures.append((legacy, path))
+                assert answer["error"] in {"unsupported_discovery", "host_not_allowed"}
+            finally:
+                lease.end()
+    observed = json.loads(
+        native.execute(
+            "browser",
+            "python",
+            "-I",
+            "-c",
+            "import urllib.request; print(urllib.request.urlopen('http://pages:8080/observed').read().decode())",
+        )
+    )
+    assert not failures, failures
+    assert not any(p["path"] in {"/b13/custom-action", "/escape", "/remove"} for p in observed)
+    assert not any(p.get("method") == "POST" for p in observed)
+    assert [
+        p["path"] for p in observed if p["path"] in {"/b13/off/search", "/b13/write/search"}
+    ] == ["/b13/off/search", "/b13/write/search"]
+    assert not any(p["path"] == "/b13/search" for p in observed)
     native.completed = True

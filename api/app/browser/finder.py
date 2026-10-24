@@ -119,6 +119,9 @@ class InteractiveScope:
     query: str
     filters: tuple[tuple[str, str], ...] = ()
 
+    def tool_scope(self) -> dict[str, Any]:
+        return {"start": self.start, "query": self.query, "filters": dict(self.filters)}
+
     def __post_init__(self) -> None:
         if not canonical(self.start) or len(self.query) > 2000 or not self.query.strip():
             raise ValueError("invalid discovery scope")
@@ -132,6 +135,8 @@ class InteractiveScope:
                 for pair in self.filters
             )
         ):
+            raise ValueError("invalid discovery filters")
+        if len({k for k, _ in self.filters}) != len(self.filters):
             raise ValueError("invalid discovery filters")
 
 
@@ -325,7 +330,12 @@ class FinderSession:
             if self.interactive:
                 await self.pages._act(
                     lambda: self.pages.tools.call(
-                        "browser_navigate", {"url": url, "_discovery": "native_get"}
+                        "browser_navigate",
+                        {
+                            "url": url,
+                            "_discovery": "native_get",
+                            "_discovery_scope": self.interactive.tool_scope(),
+                        },
                     )
                 )
             else:
@@ -353,10 +363,6 @@ class FinderSession:
             return self._stop(self.stopped)
         if name == "browser_type" and args.get("text") != self.interactive.query:
             return "Refused: the query is outside this run's search scope.", True
-        if name == "browser_select_option" and not set(args.get("values", [])) <= {
-            value for _, value in self.interactive.filters
-        }:
-            return "Refused: the filter is outside this run's search scope.", True
         if self.pages.count >= PAGES_MAX:
             return self._stop("page_budget")
         from app.browser.sources import SourceError
@@ -365,7 +371,14 @@ class FinderSession:
 
         async def act() -> dict[str, Any]:
             nonlocal result
-            result = await self.pages.tools.call(name, {**args, "_discovery": "native_get"})
+            result = await self.pages.tools.call(
+                name,
+                {
+                    **args,
+                    "_discovery": "native_get",
+                    "_discovery_scope": self.interactive.tool_scope(),
+                },
+            )
             return result
 
         try:
