@@ -7,7 +7,7 @@ and multi-source history aggregation are supplied by the separate B14 integratio
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.jobs import sweep
 from app.jobs.models import Sweep
-from app.profile.schemas import BrowserSource
+from app.opportunities.sources.catalogue import NOT_SUPPORTED
+from app.profile.schemas import BrowserSource, PlatformConsent
 
-KINDS = frozenset({"freework"})
 TEXT = (
     "This site's terms forbid automated use; your account may be limited or closed; "
     "the app keeps to a person's pace, but the risk is yours."
@@ -29,8 +29,37 @@ PAUSE = timedelta(days=7)
 
 
 @dataclass(frozen=True)
+class Platform:
+    name: str
+    text: str
+    text_version: int
+    terms_url: str | None = None
+    checked_on: str | None = None
+
+
+RISK_TEXT = (
+    "Automated browsing may result in account restrictions or closure. "
+    "Enable it only if you accept this risk."
+)
+_FREEWORK = next(item for item in NOT_SUPPORTED if item.kind == "freework")
+PLATFORMS = {
+    "freework": Platform(
+        _FREEWORK.name, TEXT, TEXT_VERSION, _FREEWORK.terms_url, _FREEWORK.checked_on
+    ),
+    "indeed": Platform("Indeed", RISK_TEXT, 1),
+    "welcome_to_the_jungle": Platform("Welcome to the Jungle", RISK_TEXT, 1),
+}
+KINDS = frozenset(PLATFORMS)
+
+
+def metadata(kind: str) -> Platform:
+    item = PLATFORMS[kind]
+    return replace(item, text=TEXT, text_version=TEXT_VERSION) if kind == "freework" else item
+
+
+@dataclass(frozen=True)
 class State:
-    source: BrowserSource | None
+    source: BrowserSource | PlatformConsent | None
     accepted: bool
     paused_until: datetime | None = None
     last_sweep_at: datetime | None = None
@@ -60,9 +89,17 @@ def state(db: Session, user_id: uuid.UUID, kind: str, now: datetime | None = Non
         return State(None, False)
     now = now or datetime.now(UTC)
     search = sweep.user_search(db, user_id)
-    source = next((s for s in search.browser_sources if s.kind == kind), None) if search else None
+    source = None
+    if search:
+        source = (
+            next((s for s in search.browser_sources if s.kind == kind), None)
+            if kind == "freework"
+            else search.platform_consents.get(kind)
+        )
     accepted = bool(
-        source and source.accepted_at is not None and source.text_version == TEXT_VERSION
+        source
+        and source.accepted_at is not None
+        and source.text_version == metadata(kind).text_version
     )
     met = db.scalar(
         sa.select(

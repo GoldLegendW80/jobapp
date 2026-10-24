@@ -137,6 +137,7 @@ FULL: dict[str, dict[str, Any]] = {
                 "text_version": None,
             }
         ],
+        "platform_consents": {},
         "interactive_sites": [],
         "interactive_instructions": None,
         "sweep_schedule": {

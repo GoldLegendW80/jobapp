@@ -798,6 +798,31 @@ class BrowserSource(_Section):
         return self
 
 
+PlatformConsentKind = Literal["indeed", "welcome_to_the_jungle"]
+PLATFORM_CONSENT_KINDS = frozenset({"indeed", "welcome_to_the_jungle"})
+
+
+class PlatformConsent(_Section):
+    """Browser-owned permission, independent of a saved interactive selection."""
+
+    enabled: bool = False
+    accepted_at: Annotated[str, Field(max_length=40)] | None = None
+    text_version: Annotated[StrictInt, Field(ge=1, le=1000)] | None = None
+
+    @model_validator(mode="after")
+    def _acceptance(self) -> "PlatformConsent":
+        if (self.accepted_at is None) != (self.text_version is None):
+            raise ValueError("accepted_at and text_version go together")
+        if self.accepted_at is not None:
+            try:
+                when = datetime.fromisoformat(self.accepted_at)
+            except ValueError:
+                raise ValueError("accepted_at is not an ISO 8601 date and time") from None
+            if when.tzinfo is None:
+                raise ValueError("accepted_at needs its offset")
+        return self
+
+
 InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
 INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 INTERACTIVE_HOSTS = {
@@ -929,6 +954,9 @@ class SearchSection(_Section):
     browser_sources: Annotated[list[BrowserSource], Field(max_length=10)] = Field(
         default_factory=list
     )
+    platform_consents: Annotated[
+        dict[PlatformConsentKind, PlatformConsent], Field(max_length=2)
+    ] = Field(default_factory=dict)
     interactive_sites: Annotated[list[InteractiveSite], Field(max_length=10)] = Field(
         default_factory=list
     )
