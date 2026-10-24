@@ -558,6 +558,8 @@ def difference(found: ats_base.Discovery, rows: list[Row]) -> str:
 def _stop_of(code: str, step: str = "") -> Stop:
     if code == "needs_person":
         return Stop(State.needs_person, "needs_person", step or "needs_person")
+    if code == ats_base.CREDENTIAL:  # browserd refused to type into a credential input: a wall
+        return Stop(State.needs_person, "needs_person", "signin")
     if code in ats_base.PENDING_STEPS:
         return Stop(State.needs_person, "needs_person", code)
     if code == "posting_closed":

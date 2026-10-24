@@ -35,14 +35,20 @@ Reading is a closed world that fails closed:
 - A step only the person can take (`pending_step`: a sign in wall, a captcha, Greenhouse's e-mail
   code) is looked for on every read, before any anchor: when one shows, the fill stops with
   `needs_person` and nothing more is clicked or typed.
-- A sign in wall is a page with a credential box (`credentials`), a sign in's or a sign up's: a
-  text entry browserd read as a credential input (browserd/detect.py: a password box, an
+- A sign in wall is a page with a credential box (`credentials`), a sign in's or a sign up's. Only
+  a box that takes typed text can be one (`typed_entry`: a text entry, or a combobox that is no
+  native select): one browserd read as a credential input (browserd/detect.py: a password box, an
   autocomplete of `current-password`, `new-password` or `one-time-code`, a `webauthn` box, or a
   `username` box of a form that holds one of those, as a two step login's first page does),
-  whatever its label; or an entry whose label names a password or a sign in code (`secret`, in
+  whatever its label; or one whose label names a password or a sign in code (`secret`, in
   English, French, German, Spanish, Italian, Portuguese and Dutch). A label never clears what
-  browserd read, and it is all there is of an entry browserd did not read. A field whose label is
-  `secret`, of any kind, is no field either (`Field.credential`): never typed, never recorded.
+  browserd read, and it is all there is of an entry browserd did not read. A check box, a yes or
+  no group, a native select, a file field or an unsupported widget is never one, whatever its
+  label: recorded as any other. A credential box is no field and no row (`Field.credential`,
+  `Skipped.credential` for a text box the fill skips: never typed nor recorded), and the same rule
+  (`credential_box`) reads the page, so the page of every such box is a wall (or an adapter's own
+  step: Greenhouse's e-mail code). A typing browserd refuses as a credential input (`CREDENTIAL`)
+  is that page's wall too (`step_of`): the fill stops there, and the box is never recorded.
 - An adapter chosen by the page (`adapter_for` with an address that is not the adapter's own) is
   `framed`: the submit and every anchor must stand inside one `iframe`, and everything the fill
   reads (fields, submit, alerts, options) is that iframe's subtree, so a company page's own boxes
@@ -73,7 +79,9 @@ A sign in wall is seen only by a credential box: a "Sign in to apply" page witho
 page when its form holds no credential input and its box's label names none (its e-mail is then
 typed there, and the wall is seen on the next page); a one time code split into one digit boxes is
 seen only by the boxes browserd reads as one; a label in another language or script is read only
-for a handful of password words.
+for a handful of password words. A wall known only by browserd's refusal to type is met while
+typing, after a read that showed none: the fill stops there as `needs_person: signin`, and the
+person signs in later (no hand off is asked in the live view at that point).
 """
 
 import json
@@ -278,7 +286,7 @@ class Field:
     value: str = ""  # what the page shows now (text, chosen option, file name)
     checked: bool | None = None  # a box's or a pressed button's state, when the page says
     typed: str = ""  # a combobox's input text, kept apart from its choice
-    credential: bool = False  # browserd read it as a credential input, or its label is `secret`
+    credential: bool = False  # a credential box (`credential_box`): a text entry or a combobox only
 
     def form_field(self) -> answers.FormField:
         kind: answers.FieldKind = "yes_no" if self.kind == "yes_no" else self.kind
@@ -290,6 +298,7 @@ class Skipped:
     label: str
     role: str
     reason: str  # unsupported_widget, autofill, no_label
+    credential: bool = False  # a box that takes typed text, a credential box (`credential_box`)
 
 
 @dataclass
@@ -466,11 +475,10 @@ def discover_fields(root: Node, submit_names: frozenset[str]) -> Discovery:
 
     def add(label: str, kind: FieldKind, required: bool, **rest: Any) -> None:
         if AUTOFILL.search(fold(label)):
-            skipped.append(Skipped(label, kind, "autofill"))
+            skipped.append(Skipped(label, kind, "autofill", rest.get("credential") is True))
             return
         base = f"{kind}:{fold(label)}"
         seen[base] = seen.get(base, 0) + 1
-        rest["credential"] = rest.get("credential") is True or secret(label)
         fields.append(Field(f"{base}#{seen[base]}", label, kind, required, **rest))
 
     for node in root.walk():
@@ -498,29 +506,22 @@ def discover_fields(root: Node, submit_names: frozenset[str]) -> Discovery:
             if not label:
                 _, label, required, _ = _group_label(node)
             if not label:
-                skipped.append(Skipped("", node.role, "no_label"))
+                skipped.append(Skipped("", node.role, "no_label", credential_box(node)))
                 continue
-            add(label, "text", required, ref=node.ref, value=node.text, credential=node.credential)
+            credential = credential_box(node)
+            add(label, "text", required, ref=node.ref, value=node.text, credential=credential)
         elif node.role == "combobox":
             if not label:
                 _, label, required, _ = _group_label(node)
             if not label:
-                skipped.append(Skipped("", node.role, "no_label"))
+                skipped.append(Skipped("", node.role, "no_label", credential_box(node)))
                 continue
             native = [c for c in node.children if c.role == "option"]
             if native:
                 options = tuple(o.name for o in native if fold(o.name) not in PLACEHOLDERS)
                 chosen = [o.name for o in native if "selected" in o.attrs]
                 value = chosen[0] if chosen and fold(chosen[0]) not in PLACEHOLDERS else ""
-                add(
-                    label,
-                    "select",
-                    required,
-                    options=options,
-                    ref=node.ref,
-                    value=value,
-                    credential=node.credential,
-                )
+                add(label, "select", required, options=options, ref=node.ref, value=value)
             else:
                 shown, own_text = _shown_choice(node, label)
                 if not shown and own_text and not _menu_open_here(node):
@@ -532,7 +533,7 @@ def discover_fields(root: Node, submit_names: frozenset[str]) -> Discovery:
                     ref=node.ref,
                     value=shown,
                     typed=node.text,
-                    credential=node.credential,
+                    credential=credential_box(node),
                 )
         elif node.role == "checkbox":
             if not label:
@@ -819,7 +820,7 @@ class Adapter:
         if now is None:
             return Filled("failed", "form_changed")
         if now.credential:
-            return Filled("left", "credential")  # the person's, whatever the answer
+            return Filled("left", CREDENTIAL)  # the person's, whatever the answer
         try:
             if now.kind == "combobox":
                 return await _fill_combobox(self, tools, now, answer, found.root)
@@ -846,8 +847,8 @@ class Adapter:
                 answer = answers.resolve(item.form_field(), context)
                 result = await self.fill(tools, item, answer)
                 report.outcomes.append(Outcome(item, answer, result))
-                if result.status == "failed" and result.code in PENDING_STEPS:
-                    return _stopped(report, "needs_person", result.code)
+                if step := step_of(result):
+                    return _stopped(report, "needs_person", step)
                 if result.status == "failed" and result.code in STOPPING:
                     return _stopped(report, result.code)
             found, code = await self.discover(tools, frozenset(done))
@@ -870,6 +871,26 @@ STOPPING = frozenset(
 PENDING_STEPS = frozenset({"captcha", "signin", "email_code"})
 # The steps whose page asks for what only the person types: no box of such a read is a field.
 CREDENTIAL_STEPS = frozenset({"signin", "email_code"})
+# A credential box's fill: browserd refused to type into it, or the read marked it as one.
+CREDENTIAL = "credential"
+
+
+def step_of(filled: Filled) -> str:
+    """The step only the person can take that a failed fill met, '' when none: a step seen on the
+    page, or a sign in wall where browserd refused to type into a credential input (the read
+    before the typing saw none: a box made one since, or one browserd left unread)."""
+    if filled.status != "failed":
+        return ""
+    if filled.code == CREDENTIAL:
+        return "signin"
+    return filled.code if filled.code in PENDING_STEPS else ""
+
+
+def credential_outcome(outcome: Outcome) -> bool:
+    """The box of this outcome is a credential's, never a field: read as one, refused as one by
+    browserd, or a box that takes typed text labelled as one."""
+    item, code = outcome.field, outcome.filled.code
+    return item.credential or code == CREDENTIAL or typed_secret(item.kind, item.label)
 
 
 def _stopped(report: Report, code: str, step: str = "") -> Report:
@@ -967,7 +988,8 @@ async def _fill_combobox(
         _, now = await _fresh(adapter, tools, item.key)
         if now is not None and now.typed:
             # A typed text is no choice: cleared, and the clear read back.
-            if (code := _ok(await tools.type(now.ref, "", item.label))) in STOPPING:
+            code = _ok(await tools.type(now.ref, "", item.label))
+            if code in STOPPING or code == CREDENTIAL:
                 return Filled("failed", code)
             await tools.press_key("Escape")
             _, now = await _fresh(adapter, tools, item.key)
@@ -1174,7 +1196,7 @@ _CODE = re.compile(
 )
 # A card's code is the payment page's (app/apply/failures.py), never a sign in's.
 _CARD = re.compile(r"\b(?:card|carte|karte|tarjeta|carta|cartao|kaart|cvv|cvc|cryptogramme)s?\b")
-ENTRY_ROLES = frozenset({*TEXT_ROLES, "combobox"})  # what browserd reads for a credential
+TYPED_KINDS = frozenset({"text", "combobox"})  # the fields that take typed text (`typed_entry`)
 
 
 def _spaced(label: str) -> str:
@@ -1182,9 +1204,9 @@ def _spaced(label: str) -> str:
 
 
 def secret(label: str) -> bool:
-    """A credential's label, whatever the field's kind and the page around it: it names a
-    password, or a sign in code where it names no card. Fail closed: such a field is never
-    typed, recorded, shown, refilled nor answered."""
+    """A credential's label: it names a password, or a sign in code where it names no card. It
+    is read on a box that takes typed text only (`credential_box`, `typed_secret`); fail closed,
+    such a box is never typed, recorded, shown, refilled nor answered, and its page is a wall."""
     plain = _spaced(label)
     if any(word in plain for word in _PASSWORD_WORDS) or _PASSWORD_START.search(plain):
         return True
@@ -1196,14 +1218,29 @@ def entry_label(node: Node) -> str:
     return label_of(node.name)[0] or _group_label(node)[1]
 
 
+def typed_entry(node: Node) -> bool:
+    """A box that takes typed text: a text entry, or a combobox that is no native select."""
+    if node.role in TEXT_ROLES:
+        return True
+    return node.role == "combobox" and not any(c.role == "option" for c in node.children)
+
+
+def credential_box(node: Node) -> bool:
+    """A credential box (the module docstring): a box that takes typed text, which browserd read
+    as a credential input whatever its label, or whose label is `secret` whatever browserd read.
+    `discover_fields` marks its fields and `credentials` reads the page by this one rule."""
+    return typed_entry(node) and (node.credential is True or secret(entry_label(node)))
+
+
+def typed_secret(kind: str, label: str) -> bool:
+    """A field of this kind and label is a credential's by its label alone: a check box, a yes or
+    no group, a native select or a file field never is, whatever its label says."""
+    return kind in TYPED_KINDS and secret(label)
+
+
 def credentials(root: Node) -> list[Node]:
-    """The page's credential boxes (the module docstring): an entry browserd read as one,
-    whatever its label, or an entry whose label is `secret`, whatever browserd read."""
-    return [
-        n
-        for n in root.walk()
-        if n.credential is True or (n.role in ENTRY_ROLES and secret(entry_label(n)))
-    ]
+    """The page's credential boxes (`credential_box`): a page that holds one is a wall."""
+    return [n for n in root.walk() if credential_box(n)]
 
 
 # --- the form's frame and its anchors ----------------------------------------------------------

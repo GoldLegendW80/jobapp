@@ -529,7 +529,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
     seen: set[str] = set()
     for outcome in report.outcomes:
         item = outcome.field
-        if item.key in seen or item.credential or ats_base.secret(item.label):
+        if item.key in seen or ats_base.credential_outcome(outcome):
             continue  # a credential's box is the person's sign in, never a field
         seen.add(item.key)
         rows.append(
@@ -548,7 +548,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
         )
     for i, skipped in enumerate(report.skipped):
         key = f"skipped:{i}:{ats_base.fold(skipped.label)}"[:500]
-        if key in seen or ats_base.secret(skipped.label):
+        if key in seen or skipped.credential:
             continue
         seen.add(key)
         rows.append(
@@ -849,8 +849,8 @@ async def _type(
     item = report.outcomes[index].field
     filled = await adapter.fill(tools, item, answer)
     report.outcomes[index] = ats_base.Outcome(item, answer, filled)
-    if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
-        report.stopped, report.needs_person = "needs_person", filled.code
+    if step := ats_base.step_of(filled):
+        report.stopped, report.needs_person = "needs_person", step
         return True
     if filled.status == "failed" and filled.code in ats_base.STOPPING:
         report.stopped = filled.code

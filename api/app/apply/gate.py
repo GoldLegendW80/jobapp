@@ -221,7 +221,8 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
 
 def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
     """The form's fields, as shown, hashed, checked and refilled; never a credential's box (a
-    row of an older fill whose label is `ats_base.secret`: a fill records none)."""
+    row of an older fill of a field that takes typed text, labelled as one: a fill records none).
+    A check box, a choice, a file field or a skipped widget so labelled is a row as any other."""
     rows = db.execute(
         sa.select(ApplicationAnswer)
         .where(
@@ -230,7 +231,11 @@ def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
         )
         .order_by(ApplicationAnswer.field_key)
     ).scalars()
-    return [row for row in rows if not ats_base.secret(row.label)]
+    return [
+        row
+        for row in rows
+        if row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label)
+    ]
 
 
 def current_hash(db: Session, application: Application) -> bytes:
@@ -669,7 +674,7 @@ def set_answer(
         row is None
         or row.field_key.startswith("skipped:")
         or row.kind == "file"
-        or ats_base.secret(row.label)
+        or ats_base.typed_secret(row.kind, row.label)
     ):
         raise InvalidAnswerError("unknown_field")
     if application.state is State.needs_person and application.needs == "signin":

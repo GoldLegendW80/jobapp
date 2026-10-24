@@ -3,15 +3,18 @@
 its label alone; a page that holds one is a sign in wall, a sign in's or a sign up's, before
 anything is typed; and no such box is ever a field, an answer, a row, a log line, a Redis value
 or a job argument. The label rule as accept and refuse tables, the wall rule, then the whole
-path through `run.fill`, the api and the later hand off. browserd's own read and its refusal to
-type are tests/browser/test_credential_inputs.py and test_credential_container.py."""
+path through `run.fill`, the api and the later hand off. Only a box that takes typed text is
+one: a check box, a choice, a file field or a skipped widget so labelled is filled, approved and
+submitted as any other, and a box no row keeps always stands on a wall (browserd's refusal to
+type included). browserd's own read and its refusal to type are
+tests/browser/test_credential_inputs.py and test_credential_container.py."""
 
 import asyncio
 import json
 import logging
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -33,17 +36,20 @@ from app.apply.models import (
     Application,
     ApplicationAnswer,
     ApplicationEvent,
+    Mode,
     State,
 )
 from app.browser.handoff import Outcome
 from app.browser.later_router import router as later_router
 from app.browser.router import get_leases
 from app.identity import deps
-from tests.apply.a5_support import FakeLeases, run_ashby
+from tests.apply.a4_support import FakeForm, Spec
+from tests.apply.a5_support import FakeAgent, FakeLeases, run_ashby
+from tests.apply.a6_support import SubmitForm, submit_ashby
 from tests.apply.a8b_support import WORKABLE_PATH, ScriptedFormAgent, workable
 from tests.apply.conftest import AT
-from tests.apply.test_a5_run import application, fill, services, started
-from tests.apply.test_a6_gate import _password, api_app, stub
+from tests.apply.test_a5_run import application, fill, services, started, why_answer
+from tests.apply.test_a6_gate import _password, api_app, approve, run_submit, stub, submit_services
 from tests.apply.test_a8_generic import WORKABLE_SCRIPT, on_custom, rows_of
 from tests.identity.api_helpers import Api
 from tests.jobs.test_worker import flush_redis, redis_url
@@ -53,7 +59,7 @@ __all__ = ["api_app", "redis_url", "stub"]
 
 # --- the label rule --------------------------------------------------------------------------
 
-# A credential's label: never a field, whatever its kind (`secret`), and a wall on a text entry.
+# A credential's label (`secret`): on a box that takes typed text, never a field and a wall.
 SECRET = [
     # the re-check of round 2
     "Password:", "Create password", "Create a password", "Choose a password", "New password",
@@ -136,9 +142,13 @@ WALL_TABLE = [
     (one("textbox", "Password:", False), "signin"),  # a label is a second signal
     (one("textbox", "Password:"), "signin"),
     (one("searchbox", "New password"), "signin"),
-    (one("combobox", "Security question"), "signin"),
+    (one("combobox", "Security question"), "signin"),  # a typeahead takes typed text
+    # a native select takes none: never one, whatever its label or a read that names it
+    (shot(['- combobox "Security question" [ref=e1]:', '  - option "Your first pet"']), ""),
+    (shot(['- combobox "Pick one" [ref=e1]:', '  - option "PIN"'], {"e1": True}), ""),
     (one("textbox", "Card security code"), ""),  # the payment page's
     (one("checkbox", "Remember my password"), ""),
+    (one("checkbox", "Remember my password", True), ""),
     (one("button", "Forgot password?"), ""),
     (one("link", "Forgot your password?"), ""),
     (one("heading", "Create your password"), ""),
@@ -385,58 +395,348 @@ def test_no_model_is_asked_about_a_credential_box() -> None:
     assert [q.label for q in answer_agent.eligible(outcomes)] == ["Tell us about a project"]
 
 
-def test_a_box_browserd_reads_as_a_credential_is_never_written_whatever_its_label(db, person_a):
+def test_a_credential_box_is_never_written_and_no_other_box_is_one_whatever_its_label(db, person_a):
+    """A box that takes typed text, read or labelled as a credential or refused as one by
+    browserd at the typing, is no row; a check box, a choice, a file field or a skipped widget
+    so labelled is a row as any other."""
     found = application(db, started(db, person_a))
     left = answers.Left("not_filled", (), True)
-    boxes = [
-        base.Field("text:secret word#1", "Secret word", "text", required=True, credential=True),
+    kept = [
         base.Field("text:first name#1", "First name", "text", required=True),
+        base.Field("checkbox:remember my password#1", "Remember my password", "checkbox"),
+        base.Field("yes_no:pin code#1", "PIN code", "yes_no", options=("Yes", "No")),
+        base.Field("select:security question#1", "Security question", "select", options=("A",)),
+        base.Field("file:password protected pdf#1", "Password protected PDF", "file"),
     ]
+    dropped = [
+        base.Field("text:secret word#1", "Secret word", "text", credential=True),
+        base.Field("combobox:security question#1", "Security question", "combobox"),
+        base.Field("text:new password#1", "New password", "text"),
+    ]
+    outcomes = [base.Outcome(b, left, base.Filled("left", "not_filled")) for b in kept + dropped]
+    refused = base.Field("text:account word#1", "Account word", "text")
+    typed = answers.Answer("e2e", "answers.word")
+    outcomes.append(base.Outcome(refused, typed, base.Filled("failed", base.CREDENTIAL)))
     report = base.Report(
-        outcomes=[base.Outcome(b, left, base.Filled("left", "not_filled")) for b in boxes],
-        skipped=[base.Skipped("Choose a password", "radiogroup", "unsupported_widget")],
+        outcomes=outcomes,
+        skipped=[
+            base.Skipped("Choose a password", "radiogroup", "unsupported_widget"),
+            base.Skipped("Autofill your password", "text", "autofill", credential=True),
+            base.Skipped("", "textbox", "no_label", credential=True),
+            base.Skipped("Autofill from resume", "text", "autofill"),
+        ],
     )
-    assert [row.label for row in run._answer_rows(found, report)] == ["First name"]
+    rows = [row.label for row in run._answer_rows(found, report)]
+    assert rows == [b.label for b in kept] + ["Choose a password", "Autofill from resume"]
 
 
 class Remember:
-    """A page that is no wall, with a box named as a password's: a check box."""
+    """A page with a check box named as a password's, and, when `wall`, a password box too."""
 
-    def __init__(self) -> None:
-        self.calls: list[str] = []
+    def __init__(self, wall: bool = False) -> None:
+        self.wall, self.ticked = wall, False
+        self.calls: list[tuple[str, str]] = []
 
     async def snapshot(self) -> dict[str, Any]:
+        mark = " [checked]" if self.ticked else ""
         lines = [
-            '- checkbox "Remember my password" [ref=e1]',
+            f'- checkbox "Remember my password"{mark} [ref=e1]',
             '- textbox "First name" [ref=e2]',
             '- button "Submit application" [ref=e3]',
         ]
-        return shot(lines, {"e2": False})
+        if self.wall:
+            lines.append('- textbox "Secret word" [ref=e4]')
+        return shot(lines, {"e2": False, "e4": True})
 
-    async def check(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        self.calls.append("check")
+    async def check(self, ref: str, checked: bool = True, element: str = "") -> dict[str, Any]:
+        self.calls.append(("check", ref))
+        self.ticked = checked
+        return {"ok": True}
+
+    async def type(self, ref: str, text: str, element: str = "", submit: bool = False) -> Any:
+        self.calls.append(("type", ref))
         return {"ok": True}
 
 
-def test_no_tool_types_or_ticks_a_box_named_as_a_credential() -> None:
-    tools = Remember()
-    session = form_agent.FormSession(generic.Generic(), tools, None, str(uuid.uuid4()))  # type: ignore[arg-type]
-
-    async def scenario() -> tuple[Any, ...]:
+def test_a_check_box_named_as_a_password_is_ticked_and_nothing_is_done_on_a_wall() -> None:
+    async def scenario(tools: Remember) -> tuple[Any, ...]:
+        session = form_agent.FormSession(generic.Generic(), tools, None, str(uuid.uuid4()))  # type: ignore[arg-type]
         found, _ = await session.adapter.read(tools)
         assert found is not None
-        assert found.pending == ""
         box = next(f for f in found.fields if f.kind == "checkbox")
         filled = await base.Adapter().fill(tools, box, answers.Answer(True, "answers.remember"))
-        refused = (await session.fill_field("e1"), await session.resolve_answer("e1"))
-        return box.credential, filled, *refused
+        if not tools.wall:
+            return found.pending, box.credential, filled
+        secret = next(f for f in found.fields if f.label == "Secret word")
+        typed = await base.Adapter().fill(tools, secret, answers.Answer("e2e", "answers.word"))
+        asked = (await session.fill_field("e4"), await session.resolve_answer("e1"))
+        return found.pending, box.credential, filled, secret.credential, typed, *asked
 
-    marked, filled, typed, resolved = asyncio.run(scenario())
-    assert marked
-    assert (filled.status, filled.code) == ("left", "credential")
-    assert typed == resolved == (form_agent.CREDENTIAL, True)
-    assert session.refused["credential"] == 2
-    assert tools.calls == []
+    plain = Remember()
+    assert asyncio.run(scenario(plain)) == ("", False, base.Filled("filled"))
+    assert plain.calls == [("check", "e1")]
+    walled = Remember(wall=True)
+    pending, marked, filled, secret, typed, *asked = asyncio.run(scenario(walled))
+    assert (pending, marked, filled) == ("signin", False, base.Filled("failed", "signin"))
+    assert (secret, typed) == (True, base.Filled("failed", "signin"))
+    assert asked == [(form_agent.WALL, True)] * 2
+    assert walled.calls == []
+
+
+# --- only a box that takes typed text is a credential, and its page is always a wall -------------
+
+TYPED_SPECS = ("text", "react", "typeahead")  # the a4_support kinds that take typed text
+SPEC_KINDS = (*TYPED_SPECS, "select", "checkbox", "yesno", "file", "listbox", "buttons")
+# Labels the rule marks (a credential's, or an application's own read as one: the stated cost),
+# and plain ones.
+KIND_LABELS = (
+    "Password reset consent", "PIN code", "Password protected PDF", "Security question",
+    "Do you use a password manager?", "Have you read our Security Code of Conduct?",
+    "Are you a PWD (Person with Disability)?", "New password",
+    "Opt in to two-factor authentication", "Describe your experience with Erlang/OTP",
+    "First name", "Have you read our Code of Conduct?", "Autofill with your password",
+    "Autofill from resume",
+)  # fmt: skip
+
+
+def spec_of(label: str, kind: str, required: bool = False) -> Spec:
+    choices = ("1Password", "Bitwarden") if kind == "buttons" else ("Your pet", "Your school")
+    return Spec(label, kind, required, () if kind in ("text", "yesno", "file") else choices)
+
+
+def read_as(form: Any, reads: dict[str, bool | None]) -> Any:
+    """`form`'s snapshots carry browserd's read of every element of the fields named in `reads`
+    (left out when None), as a hostile read naming a check box or a select would."""
+    shown = form.snapshot
+
+    async def snapshot() -> dict[str, Any]:
+        got = await shown()
+        got["credentials"] = {
+            ref: read
+            for ref, (_, i, _) in form._refs.items()
+            if i >= 0 and (read := reads.get(form.fields[i].label)) is not None
+        }
+        return got
+
+    form.snapshot = snapshot
+    return form
+
+
+@pytest.mark.parametrize("kind", SPEC_KINDS)
+@pytest.mark.parametrize("read", [True, False, None])
+@pytest.mark.parametrize("label", KIND_LABELS)
+def test_a_box_no_row_keeps_is_always_on_a_wall_and_takes_typed_text(
+    kind: str, read: bool | None, label: str
+) -> None:
+    """Invariant 1: only a box that takes typed text is a credential, by browserd's read or its
+    label. Invariant 2: a box no row records always stands on a sign in wall."""
+    form = read_as(FakeForm([Spec("Full name", "text", True), spec_of(label, kind)]), {label: read})
+    page = base.parse_shot(asyncio.run(form.snapshot()))
+    found = base.discover_fields(page, frozenset({"submit application"}))
+    marked = [box.label for box in (*found.fields, *found.skipped) if box.credential]
+    assert bool(marked) == (kind in TYPED_SPECS and (read is True or base.secret(label)))
+    assert (base.Adapter().pending_at(page) == "signin") == bool(marked)
+    left = answers.Left("not_filled", (), False)
+    report = base.Report(
+        outcomes=[base.Outcome(f, left, base.Filled("left", "not_filled")) for f in found.fields],
+        skipped=found.skipped,
+    )
+    person = SimpleNamespace(id=uuid.uuid4(), user_id=uuid.uuid4())
+    kept = {row.label for row in run._answer_rows(person, report)}  # type: ignore[arg-type]
+    assert (label in kept) == (not marked)
+
+
+@pytest.mark.parametrize("read", [True, False, None])
+@pytest.mark.parametrize("role", ["textbox", "searchbox", "spinbutton", "combobox", "checkbox"])
+def test_a_box_with_no_label_is_kept_unless_browserd_reads_it_as_a_credential(
+    role: str, read: bool | None
+) -> None:
+    page = base.parse_shot(one(role, "", read))
+    found = base.discover_fields(page, frozenset())
+    credential = role != "checkbox" and read is True
+    assert [s.credential for s in found.skipped] == [credential]
+    assert (base.Adapter().pending_at(page) == "signin") == credential
+    person = SimpleNamespace(id=uuid.uuid4(), user_id=uuid.uuid4())
+    rows = run._answer_rows(person, base.Report(skipped=found.skipped))  # type: ignore[arg-type]
+    assert len(rows) == (0 if credential else 1)
+
+
+def ashby_with(spec: Spec) -> SubmitForm:
+    """A5's Ashby form with `spec` at its end, a fresh copy for each lease."""
+    form = run_ashby()
+    return SubmitForm([*form.fields, replace(spec)], submit=form.submit, title=form.title)
+
+
+# A credential looking label on a box that takes no typed text: a field, never a wall. The brief's
+# three, a native select, a skipped list box and button group, and the re-check's probes.
+WIDGETS = [
+    pytest.param(spec_of("Password reset consent", "checkbox"), id="check box"),
+    pytest.param(spec_of("PIN code", "yesno"), id="yes or no"),
+    pytest.param(spec_of("Password protected PDF", "file"), id="file"),
+    pytest.param(spec_of("Security question", "select"), id="native select"),
+    pytest.param(spec_of("Do you use a password manager?", "listbox"), id="skipped list box"),
+    pytest.param(spec_of("Which password manager do you use?", "buttons"), id="skipped buttons"),
+    pytest.param(spec_of("Have you read our Security Code of Conduct?", "checkbox"), id="conduct"),
+    pytest.param(spec_of("Are you a PWD (Person with Disability)?", "yesno"), id="PWD"),
+]
+
+
+@pytest.mark.parametrize("spec", WIDGETS)
+def test_a_widget_named_as_a_credential_is_kept_approved_refilled_and_submitted(
+    db, factory, person_a, stub, spec
+):
+    """Optional: the fill ends `ready` with its row shown, the approval passes, and the submit
+    lease reads the same form back and clicks, once: never `form_changed` at each approval."""
+    ref = started(db, person_a)
+    filled = services(factory, ashby_with(spec), None, FakeAgent(why_answer), stub_base=stub)
+    assert fill(filled, ref) == "ready"
+    assert spec.label in {row.label for row in gate.rows_of(db, application(db, ref))}
+    assert approve(factory, person_a, ref).passed
+    form = ashby_with(spec)
+    assert run_submit(submit_services(factory, form, stub), ref) == "submitted"
+    assert [c["what"] for c in form.gate_clicks] == ["submit"]
+
+
+REQUIRED = [
+    pytest.param(spec_of("Password reset consent", "checkbox", True), True, id="check box"),
+    pytest.param(spec_of("PIN code", "yesno", True), False, id="yes or no"),
+    pytest.param(spec_of("Security question", "select", True), "Your pet", id="native select"),
+    pytest.param(
+        spec_of("Have you read our Security Code of Conduct?", "checkbox", True), True, id="conduct"
+    ),
+    pytest.param(spec_of("Are you a PWD (Person with Disability)?", "yesno", True), True, id="PWD"),
+]
+
+
+@pytest.mark.parametrize(("spec", "value"), REQUIRED)
+def test_a_required_widget_named_as_a_credential_is_the_persons_question_then_submitted(
+    db, factory, person_a, stub, spec, value
+):
+    """Required and left: the item waits `required_left` with the question shown, the person's
+    answer is taken (never 422), then the approval and one click."""
+    ref = started(db, person_a)
+    filled = services(factory, ashby_with(spec), None, FakeAgent(why_answer), stub_base=stub)
+    assert fill(filled, ref) == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs) == (State.needs_person, "required_left")
+    (row,) = [row for row in gate.rows_of(db, found) if row.label == spec.label]
+    assert (row.required, row.value) == (True, None)
+    gate.set_answer(db, person_a.user_id, ref, row.field_key, value, AT)
+    db.commit()
+    assert application(db, ref).state is State.ready
+    assert approve(factory, person_a, ref).passed
+    form = ashby_with(spec)
+    assert run_submit(submit_services(factory, form, stub), ref) == "submitted"
+    assert [c["what"] for c in form.gate_clicks] == ["submit"]
+
+
+# A box that takes typed text, labelled as a credential or read as one: a wall, whether it is a
+# sign in's ("New password", read plain as type=text) or an application's own (the stated cost).
+TYPED_WALLS = [
+    pytest.param(spec_of("New password", "text"), False, id="New password read plain"),
+    pytest.param(spec_of("Describe your experience with Erlang/OTP", "text"), None, id="OTP"),
+    pytest.param(spec_of("Which password manager do you use?", "react"), None, id="react"),
+    pytest.param(spec_of("Account word", "text"), True, id="read as one"),
+]
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+@pytest.mark.parametrize(("spec", "read"), TYPED_WALLS)
+def test_a_box_that_takes_typed_text_read_or_named_as_a_credential_is_a_wall_even_optional(
+    db, factory, person_a, stub, spec, read, mode
+):
+    """Never `ready` then `form_changed`: nobody watches, so the item waits for a later sign
+    in, as a review item in Full auto, with nothing typed and no row of the box."""
+    ref = started(db, person_a, mode)
+    form = read_as(ashby_with(spec), {spec.label: read})
+    svc = services(factory, form, None, FakeAgent(why_answer), stub_base=stub)
+    assert fill(svc, ref) == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs, found.mode) == (State.needs_person, "signin", Mode.review)
+    assert [c for c in form.calls if c[0] in ACTING] == []
+    assert spec.label not in {row.label for row in gate.rows_of(db, found)}
+    assert spec.label not in {row.label for row in rows_of(db, ref).values()}
+
+
+def refusing(form: Any, label: str) -> Any:
+    """browserd's refusal to type into the box `label`: a credential input that no read before
+    the typing saw (made one since, or left unread)."""
+    form.refused = []
+    typed = form.type
+
+    async def type_(ref: str, text: str, element: str = "", submit: bool = False) -> Any:
+        target = form._target(ref)
+        if target is not None and target[0] == "input" and form.fields[target[1]].label == label:
+            form.refused.append(label)
+            return {"ok": False, "error": "credential"}
+        return await typed(ref, text, element, submit)
+
+    form.type = type_
+    return form
+
+
+def appears(spec: Spec) -> Any:
+    """`spec` shown once the fill typed its first value: a box no read before saw."""
+
+    def on_call(form: Any, n: int) -> None:
+        if form.calls[-1][0] == "type" and spec not in form.fields:
+            form.fields.append(spec)
+
+    return on_call
+
+
+@pytest.mark.parametrize("added", [True, False], ids=["added after the read", "made one since"])
+def test_a_typing_browserd_refuses_as_a_credential_is_a_wall_and_its_box_never_answerable(
+    db, factory, person_a, stub, added
+):
+    """The re-check's follow up 3: the box browserd refused at the typing is no field the person
+    answers; its page is a wall (`needs_person: signin`), never `required_left`."""
+    label = "Email address" if added else "Email"
+    form = run_ashby()
+    if added:
+        form.on_call = appears(Spec(label, "text", True))
+    refusing(form, label)
+    ref = started(db, person_a)
+    svc = services(factory, form, None, FakeAgent(why_answer), stub_base=stub)
+    assert fill(svc, ref) == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs) == (State.needs_person, "signin")
+    assert form.refused == [label]
+    rows = rows_of(db, ref)
+    assert label not in {row.label for row in rows.values()}
+    with pytest.raises(gate.InvalidAnswerError, match="unknown_field"):
+        gate.set_answer(db, person_a.user_id, ref, f"text:{base.fold(label)}#1", "e2e", AT)
+    db.rollback()
+
+
+def test_a_typing_browserd_refuses_in_the_form_agents_run_keeps_none_of_its_step(
+    db, factory, person_a, stub
+):
+    form = refusing(workable(), "Email")
+    agent = ScriptedFormAgent(WORKABLE_SCRIPT)
+    on_custom(db, person_a, stub, WORKABLE_PATH)
+    ref = started(db, person_a)
+    svc = services(factory, form, FakeLeases(), stub_base=stub, form_agent=agent)
+    assert fill(svc, ref) == "needs_person"
+    assert application(db, ref).needs == "signin"
+    assert form.refused == ["Email"]
+    assert (form_agent.REFUSED, True) in [answer[1:] for answer in agent.answers]
+    assert rows_of(db, ref) == {}  # First name was typed, but the page is a wall: none of it
+
+
+def test_a_typing_browserd_refuses_at_the_refill_is_a_wall_never_form_changed(
+    db, factory, person_a, stub
+):
+    ref = started(db, person_a)
+    svc = services(factory, run_ashby(), None, FakeAgent(why_answer), stub_base=stub)
+    assert fill(svc, ref) == "ready"
+    assert approve(factory, person_a, ref).passed
+    form = refusing(submit_ashby(), "Email")
+    assert run_submit(submit_services(factory, form, stub), ref) == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs) == (State.needs_person, "signin")
+    assert form.refused == ["Email"]
+    assert form.gate_clicks == []
 
 
 # --- the canary ----------------------------------------------------------------------------
