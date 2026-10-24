@@ -566,6 +566,7 @@ def test_adding_puts_enabled_boards_and_sources_in_the_search(
             "query": "AI engineer",
             "location": "Paris",
             "enabled": True,
+            "interactive_only": False,
             # browser B10 shape: the acceptance fields, null for a source that is not linkedin
             "accepted_at": None,
             "text_version": None,

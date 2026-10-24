@@ -22,11 +22,13 @@ The photo is not a section: storing or removing it adds no revision, but updates
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
 The LinkedIn consent (browser B10) cannot be written through a section: on the `search`
-section's `linkedin` entry, `enabled`, `accepted_at` and `text_version` keep their stored values
+section's `linkedin` entry, `enabled`, `accepted_at`, `text_version` and `interactive_only` keep
+their stored values
 (off and none when nothing is stored) on every save and import, unless the caller passes
 `linkedin_consent=True`, which only PUT /api/browser/linkedin does (it shows the sentence and
 records the person's accept). The words and the location of the entry are saved as sent, and an
-entry left out removes it, which turns LinkedIn off.
+entry left out removes it, which turns LinkedIn off, unless it is a permission-only row.
+Permission-only LinkedIn rows are retained so an ordinary save cannot clear their reader intent.
 Free-Work consent follows the same dedicated-route rule, but an omitted Free-Work entry is
 retained: generic Search saves and imports cannot remove its protected settings. Restoring it
 must still satisfy the Search rules, including the ten-source limit, before anything is written.
@@ -89,8 +91,10 @@ def _ensure(db: Session, user_id: uuid.UUID, now: datetime) -> None:
     )
 
 
-def get_profile(db: Session, user_id: uuid.UUID, now: datetime) -> Profile:
+def get_profile(db: Session, user_id: uuid.UUID, now: datetime, *, lock: bool = False) -> Profile:
     """The user's profile, created empty on first read."""
+    if lock:
+        return _locked(db, user_id, now)
     _ensure(db, user_id, now)
     profile = db.execute(
         sa.select(Profile)
@@ -116,7 +120,7 @@ def sections_view(profile: Profile) -> dict[str, dict[str, Any] | None]:
     return {name: stored.get(name) for name in SECTIONS}
 
 
-CONSENT_FIELDS = ("enabled", "accepted_at", "text_version")
+BROWSER_FIELDS = ("enabled", "accepted_at", "text_version", "interactive_only")
 LINKEDIN = "linkedin"
 PROTECTED_SOURCES = frozenset({LINKEDIN, "freework"})
 
@@ -124,7 +128,7 @@ PROTECTED_SOURCES = frozenset({LINKEDIN, "freework"})
 def _keep_consent(
     stored: dict[str, Any] | None, data: dict[str, Any], trusted: str | None = None
 ) -> dict[str, Any]:
-    """Keep each protected source's own consent; only its dedicated route may change it."""
+    """Keep protected browser fields; only each kind's dedicated route may change them."""
     consents = dict((stored or {}).get("platform_consents") or {})
     if trusted in PLATFORM_CONSENT_KINDS and trusted in data.get("platform_consents", {}):
         consents[trusted] = data["platform_consents"][trusted]
@@ -146,22 +150,26 @@ def _keep_consent(
         for s in (stored or {}).get("browser_sources") or []
         if isinstance(s, dict) and s.get("kind") in PROTECTED_SOURCES
     }
-    restored = "freework" in previous and not any(
-        isinstance(source, dict) and source.get("kind") == "freework" for source in sources
-    )
+    restored = [
+        before
+        for kind, before in previous.items()
+        if (kind == "freework" or before.get("interactive_only") is True)
+        and not any(isinstance(source, dict) and source.get("kind") == kind for source in sources)
+    ]
     if restored:
-        sources = [*sources, previous["freework"]]
+        sources = [*sources, *restored]
     kept = []
     for source in sources:
         if not isinstance(source, dict) or source.get("kind") not in PROTECTED_SOURCES - {trusted}:
             kept.append(source)
             continue
         before = previous.get(source["kind"], {})
-        consent = {key: before.get(key) for key in CONSENT_FIELDS}
-        consent["enabled"] = consent["enabled"] is True
-        if (consent["accepted_at"] is None) != (consent["text_version"] is None):
-            consent = {"enabled": False, "accepted_at": None, "text_version": None}
-        kept.append({**source, **consent})
+        browser = {key: before.get(key) for key in BROWSER_FIELDS}
+        browser["enabled"] = browser["enabled"] is True
+        browser["interactive_only"] = browser["interactive_only"] is True
+        if (browser["accepted_at"] is None) != (browser["text_version"] is None):
+            browser.update(enabled=False, accepted_at=None, text_version=None)
+        kept.append({**source, **browser})
     result = {**data, "browser_sources": kept}
     if restored:
         try:

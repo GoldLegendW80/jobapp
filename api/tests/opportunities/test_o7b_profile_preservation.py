@@ -93,6 +93,7 @@ def sources(count: int, canary: str) -> list[dict[str, Any]]:
             "query": f"{canary} {n}",
             "location": None,
             "enabled": True,
+            "interactive_only": False,
             "accepted_at": None,
             "text_version": None,
         }
