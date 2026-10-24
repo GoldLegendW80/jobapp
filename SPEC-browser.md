@@ -110,6 +110,7 @@ Every sweep lease is low priority and is the one lease that ends at once when a 
 | POST /api/browser/takeover ; POST /api/browser/giveback | switch input between the agent and the person |
 | DELETE /api/browser/profile | forget all logins (3 times a person and UTC day, then 429) |
 | POST /api/browser/handoff/done ; POST /api/browser/handoff/cancel | "I'm signed in" (restarts Chromium with CDP at the same address) and "Cancel" of a sign in hand off; the state itself (`waiting_person: signin`, the site, the minutes left) is part of `GET /api/browser` |
+| POST /api/browser/handoff/later ; POST /api/browser/handoff/later/done ; POST /api/browser/handoff/later/cancel `{module, ref}` | the later hand off of work that waits as `needs_person: signin` (its module registers it, apply's `application`): a sign in session at the address the module stores for the person's own item (404 for none, 409 while the browser holds other work, 422 for an address no longer valid, 503 without Redis or browserd); "I'm signed in" ends it and queues the work again once; "Cancel" ends it and the work keeps waiting |
 | GET and PUT /api/browser/linkedin | the LinkedIn switch of the person: off by default; turning it on records the acceptance of the sentence (date and version) |
 
 ## Frontend
