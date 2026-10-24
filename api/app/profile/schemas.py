@@ -65,6 +65,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Literal, get_args
+from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -764,13 +765,14 @@ class BrowserSource(_Section):
     """A job source read through the person's browser (browser B8, app/browser/sources): the
     words typed in the site's search box, and its location box when the site has one. B8 runs
     `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
-    finder agent), B10 `linkedin`. Off until the person turns it on.
+    finder agent), B10 `linkedin`. The `freework` entry stores O7b consent; its reader is a
+    separate slice. Off until the person turns it on.
 
-    A `linkedin` source (B10) also records the acceptance of the risk sentence: when
+    A protected source (`linkedin`, `freework`) records the risk sentence's acceptance: when
     (`accepted_at`, ISO 8601 with its offset) and which version (`text_version`), written by
-    PUT /api/browser/linkedin; the other kinds have neither."""
+    its dedicated consent route; the other kinds have neither."""
 
-    kind: Literal["google_careers", "vie", "site", "linkedin"]
+    kind: Literal["google_careers", "vie", "site", "linkedin", "freework"]
     query: Line
     location: OptLine = None
     enabled: bool = False
@@ -779,8 +781,11 @@ class BrowserSource(_Section):
 
     @model_validator(mode="after")
     def _acceptance(self) -> "BrowserSource":
-        if self.kind != "linkedin" and (self.accepted_at, self.text_version) != (None, None):
-            raise ValueError("only a linkedin source records an acceptance")
+        if self.kind not in ("linkedin", "freework") and (self.accepted_at, self.text_version) != (
+            None,
+            None,
+        ):
+            raise ValueError("only a protected browser source records an acceptance")
         if (self.accepted_at is None) != (self.text_version is None):
             raise ValueError("accepted_at and text_version go together")
         if self.accepted_at is not None:
@@ -790,6 +795,87 @@ class BrowserSource(_Section):
                 raise ValueError("accepted_at is not an ISO 8601 date and time") from None
             if when.tzinfo is None:
                 raise ValueError("accepted_at needs its offset")
+        return self
+
+
+PlatformConsentKind = Literal["indeed", "welcome_to_the_jungle"]
+PLATFORM_CONSENT_KINDS = frozenset({"indeed", "welcome_to_the_jungle"})
+
+
+class PlatformConsent(_Section):
+    """Browser-owned permission, independent of a saved interactive selection."""
+
+    enabled: bool = False
+    accepted_at: Annotated[str, Field(max_length=40)] | None = None
+    text_version: Annotated[StrictInt, Field(ge=1, le=1000)] | None = None
+
+    @model_validator(mode="after")
+    def _acceptance(self) -> "PlatformConsent":
+        if (self.accepted_at is None) != (self.text_version is None):
+            raise ValueError("accepted_at and text_version go together")
+        if self.accepted_at is not None:
+            try:
+                when = datetime.fromisoformat(self.accepted_at)
+            except ValueError:
+                raise ValueError("accepted_at is not an ISO 8601 date and time") from None
+            if when.tzinfo is None:
+                raise ValueError("accepted_at needs its offset")
+        return self
+
+
+InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
+INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
+INTERACTIVE_HOSTS = {
+    "linkedin.com": "linkedin",
+    "welcometothejungle.com": "welcome_to_the_jungle",
+    "indeed.com": "indeed",
+    "free-work.com": "freework",
+}
+
+
+class InteractiveSite(_Section):
+    """Saved intent only. Selection carries no consent or checkpoint authority."""
+
+    platform: InteractivePlatform
+    url: Text(2000)
+    enabled: bool
+    mode: Literal["llm_browser"]
+
+    @field_validator("url")
+    @classmethod
+    def _address(cls, value: str) -> str:
+        # Reuse the browser address rules without performing DNS or any network request on
+        # save. Resolution, redirects and current permission remain execution-time guards.
+        from app.browser.finder import canonical
+
+        address = canonical(value)
+        host = urlsplit(address).hostname or ""
+        if (
+            not address
+            or len(address) > 2000
+            or "." not in host
+            or host.rsplit(".", 1)[-1] in {"localhost", "local", "internal", "lan", "home", "onion"}
+        ):
+            raise ValueError("a public HTTP or HTTPS source address is required")
+        return address
+
+    @property
+    def effective_platform(self) -> str:
+        """Classify the canonical host independently of the submitted platform label."""
+        host = urlsplit(self.url).hostname or ""
+        return next(
+            (
+                platform
+                for root, platform in INTERACTIVE_HOSTS.items()
+                if host == root or host.endswith("." + root)
+            ),
+            "custom",
+        )
+
+    @model_validator(mode="after")
+    def _platform_host(self) -> "InteractiveSite":
+        if self.platform != "custom" and self.platform != self.effective_platform:
+            raise ValueError("the source address does not match its platform")
         return self
 
 
@@ -868,6 +954,13 @@ class SearchSection(_Section):
     browser_sources: Annotated[list[BrowserSource], Field(max_length=10)] = Field(
         default_factory=list
     )
+    platform_consents: Annotated[
+        dict[PlatformConsentKind, PlatformConsent], Field(max_length=2)
+    ] = Field(default_factory=dict)
+    interactive_sites: Annotated[list[InteractiveSite], Field(max_length=10)] = Field(
+        default_factory=list
+    )
+    interactive_instructions: OptText(2000, multiline=True) = None
     # When the boards are swept automatically (jobs J5 schedules it and edits it next to Find
     # jobs). Off unless the user turns it on; a section saved before this field existed reads as
     # off.
@@ -924,11 +1017,17 @@ class SearchSection(_Section):
 
     @field_validator("browser_sources")
     @classmethod
-    def _one_linkedin(cls, value: list[BrowserSource]) -> list[BrowserSource]:
-        # The LinkedIn switch is one per person (browser B10): one entry holds it.
-        if sum(source.kind == "linkedin" for source in value) > 1:
-            raise ValueError("at most one linkedin source")
+    def _one_protected_source(cls, value: list[BrowserSource]) -> list[BrowserSource]:
+        # A protected switch is one per person: one entry holds each kind's consent.
+        for kind in ("linkedin", "freework"):
+            if sum(source.kind == kind for source in value) > 1:
+                raise ValueError(f"at most one {kind} source")
         return value
+
+    @field_validator("interactive_sites")
+    @classmethod
+    def _unique_sites(cls, value: list[InteractiveSite]) -> list[InteractiveSite]:
+        return _unique(value, lambda site: site.url, "interactive source address")
 
     @field_validator("feeds")
     @classmethod
@@ -1127,7 +1226,18 @@ SectionName = Literal[
 def validate_section(section: str, data: Any) -> dict[str, Any]:
     """The stored form of `data` for this section. Raises pydantic.ValidationError."""
     model = SECTION_MODELS[section].model_validate(data)
-    return model.model_dump(mode="json")
+    return _stored_section(model)
+
+
+def _stored_section(model: BaseModel) -> dict[str, Any]:
+    data = model.model_dump(mode="json")
+    if isinstance(model, SearchSection):
+        # An older editor/import omits these keys. Preserve that distinction so the service
+        # can retain saved intent; explicit [] / null still clears it.
+        for name in INTERACTIVE_FIELDS:
+            if name not in model.model_fields_set:
+                data.pop(name)
+    return data
 
 
 # --- completeness -------------------------------------------------------------------------------
@@ -1346,7 +1456,7 @@ class ExportDocument(BaseModel):
 
     def stored_sections(self) -> dict[str, dict[str, Any]]:
         """Each section in its stored form, in SECTIONS order."""
-        return {name: getattr(self.sections, name).model_dump(mode="json") for name in SECTIONS}
+        return {name: _stored_section(getattr(self.sections, name)) for name in SECTIONS}
 
     def to_json(self) -> str:
         """The file as written: indented UTF-8 JSON, the photo key omitted when there is none."""

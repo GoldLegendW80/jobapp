@@ -666,7 +666,7 @@ class BoardFailureOut(BaseModel):
 
 
 class SourceOut(BaseModel):
-    """One browser source of the sweep (browser B8, app/browser/sources): the postings it read
+    """One selected source of the sweep: API boards, feeds and browser readers. The postings it read
     completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
     layout_changed, store_failed, lease_budget, lease_ended, time_budget, page_failed,
     browser_busy, browser_unavailable, or not_started for a source after one that stopped the
@@ -682,6 +682,30 @@ class SourceOut(BaseModel):
     new: int = 0
     skipped_by_rule: int = 0
     error: str | None = None
+    source_id: str | None = None
+    mode: str | None = None
+    host: str | None = None
+    phase: str | None = None
+    action: str | None = None
+    outcome: str | None = None
+    reason: str | None = None
+
+
+class SweepStartIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    profile_revision: Annotated[int, Field(ge=0, le=2_147_483_647)] | None = None
+
+
+class SearchScopeOut(BaseModel):
+    """Allowlisted owner projection of private intent; no instructions or source URLs."""
+
+    version: int
+    profile_revision: int
+    created_at: datetime
+    trigger: str
+    source_count: int
+    criteria: dict[str, Any]
 
 
 class SweepOut(BaseModel):
@@ -705,6 +729,7 @@ class SweepOut(BaseModel):
     skipped_by_rule: int = 0
     duration: float | None = None
     sources: list[SourceOut] = Field(default_factory=list)
+    search_scope: SearchScopeOut | None = None
 
 
 class SweepJobOut(BaseModel):
