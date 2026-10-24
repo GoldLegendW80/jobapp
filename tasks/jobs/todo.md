@@ -91,3 +91,36 @@ OWNER=<the owner's account e-mail> tests/e2e_jobs_jetson.sh view
 ```
 
 Each prints his jobs before and after, "identical before and after" and PASS, and removes its e2e accounts. Then, in his browser, signed in as himself: Jobs, Schedule, turn it on with today's weekday and a time 5 to 10 minutes ahead, save, wait for that time plus up to 5 minutes, and open Sweep history: the new sweep reads Automatic. Keep it on as the nightly run or turn it off. When all four passed: tick the box above, give J7 its done date and update the jobs row of `docs/STATUS.md`.
+
+
+## Interactive job search (#626, owner approved 2026-10-24)
+
+Contract and dependency order: [interactive search plan](../jobs/interactive-search-626.md). Tasks are tracked in GitHub; existing module tasks remain intact.
+
+### J9: save chosen websites and freeze search criteria at Start
+
+Task [#629](https://github.com/GoldLegendW80/jobapp/issues/629). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J10: run selected websites through the interactive finder
+
+Task [#630](https://github.com/GoldLegendW80/jobapp/issues/630). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J11: save verified search findings incrementally
+
+Task [#632](https://github.com/GoldLegendW80/jobapp/issues/632). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J12: cancel searches and restore persisted progress
+
+Task [#633](https://github.com/GoldLegendW80/jobapp/issues/633). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J13: choose websites and criteria from Find jobs
+
+Task [#636](https://github.com/GoldLegendW80/jobapp/issues/636). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J14: show live browsing progress and partial search results
+
+Task [#637](https://github.com/GoldLegendW80/jobapp/issues/637). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J15: verify the complete interactive search journey on fake sites
+
+Task [#638](https://github.com/GoldLegendW80/jobapp/issues/638). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.

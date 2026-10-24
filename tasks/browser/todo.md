@@ -264,3 +264,24 @@ Nothing yet.
 
 ### Checkpoint B
 Nothing yet.
+
+
+## Interactive job search (#626, owner approved 2026-10-24)
+
+Contract and dependency order: [interactive search plan](../jobs/interactive-search-626.md). Tasks are tracked in GitHub; existing module tasks remain intact.
+
+### B13: execute guarded interactive job search through the LLM runtime
+
+Task [#628](https://github.com/GoldLegendW80/jobapp/issues/628). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### B14: enforce platform consent and durable search checkpoints
+
+Task [#631](https://github.com/GoldLegendW80/jobapp/issues/631). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### B15: watched sign-in and takeover during manual search
+
+Task [#634](https://github.com/GoldLegendW80/jobapp/issues/634). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### B16: follow observed posting destinations within source scope
+
+Task [#635](https://github.com/GoldLegendW80/jobapp/issues/635). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
