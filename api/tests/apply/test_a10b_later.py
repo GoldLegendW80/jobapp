@@ -1,14 +1,16 @@
 """The later handoff routes with a real owned application, without a real sign in provider."""
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.apply import signin
 from app.apply.models import Mode, State
-from app.browser.later_router import router
+from app.browser.later_router import Reference, router
 from app.browser.leases import Lease
 from app.browser.router import get_leases
 from app.identity import deps
@@ -141,3 +143,20 @@ def test_invalid_saved_address_starts_nothing(later, db):
     db.commit()
     assert later.client.post("/api/browser/handoff/later", json=later.body).status_code == 422
     assert later.store.opened == []
+
+
+@pytest.mark.parametrize(
+    "module", ["a" * 41, "", "Application", "application.x", {"name": "application"}]
+)
+def test_later_reference_still_refuses_unregistered_module_shapes(module):
+    with pytest.raises(ValidationError):
+        Reference(module=module, ref=uuid.uuid4())
+
+
+def test_later_reference_accepts_the_full_registered_name_shape_and_uuid():
+    ref = uuid.uuid4()
+    value = Reference(module="a" * 40, ref=str(ref))
+    assert value.module == "a" * 40
+    assert value.ref == ref
+    schema = Reference.model_json_schema()
+    assert schema["properties"]["module"]["maxLength"] == 40
