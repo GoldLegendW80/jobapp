@@ -115,7 +115,7 @@ Task [#633](https://github.com/GoldLegendW80/jobapp/issues/633). Acceptance, own
 
 ### J13: choose websites and criteria from Find jobs
 
-Task [#636](https://github.com/GoldLegendW80/jobapp/issues/636). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+Task [#636](https://github.com/GoldLegendW80/jobapp/issues/636). The core setup and explicit permission follow-up [#651](https://github.com/GoldLegendW80/jobapp/issues/651) form separate reviewable slices. Acceptance, ownership transfer and verification are in the linked plan. Status: open, implementation in progress; full J13 acceptance remains pending.
 
 ### J14: show live browsing progress and partial search results
 
