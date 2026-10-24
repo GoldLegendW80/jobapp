@@ -199,6 +199,7 @@ export const BROWSER_KINDS = [
   "vie",
   "site",
   "linkedin",
+  "freework",
 ] as const;
 export interface BrowserSource {
   kind: (typeof BROWSER_KINDS)[number];
