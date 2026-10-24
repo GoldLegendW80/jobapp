@@ -358,8 +358,33 @@ def _detail(root: Any) -> tuple[str, list[str], dict[str, tuple[str, str]]]:
         "location": "location",
         "lieu": "location",
     }
+    title_heading = (primary or headings)[0] if len(primary or headings) == 1 else None
+    visible = nodes(scope, set())
+    metadata_parents = {id(child): node for node in visible for child in node.children}
+    contains_title: dict[int, bool] = {}
+    contains_heading: dict[int, bool] = {}
+    for node in reversed(visible):
+        contains_title[id(node)] = node is title_heading or any(
+            contains_title.get(id(child), False) for child in node.children
+        )
+        contains_heading[id(node)] = node.role == "heading" or any(
+            contains_heading.get(id(child), False) for child in node.children
+        )
+    section_owned: dict[int, bool] = {}
     candidates: dict[str, dict[str, tuple[str, str]]] = {}
     for node in nodes(scope, {"article", "list", "listitem"}):
+        parent = metadata_parents.get(id(node))
+        owned = section_owned.get(id(parent), True)
+        if node.role == "heading":
+            owned = node is title_heading
+            if parent is not None:
+                section_owned[id(parent)] = owned
+        # A detached headed subtree owns its fields. Flat headings also divide sibling fields.
+        section_owned[id(node)] = owned and (
+            node is scope or contains_title[id(node)] or not contains_heading[id(node)]
+        )
+        if not section_owned[id(node)]:
+            continue
         line = " ".join(node.label().split())
         if not line:
             continue
@@ -382,16 +407,51 @@ def _detail(root: Any) -> tuple[str, list[str], dict[str, tuple[str, str]]]:
     fields = {
         key: next(iter(values.values())) for key, values in candidates.items() if len(values) == 1
     }
-    # Narrative lists belong to the detail; headed lists and link-only employer cards do not.
+    # Prose can belong to a nested article or headed list. Posting metadata marks a boundary.
     has_heading: dict[int, bool] = {}
     has_narrative: dict[int, bool] = {}
+    has_metadata: dict[int, bool] = {}
+    removed_narrative = False
     for node in reversed(scope.walk()):
+        sections: list[list[Any]] = []
+        for child in node.children:
+            if id(child) not in contains_heading:
+                continue
+            if child.role == "heading":
+                sections.append([])
+            if sections:
+                sections[-1].append(child)
+        pruned_section = False
+        for section in sections:
+            if any(contains_title[id(child)] for child in section) or not any(
+                has_metadata[id(child)] for child in section
+            ):
+                continue
+            pruned_section = True
+            for child in section:
+                removed_narrative |= has_narrative[id(child)]
+                blocked.add(id(child))
+                for facts in (has_heading, has_narrative, has_metadata):
+                    facts[id(child)] = False
         has_heading[id(node)] = (
             not node.hidden
             and node.role not in excluded
             and (node.role == "heading" or any(has_heading[id(child)] for child in node.children))
         )
         label = node.label().strip()
+        name, colon, value = label.partition(":")
+        has_metadata[id(node)] = (
+            not node.hidden
+            and node.role not in excluded
+            and (
+                (
+                    node.role in {"text", "paragraph", "generic"}
+                    and bool(colon and value.strip())
+                    and _norm(name) in labels
+                )
+                or any(has_metadata[id(child)] for child in node.children)
+            )
+        )
         has_narrative[id(node)] = (
             not node.hidden
             and node.role not in excluded
@@ -405,14 +465,25 @@ def _detail(root: Any) -> tuple[str, list[str], dict[str, tuple[str, str]]]:
                 or any(has_narrative[id(child)] for child in node.children)
             )
         )
-        if node.role not in {"list", "listitem"}:
+        if node is scope or contains_title.get(id(node), False):
             continue
-        linked = any(child.role == "link" and child.url for child in node.children)
-        if has_heading[id(node)] or (
-            node.role == "listitem" and linked and not has_narrative[id(node)]
+        foreign_section = (
+            node.role in {"article", "generic", "region", "group", "list", "listitem"}
+            and has_heading[id(node)]
+            and has_metadata[id(node)]
+        )
+        if foreign_section or (
+            not has_narrative[id(node)]
+            and (pruned_section or node.role in {"article", "list", "listitem", "region", "group"})
         ):
+            removed_narrative |= has_narrative[id(node)] and id(node) in contains_heading
             blocked.add(id(node))
-    lines = [" ".join(node.label().split()) for node in nodes(scope, {"article"})]
+            has_heading[id(node)] = False
+            has_narrative[id(node)] = False
+            has_metadata[id(node)] = False
+    if removed_narrative and not has_narrative[id(scope)]:
+        return "", [], {}
+    lines = [" ".join(node.label().split()) for node in nodes(scope, set())]
     lines = [line for line in lines if line]
     return "\n".join(lines)[:TEXT_MAX], titles, fields
 

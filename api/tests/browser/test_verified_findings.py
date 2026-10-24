@@ -634,3 +634,336 @@ def test_current_observation_and_known_url_memory_have_explicit_bounds():
         assert one.refused["postings_max"] == 1
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize(
+    ("container", "nested"),
+    [
+        ("generic", False),
+        ("generic", True),
+        ('region "Examples"', False),
+        ('region "Examples"', True),
+        ('group "Examples"', False),
+        ('group "Examples"', True),
+        (None, False),
+    ],
+)
+@pytest.mark.parametrize("claimed", [False, True])
+@pytest.mark.parametrize(
+    ("label", "key", "value", "unknown", "reason"),
+    [
+        ("Employer", "company", "Example Other Systems", None, "company_not_on_page"),
+        ("Published", "published_on", "2026-10-19", None, "date_not_on_page"),
+        ("Location", "location", "Example Other City", "", "location_not_on_page"),
+    ],
+)
+def test_secondary_section_metadata_stays_with_its_own_heading(
+    article, container, nested, claimed, label, key, value, unknown, reason
+):
+    batches = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    async def scenario():
+        indent = "    " if article else "  "
+        snapshot = "- main:\n" + ("  - article:\n" if article else "")
+        snapshot += (
+            f'{indent}- heading "Robot Engineer" [level=1]'
+            f"\n{indent}- paragraph: Build the primary robot service"
+        )
+        section_indent = indent
+        if container:
+            snapshot += f"\n{section_indent}- {container}:"
+            section_indent += "  "
+        if nested:
+            snapshot += f"\n{section_indent}- generic:"
+            section_indent += "  "
+        snapshot += (
+            f'\n{section_indent}- heading "Boundary Ω" [level=2]'
+            f"\n{section_indent}- paragraph: {label}: {value}"
+        )
+        one = await observed(snapshot, commit)
+        answer, error = await one.report_verified([report(**({key: value} if claimed else {}))])
+        assert not error
+        if claimed:
+            assert json.loads(answer)["kept"] == 0
+            assert one.refused[reason] == 1
+            assert not batches
+        else:
+            assert json.loads(answer)["kept"] == 1
+            [finding] = batches[0].findings
+            assert getattr(finding, key) == unknown
+            assert key not in finding.evidence
+            assert "Build the primary robot service" in finding.text
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("label", "key", "value"),
+    [
+        ("Employer", "company", "Example Robotics"),
+        ("Published", "published_on", "2026-10-20"),
+        ("Location", "location", "Example City"),
+    ],
+)
+def test_secondary_section_metadata_keeps_primary_fields_and_h2_prose(
+    article, wrapped, label, key, value
+):
+    batches = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    async def scenario():
+        indent = "    " if article else "  "
+        snapshot = "- main:\n" + ("  - article:\n" if article else "")
+        snapshot += f'{indent}- heading "Robot Engineer" [level=1]'
+        field_indent = indent
+        if wrapped:
+            snapshot += f"\n{indent}- generic:"
+            field_indent += "  "
+        snapshot += (
+            f"\n{field_indent}- paragraph: {label}: {value}"
+            f'\n{indent}- heading "Construire les outils" [level=2]'
+            f"\n{indent}- paragraph: Maintain the primary robot service"
+        )
+        one = await observed(snapshot, commit)
+        answer, error = await one.report_verified([report(**{key: value})])
+        assert not error
+        assert json.loads(answer)["kept"] == 1
+        [finding] = batches[0].findings
+        assert getattr(finding, key) == value
+        assert finding.evidence[key] == f"{label}: {value}"
+        assert "Construire les outils" in finding.text
+        assert "Maintain the primary robot service" in finding.text
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("nested", [False, True, 'region "Owned"', 'group "Owned"'])
+@pytest.mark.parametrize("layout", ["article", "headed_list", "flat_heading"])
+@pytest.mark.parametrize(
+    "duty",
+    [
+        "Maintain the automated test service",
+        "Concevoir des outils fiables",
+        "Automatisierung verbessern",
+        "自動化を設計する",
+        "تطوير أدوات موثوقة",
+    ],
+)
+def test_narrative_scope_regression_keeps_owned_duties(article, nested, layout, duty):
+    batches = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    async def scenario():
+        indent = "    " if article else "  "
+        snapshot = "- main:\n" + ("  - article:\n" if article else "")
+        snapshot += (
+            f'{indent}- heading "Robot Engineer" [level=1]'
+            f"\n{indent}- paragraph: Employer: Example Robotics"
+        )
+        prose_indent = indent
+        if layout == "article":
+            snapshot += f"\n{indent}- article:"
+            prose_indent += "  "
+        elif layout == "headed_list":
+            snapshot += (
+                f"\n{indent}- list:\n{indent}  - listitem:"
+                f'\n{indent}    - heading "Fonctions Ω" [level=2]'
+            )
+            prose_indent += "    "
+        else:
+            snapshot += f'\n{indent}- heading "Fonctions Ω" [level=2]'
+        if nested:
+            wrapper = nested if isinstance(nested, str) else "generic"
+            snapshot += f"\n{prose_indent}- {wrapper}:"
+            prose_indent += "  "
+        snapshot += (
+            f"\n{prose_indent}- paragraph:\n{prose_indent}  - text: {duty}"
+            f'\n{prose_indent}  - link "Reference guide"'
+            f"\n{prose_indent}    - /url: https://docs.example.test/guide"
+            f"\n{prose_indent}  - text: Follow the reference while maintaining the tools"
+        )
+        one = await observed(snapshot, commit)
+        answer, error = await one.report_verified([report(company="Example Robotics")])
+        assert not error
+        assert json.loads(answer)["kept"] == 1
+        [finding] = batches[0].findings
+        expected = ["Robot Engineer", "Employer: Example Robotics"]
+        if layout != "article":
+            expected.append("Fonctions Ω")
+        if isinstance(nested, str):
+            expected.append("Owned")
+        expected.extend([duty, "Follow the reference while maintaining the tools"])
+        assert finding.text == "\n".join(expected)
+        assert "Invented model text" not in finding.text
+        assert finding.company == "Example Robotics"
+        assert finding.published_on is None
+        assert finding.evidence["company"] == "Employer: Example Robotics"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("nested", [False, True, "inside"])
+@pytest.mark.parametrize(
+    ("container", "linked"),
+    [
+        ("article", False),
+        ("generic", False),
+        ('region "Examples"', False),
+        ('group "Examples"', False),
+        ("list", False),
+        ("listitem", False),
+        ("list", True),
+        ("listitem", True),
+        ("navigation", False),
+        ("banner", False),
+        ("contentinfo", False),
+        ("complementary", False),
+        ("dialog", False),
+        ("menu", False),
+    ],
+)
+def test_narrative_scope_regression_excludes_foreign_sections(article, nested, container, linked):
+    import uuid
+
+    marker = "e2e-" + uuid.uuid4().hex
+    batches = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    async def scenario():
+        indent = "    " if article else "  "
+        snapshot = "- main:\n" + ("  - article:\n" if article else "")
+        snapshot += (
+            f'{indent}- heading "Robot Engineer" [level=1]'
+            f"\n{indent}- paragraph: Employer: Example Robotics"
+            f"\n{indent}- paragraph: Maintain the primary robot service"
+        )
+        foreign_indent = indent
+        if nested is True:
+            snapshot += f"\n{foreign_indent}- generic:"
+            foreign_indent += "  "
+        snapshot += f"\n{foreign_indent}- {container}:"
+        foreign_indent += "  "
+        if nested == "inside":
+            snapshot += f"\n{foreign_indent}- generic:"
+            foreign_indent += "  "
+        if container == "list":
+            snapshot += f"\n{foreign_indent}- listitem:"
+            foreign_indent += "  "
+        if linked:
+            snapshot += (
+                f'\n{foreign_indent}- link "Boundary Ω"\n{foreign_indent}  - /url: /jobs/another'
+            )
+        else:
+            snapshot += f'\n{foreign_indent}- heading "Boundary Ω" [level=2]'
+        snapshot += f"\n{foreign_indent}- paragraph: Employer: {marker}"
+        if not linked:
+            snapshot += f"\n{foreign_indent}- paragraph: Maintain the foreign service {marker}"
+        one = await observed(snapshot, commit)
+        answer, error = await one.report_verified([report(company="Example Robotics")])
+        assert not error
+        assert json.loads(answer)["kept"] == 1
+        [finding] = batches[0].findings
+        assert finding.text == (
+            "Robot Engineer\nEmployer: Example Robotics\nMaintain the primary robot service"
+        )
+        assert marker not in finding.text
+        assert "Boundary Ω" not in finding.text
+        assert finding.company == "Example Robotics"
+        assert finding.evidence["company"] == "Employer: Example Robotics"
+        assert finding.published_on is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("container", ["article", "generic", "list"])
+def test_narrative_scope_regression_refuses_when_only_excluded_prose_was_observed(
+    article, container
+):
+    batches = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    async def scenario():
+        indent = "    " if article else "  "
+        snapshot = "- main:\n" + ("  - article:\n" if article else "")
+        snapshot += (
+            f'{indent}- heading "Robot Engineer" [level=1]'
+            f"\n{indent}- paragraph: Employer: Example Robotics"
+            f"\n{indent}- {container}:"
+        )
+        prose_indent = indent + "  "
+        if container == "list":
+            snapshot += f"\n{prose_indent}- listitem:"
+            prose_indent += "  "
+        snapshot += (
+            f'\n{prose_indent}- heading "Fonctions Ω" [level=2]'
+            f"\n{prose_indent}- paragraph: Employer: Example Other Systems"
+            f"\n{prose_indent}- paragraph: Maintain the observed automation service"
+        )
+        one = await observed(snapshot, commit)
+        answer, error = await one.report_verified([report()])
+        assert not error
+        assert json.loads(answer)["kept"] == 0
+        assert not batches
+        assert one.verified_count == 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("primary_duties", [False, True])
+def test_narrative_scope_regression_binds_flat_sections_to_their_heading(article, primary_duties):
+    import uuid
+
+    marker = "e2e-" + uuid.uuid4().hex
+    batches = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    async def scenario():
+        indent = "    " if article else "  "
+        snapshot = "- main:\n" + ("  - article:\n" if article else "")
+        snapshot += (
+            f'{indent}- heading "Robot Engineer" [level=1]'
+            f"\n{indent}- paragraph: Employer: Example Robotics"
+        )
+        expected = "Robot Engineer\nEmployer: Example Robotics"
+        if primary_duties:
+            snapshot += f"\n{indent}- paragraph: Maintain the primary robot service"
+            expected += "\nMaintain the primary robot service"
+        snapshot += (
+            f'\n{indent}- heading "Boundary Ω" [level=2]'
+            f"\n{indent}- paragraph: Employer: {marker}"
+            f"\n{indent}- paragraph: Maintain the foreign service {marker}"
+        )
+        one = await observed(snapshot, commit)
+        answer, error = await one.report_verified([report()])
+        assert not error
+        assert json.loads(answer)["kept"] == int(primary_duties)
+        if primary_duties:
+            [finding] = batches[0].findings
+            assert finding.text == expected
+            assert marker not in finding.text
+            assert finding.company == "Example Robotics"
+        else:
+            assert not batches
+            assert one.verified_count == 0
+
+    asyncio.run(scenario())

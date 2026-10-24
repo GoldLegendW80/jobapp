@@ -25,6 +25,27 @@ document.querySelector('#search').addEventListener('click', event => {
 document.currentScript.remove();
 </script>"""
 
+DETAIL_PROSE = (
+    '<p>Build reliable tools <a href="/b13/documentation">Reference guide</a> with the guide.</p>'
+)
+DETAIL_FOREIGN = (
+    "<h2>Boundary Ω</h2><p>Employer: Other Systems</p><p>Published: 2026-10-19</p>"
+    "<p>Maintain the foreign service.</p>"
+)
+DETAIL_EMPLOYER = "<p>Employer: Example Robotics</p>"
+DETAILS = {
+    "nested-foreign": (
+        '<p>Maintain the primary service.</p><section aria-label="Other roles">'
+        f"<div>{DETAIL_FOREIGN}</div></section>"
+    ),
+    "nested-article": f"{DETAIL_EMPLOYER}<article>{DETAIL_PROSE}</article>",
+    "headed-list": f"{DETAIL_EMPLOYER}<ul><li><h2>Fonctions Ω</h2>{DETAIL_PROSE}</li></ul>",
+    "flat-owned": f"{DETAIL_EMPLOYER}<h2>Fonctions Ω</h2>{DETAIL_PROSE}",
+    "flat-foreign": f"{DETAIL_EMPLOYER}<p>Maintain the primary service.</p>{DETAIL_FOREIGN}",
+    "nested-refused": f"{DETAIL_EMPLOYER}<article>{DETAIL_FOREIGN}</article>",
+    "flat-refused": f"{DETAIL_EMPLOYER}{DETAIL_FOREIGN}",
+}
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -98,10 +119,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if READY
                 else "<main>No observed search yet</main>"
             )
+        elif path.path == "/b13/details":
+            links = "".join(f'<a href="/b13/details/{name}">{name}</a>' for name in DETAILS)
+            body = f"<main>{links}</main>"
+        elif path.path.startswith("/b13/details/"):
+            name = path.path.rsplit("/", 1)[-1]
+            body = f"<h1>Robot Engineer</h1>{DETAILS[name]}"
+            if name in {"nested-article", "headed-list", "nested-refused"}:
+                body = f"<article>{body}</article>"
+            body = f"<main>{body}</main>"
         data = body.encode()
         self.send_response(200)
         self.send_header(
-            "Content-Type", "application/json" if path.path == "/observed" else "text/html"
+            "Content-Type",
+            "application/json" if path.path == "/observed" else "text/html; charset=utf-8",
         )
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
