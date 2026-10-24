@@ -1025,6 +1025,7 @@ async def submit(services: Services, application_id: uuid.UUID) -> str:
             True,
             hosts=run._hosts(adapter, plan.form_url),
             submit_selectors=run.SUBMIT_SELECTORS,
+            application_id=str(application_id),
         )
     except (BrowserError, StoreUnavailableError) as exc:
         await waiting(

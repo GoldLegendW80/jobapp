@@ -190,7 +190,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
 
   const holdUntil =
     application?.state === "held" ? detail.data?.hold_until : undefined;
-  const submitLease = submitLeaseOf(application, holdUntil);
+  const submitLease = submitLeaseOf(application);
 
   // The state moved: read the form, the report and the posting (it may have become `applied`).
   const state = application?.state;
@@ -656,25 +656,14 @@ function canCancel(application: Application | null): boolean {
 }
 
 /**
- * This application's submit lease among the person's leases, null in a state without one. A lease
- * that started before the approval, a wait of this application or the end of its hold is another
- * application's; while `submitting`, the browser is this one's.
+ * This application's submit lease among the person's leases: the one the api names for it, as the
+ * person may have several applications approved or held; null in a state without one.
  */
-function submitLeaseOf(
-  application: Application | null,
-  holdUntil: string | null | undefined,
-): LeaseOf | null {
+function submitLeaseOf(application: Application | null): LeaseOf | null {
   if (!application || application.ats === "email") return null;
-  switch (application.state) {
-    case "approved":
-      return { startedAfter: application.updated_at };
-    case "held":
-      return holdUntil ? { startedAfter: holdUntil } : "none";
-    case "submitting":
-      return "any";
-    default:
-      return null;
-  }
+  return ["approved", "held", "submitting"].includes(application.state)
+    ? { application: application.id }
+    : null;
 }
 
 function ReviewButtons({

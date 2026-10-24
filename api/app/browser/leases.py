@@ -197,7 +197,9 @@ def lease_max_table(raw: str) -> dict[str, int]:
 @dataclass
 class Lease:
     """The holder's turn. `lease_id` is browserd's lease id once it started (`starting:<uuid>`
-    before). Times are seconds of the store's clock."""
+    before). Times are seconds of the store's clock. `application_id`: the application the call
+    that started the lease named (apply's submit lease); None otherwise, and on a lease taken back
+    from browserd after Redis lost it."""
 
     lease_id: str
     user_id: str
@@ -214,6 +216,7 @@ class Lease:
     active_before: float = 0.0  # active seconds banked before the current active stretch
     active_since: float = 0.0
     last_input: float = 0.0
+    application_id: str | None = None
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
@@ -368,12 +371,14 @@ class Leases:
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
         address: str | None = None,
+        application_id: str | None = None,
     ) -> Acquired:
         """The caller's lease, started now or already held, or its place in the queue. Raises
         BrowserError when browserd cannot start it, StoreUnavailableError without Redis.
         `hosts` and `submit_selectors` (B5) are given to browserd by the call that starts the
         lease: the hosts its tools may open, the adapter's own submit elements; `address` (B7)
-        is where a person's own session opens."""
+        is where a person's own session opens. `application_id` is written on the lease this
+        call starts, never on one it finds held."""
         if purpose not in TIERS:
             raise ValueError(purpose)
         try:
@@ -405,6 +410,7 @@ class Leases:
                 started_at=now,
                 active_since=now,
                 last_input=now,
+                application_id=application_id,
             )
             raw = turn.dumps()
             for _ in range(2):

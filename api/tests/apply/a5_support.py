@@ -104,9 +104,16 @@ class FakeLeases:
         *,
         hosts: Any = (),
         submit_selectors: Any = (),
+        application_id: str | None = None,
     ) -> Acquired:
         self.acquired.append(
-            {"user_id": user_id, "purpose": purpose, "hosts": list(hosts), "automation": automation}
+            {
+                "user_id": user_id,
+                "purpose": purpose,
+                "hosts": list(hosts),
+                "automation": automation,
+                "application_id": application_id,
+            }
         )
         if self.error is not None:
             raise self.error
