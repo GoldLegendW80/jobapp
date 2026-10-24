@@ -1087,26 +1087,12 @@ describe("the submit lease on the job page", () => {
   });
 
   it("opens no browser for an application sent by e-mail", async () => {
+    const opened = fakeScreens();
     fakeApply({ application: fakeApplication("approved", { ats: "email" }) });
-    server.use(
-      http.get("*/api/applications/:id/email", () =>
-        HttpResponse.json({
-          id: "draft",
-          status: "approved",
-          to: ["e2e-jobs@example.org"],
-          subject: "Robotics Engineer",
-          body: "Please find my application attached.",
-          send_id: null,
-          message: null,
-          issues: [],
-        }),
-      ),
-    );
     holding(APP_ID);
     const { section } = await openSection();
-    expect(
-      await within(section).findByRole("region", { name: "Application email" }),
-    ).toBeInTheDocument();
+    expect(await within(section).findByText(/Approved\./)).toBeInTheDocument();
     expect(within(section).queryByTestId("live-view-slot")).toBeNull();
+    expect(opened).toHaveLength(0);
   });
 });
