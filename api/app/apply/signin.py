@@ -82,6 +82,16 @@ class Tools:
         self.blocked = self.outcome = None
         return shot
 
+    async def screenshot(self, **kwargs: Any) -> dict[str, Any]:
+        try:
+            shot: dict[str, Any] = await self._tools.screenshot(**kwargs)
+        except (BrowserError, StoreUnavailableError):
+            if self.blocked is None:
+                raise
+            # A Cancel or the deadline released the lease: no picture, and the item still waits.
+            return {"ok": False, "error": "ended"}
+        return shot
+
 
 async def waiting(leases: Any, user: str, lease_id: str) -> bool:
     if not hasattr(leases, "current"):

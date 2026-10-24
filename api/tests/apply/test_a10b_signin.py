@@ -192,6 +192,30 @@ def test_a_fill_nobody_watches_waits_for_a_later_sign_in_without_asking(
     assert len(leases.released) == 1
 
 
+@pytest.mark.parametrize("code", ["signin_cancelled", "signin_timeout"])
+def test_a_watched_sign_in_cancelled_or_out_of_time_leaves_the_item_waiting(
+    db, factory, person_a, forms_base_url, monkeypatch, code
+):
+    """The Cancel, or the deadline, released the lease while the person watched: the fill can
+    neither read the page again nor take its picture, and the item waits for a later sign in."""
+    form = run_ashby()
+    asked = walled(form)
+
+    async def request(tools: Any, site: str, reason: str) -> Outcome:
+        asked.append(site)
+        form.crash_at = len(form.calls)  # every later call finds the lease gone
+        return Outcome(code)
+
+    form.ask_signin = request  # type: ignore[attr-defined]
+    monkeypatch.setattr(signin, "request_signin", request)
+    ref = started(db, person_a)
+    filled = fill(services(factory, form, FakeLeases(), stub_base=forms_base_url), ref)
+    assert filled == "needs_person"
+    found = application(db, ref)
+    assert (found.state, found.needs, found.error_code) == (State.needs_person, "signin", None)
+    assert len(asked) == 1
+
+
 def test_a_full_auto_fill_at_a_wall_goes_to_the_review_queue_as_needs_you(
     db, factory, person_a, forms_base_url, monkeypatch
 ):
