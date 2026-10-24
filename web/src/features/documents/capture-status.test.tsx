@@ -29,6 +29,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const RETRY = "Try the design again for My CV";
+// The api's own sentences, from api/app/documents/design_router.py.
+const RUNNING = "Another change to this document is still in progress.";
+const NOT_UPLOADED = "This CV was not converted from an uploaded file.";
+
 const capture = (
   status: Generation["status"],
   extra: Partial<Generation> = {},
@@ -87,14 +92,23 @@ describe("uploaded CV capture controls", () => {
         "aria-live",
         "polite",
       );
-      expect(
-        screen.getByRole("link", { name: "Choose a template" }),
-      ).toHaveAttribute("href", "/documents/templates?document=cv-1");
-      expect(
-        screen.getByRole("button", { name: "Try the design again" }),
-      ).toHaveAttribute(
+      const gallery = screen.getByRole("link", {
+        name: "Choose a template for My CV",
+      });
+      const retry = screen.getByRole("button", { name: RETRY });
+      expect(gallery).toHaveAttribute(
+        "href",
+        "/documents/templates?document=cv-1",
+      );
+      expect(retry).toHaveAttribute(
         "aria-disabled",
         String(status === "queued" || status === "running"),
+      );
+      // Only the sentences are announced again when they change, not the controls.
+      expect(gallery.closest('[role="status"]')).toBeNull();
+      expect(retry.closest('[role="status"]')).toBeNull();
+      expect(screen.getByRole("group", { name: "CV design" })).toContainElement(
+        retry,
       );
       expect(
         screen.queryByText(/Classic was kept|last attempt failed/i),
@@ -130,9 +144,10 @@ describe("uploaded CV capture controls", () => {
           href,
         );
       }
-      expect(
-        screen.getByRole("button", { name: "Try the design again" }),
-      ).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByRole("button", { name: RETRY })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
     },
   );
 
@@ -149,9 +164,10 @@ describe("uploaded CV capture controls", () => {
     expect(
       screen.getByText("Your CV's design has not been copied yet."),
     ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Try the design again" }),
-    ).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: RETRY })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it.each(["profile", "built"] as const)(
@@ -159,7 +175,7 @@ describe("uploaded CV capture controls", () => {
     async (source) => {
       await show(null, { source });
       expect(
-        screen.queryByRole("button", { name: "Try the design again" }),
+        screen.queryByRole("button", { name: /Try the design again/ }),
       ).toBeNull();
     },
   );
@@ -180,7 +196,7 @@ describe("uploaded CV capture controls", () => {
         return HttpResponse.json(capture("queued"), { status: 202 });
       }),
     );
-    const retry = screen.getByRole("button", { name: "Try the design again" });
+    const retry = screen.getByRole("button", { name: RETRY });
     retry.focus();
     await user.keyboard("{Enter}{Enter} ");
     await user.dblClick(retry);
@@ -197,34 +213,81 @@ describe("uploaded CV capture controls", () => {
     expect(calls).toBe(1);
   });
 
-  it("refreshes a conflict with fixed copy associated with this CV", async () => {
-    const { api, user } = await show(null);
+  it("shows the api's conflict sentence on this CV until the capture in progress ends", async () => {
+    const { api, user, client } = await show(null);
     server.use(
       http.post("*/api/documents/cv-1/design/capture", () => {
         api.cvs[0] = { ...api.cvs[0]!, design_generation: capture("running") };
-        return HttpResponse.json(
-          { detail: "synthetic-private-context" },
-          { status: 409 },
-        );
+        return HttpResponse.json({ detail: RUNNING }, { status: 409 });
       }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Try the design again" }),
-    );
+    const retry = screen.getByRole("button", { name: RETRY });
+    await user.click(retry);
+    expect(await screen.findByText(RUNNING)).toBeVisible();
+    expect(screen.getByText("Copying your CV's design.")).toBeVisible();
     expect(
-      await screen.findByText(
-        "Another change is in progress for this CV. Its latest state has been refreshed.",
-      ),
+      within(screen.getByRole("list", { name: "Your CVs" })).getByText(RUNNING),
     ).toBeVisible();
-    expect(await screen.findByText("Copying your CV's design.")).toBeVisible();
-    expect(
-      within(screen.getByRole("list", { name: "Your CVs" })).getByText(
-        /Another change/,
-      ),
-    ).toBeVisible();
-    expect(document.body.textContent).not.toContain(
-      "synthetic-private-context",
+    expect(screen.getByText(RUNNING).closest('[role="status"]')).toBe(
+      screen.getByText("Copying your CV's design.").closest('[role="status"]'),
     );
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    api.cvs[0] = { ...api.cvs[0]!, design_generation: capture("done") };
+    await client.invalidateQueries({ queryKey: ["documents", "base-cvs"] });
+    expect(
+      await screen.findByText("Your CV's design has been copied."),
+    ).toBeVisible();
+    expect(screen.queryByText(RUNNING)).toBeNull();
+    expect(retry).toHaveAttribute("aria-disabled", "false");
+  });
+
+  it("holds a retry the api refuses for good, giving the api's reason", async () => {
+    const { user, client } = await show(capture("failed"));
+    let calls = 0;
+    server.use(
+      http.post("*/api/documents/cv-1/design/capture", () => {
+        calls += 1;
+        return HttpResponse.json({ detail: NOT_UPLOADED }, { status: 422 });
+      }),
+    );
+    const item = within(
+      screen.getByRole("list", { name: "Your CVs" }),
+    ).getAllByRole("listitem")[0]!;
+    const retry = within(item).getByRole("button", { name: RETRY });
+    await user.click(retry);
+    expect(await within(item).findByText(NOT_UPLOADED)).toBeVisible();
+    expect(within(item).queryByText(/Try again/)).toBeNull();
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).toHaveAccessibleDescription(NOT_UPLOADED);
+    expect(retry).toHaveFocus();
+    await user.click(retry);
+    await user.keyboard("{Enter} ");
+    await client.invalidateQueries({ queryKey: ["documents", "base-cvs"] });
+    expect(calls).toBe(1);
+    expect(retry).toHaveFocus();
+    expect(within(item).getByText(NOT_UPLOADED)).toBeVisible();
+  });
+
+  it("drops a failed retry's sentence once the capture it described changes", async () => {
+    const { api, user, client } = await show(capture("failed"));
+    server.use(
+      http.post("*/api/documents/cv-1/design/capture", () =>
+        HttpResponse.json({ detail: "synthetic-error" }, { status: 503 }),
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: RETRY }));
+    expect(
+      await screen.findByText("The design could not be started. Try again."),
+    ).toBeVisible();
+    api.cvs[0] = {
+      ...api.cvs[0]!,
+      design_generation: capture("queued", { id: "next" }),
+    };
+    await client.invalidateQueries({ queryKey: ["documents", "base-cvs"] });
+    expect(
+      await screen.findByText("Waiting to copy your CV's design."),
+    ).toBeVisible();
+    expect(screen.queryByText(/could not be started/)).toBeNull();
   });
 
   it("shows a missing original returned by retry without retrying it automatically", async () => {
@@ -238,9 +301,7 @@ describe("uploaded CV capture controls", () => {
         return HttpResponse.json(gone, { status: 202 });
       }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Try the design again" }),
-    );
+    await user.click(screen.getByRole("button", { name: RETRY }));
     expect(
       await screen.findByText(
         "Upload your original CV again to copy its design.",
@@ -272,9 +333,17 @@ describe("uploaded CV capture controls", () => {
     const rows = within(
       screen.getByRole("list", { name: "Your CVs" }),
     ).getAllByRole("listitem");
-    await user.click(
-      within(rows[0]!).getByRole("button", { name: "Try the design again" }),
-    );
+    expect(
+      within(rows[1]!).getByRole("button", {
+        name: "Try the design again for Other CV",
+      }),
+    ).toBeVisible();
+    expect(
+      within(rows[1]!).getByRole("link", {
+        name: "Choose a template for Other CV",
+      }),
+    ).toBeVisible();
+    await user.click(within(rows[0]!).getByRole("button", { name: RETRY }));
     expect(
       await within(rows[0]!).findByText(
         "The design could not be started. Try again.",
@@ -460,14 +529,16 @@ describe("capture completion across CV navigation", () => {
     await user.click(screen.getByRole("link", { name: "All my CVs" }));
     await user.click(await screen.findByRole("link", { name: "My CV" }));
     expect(await screen.findByText("Copying your CV's design.")).toBeVisible();
+    const gets = (path: string) =>
+      api.requests.filter((one) => one.method === "GET" && one.path === path)
+        .length;
+    const polls = gets("/api/documents/base-cvs");
     await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    // The list polls the capture; the opened document is read again only once it ends.
     await waitFor(() => {
-      expect(
-        api.requests.filter(
-          (one) => one.method === "GET" && one.path === "/api/documents/cv-1",
-        ).length,
-      ).toBe(2);
+      expect(gets("/api/documents/base-cvs")).toBe(polls + 1);
     });
+    expect(gets("/api/documents/cv-1")).toBe(1);
     const cv = {
       ...api.cvs[0]!,
       template_slug: "upload-new",
