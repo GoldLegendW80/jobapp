@@ -108,6 +108,7 @@ NOT_STARTED = (GenerationStatus.waiting, GenerationStatus.queued)
 # settled once it finished this long ago: over runner.FINAL_HOOK_TIMEOUT_S (30 s), so a hook that
 # is merely late still settles its own result.
 COUNTED_MODES = (GenerationMode.posting, GenerationMode.base_profile)
+RECOVERY_MODES = (*COUNTED_MODES, GenerationMode.base_upload, GenerationMode.template_capture)
 HOOK_GRACE_S = 120
 
 
@@ -281,8 +282,9 @@ class Outcome:
 def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
     """Step 0 of the module docstring: each running generation whose run is final and finished
     over HOOK_GRACE_S ago gets the run's outcome, as `generate.settle` would have given it:
-    `failed` with `token_limit` or `run_failed` (the bounded retry then applies), `cancelled`
-    for a run cancelled while queued (a stop, never retried). Returns how many."""
+    `failed` with `token_limit` or `run_failed`, `cancelled` for a run cancelled while queued.
+    Capture and upload recovery does not add them to daily accounting or automatic retry.
+    Returns how many."""
     ended = sa.func.coalesce(AgentRun.finished_at, AgentRun.created_at)
     rows = db.execute(
         sa.select(DocumentGeneration.id, DocumentGeneration.document_id)
@@ -296,7 +298,7 @@ def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
         .where(
             DocumentGeneration.user_id == user_id,
             DocumentGeneration.status == GenerationStatus.running,
-            DocumentGeneration.mode.in_(COUNTED_MODES),
+            DocumentGeneration.mode.in_(RECOVERY_MODES),
             AgentRun.status.in_(FINAL_STATUSES),
             ended < at - timedelta(seconds=HOOK_GRACE_S),
         )
