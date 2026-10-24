@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
+import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -36,8 +37,10 @@ import {
   type InteractiveSite,
   type BrowserSource,
   type Profile,
+  type Search,
 } from "@/features/profile/api";
 import {
+  BROWSER_SOURCES_MAX,
   fromSearchForm,
   searchSchema,
   toSearchForm,
@@ -45,7 +48,7 @@ import {
 } from "@/features/profile/editor-forms";
 import { TargetFields } from "@/features/profile/target-fields";
 import { TermChips } from "@/features/profile/term-chips";
-import { describeError, isApiError } from "@/lib/api";
+import { describeError, isApiError, request } from "@/lib/api";
 import type { SweepRunner } from "./use-sweep-runner";
 
 const PRESETS = [
@@ -62,6 +65,54 @@ const PRESETS = [
     url: "https://www.free-work.com/",
   },
 ] as const;
+
+const PERMISSION_PRESETS = PRESETS.filter(
+  (preset) =>
+    preset.platform === "indeed" || preset.platform === "welcome_to_the_jungle",
+);
+
+function ordinarySearch(search: Search) {
+  const { browser_sources: sources = [], ...settings } = fromSearchForm(
+    toSearchForm(search),
+  );
+  const protectedKinds = ["linkedin", "freework"];
+  return {
+    ...settings,
+    browser_sources: sources.filter(
+      (source) => !protectedKinds.includes(source.kind),
+    ),
+    legacy_readers: sources
+      .filter(
+        (source) =>
+          protectedKinds.includes(source.kind) &&
+          !search.browser_sources?.some(
+            (row) => row.kind === source.kind && row.interactive_only === true,
+          ),
+      )
+      .map(({ kind, query, location }) => ({ kind, query, location }))
+      .sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0)),
+    interactive_sites: search.interactive_sites ?? [],
+    interactive_instructions: search.interactive_instructions ?? "",
+  };
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stable(record[key])}`)
+      .join(",")}}`;
+  }
+  if (
+    value === undefined ||
+    typeof value === "function" ||
+    typeof value === "symbol"
+  )
+    return "null";
+  return JSON.stringify(value);
+}
 
 export function SearchSetup({
   runner,
@@ -157,15 +208,34 @@ function SetupForm({
   );
   const [custom, setCustom] = useState("");
   const [revision, setRevision] = useState(profile.revision);
+  const [reviewed, setReviewed] = useState(() =>
+    structuredClone(profile.sections.search),
+  );
   const [saving, setSaving] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [permissionBusy, setPermissionBusy] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busy = useRef(false);
+  const mounted = useRef(true);
+  const isMounted = () => mounted.current;
   useEffect(() => {
-    onBusyChange(saving);
-  }, [saving, onBusyChange]);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const isCurrent = (current: Profile) =>
+    current.revision >=
+    Math.max(
+      revision,
+      client.getQueryData<Profile>(profileKey)?.revision ?? revision,
+    );
+  useEffect(() => {
+    onBusyChange(saving || permissionBusy);
+  }, [saving, permissionBusy, onBusyChange]);
   const submit = async (values: SearchForm) => {
-    if (busy.current || conflict) return;
+    if (busy.current || conflict || permissionBusy) return;
     const settings = interactiveSettingsSchema.safeParse({
       interactive_sites: sites,
       interactive_instructions: instructions,
@@ -189,7 +259,11 @@ function SetupForm({
         ...fromSearchForm(values),
         ...settings.data,
       });
+      if (!isMounted()) return;
+      if (!isCurrent(saved))
+        throw new Error("A newer profile was loaded. Review current settings.");
       setRevision(saved.revision);
+      setReviewed(structuredClone(saved.sections.search));
       client.setQueryData(profileKey, saved);
       await runner.start(saved.revision);
       onClose();
@@ -230,6 +304,47 @@ function SetupForm({
     setCustom("");
     setError(null);
   };
+  const permissionChanged = async () => {
+    if (!isMounted()) return false;
+    const current = await getProfile();
+    if (!isMounted()) return false;
+    if (!isCurrent(current))
+      throw new Error("A newer profile was loaded. Review current settings.");
+    if (
+      stable(ordinarySearch(current.sections.search)) !==
+      stable(ordinarySearch(reviewed))
+    ) {
+      setConflict(true);
+      setError(
+        "Your search settings changed in another tab while browser permission was saved. Your draft is still here. Load current settings and review them before starting.",
+      );
+      client.setQueryData(profileKey, current);
+      return false;
+    }
+    // Browser-owned rows may have been added by the permission endpoint. Retain the draft's
+    // other sources and criteria while carrying those authoritative rows into this save.
+    const ordinary = form
+      .getValues("browser_sources")
+      .filter((source) => !["linkedin", "freework"].includes(source.kind));
+    const protectedRows = toSearchForm(
+      current.sections.search,
+    ).browser_sources.filter((source) =>
+      ["linkedin", "freework"].includes(source.kind),
+    );
+    const merged = [...ordinary, ...protectedRows];
+    form.setValue("browser_sources", merged);
+    client.setQueryData(profileKey, current);
+    if (merged.length > BROWSER_SOURCES_MAX) {
+      setConflict(true);
+      setError(
+        `Your saved permission and draft exceed the limit of ${BROWSER_SOURCES_MAX} sources. Your draft is still here. Review your sources before starting.`,
+      );
+      return false;
+    }
+    setRevision(current.revision);
+    setReviewed(structuredClone(current.sections.search));
+    return true;
+  };
   return (
     <Form {...form}>
       <form
@@ -255,8 +370,8 @@ function SetupForm({
           </div>
         ) : null}
         <fieldset
-          disabled={saving}
-          aria-busy={saving}
+          disabled={saving || permissionBusy}
+          aria-busy={saving || permissionBusy}
           className="min-w-0 space-y-6"
         >
           <section className="space-y-3" aria-labelledby={`${id}-sites`}>
@@ -365,6 +480,49 @@ function SetupForm({
               </ul>
             ) : null}
           </section>
+          <section aria-label="Website permissions" className="space-y-3">
+            <h3 className="font-medium">Website permissions</h3>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setPermissionsOpen((open) => !open);
+              }}
+              aria-expanded={permissionsOpen}
+            >
+              Review website permissions
+            </Button>
+            {permissionsOpen
+              ? PERMISSION_PRESETS.map((preset) => (
+                  <PermissionCard
+                    key={preset.platform}
+                    platform={preset.platform}
+                    label={preset.label}
+                    revision={revision}
+                    blocked={conflict}
+                    onChanged={permissionChanged}
+                    onBusyChange={(pending) => {
+                      if (pending && busy.current) return false;
+                      busy.current = pending;
+                      setPermissionBusy(pending);
+                      return true;
+                    }}
+                    onUnconfirmed={(failure) => {
+                      setConflict(true);
+                      setError(
+                        `Browser permission was not confirmed. Your draft is still here. Load current settings and review them before starting. ${describeError(failure)}`,
+                      );
+                    }}
+                    onStale={() => {
+                      setConflict(true);
+                      setError(
+                        "The browser permission changed. Load current settings and review the current risk text before starting.",
+                      );
+                    }}
+                  />
+                ))
+              : null}
+          </section>
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
             <TermChips
@@ -409,13 +567,188 @@ function SetupForm({
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={conflict || saving}>
+            <Button
+              type="submit"
+              disabled={conflict || saving || permissionBusy}
+            >
               {saving ? "Saving and starting…" : "Save and Start"}
             </Button>
           </DialogFooter>
         </fieldset>
       </form>
     </Form>
+  );
+}
+
+const permissionSchema = z.object({
+  enabled: z.boolean(),
+  accepted: z.boolean(),
+  allowed: z.boolean(),
+  text: z.string().max(20000),
+  text_version: z.number().int().positive(),
+});
+
+function PermissionCard({
+  platform,
+  label,
+  revision,
+  blocked,
+  onChanged,
+  onBusyChange,
+  onUnconfirmed,
+  onStale,
+}: {
+  platform: (typeof PERMISSION_PRESETS)[number]["platform"];
+  label: string;
+  revision: number;
+  blocked: boolean;
+  onChanged: () => Promise<boolean>;
+  onBusyChange: (busy: boolean) => boolean;
+  onUnconfirmed: (failure: unknown) => void;
+  onStale: () => void;
+}) {
+  const client = useQueryClient();
+  const path = `/opportunities/platforms/${platform}`;
+  const key = ["search-permission", platform];
+  const state = useQuery({
+    queryKey: key,
+    queryFn: ({ signal }) =>
+      request(path, {
+        signal,
+        validate: (value) => permissionSchema.parse(value),
+      }),
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const [acceptedVersion, setAcceptedVersion] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const mounted = useRef(true);
+  const isMounted = () => mounted.current;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const change = async (enabled: boolean) => {
+    if (!state.data || state.isFetching || stale || blocked) return;
+    if (!onBusyChange(true)) return;
+    setError(null);
+    let committed = false;
+    try {
+      await request(path, {
+        method: "PUT",
+        body: enabled
+          ? {
+              enabled: true,
+              base_revision: revision,
+              accept_version: state.data.text_version,
+            }
+          : { enabled: false, base_revision: revision },
+        validate: (value) => permissionSchema.parse(value),
+      });
+      committed = true;
+      if (!isMounted()) return;
+      if (!(await onChanged())) return;
+      const data = await request(path, {
+        validate: (value) => permissionSchema.parse(value),
+      });
+      if (!isMounted()) return;
+      client.setQueryData(key, data);
+      setAcceptedVersion(null);
+    } catch (failure) {
+      if (!isMounted()) return;
+      if (isApiError(failure) && failure.status === 409) {
+        setStale(true);
+        onStale();
+        return;
+      }
+      if (
+        committed ||
+        !isApiError(failure) ||
+        failure.kind !== "http" ||
+        (failure.status ?? 500) >= 500
+      ) {
+        setStale(true);
+        onUnconfirmed(failure);
+        return;
+      }
+      setError(
+        `Browser permission was not confirmed. ${describeError(failure)}`,
+      );
+    } finally {
+      onBusyChange(false);
+    }
+  };
+  return (
+    <section
+      aria-label={`${label} browser permission`}
+      className="space-y-2 rounded-md border p-3 text-sm"
+    >
+      <h4 className="font-medium">{label} browser permission</h4>
+      {state.isPending ? (
+        <p role="status">Loading permission…</p>
+      ) : state.isError ? (
+        <p role="alert">
+          Permission could not be loaded. Browsing remains subject to the server
+          permission check.
+        </p>
+      ) : (
+        <>
+          <p>{state.data.text}</p>
+          <p role="status">
+            {state.data.allowed
+              ? "Browsing allowed"
+              : "Browsing is currently blocked. Review permission or site access."}
+          </p>
+          {state.data.enabled ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-auto max-w-full whitespace-normal"
+              disabled={blocked || stale || state.isFetching}
+              onClick={() => void change(false)}
+            >
+              Disable {label} browsing
+            </Button>
+          ) : null}
+          {!state.data.allowed ? (
+            <>
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-1 size-4 accent-primary"
+                  checked={acceptedVersion === state.data.text_version}
+                  onChange={(event) => {
+                    setAcceptedVersion(
+                      event.target.checked ? state.data.text_version : null,
+                    );
+                  }}
+                />
+                I accept the {label} risk above
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-auto max-w-full whitespace-normal"
+                disabled={
+                  acceptedVersion !== state.data.text_version ||
+                  stale ||
+                  blocked ||
+                  state.isFetching
+                }
+                onClick={() => void change(true)}
+              >
+                Enable {label} browsing
+              </Button>
+            </>
+          ) : null}
+        </>
+      )}
+      {error ? <p role="alert">{error}</p> : null}
+    </section>
   );
 }
 
