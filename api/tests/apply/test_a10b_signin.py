@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from app.apply import signin
+from app.apply import run, signin
 from app.apply.models import Mode, State
 from app.browser.handoff import Outcome
 from tests.apply.a5_support import FakeLeases, run_ashby
@@ -151,3 +151,50 @@ async def test_wait_survival_uses_the_exact_owned_lease():
 
     assert await signin.waiting(Leases(), str(uuid.uuid4()), "mine")
     assert not await signin.waiting(Leases(), str(uuid.uuid4()), "other")
+
+
+def test_a_cancelled_fill_keeps_the_person_signing_in_and_binds_the_later_callback(
+    db, factory, person_a, forms_base_url, monkeypatch
+):
+    import json
+
+    ref = started(db, person_a)
+    leases = FakeLeases()
+    state = {"waiting": False}
+    saved = {}
+    leases.session_max_s = 1800
+
+    class Redis:
+        async def set(self, key, value, **kwargs):
+            saved[key] = json.loads(value)
+
+    async def pool():
+        return Redis()
+
+    async def current(user):
+        return SimpleNamespace(
+            lease=SimpleNamespace(
+                lease_id="lease-1",
+                state="waiting_person" if state["waiting"] else "active",
+            )
+        )
+
+    async def interrupted(*args):
+        state["waiting"] = True
+        raise asyncio.CancelledError
+
+    leases.current, leases._pool = current, pool
+    monkeypatch.setattr(run, "_drive", interrupted)
+    with pytest.raises(asyncio.CancelledError):
+        fill(services(factory, run_ashby(), leases=leases, stub_base=forms_base_url), ref)
+    app = application(db, ref)
+    assert (app.state, app.needs) == (State.needs_person, "signin")
+    assert leases.released == []
+    assert list(saved.values()) == [
+        {
+            "module": "application",
+            "ref": str(ref),
+            "lease": "lease-1",
+            "kind": "handoff",
+        }
+    ]

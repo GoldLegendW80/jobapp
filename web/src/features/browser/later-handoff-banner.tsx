@@ -71,7 +71,7 @@ export function LaterHandoffBanner({
   return (
     <section
       aria-label={`Sign in to ${host}`}
-      className="flex flex-col gap-3 rounded-md border border-amber-500/60 p-3"
+      className="flex min-w-0 flex-col gap-3 rounded-md border border-amber-500/60 p-3 [overflow-wrap:anywhere]"
     >
       <p className="font-medium">Needs you: sign in to {host}</p>
       <p className="text-sm">

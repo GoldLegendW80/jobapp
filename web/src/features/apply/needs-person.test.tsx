@@ -12,6 +12,7 @@ import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
 import { NeedsPerson, NeedsYouDot } from "./needs-person";
+import { LiveViewSlot } from "./live-view-slot";
 import type { ApplicationEvent } from "./apply-api";
 import {
   PAYMENT_SENTENCE,
@@ -44,7 +45,7 @@ const WAITING: ApplicationEvent = {
 };
 
 /** The person's browser held by an automation lease of `purpose`, started at `startedAt`. */
-function leaseOf(purpose: string, startedAt = LEASE_START) {
+function leaseOf(purpose: string, startedAt = LEASE_START, signingIn = false) {
   server.use(
     http.get("*/api/browser", () =>
       HttpResponse.json({
@@ -54,9 +55,10 @@ function leaseOf(purpose: string, startedAt = LEASE_START) {
           id: "7b2e3d4c-5f60-4b7c-8d9e-0f1a2b3c4d5e",
           purpose,
           automation: true,
-          state: "active",
-          wait_reason: null,
-          wait_host: null,
+          state: signingIn ? "waiting_person" : "active",
+          wait_reason: signingIn ? "signin" : null,
+          wait_host: signingIn ? "jobs.example.org" : null,
+          wait_minutes_left: signingIn ? 30 : null,
           wait_deadline: null,
           started_at: startedAt,
           active_s: 30,
@@ -135,6 +137,18 @@ describe("what the application needs", () => {
 });
 
 describe("the job page", () => {
+  it("has one person-controlled live view during a sign in handoff", async () => {
+    const opened = fakeScreens();
+    leaseOf("apply_fill", LEASE_START, true);
+    renderWithQuery(<LiveViewSlot idle="Filling" leaseOf="any" />);
+    await screen.findByRole("region", { name: "Sign in to jobs.example.org" });
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(screen.getAllByTestId("live-screen")).toHaveLength(1);
+  });
+
   it("says a captcha needs the person and opens the live view of the assistant's lease", async () => {
     const opened = fakeScreens();
     leaseOf("apply_fill");

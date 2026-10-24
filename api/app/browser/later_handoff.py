@@ -6,7 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
+
+from app.browser.leases import StoreUnavailableError
 
 PREFIX = "jobapp:browser:later:"
 
@@ -24,12 +27,15 @@ HANDLERS: dict[str, Handler] = {}
 
 async def bind_wait(store, user: str, module: str, ref: uuid.UUID, lease_id: str) -> None:
     """Retain a wait whose worker ended; a later route may finish only this exact work."""
-    redis = await store._pool()
-    await redis.set(
-        PREFIX + user,
-        json.dumps({"module": module, "ref": str(ref), "lease": lease_id, "kind": "handoff"}),
-        ex=store.session_max_s + 60,
-    )
+    try:
+        redis = await store._pool()
+        await redis.set(
+            PREFIX + user,
+            json.dumps({"module": module, "ref": str(ref), "lease": lease_id, "kind": "handoff"}),
+            ex=store.session_max_s + 60,
+        )
+    except RedisError as exc:
+        raise StoreUnavailableError from exc
 
 
 def register(
