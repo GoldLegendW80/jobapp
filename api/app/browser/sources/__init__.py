@@ -67,7 +67,7 @@ from redis.exceptions import RedisError
 
 from app.browser.client import BrowserError
 from app.browser.leases import Leases, StoreUnavailableError
-from app.jobs import ats
+from app.jobs import ats, sweep
 from app.profile.schemas import BrowserSource
 
 logger = logging.getLogger("app.browser.sources")
@@ -551,8 +551,11 @@ class Runner:
                 "postings": 0,
                 "error": None if stop is None else NOT_STARTED,
             }
-            stats.sources.append(entry)
+            entry = sweep.bind_source(
+                stats, "legacy_browser", (source.kind, source.query, source.location or ""), entry
+            )
             if stop is not None:
+                sweep.finish_source(entry)
                 continue
             stats.current_board = source_name(source)
             await progress()
@@ -561,6 +564,7 @@ class Runner:
             )
             if ended in STOPS_SWEEP:
                 stop = ended
+            sweep.finish_source(entry)
             await progress()
 
     async def _one(
