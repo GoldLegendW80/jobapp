@@ -1,6 +1,8 @@
 """What every tool of B5 does to a page before and around its action, in one place:
 
 - `snapshot_for_ai`, the ONE call of Playwright's private AI snapshot (refs `[ref=eN]`);
+- `native_files`, the names in each native file input among a snapshot's buttons, which the AI
+  snapshot does not show;
 - `front`, the tab the tool acts on brought to the front (B1: Chromium throttles background
   tabs, a 0.9 s fill took 5.9 s in a background tab);
 - `navigate`, a navigation with its own timeout that answers a failure result instead of hanging
@@ -8,6 +10,8 @@
 """
 
 import contextlib
+import json
+import re
 from typing import Any
 
 from browserd.config import NAVIGATION_S
@@ -16,6 +20,21 @@ from browserd.config import NAVIGATION_S
 PLAYWRIGHT_VERSION = "1.55.0"
 SNAPSHOT_METHOD = "snapshotForAI"
 REF_MARKER = "[ref=e"
+# api/app/apply/ats/base.py's _LINE: the ref is in the attributes before the colon, never after.
+BUTTON_LINE = re.compile(r'button(?: "(?:[^"\\]|\\.)*")?(?P<attrs>(?: \[[^\]]*\])*)(?::(?: .*)?)?')
+ATTR = re.compile(r"\[([^\]=]+)(?:=([^\]]*))?\]")
+REF = re.compile(r"(?:f\d{1,4})?e\d{1,7}")
+# A read costs about 2.6 ms per ref in the image on a Mac: the refs past it read [] unread.
+NATIVE_REFS_MAX = 200
+NAMES_MAX, NAME_MAX = 3, 83
+NATIVE_FILES_JS = """e => {
+  if (!e.isConnected) return [];
+  if (!(e instanceof HTMLInputElement) || e.type !== 'file') return null;
+  const files = e.files;
+  if (!files || files.length > 3) return [];
+  const names = Array.from(files, file => file.name);
+  return names.every(name => name.length <= 83) ? names : [];
+}"""
 
 
 class SnapshotUnavailable(RuntimeError):  # noqa: N818 - an outcome, not an error
@@ -45,6 +64,56 @@ async def snapshot_for_ai(page: Any) -> str:
     if REF_MARKER not in text:
         raise SnapshotUnavailable(f"{SNAPSHOT_METHOD} answered without any {REF_MARKER}N] ref")
     return text
+
+
+def button_refs(snapshot: str) -> list[str]:
+    """The refs of the snapshot's button lines in page order, each read where base.py's
+    parse_snapshot reads it, so the page's text after a colon never names one."""
+    refs: dict[str, None] = {}
+    for line in snapshot.splitlines():
+        stripped = line.lstrip(" ")
+        found = BUTTON_LINE.fullmatch(stripped[2:].rstrip()) if stripped.startswith("- ") else None
+        ref = dict(ATTR.findall(found["attrs"])).get("ref", "") if found else ""
+        if REF.fullmatch(ref):
+            refs[ref] = None
+    return list(refs)
+
+
+async def _names(page: Any, ref: str) -> list[str] | None:
+    """The names in the native file input at ref, None for any other element, and [] for a ref
+    that no longer resolves or an answer that is not a short list of short names. One call,
+    which never waits for the element: a ref gone since the snapshot raises at once."""
+    try:
+        # Not evaluate_all: it resolves refs in the main world, which lacks snapshotForAI's cache.
+        names = await page.eval_on_selector(f"aria-ref={ref}", NATIVE_FILES_JS)
+    except Exception:
+        return []
+    if names is None:
+        return None
+    if not isinstance(names, list) or len(names) > NAMES_MAX:
+        return []
+    return names if all(isinstance(n, str) and len(n) <= NAME_MAX for n in names) else []
+
+
+async def native_files(page: Any, snapshot: str) -> dict[str, list[str]]:
+    """Current native FileLists at this snapshot's button refs. Empty selections are explicit,
+    so a stale filename echoed by the page cannot hide a cleared or replaced input; a ref this
+    read cannot hold (gone since the snapshot, past NATIVE_REFS_MAX, or past the names' budget
+    of SNAPSHOT_MAX characters) reads [] too, as holding no file, and never fails the snapshot.
+    Chooser buttons are not native inputs: no entry, they keep their visible readback path."""
+    from browserd.tools.policy import SNAPSHOT_MAX
+
+    selected: dict[str, list[str]] = {}
+    size = 2
+    for index, ref in enumerate(button_refs(snapshot)):
+        names = await _names(page, ref) if index < NATIVE_REFS_MAX else []
+        if names is None:
+            continue
+        cost = len(json.dumps({ref: names}, ensure_ascii=True)) if names else 0
+        if size + cost > SNAPSHOT_MAX:
+            names, cost = [], 0
+        selected[ref], size = names, size + cost
+    return selected
 
 
 async def front(page: Any) -> Any:
