@@ -138,6 +138,7 @@ class LeaseStore(Protocol):
         *,
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
+        application_id: str | None = None,
     ) -> Any: ...
 
     async def release(

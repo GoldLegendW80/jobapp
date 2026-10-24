@@ -18,13 +18,12 @@ const FILL_PURPOSES = new Set(["apply_fill", "full_auto"]);
 const SUBMIT_PURPOSES = new Set(["apply_submit"]);
 
 /**
- * Which of the person's leases is this application's: `any` lease of the slot's purposes (a
- * person has one lease at a time), one that started by `startedBy` (a later one is the fill of
- * another posting), one that started at or after `startedAfter` (an earlier one is another
- * application's), or `none`.
+ * Which of the person's leases is this application's: `any` fill lease (the application fills,
+ * and a person has one fill at a time), one that started by `startedBy` (a later one is the fill
+ * of another posting), the one the api names for `application` (the submit lease), or `none`.
  */
 export type LeaseOf =
-  "any" | "none" | { startedBy: string } | { startedAfter: string };
+  "any" | "none" | { startedBy: string } | { application: string };
 
 /** The lease of this application, the one the live view shows; null otherwise. */
 function applicationLease(
@@ -37,11 +36,12 @@ function applicationLease(
     return null;
   if (!purposes.has(lease.purpose)) return null;
   if (of === "any") return lease;
-  // The lease store's started_at against the application's times: right only on one host clock.
+  if ("application" in of)
+    return lease.application_id === of.application ? lease : null;
+  // browserd's started_at against the api's waiting_person time: right only while both share the host clock.
   const started = Date.parse(lease.started_at);
-  if ("startedAfter" in of)
-    return started >= Date.parse(of.startedAfter) ? lease : null;
-  return started <= Date.parse(of.startedBy) ? lease : null;
+  const by = Date.parse(of.startedBy);
+  return started <= by ? lease : null;
 }
 
 const signingIn = (lease: ReturnType<typeof applicationLease>) =>

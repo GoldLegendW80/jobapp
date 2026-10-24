@@ -8,6 +8,7 @@ import { browserQueryKey } from "@/features/browser/browser-api";
 import { server } from "@/test/server";
 import { fakeSession, member } from "@/test/auth";
 import {
+  APP_ID,
   fakeAnswer,
   fakeApplication,
   fakeApply,
@@ -912,12 +913,13 @@ describe("the submit lease on the job page", () => {
     "A rehearsal: the assistant fills the form again with your approved answers, then stops without submitting it.";
   const WAITS =
     "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn.";
-  // fakeApplication's updated_at is 2026-10-15T08:01:12Z: the approval.
-  const AFTER = "2026-10-15T08:02:00Z";
-  const BEFORE = "2026-10-15T08:00:30Z";
+  const HOLD_WAITS =
+    "After the hold, you can watch the assistant fill the form again here.";
+  /** Another application of the person, approved or held too. */
+  const OTHER_APP = "00000000-0000-4000-9000-0000000000a2";
 
-  /** The person's browser held by a lease of `purpose` that started at `startedAt`. */
-  function holding(startedAt: string, purpose = "apply_submit") {
+  /** The person's browser held by a lease of `purpose` the api names for `application`. */
+  function holding(application: string | null, purpose = "apply_submit") {
     server.use(
       http.get("*/api/browser", () =>
         HttpResponse.json({
@@ -931,9 +933,11 @@ describe("the submit lease on the job page", () => {
             wait_reason: null,
             wait_host: null,
             wait_deadline: null,
-            started_at: startedAt,
+            // Later than every approval and hold here: only the name tells whose lease it is.
+            started_at: "2026-10-15T08:30:00Z",
             active_s: 12,
             max_s: 900,
+            application_id: application,
           },
         }),
       ),
@@ -954,6 +958,13 @@ describe("the submit lease on the job page", () => {
     });
   }
 
+  /** The slot reads the browser again, as its next poll would. */
+  async function readAgain(client: QueryClient) {
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: browserQueryKey });
+    });
+  }
+
   it.each([
     ["a submission", false, SUBMITS],
     ["a rehearsal", true, REHEARSES],
@@ -965,7 +976,7 @@ describe("the submit lease on the job page", () => {
         application: fakeApplication("approved", { dry_run: dryRun }),
         answers: filled(),
       });
-      holding(AFTER);
+      holding(APP_ID);
       const { section } = await openSection();
       const view = await connected(opened);
       const live = await watching(section);
@@ -986,12 +997,11 @@ describe("the submit lease on the job page", () => {
 
   it("follows the lease after the click, with nothing left to cancel", async () => {
     const opened = fakeScreens();
-    // `submitting` is written after the lease started: the browser is this application's.
     fakeApply({
       application: fakeApplication("submitting"),
       answers: filled(),
     });
-    holding(BEFORE);
+    holding(APP_ID);
     const { section } = await openSection();
     await connected(opened);
     const live = await watching(section);
@@ -1001,15 +1011,35 @@ describe("the submit lease on the job page", () => {
     }
   });
 
+  it.each(["approved", "submitting"])(
+    "shows only its own submit lease while %s, never another application's",
+    async (state) => {
+      const opened = fakeScreens();
+      fakeApply({ application: fakeApplication(state), answers: filled() });
+      holding(OTHER_APP);
+      const { section, client } = await openSection();
+      await read(client);
+      expect(within(section).getByTestId("live-view-slot")).toHaveTextContent(
+        WAITS,
+      );
+      expect(opened).toHaveLength(0);
+
+      holding(APP_ID);
+      await readAgain(client);
+      await connected(opened);
+      const live = await watching(section);
+      expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
+    },
+  );
+
   it.each([
     ["no lease yet", null],
-    ["the lease of an application approved earlier", BEFORE],
+    ["a submit lease that names no application", "apply_submit"],
     ["a fill", "apply_fill"],
-  ])("says it waits with %s", async (_, lease) => {
+  ])("says it waits with %s", async (_, purpose) => {
     const opened = fakeScreens();
     fakeApply({ application: fakeApplication("approved"), answers: filled() });
-    if (lease === BEFORE) holding(BEFORE);
-    if (lease === "apply_fill") holding(AFTER, "apply_fill");
+    if (purpose) holding(null, purpose);
     const { section, client } = await openSection();
     await read(client);
     expect(
@@ -1022,7 +1052,7 @@ describe("the submit lease on the job page", () => {
     ).toBeEnabled();
   });
 
-  it("shows a held item's own lease after its hold, never one from during it", async () => {
+  it("shows a held item's own lease after its hold, never another application's", async () => {
     const opened = fakeScreens();
     const api = fakeApply({
       application: fakeApplication("held", { mode: "full_auto" }),
@@ -1032,21 +1062,19 @@ describe("the submit lease on the job page", () => {
       hold_until: "2026-10-15T08:20:00Z",
       now: "2026-10-15T08:21:00Z",
     };
-    holding("2026-10-15T08:10:00Z");
+    holding(OTHER_APP);
     const { section, client } = await openSection();
     expect(
       await within(section).findByText(/The hold has ended/),
     ).toBeInTheDocument();
     await read(client);
     expect(within(section).getByTestId("live-view-slot")).toHaveTextContent(
-      "After the hold, you can watch the assistant fill the form again here.",
+      HOLD_WAITS,
     );
     expect(opened).toHaveLength(0);
 
-    holding("2026-10-15T08:20:30Z");
-    await act(async () => {
-      await client.invalidateQueries({ queryKey: browserQueryKey });
-    });
+    holding(APP_ID);
+    await readAgain(client);
     await connected(opened);
     const live = await watching(section);
     expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
@@ -1074,7 +1102,7 @@ describe("the submit lease on the job page", () => {
         }),
       ),
     );
-    holding(AFTER);
+    holding(APP_ID);
     const { section } = await openSection();
     expect(
       await within(section).findByRole("region", { name: "Application email" }),

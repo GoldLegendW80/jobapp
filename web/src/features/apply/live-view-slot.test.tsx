@@ -16,6 +16,10 @@ afterEach(() => {
 
 const STARTED = "2026-10-24T09:00:00Z";
 const SUBMITS = "The assistant fills the form again, then submits it.";
+/** Two applications of the person, both approved: a submit lease names the one it sends. */
+const MINE = "00000000-0000-4000-9000-0000000000a1";
+const OTHER = "00000000-0000-4000-9000-0000000000a2";
+const OF_MINE: LeaseOf = { application: MINE };
 
 function lease(overrides: Partial<Lease> = {}): Lease {
   return {
@@ -29,6 +33,7 @@ function lease(overrides: Partial<Lease> = {}): Lease {
     started_at: STARTED,
     active_s: 12,
     max_s: 900,
+    application_id: MINE,
     ...overrides,
   };
 }
@@ -70,7 +75,7 @@ describe("the submit lease", () => {
     async (_, state, reason) => {
       const opened = fakeScreens();
       browser(lease({ state, wait_reason: reason }));
-      slot("any");
+      slot(OF_MINE);
       const view = await connected(opened);
       expect(view.screen.viewOnly).toBe(true);
       expect(await screen.findByRole("status")).toHaveTextContent(SUBMITS);
@@ -88,41 +93,19 @@ describe("the submit lease", () => {
   );
 
   it.each([
-    ["at the time given", STARTED],
-    ["after it", "2026-10-24T09:00:01Z"],
-  ])("is this application's when it started %s", async (_, startedAt) => {
-    const opened = fakeScreens();
-    browser(lease({ started_at: startedAt }));
-    slot({ startedAfter: STARTED });
-    await connected(opened);
-    expect(screen.getByTestId("live-screen")).toBeInTheDocument();
-  });
-
-  it.each([
-    [
-      "one that started earlier",
-      lease(),
-      { startedAfter: "2026-10-24T09:00:01Z" },
-    ],
-    [
-      "a time it cannot read",
-      lease({ started_at: "soon" }),
-      { startedAfter: STARTED },
-    ],
-    ["a lease still starting", lease({ state: "starting" }), "any"],
-    ["a fill lease", lease({ purpose: "apply_fill" }), "any"],
-    ["a Full auto fill lease", lease({ purpose: "full_auto" }), "any"],
-    ["a sweep", lease({ purpose: "sweep" }), "any"],
-    ["a profile edit", lease({ purpose: "profile_edit" }), "any"],
-    [
-      "the person's own session",
-      lease({ purpose: "look", automation: false }),
-      "any",
-    ],
-  ] as const)("is not %s", async (_, found, leaseOf) => {
+    ["another application's", lease({ application_id: OTHER })],
+    ["one that names no application", lease({ application_id: null })],
+    ["one without the field", lease({ application_id: undefined })],
+    ["a lease still starting", lease({ state: "starting" })],
+    ["a fill lease", lease({ purpose: "apply_fill" })],
+    ["a Full auto fill lease", lease({ purpose: "full_auto" })],
+    ["a sweep", lease({ purpose: "sweep" })],
+    ["a profile edit", lease({ purpose: "profile_edit" })],
+    ["the person's own session", lease({ purpose: "look", automation: false })],
+  ])("is not %s", async (_, found) => {
     const opened = fakeScreens();
     browser(found);
-    const { client } = slot(leaseOf);
+    const { client } = slot(OF_MINE);
     await read(client);
     expect(screen.getByTestId("live-view-slot")).toHaveTextContent(
       "Waiting for the browser.",
@@ -134,7 +117,7 @@ describe("the submit lease", () => {
   it("never shows another person's lease", async () => {
     const opened = fakeScreens();
     browser(lease(), "other");
-    const { client } = slot("any");
+    const { client } = slot(OF_MINE);
     await read(client);
     expect(screen.getByTestId("live-view-slot")).toHaveTextContent(
       "Waiting for the browser.",
