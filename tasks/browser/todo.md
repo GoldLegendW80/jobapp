@@ -272,7 +272,7 @@ Contract and dependency order: [interactive search plan](../jobs/interactive-sea
 
 ### B13: execute guarded interactive job search through the LLM runtime
 
-Task [#628](https://github.com/GoldLegendW80/jobapp/issues/628). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+Task [#628](https://github.com/GoldLegendW80/jobapp/issues/628). Acceptance, owned files and verification are in that issue and the linked plan. Status: [draft #640](https://github.com/GoldLegendW80/jobapp/pull/640), not merged or deployed. No production wiring claimed.
 
 ### B14: enforce platform consent and durable search checkpoints
 

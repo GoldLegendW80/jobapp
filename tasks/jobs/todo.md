@@ -99,7 +99,7 @@ Contract and dependency order: [interactive search plan](../jobs/interactive-sea
 
 ### J9: save chosen websites and freeze search criteria at Start
 
-Task [#629](https://github.com/GoldLegendW80/jobapp/issues/629). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+Task [#629](https://github.com/GoldLegendW80/jobapp/issues/629). Acceptance, owned files and verification are in that issue and the linked plan. Status: [draft #639](https://github.com/GoldLegendW80/jobapp/pull/639), not merged or deployed. J16 compatibility must precede merging the status expansion.
 
 ### J10: run selected websites through the interactive finder
 
@@ -124,3 +124,7 @@ Task [#637](https://github.com/GoldLegendW80/jobapp/issues/637). Acceptance, own
 ### J15: verify the complete interactive search journey on fake sites
 
 Task [#638](https://github.com/GoldLegendW80/jobapp/issues/638). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### J16: keep source modes and pending outcomes truthful in the current summary
+
+Task [#641](https://github.com/GoldLegendW80/jobapp/issues/641). Small client compatibility follow up for J9's expanded source statuses. Acceptance and owned files are in that issue and the linked plan. Status: implementation and checks in progress; no deployment claimed.

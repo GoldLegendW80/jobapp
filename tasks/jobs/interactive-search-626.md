@@ -8,6 +8,7 @@ GitHub Issues are the task list target. The existing unrelated incomplete tasks/
 
 - [B13, #628](https://github.com/GoldLegendW80/jobapp/issues/628): execute guarded interactive job search through the LLM runtime
 - [J9, #629](https://github.com/GoldLegendW80/jobapp/issues/629): save chosen websites and freeze search criteria at Start
+- [J16, #641](https://github.com/GoldLegendW80/jobapp/issues/641): preserve source modes and pending outcomes in the existing search summary
 - [J10, #630](https://github.com/GoldLegendW80/jobapp/issues/630): run selected websites through the interactive finder
 - [B14, #631](https://github.com/GoldLegendW80/jobapp/issues/631): enforce platform consent and durable search checkpoints
 - [J11, #632](https://github.com/GoldLegendW80/jobapp/issues/632): save verified search findings incrementally
@@ -19,6 +20,8 @@ GitHub Issues are the task list target. The existing unrelated incomplete tasks/
 - [J15, #638](https://github.com/GoldLegendW80/jobapp/issues/638): verify the complete interactive search journey on fake sites
 
 This remains one capability in the existing jobs, profile, agents and browser modules. Reuse RuntimeFinder, runner.execute, SdkBackend and the existing bound tool layer.
+
+Implementation checkpoints are published as [draft #639](https://github.com/GoldLegendW80/jobapp/pull/639) for J9 and [draft #640](https://github.com/GoldLegendW80/jobapp/pull/640) for B13. Review findings and verification evidence are recorded in those drafts. They do not establish full acceptance or change the deployed application.
 
 ## Source findings that determine the order
 
@@ -92,6 +95,16 @@ Target about 800 total changed lines per slice and about five application files.
 **Acceptance:** (1) strict per-person site/instruction validation and profile revision checks, including a custom URL disguised as a consent-controlled platform, (2) freeze on manual/scheduled sweep creation and prove edits before worker claim and during the run affect only later sweeps, (3) list/detail/events report every selected source with explicit mode and safe scope summary; all stats rewrite paths retain the scope and existing no-body starts/onboarding work.
 
 **Tests:** profile save/import preservation and two-person tests; sweep API, worker, schedule and crash/reap tests. No schema migration or UI in this issue.
+
+**Compatibility dependency:** J16 must precede merging the backend status expansion. Its optional client fields work with the old API, so this adds no dependency cycle. Record its actual PR as a dependency of draft #639 when published.
+
+### J16 (#641) / review follow up: retain truthful source modes in the current summary
+
+**Depends on:** the fixed HTTP contract above; no backend implementation dependency. **Owns:** `web/src/features/jobs/sweeps-api.ts`, `sweep-sources.tsx` and their owning schema/render tests.
+
+**Acceptance:** preserve optional nullable source identity, mode, phase, outcome and reason while accepting old payloads. API board entries must not appear under browser activity, since their aggregate/failure summary already exists. An interactive source that was not attempted must say it was not searched rather than imply an observed zero. Keep feed and legacy rendering compatible. This is a small compatibility change; the setup and live-run interfaces remain J13/J14.
+
+**Tests:** mixed-mode and pending-outcome regressions, legacy payload parsing, whole Jobs feature tests, typecheck, lint and normal hooks. Transfer these client paths to J14 after this slice; do not edit them concurrently.
 
 ### J10 (#630) / third issue: connect selected interactive sites to the bounded runtime
 
