@@ -3,7 +3,7 @@ import { useState } from "react";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
-import { describeError, request } from "@/lib/api";
+import { describeError, errorDetail, request } from "@/lib/api";
 
 import { browserQueryKey, browserSchema, getBrowser } from "./browser-api";
 import { LiveBrowser } from "./live-browser";
@@ -92,7 +92,9 @@ export function LaterHandoffBanner({
           The browser is busy. Open the live view again when it is free.
         </p>
       ) : null}
-      {error ? <p role="alert">{describeError(error)}</p> : null}
+      {error ? (
+        <p role="alert">{errorDetail(error) ?? describeError(error)}</p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         {!live ? (
           <Button

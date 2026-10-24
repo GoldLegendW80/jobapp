@@ -66,3 +66,29 @@ it("opens only a registered reference and reports the person's done without an a
     { module: "application", ref: refId },
   ]);
 });
+
+it("says the browser is busy in the server's own words when other work holds it", async () => {
+  const busy =
+    "Your browser is busy with something else. Open it again when it is free.";
+  server.use(
+    http.post("*/api/browser/handoff/later", () =>
+      HttpResponse.json({ detail: busy }, { status: 409 }),
+    ),
+  );
+  renderWithQuery(
+    <LaterHandoffBanner
+      module="application"
+      refId="00000000-0000-4000-9000-000000000002"
+      address="https://jobs.example.org/form"
+    />,
+  );
+  const user = userEvent.setup();
+  await user.click(
+    screen.getByRole("button", { name: "Open the live view to sign in" }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toBe(busy);
+  expect(screen.queryByText("The person's browser")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Open the live view to sign in" }),
+  ).toBeEnabled();
+});

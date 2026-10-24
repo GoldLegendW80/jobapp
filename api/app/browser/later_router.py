@@ -57,7 +57,7 @@ def _signed_in(request: Request, user_id: uuid.UUID, body: Reference) -> bool:
         return changed
 
 
-async def _binding(store: Store, user: str, body: Reference) -> dict:
+async def _saved(store: Store, user: str, body: Reference) -> dict | None:
     redis = await pool(store)
     try:
         raw = await redis.get(later.PREFIX + user)
@@ -72,6 +72,13 @@ async def _binding(store: Store, user: str, body: Reference) -> dict:
         or binding.get("module") != body.module
         or binding.get("ref") != str(body.ref)
     ):
+        return None
+    return binding
+
+
+async def _binding(store: Store, user: str, body: Reference) -> dict:
+    binding = await _saved(store, user, body)
+    if binding is None:
         raise HTTPException(404, "No sign in is waiting for you.")
     return binding
 
@@ -86,9 +93,15 @@ async def start(
     try:
         view = await store.current(str(user.id))
         if view.lease is not None:
-            binding = await _binding(store, str(user.id), body)
-            if binding.get("lease") != view.lease.lease_id or binding.get("done"):
-                raise HTTPException(409, "Finish your current browser session first.")
+            binding = await _saved(store, str(user.id), body)
+            if (
+                binding is None
+                or binding.get("lease") != view.lease.lease_id
+                or binding.get("done")
+            ):
+                raise HTTPException(
+                    409, "Your browser is busy with something else. Open it again when it is free."
+                )
             return SessionOut(lease=_lease_out(view.lease, store.clock()), queue=None)
         got = await store.acquire(str(user.id), "signin", False, address=address)
         if got.lease is None:

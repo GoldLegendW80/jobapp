@@ -138,6 +138,33 @@ def test_expired_session_keeps_the_item_waiting_and_can_start_again(later, db):
     assert later.client.post("/api/browser/handoff/later", json=later.body).status_code == 201
 
 
+@pytest.mark.parametrize("purpose", ["apply_fill", "look", "signin"])
+def test_a_browser_busy_with_other_work_starts_nothing_and_the_item_keeps_waiting(
+    later, db, person_a, purpose
+):
+    later.store.lease = Lease(
+        lease_id="other-work",
+        user_id=str(person_a.user_id),
+        purpose=purpose,
+        automation=purpose == "apply_fill",
+        profile_id="fixture",
+        max_s=1800,
+        idle_s=300,
+        started_at=later.store.clock(),
+        active_since=later.store.clock(),
+        last_input=later.store.clock(),
+    )
+    response = later.client.post("/api/browser/handoff/later", json=later.body)
+    assert response.status_code == 409
+    assert "busy" in response.json()["detail"]
+    assert later.store.opened == []
+    assert later.store.values == {}
+    assert application(db, later.ref).state is State.needs_person
+    assert later.client.post("/api/browser/handoff/later/done", json=later.body).status_code == 404
+    assert later.store.released == []
+    assert later.queued == []
+
+
 def test_invalid_saved_address_starts_nothing(later, db):
     application(db, later.ref).form_url = "javascript:alert(1)"
     db.commit()
