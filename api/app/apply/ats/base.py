@@ -684,6 +684,21 @@ class Adapter:
         page = parse_snapshot(str(shot.get("snapshot") or ""))
         scope = self.scope(page)
         found = discover_fields(scope or Node("root"), self.submit_names)
+        native = shot.get("native_files", {})
+        if not isinstance(native, dict):
+            return None, "unreadable"
+        for index, item in enumerate(found.fields):
+            if item.kind == "file" and item.ref in native:
+                names = native[item.ref]
+                value = (
+                    names[0]
+                    if isinstance(names, list)
+                    and len(names) == 1
+                    and isinstance(names[0], str)
+                    and len(names[0]) <= 83
+                    else ""
+                )
+                found.fields[index] = replace(item, value=value)
         found.cut, found.root, found.pending = bool(shot.get("cut")), scope, self.pending_at(page)
         return found, ""
 
