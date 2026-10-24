@@ -1,8 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
+import type { QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { browserQueryKey } from "@/features/browser/browser-api";
 import { server } from "@/test/server";
 import { fakeSession, member } from "@/test/auth";
 import {
@@ -11,6 +13,7 @@ import {
   fakeApply,
   leftAnswer,
 } from "@/test/apply";
+import { FREE, connected, fakeScreens } from "@/test/browser";
 import { fakeJobDetail, makeDetail } from "@/test/jobs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -34,6 +37,10 @@ beforeEach(() => {
       title: "Robotics Engineer",
     }),
   );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 async function openSection() {
@@ -806,6 +813,8 @@ describe("other states", () => {
     ["needs_person", { needs: "signin" }],
     ["ready", {}],
     ["approved", {}],
+    ["held", {}],
+    ["submitting", {}],
     ["submitted", {}],
     ["submit_unknown", {}],
     ["refused_by_site", {}],
@@ -893,5 +902,183 @@ describe("Full auto's hold on the job page", () => {
       expect(api.decisions).toEqual(["cancel"]);
     });
     expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+});
+
+describe("the submit lease on the job page", () => {
+  const SUBMITS =
+    "The assistant fills the form again with your approved answers, then submits it.";
+  const REHEARSES =
+    "A rehearsal: the assistant fills the form again with your approved answers, then stops without submitting it.";
+  const WAITS =
+    "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn.";
+  // fakeApplication's updated_at is 2026-10-15T08:01:12Z: the approval.
+  const AFTER = "2026-10-15T08:02:00Z";
+  const BEFORE = "2026-10-15T08:00:30Z";
+
+  /** The person's browser held by a lease of `purpose` that started at `startedAt`. */
+  function holding(startedAt: string, purpose = "apply_submit") {
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json({
+          ...FREE,
+          holder: "you",
+          lease: {
+            id: "3c5d7e9f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            purpose,
+            automation: true,
+            state: "active",
+            wait_reason: null,
+            wait_host: null,
+            wait_deadline: null,
+            started_at: startedAt,
+            active_s: 12,
+            max_s: 900,
+          },
+        }),
+      ),
+    );
+  }
+
+  /** The live view of the section, once its screen connected. */
+  async function watching(section: HTMLElement) {
+    return within(section).findByRole("region", {
+      name: "Live view of your browser",
+    });
+  }
+
+  /** The slot has read the browser, so what it shows is its answer to that read. */
+  async function read(client: QueryClient) {
+    await waitFor(() => {
+      expect(client.getQueryData(browserQueryKey)).toBeDefined();
+    });
+  }
+
+  it.each([
+    ["a submission", false, SUBMITS],
+    ["a rehearsal", true, REHEARSES],
+  ])(
+    "shows %s watch only once approved, and keeps Cancel",
+    async (_, dryRun, sentence) => {
+      const opened = fakeScreens();
+      fakeApply({
+        application: fakeApplication("approved", { dry_run: dryRun }),
+        answers: filled(),
+      });
+      holding(AFTER);
+      const { section } = await openSection();
+      const view = await connected(opened);
+      const live = await watching(section);
+      expect(within(live).getByRole("status")).toHaveTextContent(sentence);
+      expect(view.screen.viewOnly).toBe(true);
+      for (const name of ["Take over", "Keyboard", "Approve and submit"]) {
+        expect(within(section).queryByRole("button", { name })).toBeNull();
+      }
+      expect(
+        within(section).queryByLabelText("Type into your browser"),
+      ).toBeNull();
+      expect(
+        within(section).getByRole("button", { name: "Cancel application" }),
+      ).toBeEnabled();
+      expect(section.textContent).not.toMatch(SEPARATOR);
+    },
+  );
+
+  it("follows the lease after the click, with nothing left to cancel", async () => {
+    const opened = fakeScreens();
+    // `submitting` is written after the lease started: the browser is this application's.
+    fakeApply({
+      application: fakeApplication("submitting"),
+      answers: filled(),
+    });
+    holding(BEFORE);
+    const { section } = await openSection();
+    await connected(opened);
+    const live = await watching(section);
+    expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
+    for (const name of ["Take over", "Cancel application"]) {
+      expect(within(section).queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it.each([
+    ["no lease yet", null],
+    ["the lease of an application approved earlier", BEFORE],
+    ["a fill", "apply_fill"],
+  ])("says it waits with %s", async (_, lease) => {
+    const opened = fakeScreens();
+    fakeApply({ application: fakeApplication("approved"), answers: filled() });
+    if (lease === BEFORE) holding(BEFORE);
+    if (lease === "apply_fill") holding(AFTER, "apply_fill");
+    const { section, client } = await openSection();
+    await read(client);
+    expect(
+      await within(section).findByTestId("live-view-slot"),
+    ).toHaveTextContent(WAITS);
+    expect(within(section).queryByTestId("live-screen")).toBeNull();
+    expect(opened).toHaveLength(0);
+    expect(
+      within(section).getByRole("button", { name: "Cancel application" }),
+    ).toBeEnabled();
+  });
+
+  it("shows a held item's own lease after its hold, never one from during it", async () => {
+    const opened = fakeScreens();
+    const api = fakeApply({
+      application: fakeApplication("held", { mode: "full_auto" }),
+      answers: filled(),
+    });
+    api.detail = {
+      hold_until: "2026-10-15T08:20:00Z",
+      now: "2026-10-15T08:21:00Z",
+    };
+    holding("2026-10-15T08:10:00Z");
+    const { section, client } = await openSection();
+    expect(
+      await within(section).findByText(/The hold has ended/),
+    ).toBeInTheDocument();
+    await read(client);
+    expect(within(section).getByTestId("live-view-slot")).toHaveTextContent(
+      "After the hold, you can watch the assistant fill the form again here.",
+    );
+    expect(opened).toHaveLength(0);
+
+    holding("2026-10-15T08:20:30Z");
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: browserQueryKey });
+    });
+    await connected(opened);
+    const live = await watching(section);
+    expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
+    expect(
+      within(section).queryByRole("button", { name: "Take over" }),
+    ).toBeNull();
+    expect(
+      within(section).getAllByRole("button", { name: "Cancel application" }),
+    ).toHaveLength(1);
+  });
+
+  it("opens no browser for an application sent by e-mail", async () => {
+    fakeApply({ application: fakeApplication("approved", { ats: "email" }) });
+    server.use(
+      http.get("*/api/applications/:id/email", () =>
+        HttpResponse.json({
+          id: "draft",
+          status: "approved",
+          to: ["e2e-jobs@example.org"],
+          subject: "Robotics Engineer",
+          body: "Please find my application attached.",
+          send_id: null,
+          message: null,
+          issues: [],
+        }),
+      ),
+    );
+    holding(AFTER);
+    const { section } = await openSection();
+    expect(
+      await within(section).findByRole("region", { name: "Application email" }),
+    ).toBeInTheDocument();
+    expect(within(section).queryByTestId("live-view-slot")).toBeNull();
   });
 });
