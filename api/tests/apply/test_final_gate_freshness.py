@@ -20,11 +20,18 @@ from app.apply.models import (
     State,
 )
 from app.jobs.models import Job
+from app.mail import gate as mail_gate
+from app.mail.draft_models import MailDraft
 from tests.apply import a11_support as a11
 from tests.apply.a6_support import submit_ashby
 from tests.apply.conftest import AT
 from tests.apply.test_a6_gate import approve, frozen, ready, run_submit, submit_services
 from tests.apply.test_a13_full_auto import held, turn_on
+from tests.apply.test_a14_email import connect, no_google, provider
+from tests.apply.test_a14_pacing import ON, approved
+from tests.mail.fake_gmail import FakeGoogle
+
+__all__ = ["no_google"]
 
 
 class LockWait:
@@ -449,3 +456,111 @@ def test_linkedin_post_arm_daily_count_excludes_only_its_own_admitted_click(
     assert caps.linkedin_daily(db, app, AT) == (other_count + prior_own_click >= 15)
     admit(db, app)
     assert caps.linkedin_daily(db, app, AT) == (other_count + prior_own_click >= 15)
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+@pytest.mark.parametrize("boundary", ["owner", "host", "after_commit"])
+@pytest.mark.parametrize("pause", [False, True, "error"])
+def test_mail_final_lock_pause_is_a_known_atomic_non_send(
+    db, factory, person_a, monkeypatch, mode, boundary, pause
+):
+    fake = FakeGoogle()
+    fake.seed("alice")
+    ring = connect(db, person_a, fake)
+    if mode is Mode.full_auto:
+        turn_on(db, person_a)
+    app, auth = approved(db, person_a, mode, "e2e-jobs@example.org")
+    app_id = app.id
+    authority = db.get(Authorisation, auth.apply_id)
+    authority_id, original_used = authority.id, authority.used_at
+    deadline = authority.expires_at
+    db.commit()
+    current, paused, calls, minted, lock_calls = (
+        [deadline - timedelta(minutes=1)],
+        [False],
+        [],
+        [],
+        [0],
+    )
+    settings, _, _ = provider(fake, ring)
+    original_lock, original_reserve, original_mint = (
+        mail_gate.apply_gate.lock,
+        caps.reserve,
+        mail_gate.send_key.mint,
+    )
+
+    def change():
+        current[0] = deadline + timedelta(seconds=-1 if pause else 0)
+        paused[0] = pause
+
+    def lock(*args, **kwargs):
+        found = original_lock(*args, **kwargs)
+        lock_calls[0] += 1
+        # _decide also calls prepare, which takes the application locks again. Identify
+        # the actual phase from the durable send binding, rather than its call count.
+        application = found[0]
+        if (boundary == "after_commit" and application.state is State.submitting) or (
+            boundary == "owner" and application.mail_send_id is not None
+        ):
+            change()
+        return found
+
+    def reserve(*args, **kwargs):
+        answer = original_reserve(*args, **kwargs)
+        if boundary == "host" and args[1].mail_send_id is not None:
+            change()
+        return answer
+
+    def mint(*args):
+        minted.append(args)
+        return original_mint(*args)
+
+    class Provider:
+        async def call(self, *args):
+            calls.append(args)
+            return {"result": "sent", "id": "synthetic-final-lock"}
+
+        async def get_message(self, *args, **kwargs):
+            return {}
+
+    async def switches():
+        if paused[0] == "error":
+            raise ConnectionError("synthetic unavailable pause store")
+        return mail_gate.apply_gate.Switches(enabled=True, paused=paused[0])
+
+    monkeypatch.setattr(mail_gate.apply_gate, "lock", lock)
+    monkeypatch.setattr(caps, "reserve", reserve)
+    monkeypatch.setattr(mail_gate.send_key, "mint", mint)
+    result = asyncio.run(
+        mail_gate.send(
+            factory,
+            auth,
+            current[0],
+            settings=settings,
+            mcp=Provider(),
+            switches=ON,
+            switches_for=switches,
+            clock=lambda: current[0],
+        )
+    )
+    assert (result.result, result.refusal_code) == (
+        "failed",
+        "paused" if pause else "authorisation_expired",
+    )
+    assert calls == minted == []
+    db.expire_all()
+    app = db.get(Application, app_id)
+    assert app.mail_send_id is None
+    assert app.state is (
+        State.cancelled
+        if mode is Mode.review and pause and boundary != "after_commit"
+        else State.ready
+    )
+    assert db.get(MailDraft, auth.draft_id).status == "draft"
+    assert db.get(Authorisation, authority_id).used_at == original_used
+    assert frozen(db, person_a.cv_version_id) == [None]
+    assert db.scalar(
+        sa.select(sa.func.count())
+        .select_from(ApplicationEvent)
+        .where(ApplicationEvent.application_id == app_id, ApplicationEvent.kind == "click")
+    ) == (1 if boundary == "after_commit" else 0)

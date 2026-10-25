@@ -131,9 +131,17 @@ def start(
     if code is not None:
         _refuse(code, mode, warnings)
 
+    from app.apply.email import addresses
+
     form_url = (posting.url or "").strip()
     read_as = guardrails.unstub(form_url, stub_base)
-    key = guardrails.canonical_key(read_as)
+    # An application by email only when the posting's address shows no form of its own
+    # (email.addresses): a negated instruction or an ATS page never becomes one.
+    recipients = addresses(posting, read_as)
+    email_application = bool(recipients)
+    if email_application and mode is Mode.manual:
+        raise RefusedError(guardrails.Refusal("email_manual"))
+    key = f"email:{posting.id}" if email_application else guardrails.canonical_key(read_as)
     if key is None:
         raise RefusedError(guardrails.Refusal("no_address"))
 
@@ -150,8 +158,8 @@ def start(
         mode=mode,
         dry_run=dry_run,
         state=State.queued,
-        ats=guardrails.ats_of(read_as),
-        form_url=form_url,
+        ats="email" if email_application else guardrails.ats_of(read_as),
+        form_url=form_url or f"mailto:{recipients[0]}",
         canonical_key=key,
         created_at=now,
         updated_at=now,

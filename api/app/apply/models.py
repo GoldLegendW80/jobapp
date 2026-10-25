@@ -265,6 +265,7 @@ class Application(Base):
     canonical_key: Mapped[str] = mapped_column(sa.Text, nullable=False)
     document_versions: Mapped[dict[str, Any]] = _object()
     answers_hash: Mapped[bytes | None] = mapped_column(pg.BYTEA)
+    mail_send_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
     attempt: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, default=0, server_default=sa.text("0")
     )
