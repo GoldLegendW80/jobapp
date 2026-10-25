@@ -63,6 +63,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.apply.answer_limits import LETTER_MAX
+from app.apply.bank import QUESTION_MAX, VALUE_MAX
 from app.documents.content import RAW_MAX_BYTES
 from app.jobs.schemas import POSTING_MAX
 
@@ -83,6 +84,7 @@ DEFAULT_MAX_BYTES = 1024 * 1024  # other JSON routes; well under Caddy's 10 MiB 
 # walks every route with a JSON body and fails when a schema can describe more than its class
 # takes.
 SIZED: dict[tuple[str, str], int] = {
+    ("POST", "/api/apply/answer-bank"): 12 * (QUESTION_MAX + VALUE_MAX) + 1024,
     # JSON can escape one astral character as two six-byte surrogate escapes.
     ("PUT", "/api/applications/{application_id}/answers/{field_key:path}"): 12 * LETTER_MAX + 1024,
     # A posting added by hand: posting_text up to POSTING_MAX characters (jobs/schemas.py).

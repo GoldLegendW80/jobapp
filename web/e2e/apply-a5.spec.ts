@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -34,7 +35,8 @@ test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 const WHY = "Why Example Robotics?";
 /** What the recorded stream `apply_answer` submits for the first question it is asked. */
 const ANSWERED =
-  "The robots this team builds are the kind of work I want to do, and this role puts agents in front of real operations.";
+  "The robots this team builds are the kind of work I want to do, and this role puts agents in front of real operations. " +
+  "I would bring my agent and evaluation work to the team.";
 const EDITED = "I want to build agents for robots that leave the lab.";
 /** The fake forms server as the stack's browser reaches it (tests/ats-forms-stub.compose.yml). */
 const STACK_FORMS = "http://atsforms:8080";
@@ -46,20 +48,13 @@ let page: Page;
 let errors: string[];
 let job: string;
 
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(id: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${id}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
-
 test.beforeAll(async ({ browser }) => {
   person = invented("a5");
+  // The recorded stream's factual statements have explicit source motivation.
+  const profile = person.profile as {
+    sections: { answers: { motivation: string } };
+  };
+  profile.sections.answers.motivation = ANSWERED;
   context = await newContext(browser);
   page = await context.newPage();
   errors = watchErrors(page);
@@ -110,7 +105,7 @@ test("an invented person has a credential, the consent, a base CV and an Ashby p
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
 });
 
 test("the open question is answered by the agent, shown as its answer, and editable", async () => {

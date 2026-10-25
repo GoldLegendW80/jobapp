@@ -61,10 +61,11 @@ import json
 import unicodedata
 import uuid
 import zoneinfo
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
@@ -80,7 +81,14 @@ from app.apply.caps_models import (
     CompanyCap,
     LikeMode,
 )
-from app.apply.models import Application, ApplicationEvent, Mode, State
+from app.apply.models import (
+    Application,
+    ApplicationEvent,
+    Authorisation,
+    AuthorisationKind,
+    Mode,
+    State,
+)
 from app.browser import linkedin_guard
 from app.jobs import service as jobs_service
 from app.jobs import sweep
@@ -401,6 +409,40 @@ def caps_of(db: Session, user_id: uuid.UUID) -> list[CompanyCap]:
     )
 
 
+def _admitted_click(db: Session, application: Application) -> int | None:
+    """The current submitting decision's last click, backed by a spent matching approval."""
+    if application.state is not S.submitting or application.answers_hash is None:
+        return None
+    kind = {
+        Mode.review: AuthorisationKind.person_approval,
+        Mode.full_auto: AuthorisationKind.full_auto_like,
+    }.get(application.mode)
+    if kind is None:
+        return None
+    return db.scalar(
+        sa.select(ApplicationEvent.id)
+        .join(
+            Authorisation,
+            sa.and_(
+                Authorisation.application_id == ApplicationEvent.application_id,
+                Authorisation.user_id == ApplicationEvent.user_id,
+            ),
+        )
+        .where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "click",
+            ApplicationEvent.at == application.updated_at,
+            Authorisation.kind == kind,
+            Authorisation.answers_hash == application.answers_hash,
+            Authorisation.used_at.is_not(None),
+            Authorisation.used_at <= ApplicationEvent.at,
+        )
+        .order_by(ApplicationEvent.id.desc())
+        .limit(1)
+    )
+
+
 def check(db: Session, application: Application, now: datetime) -> str | None:
     """The code of the first rule the submission would break, or None (module docstring). The
     caller holds the posting's row lock and the person's apply lock."""
@@ -425,7 +467,7 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
         now,
         now - timedelta(days=max(days) + 2),
         exclude=application.id,
-        deciding=application.state not in DECIDED,
+        deciding=application.state not in DECIDED and _admitted_click(db, application) is None,
     )
     role = guardrails.title_key(posting.title)
     for cap, capped in caps:
@@ -555,7 +597,17 @@ def _fixture_linkedin(url: str) -> bool:
 def host_of(ats: str, form_url: str) -> str:
     """The host a click is paced on: the ATS for the known ones, else the form's host."""
     url = guardrails.unstub(form_url or "", _setting("apply_stub_base_url"))
-    host = (urlsplit(url).hostname or "").lower().rstrip(".").removeprefix("www.")
+    try:
+        host = (
+            unquote(urlsplit(url).hostname or "")
+            .encode("idna")
+            .decode("ascii")
+            .lower()
+            .rstrip(".")
+            .removeprefix("www.")
+        )
+    except (ValueError, UnicodeError):
+        host = ""
     if host == "linkedin.com" or host.endswith(".linkedin.com") or _fixture_linkedin(url):
         return "linkedin"  # the host decides first, whatever ATS the address pretends to be
     if ats in KNOWN_HOSTS:
@@ -573,10 +625,27 @@ def linkedin_refusal(db: Session, application: Application, now: datetime) -> st
     return linkedin_guard.refusal(db, application.user_id, now)
 
 
+def linkedin_daily(db: Session, application: Application, now: datetime) -> bool:
+    if host_of(application.ats, application.form_url) != "linkedin":
+        return False
+    clicks = clicks_since(now - DAY)
+    if (admitted := _admitted_click(db, application)) is not None:
+        clicks = clicks.where(ApplicationEvent.id != admitted)
+    return (
+        sum(host_of(ats, url) == "linkedin" for _, ats, url in db.execute(clicks).all())
+        >= pace_of("linkedin").daily_max
+    )
+
+
 def pace_of(host: str) -> Pace:
     if host == "linkedin":
         return Pace(
-            timedelta(seconds=_setting("apply_linkedin_min_interval_s")),
+            timedelta(
+                seconds=(
+                    _setting("test_apply_linkedin_min_interval_s")
+                    or _setting("apply_linkedin_min_interval_s")
+                )
+            ),
             _setting("apply_linkedin_daily_max"),
         )
     return Pace(
@@ -619,12 +688,18 @@ def next_slot(db: Session, application: Application, now: datetime) -> datetime 
     return max(waits, default=None)
 
 
-def reserve(db: Session, application: Application, now: datetime) -> datetime | None:
+def reserve(
+    db: Session,
+    application: Application,
+    now: datetime,
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> datetime | None:
     """`next_slot` under the host's transaction lock: None means the caller's click event, written
     in this transaction, takes the slot; another person's reserve waits for this commit. A lock
     still held at the transaction's `lock_timeout` keeps the time the application's wait shows
     while it is ahead (one `waiting` event per wait, not one per tick), else an interval from
-    now."""
+    now. An injected clock samples the time after the lock wait for the pacing calculation."""
     host = host_of(application.ats, application.form_url)
     key = f"apply_pace:{host}"
     try:
@@ -633,8 +708,10 @@ def reserve(db: Session, application: Application, now: datetime) -> datetime | 
     except DBAPIError as exc:
         if not jobs_service.is_lock_timeout(exc):
             raise
+        now = clock() if clock else now
         shown = _shown(db, application)
         return shown if shown is not None and shown > now else now + pace_of(host).interval
+    now = clock() if clock else now
     return next_slot(db, application, now)
 
 

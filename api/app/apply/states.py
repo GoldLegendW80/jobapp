@@ -62,7 +62,8 @@ TRANSITIONS: dict[State, frozenset[State]] = {
     S.approved: frozenset({S.ready, S.needs_person, S.submitting, S.rehearsed}) | _STOPS,
     # ready: Full auto's refusal sends the item to the review queue, never to the bin.
     S.held: frozenset({S.ready, S.needs_person, S.submitting, S.rehearsed}) | _STOPS,
-    # The three outcomes of the click, and nothing else: the click may have gone through.
+    # The three uncertain/observed outcomes. Only an explicit pre-click browser refusal can
+    # return to ready (move's click_refused), because that reply proves no click occurred.
     S.submitting: frozenset({S.submitted, S.submit_unknown, S.refused_by_site}),
     S.refused_by_site: frozenset({S.ready, S.filling, S.cancelled}),
     S.submit_unknown: frozenset({S.submitted, S.ready}),
@@ -89,16 +90,25 @@ def allowed(current: State, to: State) -> bool:
     return to in TRANSITIONS[current]
 
 
-def move(application: Application, to: State, now: datetime, *, by_gate: bool = False) -> None:
+def move(
+    application: Application,
+    to: State,
+    now: datetime,
+    *,
+    by_gate: bool = False,
+    click_refused: bool = False,
+) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
     commits. `submitted_at` is set when the move records the click, and kept after it. Only the
     gate's decision passes `by_gate` (into `approved` or `held`); a rehearsal never moves to
-    `submitting`."""
+    `submitting`. Only the submit driver's definite native input refusal sets `click_refused`:
+    the original approval stays spent, a fresh approval is required, and no version is frozen."""
     current = State(application.state)
     sent_by_person = (
         application.mode is Mode.manual and to is S.submitted and current in MANUAL_SENT_FROM
     )
-    if not sent_by_person and not allowed(current, to):
+    no_click = click_refused and current is S.submitting and to is S.ready
+    if not sent_by_person and not no_click and not allowed(current, to):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")
     if to in DECIDED and not by_gate:
         raise TransitionError(

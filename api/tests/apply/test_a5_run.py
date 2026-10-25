@@ -752,11 +752,20 @@ def test_the_apply_queue_runs_one_fill_at_a_time_and_ticks_every_30_seconds() ->
     assert spec.max_jobs == 1
     functions = {f.name: f for f in spec.functions}
     # submit: A6; manual: A9's Apply myself session
-    assert set(functions) == {"apply_fill", "apply_submit", "apply_tick", "apply_manual"}
+    assert set(functions) == {
+        "apply_fill",
+        "apply_submit",
+        "apply_tick",
+        "apply_manual",
+        "prune_apply_screenshots",
+    }
     assert all(f.keep_result_s == 0 and f.max_tries == 1 for f in functions.values())
-    (tick,) = spec.cron_jobs
+    tick, prune = spec.cron_jobs
     assert tick.second == {0, 30}
     assert tick.keep_result_s == 0
+    assert prune.name == "cron:prune_apply_screenshots"
+    assert (prune.hour, prune.minute, prune.second) == (3, 17, 0)
+    assert prune.keep_result_s == 0
     assert queue.apply_fill_job_id("x") == "apply-fill:x"
 
 
