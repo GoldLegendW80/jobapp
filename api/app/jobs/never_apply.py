@@ -13,7 +13,7 @@ from app.profile.matching import PLURAL, escape
 
 _JOINERS = re.compile(r"[\s\-\u2010-\u2015_/.]+")
 # What a reader does not see: formatting, controls, surrogates, private use, unassigned points,
-# accents, variation selectors and enclosing marks. Whitespace still separates words.
+# accents, variation selectors and enclosing marks. Visible gaps and tab/LF/CR separate words.
 _UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
 _HANGUL_FILLERS = frozenset("\u115f\u1160")
 _LOOKALIKES = str.maketrans(
@@ -23,7 +23,7 @@ _LOOKALIKES = str.maketrans(
 
 
 def _seen(c: str) -> bool:
-    if c.isspace():
+    if c in "\t\n\r" or unicodedata.category(c) in ("Zs", "Zl", "Zp"):
         return True
     if unicodedata.combining(c) or c in _HANGUL_FILLERS:
         return False
@@ -33,11 +33,11 @@ def _seen(c: str) -> bool:
 def fold(text: str) -> str:
     """Read case and Unicode variants alike, dropping hidden characters and joining separators.
 
-    NFKC and NFKD leave ordinary letters; the case fold comes before the lookalike mapping so a
-    capital and its small letter read alike. Tabs and line breaks remain word separators.
+    Case fold before removing marks: the polytonic Greek iota subscript folds to a letter.
+    Lookalikes are mapped after case folding. Tabs and line breaks remain word separators.
     """
-    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
-    plain = "".join(c for c in decomposed if _seen(c)).casefold().translate(_LOOKALIKES)
+    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text).casefold())
+    plain = "".join(c for c in decomposed if _seen(c)).translate(_LOOKALIKES)
     return _JOINERS.sub(" ", plain)
 
 
