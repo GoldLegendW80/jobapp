@@ -12,10 +12,14 @@
 #    volume, the committed serve config mounted read only, TS_AUTHKEY and TS_HOSTNAME from .env,
 #    128m, restart unless-stopped, a healthcheck on `tailscale status --json`, after a healthy
 #    caddy; cloudflared is gone; tailscale/serve.json Funnels HTTPS 443 to http://caddy:8080 only.
-# 2. caddy's :8080 listener (the real caddy image and caddy/Caddyfile, an echo stand-in for the
-#    api, a scratch network): the client address comes from X-Forwarded-For only, what Funnel
-#    sets, read strictly right to left; Cf-Connecting-Ip, X-Real-Ip and the like are ignored; the
-#    published :80 trusts no header at all.
+# 2. caddy's :8080 listener (the real caddy, built by the `caddy-base` target of web/Dockerfile
+#    with its rate limit module, and caddy/Caddyfile, an echo stand-in for the api, a scratch
+#    network): the client address comes from X-Forwarded-For only, what Funnel sets, read
+#    strictly right to left; Cf-Connecting-Ip, X-Real-Ip and the like are ignored; the published
+#    :80 trusts no header at all. Then the password door's rate limit (issue #152): 2 per 90
+#    seconds per address (an IPv6 /64, an IPv4 mapped address as its IPv4), 15 per 3 seconds for
+#    all, on the three password routes of :8080 only, a refusal by the address never spending the
+#    door's budget, each 429 in the api's {"detail": ...} shape with Retry-After.
 # 3. live, without a key: the pinned image started in a scratch Compose project with no
 #    TS_AUTHKEY stays NeedsLogin and never turns healthy (containerboot gives up after 60s and the
 #    restart policy starts it again), so compose up --wait fails, and its logs say why. It never
@@ -26,12 +30,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-CADDY_IMAGE="$(sed -n 's/^ARG CADDY_IMAGE=//p' web/Dockerfile)"
 PYTHON_IMAGE="$(sed -n 's/^ARG PYTHON_IMAGE=//p' api/Dockerfile)"
 TAG="tstest-$$"
 WORK="$(mktemp -d)"
 NET="jobapp-$TAG"
 PROJECT="jobapp-$TAG"
+CADDY_IMAGE="jobapp-$TAG-caddy:test"
 
 passed=0
 step() { printf '\n== %s\n' "$*"; }
@@ -50,6 +54,7 @@ cleanup() {
   fi
   docker rm -f -v "$TAG-caddy" "$TAG-echo" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  docker rmi "$CADDY_IMAGE" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -161,6 +166,15 @@ PY
 ok "serve.json: HTTPS 443 only, / proxied to http://caddy:8080 (the tunnel listener), Funnel on for that port only"
 
 step "caddy :8080 trusts Funnel's X-Forwarded-For only; :80 trusts nothing"
+# The caddy binary of the stack (xcaddy with the rate limit module), without the web build. Behind
+# a TLS inspecting proxy, JOBAPP_EXTRA_CA (README) reaches xcaddy's download as the image builds do.
+ca=()
+if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
+  [[ "$JOBAPP_EXTRA_CA" == /* && -f "$JOBAPP_EXTRA_CA" && -r "$JOBAPP_EXTRA_CA" ]] ||
+    fail "JOBAPP_EXTRA_CA is set but does not name a readable file by its absolute path"
+  ca=(--secret "id=extra_ca,src=$JOBAPP_EXTRA_CA")
+fi
+docker build -q --target caddy-base ${ca[@]+"${ca[@]}"} -t "$CADDY_IMAGE" web/ >/dev/null || fail "the caddy-base image did not build"
 docker network create "$NET" >/dev/null
 docker run -d --name "$TAG-echo" --network "$NET" --network-alias api \
   -v "$ROOT/tests/echo_upstream.py:/echo.py:ro" "$PYTHON_IMAGE" python /echo.py >/dev/null
@@ -200,6 +214,130 @@ ok ":8080 without X-Forwarded-For: the peer $peer, never a forged Cf-Connecting-
 read -r xff proto <<<"$(seen http://caddy:80/api/echo "X-Forwarded-For: 198.51.100.7" "X-Forwarded-Proto: https" "${forged[@]}")"
 [[ "$xff" == "$peer" && "$proto" == "http" ]] || fail ":80 gave '$xff' '$proto', expected the peer $peer and http"
 ok ":80 trusts no header: the peer $peer and http, whatever the client sends"
+
+step "caddy :8080 rate limits the password routes (issue #152); :80 and every other route do not"
+# limits <phase>: requests sent from the echo container (a private peer, as tailscale is), each
+# visitor given by the X-Forwarded-For Funnel would set. The phase asserts what it saw. Each
+# phase starts on a restarted caddy, whose zones start empty (the state lives in the process).
+limits() {
+  docker restart "$TAG-caddy" >/dev/null
+  docker exec -i "$TAG-echo" python - "$1" <<'PY'
+import json, sys, time, urllib.error, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+ADDRESS = "Too many password attempts from this connection. Try again in a minute or two."
+DOOR = "The server is busy. Try again in a moment."
+
+
+def send(path, visitor=None, method="POST", port=8080):
+    req = urllib.request.Request(f"http://caddy:{port}{path}", data=b"{}" if method == "POST" else None, method=method)
+    req.add_header("Content-Type", "application/json")
+    if visitor:
+        req.add_header("X-Forwarded-For", visitor)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def refused(answer, sentence, longest):
+    status, headers, body = answer
+    assert status == 429, answer
+    assert json.loads(body) == {"detail": sentence}, body
+    assert headers["Content-Type"] == "application/json", headers
+    assert 1 <= int(headers["Retry-After"]) <= longest, headers
+    assert headers["X-Frame-Options"] == "DENY" and headers["Cache-Control"] == "no-store", headers
+    assert headers["X-Content-Type-Options"] == "nosniff", headers
+
+
+def served(answer, path):
+    status, _, body = answer
+    assert status == 200, answer
+    assert json.loads(body)["path"] == path, body
+
+
+for attempt in range(40):  # caddy is back once it answers
+    try:
+        urllib.request.urlopen("http://caddy:8080/healthz", timeout=3).read()
+        break
+    except OSError:
+        time.sleep(0.25)
+else:
+    sys.exit("caddy did not come back")
+
+LOGIN = "/api/auth/login"
+phase = sys.argv[1]
+if phase == "address":
+    # Two per address, the third refused with the address's sentence and at most 90s to wait.
+    for _ in range(2):
+        served(send(LOGIN, "198.51.100.1"), LOGIN)
+    refused(send(LOGIN, "198.51.100.1"), ADDRESS, 91)
+    served(send(LOGIN, "198.51.100.2"), LOGIN)
+    # The three password routes share the address's count.
+    served(send(LOGIN, "198.51.100.3"), LOGIN)
+    served(send("/api/auth/password", "198.51.100.3"), "/api/auth/password")
+    refused(send("/api/auth/invites/e2e-token-1/accept", "198.51.100.3"), ADDRESS, 91)
+    served(send("/api/auth/invites/e2e-token-2/accept", "198.51.100.4"), "/api/auth/invites/e2e-token-2/accept")
+    # IPv6 by its /64; another /64 is another address.
+    served(send(LOGIN, "2001:db8:1:2::1"), LOGIN)
+    served(send(LOGIN, "2001:db8:1:2:ffff:ffff:ffff:fffe"), LOGIN)
+    refused(send(LOGIN, "2001:db8:1:2::abcd"), ADDRESS, 91)
+    served(send(LOGIN, "2001:db8:1:3::1"), LOGIN)
+    # An IPv4 mapped address is that IPv4 address.
+    served(send(LOGIN, "198.51.100.5"), LOGIN)
+    served(send(LOGIN, "::ffff:198.51.100.5"), LOGIN)
+    refused(send(LOGIN, "198.51.100.5"), ADDRESS, 91)
+    # Not limited: what checks no password, other methods, paths the api routes elsewhere, and
+    # the published :80 (the host loopback alone), all from addresses already at their limit.
+    others = [
+        ("POST", "/api/auth/logout"),
+        ("GET", "/api/auth/me"),
+        ("GET", "/api/auth/invites/e2e-token-1"),
+        ("GET", LOGIN),
+        ("PUT", LOGIN),
+        ("POST", "/api/auth/login/"),
+        ("POST", "/api/auth//login"),
+        ("POST", "/API/auth/login"),
+        ("POST", "/api/auth/invites/e2e-token-1/accept/x"),
+        ("POST", "/api/auth/invites//accept"),
+        ("POST", "/api/admin/invites"),
+        ("POST", "/api/echo"),
+    ]
+    for method, path in others:
+        for _ in range(3):
+            assert send(path, "198.51.100.1", method)[0] == 200, (method, path)
+    for _ in range(5):
+        assert send(LOGIN, "198.51.100.1", port=80)[0] == 200, ":80 is limited"
+elif phase == "one-address":
+    # One address flooding is refused by its own zone and spends nothing of the door's: after 30
+    # from it (2 served), 12 other addresses are all served (14 in the door's window, under 15).
+    answers = [send(LOGIN, "203.0.113.50") for _ in range(30)]
+    assert [a[0] for a in answers].count(200) == 2, [a[0] for a in answers]
+    for answer in answers[2:]:
+        refused(answer, ADDRESS, 91)
+    for n in range(12):
+        served(send(LOGIN, f"203.0.113.{n + 1}"), LOGIN)
+elif phase == "door":
+    # Many addresses at once: at most 15 in 3 seconds reach the api, the rest wait at most 3s.
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        answers = list(pool.map(lambda n: send(LOGIN, f"192.0.2.{n + 1}"), range(60)))
+    codes = [a[0] for a in answers]
+    assert set(codes) <= {200, 429}, codes
+    assert 1 <= codes.count(200) <= 15, codes
+    for answer in answers:
+        if answer[0] == 429:
+            refused(answer, DOOR, 4)
+print("ok")
+PY
+}
+[[ "$(limits address)" == ok ]] || fail "the per address limit of the password routes"
+ok ":8080: 2 password checks per 90s per address, the third 429 with the api's shape, Retry-After and the security headers; login, password change and link acceptance share it; IPv6 by its /64, an IPv4 mapped address as its IPv4"
+ok ":8080 leaves sign out, GET, other methods and paths, and every other route alone; :80 is never limited"
+[[ "$(limits one-address)" == ok ]] || fail "one address spent the door's budget"
+ok "one address sending 30 is refused by its own zone: 12 other addresses are all served after it"
+[[ "$(limits door)" == ok ]] || fail "the door's limit for all addresses"
+ok "60 addresses at once: at most 15 reach the api, the rest 429 \"The server is busy\" with at most 3s to wait"
 
 step "deploy rollback (ops/previous.sh) and tailscale/serve.json"
 # A rollback restores the previous tree with rsync --checksum --delete. An unchanged serve.json

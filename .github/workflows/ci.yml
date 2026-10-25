@@ -435,7 +435,8 @@ jobs:
         id: secret_scan_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/secret_scan_test.sh
-      # tailscale (Funnel): compose config and caddy's :8080 trust rules. No key, no tailnet; the
+      # tailscale (Funnel): compose config, caddy's :8080 trust rules and its password rate limit
+      # (issue #152, the caddy-base image built here). No key, no tailnet; the
       # live no-key start is skipped here (CI is set, and the image is pinned to arm64).
       - name: tests/tailscale_test.sh
         id: tailscale_test
