@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
+import { fakeProfile } from "@/test/profile";
 import { emptySweeps, server } from "@/test/server";
 
 import type {
@@ -126,6 +127,7 @@ function fakeSweeps(options: {
 
 beforeEach(() => {
   fakeSession(admin);
+  fakeProfile();
   sweepTiming.pollMs = 20;
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
@@ -138,6 +140,14 @@ async function openJobs() {
   const app = renderApp("/jobs");
   await screen.findByRole("table", { name: "Postings" });
   return { jobs, app };
+}
+
+async function startSearch(user = userEvent.setup()) {
+  await user.click(screen.getByRole("button", { name: "Find jobs" }));
+  const setup = await screen.findByRole("dialog", { name: "Find jobs setup" });
+  await user.click(
+    within(setup).getByRole("button", { name: "Save and Start" }),
+  );
 }
 
 describe("Find jobs", () => {
@@ -154,7 +164,7 @@ describe("Find jobs", () => {
     const { jobs } = await openJobs();
     const before = jobs.requests.length;
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
 
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
@@ -215,7 +225,7 @@ describe("Find jobs", () => {
     );
     const { app } = await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
@@ -264,7 +274,7 @@ describe("Find jobs", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
     });
@@ -343,9 +353,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
@@ -383,7 +391,7 @@ describe("Find jobs", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
     });
@@ -432,7 +440,7 @@ describe("Find jobs", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
@@ -470,9 +478,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     expect(
       await screen.findByText("A sweep is already running: following it."),
     ).toBeInTheDocument();
@@ -492,21 +498,22 @@ describe("Find jobs", () => {
           { status: 422 },
         ),
     });
-    server.use(
-      http.get("*/api/profile", () =>
-        HttpResponse.json({ detail: "x" }, { status: 500 }),
-      ),
-    );
     const { app } = await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     expect(
       await screen.findByText(
-        "No board is enabled in the search section of your profile.",
+        /No board is enabled in the search section of your profile/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Open the profile" }));
+    expect(
+      screen.getByRole("button", { name: "Save and Start" }),
+    ).toBeEnabled();
+    await user.click(
+      screen.getByRole("link", {
+        name: "Manage API boards, feeds and search options",
+      }),
+    );
     expect(app.location()).toBe("/profile?tab=search");
   });
 
@@ -518,14 +525,17 @@ describe("Find jobs", () => {
     });
     const { app } = await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
-    const message = await screen.findByText(detail);
-    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
-    // The toast of this 422 (toasts of earlier tests may still be on screen).
-    const toastOf = message.closest("li");
-    if (!toastOf) throw new Error("the message is not in a toast");
+    await startSearch(user);
+    await screen.findByText(
+      new RegExp("The search section of your profile no longer passes"),
+    );
+    expect(
+      screen.getByRole("button", { name: "Save and Start" }),
+    ).toBeEnabled();
     await user.click(
-      within(toastOf).getByRole("button", { name: "Open the profile" }),
+      screen.getByRole("link", {
+        name: "Manage API boards, feeds and search options",
+      }),
     );
     expect(app.location()).toBe("/profile?tab=search");
   });
@@ -539,13 +549,15 @@ describe("Find jobs", () => {
         ),
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     expect(
-      await screen.findByText(/The sweep did not start\. The API answered 503/),
+      await screen.findByText(
+        /The search did not start\. The API answered 503/,
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Save and Start" }),
+    ).toBeEnabled();
   });
 
   it("follows a sweep already running when the page opens", async () => {
@@ -581,9 +593,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     const dialog = await screen.findByRole("dialog", {
       name: "The sweep stopped",
     });
@@ -602,9 +612,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     await waitFor(() => {
       expect(
         screen.queryByRole("region", { name: "Sweep in progress" }),

@@ -32,6 +32,7 @@ const BROWSER_KIND_LABELS: Record<BrowserSource["kind"], string> = {
   vie: "Business France VIE",
   site: "Company site (coming later)",
   linkedin: "LinkedIn (coming later)",
+  freework: "Free-Work",
 };
 
 const runnable = (kind: string) =>
