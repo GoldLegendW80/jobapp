@@ -111,9 +111,9 @@ def say_everything(name: str, secret: str) -> None:
 
 def redactions(name: str) -> int:
     """How many `REDACTED` the lines of `say_everything` hold at least. A message of asyncio is
-    written up to its first repr only (issue #670), and "[redacted]" opens like one: the five
-    of the messages go with what is cut, the extra fields and the stack keep theirs."""
-    return 6 if name == "asyncio" else 11
+    written up to its first repr only (issue #670), but "[redacted]" is no repr: the two later
+    ones of the second message go with what is cut, the extra fields and the stack keep theirs."""
+    return 9 if name == "asyncio" else 11
 
 
 @pytest.mark.parametrize("name", THIRD_PARTY)
@@ -130,10 +130,7 @@ def test_a_credential_in_use_never_reaches_a_line_of_any_logger(
     assert secret[:24] not in whole  # not even its beginning
     assert whole.count(REDACTED) >= redactions(name)
     assert written[0] == {**written[0], "logger": name, "level": "error"}
-    if name == "asyncio":  # cut before its first repr, "[redacted]" included (issue #670)
-        assert written[0]["msg"] == "Fatal error in message reader"
-    else:
-        assert written[0]["msg"] == f"Fatal error in message reader: {REDACTED}"
+    assert written[0]["msg"] == f"Fatal error in message reader: {REDACTED}"
     # What the error says is never written at all (issue #670): the trace ends at its class.
     assert written[3]["exc"].endswith(", in say_everything\nValueError")
 

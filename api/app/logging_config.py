@@ -223,8 +223,11 @@ def _without_errors(value: Any, depth: int = 0) -> Any:
 
 # Where a repr starts in a line of asyncio: a callback's arguments `f('...')`, an object
 # `<Task ...>`, a field `exception=...`, a quoted value. Not the `<locals>` and `<lambda>` of a
-# function's qualified name (`test.<locals>.callback`), which is code, not data.
-_REPR_START = re.compile(r"""[('"\[{=]|<(?!locals>|lambda>)""")
+# function's qualified name (`test.<locals>.callback`), which is code, not data. Nor a marker
+# the cleaner itself writes (`[redacted]`, `[unprintable]`, `[trace cut]`): fixed text, no data.
+_REPR_START = re.compile(
+    r"""[('"{=]|\[(?!redacted\]|unprintable\]|trace cut\])|<(?!locals>|lambda>)"""
+)
 # The one message of asyncio whose sentence starts with a repr ("Task <Task ...> has errored
 # out but its parent task <Task ...> is already completed"): written as a fixed sentence.
 _ASYNCIO_FIXED = (
