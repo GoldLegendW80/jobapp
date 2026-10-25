@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -12,6 +13,10 @@ from app.apply.ats.linkedin import LinkedIn
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.browser import address, linkedin_guard
 from app.jobs.models import Job
+from app.mail import domains, hosts
+
+# The reason a Full auto item followed off LinkedIn becomes a review item.
+NOT_OWN_COMPANY = "company_site_unverified"
 
 
 def pause(db: Session, user_id: Any, now: datetime) -> None:
@@ -66,6 +71,37 @@ def watched(services: Any, plan: Any, tools: Any) -> Any:
     )
 
 
+def own_company(company: str, url: str) -> bool:
+    """Whether `url`, read on a LinkedIn posting, is the posting's own company's form: the ATS
+    organisation of a known ATS form (`caps.company_names`), or the registrable domain of a
+    company's own site (the check Full auto e-mail makes with `email.own_company`), has the key
+    of the posting's company (`caps.company_key`: case, accents, spacing and trailing legal forms
+    do not count). Only the whole name matches, never a leading part of it ("Example" is not
+    "Example Robotics"). A shared host, a job board, a host without a registrable domain, an
+    empty company or an organisation the ATS address does not name are not: fail closed, the
+    person reviews it."""
+    real = guardrails.unstub(url, caps._setting("apply_stub_base_url"))
+    posting = caps.company_names(company or "", "other", "")
+    if not posting.keys:
+        return False
+    ats = guardrails.ats_of(real)
+    if ats in ("ashby", "greenhouse", "lever"):
+        org = caps.company_names("", ats, real)
+        return bool(posting.keys & org.keys)
+    parts = urlsplit(real)
+    host = parts.hostname
+    domain = domains.registrable_domain(host)
+    if (
+        ats != "other"
+        or parts.scheme not in ("http", "https")
+        or domain is None
+        or not hosts.is_company_own(host)
+    ):
+        return False
+    own = caps.company_names(domain.split(".", 1)[0], "other", "")
+    return bool(posting.keys & own.keys)
+
+
 def follow_company(
     db: Session, application: Application, posting: Job, url: str, now: datetime
 ) -> str:
@@ -97,6 +133,10 @@ def follow_company(
     application.answers_hash = None
     application.needs = None
     states.move(application, State.queued, now)
+    if application.mode is Mode.full_auto and not own_company(posting.company, url):
+        # Full auto continues only on the posting's own company's form; any other site is
+        # followed in Review first, so the person approves what is sent.
+        full_auto.hand_over(db, application, NOT_OWN_COMPANY, now)
     db.add(
         ApplicationEvent(
             application_id=application.id,
