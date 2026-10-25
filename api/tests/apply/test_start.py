@@ -320,6 +320,19 @@ def test_no_form_address(db: Session, a: uuid.UUID, url: str) -> None:
         assert refused(db, a, job, mode) == "no_address"
 
 
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+def test_mailto_posting_starts_an_email_application(db: Session, a: uuid.UUID, mode: Mode) -> None:
+    job = posting(db, a)
+    db.execute(
+        sa.text("UPDATE jobs SET url = :url WHERE id = :j"),
+        {"url": "mailto:e2e-jobs@example.org", "j": job},
+    )
+    db.commit()
+    application = start(db, a, job, mode).application
+    assert application.ats == "email"
+    assert application.form_url == "mailto:e2e-jobs@example.org"
+
+
 def test_a_rehearsal_is_never_manual(db: Session, a: uuid.UUID) -> None:
     with pytest.raises(ValueError, match="never a rehearsal"):
         start(db, a, posting(db, a), Mode.manual, dry_run=True)
