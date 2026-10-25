@@ -121,10 +121,11 @@ def test_a_credential_in_use_never_reaches_a_line_of_any_logger(
     whole = json.dumps(written)
     assert secret not in whole
     assert secret[:24] not in whole  # not even its beginning
-    assert whole.count(REDACTED) >= 12
+    assert whole.count(REDACTED) >= 11
     assert written[0] == {**written[0], "logger": name, "level": "error"}
     assert written[0]["msg"] == f"Fatal error in message reader: {REDACTED}"
-    assert written[3]["exc"].rstrip().endswith(f"ValueError: cannot decode {REDACTED}")
+    # What the error says is never written at all (issue #670): the trace ends at its class.
+    assert written[3]["exc"].endswith(", in say_everything\nValueError")
 
 
 @pytest.mark.parametrize("name", THIRD_PARTY)
@@ -138,7 +139,7 @@ def test_anything_shaped_like_a_credential_is_replaced_without_being_in_use(
     whole = json.dumps(lines())
     assert secret not in whole
     assert PREFIX not in whole
-    assert whole.count(REDACTED) >= 12
+    assert whole.count(REDACTED) >= 11
 
 
 @pytest.mark.parametrize("secret", list(SHAPED.values()), ids=list(SHAPED))
@@ -247,11 +248,13 @@ def test_the_record_itself_is_rewritten_for_whatever_handles_it_next() -> None:
     assert record.args is None
     assert record.exc_info is caught  # kept, for whoever reads the record in code
     assert record.exc_text is not None
-    assert record.exc_text.endswith(f"RuntimeError: {REDACTED}")
+    assert record.exc_text.endswith(
+        ", in test_the_record_itself_is_rewritten_for_whatever_handles_it_next\nRuntimeError"
+    )
     assert record.headers == {"authorization": f"Bearer {REDACTED}"}
     plain = logging.Formatter("%(name)s %(message)s %(headers)s").format(record)
     assert API_KEY not in plain
-    assert plain.count(REDACTED) == 3
+    assert plain.count(REDACTED) == 2
     assert json.loads(JsonFormatter().format(record))["exc"] == record.exc_text
 
 
