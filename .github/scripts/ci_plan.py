@@ -33,6 +33,7 @@ none is ever skipped, and the run is green when every job is.
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import hashlib
 import json
@@ -368,8 +369,14 @@ def verify_problems(
 # <base> (the merged tree against the main it was merged onto), each file judged by the first of
 # these that answers:
 #
-# 1. Every api/app/ path runs every group. Python dependencies, reflective loaders and
-#    registrations are not inferred.
+# 1. An api/app/ file (owner's decision of 2026-10-25: narrow the gate) runs the groups of its
+#    own module (API_AREAS) and those of every api file that imports it, directly or
+#    transitively, read from the Python imports of the tree (Imports.api). main.py and worker.py
+#    are wiring and carry nothing on, as routes.tsx does for the web. Every group runs for a
+#    shared file (app/*.py), a module's __init__.py, the models, a worker registration module
+#    (worker.py REGISTRATION_MODULES), an asset, a module no line decides, and whenever the
+#    reader is unsure: any dynamic import outside the reviewed loaders of API_LOADERS, an
+#    unresolved import, a hook registered on an object it cannot resolve, a parse error.
 # 2. RULES above: a file whose units leave out e2e (documentation, task notes, Claude Code's
 #    configuration) touches no group. The same rules as the pull request plan of CI, not a copy.
 # 3. JOURNEY_RULES below: the gate itself and this mapping run every group, the fakes of a group
@@ -407,6 +414,16 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     ("api/uv.lock", EVERY, "the api's dependencies"),
     ("web/package.json", EVERY, "the web's dependencies"),
     ("web/pnpm-lock.yaml", EVERY, "the web's dependencies"),
+    (
+        "browser/Dockerfile",
+        frozenset({"browser", "apply"}),
+        "the browser image, started only by the stacks of the browser profile",
+    ),
+    (
+        "renderer/Dockerfile",
+        frozenset({"documents", "apply"}),
+        "the renderer image, as the renderer's own files",
+    ),
     ("*/Dockerfile", EVERY, "an image of every journey stack"),
     ("compose*.yml", EVERY, "the compose files of every journey stack"),
     (
@@ -500,6 +517,117 @@ AREA_GROUPS: dict[str, frozenset[str] | str] = {
     "browser": frozenset({"browser", "apply"}),
     "opportunities": frozenset({"opportunities"}),
 }
+
+# The journey groups of the api modules (api/app/<module>/), first match wins, matched as RULES
+# are. What each group's journeys reach: every journey signs up (identity), passes the onboarding
+# gate (opportunities onboarding), seeds postings and a profile (jobs, profile) and sets a model
+# credential (agents). Apply's routes are driven by the apply group, by the browser group (B10's
+# LinkedIn step lists applications) and by the opportunities group (a Like queues an application
+# and writes its documents); only the apply and browser stacks start the browser service
+# (COMPOSE_PROFILES=browser in ops/local-check.sh). The worker runs the browser sources and the
+# freelance feeds on every sweep (worker.py browser_sources, feed_sources): the browser,
+# opportunities and sweep groups sweep. The imports add the rest: a file of browser that apply
+# imports runs apply's groups too.
+API_AREAS: tuple[tuple[str, frozenset[str] | str, str], ...] = (
+    (
+        "api/app/browser/sources/*",
+        frozenset({"apply", "browser", "opportunities", "sweep"}),
+        "a browser source, run by every sweep",
+    ),
+    (
+        "api/app/opportunities/sources/*",
+        frozenset({"browser", "opportunities", "sweep"}),
+        "a freelance feed, run by every sweep",
+    ),
+    (
+        "api/app/opportunities/onboarding*",
+        EVERY,
+        "the onboarding gate every new account passes",
+    ),
+    ("api/app/identity/*", EVERY, "every journey signs in"),
+    ("api/app/profile/*", EVERY, "every journey has a profile"),
+    ("api/app/jobs/*", EVERY, "every journey has postings"),
+    ("api/app/agents/*", EVERY, "every journey sets a model credential"),
+    (
+        "api/app/apply/*",
+        frozenset({"apply", "browser", "opportunities"}),
+        "the api module apply",
+    ),
+    ("api/app/browser/*", frozenset({"apply", "browser"}), "the api module browser"),
+    (
+        "api/app/documents/*",
+        frozenset({"apply", "documents", "opportunities"}),
+        "the api module documents",
+    ),
+    (
+        "api/app/ingestion/*",
+        frozenset({"documents", "ingestion", "opportunities"}),
+        "the api module ingestion",
+    ),
+    ("api/app/mail/*", frozenset({"mail"}), "the api module mail"),
+    (
+        "api/app/opportunities/*",
+        frozenset({"opportunities"}),
+        "the api module opportunities",
+    ),
+)
+API_WIRING = frozenset({"api/app/main.py", "api/app/worker.py"})
+# app/worker.py REGISTRATION_MODULES: the worker imports <module>.<name> of every module by
+# itself, and what they register (crons, hooks, callbacks) runs for modules that never import
+# them. Every group runs for one, and for every file it imports, except the reviewed ones here.
+REGISTRATION_NAMES = frozenset({"agents", "engine", "freeze", "jobs", "writers"})
+SCOPED_REGISTRATIONS = {
+    "api/app/apply/agents.py": "it registers apply's internal answer agent and its tool, and "
+    "imports the internal form and check agents: only the apply run starts them",
+}
+# The reviewed dynamic loaders: each imports, by name, the modules a literal of its own file
+# names (a tuple, or a dict of them), from its own package and no other (no string of the file
+# names another "app.<module>"). Those modules are read as imported by it. Any other dynamic
+# import fails the reader: every group runs.
+API_LOADERS = {
+    "api/app/apply/registry.py": "ROUTER_MODULES",
+    "api/app/browser/registry.py": "ROUTER_MODULES",
+    "api/app/documents/routers.py": "ROUTERS",
+    "api/app/documents/writers.py": "WRITERS",
+    "api/app/ingestion/sandbox/main.py": "HANDLERS",  # by path, from its own folder
+    "api/app/mail/registry.py": "MODULES",
+    "api/app/mail/routers.py": "ROUTER_MODULES",
+    "api/app/opportunities/registry.py": "ROUTER_MODULES",
+}
+# Names that load code by name: a file that mentions one is not read (every group), save the
+# reviewed loaders, the wiring, and `importlib.util.find_spec("<a package outside app>")`.
+DYNAMIC_NAMES = frozenset(
+    {
+        "__import__",
+        "importlib",
+        "import_module",
+        "builtins",
+        "__builtins__",
+        "eval",
+        "exec",
+    }
+    | {"compile", "__loader__", "__spec__"}
+)
+DYNAMIC_MODULES = frozenset(
+    {"importlib", "builtins", "runpy", "pkgutil", "zipimport", "imp"}
+)
+# Registries of names, looked up only by the runs that name them: an agent definition (when it
+# is internal: GET /api/agents lists the others) and an agent tool. Every other call of a
+# `register...` function is a hook: the file is read as imported by the hook's module.
+# app/agents/fake_streams/<agent>_<case>.json: the fake answers of an agent, read only by the
+# runs that name them (agents/fake_backend.py load). An agent's name starts with its module.
+STREAM_OWNERS = {
+    "apply": "apply",
+    "browser": "browser",
+    "documents": "documents",
+    "extract": "ingestion",
+    "ingest": "ingestion",
+    "transcribe": "ingestion",
+}
+NAMED_REGISTRIES = frozenset(
+    {"api/app/agents/definitions.py", "api/app/agents/tools.py"}
+)
+
 
 WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
 SHARED = "<shared>"
@@ -598,6 +726,27 @@ class Imports:
     def __init__(self, root: Path) -> None:
         self.root = root
         self._web: dict[str, set[str]] | None = None
+        self._api: dict[str, set[str]] | None = None
+
+    def api(self) -> dict[str, set[str]]:
+        """api/app/ files and the files that import them, with the reviewed loaders and the
+        hooks (`<module>.register_x(callback)`, read as the hook's module importing the caller)."""
+        if self._api is None:
+            graph: dict[str, set[str]] = {}
+            for path in source_files(self.root / "api/app", (".py",)):
+                me = path.relative_to(self.root).as_posix()
+                imported, hosts = python_edges(
+                    self.root, me, path.read_text(encoding="utf-8")
+                )
+                for target in imported:
+                    if target != me:
+                        graph.setdefault(target, set()).add(me)
+                # A hook's module calls the callback: it reads as importing the caller.
+                for host in hosts:
+                    if host != me:
+                        graph.setdefault(me, set()).add(host)
+            self._api = graph
+        return self._api
 
     def web(self) -> dict[str, set[str]]:
         if self._web is None:
@@ -630,6 +779,265 @@ class Imports:
                         raise MappingError(f"unresolved TypeScript import {spec}")
             self._web = graph
         return self._web
+
+
+def python_files(root: Path, dotted: str) -> list[str] | None:
+    """The files that importing `dotted` (app.x.y) runs: each package's __init__.py, then the
+    module or package itself; None when it is no module of the tree."""
+    found: list[str] = []
+    folder = root / "api"
+    parts = dotted.split(".")
+    for index, part in enumerate(parts):
+        folder = folder / part
+        if (folder / "__init__.py").is_file():
+            found.append((folder / "__init__.py").relative_to(root).as_posix())
+        elif index == len(parts) - 1 and folder.with_suffix(".py").is_file():
+            found.append(folder.with_suffix(".py").relative_to(root).as_posix())
+        else:
+            return None
+    return found
+
+
+def python_edges(root: Path, me: str, text: str) -> tuple[set[str], set[str]]:
+    """(the api files `me` imports, the files of the hooks it registers a callback with)."""
+    tree = ast.parse(text, filename=me)
+    package = ".".join(Path(me).parent.parts[1:])  # api/app/mail/x.py: app.mail
+    parents = {
+        child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+    }
+    imported: set[str] = set()
+    bound: dict[str, str] = {}  # a local name and the app module or member it names
+    loader = me in API_LOADERS or me in API_WIRING
+
+    def need(dotted: str) -> list[str]:
+        files = python_files(root, dotted)
+        if files is None:
+            raise MappingError(f"unresolved Python import {dotted} in {me}")
+        return files
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in DYNAMIC_MODULES:
+                    continue  # judged with the names below
+                if alias.name == "app" or alias.name.startswith("app."):
+                    imported.update(need(alias.name))
+                    bound[alias.asname or "app"] = alias.asname and alias.name or "app"
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                parts = package.split(".")
+                if node.level > len(parts):
+                    raise MappingError(f"relative import above app in {me}")
+                base = ".".join(parts[: len(parts) - node.level + 1])
+                base += f".{node.module}" if node.module else ""
+            else:
+                base = node.module or ""
+            if not loader and (
+                base.split(".")[0] in DYNAMIC_MODULES
+                or base == "sys"
+                and any(a.name == "modules" for a in node.names)
+            ):
+                raise MappingError(f"a dynamic import in {me}")
+            if base != "app" and not base.startswith("app."):
+                continue
+            imported.update(need(base))
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                member = python_files(root, f"{base}.{alias.name}")
+                imported.update(member or ())
+                bound[alias.asname or alias.name] = f"{base}.{alias.name}"
+    for node in ast.walk(tree):
+        if loader:
+            break
+        if isinstance(node, ast.alias):
+            if node.asname is None and node.name in ("importlib", "importlib.util"):
+                continue  # `import importlib.util`, judged where the name is used
+            flagged = node.name.split(".")[0] in DYNAMIC_MODULES | DYNAMIC_NAMES
+        elif isinstance(node, ast.Name):
+            flagged = node.id in DYNAMIC_NAMES and not (
+                node.id == "importlib" and finds_a_spec(node, parents)
+            )
+        elif isinstance(node, ast.Attribute):
+            flagged = node.attr in ("__import__", "import_module") or (
+                node.attr == "modules"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "sys"
+            )
+        else:
+            flagged = False
+        if flagged:
+            raise MappingError(f"a dynamic import in {me}")
+    if me in API_LOADERS:
+        imported |= loaded_modules(root, me, tree, package)
+    return imported, hook_hosts(root, me, tree, bound)
+
+
+def finds_a_spec(node: ast.Name, parents: dict[ast.AST, ast.AST]) -> bool:
+    """`importlib.util.find_spec("<a package outside app>")`: it tells whether a package is
+    installed and loads nothing."""
+    util = parents.get(node)
+    find = parents.get(util) if util is not None else None
+    call = parents.get(find) if find is not None else None
+    return (
+        isinstance(util, ast.Attribute)
+        and util.attr == "util"
+        and isinstance(find, ast.Attribute)
+        and find.attr == "find_spec"
+        and isinstance(call, ast.Call)
+        and call.func is find
+        and not call.keywords
+        and len(call.args) == 1
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+        and call.args[0].value.split(".")[0] != "app"
+    )
+
+
+def loaded_modules(root: Path, me: str, tree: ast.Module, package: str) -> set[str]:
+    """The files a reviewed loader imports by name: its literal tuple, from its own package."""
+    strings = {
+        n.value
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and n.value.startswith("app.")
+    }
+    if not strings <= {package}:
+        raise MappingError(f"the loader {me} names another package")
+    names = [
+        n.value
+        for n in tree.body
+        if isinstance(n, ast.Assign | ast.AnnAssign)
+        and n.value is not None
+        and any(
+            isinstance(t, ast.Name) and t.id == API_LOADERS[me]
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+        )
+    ]
+    if len(names) != 1:
+        raise MappingError(f"the loader {me} has no single {API_LOADERS[me]}")
+    try:
+        listed = ast.literal_eval(names[0])
+    except ValueError as error:
+        raise MappingError(f"the names of the loader {me} are not literal") from error
+    found: set[str] = set()
+    for item in listed.values() if isinstance(listed, dict) else listed:
+        name = item[0] if isinstance(item, tuple) else item
+        if name is None and isinstance(listed, dict):
+            continue  # a kind with no file (the sandbox's ping)
+        if not isinstance(name, str):
+            raise MappingError(f"the names of the loader {me} are not strings")
+        found.update(python_files(root, f"{package}.{name}") or ())
+    return found
+
+
+def hook_hosts(
+    root: Path, me: str, tree: ast.Module, bound: dict[str, str]
+) -> set[str]:
+    """The files whose hooks `me` registers a callback with: a call of `register...` on an
+    imported app module or member. An internal agent definition or a tool registers a name
+    that only its own runs look up; a hook nobody can resolve runs every group."""
+    defined = {
+        n.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    hosts: set[str] = set()
+    named = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr.startswith("register"):
+            target = func.value
+            while isinstance(target, ast.Attribute):
+                target = target.value
+            dotted = bound.get(target.id) if isinstance(target, ast.Name) else None
+            if dotted is None:
+                if isinstance(target, ast.Name) and target.id in ("self", "cls"):
+                    continue  # a method of the file's own class
+                if me in API_LOADERS:
+                    continue  # a loaded module's own register(): that file is read itself
+                raise MappingError(f"a hook of an unknown object in {me}")
+        elif isinstance(func, ast.Name) and func.id.startswith("register"):
+            if func.id in defined:
+                continue
+            dotted = bound.get(func.id)
+            if dotted is None:
+                raise MappingError(f"a hook of an unknown function in {me}")
+            dotted = dotted.rpartition(".")[0]
+        else:
+            continue
+        files = python_files(root, dotted) or python_files(
+            root, dotted.rpartition(".")[0]
+        )
+        if not files:
+            raise MappingError(f"a hook of an unknown module in {me}")
+        host = files[-1]
+        if host in NAMED_REGISTRIES and getattr(func, "attr", "") == "register":
+            named += host.endswith("definitions.py")
+            continue
+        hosts.add(host)
+    internal = sum(
+        1
+        for n in ast.walk(tree)
+        if isinstance(n, ast.keyword)
+        and n.arg == "internal"
+        and isinstance(n.value, ast.Constant)
+        and n.value.value is True
+    )
+    if named > internal:
+        hosts.add("api/app/agents/definitions.py")  # listed by GET /api/agents
+    return hosts
+
+
+def api_own(path: str) -> tuple[frozenset[str] | str, str]:
+    """The groups an api/app/ file runs for itself, before the files that import it."""
+    parts = path.split("/")
+    stream = path.removeprefix("api/app/agents/fake_streams/")
+    owner = STREAM_OWNERS.get(stream.partition("_")[0]) if stream != path else None
+    if owner and "/" not in stream and stream.endswith(".json"):
+        for pattern, groups, _ in API_AREAS:
+            if matches(pattern, f"api/app/{owner}/agent.py"):
+                return groups, f"the fake stream of a {owner} agent"
+    if not path.endswith(".py"):
+        return EVERY, "an api asset, its readers are not inferred"
+    if len(parts) == 3:
+        return EVERY, "a shared file of the api"
+    if len(parts) == 4 and parts[3] == "__init__.py":
+        return EVERY, "a module's __init__.py runs with any import of the module"
+    if parts[-1] == "models.py" or parts[-1].endswith("_models.py"):
+        return EVERY, "the tables of every journey stack"
+    if (
+        parts[3].removesuffix(".py") in REGISTRATION_NAMES
+    ) and path not in SCOPED_REGISTRATIONS:
+        return EVERY, "a worker registration module, its hooks reach every module"
+    for pattern, groups, why in API_AREAS:
+        if matches(pattern, path):
+            return groups, why
+    return EVERY, f"no journey groups are decided for the api module {parts[2]}"
+
+
+def api_groups(path: str, imports: Imports) -> tuple[frozenset[str] | str, str]:
+    """An api/app/ file: its own groups and those of every api file that imports it."""
+    own, why = api_own(path)
+    if own == EVERY:
+        return EVERY, why
+    users = importers(path, imports.api(), lambda name: name in API_WIRING)
+    groups: set[str] = set()
+    for user in sorted(users):
+        decided, reason = api_own(user)
+        if decided == EVERY:
+            return EVERY, f"imported by {shown(user)}: {reason}"
+        groups |= decided
+    others = sorted(u for u in users if u != path)
+    by = (
+        f", imported by {len(others)} api file{'s' if len(others) != 1 else ''}"
+        if others
+        else ""
+    )
+    return frozenset(groups), f"{why}{by}"
 
 
 def web_area(path: str) -> str:
@@ -670,7 +1078,7 @@ def journey_groups_for(
     """(the groups one changed path touches, or EVERY; why). `specs` maps a spec file name to its
     group, `configs` a config path (web/e2e/x-all.config.ts) to its group."""
     if path.startswith("api/app/"):
-        return EVERY, "API application changes run every group"
+        return api_groups(path, imports)
     units, why = units_for(path)
     if "e2e" not in units:
         return NO_GROUP, why
@@ -719,7 +1127,10 @@ def journey_plan(
         try:
             # --no-renames exposes old and new paths. A deletion can have consumers only
             # in the base, so the head graph cannot justify skipping any group.
-            if path.startswith("web/src/") and not (root / path).is_file():
+            if (
+                path.startswith(("web/src/", "api/app/"))
+                and not (root / path).is_file()
+            ):
                 raise MappingError("deleted or missing source path")
             groups, why = journey_groups_for(path, specs, configs, imports)
         except (OSError, UnicodeError, SyntaxError, ValueError, ImportError) as error:

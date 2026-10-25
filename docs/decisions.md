@@ -40,6 +40,7 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-10-20 | The board's Status columns are the pipeline steps: Needs you, Paused, Blocked, Spec, Ready, Building, In review, Fix & re-check, Approved, Gating, Merged, Live, Dropped, Epic, kept by the board sync. Every open card is Ready or Done; a blocked card shows as Ready with what it waits for. |
 | 2026-10-20 | Everything the owner must do himself lives in one checklist issue, #506. |
 | 2026-10-21 | Distributed sign in flood (#152): a rate limit in front of the api, a Caddy build with a free, open source rate limit module (arm64 image, tests). Everything stays free. |
+| 2026-10-25 | Narrow the gate and fix flakes (the owner, after 14 merged pull requests a day): an `api/app/` change runs the journey groups of its module and of the api files that import it (`ci_plan.py` `API_AREAS`), no longer every group; shared api files, models, worker registrations and anything the reader cannot follow still run every group. The gate's parallelism and the move to GitHub runners stay as they are (declined). |
 
 ## Agents and ingestion
 

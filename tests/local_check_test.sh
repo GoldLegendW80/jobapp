@@ -1378,13 +1378,14 @@ out_lacks "journeys-apply"
 ok "a change in one web feature runs only its groups"
 
 scoped 0 --merge origin/scope-api
-out_has "journeys: full (api/app/mail/sync.py: API application changes run every group), ran apps, apply, mail, sweep"
-[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "API application path narrowed journeys"
+out_has "journeys: scoped, ran mail; skipped apps, apply, sweep"
+out_has "  run   mail             api/app/mail/sync.py: the api module mail"
+[[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply sweep | scoped" ]] || fail "one api module: $(journeys_of "$(tree_of)")"
 changes_match "$(tree_of)"
-ok "an API application change runs every group and records its policy and exact change metadata"
+ok "a change in one api module runs only its groups and records exact change metadata"
 
 scoped 0 --merge origin/scope-shared
-out_has "journeys: full (api/app/db.py: API application changes run every group), ran apps, apply, mail, sweep"
+out_has "journeys: full (api/app/db.py: a shared file of the api), ran apps, apply, mail, sweep"
 scoped 0 --merge origin/scope-unknown
 out_has "journeys: full (somewhere/new.txt: no rule names this path), ran apps, apply, mail, sweep"
 [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "unknown path: $(journeys_of "$(tree_of)")"
