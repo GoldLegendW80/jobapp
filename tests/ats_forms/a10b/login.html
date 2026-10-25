@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Example Robotics: sign in</title></head>
+<body>
+<h1>Sign in to Example Robotics</h1>
+<p>This invented site accepts any fixture word. No account or password is stored.</p>
+<form id="signin">
+  <label>Password <input type="password" id="password" autocomplete="off" autofocus required></label>
+  <button type="submit">Sign in</button>
+</form>
+<script>
+document.getElementById("signin").addEventListener("submit", (event) => {
+  event.preventDefault();
+  document.getElementById("password").value = "";
+  const name = "a10b_" + location.pathname.replace(/[^a-z0-9]/gi, "_");
+  document.cookie = name + "=signed; Path=/; SameSite=Lax";
+  location.reload();
+});
+</script>
+</body>
+</html>

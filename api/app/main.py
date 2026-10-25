@@ -175,6 +175,7 @@ def create_app(
     # Around the two above, so the 401 and the 403 of an ingestion route are never cached.
     app.middleware("http")(ingestion_no_store)
     app.middleware("http")(mail_routers.no_store)
+    app.middleware("http")(documents_routers.no_store)
 
     @app.middleware("http")
     async def request_log(
@@ -205,12 +206,17 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("unhandled error", extra={"path": request.url.path})
-        # Built outside every middleware: the no-store of the ingestion routes is set here.
         path = request.url.path
+        if documents_routers.private(path):
+            logger.error("documents.request.failed")
+        else:
+            logger.exception("unhandled error", extra={"path": path})
+        # This response is built outside the prefix middleware.
         headers = mail_routers.extra_headers(path)
         if ingestion_private(path):
             headers["Cache-Control"] = "no-store"
+        if documents_routers.private(path):
+            headers["Cache-Control"] = "private, no-store"
         return JSONResponse(
             status_code=500, content={"detail": "internal server error"}, headers=headers or None
         )

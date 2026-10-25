@@ -201,25 +201,32 @@ async def _call(
 
 CHECK_MAX_ANSWER = 32 * 1024 * 1024
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-_CHECK_KEYS = frozenset(("width", "height", "shown", "scale", "found", "before", "after"))
+_CHECK_KEYS = frozenset(
+    ("width", "scroll_width", "height", "shown", "scale", "found", "before", "after")
+)
 
 
 @dataclass(frozen=True)
 class Seen:
-    """One occurrence of a needle: the font size of its element in CSS pixels, and per glyph
-    `(x, y, width, height, own)`, `own` True when nothing lies over the glyph's centre."""
+    """One occurrence of a needle: the font size of its element in CSS pixels, per glyph
+    `(x, y, width, height, own)`, `own` True when nothing lies over the glyph's centre, and
+    `within`, the left and right edges it should stay within: those of its element and of every
+    box that holds it, up to the body."""
 
     size: float
     glyphs: tuple[tuple[float, float, float, float, bool], ...]
+    within: tuple[float, float]
 
 
 @dataclass(frozen=True)
 class Checked:
-    """What the renderer measured: the page laid out at `width` CSS pixels, its lowest text at
-    `height`, the top `shown` measured and photographed at `scale` device pixels each; per
-    needle its occurrences; the PNG of the page, and of the page with the needles transparent."""
+    """What the renderer measured: the page laid out at `width` CSS pixels, `scroll_width` wide
+    (wider when a box overflows the page), its lowest text at `height`, the top `shown` measured
+    and photographed at `scale` device pixels each; per needle its occurrences; the PNG of the
+    page, and of the page with the needles transparent."""
 
     width: int
+    scroll_width: int
     height: int
     shown: int
     scale: int
@@ -235,7 +242,9 @@ def _number(value: object) -> float:
 
 
 def _seen(value: object, needle: str) -> Seen:
-    if not isinstance(value, list) or len(value) != 2 or not isinstance(value[1], list):
+    if not isinstance(value, list) or len(value) != 3 or not isinstance(value[1], list):
+        raise RenderError("render_failed")
+    if not isinstance(value[2], list) or len(value[2]) != 2:
         raise RenderError("render_failed")
     if len(value[1]) > len(needle):
         raise RenderError("render_failed")
@@ -245,7 +254,8 @@ def _seen(value: object, needle: str) -> Seen:
             raise RenderError("render_failed")
         x, y, w, h, own = (_number(part) for part in glyph)
         glyphs.append((x, y, w, h, own == 1))
-    return Seen(_number(value[0]), tuple(glyphs))
+    left, right = (_number(edge) for edge in value[2])
+    return Seen(_number(value[0]), tuple(glyphs), (left, right))
 
 
 def _png(value: object) -> bytes:
@@ -269,7 +279,7 @@ def read_checked(raw: bytes, needles: tuple[str, ...], width: int) -> Checked:
     found = data["found"]
     if not isinstance(found, list) or len(found) != len(needles):
         raise RenderError("render_failed")
-    sizes = [data["width"], data["height"] + 1, data["shown"], data["scale"]]
+    sizes = [data["width"], data["scroll_width"], data["height"] + 1, data["shown"], data["scale"]]
     if not all(type(value) is int and value >= 1 for value in sizes) or data["width"] != width:
         raise RenderError("render_failed")
     if data["scale"] > 4:
@@ -281,6 +291,7 @@ def read_checked(raw: bytes, needles: tuple[str, ...], width: int) -> Checked:
         occurrences.append(tuple(_seen(one, needle) for one in seen))
     return Checked(
         width=width,
+        scroll_width=data["scroll_width"],
         height=data["height"],
         shown=data["shown"],
         scale=data["scale"],

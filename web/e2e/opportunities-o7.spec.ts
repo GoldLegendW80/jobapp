@@ -241,6 +241,16 @@ test("Discover shows the missions with their source, linking back", async () => 
     pageA.getByLabel("Source").locator("option[value='hackernews']"),
   ).toHaveCount(1);
   await pageA.getByLabel("Source").selectOption("hackernews");
+  // Both HN missions tie on fit and discovery date, so their UUIDs can put either first.
+  await expect(card).toContainText(/Nimbletide Example|Longform Example/);
+  if ((await card.textContent())?.includes("Longform Example")) {
+    await expect(card).toContainText("Freelance mission");
+    await expect(
+      card.getByRole("link", { name: /via Hacker News/ }),
+    ).toHaveAttribute("href", "https://news.ycombinator.com/item?id=4007");
+    // Pass this verified fake mission to reach Nimbletide through the person's deck controls.
+    await pageA.getByRole("button", { name: "Pass", exact: true }).click();
+  }
   await expect(card).toContainText("Nimbletide Example");
   await expect(card).toContainText("Freelance mission");
   await expect(
