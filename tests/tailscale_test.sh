@@ -167,7 +167,7 @@ ok "serve.json: HTTPS 443 only, / proxied to http://caddy:8080 (the tunnel liste
 
 step "caddy :8080 trusts Funnel's X-Forwarded-For only; :80 trusts nothing"
 # The caddy binary of the stack (xcaddy with the rate limit module), without the web build. Behind
-# a TLS inspecting proxy, JOBAPP_EXTRA_CA (README) reaches xcaddy's download as the image builds do.
+# a TLS inspecting proxy, JOBAPP_EXTRA_CA (docs/runbooks/develop-new-machine.md) reaches xcaddy's download as the image builds do.
 ca=()
 if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
   [[ "$JOBAPP_EXTRA_CA" == /* && -f "$JOBAPP_EXTRA_CA" && -r "$JOBAPP_EXTRA_CA" ]] ||
