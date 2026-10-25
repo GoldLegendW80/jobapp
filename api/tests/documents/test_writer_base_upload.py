@@ -38,6 +38,7 @@ from app.documents import content as c
 from app.documents.models import (
     BaseSource,
     Document,
+    DocumentGeneration,
     GenerationMode,
     GenerationStatus,
     GenerationWait,
@@ -131,8 +132,14 @@ def convert(
 def hooks(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     called: list[uuid.UUID] = []
 
-    async def record(final: FinalRun, document_id: uuid.UUID) -> None:
-        called.append(document_id)
+    async def record(final: FinalRun, generation_id: uuid.UUID) -> None:
+        with final.sessions() as db:
+            generation = db.get(DocumentGeneration, generation_id)
+            assert generation is not None
+            assert generation.user_id == final.user_id
+            assert generation.mode is GenerationMode.template_capture
+            assert generation.run_id is None
+            called.append(generation.document_id)
 
     monkeypatch.setattr(design_capture, "enqueue", record)
     return called

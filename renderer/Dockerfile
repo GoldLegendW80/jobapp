@@ -14,7 +14,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 # extra_ca: a bundle pip and Playwright's download trust beside their own, given only behind a TLS
-# inspecting proxy (README); apt reads deb.debian.org over http and needs none.
+# inspecting proxy (docs/runbooks/develop-new-machine.md); apt reads deb.debian.org over http and needs none.
 RUN --mount=type=secret,id=extra_ca,required=false \
     if [ -s /run/secrets/extra_ca ]; then \
       cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \

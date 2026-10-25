@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
 from app import queue
+from app.documents import routers as documents_routers
 from app.identity.deps import default_deny
 from app.logging_config import (
     CAUSE,
@@ -447,9 +448,17 @@ def test_an_unhandled_error_of_any_route_stays_out_of_every_log(
     # Nothing left the app: uvicorn logged no error of its own.
     assert [one for one in caplog.records if one.name.startswith("uvicorn") and one.exc_info] == []
     lines = [json.loads(line) for line in written.getvalue().splitlines()]
+    # The documents routes answer their own errors first (#620, documents_routers.no_store),
+    # logged by class only; every other route's error reaches the net of request_log.
+    documents = [path for path in PATHS if documents_routers.private(path)]
+    assert documents == ["/api/documents/t670", "/api/document-generations/t670"]
+    for path in documents:
+        assert answers[PATHS.index(path)].headers["cache-control"] == "private, no-store"
+    caught_there = [line for line in lines if line["msg"] == "documents.request.failed"]
+    assert [line["error"] for line in caught_there] == ["HostileError"] * len(documents)
     failed = [line for line in lines if line["msg"] == "unhandled error"]
     assert [(line["request_id"], line["path"]) for line in failed] == [
-        (f"t670-{number}", path) for number, path in enumerate(PATHS)
+        (f"t670-{number}", path) for number, path in enumerate(PATHS) if path not in documents
     ]
     for line in failed:
         assert line["level"] == "error"

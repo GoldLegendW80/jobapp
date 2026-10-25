@@ -175,6 +175,7 @@ def create_app(
     # Around the two above, so the 401 and the 403 of an ingestion route are never cached.
     app.middleware("http")(ingestion_no_store)
     app.middleware("http")(mail_routers.no_store)
+    app.middleware("http")(documents_routers.no_store)
 
     def failed(request: Request, exc: Exception, request_id: str | None) -> JSONResponse:
         """The one answer and the one log line of an error no route answered (issue #670): a
@@ -195,6 +196,8 @@ def create_app(
         headers = mail_routers.extra_headers(path)
         if ingestion_private(path):
             headers["Cache-Control"] = "no-store"
+        if documents_routers.private(path):
+            headers["Cache-Control"] = "private, no-store"
         return JSONResponse(
             status_code=500, content={"detail": "internal server error"}, headers=headers or None
         )

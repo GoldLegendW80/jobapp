@@ -20,6 +20,7 @@ import pytest
 from app.documents import design_capture, design_check, render_client, template_rules, templates
 from app.documents.render_client import Checked, RenderError
 from app.ingestion.parser_client import DesignPdf
+from app.profile.schemas import URL_MAX, IdentitySection
 from tests.documents.test_renderer_container import Stack, stack
 
 __all__ = ["stack"]
@@ -151,7 +152,7 @@ def test_a_style_that_hides_a_field_is_refused_with_its_field(
 
 # PR #518 round 2: what only another content shape shows (both refused statically too, by
 # template_css: a height off the photo, a column track under TRACK_MIN).
-LONE = " one item per list and long texts"
+OTHER_SHAPES = tuple(design_check.WHERE[shape] for shape in design_check.SHAPES[1:])
 SHAPE_HIDING = [
     ("box_shorter_than_a_long_summary", ".summary { height: 3.2em; }", "content.summary"),
     (
@@ -177,7 +178,7 @@ def test_a_style_that_fails_only_another_content_shape_is_refused(
     found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
     caught = [p for p in found if p.detail.startswith(field)]
     assert caught, (name, found)
-    assert all(p.detail.endswith(LONE) for p in caught), (name, caught)
+    assert all(p.detail.endswith(OTHER_SHAPES) for p in caught), (name, caught)
 
 
 def test_a_style_that_ignores_the_density_is_refused(stack: Stack) -> None:
@@ -280,10 +281,11 @@ def test_the_reviewers_sheet_is_refused_only_where_its_grid_is_wider_than_the_he
     stack: Stack,
 ) -> None:
     # 135 mm of tracks beside the photo: wider than the letter's header at its loosest margin,
-    # so its name runs past the page's text; the long addresses wrap inside their cells.
+    # so the page is wider than its text and the last track runs past the header; the long
+    # addresses wrap inside their cells, where nothing covers them.
     found = asyncio.run(design_check.check_template(probe(REVIEWER_SHEET), checker(stack)))
-    assert found
-    assert not [p for p in found if p.detail.startswith("contact[].text")], found
+    assert "scaled" in {p.code for p in found}
+    assert {p.code for p in found if p.detail.startswith("contact[].text")} <= {"overflow"}
 
 
 def _glyphs(pdf: bytes) -> list[tuple[str, tuple[float, float, float, float]]]:
@@ -316,3 +318,137 @@ def test_the_reviewers_long_email_prints_inside_its_cell_left_of_the_phone(stack
     rightmost = max(box[2] for _, box in glyphs[at : at + len(email)])
     leftmost = min(box[0] for _, box in glyphs[phone_at : phone_at + len(phone)])
     assert rightmost < leftmost
+
+
+# Issue #575, the approving review's sheet: the 55 character canary fits but real URLs need
+# more room. Render the refused variants deliberately too, to prove the PDF bounds detect them.
+HEADER_125_SHEET = ".headtext { flex: 0 0 125mm; } .photo { order: 2; }"
+
+
+def _lines(whitespace: str) -> str:
+    return f".contact {{ display: block; }} .contact li {{ white-space: {whitespace}; }}"
+
+
+def _website_in_125mm_header(
+    stack: Stack, kind: str, step: int, length: int, contact: str
+) -> tuple[list[tuple[float, float, float, float]], float, float, float]:
+    printed = "example.org/" + "a" * (length - len("example.org/"))
+    address = "https://" + printed
+    assert len(printed) == length
+    assert IdentitySection(website=address).website == address
+    sample = design_check.canary(kind)
+    view = dataclasses.replace(
+        sample.view, identity=dataclasses.replace(sample.view.identity, website=address)
+    )
+    # A flex basis alone can grow to its automatic content minimum. Keep the measured box at
+    # 125 mm for both variants, so the hostile address cannot move the photo out of its way.
+    template = probe(f"{HEADER_125_SHEET} {contact} .headtext {{ min-width: 0; }}")
+    html = templates.build_html(
+        template,
+        kind,
+        sample.content,
+        view,
+        "en",
+        step,
+        sample.rendered_on,
+        photo=design_check.grey_photo(),
+    )
+    rendered = stack.render(html)
+    glyphs = _glyphs(rendered.pdf)
+    text = "".join(char for char, _ in glyphs)
+    assert text.count(printed) == 1, (length, contact, text)
+    at = text.index(printed)
+    boxes = [box for _, box in glyphs[at : at + length]]
+    document = pdfium.PdfDocument(rendered.pdf)
+    try:
+        page = document[0]
+        images = list(page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]))
+        assert len(images) == 1
+        photo_left = images[0].get_bounds()[0]
+    finally:
+        document.close()
+    left = template.steps(kind)[step].margin * 72 / 25.4
+    right = left + 125 * 72 / 25.4
+    assert abs(photo_left - right - 14) < 0.5  # the actual photo follows the 14 pt header gap
+    return boxes, left, right, photo_left
+
+
+@pytest.mark.parametrize("kind", ["cv", "letter"])
+@pytest.mark.parametrize("step", [0, -1])
+@pytest.mark.parametrize("length", [77, 80, URL_MAX - len("https://")])
+@pytest.mark.parametrize("whitespace", ["normal", "pre-line", "pre-wrap"])
+def test_a_valid_long_website_prints_completely_inside_125mm_before_the_photo(
+    stack: Stack, kind: str, step: int, length: int, whitespace: str
+) -> None:
+    found = _website_in_125mm_header(stack, kind, step, length, _lines(whitespace))
+    boxes, left, right, photo_left = found
+    assert all(left - 0.5 <= box[0] and box[2] <= right + 0.5 for box in boxes), boxes
+    assert all(box[2] < photo_left for box in boxes)
+    if step == 0:
+        assert boxes[-1][3] < boxes[0][1]  # the end of the address is on a later printed line
+
+
+# The review of #613: the same overflow without nowrap, the address's box sized by its text.
+UNWRAPPED_IN_PDF = [_lines("nowrap"), ".contact li { flex: none; }"]
+
+
+@pytest.mark.parametrize("contact", UNWRAPPED_IN_PDF, ids=["nowrap", "flex_none"])
+@pytest.mark.parametrize("length", [77, 80])
+def test_the_pdf_bounds_detect_the_refused_nowrap_website_beyond_125mm(
+    stack: Stack, length: int, contact: str
+) -> None:
+    boxes, _, right, photo_left = _website_in_125mm_header(stack, "cv", 0, length, contact)
+    assert any(box[2] > right + 0.5 for box in boxes)
+    if length == 80:
+        assert any(box[2] > photo_left for box in boxes)
+
+
+# The review of #613: a box sized by its unwrapped text, or wider than its column, passed both
+# checks with the canary's 55 character address. The identity shape prints every contact line
+# at the profile's maximum, so each of these runs past a box that holds it, or past the page.
+IDENTITY = design_check.WHERE["identity"]
+UNWRAPPED = [
+    ("flex_none", ".contact li { flex: none; }"),
+    ("flex_shrink_0", ".contact li { flex-shrink: 0; }"),
+    ("max_content_column", ".contact { display: grid; grid-template-columns: max-content; }"),
+    (
+        "max_content_floor",
+        ".contact { display: grid; grid-template-columns: minmax(max-content, 1fr); }",
+    ),
+    ("box_wider_than_its_column", ".contact { display: block; } .contact li { width: 150mm; }"),
+    ("nowrap", _lines("nowrap")),
+]
+MIN_WIDTH = {"min_width_0": " .headtext { min-width: 0; }", "automatic_minimum": ""}
+
+
+@pytest.mark.parametrize("min_width", MIN_WIDTH.values(), ids=MIN_WIDTH.keys())
+@pytest.mark.parametrize(("name", "contact"), UNWRAPPED)
+def test_a_box_sized_by_its_unwrapped_text_or_wider_than_its_column_is_refused(
+    stack: Stack, name: str, contact: str, min_width: str
+) -> None:
+    template = probe(f"{HEADER_125_SHEET} {contact}{min_width}")
+    found = asyncio.run(design_check.check_template(template, checker(stack)))
+    wide = ("outside", "overflow", "scaled")
+    assert [p for p in found if p.code in wide and p.detail.endswith(IDENTITY)], (name, found)
+
+
+@pytest.mark.parametrize("min_width", MIN_WIDTH.values(), ids=MIN_WIDTH.keys())
+@pytest.mark.parametrize("contact", ["", _lines("normal"), _lines("pre-line"), _lines("pre-wrap")])
+def test_the_125mm_header_whose_contact_lines_wrap_passes(
+    stack: Stack, contact: str, min_width: str
+) -> None:
+    template = probe(f"{HEADER_125_SHEET} {contact}{min_width}")
+    found = asyncio.run(design_check.check_template(template, checker(stack)))
+    assert found == [], [(p.code, p.detail) for p in found]
+
+
+def test_a_box_wider_than_the_page_is_refused_where_print_would_shrink_it(stack: Stack) -> None:
+    # The review of #613: print shrank the whole CV to two thirds, the canary inside its boxes.
+    contact = ".contact { display: block; } .contact li { min-width: 300mm; }"
+    template = probe(f"{HEADER_125_SHEET} {contact} .headtext {{ min-width: 0; }}")
+    found = asyncio.run(design_check.check_template(template, checker(stack)))
+    assert {p.detail for p in found if p.code == "scaled"} == {
+        f"the page at the {label} step{design_check.WHERE[shape]}"
+        for shape in design_check.SHAPES
+        for label in ("loosest", "tightest")
+    }
