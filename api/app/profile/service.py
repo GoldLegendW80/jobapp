@@ -141,6 +141,9 @@ def _keep_consent(
         **data,
         "platform_consents": consents,
     }
+    if not consents:
+        # No dedicated decision yet: store no map at all (schemas._stored_section).
+        del data["platform_consents"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data

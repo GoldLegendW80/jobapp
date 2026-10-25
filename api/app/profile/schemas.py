@@ -1237,6 +1237,10 @@ def _stored_section(model: BaseModel) -> dict[str, Any]:
         for name in INTERACTIVE_FIELDS:
             if name not in model.model_fields_set:
                 data.pop(name)
+        # Stored only once a dedicated writer records a decision: the release before this one
+        # refuses the key, so an empty map would make every saved Search a rollback hazard.
+        if not data["platform_consents"]:
+            data.pop("platform_consents")
     return data
 
 
