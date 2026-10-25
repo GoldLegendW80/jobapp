@@ -558,7 +558,7 @@ def test_closed_pages(text: str, is_closed: bool) -> None:
         ("- paragraph [ref=e1]: This site is protected by reCAPTCHA", ""),
         ("- paragraph [ref=e1]: Verify you are human by completing the action below.", ""),
         ('- checkbox "Are you human? Tell us about you" [ref=e1]', ""),
-        # sign in wall: a password box, its label whole
+        # sign in wall: a credential box, read here by its label alone
         ('- textbox "Password" [ref=e1]', "signin"),
         ('- textbox "Password *" [ref=e1]', "signin"),
         ('- textbox "Enter your password" [ref=e1]', "signin"),
@@ -568,8 +568,8 @@ def test_closed_pages(text: str, is_closed: bool) -> None:
         ('- textbox "Mot de passe (obligatoire)" [ref=e1]', "signin"),
         ('- textbox "Saisissez votre mot de passe" [ref=e1]', "signin"),
         ('- textbox "Confirmer le mot de passe" [ref=e1]', "signin"),
-        ('- textbox "Password hint (do not share your password)" [ref=e1]', ""),
-        ('- textbox "Passwordless sign in email" [ref=e1]', ""),
+        ('- textbox "Password hint (do not share your password)" [ref=e1]', "signin"),
+        ('- textbox "Passwordless sign in email" [ref=e1]', "signin"),
         ('- checkbox "Password" [ref=e1]', ""),
         ('- button "Forgot password?" [ref=e1]', ""),
         ('- link "Sign in" [ref=e1]', ""),
@@ -584,7 +584,8 @@ def test_closed_pages(text: str, is_closed: bool) -> None:
 )
 def test_pending_steps(snapshot: str, step: str) -> None:
     assert Greenhouse().pending_step(snapshot) == step
-    assert Ashby().pending_step(snapshot) == (step if step != "email_code" else "")
+    # Greenhouse's own e-mail code is a sign in code anywhere else: a wall.
+    assert Ashby().pending_step(snapshot) == (step if step != "email_code" else "signin")
 
 
 # --- the fill ----------------------------------------------------------------------------------

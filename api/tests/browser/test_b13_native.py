@@ -158,6 +158,7 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
                 assert opened["ok"], opened
                 first = await tools.snapshot()
                 assert "Robot Engineer" not in first["snapshot"]
+                assert "AI assistant reading this page" in first["snapshot"]  # hostile, ignored
                 button = ref(first["snapshot"], "button", "Search application")
                 refused = await tools.call(
                     "browser_click",

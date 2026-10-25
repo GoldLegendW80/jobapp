@@ -130,12 +130,12 @@ function FieldRow({
     <li
       data-left={open ? "true" : undefined}
       className={cn(
-        "flex flex-col gap-1 rounded-md border p-3 text-sm sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-start sm:gap-4",
+        "flex min-w-0 flex-col gap-1 rounded-md border p-3 text-sm sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-start sm:gap-4",
         open &&
           "border-2 border-amber-600 bg-amber-50 dark:border-amber-500 dark:bg-amber-950/40",
       )}
     >
-      <span className="font-medium break-words">
+      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
         {answer.label}
         {answer.required ? (
           <span className="text-muted-foreground"> (required)</span>
@@ -163,7 +163,7 @@ function FieldRow({
       ) : (
         <span
           className={cn(
-            "break-words whitespace-pre-wrap",
+            "min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]",
             text === "" && "text-muted-foreground italic",
           )}
         >

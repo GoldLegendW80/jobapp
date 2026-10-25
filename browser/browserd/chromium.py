@@ -38,10 +38,9 @@ def switches(
     fingerprint that lies is never set. WebGL stays off under Xvfb (no SwiftShader): the
     owner's question in B2's pull request. `port` None: no debugging port at all (a person's
     own session, browserd/signin.py), and no --disable-blink-features=AutomationControlled
-    either: nothing automates that session, and Chromium would show the person an infobar about
-    an unsupported switch. The address comes last, after `--`, so Chromium never reads it as a
-    switch; the first `--` stops the option loop of Debian's wrapper script (/usr/bin/chromium),
-    which would otherwise drop the second one."""
+    either: nothing automates that session. The address comes last, after `--`, so Chromium
+    never reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
+    (/usr/bin/chromium), which would otherwise drop the second one."""
     debugging = (
         []
         if port is None
