@@ -42,7 +42,7 @@ import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
-import { LiveViewSlot } from "./live-view-slot";
+import { LiveViewSlot, type LeaseOf } from "./live-view-slot";
 import { ManualPanel } from "./manual-panel";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
@@ -89,6 +89,16 @@ const POLL_RETRY_MS = 1000;
 
 const STALE_NOTICE =
   "The form or your documents changed since you looked. Check the answers shown now and approve again.";
+
+/** The submit lease in the live view, and the words before it starts. */
+const SUBMIT_STATUS =
+  "The assistant fills the form again with your approved answers, then submits it.";
+const REHEARSAL_STATUS =
+  "A rehearsal: the assistant fills the form again with your approved answers, then stops without submitting it.";
+const SUBMIT_WAITS =
+  "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn. Then you can watch the assistant fill the form again here.";
+const HOLD_WAITS =
+  "After the hold, you can watch the assistant fill the form again here.";
 
 /**
  * The "Apply" section of the job page (SPEC-apply.md, "Frontend"): Apply with Review first, the
@@ -154,6 +164,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
 
   const holdUntil =
     application?.state === "held" ? detail.data?.hold_until : undefined;
+  const submitLease = submitLeaseOf(application);
 
   // The state moved: read the form, the report and the posting (it may have become `applied`).
   const state = application?.state;
@@ -370,6 +381,15 @@ export function ApplySection({ job }: { job: JobDetail }) {
               leaseOf="none"
             />
           ) : null}
+          {submitLease && !manual ? (
+            <LiveViewSlot
+              idle={application?.state === "held" ? HOLD_WAITS : SUBMIT_WAITS}
+              leaseOf={submitLease}
+              status={application?.dry_run ? REHEARSAL_STATUS : SUBMIT_STATUS}
+              stopped={application?.state === "held"}
+              submit
+            />
+          ) : null}
           {application && manual ? (
             <ManualPanel
               application={application}
@@ -561,6 +581,17 @@ function canCancel(application: Application | null): boolean {
   return ["queued", "filling", "needs_person", "approved", "held"].includes(
     application.state,
   );
+}
+
+/**
+ * This application's submit lease among the person's leases: the one the api names for it, as the
+ * person may have several applications approved or held; null in a state without one.
+ */
+function submitLeaseOf(application: Application | null): LeaseOf | null {
+  if (!application || application.ats === "email") return null;
+  return ["approved", "held", "submitting"].includes(application.state)
+    ? { application: application.id }
+    : null;
 }
 
 function ReviewButtons({
