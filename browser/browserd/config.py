@@ -86,9 +86,8 @@ class Config:
         if (names or linkedin_stub) and os.environ.get(
             "APP_ENV", ""
         ).strip().lower() == "production":
-            raise ValueError(
-                "BROWSER_PROXY_ALLOW_PRIVATE is for test stacks, refused when APP_ENV=production"
-            )
+            named = "BROWSER_PROXY_ALLOW_PRIVATE" if names else "BROWSER_LINKEDIN_STUB_BASE_URL"
+            raise ValueError(f"{named} is for test stacks, refused when APP_ENV=production")
         return cls(
             secret=os.environ.get("BROWSER_CONTROL_SECRET", "").strip().encode(),
             lease_max_s=lease_max_table(os.environ.get("BROWSER_LEASE_MAX_S", "")),

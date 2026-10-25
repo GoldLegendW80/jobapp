@@ -4,6 +4,7 @@ activity, the seconds left before the idle timeout, and a file chooser the perso
 with a document of the lease. Clocks are injected; ids are made up here."""
 
 import asyncio
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -15,12 +16,21 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "browser"))
 
 from browserd import config as browserd_config  # noqa: E402
+from browserd import pages  # noqa: E402
 from browserd.leases import Request  # noqa: E402
-from browserd.tools import actions  # noqa: E402
+from browserd.tools import actions, pacing, routes  # noqa: E402
 
 from app.browser import leases as api_leases  # noqa: E402
 from tests.browser.test_b4_live_unit import VIEWER, World, run  # noqa: E402
-from tests.browser.test_b5_actions import Page, acted, facts, tab_of  # noqa: E402
+from tests.browser.test_b5_actions import (  # noqa: E402
+    Browser,
+    Context,
+    Page,
+    acted,
+    facts,
+    no_sleep,
+    tab_of,
+)
 from tests.browser.test_b5_actions import Request as ToolRequest  # noqa: E402
 
 
@@ -37,6 +47,13 @@ def test_apply_manual_is_a_tier_0_session_of_thirty_minutes_with_its_debugging_p
     assert api_leases.TIERS["apply_manual"] == 0
     assert manual_request().automation is True
     assert "apply_manual" not in api_leases.PREEMPTS_SWEEP
+
+
+def test_the_api_mirrors_browserds_apply_wait_reasons_and_ceiling() -> None:
+    from browserd import leases as browserd_leases
+
+    assert api_leases.APPLY_WAITS == browserd_leases.APPLY_WAITS
+    assert api_leases.APPLY_WAIT_S == browserd_leases.APPLY_WAIT_S
 
 
 def _input_route(w: World) -> Any:
@@ -330,3 +347,93 @@ def test_the_chooser_the_apps_own_attach_click_opens_is_never_kept_for_the_perso
     stale = asyncio.run(actions.run(tab, "browser_file_upload", {"paths": ["cv.pdf"]}))
     assert stale["error"] == "no_chooser"
     assert len(opened.files) == 1  # the letter's chooser never receives the CV
+
+
+def test_attach_my_cv_answers_the_persons_chooser_through_browserds_own_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Apply myself's "Attach my CV" (api/app/apply/manual.py, `_watch` then `_attach`) against
+    browserd's real tool and live input routes, only the page faked: the passive watch reads the
+    chooser's boundary, the attach claims the app's turn, names that boundary and gives the
+    input back. The call main made before this contract (no turn, no boundary) is refused."""
+    from app.apply import manual
+
+    async def text(page: Any) -> str:
+        return '- heading "Apply to Example Robotics" [level=1]'
+
+    monkeypatch.setattr(pages, "snapshot_for_ai", text)
+    page = Page()
+    page.on = lambda event, handler: None  # type: ignore[attr-defined]
+    real_tab = routes._tab
+
+    def tab_for(svc: Any, lease: Any, *, gate: bool = False) -> actions.Tab:
+        tab = real_tab(svc, lease, gate=gate)  # browserd's own input rule (input_allowed)
+        tab.request, tab.browser = ManualRequest(), Browser(Context(page))
+        tab.pacer = pacing.Pacer(no_sleep)
+        return tab
+
+    monkeypatch.setattr(routes, "_tab", tab_for)
+
+    async def go(w: World) -> None:
+        from browserd import app as browserd_app
+
+        made, token = await w.manager.acquire(manual_request())
+        lease_id = made.lease_id
+        service = browserd_app.Service(w.manager, b"e2e-a9")
+        service.live = w.live  # type: ignore[attr-defined]
+        tool_route = next(r for r in browserd_app.ROUTES if "/tools/" in r.pattern.pattern)
+        input_route = next(r for r in browserd_app.ROUTES if "live/input" in r.pattern.pattern)
+        state = routes.state_of(made)
+        state.page, state.files["cv.pdf"] = page, b"%PDF-1.4 e2e"
+
+        class Tools:
+            async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+                match = tool_route.pattern.fullmatch(f"/leases/{lease_id}/tools/{name}")
+                body = json.dumps(args).encode()
+                req = browserd_app.HttpRequest("POST", "/", {"x-lease-token": token}, body)
+                status, found = await tool_route.handler(service, req, match)
+                assert status == 200
+                return dict(found)
+
+        class Client:  # app/browser/client.py, its two calls the session makes here
+            async def live_input(self, lease: str, viewer: str | None) -> str:
+                match = input_route.pattern.fullmatch(f"/leases/{lease}/live/input")
+                body = json.dumps({"viewer": viewer}).encode()
+                req = browserd_app.HttpRequest("POST", "/", {}, body)
+                status, found = await input_route.handler(service, req, match)
+                assert status == 200
+                return str(found["input"])
+
+            async def current(self) -> dict[str, Any]:
+                return {"lease": made.public(w.clock())}
+
+        class Reader:
+            def confirmation(self, text: str, url: str) -> bool:
+                return False
+
+        tools, reader = Tools(), Reader()
+        services: Any = type("Services", (), {"browser": Client()})()
+        s = manual.Live(application_id=uuid.uuid4(), lease_id=lease_id, placed={"cv": "cv.pdf"})
+        chooser = Chooser()
+        tab_for(service, made)._chosen(chooser)  # the person clicks the form's Attach
+        before = {"paths": ["cv.pdf"]}  # main's call before this contract, outside the turn
+        assert (await tools.call("browser_file_upload", before))["error"] == "person_input"
+        await manual._watch(services, tools, reader, s)  # type: ignore[arg-type]
+        assert (s.chooser, s.chooser_id) == (True, state.chooser_id)
+        attach = manual._attach
+        done = await attach(services, tools, reader, None, s, "attach_cv")  # type: ignore[arg-type]
+        assert done == "attached"
+        assert [f["name"] for f in chooser.files[0]] == ["cv.pdf"]
+        assert w.live.person(lease_id) is True  # given back
+        assert made.app_turn is False
+        # The person opens a second chooser after the watch: the stale boundary sets nothing.
+        first, second = Chooser(), Chooser()
+        tab_for(service, made)._chosen(first)
+        await manual._watch(services, tools, reader, s)  # type: ignore[arg-type]
+        tab_for(service, made)._chosen(second)
+        late = await attach(services, tools, reader, None, s, "attach_cv")  # type: ignore[arg-type]
+        assert late == "chooser_changed"
+        assert first.files == second.files == []
+        assert w.live.person(lease_id) is True
+
+    run(go)

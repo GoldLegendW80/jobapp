@@ -134,7 +134,8 @@ def test_fixture_mapping_is_exact_origin_and_path():
 def test_fixture_configuration_refused_in_production(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("BROWSER_LINKEDIN_STUB_BASE_URL", "http://atsforms:8080/linkedin")
-    with pytest.raises(ValueError, match="production"):
+    monkeypatch.delenv("BROWSER_PROXY_ALLOW_PRIVATE", raising=False)
+    with pytest.raises(ValueError, match=r"^BROWSER_LINKEDIN_STUB_BASE_URL is for test stacks"):
         Config.from_env()
 
 
