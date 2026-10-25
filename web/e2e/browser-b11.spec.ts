@@ -306,7 +306,7 @@ test("A's whole path, B refused on each of A's identifiers, and no secret in a l
   cookies.forEach((value, n) => (planted[`cookie ${n}`] = value));
   tickets.forEach((value, n) => (planted[`ticket ${n}`] = value));
   const logs = appLogs();
-  expect(logs).toContain("/vnc/websockify?[redacted]"); // Caddy saw the viewers, masked
+  expect(logs).toContain("/vnc/websockify[redacted]"); // Caddy saw the viewers, masked
   const redis = redisText();
   for (const [name, value] of Object.entries(planted)) {
     expect(logs.includes(value), `${name} in the logs`).toBe(false);
