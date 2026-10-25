@@ -33,7 +33,7 @@ from pathlib import Path
 # a journey that can run against the scratch stack belongs in a group of the e2e job.
 NOT_IN_CI: dict[str, str] = {
     # Stops and starts the db service of the stack it is pointed at, so it cannot share a stack
-    # with the other journeys (README: never beside identity.spec.ts). Run by hand against a
+    # with the other journeys (docs/runbooks/accounts.md: never beside identity.spec.ts). Run by hand against a
     # local stack or the Jetson.
     "caddy.spec.ts": "stops the database of the stack under test",
     # The task 5 health card with /api mocked by route interception, against `vite preview`

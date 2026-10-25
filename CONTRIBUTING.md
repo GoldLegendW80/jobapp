@@ -37,8 +37,8 @@ in the job folder that holds this repository (it is not part of the repository).
    guards, the e2e groups apps, ingestion and mail) and `journeys` (eslint, tsc, build, Vitest, the
    e2e groups identity and sweep; every e2e group against its own scratch Compose stack).
    `ci.yml` stays the definition of those steps and starts by hand only
-   (`gh workflow run ci.yml --ref <branch>`, with a runner started: README, CI runners on the
-   Mac). The batch check reads two lists from the `ci.yml` of the tree it checks: the files of
+   (`gh workflow run ci.yml --ref <branch>`, with a runner started: docs/runbooks/ci-runners-mac.md).
+   The batch check reads two lists from the `ci.yml` of the tree it checks: the files of
    the Shellcheck step and the `tests/*_test.sh` steps. So a new `tests/*_test.sh` gets a step
    in `ci.yml`, and a new shell script joins the Shellcheck step. A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
@@ -231,21 +231,20 @@ in the job folder that holds this repository (it is not part of the repository).
    Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
    `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,
    a stopped or missing one counts, `alembic current` at head, memory, no error line in the last
-   10 minutes, JSON `"level": "error"` lines included, a running browser healthy; README,
-   "Deploy from any machine"). The last line is `SHIP: OK`,
+   10 minutes, JSON `"level": "error"` lines included, a running browser healthy; docs/runbooks/deploy-from-any-machine.md). The last line is `SHIP: OK`,
    `SHIP: PLAN, nothing was done`, `SHIP: NOTHING TO SHIP` or `SHIP: FAIL <reason>` (exit 1);
    the gate and deploy logs of the last 10 runs stay in `.local-check/ship/`.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
    tree has no PASS record, and a commit that is not on `origin/main`. Then it starts
    `.github/workflows/deploy.yml` on the Jetson's own runner for the full sha
    (`gh workflow run deploy.yml -f ref=<sha>`), waits for that run, prints its conclusion and
-   asks the public health URL (README, Continuous delivery). Nothing deploys by itself any
+   asks the public health URL (docs/runbooks/continuous-delivery.md). Nothing deploys by itself any
    more: the deploy workflow has no trigger but the dispatch. `--dry-run` says what it would
    start.
 
 `main` is always deployable: nothing is pushed to it directly, and a `main` whose check fails is fixed first.
 
-The Mac's CI runners (`ops/ci-runners.sh`, README, CI runners on the Mac) are optional and
+The Mac's CI runners (`ops/ci-runners.sh`, docs/runbooks/ci-runners-mac.md) are optional and
 stopped by default since issue #116. They serve a run of `ci.yml` started by hand, and nothing
 else: `ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`, then
 `gh workflow run ci.yml --ref <branch>`. A job that never starts ("Waiting for a runner") means

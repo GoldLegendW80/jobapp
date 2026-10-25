@@ -203,8 +203,17 @@ class RulesTest(unittest.TestCase):
             self.assertEqual(self.units(path), expected, path)
         self.assertEqual(self.units("web/src/App.tsx", "README.md"), expected)
 
+    def test_a_runbook_runs_the_shell_unit_alone(self) -> None:
+        # tests/deploy_test.sh and tests/migrate_test.sh read the runbooks.
+        self.assertEqual(self.units("docs/runbooks/accounts.md"), frozenset({"shell"}))
+        self.assertEqual(
+            self.units("docs/runbooks/continuous-delivery.md", "SPEC-platform.md"),
+            frozenset({"shell"}),
+        )
+        self.assertEqual(self.units("docs/STATUS.md"), frozenset())
+
     def test_the_readme_runs_the_shell_unit_alone(self) -> None:
-        # tests/deploy_test.sh checks statements of the README.
+        # tests/deploy_test.sh scans the README for a stale sentence.
         self.assertEqual(self.units("README.md"), frozenset({"shell"}))
         self.assertEqual(
             self.units("README.md", "SPEC-platform.md"), frozenset({"shell"})
@@ -776,7 +785,7 @@ class ReasonsTest(unittest.TestCase):
         """A documentation rule may skip a unit only if nothing of that unit reads the file. So
         every place where something executable names a documentation path is looked up: the
         rule of that path must run the unit the file belongs to (tests/deploy_test.sh reads
-        README.md, and the README's rule runs the shell unit; a workflow belongs to every
+        docs/runbooks/, and their rule runs the shell unit; a workflow belongs to every
         unit), or the mention is listed in MENTIONS_ONLY with its reason.
 
         Read: the Python of api/ and of .github/scripts and tests/ (string constants, docstrings
@@ -904,6 +913,11 @@ class ReasonsTest(unittest.TestCase):
         text = (ROOT / "tests/deploy_test.sh").read_text(encoding="utf-8")
         self.assertIn("README.md", text)
         self.assertEqual(ci_plan.units_for("README.md")[0], frozenset({"shell"}))
+        self.assertIn("docs/runbooks/continuous-delivery.md", text)
+        self.assertEqual(
+            ci_plan.units_for("docs/runbooks/continuous-delivery.md")[0],
+            frozenset({"shell"}),
+        )
 
     def test_the_evidence_rule_matches_what_the_shell_test_reads(self) -> None:
         text = (ROOT / "tests/agents_real_run_test.sh").read_text(encoding="utf-8")

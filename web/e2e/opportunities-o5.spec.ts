@@ -224,6 +224,44 @@ test("an admin with a filled profile is never sent to the wizard", async () => {
   ).toHaveCount(0);
 });
 
+test("wizard route variants stay put and wizard return targets fall back home", async ({
+  browser,
+}) => {
+  for (const [index, pathname] of ["/Welcome", "/%57elcome"].entries()) {
+    const context = await newContext(browser);
+    const email = `e2e-o5-path-${index}-${run}@example.org`;
+    try {
+      const page = await context.newPage();
+      const pathErrors = watchErrors(page);
+      await accept(page, await invite(email), "Example Member");
+      await page.evaluate(() => {
+        window.sessionStorage.clear();
+      });
+      const path = `${pathname}?${new URLSearchParams({ next: pathname, step: "profile" })}#upload`;
+      await page.goto(path);
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Welcome" }),
+      ).toBeVisible();
+      expect(
+        new URL(page.url()).pathname +
+          new URL(page.url()).search +
+          new URL(page.url()).hash,
+      ).toBe(path);
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-onboarding",
+        "stay",
+      );
+      await shots(page, `wizard-path-${index}`);
+      await press(page.getByRole("button", { name: "Skip for now" }), "Enter");
+      await expect(page).toHaveURL(/\/jobs$/);
+      expect(pathErrors).toEqual([]);
+    } finally {
+      clearAttempts([email]);
+      await context.close();
+    }
+  }
+});
+
 test("a new member lands on the wizard and imports an invented CV in step 1", async () => {
   await accept(pageN, await invite(N.email), N.name);
   await expect(pageN).toHaveURL(/\/welcome$/);

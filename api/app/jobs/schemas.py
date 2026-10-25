@@ -28,6 +28,7 @@ import json
 import re
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
@@ -35,9 +36,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
+    PlainValidator,
     PrivateAttr,
     StringConstraints,
     ValidationError,
+    WithJsonSchema,
     field_validator,
     model_validator,
 )
@@ -314,6 +318,31 @@ class ImportSummaryOut(BaseModel):
     warnings: list[str]
 
 
+def _read_pay_amount(value: Any) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise ValueError("pay must be a number")
+    amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    if not amount.is_finite() or not 1 <= amount <= PAY_MAX:
+        raise ValueError("pay must be from 1 to 10000000")
+    if amount != amount.quantize(Decimal("0.01")):
+        raise ValueError("pay must have at most two decimal places")
+    return amount
+
+
+def _pay_number(value: Decimal) -> int | float:
+    # Convert only at the JSON boundary; Python-mode detail construction keeps Decimal.
+    return int(value) if value == value.to_integral_value() else float(value)
+
+
+# Response-only: request writers stay whole until the storage rollout.
+ReadPayAmount = Annotated[
+    Decimal,
+    PlainValidator(_read_pay_amount),
+    PlainSerializer(_pay_number, when_used="json"),
+    WithJsonSchema({"type": "number", "minimum": 1, "maximum": PAY_MAX, "multipleOf": 0.01}),
+]
+
+
 class JobListItem(BaseModel):
     """One row of the list: everything but the posting text, the legacy columns and the files."""
 
@@ -336,8 +365,8 @@ class JobListItem(BaseModel):
     published_on: date | None
     # The pay and the work mode the posting states, or the person's edit (opportunities O3); the
     # four pay fields are all set or all null.
-    pay_min: int | None = None
-    pay_max: int | None = None
+    pay_min: ReadPayAmount | None = None
+    pay_max: ReadPayAmount | None = None
     pay_currency: str | None = None
     pay_period: PayPeriod | None = None
     work_mode: WorkMode | None = None
@@ -347,6 +376,12 @@ class JobListItem(BaseModel):
     file_count: int
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def pay_order(self) -> "JobListItem":
+        if self.pay_min is not None and self.pay_max is not None and self.pay_min > self.pay_max:
+            raise ValueError("pay minimum must be at most its maximum")
+        return self
 
 
 class FitBucket(BaseModel):
@@ -672,7 +707,9 @@ class SourceOut(BaseModel):
     browser_busy, browser_unavailable, or not_started for a source after one that stopped the
     sweep's sources). A freelance and project feed (opportunities O7) is listed here too, its
     `kind` the feed's, with its own codes (app/opportunities/sources ERRORS) and the postings the
-    never apply rules set aside (`skipped_by_rule`, opportunities O8)."""
+    never apply rules set aside (`skipped_by_rule`, opportunities O8), plus items whose parser
+    raised (`items_skipped`, opportunities O7). Unread Hacker News comments beyond its read
+    cap and ordinary filtering are not parser failures."""
 
     kind: str
     query: str
@@ -681,6 +718,7 @@ class SourceOut(BaseModel):
     found: int = 0
     new: int = 0
     skipped_by_rule: int = 0
+    items_skipped: int = Field(default=0, ge=0)
     error: str | None = None
 
 

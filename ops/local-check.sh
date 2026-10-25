@@ -775,7 +775,7 @@ EOF
   # which starts them below, under this check's names: the shared jobapp-*:latest tags are not
   # written.
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  # Behind a TLS inspecting proxy (README): the bundle reaches these builds only, never a stack.
+  # Behind a TLS inspecting proxy (docs/runbooks/develop-new-machine.md): the bundle reaches these builds only, never a stack.
   if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
     if [[ "$JOBAPP_EXTRA_CA" != /* || ! -f "$JOBAPP_EXTRA_CA" || ! -r "$JOBAPP_EXTRA_CA" ]]; then
       echo "JOBAPP_EXTRA_CA is set but does not name a readable file by its absolute path"

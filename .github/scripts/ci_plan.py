@@ -75,13 +75,15 @@ RULES: tuple[tuple[str, frozenset[str], str], ...] = (
     # Prose, plans and screenshots. Nothing executable reads them: ci_plan_test.py fails when a
     # test or a script of the units starts to.
     ("tasks/*", NONE, "task notes and evidence"),
-    ("docs/*", NONE, "documentation"),
-    # tests/deploy_test.sh checks that the README still gives the recovery statements it tests.
+    # tests/deploy_test.sh and tests/migrate_test.sh read the runbooks: the cron line and a
+    # stale sentence of the backups one, the recovery statement of the continuous delivery one.
     (
-        "README.md",
+        "docs/runbooks/*",
         frozenset({"shell"}),
-        "statements of the README are checked by a shell test",
+        "the runbooks are read by shell tests",
     ),
+    ("docs/*", NONE, "documentation"),
+    ("README.md", frozenset({"shell"}), "the README is scanned by a shell test"),
     ("CONTRIBUTING.md", NONE, "documentation"),
     ("CAPABILITY-MAP.md", NONE, "documentation"),
     ("SPEC-*.md", NONE, "documentation"),
