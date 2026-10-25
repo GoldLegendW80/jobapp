@@ -555,6 +555,8 @@ def settle(
     status: RunStatus,
     taken: submit.Taken,
     at: datetime,
+    *,
+    after_finish: Callable[[Session, DocumentGeneration], None] | None = None,
 ) -> tuple[uuid.UUID, int] | None:
     """The generation of a finished run, finished, cancelled or failed, in one transaction.
     Returns `(document_id, revision)` of a render to queue after the commit."""
@@ -579,6 +581,8 @@ def settle(
         if status is RunStatus.done and taken.accepted is not None:
             accepted = taken.accepted
             revision = finish(db, generation, accepted.content, accepted.corrections, at=at)
+            if after_finish is not None:
+                after_finish(db, generation)
             render = (generation.document_id, revision) if revision is not None else None
         elif status is RunStatus.cancelled:
             generation.status = GenerationStatus.cancelled
