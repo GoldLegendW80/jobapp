@@ -209,6 +209,12 @@ choice made by the build that stands until the owner says otherwise.
   chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
   dropped before every start.
 
+## Likes (2026-10-21)
+
+- The owner decided “no limit”: Likes have no per-click, session or daily cap. Application
+  guardrails remain in force, including fit checks, company caps, pacing, holds and the safety
+  ceiling.
+
 ## The short path to Full auto (2026-10-19)
 
 The owner's answers of 2026-10-19 (issue #405). The plans and specs of browser and apply follow

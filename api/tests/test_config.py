@@ -6,6 +6,40 @@ from app.config import ConfigError, Settings, get_settings, load_settings
 URL = "postgresql+psycopg://jobapp:secret@db:5432/jobapp"
 
 
+@pytest.mark.parametrize(
+    "values", [{"apply_linkedin_min_interval_s": 599}, {"apply_linkedin_daily_max": 16}]
+)
+def test_linkedin_limits_cannot_relax_the_specification(values: dict[str, int]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(database_url=URL, **values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {},
+        {"test_fast_timers": True},
+        {"apply_stub_base_url": "http://atsforms:8080"},
+        {"app_env": "production", "secret_key": "a" * 40, "credentials_key": "A" * 43},
+    ],
+)
+def test_short_linkedin_pace_is_only_for_a_fast_fake_stack(values: dict[str, object]) -> None:
+    with pytest.raises(ValidationError, match="TEST_APPLY_LINKEDIN_MIN_INTERVAL_S"):
+        Settings(database_url=URL, test_apply_linkedin_min_interval_s=60, **values)  # type: ignore[arg-type]
+
+
+def test_fast_fake_linkedin_pace_keeps_production_limits() -> None:
+    settings = Settings(
+        database_url=URL,  # type: ignore[arg-type]
+        test_apply_linkedin_min_interval_s=60,
+        test_fast_timers=True,
+        apply_stub_base_url="http://atsforms:8080",
+    )
+    assert settings.apply_linkedin_min_interval_s == 600
+    assert settings.apply_linkedin_daily_max == 15
+    assert settings.test_apply_linkedin_min_interval_s == 60
+
+
 def test_reads_names_of_env_example(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("LOG_LEVEL", "debug")

@@ -518,6 +518,22 @@ browser_egress() {
   fi
 }
 
+# The provider reads in the normal deployment; only the explicit operator files enable sends.
+mail_configuration() {
+  if remote "test -f $RDIR_Q/.env.mailsend"; then
+    RCOMPOSE="$RCOMPOSE -f compose.mail.yml"
+  fi
+}
+
+mail_egress() {
+  step "Gmail provider behind its host firewall"
+  if remote "cd $RDIR_Q && JOBAPP_EGRESS_KIND=mail COMPOSE=$(printf '%q' "$RCOMPOSE") bash ops/browser-egress.sh deploy"; then
+    RCOMPOSE="$RCOMPOSE --profile mail"
+  else
+    warn "Gmail provider was not started; complete the operator firewall setup above"
+  fi
+}
+
 # migrate: ops/migrate.sh of the tree just synced, on the Jetson, BEFORE start_stack (issue #81).
 # `alembic upgrade head` runs in a one off container of the api image just built, against the live
 # database, while the containers of the previous release keep serving: new code never queries a
@@ -691,10 +707,12 @@ cmd_deploy() {
   sync_tree
   record rsync "$start"
   push_env "$force_env"
+  mail_configuration
   check_port
   build_images
   migrate
   browser_egress
+  mail_egress
   start_stack
   health
   step "public URL"
@@ -1358,7 +1376,7 @@ cmd_backup_schedule() {
 # workflow (.github/workflows/deploy.yml) runs docker compose there exactly as this script does.
 # Registration and removal tokens come from `gh api` on this Mac, go to the container on stdin and
 # are never written anywhere. Docker socket access makes the runner root-equivalent on the Jetson
-# (README, Continuous delivery).
+# (docs/runbooks/continuous-delivery.md).
 RUNNER_REPO="$(setting JOBAPP_RUNNER_REPO GoldLegendW80/jobapp)"
 RUNNER_NAME="$(setting JOBAPP_RUNNER_NAME jetson)"
 RUNNER_LABELS="jetson,arm64" # GitHub adds self-hosted, Linux and ARM64 itself

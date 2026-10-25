@@ -397,7 +397,7 @@ fi
 # 3.2 and 5). A new bash inherits nothing of that state, so the status of a step is the same
 # however run_step is called. The step is given every function of this script (declare -f) and the
 # variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
-STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST NET_BASE STACK_NETWORKS JOURNEY_SHARDS)
+STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST NET_BASE STACK_NETWORKS STACK_NETWORK_COUNT JOURNEY_SHARDS)
 TIMINGS="$RECORDS/timings.csv"
 timing() { # timing <step> <exit status> <seconds>: one line of timings.csv
   local result=PASS
@@ -480,29 +480,30 @@ pick_journey_ports() { # pick_journey_ports <group ...>: one claimed port per gr
   done
 }
 
-# The networks of the journey stacks. A stack has five (default, parsing, rendering, browsing,
-# egress), and Docker Desktop's predefined address pools hold about thirty: six stacks side by side
+# The networks of the journey stacks. A stack has seven networks (default, parsing, rendering, browsing,
+# egress, mailmcp and gmail_egress), and Docker Desktop's predefined address pools hold about thirty: six stacks side by side
 # plus the stacks of agents ran out ("all predefined address pools have been fully subnetted",
 # check lc1014171255-32596). So each stack takes a slot, claimed like a port in $WORK/nets and
 # freed with the stack, and its networks get /27 subnets of that slot out of NET_BASE.0.0/16,
-# outside the pools Docker picks from: slot s, network j is NET_BASE.(5s + j).0/27.
+# outside the pools Docker picks from: slot s, network j is NET_BASE.(7s + j).0/27.
 NET_BASE="${LOCAL_CHECK_NET_BASE:-10.213}"
-STACK_NETWORKS="default parsing rendering browsing egress"
+STACK_NETWORKS="default parsing rendering browsing egress mailmcp gmail_egress"
+STACK_NETWORK_COUNT=$(wc -w <<<"$STACK_NETWORKS" | tr -d " ")
 
 # A check that died without its trap (SIGKILL, Docker Desktop or the Mac restarted) leaves its
 # stacks' networks behind, on the same slots as this check's: a slot is claimed only when no Docker
 # network holds one of its subnets (one query per claim), and stack_up moves a stack that still
 # meets "Pool overlaps" to another slot.
-claim_net_slot() { # prints the first slot (0 to 49) that no stack of this check holds and no network uses
+claim_net_slot() { # prints the first slot (0 to 35) that no stack of this check holds and no network uses
   local slot j ids used="" taken
   mkdir -p "$WORK/nets"
   ids="$(docker network ls -q 2>/dev/null)" || ids=""
   # shellcheck disable=SC2086
   [[ -z "$ids" ]] || used=" $(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $ids 2>/dev/null | tr '\n' ' ') " || used=""
-  for slot in $(seq 0 49); do
+  for slot in $(seq 0 $((256 / STACK_NETWORK_COUNT - 1))); do
     taken=""
-    for j in 0 1 2 3 4; do
-      [[ "$used" != *" $NET_BASE.$((slot * 5 + j)).0/27 "* ]] || taken=1
+    for j in $(seq 0 $((STACK_NETWORK_COUNT - 1))); do
+      [[ "$used" != *" $NET_BASE.$((slot * STACK_NETWORK_COUNT + j)).0/27 "* ]] || taken=1
     done
     [[ -z "$taken" ]] || continue
     if mkdir "$WORK/nets/$slot" 2>/dev/null; then
@@ -519,7 +520,7 @@ stack_networks() { # stack_networks <group> <slot>: writes the compose override 
   {
     echo "networks:"
     for net in $STACK_NETWORKS; do
-      printf '  %s:\n    ipam:\n      config:\n        - subnet: %s.%s.0/27\n' "$net" "$NET_BASE" "$(($2 * 5 + j))"
+      printf '  %s:\n    ipam:\n      config:\n        - subnet: %s.%s.0/27\n' "$net" "$NET_BASE" "$(($2 * STACK_NETWORK_COUNT + j))"
       j=$((j + 1))
     done
   } >"$file"
@@ -760,6 +761,8 @@ services:
     image: $PREFIX-caddy:latest
   api:
     image: $PREFIX-api:latest
+  gmailmcp:
+    image: $PREFIX-api:latest
   worker:
     image: $PREFIX-worker:latest
   parser:
@@ -775,7 +778,7 @@ EOF
   # which starts them below, under this check's names: the shared jobapp-*:latest tags are not
   # written.
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  # Behind a TLS inspecting proxy (README): the bundle reaches these builds only, never a stack.
+  # Behind a TLS inspecting proxy (docs/runbooks/develop-new-machine.md): the bundle reaches these builds only, never a stack.
   if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
     if [[ "$JOBAPP_EXTRA_CA" != /* || ! -f "$JOBAPP_EXTRA_CA" || ! -r "$JOBAPP_EXTRA_CA" ]]; then
       echo "JOBAPP_EXTRA_CA is set but does not name a readable file by its absolute path"
@@ -1009,7 +1012,7 @@ stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or o
       continue
     fi
     port=""
-    if [[ "$group" == mail ]]; then # the fake Google has a loopback port of its own, taken anew too
+    if [[ "$group" == mail || "$group" == apply ]]; then # both groups use fake Google
       GMAIL_STUB_PORT="$(claim_port)" || return 1
       export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
     fi
@@ -1042,6 +1045,7 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
     GMAIL_STUB_PORT="$(claim_port)" || return 1
     export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
     files+=(-f tests/gmail-stub.compose.yml)
+    export COMPOSE_PROFILES=mail
     ;;
   apply)
     # The fake ATS forms server beside the stack (never a real job site). The browser of a
@@ -1050,7 +1054,10 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
     ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
     export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     files+=(-f tests/ats-forms-stub.compose.yml)
-    export COMPOSE_PROFILES=browser # the browser that fills the fake forms (apply A7's journey)
+    GMAIL_STUB_PORT="$(claim_port)" || return 1
+    export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
+    files+=(-f tests/gmail-stub.compose.yml -f tests/mail-send.compose.yml)
+    export COMPOSE_PROFILES=browser,mail # browser forms and synthetic email applications
     ;;
   browser)
     # The stack's own browser, and the static pages it opens (never a real site).

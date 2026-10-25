@@ -1,0 +1,62 @@
+{
+  "tested_code_head": "dc3c368d9e47d02598ee4cc833c1029be7c244b1",
+  "tested_code_tree": "2131e1b5be2440df4649972f68d4e135d77fc9be",
+  "dependency_head": "feb7ca71b8bdf8e2c904bce907b02b36362b4d29",
+  "dependency_tree": "2ad2e3adaa0d26e89b5b57b75f9383347ae1b11d",
+  "prior_regular_file_bytes_verified_unchanged": 3410,
+  "prior_symlink_targets_verified_unchanged": 1,
+  "prior_source_manifest_sha256": "10d6a09863ddef516ca5ab1883b19da1d0a8934a519fc89a4c4f0357d810c07b",
+  "native36": {
+    "executions": 1,
+    "wrapper_exit": 0,
+    "expected": 36,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0,
+    "duration_ms": 67830.331
+  },
+  "private_numeric_fixture": {
+    "final_expected": 1,
+    "final_wrapper_exit": 0,
+    "final_duration_ms": 4409.219,
+    "first_fixture_sha256": "b0c947c9603cd4ad8180d218f75b22cc0013ad503c7a2822d5cd28138415d220",
+    "current_fixture_sha256": "17b909b47114c69358371bd7b519a583ebeb3feeaa09bcb550d2f20dc1280ea5",
+    "configured_executions": 3,
+    "history": [
+      "First: functional checks passed; strict errors caught missing synthetic model credential.",
+      "Second: corrected current fixture passed strict checks, but retained first spec was also collected and failed; wrapper exit1 with1passed/1failed.",
+      "Third: exact-path config collected1 and ran1; all functional and strict errors checks passed."
+    ]
+  },
+  "captures": [
+    {
+      "file": "numeric-reader-editor-desktop-dark.png",
+      "sha256": "a33eadac2b0e3a9fdba4c8bdf77dc7f24198aeb8e7c9eb34c6f4472589e3d513",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "file": "numeric-reader-editor-desktop-light.png",
+      "sha256": "26cf8db55433472358d55231d91959c6a064125f44b471c7e232a4f3d8fdff9a",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "file": "numeric-reader-editor-mobile-dark.png",
+      "sha256": "8af03368c011aa705297edce6ef7ea8882308f70d2a1f94c1da4c54acaaa9ca0",
+      "width": 375,
+      "height": 812
+    },
+    {
+      "file": "numeric-reader-editor-mobile-light.png",
+      "sha256": "8f731e623b6ce6ad6c84d7f41991859d96bb7a7f3e196863bda6677610543ee6",
+      "width": 375,
+      "height": 812
+    }
+  ],
+  "limits": [
+    "Browser posting GET is deliberately intercepted to supply4.35/5.1; actual title PATCH and direct server read are real.",
+    "Server pay remains integer4/5; no stored fractional persistence or Numeric migration is claimed.",
+    "Native36 retains its existing watchErrors helper and expected-response allowlist; only the separate fixture checks all browser warnings/errors/pageerrors/HTTP errors after setup."
+  ]
+}

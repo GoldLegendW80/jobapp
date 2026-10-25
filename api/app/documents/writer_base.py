@@ -232,33 +232,33 @@ def _with_fixed(taken: submit.Taken, records: tuple[Correction, ...]) -> submit.
     return replace(taken, accepted=replace(accepted, corrections=(*records, *accepted.corrections)))
 
 
-def _converted(sessions: Any, run_id: uuid.UUID) -> uuid.UUID | None:
-    """The base CV an upload's conversion run has just written, None for anything else."""
-    with sessions() as db:
-        found: uuid.UUID | None = db.scalar(
-            sa.select(DocumentGeneration.document_id).where(
-                DocumentGeneration.run_id == run_id,
-                DocumentGeneration.mode == GenerationMode.base_upload,
-                DocumentGeneration.status == GenerationStatus.done,
-            )
-        )
-        return found
-
-
 async def _on_final(final: definitions.FinalRun) -> None:
     """Settle the generation (D7's `generate.settle`), queue the render of its version, then
     hand a converted upload to the design capture."""
     if final.agent != NAME:
         return
+    prepared: uuid.UUID | None = None
+
+    def after_finish(db: Session, generation: DocumentGeneration) -> None:
+        nonlocal prepared
+        if generation.mode is GenerationMode.base_upload:
+            intent = design_capture.prepare_after_conversion(db, generation, at=final.clock())
+            prepared = intent.id if intent is not None else None
+
     taken = _with_fixed(submit.take(final.run_id), take_fixed(final.run_id))
     render = await asyncio.to_thread(
-        generate.settle, final.sessions, final.run_id, final.status, taken, final.clock()
+        generate.settle,
+        final.sessions,
+        final.run_id,
+        final.status,
+        taken,
+        final.clock(),
+        after_finish=after_finish,
     )
     if render is not None:
         await _queue_render(final, render)
-    converted = await asyncio.to_thread(_converted, final.sessions, final.run_id)
-    if converted is not None:
-        await design_capture.enqueue(final, converted)
+    if prepared is not None:
+        await design_capture.enqueue(final, prepared)
 
 
 async def _queue_render(final: definitions.FinalRun, render: tuple[uuid.UUID, int]) -> None:
