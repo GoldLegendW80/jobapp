@@ -19,7 +19,7 @@ RUN corepack enable
 WORKDIR /web
 COPY package.json pnpm-lock.yaml ./
 # Downloads the pnpm version pinned in packageManager, then installs from the lockfile only.
-# extra_ca: a bundle Node trusts beside its own, given only behind a TLS inspecting proxy (README).
+# extra_ca: a bundle Node trusts beside its own, given only behind a TLS inspecting proxy (docs/runbooks/develop-new-machine.md).
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     --mount=type=secret,id=extra_ca,required=false \
     if [ -s /run/secrets/extra_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/extra_ca; fi \

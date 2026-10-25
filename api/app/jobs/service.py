@@ -17,6 +17,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
@@ -1085,6 +1086,8 @@ def lock_job(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:
 
 
 def _jsonable(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
     return value.value if isinstance(value, enum.Enum) else value
 
 

@@ -104,7 +104,7 @@ if [[ "$conclusion" == cancelled ]]; then
 fi
 if [[ "$conclusion" != success ]]; then
   [[ -n "$lines" ]] ||
-    fail "the run ended $conclusion with no figures: gh run view $run --log-failed (a 'runner-job-guard: refused' there means the Jetson's runner predates ops.yml: README, Deploy from any machine)"
+    fail "the run ended $conclusion with no figures: gh run view $run --log-failed (a 'runner-job-guard: refused' there means the Jetson's runner predates ops.yml: docs/runbooks/deploy-from-any-machine.md)"
   fail "the run ended $conclusion"
 fi
 grep -qE "^JOBAPP-OPS action=$ACTION( .*)? result=ok$" <<<"$lines" || fail "the run printed no result=ok for $ACTION"

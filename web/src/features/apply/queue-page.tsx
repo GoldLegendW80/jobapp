@@ -30,13 +30,18 @@ const QUEUE_MAX = 200;
  * Full auto, its day so far comes first, and each hold counts down on the server's clock.
  */
 export function QueuePage() {
-  useTitle("Applications");
+  useTitle("Application queue");
   const queryClient = useQueryClient();
   const heading = useRef<HTMLHeadingElement>(null);
   const query = useQuery({
     queryKey: queueListKey,
     queryFn: ({ signal }) => getQueue(signal),
-    refetchInterval: (current) => queuePoll(current.state.data),
+    refetchInterval: (current) =>
+      queuePoll(
+        current.state.data,
+        Date.now(),
+        serverOffset(current.state.data?.now, current.state.dataUpdatedAt),
+      ),
   });
   const settings = useQuery({
     queryKey: applySettingsKey,
@@ -67,7 +72,7 @@ export function QueuePage() {
           tabIndex={-1}
           className="text-2xl font-semibold tracking-tight outline-none"
         >
-          Applications
+          Application queue
         </h1>
         <p className="text-muted-foreground">
           {settings.data === undefined

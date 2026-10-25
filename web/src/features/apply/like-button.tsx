@@ -10,14 +10,12 @@ import { describeError } from "@/lib/api";
 
 import { applicationsKey, refusalOf } from "./apply-api";
 import { likePosting, queueKey } from "./queue-api";
-import { LIKE_MAX } from "./queue-state";
 
 /**
  * The Like of the jobs list's bulk bar, until the swipe deck (#74) sends Likes: one Like per
- * selected posting, one after the other, at most LIKE_MAX per click (the label says so when more
- * are selected). A Like is the application in Review first: the assistant fills the form and the
- * item waits in the review queue for the person's approval. A refusal is shown with the api's
- * sentence; the others still go.
+ * selected posting, one after the other. A Like is the application in Review first: the assistant
+ * fills the form and the item waits in the review queue for the person's approval. A refusal is
+ * shown with the api's sentence; the others still go.
  */
 export function LikeButton({
   ids,
@@ -29,7 +27,6 @@ export function LikeButton({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
-  const chosen = ids.slice(0, LIKE_MAX);
 
   const like = async () => {
     setBusy(true);
@@ -37,7 +34,7 @@ export function LikeButton({
     let fullAuto = 0;
     let rehearsals = 0;
     const refused = new Map<string, number>();
-    for (const postingId of chosen) {
+    for (const postingId of ids) {
       try {
         const done = await likePosting(postingId);
         liked += 1;
@@ -59,7 +56,7 @@ export function LikeButton({
         rehearsals > 0
           ? `${plural(liked, "posting")} liked. Full auto rehearses first: the app fills the form, submits nothing, and asks you "Does this look right?" in Applications.`
           : fullAuto > 0
-            ? `${plural(liked, "posting")} liked. In Full auto, the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.`
+            ? `${plural(liked, "posting")} liked. In Full auto, your Like is your approval: the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.`
             : `${plural(liked, "posting")} liked. The assistant fills each form, then waits for your approval in Applications.`,
         {
           duration: 10_000,
@@ -82,7 +79,7 @@ export function LikeButton({
     <Button
       size="sm"
       variant="outline"
-      disabled={busy || chosen.length === 0}
+      disabled={busy || ids.length === 0}
       onClick={() => {
         void like();
       }}
@@ -92,7 +89,7 @@ export function LikeButton({
       ) : (
         <Heart aria-hidden="true" />
       )}
-      {ids.length > LIKE_MAX ? `Like the first ${LIKE_MAX}` : "Like"}
+      Like
     </Button>
   );
 }

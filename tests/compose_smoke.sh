@@ -471,7 +471,7 @@ done
 ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, parser 640MiB, worker 1.5GiB"
 
 # compose.mac.yml: OPENSSL_armcap=0 for api and worker, or the runtime image dies with SIGILL at
-# import inside Docker on an M4 (README, Apple silicon). This script only ever runs on the Mac.
+# import inside Docker on an M4 (docs/runbooks/development-on-the-mac.md, Apple silicon). This script only ever runs on the Mac.
 SCRATCH=(docker compose -p "$SCRATCH_PROJECT" -f compose.yml -f compose.mac.yml)
 [[ -z "${SMOKE_PROD_OVERLAY:-}" ]] || SCRATCH+=(-f "$SMOKE_PROD_OVERLAY")
 psql_scratch() { "${SCRATCH[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$1"; }
