@@ -30,6 +30,7 @@ const REASONS = [
   "signin",
   "form_changed",
   "no_adapter",
+  "linkedin_paused",
   null,
 ];
 
@@ -84,6 +85,14 @@ describe("what the application needs", () => {
     const need = needOf(fakeApplication("needs_person", { needs }));
     expect(need.title).not.toMatch(DASHES);
     expect(need.what).not.toMatch(DASHES);
+  });
+
+  it("says LinkedIn is paused for seven days and nothing was sent", () => {
+    const need = needOf(
+      fakeApplication("needs_person", { needs: "linkedin_paused" }),
+    );
+    expect(need.title).toBe("LinkedIn is paused for seven days");
+    expect(need.what).toContain("Nothing was sent");
   });
 
   it("names the site of a sign in wall", () => {

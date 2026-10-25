@@ -85,6 +85,10 @@ SENTENCES = {
         "This posting's fit is below your threshold for Full auto, so it waits for you."
     ),
     "unsupported_source": "Full auto does not apply on this site yet, so it waits for you.",
+    "company_site_unverified": (
+        "The LinkedIn posting links to a site the app cannot match to its company, so it waits"
+        " for you."
+    ),
     "fields_left": "Some questions of this form were left, so it waits for you.",
     "captcha_seen": "A captcha showed up while filling this form, so it waits for you.",
     "agent_text": "The app wrote a free text answer on this form, so you check it first.",

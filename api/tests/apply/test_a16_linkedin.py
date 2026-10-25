@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from app.apply import caps, gate, guardrails, linkedin
 from app.apply.ats import adapter_for, base, generic
 from app.apply.ats.linkedin import LinkedIn
-from app.apply.models import AnswerSource, Mode, State
+from app.apply.models import AnswerSource, ApplicationEvent, Mode, State
 from app.jobs.models import Job
 from tests.apply.a5_support import FakeLeases
 from tests.apply.a16_support import URL, LinkedInForm
@@ -535,3 +535,84 @@ def test_sixteenth_in_24_hours_goes_to_review(db, factory, person_a, stub):
 )
 def test_host_aliases_still_require_current_consent(url):
     assert caps.host_of("other", url) == "linkedin"
+
+
+# The posting's own company, for a site linked from a LinkedIn posting in Full auto: true inputs
+# that keep Full auto, then near misses that go to Review first (fail closed).
+OWN_COMPANY = [
+    ("Example Robotics", "https://boards.greenhouse.io/examplerobotics/jobs/4012345", True),
+    ("Example Robotics", "https://job-boards.greenhouse.io/examplerobotics/jobs/4012345", True),
+    (
+        "Example Robotics Inc.",
+        "https://jobs.ashbyhq.com/example-robotics/0d5b8a52-1c2e-4f6b-9a3d-7e8f9a0b1c2d",
+        True,
+    ),
+    (
+        "EXAMPLE ROBOTICS",
+        "https://jobs.lever.co/ExampleRobotics/0d5b8a52-1c2e-4f6b-9a3d-7e8f9a0b1c2d",
+        True,
+    ),
+    (
+        "Exämple Robotics SAS",
+        "https://jobs.eu.lever.co/examplerobotics/0d5b8a52-1c2e-4f6b-9a3d-7e8f9a0b1c2d",
+        True,
+    ),
+    ("Example Robotics", "https://careers.example-robotics.com/jobs/12", True),
+    ("Example Robotics", "https://www.examplerobotics.fr/carrieres/12", True),
+    ("Example Robotics", "https://examplerobotics.co.uk/jobs/12", True),
+    ("Northwind Labs", "https://boards.greenhouse.io/northwind-labs/jobs/4012345", True),
+    ("Example Robotics", "https://boards.greenhouse.io/northwind-labs/jobs/4012345", False),
+    ("Example Robotics", "https://boards.greenhouse.io/example/jobs/4012345", False),
+    ("Example", "https://boards.greenhouse.io/examplerobotics/jobs/4012345", False),
+    ("Example Robotics", "https://boards.greenhouse.io/examplerobotics2/jobs/4012345", False),
+    ("Example Robotics", "https://boards.greenhouse.io/embed/job_app?token=4012345", False),
+    ("Example Robotics", "https://jobs.ashbyhq.com/", False),
+    ("Example Robotics", "https://careers.example.com/jobs/12", False),
+    ("Example Robotics", "https://careers.northwind.example/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.northwind.example/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.github.io/jobs/12", False),
+    ("Example Robotics", "https://www.indeed.com/viewjob?jk=examplerobotics", False),
+    ("Example Robotics", "https://www.welcometothejungle.com/fr/companies/examplerobotics", False),
+    ("Example Robotics", "https://examplerobotics.myworkdayjobs.com/en-US/careers/job/12", False),
+    ("Example Robotics", "https://192.0.2.10/jobs/12", False),
+    ("Example Robotics", "https://localhost/jobs/12", False),
+    ("Example Robotics", "ftp://examplerobotics.com/jobs/12", False),
+    ("Example Robotics", "not an address", False),
+    ("Example Robotics", "", False),
+    ("", "https://boards.greenhouse.io/examplerobotics/jobs/4012345", False),
+    ("   ", "https://careers.example-robotics.com/jobs/12", False),
+    ("Example Robotics", "http://careers.example-robotics.com:8443/jobs/12", True),
+    ("Example Robotics", "https://careers.example-robotics.com.northwind.example/jobs", False),
+]
+
+
+@pytest.mark.parametrize(("company", "url", "own"), OWN_COMPANY)
+def test_company_site_is_the_postings_own_only_for_its_whole_name(company, url, own):
+    assert linkedin.own_company(company, url) is own
+
+
+@pytest.mark.parametrize(
+    ("target", "mode"),
+    [
+        ("https://boards.greenhouse.io/examplerobotics/jobs/4012345", Mode.full_auto),
+        ("https://boards.greenhouse.io/northwind-labs/jobs/4012345", Mode.review),
+        ("https://careers.northwind.example/jobs/12", Mode.review),
+    ],
+)
+def test_full_auto_follows_only_the_postings_own_company_site(
+    db, factory, person_a, stub, target, mode
+):
+    switch(factory, person_a)
+    app_id = start(db, person_a, Mode.full_auto)
+    form, leases = LinkedInForm(company=target), FakeLeases()
+    assert fill(services(factory, form, leases, stub_base=stub), app_id) == "queued"
+    found = application(db, app_id)
+    assert (found.form_url, found.state, found.mode) == (target, State.queued, mode)
+    assert form.openings == 0
+    handed = db.scalars(
+        sa.select(ApplicationEvent.data).where(
+            ApplicationEvent.application_id == app_id,
+            ApplicationEvent.kind == "sent_to_review",
+        )
+    ).all()
+    assert handed == ([] if mode is Mode.full_auto else [{"code": linkedin.NOT_OWN_COMPANY}])

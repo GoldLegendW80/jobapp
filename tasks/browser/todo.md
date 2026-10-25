@@ -265,3 +265,26 @@ Nothing yet.
 
 ### Checkpoint B
 Nothing yet.
+
+
+## Interactive job search (#626, owner approved 2026-10-24)
+
+Contract and dependency order: [interactive search plan](../jobs/interactive-search-626.md). Tasks are tracked in GitHub; existing module tasks remain intact.
+
+### B13: execute guarded interactive job search through the LLM runtime
+
+Task [#628](https://github.com/GoldLegendW80/jobapp/issues/628). Acceptance, owned files and verification are in that issue and the linked plan. Status: [draft #640](https://github.com/GoldLegendW80/jobapp/pull/640), not merged or deployed. No production wiring claimed.
+
+### B14: enforce platform consent and durable search checkpoints
+
+Task [#631](https://github.com/GoldLegendW80/jobapp/issues/631). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+Prerequisites are published as drafts: API-only Free-Work extraction [#653](https://github.com/GoldLegendW80/jobapp/pull/653), optional generic Search client compatibility [#657](https://github.com/GoldLegendW80/jobapp/pull/657), and Indeed/WTTJ consent [#656](https://github.com/GoldLegendW80/jobapp/pull/656). Permission and legacy reader intent remain [#648](https://github.com/GoldLegendW80/jobapp/issues/648). The extracted consent portion overlaps draft #619 but excludes its unrelated unmerged ancestry; that existing draft stays untouched. A future gate must select or reconcile the foundation lineage.
+
+### B15: watched sign-in and takeover during manual search
+
+Task [#634](https://github.com/GoldLegendW80/jobapp/issues/634). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### B16: follow observed posting destinations within source scope
+
+Task [#635](https://github.com/GoldLegendW80/jobapp/issues/635). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.

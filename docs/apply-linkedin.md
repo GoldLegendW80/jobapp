@@ -38,7 +38,12 @@ submission. No real posting was visited during implementation.
 A company-site link is parsed and validated without clicking it. The restricted LinkedIn
 lease ends first. The application is queued with the new address and canonical key, and the
 next fill rechecks posting, documents, duplicates, and site guards before requesting its own
-lease. No host is appended to the LinkedIn lease. A checkpoint or unusual-activity page
+lease. No host is appended to the LinkedIn lease. In Full auto the followed site keeps Full
+auto only when it is the posting's own company's form: the ATS organisation of an Ashby,
+Greenhouse or Lever address, or the registrable domain of a company's own site, has the key of
+the posting's company (`linkedin.own_company`, whole name only). Any other site, a job board or
+a shared host goes to Review first (`company_site_unverified`), so the person approves what is
+sent. A checkpoint or unusual-activity page
 commits the person's seven-day LinkedIn pause before content returns to the adapter, and
 held LinkedIn work becomes Review first. Sign-in walls use the existing owned handoff.
 

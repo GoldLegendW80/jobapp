@@ -29,6 +29,11 @@ function siteOf(application: Application): string {
 /** The headline and what to do, for each reason the api writes in `needs`. */
 export function needOf(application: Application): Need {
   switch (application.needs) {
+    case "linkedin_paused":
+      return {
+        title: "LinkedIn is paused for seven days",
+        what: "LinkedIn showed a security check or unusual activity. Nothing was sent. All your LinkedIn work waits for seven days, then you can review this application again.",
+      };
     case "captcha":
       return {
         title: "A captcha needs you",
