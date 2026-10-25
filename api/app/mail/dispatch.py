@@ -58,8 +58,9 @@ def _authorise(app: Any, application_id: uuid.UUID, now: datetime) -> gate.Autho
 
 async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
     now = app.state.clock()
-    # Database work runs in a thread: the event loop never waits on a lock (gate.send).
-    auth = await asyncio.to_thread(_authorise, app, application_id, now)
+    # Database work runs in a thread: the event loop never waits on a lock (gate.send). A
+    # stop of the loop waits for the step, so no session outlives the shutdown.
+    auth = await gate._blocking(lambda: _authorise(app, application_id, now))
     if auth is None:
         return None
     settings = app.state.settings
@@ -163,7 +164,7 @@ def _batch(app: Any) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
 async def once(app: Any) -> int:
     """One tick. Each item stands alone: one that fails is logged and the rest of the batch,
     any user's, and every reconciliation still run."""
-    due, unknown_users = await asyncio.to_thread(_batch, app)
+    due, unknown_users = await gate._blocking(lambda: _batch(app))
     for wanted in due:
         try:
             await application(app, wanted)

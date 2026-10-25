@@ -1,6 +1,5 @@
 """Owner-only draft review, the single explicit send click, and unknown-send decisions."""
 
-import asyncio
 import uuid
 from contextlib import suppress
 from typing import Annotated, Any, Literal
@@ -199,7 +198,7 @@ async def reconcile(send_id: str, request: Request, user: CurrentUser) -> dict[s
                 is not None
             )
 
-    if not await asyncio.to_thread(owned):
+    if not await gate._blocking(owned):
         raise HTTPException(404, "No such send.")
     mcp = dispatch.client(request.app)
     found = (
