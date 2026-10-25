@@ -2498,6 +2498,7 @@ deploy_order() { # deploy_order <substring of the remote command that fails, or 
     eval "$(sed -n -e '/^step() {/p' -e '/^info() {/p' -e '/^warn() {/p' -e '/^die() {/,/^}/p' -e '/^envval() {/,/^}/p' \
       -e '/^setting() {/,/^}/p' -e '/^record() {/,/^}/p' -e '/^rcompose() {/,/^}/p' \
       -e '/^build_images() {/,/^}/p' -e '/^migrate() {/,/^}/p' -e '/^start_stack() {/,/^}/p' \
+      -e '/^mail_configuration() {/,/^}/p' -e '/^mail_egress() {/,/^}/p' \
       -e '/^cmd_deploy() {/,/^}/p' deploy.sh)"
     # shellcheck disable=SC2034 # read by the evaluated functions
     ROOT="$WORK/norepo" HOST=fakejetson RDIR=jobapp RDIR_Q=jobapp TIMES=() \
@@ -2568,6 +2569,31 @@ grep -q "browser-egress.sh skip" "$WORK/order" && fail "skip ran although the im
 grep -q "^RCOMPOSE=.*--profile browser" "$WORK/order" || fail "the browser profile was not added after the firewall step"
 ok "browser_egress: a failed image build removes the previous browser (skip) and never starts it; a good build runs the firewall step as before"
 
+# The Gmail provider (SPEC-mail, "Its way out is filtered like the browser's"): its profile joins
+# compose up only after its firewall check passed, and the sending overlay only with .env.mailsend.
+MAIL_CHECK="remote: cd jobapp && JOBAPP_EGRESS_KIND=mail COMPOSE="
+up_line() { grep -- "up -d --remove-orphans" "$WORK/order" | head -n 1; }
+run 0 deploy_order ""
+mailed="$(line_of "$MAIL_CHECK")" guarded="$(line_of "^browser_egress$")" upped="$(line_of "up -d --remove-orphans")"
+[[ -n "$mailed" && -n "$upped" ]] || fail "the mail firewall check or compose up is missing: $(cat "$WORK/order")"
+((guarded < mailed && mailed < upped)) || fail "order is browser_egress $guarded, mail firewall $mailed, up $upped"
+grep -- "$MAIL_CHECK" "$WORK/order" | grep -q "browser-egress.sh deploy" || fail "the mail check is not the firewall's deploy: $(cat "$WORK/order")"
+up_line | grep -q -- "--profile mail" || fail "the firewall check passed but compose up lacks --profile mail: $(up_line)"
+up_line | grep -q -- "-f compose.mail.yml" || fail ".env.mailsend is there but compose up lacks compose.mail.yml: $(up_line)"
+grep -- "$MAIL_CHECK" "$WORK/order" | grep -q -- "--profile mail" && fail "the profile was added before its own firewall check"
+out_lacks "Gmail provider was not started"
+ok "cmd_deploy: the mail firewall check passes after the browser's, then compose up with --profile mail; .env.mailsend adds compose.mail.yml"
+run 0 deploy_order "JOBAPP_EGRESS_KIND=mail"
+[[ -n "$(up_line)" ]] || fail "a failed mail firewall check stopped the deploy: $(cat "$WORK/order")"
+up_line | grep -q -- "--profile mail" && fail "the mail firewall check failed but compose up has --profile mail: $(up_line)"
+out_has "Gmail provider was not started; complete the operator firewall setup above"
+[[ -n "$(line_of "^health$")" ]] || fail "a failed mail firewall check stopped the deploy before health"
+ok "cmd_deploy: a failed mail firewall check warns, and compose up runs without --profile mail; everything else deploys, exit 0"
+run 0 deploy_order "test -f jobapp/.env.mailsend"
+grep -q -- "-f compose.mail.yml" "$WORK/order" && fail "no .env.mailsend but compose.mail.yml was used: $(cat "$WORK/order")"
+up_line | grep -q -- "--profile mail" || fail "the read only provider was not started without .env.mailsend: $(up_line)"
+ok "cmd_deploy: without .env.mailsend no compose.mail.yml (the provider starts read only, after its firewall check)"
+
 run 1 deploy_order "ops/migrate.sh"
 out_has "the migrations did not apply"
 out_has "the containers on fakejetson were not touched and still run the previous release"
@@ -2619,6 +2645,16 @@ wf() {
   cp ops/migrate.sh ops/previous.sh "$WF/ws/ops/"
   # The real browser script runs only where a test is about it (the others find none and carry on).
   if [[ " $* " == *" FAKE_FAIL_BROWSER_BUILD=1 "* ]]; then cp ops/browser-egress.sh "$WF/ws/ops/"; fi
+  # FAKE_MAIL_EGRESS=<exit>: a stub firewall script; the browser's check fails, the mail one
+  # answers that exit. FAKE_MAILSEND=1: the operator's .env.mailsend is on the Jetson.
+  if [[ " $* " == *" FAKE_MAIL_EGRESS="* ]]; then
+    cat >"$WF/ws/ops/browser-egress.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "egress ${JOBAPP_EGRESS_KIND:-browser} $* with $COMPOSE" >>"$FAKE_DIR/calls"
+[[ "${JOBAPP_EGRESS_KIND:-}" == mail ]] || exit 1
+exit "$FAKE_MAIL_EGRESS"
+STUB
+  fi
   printf 'name: new release\n' >"$WF/ws/compose.yml"
   cat >"$WF/ws/ops/db.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -2641,6 +2677,7 @@ echo "smoke" >>"$FAKE_DIR/calls"
 STUB
   chmod +x "$WF/ws/tests/jetson_smoke.sh"
   printf 'POSTGRES_USER=jobapp\n' >"$WF/app/.env"
+  if [[ " $* " == *" FAKE_MAILSEND=1 "* ]]; then : >"$WF/app/.env.mailsend"; fi
   if [[ " $* " != *" FIRST_INSTALL=1 "* ]]; then
     cp .rsyncignore "$WF/app/"
     printf 'name: previous release\n' >"$WF/app/compose.yml"
@@ -2652,7 +2689,7 @@ STUB
 }
 wf_line() { grep -n -- "$1" "$MIG/calls" | head -n 1 | cut -d: -f1; }
 wf_count() { grep -c -- "$1" "$MIG/calls" || true; }
-WF_UP='docker compose -f compose.yml --profile tunnel\( --profile mail\)\? up -d --remove-orphans --wait --wait-timeout 180'
+WF_UP="docker compose -f compose.yml --profile tunnel up -d --remove-orphans --wait --wait-timeout 180"
 
 wf 0 FAKE_PENDING=1
 [[ -n "$(wf_line " build renderer")" ]] || fail "the workflow does not build the renderer: $(cat "$MIG/calls")"
@@ -2729,16 +2766,43 @@ wf 0 FAKE_PENDING=1 FAKE_FAIL_BROWSER_BUILD=1
 out_has "::warning::build of browser failed: everything else deploys, the browser is not deployed"
 out_has "browser: not started, the browser image did not build; no browser container left"
 out_has "::warning::the browser is not deployed (its image did not build); everything else deploys"
-built="$(wf_line " build browser")" removed_at="$(wf_line "--profile browser rm -s -f browser")" upped="$(wf_line "^$WF_UP$")" smoked="$(wf_line "^smoke$")"
-[[ -n "$built" && -n "$removed_at" && -n "$upped" && -n "$smoked" ]] || fail "a step is missing: $(cat "$MIG/calls")"
-((built < removed_at && removed_at < upped && upped < smoked)) ||
-  fail "order is build browser $built, remove browser $removed_at, up $upped, smoke $smoked: $(cat "$MIG/calls")"
+# The real firewall script runs here, and its mail check passes against the fakes: compose up
+# carries --profile mail, after that check (the cases below cover a failing check).
+built="$(wf_line " build browser")" removed_at="$(wf_line "--profile browser rm -s -f browser")" smoked="$(wf_line "^smoke$")"
+mailed="$(wf_line "jobapp-mail-egress check$")" upped="$(wf_line "^docker compose -f compose.yml --profile tunnel --profile mail up -d --remove-orphans --wait --wait-timeout 180$")"
+[[ -n "$built" && -n "$removed_at" && -n "$mailed" && -n "$upped" && -n "$smoked" ]] || fail "a step is missing: $(cat "$MIG/calls")"
+((built < removed_at && removed_at < mailed && mailed < upped && upped < smoked)) ||
+  fail "order is build browser $built, remove browser $removed_at, mail check $mailed, up $upped, smoke $smoked: $(cat "$MIG/calls")"
 [[ "$(wf_count " up -d --remove-orphans ")" == 1 ]] || fail "compose up ran more than once"
 grep -q "create browser\|jobapp-browser-egress apply\|^docker pull" "$MIG/calls" && fail "the browser was created or its firewall step ran: $(cat "$MIG/calls")"
 grep -q "up -d --remove-orphans.*--profile browser\|--profile browser up" "$MIG/calls" && fail "the browser profile was in compose up"
 [[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail ".deployed-commit not written"
 [[ "$(cat "$WF/app/compose.yml")" == "name: new release" ]] || fail "the new tree is not in place"
 ok "a browser image that does not build: the workflow deploys everything else, removes the previous browser container, never starts it, and says so"
+
+# Without a firewall script (every case above but the failed browser build) the mail check fails
+# and compose up is WF_UP, without --profile mail. A stub script decides the check below.
+wf 0 FAKE_MAIL_EGRESS=1
+grep -q "^egress mail deploy with docker compose -f compose.yml --profile tunnel$" "$MIG/calls" || fail "the mail firewall check did not run: $(cat "$MIG/calls")"
+[[ -n "$(wf_line "^$WF_UP$")" ]] || fail "a failed mail firewall check: compose up is not the plain one: $(cat "$MIG/calls")"
+grep -q -- "--profile mail" "$MIG/calls" && fail "the mail firewall check failed but --profile mail was used: $(cat "$MIG/calls")"
+out_has "::warning::Gmail provider not started; complete the operator mail firewall setup"
+[[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail "a failed mail firewall check stopped the deploy"
+ok "deploy.yml: a failed mail firewall check warns, compose up runs without --profile mail, the deploy goes on"
+wf 0 FAKE_MAIL_EGRESS=0
+checked="$(wf_line "^egress mail deploy")" upped="$(wf_line "^docker compose -f compose.yml --profile tunnel --profile mail up -d --remove-orphans --wait --wait-timeout 180$")"
+[[ -n "$checked" && -n "$upped" ]] || fail "the mail check passed, but compose up lacks --profile mail: $(cat "$MIG/calls")"
+((checked < upped)) || fail "compose up with --profile mail ran before the mail firewall check"
+[[ "$(wf_line "--profile mail")" == "$upped" ]] || fail "--profile mail was used before the compose up that follows the check: $(cat "$MIG/calls")"
+grep -q -- "-f compose.mail.yml" "$MIG/calls" && fail "no .env.mailsend but compose.mail.yml was used"
+out_lacks "Gmail provider not started"
+ok "deploy.yml: the mail firewall check passes, then compose up with --profile mail; no .env.mailsend, no compose.mail.yml"
+wf 0 FAKE_MAIL_EGRESS=0 FAKE_MAILSEND=1
+grep -q "^egress mail deploy with docker compose -f compose.yml --profile tunnel -f compose.mail.yml$" "$MIG/calls" || fail "the mail check does not see compose.mail.yml: $(cat "$MIG/calls")"
+[[ -n "$(wf_line "^docker compose -f compose.yml --profile tunnel -f compose.mail.yml --profile mail up -d --remove-orphans --wait --wait-timeout 180$")" ]] ||
+  fail ".env.mailsend: compose up lacks compose.mail.yml or --profile mail: $(cat "$MIG/calls")"
+[[ -n "$(wf_line " -f compose.mail.yml build ")" || -n "$(wf_line "compose.mail.yml.* build")" ]] || fail ".env.mailsend: the build does not use compose.mail.yml: $(cat "$MIG/calls")"
+ok "deploy.yml: with .env.mailsend every compose call adds compose.mail.yml, and the mail profile still waits for its firewall check"
 
 wf 1 FAKE_TIMEOUT=1
 out_has "did not finish within 300s and were stopped"

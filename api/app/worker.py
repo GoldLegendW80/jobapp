@@ -117,7 +117,7 @@ from app import queue
 from app.agents import definitions
 from app.agents import runs as agent_runs
 from app.browser import removals as browser_removals
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, refuse_send_key
 from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
@@ -1242,6 +1242,7 @@ def main(argv: list[str] | None = None) -> int:
     # Loaded through the cache: job code that reads get_settings() (the documents renders,
     # render_client and store) runs after the secrets below left the environment.
     settings = get_settings()
+    refuse_send_key(settings)
     if args.check:
         return asyncio.run(check(settings))
     configure_logging(settings.log_level)

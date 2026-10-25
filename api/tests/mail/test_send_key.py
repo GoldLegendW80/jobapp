@@ -55,3 +55,23 @@ def test_unconfigured_process_cannot_mint() -> None:
             b"x",
             datetime.now(UTC),
         )
+
+
+def test_worker_refuses_to_start_with_the_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import worker
+    from app.config import ConfigError, Settings, refuse_send_key
+
+    url = "postgresql+psycopg://jobapp:secret@db:5432/jobapp"
+    refuse_send_key(Settings(database_url=url))  # type: ignore[arg-type]
+    held = Settings(database_url=url, mail_send_key="synthetic-test-key-" * 4)  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="MAIL_SEND_KEY is refused in the worker"):
+        refuse_send_key(held)
+    started: list[object] = []
+    monkeypatch.setattr(worker, "get_settings", lambda: held)
+    monkeypatch.setattr(worker, "serve", lambda *a: started.append(a))
+    monkeypatch.setattr(worker, "check", lambda *a: started.append(a))
+    # Neither the worker nor its healthcheck runs: the container fails to start.
+    for argv in ([], ["--check"]):
+        with pytest.raises(ConfigError, match="MAIL_SEND_KEY"):
+            worker.main(argv)
+    assert started == []

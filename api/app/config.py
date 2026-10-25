@@ -470,6 +470,16 @@ def get_settings() -> Settings:
     return load_settings()
 
 
+def refuse_send_key(settings: Settings) -> None:
+    """The worker runs every agent and every schedule, so it must never hold the key that mints
+    a send key (SPEC-mail "The send: a one time key"). Raises ConfigError when it does."""
+    if settings.mail_send_key is not None:
+        raise ConfigError(
+            "Invalid configuration: MAIL_SEND_KEY is refused in the worker, "
+            "only the api and gmailmcp load .env.mailsend"
+        )
+
+
 def ats_stub_for(settings: Settings, org: str) -> str | None:
     """The test stub's base address when this org's ATS calls go to it (ATS_BASE_URL, filtered
     by ATS_BASE_URL_ORG_PREFIX), else None: the real ATS."""
