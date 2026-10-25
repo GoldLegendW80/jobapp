@@ -221,6 +221,9 @@ jobs:
           echo "files: $(find "$APP" -type f | wc -l)"
           echo "::endgroup::"
           cd "$APP"
+          if [[ -f .env.mailsend ]]; then
+            COMPOSE="$COMPOSE -f compose.mail.yml"
+          fi
 
           echo "::group::build (the running stack is untouched until this succeeds)"
           for svc in api worker caddy renderer; do
@@ -327,6 +330,14 @@ jobs:
             COMPOSE="$COMPOSE --profile browser"
           else
             echo "::warning::the browser is not started (above); everything else deploys"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Gmail provider behind its host firewall"
+          if JOBAPP_EGRESS_KIND=mail COMPOSE="$COMPOSE" bash ops/browser-egress.sh deploy; then
+            COMPOSE="$COMPOSE --profile mail"
+          else
+            echo "::warning::Gmail provider not started; complete the operator mail firewall setup"
           fi
           echo "::endgroup::"
 

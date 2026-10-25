@@ -2652,7 +2652,7 @@ STUB
 }
 wf_line() { grep -n -- "$1" "$MIG/calls" | head -n 1 | cut -d: -f1; }
 wf_count() { grep -c -- "$1" "$MIG/calls" || true; }
-WF_UP="docker compose -f compose.yml --profile tunnel up -d --remove-orphans --wait --wait-timeout 180"
+WF_UP='docker compose -f compose.yml --profile tunnel\( --profile mail\)\? up -d --remove-orphans --wait --wait-timeout 180'
 
 wf 0 FAKE_PENDING=1
 [[ -n "$(wf_line " build renderer")" ]] || fail "the workflow does not build the renderer: $(cat "$MIG/calls")"
@@ -2734,7 +2734,7 @@ built="$(wf_line " build browser")" removed_at="$(wf_line "--profile browser rm 
 ((built < removed_at && removed_at < upped && upped < smoked)) ||
   fail "order is build browser $built, remove browser $removed_at, up $upped, smoke $smoked: $(cat "$MIG/calls")"
 [[ "$(wf_count " up -d --remove-orphans ")" == 1 ]] || fail "compose up ran more than once"
-grep -q "create browser\|nsenter\|^docker pull" "$MIG/calls" && fail "the browser was created or the firewall step ran: $(cat "$MIG/calls")"
+grep -q "create browser\|jobapp-browser-egress apply\|^docker pull" "$MIG/calls" && fail "the browser was created or its firewall step ran: $(cat "$MIG/calls")"
 grep -q "up -d --remove-orphans.*--profile browser\|--profile browser up" "$MIG/calls" && fail "the browser profile was in compose up"
 [[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail ".deployed-commit not written"
 [[ "$(cat "$WF/app/compose.yml")" == "name: new release" ]] || fail "the new tree is not in place"

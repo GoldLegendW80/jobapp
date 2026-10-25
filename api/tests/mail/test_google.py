@@ -20,6 +20,7 @@ import httpx
 import pytest
 
 from app.config import Settings
+from app.gmailmcp.google import GmailGoogle as GoogleClient
 from app.mail import errors, log
 from app.mail import google as google_module
 from app.mail.google import (
@@ -28,7 +29,6 @@ from app.mail.google import (
     MESSAGE_MAX_BYTES,
     UNITS,
     USER_UNITS_PER_MINUTE,
-    GoogleClient,
     Grant,
     decode_attachment,
     next_backoff,

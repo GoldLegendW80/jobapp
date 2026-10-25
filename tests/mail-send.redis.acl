@@ -1,0 +1,2 @@
+user default on nopass ~* &* +@all
+user gmailmcp on >e2e-only ~mailmcp:send:* -@all +set
