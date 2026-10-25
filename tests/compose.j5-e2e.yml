@@ -10,6 +10,8 @@
 # http://fakeats:8099 for boards whose org starts with "fake-" (ATS_BASE_URL with
 # ATS_BASE_URL_ORG_PREFIX, refused when APP_ENV is production). Every other board still goes to
 # its real ATS.
+# Only the worker reaches it: the api here proposes the real starter catalog (O5b), so the O5b
+# journey fails closed on this stack, before it adds anything.
 services:
   api:
     image: jobapp-api:j5-e2e

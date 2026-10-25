@@ -264,6 +264,23 @@ describe("the Applications page", () => {
     expect(panel).toHaveTextContent(
       "A company cap you set on this page replaces the one per company rule for that company.",
     );
+    const waits = within(panel).getByRole("list", {
+      name: "These wait for you in Applications instead:",
+    });
+    expect(
+      within(waits)
+        .getAllByRole("listitem")
+        .map((one) => one.textContent),
+    ).toEqual([
+      "a posting whose fit is below 72",
+      "a site Full auto does not handle yet",
+      "a question left, a captcha or a sign in",
+      "a free text answer the app wrote itself, unless the app's own check of it passed",
+      "a term your never apply rules exclude, in the posting's text",
+      "a CV or letter that runs over its page or has a correction to look at",
+      "a second application to the same company within 30 days",
+      "anything past the safety ceiling of 30 submissions a day",
+    ]);
     expect(api.puts).toEqual([]);
 
     await user.click(

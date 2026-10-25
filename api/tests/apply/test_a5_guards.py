@@ -217,16 +217,17 @@ OFF_TOPIC = [
     "What restrictions apply to you?",
     "What are the legal requirements you must meet?",
     "Why did you apply?",
-    "What is your current location?",
     "Which languages do you speak?",
     "Which university did you attend?",
     "What is your GPA?",
     "What is the name of your current manager?",
-    "What is your work arrangement?",
     "How did you hear about us?",
     "How do you handle 2FA?",
     "Describe your last 3 jobs",
     "Why have you had so many roles in two years?",
+    # an employer word alone, outside a question of motivation (issue #317): "How did you hear
+    # about us?" in French; A3's `how they heard` answers it from the profile
+    "Comment avez-vous connu notre entreprise ?",
 ]
 
 # Leaving a job and the person's practical situation (review of PR #323): the profile holds no
@@ -284,13 +285,16 @@ LEAVING_AND_PRACTICAL = [
     ("Why do you want to work in the US?", "practical"),
     ("Why do you want to work in Paris?", "practical"),
     ("Pourquoi voulez-vous travailler à Paris ?", "practical"),
+    # a place or an arrangement word, whatever the verb (issue #317; `off_topic` before)
+    ("What is your current location?", "practical"),
+    ("What is your work arrangement?", "practical"),
 ]
 
 
 # The `not_open` rows of the table below that are still about the job: written by A3 as free text,
-# they are asked; the other `not_open` rows are `off_topic` on that route.
+# they are asked; the other `not_open` rows are `off_topic` on that route ("Team preference": an
+# employer word puts a label on topic only in a question of motivation, issue #317).
 FREE_TEXT_ON_TOPIC = {
-    "Team preference",
     "Favourite colour",
     "Kubernetes experience",
     "Experience with Kubernetes: why?",
@@ -461,7 +465,6 @@ def test_a_question_not_about_the_job_stays_the_persons_in_any_widget(
         ("Tell us about yourself", "text", (), None),
         ("Describe your biggest achievement", "text", (), None),
         ("Explain your interest in the company", "text", (), None),
-        ("Comment avez-vous connu notre entreprise ?", "text", (), None),
         ("Quelle est votre motivation ?", "text", (), None),
         ("Décrivez votre expérience", "text", (), None),
         ("Why Example Robotics? (optional)", "text", (), None),
@@ -603,7 +606,7 @@ def test_a_field_reported_twice_is_asked_once() -> None:
 # --- never left `filling` ----------------------------------------------------------------------
 
 
-def test_a_fill_cancelled_mid_fill_ends_interrupted_and_releases_the_lease_once(
+def test_a_fill_cancelled_mid_fill_is_queued_for_its_retry_and_releases_the_lease_once(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
     app_id = started(db, person_a)
@@ -617,13 +620,14 @@ def test_a_fill_cancelled_mid_fill_ends_interrupted_and_releases_the_lease_once(
     with pytest.raises(asyncio.CancelledError):
         fill(services(factory, form, leases, stub_base=stub), app_id)
     found = application(db, app_id)
-    assert (found.state, found.error_code) == (State.failed, "interrupted")
-    assert [e.data for e in events(db, app_id) if e.kind == "ended"] == [{"code": "interrupted"}]
+    # A10a: an interrupted fill is retried while a retry is left.
+    assert (found.state, found.needs, found.error_code) == (State.queued, "retry", "interrupted")
+    assert [e.data["code"] for e in events(db, app_id) if e.kind == "retry"] == ["interrupted"]
     assert len(leases.released) == 1
     assert status(db, person_a) is JobStatus.found
 
 
-def test_a_fill_whose_end_cannot_be_written_ends_failed(
+def test_a_fill_whose_end_cannot_be_written_never_stays_filling(
     db: Session,
     factory: sessionmaker[Session],
     person_a: Person,
@@ -637,10 +641,14 @@ def test_a_fill_whose_end_cannot_be_written_ends_failed(
         raise jobs_service.JobBusyError  # the person holds the posting's row
 
     monkeypatch.setattr(run, "finish", busy)
-    assert fill(services(factory, run_ashby(), leases, stub_base=stub), app_id) == "failed"
+    assert fill(services(factory, run_ashby(), leases, stub_base=stub), app_id) == "queued"
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.queued, "interrupted")  # A10a: retried
+    assert len(leases.released) == 1
+    svc = services(factory, run_ashby(), leases, stub_base=stub, retry_delays_s=())
+    assert fill(svc, app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "interrupted")
-    assert len(leases.released) == 1
 
 
 def test_an_application_no_longer_filling_is_not_interrupted(
@@ -695,7 +703,7 @@ def test_the_queue_start_ends_fills_left_by_a_dead_worker_and_nothing_else(
     ctx = {"sessions": factory, "clock": Clock()}
     assert asyncio.run(worker.reset_fills_at_start(ctx)) == 1
     found = application(db, left)
-    assert (found.state, found.error_code) == (State.failed, "interrupted")
+    assert (found.state, found.error_code) == (State.queued, "interrupted")  # A10a: retried
     assert application(db, ready).state is State.ready
     assert application(db, b_id).state is State.queued
     assert asyncio.run(worker.reset_fills_at_start(ctx)) == 0
@@ -816,17 +824,18 @@ FREE_TEXT_ROUTE = [
     ("Describe your status", "textarea", "off_topic"),
     ("Tell us how your data should be handled", "textarea", "off_topic"),
     ("Explain your situation", "textarea", "off_topic"),
-    ("Tell us about your weekend", "textarea", "off_topic"),
+    ("Tell us about your weekend", "textarea", "practical"),
     ("Why do you want to leave your current job?", "text", "history"),
-    ("Why are you looking for a new job?", "text", "off_topic"),
+    ("Why are you looking for a new job?", "text", "history"),
     ("Why did you apply?", "text", "off_topic"),
     ("Why should we trust you?", "text", "off_topic"),
     ("Décrivez votre situation", "textarea", "off_topic"),
+    # a time is no employer: the reason to move now is not in the profile (issue #317)
+    ("Why now?", "text", "practical"),
     # what this route still asks
     ("Why Example Robotics?", "textarea", None),
     ("Why Example Robotics?", "text", None),
     ("Why us?", "text", None),
-    ("Why now?", "text", None),
     ("Why this role?", "text", None),
     ("Why do you want to work here?", "text", None),
     ("Why do you want to join Example Robotics?", "text", None),

@@ -52,7 +52,7 @@ function sentence(error: unknown): string {
  * noVNC over /vnc/websockify with a one use ticket, view only until "Take over", which gives this
  * tab the keyboard and the mouse (the agent's next action waits) until "Give back". `status` is the
  * caller's sentence for the status line while the assistant has the browser ("The assistant is
- * filling the form"). `person`: the person's own session (no assistant, browser B7), where this
+ * filling the form"), or while the person has it (a sign in hand off). `person`: the person's own session (no assistant, browser B7), where this
  * view has the keyboard and the mouse from the start and there is nothing to take over or give
  * back. Used by Account's "Your browser" card and by the apply module's job page.
  */
@@ -183,7 +183,7 @@ export function LiveBrowser({
       : phase === "closed"
         ? "The live view is closed."
         : person
-          ? OWN_SESSION
+          ? (status ?? OWN_SESSION)
           : input === "you"
             ? STATUS.you
             : (status ?? STATUS.assistant);

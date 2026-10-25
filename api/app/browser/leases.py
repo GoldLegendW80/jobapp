@@ -6,7 +6,8 @@ second one. The keys, all under `jobapp:browser:`:
 
     holder          the current lease as JSON, written and ended by compare and set only
     queue:<tier>    one sorted set per priority tier, members `<user id>|<purpose>`, in order of
-                    arrival; tier 0 first: a person's own session (`takeover`, `signin`), then
+                    arrival; tier 0 first: a person's own session (`takeover`, `signin`, and
+                    Apply myself's `apply_manual`, apply A9), then
                     the apply purposes a person waits on, then `full_auto`, then `sweep`
     ticket:<member> present while that waiter still waits: it lives TICKET_TTL_S and is renewed
                     each time the waiter asks again; a member whose ticket is gone leaves the queue
@@ -31,7 +32,7 @@ lease token once, in memory: it is never written to Redis nor logged.
 
 Time (SPEC-browser, "Leases"): the purpose's maximum counts active time only, and the idle timer
 (BROWSER_IDLE_S without a tool call or input, `touch`) ends a lease; while the lease is
-`waiting_person` (B12 sets it, with a reason, a site and a deadline of BROWSER_SESSION_MAX_S)
+`waiting_person` (B12 sets it, with a reason, a host and a deadline of BROWSER_SESSION_MAX_S)
 neither runs, and `resume` gives the lease back the active time it had left. The sign in hand off
 (app/browser/handoff.py) sets and clears this copy's wait in step with browserd's, with the
 seconds browserd has left; a lease already waiting keeps its deadline, and after a Redis restart
@@ -75,7 +76,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -102,6 +103,7 @@ FORGETS = PREFIX + "forgets:"
 LEASE_MAX_S = {
     "takeover": 1800,
     "signin": 1800,
+    "apply_manual": 1800,
     "apply_fill": 900,
     "apply_submit": 900,
     "profile_edit": 900,
@@ -112,6 +114,7 @@ PURPOSES = tuple(LEASE_MAX_S)
 TIERS = {
     "takeover": 0,
     "signin": 0,
+    "apply_manual": 0,
     "apply_fill": 1,
     "apply_submit": 1,
     "profile_edit": 1,
@@ -127,9 +130,7 @@ SEEN_TTL_S = 86400  # a sighting nobody refreshed for a day is forgotten (renewe
 HISTORY = 10
 DEFAULT_LEASE_S = 300  # the estimate's lease length while no lease has ended yet
 UPDATE_ATTEMPTS = 5
-SITE_MAX = (
-    80  # browserd/handoff.py's SITE_MAX: the site a sign in waits for, as the person reads it
-)
+HOST_MAX = 253  # a DNS name's longest form: the host a sign in waits on, as browserd noted it
 
 # Drops the members whose ticket is gone, then, when ARGV[1] names a member, gives it the turn
 # if nobody holds one and it is the head of the first non empty tier.
@@ -208,7 +209,7 @@ class Lease:
     started_at: float
     state: str = "starting"  # then "active", or "waiting_person"
     wait_reason: str | None = None
-    wait_site: str | None = None
+    wait_host: str | None = None  # browserd's host of the noted address, never the model's words
     wait_deadline: float | None = None
     active_before: float = 0.0  # active seconds banked before the current active stretch
     active_since: float = 0.0
@@ -221,16 +222,16 @@ class Lease:
     def touch(self, now: float) -> None:
         self.last_input = now
 
-    def wait_person(self, now: float, reason: str, site: str, deadline_s: int) -> None:
+    def wait_person(self, now: float, reason: str, host: str, deadline_s: int) -> None:
         if self.state == "active":
             self.active_before = self.active_s(now)
-        self.state, self.wait_reason, self.wait_site = "waiting_person", reason, site
+        self.state, self.wait_reason, self.wait_host = "waiting_person", reason, host
         self.wait_deadline = now + deadline_s
 
     def resume(self, now: float) -> None:
         if self.state != "waiting_person":
             return
-        self.state, self.wait_reason, self.wait_site, self.wait_deadline = (
+        self.state, self.wait_reason, self.wait_host, self.wait_deadline = (
             "active",
             None,
             None,
@@ -272,7 +273,9 @@ class Lease:
 
     @classmethod
     def loads(cls, raw: str | bytes) -> "Lease":
-        return cls(**json.loads(raw))
+        known = {f.name for f in fields(cls)}
+        # A lease stored by an older api (its `wait_site`) still loads.
+        return cls(**{k: v for k, v in json.loads(raw).items() if k in known})
 
 
 @dataclass(frozen=True)
@@ -519,7 +522,7 @@ class Leases:
         return await self._update(user_id, lease_id, lambda lease, now: lease.touch(now))
 
     async def wait_person(
-        self, user_id: str, lease_id: str, reason: str, site: str, left_s: int | None = None
+        self, user_id: str, lease_id: str, reason: str, host: str, left_s: int | None = None
     ) -> Lease | None:
         """B12: the lease waits for the person, both timers suspended, until the deadline:
         `left_s` from now (browserd's own, at most BROWSER_SESSION_MAX_S). A lease that already
@@ -530,7 +533,7 @@ class Leases:
 
         def wait(lease: Lease, now: float) -> None:
             if lease.state != "waiting_person":
-                lease.wait_person(now, reason, site, deadline_s)
+                lease.wait_person(now, reason, host, deadline_s)
 
         return await self._update(user_id, lease_id, wait)
 
@@ -657,11 +660,11 @@ class Leases:
                     # browserd's deadline, not a fresh one (#291): what it has left, else none.
                     left = found.get("wait_left_s")
                     left = left if isinstance(left, int) and not isinstance(left, bool) else 0
-                    site = found.get("wait_site")
+                    host = found.get("wait_host")
                     lease.wait_person(
                         now,
                         str(found.get("wait_reason") or "signin"),
-                        site[:SITE_MAX] if isinstance(site, str) else "",
+                        host[:HOST_MAX] if isinstance(host, str) else "",
                         max(0, min(left, self.session_max_s)),
                     )
                 if await r.set(HOLDER, lease.dumps(), nx=True):

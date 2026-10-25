@@ -29,7 +29,8 @@ journey needs), code (Greenhouse only: an e-mail code step).
 For tests (JSON):
 
     GET  /_stub/submissions    every submission, in order; POST /_stub/reset forgets them all
-    GET  /_stub/files/<sha>    a stored file, by the SHA-256 of its bytes
+    GET  /_stub/files/<sha>    a stored file, by the SHA-256 of its bytes, as a download
+                               (application/octet-stream), whatever type its upload declared
     GET  /_stub/mailbox        the e-mail codes the code variant "sent" (nothing is ever sent)
     GET  /_stub/postings       the catalogue: ats, org, job, variant, title, path
 
@@ -37,10 +38,17 @@ Ashby's invisible check rejects a submit that comes less than --min-dwell-ms aft
 and one made with navigator.webdriver set. The browser-side signals are `_signal_dwell_ms` and
 `_signal_webdriver`; the page script sends them.
 
-    python3 tests/ats_forms_stub.py [--port 8100] [--host 0.0.0.0] [--min-dwell-ms 3000]
+These requests are answered, not dropped: 400 for a target that is no address or a
+Content-Length that is not one header of ASCII digits, 413 for a body over MAX_BODY (both
+without waiting for the body), 404 for a file name the file system refuses (a NUL byte, a name
+too long). A text part in a charset Python cannot decode is read as UTF-8.
+
+    python3 tests/ats_forms_stub.py [--port 8100] [--host 127.0.0.1] [--min-dwell-ms 3000]
                                     [--slow-seconds 10]
 
-Standard library only. It refuses to start when APP_ENV is production.
+It listens on the loopback unless told otherwise; its container passes --host 0.0.0.0
+(tests/ats-forms-stub.compose.yml). Standard library only. It refuses to start when APP_ENV is
+production.
 """
 
 from __future__ import annotations
@@ -112,8 +120,8 @@ POSTINGS: dict[str, dict[str, dict[str, tuple[str, str, str]]]] = {
                 "Software Engineer, Agents",
                 "Remote, Europe",
             ),
-            # Two more forms of one company: a journey that applies more than once needs
-            # distinct form addresses (apply A13b).
+            # More forms of one company: a journey that applies more than once needs distinct
+            # form addresses (apply A13b: three rehearsals, then two Full auto Likes).
             "4012346": (
                 "Northwind Labs",
                 "Robotics Engineer, Fleet",
@@ -123,6 +131,16 @@ POSTINGS: dict[str, dict[str, dict[str, tuple[str, str, str]]]] = {
                 "Northwind Labs",
                 "Controls Engineer",
                 "Berlin, Germany",
+            ),
+            "4012348": (
+                "Northwind Labs",
+                "Perception Engineer",
+                "Paris, France",
+            ),
+            "4012349": (
+                "Northwind Labs",
+                "Simulation Engineer",
+                "Remote, Europe",
             ),
         }
     },
@@ -523,9 +541,8 @@ def parse_body(
                     Upload(name, filename, part.get_content_type(), bytes(payload))
                 )
             else:
-                charset = part.get_content_charset() or "utf-8"
                 fields.setdefault(name, []).append(
-                    bytes(payload).decode(charset, "replace")
+                    _text(bytes(payload), part.get_content_charset())
                 )
     else:
         for name, values in parse_qs(
@@ -533,6 +550,15 @@ def parse_body(
         ).items():
             fields[name] = values
     return fields, files
+
+
+def _text(data: bytes, charset: str | None) -> str:
+    """A text part in its declared charset, or in UTF-8 when Python has no text codec of that
+    name that can replace what it cannot decode (an unknown name, base64, idna)."""
+    try:
+        return data.decode(charset or "utf-8", "replace")
+    except (LookupError, ValueError):
+        return data.decode("utf-8", "replace")
 
 
 # --- the state ---------------------------------------------------------------------------------
@@ -555,7 +581,7 @@ class Stub:
     def reset(self) -> None:
         with self.lock:
             self.submissions: list[dict[str, Any]] = []
-            self.files: dict[str, tuple[bytes, str]] = {}
+            self.files: dict[str, bytes] = {}
             self.mailbox: list[dict[str, str]] = []
 
     def record(self, entry: dict[str, Any]) -> dict[str, Any]:
@@ -568,7 +594,7 @@ class Stub:
     def store(self, upload: Upload) -> dict[str, Any]:
         sha = hashlib.sha256(upload.data).hexdigest()
         with self.lock:
-            self.files.setdefault(sha, (upload.data, upload.content_type))
+            self.files.setdefault(sha, upload.data)
         return {
             "field": upload.field,
             "filename": upload.filename,
@@ -767,6 +793,22 @@ def catalogue() -> list[dict[str, str]]:
 ASHBY_FORM = re.compile(r"^/ashby/([\w.-]+)/([\w.-]+)/application(/confirmation)?$")
 GH_HOSTED = re.compile(r"^/greenhouse/([\w.-]+)/jobs/([\w.-]+?)(/confirmation)?$")
 SITE = re.compile(r"^/sites/([\w.-]+)/careers/([\w.-]+)$")
+ASCII_DIGITS = re.compile(r"[0-9]+")
+
+
+def body_length(headers: list[str] | None) -> int | None:
+    """The length of a body by its Content-Length headers: 0 when there is none, None (a 400)
+    unless there is exactly one and it is ASCII digits (RFC 9110, 8.6), and MAX_BODY + 1 for any
+    length over the bound, judged by its count of digits first (int() refuses over 4300)."""
+    if not headers:
+        return 0
+    value = headers[0].strip(" \t")
+    if len(headers) > 1 or not ASCII_DIGITS.fullmatch(value):
+        return None
+    digits = value.lstrip("0") or "0"
+    if len(digits) > len(str(MAX_BODY)) or int(digits) > MAX_BODY:
+        return MAX_BODY + 1
+    return int(digits)
 
 
 def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
@@ -776,11 +818,16 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:
             return
 
-        def _send(self, status: int, body: bytes, content_type: str) -> None:
+        def _send(
+            self, status: int, body: bytes, content_type: str, *, download: bool = False
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if download:
+                self.send_header("Content-Disposition", "attachment")
+                self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
 
@@ -790,9 +837,20 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
         def _html(self, status: int, text: str) -> None:
             self._send(status, text.encode(), "text/html; charset=utf-8")
 
+        def _target(self) -> tuple[str, dict[str, list[str]]] | None:
+            """The path and query of the request; None, answered 400, when it is no address."""
+            try:
+                url = urlsplit(self.path)
+            except ValueError:
+                self._json(400, {"ok": False, "message": "bad request target"})
+                return None
+            return unquote(url.path), parse_qs(url.query)
+
         def do_GET(self) -> None:
-            url = urlsplit(self.path)
-            path, query = unquote(url.path), parse_qs(url.query)
+            target = self._target()
+            if target is None:
+                return
+            path, query = target
             if path == "/healthz":
                 return self._json(200, {"ok": True})
             if path == "/_stub/submissions":
@@ -808,7 +866,8 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                     found = stub.files.get(path.rsplit("/", 1)[1])
                 if found is None:
                     return self._json(404, {"error": "no such file"})
-                return self._send(200, found[0], found[1])
+                # An upload declared text/html must not run as a page of this origin.
+                return self._send(200, found, "application/octet-stream", download=True)
             if path == "/ashby/_locations":
                 typed = (query.get("q") or [""])[0].lower()
                 return self._json(200, [x for x in LOCATIONS if typed in x.lower()])
@@ -821,8 +880,13 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
             self._html(status, text)
 
         def _static(self, relative: str) -> None:
-            target = (FORMS_DIR / relative).resolve()
-            if not target.is_relative_to(FORMS_DIR) or not target.is_file():
+            # resolve() and is_file() raise on a NUL byte or a name too long for the file system.
+            try:
+                target = (FORMS_DIR / relative).resolve()
+                found = target.is_relative_to(FORMS_DIR) and target.is_file()
+            except (OSError, ValueError):
+                found = False
+            if not found:
                 return self._html(404, page("Not found", "<h1>Not found</h1>"))
             kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             self._send(200, target.read_bytes(), kind)
@@ -855,6 +919,15 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                 if missing:
                     return missing
                 variant = job.partition("--")[2]
+                if variant == "signin":
+                    cookie = "a10b_" + re.sub(
+                        r"[^a-z0-9]", "_", path, flags=re.IGNORECASE
+                    )
+                    if cookie + "=signed" not in self.headers.get("Cookie", "").split(
+                        "; "
+                    ):
+                        return 200, (FORMS_DIR / "a10b" / "login.html").read_text()
+                    variant = "plain"
                 if variant == "slow":
                     stub.sleep(stub.slow_seconds)
                 return 200, form_page(
@@ -884,12 +957,16 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
             return None
 
         def do_POST(self) -> None:
-            url = urlsplit(self.path)
-            path, query = unquote(url.path), parse_qs(url.query)
+            target = self._target()
+            if target is None:
+                return
+            path, query = target
             if path == "/_stub/reset":
                 stub.reset()
                 return self._json(200, {"ok": True})
-            length = int(self.headers.get("Content-Length") or 0)
+            length = body_length(self.headers.get_all("Content-Length"))
+            if length is None:
+                return self._json(400, {"ok": False, "message": "bad Content-Length"})
             if length > MAX_BODY:
                 return self._json(413, {"ok": False, "message": "too large"})
             body = self.rfile.read(length)
@@ -958,7 +1035,7 @@ def make_server(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8100)
     parser.add_argument("--min-dwell-ms", type=int, default=MIN_DWELL_MS)
     parser.add_argument("--slow-seconds", type=float, default=SLOW_SECONDS)

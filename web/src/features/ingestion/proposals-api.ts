@@ -87,6 +87,8 @@ export const reviewSchema = z.object({
   run_id: z.string(),
   status: z.string(),
   partial: z.boolean(),
+  /** Another run is running or paused: when it ends, what is undecided here is replaced. */
+  newer_run: z.boolean().default(false),
   profile_revision: z.number(),
   counts: countsSchema,
   documents: z.array(documentRefSchema),
@@ -157,6 +159,14 @@ export async function acceptProposal(
 
 export async function rejectProposal(id: string): Promise<void> {
   await request(`/proposals/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    timeoutMs: TIMEOUT_MS,
+  });
+}
+
+/** "Take back" of one accepted proposal: the profile holds again what it held before. */
+export async function undoProposal(id: string): Promise<void> {
+  await request(`/ingestion/proposals/${encodeURIComponent(id)}/undo`, {
     method: "POST",
     timeoutMs: TIMEOUT_MS,
   });

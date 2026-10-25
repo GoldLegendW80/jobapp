@@ -1,13 +1,11 @@
 """The refusals before anything is spent (SPEC-apply, "Guardrails", rules 3 and 4).
 
 **Never apply** (`never_apply`, pure). The person's `never_apply` rules (`sweep.never_apply_rules`
-on the search section) match the posting the way the sweep excludes a role: each rule's terms,
-whole word with an optional plural, case-insensitive, on the company and the title. Two
-additions, both toward refusing, since a role the person excluded must never be applied to by
-the app: the text is folded first (accents, compatibility forms: "Sécurité" is "securite", a full
-width letter is its plain one), and a term also matches at the start or the end of a glued word,
-so the owner's rule "No cybersecurity roles: cyber, security, pentest, threat" refuses
-"Cybersecurity Engineer" and "AppSecurity Lead", which the sweep's whole word match lets through;
+on the search section) use the sweep's shared matcher (`jobs.never_apply`) on the company and
+the title. The text is folded first (accents, case, compatibility forms, hidden characters and
+lookalike letters), and terms match whole words, optional plurals and the start or end of a
+glued word. Both sweep and apply refuse "Cybersecurity Engineer" and "AppSecurity Lead" under
+the owner's rule "No cybersecurity roles: cyber, security, pentest, threat";
 spaces, hyphens, underscores, slashes and dots are one separator ("Cyber-Security", "red_team").
 Stated cost: a short term refuses more ("ai" in a rule refuses "Aide"), and that is the side the
 rule errs on.
@@ -29,7 +27,9 @@ so it refuses as a match would (`rules_unreadable`).
   title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
   way), or has an applied status with its `applied_on` in the last 180 days, counted from `now`:
   at exactly 180 days it is still refused. An applied status without `applied_on` counts too: its
-  date is unknown, so nothing shows it is older (fail closed).
+  date is unknown, so nothing shows it is older (fail closed);
+- `passed`: the posting's status is `skipped`. Apply myself only warns, after the other
+  duplicate protections have passed; automated starts, decisions and rechecks refuse it.
 
 **The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
 is the ATS and its id, wherever the form is shown: `ashby:<uuid>` from jobs.ashbyhq.com/<org>/<id>
@@ -65,7 +65,7 @@ Declared open points (what these rules still miss, each toward applying):
 import re
 import unicodedata
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import parse_qsl, urlsplit
@@ -76,8 +76,7 @@ from sqlalchemy.orm import Session
 from app.apply.models import ENDED, Application, Mode, State
 from app.jobs import slug
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
-from app.jobs.sweep import NeverApplyRule
-from app.profile.matching import PLURAL, escape
+from app.jobs.never_apply import NeverApplyRule, fold, matching_rule
 
 SAME_ROLE_DAYS = 180
 FULL_AUTO_TEXT_CHARS = 1500
@@ -104,6 +103,7 @@ SENTENCES = {
     "in_progress": "An application to this posting is already under way.",
     "already_applied": "This posting is marked as applied.",
     "posting_closed": "This posting is closed.",
+    "passed": "You passed this posting. Undo the Pass first if you want to apply.",
     "same_form": "This application form was already used for another of your postings.",
     "same_address": "Another of your postings with this address is marked as applied.",
     "same_role": "You applied to the same role at this company less than 180 days ago.",
@@ -114,6 +114,7 @@ WARNINGS = {
     "rules_unreadable": "Your never apply rules could not be read.",
     "same_address": SENTENCES["same_address"],
     "same_role": SENTENCES["same_role"],
+    "passed": SENTENCES["passed"],
 }
 
 
@@ -128,62 +129,6 @@ class Refusal:
 
 
 # --- never apply ---------------------------------------------------------------------------------
-
-
-_JOINERS = re.compile(r"[\s\-\u2010-\u2015_/.]+")
-# What a reader does not see: format characters (soft hyphen, zero width space and joiners, word
-# joiner, BOM, bidi marks), controls, surrogates, private use and unassigned code points, and the
-# nonspacing and enclosing marks (accents, variation selectors, the grapheme joiner).
-_UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
-_HANGUL_FILLERS = frozenset("\u115f\u1160")  # letters drawn as nothing (NFKC maps U+3164 here)
-# Keys are small letters as NFKC, NFKD and the case fold leave them: any other key is never reached.
-_LOOKALIKES = str.maketrans(
-    "авекмнорстхуѕіјһԁԛԝүӏαβεζηικμνορτυχϳᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢıȷɑɡɩ",
-    "abekmhopctxysijhdqwyiabezhikmnoptyxjabcdefghijklmnoprstuvwyzijagi",
-)
-
-
-def _seen(c: str) -> bool:
-    if c.isspace():
-        return True  # a tab or a line break separates words, as a space does
-    if unicodedata.combining(c) or c in _HANGUL_FILLERS:
-        return False
-    return unicodedata.category(c) not in _UNSEEN
-
-
-def fold(text: str) -> str:
-    """NFKC then NFKD with what a reader does not see dropped (`_UNSEEN`: accents, soft hyphens,
-    zero width characters), case folded, lookalike letters then read as Latin, and every run of
-    spaces, hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full
-    width letter is its plain one, "Secu\u00adrity" (a soft hyphen) and "Security" written with
-    Cyrillic letters are "security", "Red-Team" and "red_team" are "red team". The lookalikes are
-    read after the case fold, so a capital and its small letter read as one letter (Greek capital
-    and small eta are both "h"), and a rule matches a title whatever the case of either."""
-    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
-    plain = "".join(c for c in decomposed if _seen(c)).casefold().translate(_LOOKALIKES)
-    return _JOINERS.sub(" ", plain)
-
-
-def _term_pattern(terms: Sequence[str]) -> re.Pattern[str] | None:
-    """The sweep's whole word match of the folded terms, widened to a term that starts or ends
-    a glued word. Linear: one alternation, searched once."""
-    folded = [escape(fold(term)) for term in terms if fold(term).strip()]
-    if not folded:
-        return None
-    alternation = "|".join(folded)
-    starts = rf"(?<!\w)(?:{alternation})"  # "cyber" in "cybersecurity"
-    ends = rf"(?:{alternation}){PLURAL}(?!\w)"  # "security" in "cybersecurity"
-    return re.compile(f"{starts}|{ends}")
-
-
-def matching_rule(rules: Iterable[NeverApplyRule], *texts: str) -> NeverApplyRule | None:
-    """The first rule whose terms match one of `texts`, or None."""
-    folded = " \n ".join(fold(text) for text in texts if text)
-    for rule in rules:
-        pattern = _term_pattern(rule.terms)
-        if pattern is not None and pattern.search(folded) is not None:
-            return rule
-    return None
 
 
 def never_apply(
@@ -429,4 +374,6 @@ def duplicates(
     role = (company_key(posting.company), title_key(posting.title))
     if any((company_key(c), title_key(t)) == role for c, t in recent):
         return Refusal("same_role")
+    if status is JobStatus.skipped:
+        return Refusal("passed")
     return None

@@ -119,3 +119,6 @@ li, p { overflow-wrap: anywhere; }
 .paragraph { white-space: pre-line; }
 .closing { margin-top: var(--section-gap); }
 .signature { font-weight: 700; margin-top: var(--section-gap); }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }

@@ -38,10 +38,9 @@ def switches(
     fingerprint that lies is never set. WebGL stays off under Xvfb (no SwiftShader): the
     owner's question in B2's pull request. `port` None: no debugging port at all (a person's
     own session, browserd/signin.py), and no --disable-blink-features=AutomationControlled
-    either: nothing automates that session, and Chromium would show the person an infobar about
-    an unsupported switch. The address comes last, after `--`, so Chromium never reads it as a
-    switch; the first `--` stops the option loop of Debian's wrapper script (/usr/bin/chromium),
-    which would otherwise drop the second one."""
+    either: nothing automates that session. The address comes last, after `--`, so Chromium
+    never reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
+    (/usr/bin/chromium), which would otherwise drop the second one."""
     debugging = (
         []
         if port is None
@@ -151,10 +150,20 @@ def profile_uids() -> dict[int, list[int]]:
     for entry in os.listdir("/proc"):
         if entry.isdigit():
             with contextlib.suppress(OSError, ValueError):
-                uid = os.stat(f"/proc/{entry}").st_uid
+                uid = real_uid(entry)
                 if c.UID_MIN <= uid <= c.UID_MAX and not zombie(entry):
                     found.setdefault(uid, []).append(int(entry))
     return found
+
+
+def real_uid(pid: str) -> int:
+    """The process's real uid, from its status: the uid a kill(-1) sent as that uid reaches. The
+    owner of /proc/<pid> is the effective uid, the same here (no setuid program runs)."""
+    with open(f"/proc/{pid}/status", "rb") as handle:
+        for line in handle:
+            if line.startswith(b"Uid:"):
+                return int(line.split()[1])
+    raise ValueError(pid)
 
 
 def zombie(pid: str) -> bool:
@@ -270,12 +279,14 @@ def seed_uid_records(profiles: str = c.PROFILES, root: str = c.UIDS, lstat=os.ls
 
 
 async def reap_strays() -> int:
-    """At start, before every lease and after it: any process left under a profile uid is killed
+    """At start, before every lease and after it: every process left under a profile uid is killed
     (a Chromium that outlived a browserd restart or an end that failed), then waited for, at most
-    REAP_TRIES times. Returns how many were found."""
+    REAP_TRIES times. Each uid's processes go in one kill(-1) sent as that uid, which no fork can
+    outrun; a list of pids would miss the children forked after it was read. Returns how many
+    were found."""
     strays = profile_uids()
-    for uid, pids in strays.items():
-        await as_uid(uid, sys.executable, "-m", "browserd.prep", "kill", *map(str, pids))
+    for uid in strays:
+        await as_uid(uid, sys.executable, "-m", "browserd.prep", "killuid")
     for _ in range(REAP_TRIES if strays else 0):
         if not profile_uids():
             break

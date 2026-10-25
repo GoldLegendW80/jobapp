@@ -404,6 +404,128 @@ describe("the review queue page", () => {
   });
 });
 
+/** The person's fill, waiting for them to sign in (browser B12a's state in GET /api/browser). */
+const FILL_SIGNIN = {
+  id: "0b6f7c1e-4a43-4f0e-9a51-1f2f3c4d5e6f",
+  purpose: "apply_fill",
+  automation: true,
+  state: "waiting_person",
+  wait_reason: "signin",
+  wait_host: "jobs.example.org",
+  wait_deadline: "2026-10-20T10:30:00Z",
+  wait_minutes_left: 12,
+  started_at: "2026-10-20T10:00:00Z",
+  active_s: 40,
+  max_s: 900,
+};
+const FILL_ACTIVE = {
+  ...FILL_SIGNIN,
+  state: "active",
+  wait_reason: null,
+  wait_host: null,
+  wait_deadline: null,
+  wait_minutes_left: null,
+};
+
+const browserOf = (lease: object, holder: "you" | "other" = "you") => ({
+  available: true,
+  profile: { exists: true, size_bytes: 0, last_used_at: null },
+  lease,
+  holder,
+  queue: [],
+});
+
+describe("a sign in wall in the queue", () => {
+  it("offers the later sign in on the card, and none of the answers read behind the wall", async () => {
+    const item = queueItem(1, "needs_person", { needs: "signin", left: 2 });
+    const api = fakeQueue([item], {
+      [item.id]: [
+        leftAnswer("email", "Email"),
+        leftAnswer("password", "Password"),
+      ],
+    });
+    renderApp(PATH);
+    const card = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    const banner = within(card).getByRole("region", {
+      name: "Sign in to boards.example.org",
+    });
+    expect(banner).toHaveTextContent(
+      "Needs you: sign in to boards.example.org",
+    );
+    within(banner).getByRole("button", {
+      name: "Open the live view to sign in",
+    });
+    expect(
+      within(card).queryByRole("button", { name: /the answers/ }),
+    ).toBeNull();
+    expect(within(card).queryByRole("textbox")).toBeNull();
+    expect(card).not.toHaveTextContent(/left for you/);
+    expect(api.reads).toBe(0);
+  });
+
+  it("shows the hand off of the fill that waits for the person's sign in", async () => {
+    const state = { browser: browserOf(FILL_SIGNIN) };
+    let done = 0;
+    server.use(
+      http.get("*/api/browser", () => HttpResponse.json(state.browser)),
+      http.post("*/api/browser/handoff/done", () => {
+        done += 1;
+        state.browser = browserOf(FILL_ACTIVE);
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    fakeQueue([queueItem(1, "filling")]);
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const card = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    const banner = await within(card).findByRole("region", {
+      name: "Sign in to jobs.example.org",
+    });
+    within(banner).getByRole("button", { name: "Open the live view" });
+    await user.click(
+      within(banner).getByRole("button", { name: "I'm signed in" }),
+    );
+    await waitFor(() => {
+      expect(
+        within(card).queryByRole("region", { name: /Sign in to/ }),
+      ).toBeNull();
+    });
+    expect(done).toBe(1);
+  });
+
+  it.each([
+    ["another person's lease", browserOf(FILL_SIGNIN, "other")],
+    [
+      "the submit's lease",
+      browserOf({ ...FILL_SIGNIN, purpose: "apply_submit" }),
+    ],
+    ["a fill that waits for nobody", browserOf(FILL_ACTIVE)],
+  ])("shows no hand off on a filling card for %s", async (_, browser) => {
+    let asked = 0;
+    server.use(
+      http.get("*/api/browser", () => {
+        asked += 1;
+        return HttpResponse.json(browser);
+      }),
+    );
+    fakeQueue([queueItem(1, "filling")]);
+    renderApp(PATH);
+    const card = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    await waitFor(() => {
+      expect(asked).toBeGreaterThan(0);
+    });
+    expect(
+      within(card).queryByRole("region", { name: /Sign in to/ }),
+    ).toBeNull();
+  });
+});
+
 describe("the app shell's Applications link", () => {
   it("shows how many wait for the person, and follows the queue page", async () => {
     const api = fakeQueue([

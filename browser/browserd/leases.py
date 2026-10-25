@@ -15,6 +15,12 @@ with automation, whatever the caller asks: its Chromium has no debugging port
 on it is refused 409 `person_session`. Its address, when the person typed one, is checked as
 signin.check_address checks it.
 
+Apply myself (`apply_manual`, apply A9) keeps its debugging port, so the app's tools can upload
+the documents and fill identity fields on request, but the person holds the input from its start
+to its end like a person's own session, except during the app's turn (`app_turn`, which the api
+sets and clears through the live view's input route, browserd/live.py). A watch of the page
+(`touch=False`) is not activity: the idle timer still ends a session nobody uses.
+
 While a lease ends (its Chromium closing, the profile measured) browserd is still busy: a new
 lease is refused 409 and the profile is not removed until the end is done.
 """
@@ -44,6 +50,7 @@ LANGUAGE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
 TIMEZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
 USER_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 PERSON_PURPOSES = ("takeover", "signin")
+MANUAL_PURPOSE = "apply_manual"
 
 
 class LeaseError(Exception):
@@ -147,7 +154,8 @@ class Lease:
     token_hash: bytes = b""
     state: str = "active"  # or "waiting_person"
     wait_reason: str | None = None
-    wait_site: str | None = None
+    # B12b: the host of the noted address, shown to the person; never the model's site argument.
+    wait_host: str | None = None
     wait_deadline: float | None = None
     active_before: float = 0.0  # active seconds banked before the current active stretch
     active_since: float = 0.0
@@ -159,6 +167,8 @@ class Lease:
     scratch: dict[str, Any] = field(default_factory=dict)
     # B12: the person holds the live view's input of this agent's lease (the sign in hand off).
     person_input: bool = False
+    # A9: during Apply myself, the app's tools hold the input (a "Fill my details" under way).
+    app_turn: bool = False
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
@@ -167,16 +177,16 @@ class Lease:
     def touch(self, now: float) -> None:
         self.last_input = now
 
-    def wait_person(self, now: float, reason: str, site: str, deadline_s: int) -> None:
+    def wait_person(self, now: float, reason: str, host: str, deadline_s: int) -> None:
         if self.state == "active":
             self.active_before = self.active_s(now)
-        self.state, self.wait_reason, self.wait_site = "waiting_person", reason, site
+        self.state, self.wait_reason, self.wait_host = "waiting_person", reason, host
         self.wait_deadline = now + deadline_s
 
     def resume(self, now: float) -> None:
         if self.state != "waiting_person":
             return
-        self.state, self.wait_reason, self.wait_site, self.wait_deadline = (
+        self.state, self.wait_reason, self.wait_host, self.wait_deadline = (
             "active",
             None,
             None,
@@ -212,11 +222,13 @@ class Lease:
             "state": self.state,
             "wait_reason": self.wait_reason,
             # B12: the api reads the wait back after a Redis restart, never a fresh deadline.
-            "wait_site": self.wait_site,
+            "wait_host": self.wait_host,
             "wait_left_s": self.wait_left_s(now),
             "active_s": round(self.active_s(now), 1),
             "max_s": self.max_s,
             "idle_s": self.idle_s,
+            # A9: Apply myself warns the person a minute before the idle timer ends the session.
+            "idle_left_s": max(0, math.ceil(self.idle_s - (now - self.last_input))),
             "events": list(self.events[-20:]),
         }
 
@@ -307,15 +319,19 @@ class Manager:
             raise LeaseError(403, "bad_lease_token")
         return lease
 
-    async def call(self, lease_id: str, token: str, work: Callable[[], Awaitable[T]]) -> T:
-        """Runs one tool call on the lease (B5's tools go through here): it counts as input, and
-        a lease that ends while it runs cancels it, so the call answers LeaseEnded."""
+    async def call(
+        self, lease_id: str, token: str, work: Callable[[], Awaitable[T]], *, touch: bool = True
+    ) -> T:
+        """Runs one tool call on the lease (B5's tools go through here): it counts as input
+        unless `touch` is False (Apply myself's watch, A9), and a lease that ends while it runs
+        cancels it, so the call answers LeaseEnded."""
         lease = self.check_token(lease_id, token)
         if not lease.request.automation:
             raise LeaseError(409, "person_session")
         if lease.state != "active":
             raise LeaseError(409, "waiting_person")
-        lease.touch(self.clock())
+        if touch:
+            lease.touch(self.clock())
         task = asyncio.ensure_future(work())
         self._calls.add(task)
         try:
@@ -326,7 +342,7 @@ class Manager:
             raise
         finally:
             self._calls.discard(task)
-            if self.lease is lease:
+            if touch and self.lease is lease:
                 lease.touch(self.clock())
 
     async def release(self, lease_id: str | None, reason: str) -> bool:

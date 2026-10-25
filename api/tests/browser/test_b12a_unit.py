@@ -186,15 +186,16 @@ def test_a_watched_call_waits_and_restarts_chromium_without_cdp_at_the_tabs_addr
         assert person.request.address == FORM
         assert person.request.profile_id == agent.request.profile_id
         assert w.running == {person}
-        assert (lease.state, lease.wait_reason, lease.wait_site) == (
+        assert (lease.state, lease.wait_reason, lease.wait_host) == (
             "waiting_person",
             "signin",
-            "Example Portal",
+            "jobs.example.org",
         )
         assert lease.person_input
         assert live.live_of(w.svc).person(lease.lease_id)
         public = lease.public(w.clock())
-        assert (public["wait_site"], public["wait_left_s"]) == ("Example Portal", SESSION_MAX_S)
+        assert (public["wait_host"], public["wait_left_s"]) == ("jobs.example.org", SESSION_MAX_S)
+        assert "Example Portal" not in str(public)
 
     run(go())
 

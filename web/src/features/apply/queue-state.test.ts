@@ -13,6 +13,7 @@ import {
   QUEUE_POLL_MS,
   QUEUE_WAIT_POLL_MS,
   queuePoll,
+  OTHER_REASON,
   reasonLine,
 } from "./queue-state";
 
@@ -63,14 +64,71 @@ describe("what is left", () => {
 });
 
 describe("why an item came back", () => {
-  it("shows the api's sentence, else the code in words", () => {
+  it("shows the api's sentence first", () => {
     expect(reasonLine(null)).toBeNull();
     expect(reasonLine({ code: "stale", sentence: "The form changed." })).toBe(
       "The form changed.",
     );
-    expect(reasonLine({ code: "form_changed", sentence: null })).toBe(
-      "Form changed.",
-    );
+  });
+
+  it.each([
+    ["signin", "The site asked you to sign in, so it waits for you."],
+    ["captcha", "The site asked for a captcha, so it waits for you."],
+    ["other", "Another reason: open it to see where it stopped."],
+    [
+      "form_changed",
+      "The form changed since it was filled, so it waits for you.",
+    ],
+    [
+      "email_code",
+      "The site sent a code by e-mail that only you can read, so it waits for you.",
+    ],
+    ["needs_person", "The form needed you before it could go on."],
+  ])("labels %s, a code the api sends without a sentence", (code, label) => {
+    expect(reasonLine({ code, sentence: null })).toBe(label);
+    expect(reasonLine({ code, sentence: "" })).toBe(label);
+  });
+
+  it.each([
+    "browser_gone",
+    "Signin",
+    "sign_in",
+    "constructor",
+    "toString",
+    "__proto__",
+    "hasOwnProperty",
+    "",
+  ])("says an unknown code %j in words, never raw", (code) => {
+    expect(reasonLine({ code, sentence: null })).toBe(OTHER_REASON);
+  });
+
+  it("gives every label as a sentence without a separator dash or a raw code", () => {
+    const codes = [
+      "captcha",
+      "signin",
+      "email_code",
+      "required_left",
+      "payment_requested",
+      "no_adapter",
+      "needs_person",
+      "form_changed",
+      "no_documents",
+      "no_capability",
+      "put_file_failed",
+      "failed",
+      "ended",
+      "host_not_allowed",
+      "unreadable",
+      "other",
+    ];
+    const labels = codes.map((code) => reasonLine({ code, sentence: null }));
+    expect(new Set(labels).size).toBe(codes.length);
+    for (const label of labels) {
+      expect(label).toMatch(/^[A-Z].*\.$/);
+      expect(label).not.toMatch(SEPARATOR);
+      expect(label).not.toMatch(/_/);
+      expect(label).not.toBe(OTHER_REASON);
+    }
   });
 });
 

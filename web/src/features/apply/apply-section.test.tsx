@@ -60,15 +60,15 @@ const filled = () => [
 ];
 
 describe("starting", () => {
-  it("offers Apply (Review first) and a disabled Apply myself, and starts a Review first application", async () => {
+  it("offers Apply (Review first) and Apply myself, and starts a Review first application", async () => {
     const api = fakeApply({ application: null });
     const { user, section } = await openSection();
     expect(
       await within(section).findByText(/Nothing is sent without your approval/),
     ).toBeInTheDocument();
     expect(
-      within(section).getByRole("button", { name: /Apply myself/ }),
-    ).toBeDisabled();
+      within(section).getByRole("button", { name: "Apply myself" }),
+    ).toBeEnabled();
     await user.click(
       within(section).getByRole("button", { name: "Apply (Review first)" }),
     );
@@ -115,6 +115,47 @@ describe("starting", () => {
       }),
     ).toBeInTheDocument();
     expect(within(section).queryByTestId("live-view-slot")).toBeNull();
+  });
+});
+
+describe("a retry and a wait", () => {
+  it("shows a queued retry's time, not a browser about to start", async () => {
+    const api = fakeApply({
+      application: fakeApplication("queued", { needs: "retry" }),
+    });
+    api.events.push({
+      at: "2026-10-15T08:02:00Z",
+      kind: "retry",
+      data: { attempt: 1, delay_s: 600, due: "2026-10-15T08:12:00Z" },
+    });
+    const { section } = await openSection();
+    const slot = await within(section).findByTestId("live-view-slot");
+    await waitFor(() => {
+      expect(slot).toHaveTextContent(/tries again at \d/);
+    });
+    expect(slot).not.toHaveTextContent("The browser starts soon.");
+    expect(within(section).getByText(/tries again later/)).toBeInTheDocument();
+  });
+
+  it("follows the run once the person took the step in the live view", async () => {
+    const api = fakeApply({
+      application: fakeApplication("needs_person", { needs: "captcha" }),
+    });
+    api.events.push({
+      at: "2026-10-15T08:02:00Z",
+      kind: "waiting_person",
+      data: { needs: "captcha" },
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText("A captcha needs you"),
+    ).toBeInTheDocument();
+    api.application = fakeApplication("filling");
+    expect(
+      await within(section).findByText(/Filling the form/, undefined, {
+        timeout: APPLY_POLL_MS * 4,
+      }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -321,6 +362,20 @@ describe("the review", () => {
 });
 
 describe("the destructive buttons", () => {
+  it("waits for sign in before showing a login wall as a filled form", async () => {
+    fakeApply({
+      application: fakeApplication("needs_person", { needs: "signin" }),
+      answers: [leftAnswer("password", "Password", { required: false })],
+    });
+    const { section } = await openSection();
+    await within(section).findByRole("button", {
+      name: "Open the live view to sign in",
+    });
+    expect(
+      within(section).queryByRole("list", { name: "Fields filled" }),
+    ).toBeNull();
+  });
+
   it.each([
     [
       "ready",
@@ -776,6 +831,46 @@ describe("other states", () => {
 });
 
 describe("Full auto's hold on the job page", () => {
+  it("offers Cancel, and nothing to approve, while the app still decides on a Full auto item", async () => {
+    const api = fakeApply({
+      application: fakeApplication("ready", { mode: "full_auto" }),
+      answers: filled().slice(0, 2),
+    });
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByText(
+        /Full auto: filled. The app checks it now/,
+      ),
+    ).toBeInTheDocument();
+    for (const name of ["Approve and submit", "Reject"]) {
+      expect(within(section).queryByRole("button", { name })).toBeNull();
+    }
+    expect(within(section).queryByRole("timer")).toBeNull();
+    const cancels = within(section).getAllByRole("button", {
+      name: "Cancel application",
+    });
+    expect(cancels).toHaveLength(1);
+    await user.click(cancels[0]!);
+    expect(api.decisions).toEqual([]);
+    await confirm(user, "Cancel the application");
+    await waitFor(() => {
+      expect(api.decisions).toEqual(["cancel"]);
+    });
+    expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("offers Reject, not Cancel, on a Review first form waiting for the approval", async () => {
+    fakeApply({
+      application: fakeApplication("ready"),
+      answers: filled().slice(0, 2),
+    });
+    const { section } = await openSection();
+    await within(section).findByRole("button", { name: "Reject" });
+    expect(
+      within(section).queryByRole("button", { name: "Cancel application" }),
+    ).toBeNull();
+  });
+
   it("counts the hold down on the server's clock, with one Cancel that stops it", async () => {
     const api = fakeApply({
       application: fakeApplication("held", { mode: "full_auto" }),

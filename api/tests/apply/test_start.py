@@ -174,7 +174,7 @@ def test_the_sweeps_never_apply_event(db: Session, a: uuid.UUID) -> None:
     db.commit()
     assert refused(db, a, job, Mode.review) == "never_apply_role"
     assert refused(db, a, job, Mode.full_auto) == "never_apply_role"
-    assert start(db, a, job, Mode.manual).warnings == ("never_apply_role",)
+    assert start(db, a, job, Mode.manual).warnings == ("never_apply_role", "passed")
 
 
 def test_rules_that_cannot_be_read_refuse_like_a_match(db: Session, a: uuid.UUID) -> None:
@@ -288,6 +288,9 @@ def test_a_posting_already_applied(db: Session, a: uuid.UUID, status: str, code:
 
 @pytest.mark.parametrize("status", ["found", "shortlisted", "cv_ready", "staged", "skipped"])
 def test_a_posting_not_applied_yet(db: Session, a: uuid.UUID, status: str) -> None:
+    if status == "skipped":
+        assert refused(db, a, posting(db, a, status=status)) == "passed"
+        return
     assert start(db, a, posting(db, a, status=status)).application.state is State.queued
 
 

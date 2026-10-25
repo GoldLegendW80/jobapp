@@ -8,7 +8,7 @@ call of the fake form's `gate_click`."""
 from __future__ import annotations
 
 import asyncio
-import json
+import dataclasses
 import logging
 import random
 import secrets
@@ -16,18 +16,34 @@ import string
 import urllib.request
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 import pytest
+import redis as redis_client
 import sqlalchemy as sa
+from arq.constants import job_key_prefix
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import queue as queues
+from app import worker
 from app.apply import gate, shots
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for
 from app.apply.ats import base as ats_base
 from app.apply.ats.lever import Lever, letter_box
-from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, State
+from app.apply.bank import question_key
+from app.apply.models import (
+    AnswerBankEntry,
+    Application,
+    ApplicationAnswer,
+    ApplicationEvent,
+    State,
+)
 from app.browser.tools import LeaseTools
+from app.config import Settings
+from app.documents.models import DocumentVersion
 from app.jobs.models import Job
 from app.profile import service as profile_service
 from tests.apply import a1_support
@@ -38,6 +54,7 @@ from tests.apply.a8_support import (
     CAPTCHA_PATH,
     COMMENTS,
     HCAPTCHA,
+    HEARD,
     LEVER_PATH,
     PARSED,
     SPONSORSHIP,
@@ -46,8 +63,21 @@ from tests.apply.a8_support import (
 )
 from tests.apply.conftest import AT, Person
 from tests.apply.test_a5_run import application, fill, services, started
-from tests.apply.test_a6_gate import TTL, approve, run_submit, submit_services
+from tests.apply.test_a6_gate import (
+    TTL,
+    _password,
+    api_app,
+    approve,
+    run_submit,
+    submit_services,
+)
+from tests.conftest import make_settings
+from tests.identity.api_helpers import Api
+from tests.jobs.test_worker import flush_redis, redis_url
+from tests.mail import canary as canaries
 from tests.profile.conftest import full
+
+__all__ = ["api_app", "redis_url"]
 
 U = "0f3c2a1e-5b7d-4c8e-9a10-1b2c3d4e5f60"
 FORM = f"https://jobs.lever.co/example-robotics/{U}/apply"
@@ -288,6 +318,76 @@ def test_a_parse_later_than_the_waits_is_left_to_the_read_back() -> None:
     assert report.stopped == ""
     assert outcome(report, "Resume/CV").filled.status == "filled"
     assert sum(1 for c in form.calls if c[0] == "wait_for") >= 5
+
+
+# The labels each render of the parse writes, one snapshot apart.
+RENDERS = {
+    "company_last": (("Full name", "Email", "Phone"), ("Current company",)),
+    "three_renders": (("Full name",), ("Email",), ("Phone", "Current company")),
+    "one_field_each": tuple((label,) for label in PARSED),
+    "company_first": (("Current company",), ("Full name", "Email", "Phone")),
+    "company_in_the_first": (("Full name", "Current company"), ("Email",), ("Phone",)),
+}
+
+
+@pytest.mark.parametrize("parse_after", [0, 1, 3])
+@pytest.mark.parametrize("renders", RENDERS.values(), ids=RENDERS.keys())
+def test_a_parse_written_over_several_renders_is_undone_whole(
+    renders: tuple[tuple[str, ...], ...], parse_after: int
+) -> None:
+    form = lever_form(files=("cv.pdf",), parse_after=parse_after, renders=renders)
+    report = filled(form)
+    assert report.stopped == ""
+    assert form.parses == 1
+    assert sorted(form.cleared) == sorted(PARSED)
+    assert form.spec("Current company").value == ""
+    assert outcome(report, "Current company").filled.status == "left"
+    assert form.spec("Full name").value == full("identity")["full_name"]
+    assert not {s.value for s in form.fields} & set(PARSED.values())
+
+
+def test_a_render_after_two_reads_agreed_is_left_to_the_read_back(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    # The second render lands after two reads agreed, past what the undo waits for.
+    form = lever_form(renders=RENDERS["company_last"], gap=3)
+    assert run_submit(submit_services(factory, form, stub), app_id) == "ready"
+    assert application(db, app_id).error_code == "form_changed"
+    assert form.spec("Current company").value == PARSED["Current company"]
+    assert form.gate_clicks == []
+    assert form.submit_clicks == 0
+
+
+def cv_after_the_email(**rest: Any) -> LeverForm:
+    """Lever's fields with the CV asked after the name and the e-mail (Lever's own form asks it
+    first)."""
+    model = lever_form()
+    fields = model.fields[1:3] + model.fields[:1] + model.fields[3:]
+    return LeverForm(fields, submit=model.submit, title=model.title, **rest)
+
+
+def test_a_field_typed_before_a_later_cv_is_cleared_while_reported_filled() -> None:
+    # Declared open point of lever.py: the parse's undo clears what the fill typed before it.
+    form = cv_after_the_email(files=("cv.pdf",))
+    report = filled(form)
+    assert report.stopped == ""
+    assert outcome(report, "Full name").filled.status == "filled"
+    assert form.spec("Full name").value == ""
+    assert form.spec("Email").value == ""
+
+
+def test_a_form_asking_for_the_cv_after_other_fields_is_never_submitted(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    form = cv_after_the_email()
+    assert run_submit(submit_services(factory, form, stub), app_id) == "ready"
+    assert application(db, app_id).error_code == "form_changed"
+    assert form.gate_clicks == []
+    assert form.submit_clicks == 0
 
 
 def test_native_selects_take_the_profile_answer() -> None:
@@ -585,34 +685,167 @@ def test_person_a_never_reads_or_approves_person_b_at_the_same_company(
     assert application(db, app_b).state is State.ready
 
 
-def test_no_answer_typed_on_lever_reaches_an_event_a_log_or_a_result(
+def test_person_a_never_reads_lists_or_edits_bs_lever_application_or_answers(
     db: Session,
     factory: sessionmaker[Session],
+    person_a: Person,
+    person_b: Person,
+    stub: str,
+    api_app: FastAPI,
+) -> None:
+    canary = "canary" + secrets.token_hex(8)
+    # B's own answer to a question A's form leaves: it answers B's form, never A's.
+    db.add(
+        AnswerBankEntry(
+            user_id=person_b.user_id,
+            question_key=question_key(HEARD),
+            question=HEARD,
+            answer="Referral",
+        )
+    )
+    db.commit()
+    app_a = ready(db, factory, person_a, stub)
+    app_b = ready(db, factory, person_b, stub)
+    assert answers_of(db, app_b)[HEARD] == "Referral"
+    assert answers_of(db, app_a)[HEARD] is None
+    db.execute(
+        sa.update(ApplicationAnswer)
+        .where(ApplicationAnswer.application_id == app_b, ApplicationAnswer.label == "Phone")
+        .values(value=f"+33 6 00 {canary}")
+    )
+    db.commit()
+    _password(factory, person_a, person_b)
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        token_a, token_b = api.login_token(person_a.email), api.login_token(person_b.email)
+        base = f"/api/applications/{app_b}"
+        view_b = api.get(f"{base}/approval", token=token_b).json()
+        phone = next(a["field_key"] for a in view_b["answers"] if a["label"] == "Phone")
+        shot = view_b["screenshots"][0]["id"]
+        refused = [
+            api.get(base, token=token_a),
+            api.get(f"{base}/approval", token=token_a),
+            api.get(f"{base}/screenshots/{shot}", token=token_a),
+            api.request(
+                "PUT",
+                f"{base}/answers/{quote(phone, safe='')}",
+                token=token_a,
+                json={"value": "+33 6 11 11 11 11"},
+            ),
+        ]
+        assert [r.status_code for r in refused] == [404] * len(refused)
+        mine = api.get("/api/applications", token=token_a)
+        theirs = api.get(f"/api/applications?posting_id={person_b.posting_id}", token=token_a)
+        assert [item["id"] for item in mine.json()["items"]] == [str(app_a)]
+        assert theirs.json()["items"] == []
+        assert [r for r in (*refused, mine, theirs) if canary in r.text] == []
+    assert answers_of(db, app_b)["Phone"] == f"+33 6 00 {canary}"
+
+
+def served(
+    settings: Settings, ctx: dict[str, Any], name: str, app_id: uuid.UUID, job_id: str
+) -> None:
+    """`name` queued for `app_id` on the apply queue as the tick queues it, then served by the
+    worker's own apply queue (its crons off) until that queue is empty."""
+
+    async def go() -> None:
+        api_queue = queues.Queue(settings.redis_url.get_secret_value())
+        try:
+            assert await api_queue.enqueue(name, str(app_id), queue=queues.APPLY, job_id=job_id)
+        finally:
+            await api_queue.close()
+        spec = dataclasses.replace(worker.apply_queue(settings), cron_jobs=())
+        apply_worker = worker.build_worker(spec, settings, ctx)
+        apply_worker.burst = True
+        try:
+            await apply_worker.main()
+        finally:
+            await worker.close_worker(apply_worker)
+
+    asyncio.run(go())
+
+
+def test_no_value_typed_on_lever_reaches_an_event_a_log_redis_or_a_job_result(
+    db: Session,
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    redis_url: str,
     person_a: Person,
     stub: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    canary = "canary" + secrets.token_hex(8)
+    flush_redis(redis_url)
     caplog.set_level(logging.DEBUG)
-    app_id = ready(db, factory, person_a, stub)
+    letter, phone = canaries.marker(), canaries.marker()
+    version = db.get(DocumentVersion, person_a.letter_version_id)
+    assert version is not None
+    paragraphs = [*version.content["paragraphs"], f"Reference {letter}."]
     db.execute(
-        sa.update(ApplicationAnswer)
-        .where(ApplicationAnswer.application_id == app_id, ApplicationAnswer.label == "Phone")
-        .values(value=f"+33 6 00 {canary}")
+        sa.update(DocumentVersion)
+        .where(DocumentVersion.id == version.id)
+        .values(content={**version.content, "paragraphs": paragraphs})
     )
     db.commit()
-    assert approve(factory, person_a, app_id).passed
-    form, leases = lever_form(), GateLeases()
-    result = run_submit(submit_services(factory, form, stub, leases=leases), app_id)
-    assert result == "submitted"
-    assert f"+33 6 00 {canary}" in [c[1].get("text") for c in form.calls if c[0] == "type"]
-    stored = db.execute(
-        sa.select(ApplicationEvent.data).where(ApplicationEvent.application_id == app_id)
-    ).scalars()
-    assert canary not in json.dumps(list(stored))
-    assert canary not in caplog.text
-    assert canary not in result
-    assert canary not in json.dumps(leases.acquired)
+    on_lever(db, person_a, stub)
+    app_id = started(db, person_a)
+    fill_job, submit_job = queues.apply_fill_job_id(app_id), queues.apply_submit_job_id(app_id)
+    settings = make_settings(migrated_url, redis_url=redis_url, apply_stub_base_url=stub)
+    client = redis_client.Redis.from_url(redis_url)
+    # Redis as it stands each time a marker is typed: its keys, and where a marker is in it.
+    typing: list[tuple[str, list[str], list[canaries.Finding]]] = []
+    job = [fill_job]
+
+    def look(form: Any, n: int) -> None:
+        name, args = form.calls[-1]
+        if name == "type" and (letter in args["text"] or phone in args["text"]):
+            keys = [key.decode() for key in client.scan_iter(match="*")]
+            typing.append((job[0], keys, canaries.find([letter, phone], redis=client)))
+
+    leases = GateLeases()
+    ctx: dict[str, Any] = {
+        "settings": settings,
+        "apply_services": services(
+            factory, lever_form(on_call=look), None, FakeAgent(), stub_base=stub
+        ),
+        "apply_submit_services": submit_services(
+            factory, lever_form(on_call=look), stub, leases=leases
+        ),
+    }
+    try:
+        served(settings, ctx, "apply_fill", app_id, fill_job)
+        assert application(db, app_id).state is State.ready
+        assert letter in answers_of(db, app_id)[COMMENTS]
+        db.execute(
+            sa.update(ApplicationAnswer)
+            .where(ApplicationAnswer.application_id == app_id, ApplicationAnswer.label == "Phone")
+            .values(value=f"+33 6 00 {phone}")
+        )
+        db.commit()
+        assert approve(factory, person_a, app_id).passed
+        job[0] = submit_job
+        served(settings, ctx, "apply_submit", app_id, submit_job)
+        assert application(db, app_id).state is State.submitted
+
+        # Each marker was typed while its job's own record stood in the Redis read.
+        assert {(at, job_key_prefix + at in keys) for at, keys, _ in typing} == {
+            (fill_job, True),
+            (submit_job, True),
+        }
+        assert [found for _, _, found in typing if found] == []
+        events = db.execute(
+            sa.select(ApplicationEvent.data).where(ApplicationEvent.application_id == app_id)
+        ).scalars()
+        found = canaries.find(
+            [letter, phone],
+            logs=caplog.records,
+            redis=client,
+            values=[*events, leases.acquired],
+        )
+        assert found == []
+        left = [key.decode() for key in client.scan_iter(match="*")]
+        assert [key for key in left if fill_job in key or submit_job in key] == []
+    finally:
+        client.close()
 
 
 # --- the fake Lever pages ------------------------------------------------------------------------

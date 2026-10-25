@@ -56,6 +56,10 @@
 #                                  turn the cv.json and letter.json the jobs import attached into
 #                                  that account's documents, a sent posting's PDF kept frozen;
 #                                  idempotent, --dry-run prints the counts only (app.documents.cli)
+#   ./deploy.sh ingestion close-run <run-id> [--dry-run]
+#                                  close an ingestion run that cannot move, as the cron does after
+#                                  its last failure; idempotent, --dry-run prints what it would do
+#                                  (app.ingestion.cli)
 #   ./deploy.sh apply pause|resume|status
 #                                  stop (or allow again) every application submission at once:
 #                                  a Redis flag the apply gate reads before its decision and
@@ -526,7 +530,7 @@ migrate() {
   timeout_s="$(setting MIGRATE_TIMEOUT_S 300)"
   [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]] || die "MIGRATE_TIMEOUT_S must be a whole number of seconds, got '$timeout_s'"
   if ! remote "cd $RDIR_Q && MIGRATE_TIMEOUT_S=$timeout_s bash ops/migrate.sh"; then
-    die "the migrations did not apply (above), so the deploy stopped before starting the new code: the containers on $HOST were not touched and still run the previous release (./deploy.sh ps). $HOST:$RDIR and the :latest images already hold the new release, so do not run compose up there by hand. Fix the migration and run ./deploy.sh again"
+    die "the migrations did not apply (above), so the deploy stopped before starting the new code: the containers on $HOST were not touched and still run the previous release (./deploy.sh ps). $HOST:$RDIR and the :latest images already hold the new release, so do not run compose up there by hand. After a lock timeout, just run ./deploy.sh again; otherwise fix the migration and run ./deploy.sh again"
   fi
   record migrations "$start"
 }
@@ -877,6 +881,20 @@ cmd_documents() {
   require_deployed
   step "documents import-legacy on $HOST$mode"
   rcompose exec -T api python -m app.documents.cli import-legacy "$2" "${@:3}"
+}
+
+# cmd_ingestion close-run <run-id> [--dry-run]: app.ingestion.cli close-run in the api container.
+cmd_ingestion() {
+  local id='^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+  [[ "${1:-}" == "close-run" && "${2:-}" =~ $id && ($# -eq 2 || ($# -eq 3 && "${3:-}" == "--dry-run")) ]] ||
+    die "usage: ./deploy.sh ingestion close-run <run-id> [--dry-run]"
+  local mode=""
+  [[ $# -eq 3 ]] && mode=" (dry run)"
+  ssh_master
+  require_remote
+  require_deployed
+  step "ingestion close-run on $HOST$mode"
+  rcompose exec -T api python -m app.ingestion.cli close-run "$2" "${@:3}"
 }
 
 # cmd_apply pause|resume|status: the administrator's pause of every submission (apply A6), set
@@ -1509,6 +1527,7 @@ main() {
     profile) cmd_profile "$@" ;;
     jobs) cmd_jobs "$@" ;;
     documents) cmd_documents "$@" ;;
+    ingestion) cmd_ingestion "$@" ;;
     runner) cmd_runner "$@" ;;
     -h | --help | help) usage ;;
     *)

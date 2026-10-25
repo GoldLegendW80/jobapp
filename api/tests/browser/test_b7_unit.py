@@ -7,6 +7,7 @@ No test sleeps or reads the wall clock: the lease clock is injected, waits are o
 the session's own timers are set to zero here. Every id and secret is made up.
 """
 
+import ast
 import asyncio
 import json
 import os
@@ -112,7 +113,7 @@ def test_a_session_without_cdp_has_no_debugging_switch_and_the_address_comes_las
     assert argv[:2] == ["chromium", "--"]  # Debian's wrapper passes the rest verbatim
     assert argv[-2:] == ["--", "https://example.org/login?next=/a"]
     assert argv.count("--") == 2
-    assert not any("AutomationControlled" in a for a in argv)  # no infobar for the person
+    assert not any("AutomationControlled" in a for a in argv)  # nothing automates the person
     with_cdp = chromium.switches(request("apply_fill"), "/leases/x", 9333)
     assert "--remote-debugging-port=9333" in with_cdp
     assert "--disable-blink-features=AutomationControlled" in with_cdp
@@ -418,18 +419,18 @@ def made(kind: Any, proc: Any) -> Any:
 @pytest.mark.parametrize(
     ("kind", "failing", "end", "expected"),
     [
-        (signin.PersonChromium, ("quit",), "stop", ["quit", "kill", "rmtree"]),
-        (signin.PersonChromium, ("killpg",), "stop", ["quit", "killpg", "kill", "rmtree"]),
-        (signin.PersonChromium, ("killpg",), "kill", ["killpg", "kill", "rmtree"]),
-        (chromium.Chromium, ("killpg",), "stop", ["killpg", "kill", "rmtree"]),
-        (chromium.Chromium, ("killpg",), "kill", ["killpg", "kill", "rmtree"]),
+        (signin.PersonChromium, ("quit",), "stop", ["quit", "killuid", "rmtree"]),
+        (signin.PersonChromium, ("killpg",), "stop", ["quit", "killpg", "killuid", "rmtree"]),
+        (signin.PersonChromium, ("killpg",), "kill", ["killpg", "killuid", "rmtree"]),
+        (chromium.Chromium, ("killpg",), "stop", ["killpg", "killuid", "rmtree"]),
+        (chromium.Chromium, ("killpg",), "kill", ["killpg", "killuid", "rmtree"]),
     ],
 )
 def test_an_end_whose_helper_raises_still_reaps_every_process_of_the_uid(
     monkeypatch: pytest.MonkeyPatch, kind: Any, failing: tuple[str, ...], end: str,
     expected: list[str],
 ) -> None:  # fmt: skip
-    """The reap ("kill" of every process left under a profile uid) runs after a helper failed,
+    """The reap ("killuid" of every process left under a profile uid) runs after a helper failed,
     so that Chromium is not on the display in the next lease."""
     monkeypatch.setattr(signin, "QUIT_S", 0)
     monkeypatch.setattr(chromium.c, "CLOSE_S", 0)
@@ -443,11 +444,11 @@ def test_an_end_whose_helper_raises_still_reaps_every_process_of_the_uid(
 
 
 def test_the_end_runs_every_step_when_the_reap_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    helpers = Helpers(monkeypatch, "kill")
+    helpers = Helpers(monkeypatch, "killuid")
     helpers.strays = [{20001: [4242]}]
     browser = made(signin.PersonChromium, ExitedProc(0))
     run(browser.stop())  # the end itself does not raise
-    assert helpers.seen == ["kill", "rmtree"]
+    assert helpers.seen == ["killuid", "rmtree"]
 
 
 def test_the_manager_ends_a_lease_whose_browser_failed_to_stop() -> None:
@@ -483,7 +484,7 @@ def test_every_start_reaps_what_an_earlier_lease_left(monkeypatch: pytest.Monkey
     helpers.strays = [{20002: [77, 78]}, {}]
     browser = made(chromium.Chromium, None)
     run(browser.prepare())
-    assert helpers.seen == ["kill", "prepare"]
+    assert helpers.seen == ["killuid", "prepare"]
 
 
 def test_a_start_is_refused_while_a_process_of_a_profile_uid_survives(
@@ -494,7 +495,7 @@ def test_a_start_is_refused_while_a_process_of_a_profile_uid_survives(
     browser = made(signin.PersonChromium, None)
     with pytest.raises(RuntimeError, match="survived the reap"):
         run(browser.start())
-    assert helpers.seen == ["kill"]  # nothing prepared, nothing started
+    assert helpers.seen == ["killuid"]  # nothing prepared, nothing started
 
 
 def test_a_session_that_exits_at_its_start_is_finished(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -951,3 +952,22 @@ def test_the_managed_policy_blocks_every_chrome_page_and_keeps_cdp() -> None:
     assert policy["ExtensionInstallBlocklist"] == ["*"]
     assert "RemoteDebuggingAllowed" not in policy
     assert "DeveloperToolsAvailability" not in policy
+
+
+def test_every_profile_of_the_b7_container_tests_has_its_own_uid() -> None:
+    """The B7 container tests share one browser per module, and bind_uid ties a uid to its first
+    profile for ever: two tests that make a fresh profile under the same uid pass alone and fail
+    together with 409 `uid_in_use`, the second one in whatever order the run picks (the gate of
+    PR #521, where Save page as and issue #488's test both took 20026)."""
+    tree = ast.parse((Path(__file__).parent / "test_b7_container.py").read_text())
+    uids = [
+        node.value.elts[1].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Tuple)
+        and len(node.value.elts) == 2
+        and "uuid4" in ast.unparse(node.value.elts[0])
+        and isinstance(node.value.elts[1], ast.Constant)
+    ]
+    assert len(uids) >= 10, uids
+    assert sorted(u for u in set(uids) if uids.count(u) > 1) == []

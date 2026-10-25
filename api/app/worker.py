@@ -28,6 +28,11 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   processes next to the sweeps (about 145 MiB plus 3 x 240 MiB measured in A2 and A5, within
   the 1536m limit). Tried once: a run whose worker died is never started again behind the
   user's back.
+- apply_decide(application_id): the decision of one `ready` Full auto item, its check by model
+  (`apply_check`, one agent run in this process) first (apply A13c, app/apply/submit.py
+  `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s
+  never holds the fills and submits, and it takes one of the MAX_AGENT_RUNS slots. Tried once:
+  after a worker stop the next tick queues it again (it clears arq's failed result first).
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
@@ -62,8 +67,8 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
   person whose fill is not running (a new one, one waiting for its documents or behind another
   person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
-  job of every `approved` application (A6), every `held` one whose hold ended and every `ready`
-  Full auto one, whose job runs Full auto's decision (A13a, `submit.due`).
+  job of every `approved` application (A6) and every `held` one whose hold ended, and the
+  decision of every `ready` Full auto one on the agents queue (A13a and A13c, `submit.due`).
   The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus the wait of a
   sign in hand off (BROWSER_SESSION_MAX_S, browser B12a) plus a margin, the submit's the
   `apply_submit` lease's ceiling plus a margin. At start, every application left `filling` by a dead
@@ -103,6 +108,7 @@ from typing import Any
 
 from arq import cron, func
 from arq.connections import ArqRedis, create_pool
+from arq.constants import result_key_prefix
 from arq.cron import CronJob
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
@@ -259,6 +265,7 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
             client,
             clock_of(ctx),
             browser=browser_sources(ctx),
+            feeds=feed_sources(ctx),
         )
 
 
@@ -274,6 +281,16 @@ def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
     return sources.runner_for(
         ctx["settings"], ctx["redis"], sessions_of(ctx), lambda: agent_context(ctx)
     )
+
+
+def feed_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The freelance and project feeds' run (opportunities O7): tests put theirs in the context."""
+    if "feed_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["feed_sources"]
+        return hook
+    from app.opportunities import sources
+
+    return sources.runner_for(ctx["settings"])
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
@@ -446,6 +463,13 @@ def agents_queue() -> QueueSpec:
         name=queue.AGENTS,
         functions=[
             func(run_agent, name="run_agent", timeout=job_timeout_s, max_tries=1),
+            func(
+                apply_decide,
+                name="apply_decide",
+                timeout=job_timeout_s,
+                max_tries=1,
+                keep_result=0,
+            ),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
         ],
         cron_jobs=[cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60)],
@@ -595,10 +619,12 @@ APPLY_JOB_MARGIN_S = 120
 
 def apply_services(ctx: dict[str, Any]) -> Any:
     """The fill's services: tests put theirs in the context; else the lease store and the tools
-    of browser B3 and B5 on this worker's Redis, and the answer agent (`apply_answer`, run in
-    this process on the runner's context of `agent_context`). B4's `Live.agent_turn` goes in
-    `before_tool` once B4 is merged."""
+    of browser B3 and B5 on this worker's Redis, and the answer and generic form agents
+    (`apply_answer`, `apply_form`, run in this process on `agent_context`). B4's
+    `Live.agent_turn` goes in `before_tool` once B4 is merged."""
     from app.apply import agents as apply_agents
+    from app.apply import form_agent as apply_forms
+    from app.apply import model_check as apply_check
     from app.apply import run as apply_run
 
     given = ctx.get("apply_services")
@@ -633,6 +659,8 @@ def apply_services(ctx: dict[str, Any]) -> Any:
         leases=leases,
         tools_for=lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         answer_agent=apply_agents.RuntimeAnswerAgent(lambda: agent_context(ctx)),
+        form_agent=apply_forms.RuntimeFormAgent(lambda: agent_context(ctx)),
+        check=apply_check.RuntimeCheck(lambda: agent_context(ctx)),
         stub_base=settings.apply_stub_base_url,
     )
 
@@ -653,15 +681,46 @@ async def apply_submit(ctx: dict[str, Any], application_id: str) -> None:
     await apply_submit_run.submit(services, uuid.UUID(application_id))
 
 
+async def apply_manual(ctx: dict[str, Any], application_id: str) -> None:
+    """One Apply myself session (apply A9, app/apply/manual.py): the person's, on the lease."""
+    from app.apply import manual
+
+    fill = apply_services(ctx)
+    services = ctx.get("apply_manual_services") or manual.Services(
+        fill, manual.RedisChannel(ctx["redis"]), fill.leases.client, _manual_max_s(ctx["settings"])
+    )
+    await manual.session(services, uuid.UUID(application_id))
+
+
+def _manual_max_s(settings: Settings | None) -> int:
+    from app.browser.leases import LEASE_MAX_S, lease_max_table
+
+    table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
+    return table["apply_manual"]
+
+
+async def apply_decide(ctx: dict[str, Any], application_id: str) -> None:
+    """The decision of one `ready` Full auto item and its check by model (apply A13c), on the
+    agents queue: the model call never holds the apply queue, and counts as one agent run."""
+    from app.apply import submit as apply_submit_run
+
+    services = ctx.get("apply_submit_services") or apply_submit_run.from_fill(
+        apply_services(ctx), ctx["settings"], ctx.get("redis")
+    )
+    await apply_submit_run.decision(services, uuid.UUID(application_id))
+
+
 async def apply_tick(ctx: dict[str, Any]) -> int:
-    """Queues a fill for every application waiting for one, and the submit of every approved
-    one (apply A6). Answers a count, nothing else."""
+    """Queues a fill for every application waiting for one, the submit of every approved one
+    (apply A6) and the decision of every `ready` Full auto one on the agents queue (A13c).
+    Answers a count, nothing else."""
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
 
     with sessions_of(ctx)() as db:
         due = apply_run.due(db)
         approved = apply_submit_run.due(db)
+        deciding = apply_submit_run.undecided_of(db, approved)
     redis: ArqRedis | None = ctx.get("redis")
     if redis is None:
         return 0
@@ -675,19 +734,30 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
         )
         queued += job is not None
     for application_id in approved:
-        job = await redis.enqueue_job(
-            "apply_submit",
-            str(application_id),
-            _job_id=queue.apply_submit_job_id(application_id),
-            _queue_name=queue.APPLY,
-        )
+        if application_id in deciding:
+            job_id = queue.apply_decide_job_id(application_id)
+            # A try cut by a worker stop keeps arq's failed result for the worker's keep_result
+            # (3600 s), not the job's 0, and the same id is refused until then.
+            await redis.delete(result_key_prefix + job_id)
+            job = await redis.enqueue_job(
+                "apply_decide", str(application_id), _job_id=job_id, _queue_name=queue.AGENTS
+            )
+        else:
+            job = await redis.enqueue_job(
+                "apply_submit",
+                str(application_id),
+                _job_id=queue.apply_submit_job_id(application_id),
+                _queue_name=queue.APPLY,
+            )
         queued += job is not None
     return queued
 
 
 async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
     """No fill runs when the apply queue starts: an application left `filling` by a killed
-    worker ends `failed` with `interrupted`."""
+    worker ends `failed` with `interrupted`; an Apply myself session ends as `manual.close`
+    ends it."""
+    from app.apply import manual as apply_manual
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
 
@@ -695,8 +765,10 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
 
     def step(db: Session) -> int:
         # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
-        return apply_run.reset_interrupted(db, clock()) + apply_submit_run.reset_interrupted(
-            db, clock()
+        return (
+            apply_run.reset_interrupted(db, clock())
+            + apply_submit_run.reset_interrupted(db, clock())
+            + apply_manual.reset_interrupted(db, clock())
         )
 
     count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
@@ -718,6 +790,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
     fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
     submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
+    manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,
         functions=[
@@ -732,6 +805,13 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 keep_result=0,
             ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
+            func(
+                apply_manual,
+                name="apply_manual",
+                timeout=manual_timeout_s,
+                max_tries=1,
+                keep_result=0,
+            ),
         ],
         cron_jobs=[
             cron(
@@ -744,7 +824,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         ],
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
-        job_timeout_s=max(fill_timeout_s, submit_timeout_s),
+        job_timeout_s=max(fill_timeout_s, submit_timeout_s, manual_timeout_s),
         on_start=reset_fills_at_start,
     )
 
@@ -1056,12 +1136,12 @@ async def serve(
             if getattr(w, "_pool", None) is not None:
                 try:
                     await w.record_health()
-                except Exception:
+                except Exception as exc:
                     # A transient Redis error here must not abort the start: arq's periodic
-                    # record retries. Queue name only, no key and no URL.
+                    # record retries. Queue name and exception class, no key, URL or error text.
                     logger.warning(
                         "startup health record failed, the periodic record retries",
-                        extra={"queue": w.queue_name},
+                        extra={"queue": w.queue_name, "error_type": type(exc).__name__},
                     )
         logger.info("worker started", extra={"queues": [w.queue_name for w in workers]})
         if on_ready is not None:

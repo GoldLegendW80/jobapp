@@ -793,6 +793,21 @@ class BrowserSource(_Section):
         return self
 
 
+FeedKind = Literal["remoteok", "weworkremotely", "hackernews_freelance", "hackernews_hiring"]
+FEEDS_MAX = 10
+
+
+class Feed(_Section):
+    """A freelance and project feed the sweep reads after the boards (opportunities O7,
+    app/opportunities/sources): a public API or feed whose terms allow it. `terms` are optional
+    include terms on top of the person's title terms: when set, a title must also match one.
+    Off until the person turns it on."""
+
+    kind: FeedKind
+    terms: TermList = Field(default_factory=TermList)
+    enabled: bool = False
+
+
 # What the person aims for (opportunities O4). Seniority, industries and company types add a
 # small bonus to the fit (app.jobs.scoring.bonus) and never filter anything; compensation is
 # stored for the person and the forms, and changes no score.
@@ -868,6 +883,8 @@ class SearchSection(_Section):
         default_factory=list
     )
     compensation: Compensation = Field(default_factory=lambda: Compensation())
+    # Opportunities O7: the freelance and project feeds, one entry per kind.
+    feeds: Annotated[list[Feed], Field(max_length=FEEDS_MAX)] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -912,6 +929,11 @@ class SearchSection(_Section):
         if sum(source.kind == "linkedin" for source in value) > 1:
             raise ValueError("at most one linkedin source")
         return value
+
+    @field_validator("feeds")
+    @classmethod
+    def _one_feed_per_kind(cls, value: list[Feed]) -> list[Feed]:
+        return _unique(value, lambda feed: feed.kind, "feed (same kind)")
 
 
 # --- answers ------------------------------------------------------------------------------------
@@ -1043,6 +1065,20 @@ def _steps(value: list[str]) -> list[str]:
     return [step for step in WIZARD_STEPS if step in value]
 
 
+# A starter list entry (opportunities O5b): an ATS board `<ats>:<org in lower case>` or a browser
+# source `source:<kind>`.
+STARTER_KEY_PATTERN = (
+    r"^(?:(?:ashby|greenhouse|lever):[a-z0-9][a-z0-9._-]{0,99}|source:(?:google_careers|vie))$"
+)
+StarterKey = Text(120, pattern=STARTER_KEY_PATTERN)
+STARTER_HANDLED_MAX = 400
+
+
+def _once(value: list[str]) -> list[str]:
+    """Each key once, in the order first given."""
+    return list(dict.fromkeys(value))
+
+
 class Onboarding(_Section):
     """When the first login wizard was finished or put off, and the steps passed in it (Next or
     "Skip this step"), so another device resumes at the same step (opportunities O5). Only the
@@ -1053,6 +1089,11 @@ class Onboarding(_Section):
     dismissed_at: OptInstant = None
     steps_passed: Annotated[
         list[WizardStep], Field(max_length=2 * len(WIZARD_STEPS)), AfterValidator(_steps)
+    ] = Field(default_factory=list)
+    # The starter list's entries the person added or removed (opportunities O5b,
+    # app/opportunities/starter.py): never proposed again once gone from the search section.
+    starter_handled: Annotated[
+        list[StarterKey], Field(max_length=STARTER_HANDLED_MAX), AfterValidator(_once)
     ] = Field(default_factory=list)
 
 

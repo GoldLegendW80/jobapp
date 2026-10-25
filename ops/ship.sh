@@ -45,7 +45,11 @@
 #    so a branch checked out in a worktree cannot fail it). The state is read after each call:
 #    MERGED counts as merged whatever gh exited with (a state that cannot be read is read once
 #    more). A head that moved stops the run before the first merge; a stop between two merges, or
-#    INT or TERM during them, names what merged and what did not.
+#    INT or TERM during them, names what merged and what did not. The journey groups the gate ran
+#    and skipped (issue #552: the gate runs only those the batch touches) are read from the record
+#    and printed in the summary (`journeys:`); a scoped record whose list of changed files is not
+#    the one of its base and head is refused before any merge. LOCAL_CHECK_FULL=1 in the
+#    environment of ops/ship.sh reaches the gate and runs every group.
 # 5. The board (issue #500). The batch the gate checks is written to .local-check/ship.lock/batch
 #    of the main checkout, one pull request number per line (again after a drop), and
 #    ops/board-sync.py --apply puts every card in its stage from GitHub facts: once at the start
@@ -812,6 +816,49 @@ read -r result stub base <<<"$(head -n 1 <<<"$facts")"
 checked="$(tail -n +2 <<<"$facts" | cut -d' ' -f1 | tr '\n' ' ')"
 [[ "$checked" == "${BATCH[*]} " ]] || die "the record $RECORD lists the merges ${checked:-none}, the batch is ${BATCH[*]}"
 gated_head() { awk -v n="$1" '$1 == n { print $2 }' <<<"$(tail -n +2 <<<"$facts")"; }
+# The journey groups the gate ran and skipped (issue #552). A scoped record holds for the change
+# set it was computed on only: the sha256 of the files of its head against its base must be the
+# one it lists, or it is a record of another batch and nothing is merged.
+journeys="$(python3 - "$RECORD" "$MAIN" <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+record = json.load(open(sys.argv[1]))
+scope = record.get("journeys")
+if scope is None:
+    print("ok not recorded (a gate before issue #552: every group ran)")
+    sys.exit(0)
+ran = [entry["group"] for entry in scope.get("ran", [])]
+skipped = [entry["group"] for entry in scope.get("skipped", [])]
+env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+done = subprocess.run(
+    ["git", "-C", sys.argv[2], "diff", "--name-only", "--no-renames", "-z",
+     record["base"]["commit"], record["head"]],
+    capture_output=True, check=False, env=env,
+)
+paths = sorted(name for name in done.stdout.split(b"\0") if name)
+digest = hashlib.sha256(b"".join(path + b"\0" for path in paths)).hexdigest()
+if (done.returncode != 0 or scope.get("scope") not in ("scoped", "full")
+        or digest != scope.get("changes") or type(scope.get("changed_files")) is not int
+        or len(paths) != scope["changed_files"]):
+    print("bad its journey scope was computed for another change set")
+    sys.exit(0)
+if scope.get("scope") == "full":
+    print(f"ok full ({scope.get('full_because')}), ran {', '.join(ran) or 'none'}")
+    sys.exit(0)
+why = {entry["group"]: entry["why"] for entry in scope.get("skipped", [])}
+reasons = sorted(set(why.values()))
+print(
+    f"ok scoped on {len(paths)} changed files, ran {', '.join(ran) or 'none'};"
+    f" skipped {', '.join(skipped) or 'none'}{' (' + '; '.join(reasons) + ')' if reasons else ''}"
+)
+PY
+)" || die "cannot read the journeys of the record $RECORD"
+[[ "$journeys" == ok\ * ]] || die "the record $RECORD: ${journeys#bad }: nothing merged"
+note journeys "${journeys#ok }"
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || REPO=""
 [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "gh cannot name the repository of $MAIN: nothing merged"

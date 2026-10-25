@@ -10,6 +10,9 @@ The rules, in the order they apply:
 1. **The items read.** The rows of `reuse.source_steps` that pass `stored_items.of_stored_text()`
    (the one condition every reader applies). The rows of those steps that fail it cite a text
    that is no longer stored: they are deleted here, in the same transaction, and never proposed.
+   A row that removes an entry, a line or a whole list (`items.removes_a_list`) is dropped: the
+   extraction refuses such a removal since PR #398, and a step finished before it is reused
+   without being read again (`plan.EXTRACTOR_VERSION` stays 1, owner, 2026-10-21, #408).
 2. **Older proposals.** Every pending profile item of the user that belongs to another run is
    superseded, in id order, before anything is proposed. So the pending items after a merge are
    exactly this run's, and the proposals are a function of the items, the profile and the user's
@@ -54,7 +57,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.agents import proposals
-from app.agents.models import Proposal, ProposalStatus
+from app.agents.models import Proposal
 from app.ingestion import item_proposals, items, reuse, stored_items
 from app.ingestion.models import IngestionDocument, TextSource
 from app.ingestion.runs_models import IngestionItem, IngestionRun
@@ -68,7 +71,7 @@ YEARS_KEY = "years_experience"
 EMPLOYERS_SECTION = "experience"
 EMPLOYERS_SLOT = "employers"
 PAGE_BREAK = "\f"
-DECIDED_MAX = 20_000  # earlier rejections read to drop a value the user already refused
+DECIDED_MAX = 20_000  # the newest values the user turned down, read to drop them again
 
 _REFUSED = (items.ItemError, items.ProfileConflict, proposals.InvalidValueError, ValueError)
 
@@ -91,6 +94,7 @@ class Merged:
     equal_to_profile: int = 0
     rejected_before: int = 0
     removals_dropped: int = 0
+    removals_refused: int = 0  # list removals stored before the extraction refused them (#408)
     left_out: int = 0
     superseded: int = 0
     deleted: int = 0
@@ -182,22 +186,36 @@ def _is_transcribed(marks: Mapping[str, Any], citation: Mapping[str, Any]) -> bo
     mark = marks.get(citation["document_id"])
     if mark is True:
         return True
-    return any(citation["start"] <= end and citation["end"] >= start for start, end in mark or ())
+    # half open ranges: a citation that ends where a transcribed page starts is not in it
+    return any(citation["start"] < end and citation["end"] > start for start, end in mark or ())
 
 
 def _variants(
     rows: Sequence[IngestionItem], marks: Mapping[str, Any], order: Mapping[str, int]
-) -> tuple[dict[tuple[str, str], dict[str, Variant]], int]:
-    """The stored rows grouped by (section, key) then by value, and how many rows no longer
-    build (their section model changed since they were stored)."""
+) -> tuple[dict[tuple[str, str], dict[str, Variant]], int, int]:
+    """The stored rows grouped by (section, key) then by value, how many rows no longer build
+    (their section model changed since they were stored), and how many list removals were
+    dropped (rule 1)."""
     groups: dict[tuple[str, str], dict[str, Variant]] = {}
-    left_out = 0
+    left_out = refused = 0
+    built: list[tuple[tuple[int, str, int, int], IngestionItem, items.Item]] = []
     for row in rows:
+        if items.removes_a_list(row.section, row.key, row.action):
+            refused += 1
+            continue
         try:
             item = stored_items.as_item(row)
         except _REFUSED:
             left_out += 1
             continue
+        starts = [one["start"] for one in stored_items.as_citations(row)]
+        document = str(row.document_id)
+        place = (order.get(document, len(order)), document, min(starts, default=0), row.id)
+        built.append((place, row, item))
+    # The item kept for a value is the first in document order (the order the user selected
+    # the documents, then the place in the text), not the first row written.
+    built.sort(key=lambda one: one[0])
+    for _, row, item in built:
         removal = item.action is items.Action.remove
         variants = groups.setdefault((item.section, item.key), {})
         name = "" if removal else item.value_hash
@@ -226,7 +244,7 @@ def _variants(
                     one["end"],
                 )
             )
-    return groups, left_out
+    return groups, left_out, refused
 
 
 def _holds(section_data: Mapping[str, Any], item: items.Item) -> bool:
@@ -285,7 +303,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     marks = _transcribed_pages(db, (row.document_id for row in rows))
     # citations in the order the user selected the documents, then by place in the text
     order = {str(one): index for index, one in enumerate(ingestion_run.document_ids or ())}
-    groups, left_out = _variants(rows, marks, order)
+    groups, left_out, refused_removals = _variants(rows, marks, order)
 
     profile = profile_service.get_profile(db, user_id, now)
     stored: dict[str, dict[str, Any] | None] = {}
@@ -299,21 +317,12 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
         return stored[name]
 
     # Rejecting a conflict rejects each value it showed, not only the first one.
+    # An item accepted as proposed is not read: the profile holds it, and a later change is the
+    # user's. One accepted with the user's own value (an edit, or the pick of a conflict) turned
+    # down the values the documents gave: all but the one the user kept.
     refused: set[tuple[Any, Any, Any]] = set()
-    for one in item_proposals.list_items(
-        db, user_id, statuses=(ProposalStatus.rejected, ProposalStatus.accepted), limit=DECIDED_MAX
-    ):
-        at = (one.payload.get("section"), one.payload.get("key"))
-        if one.status is ProposalStatus.accepted and one.edited_value is None:
-            continue  # accepted as proposed: the profile holds it, and a later change is the user's
-        # An accepted item that carries the user's own value (an edit, or the pick of a conflict)
-        # turned down the values the documents gave: all but the one the user kept.
-        kept = items.value_hash(one.edited_value) if one.edited_value is not None else None
-        hashes = [one.payload.get("value_hash")]
-        hashes += [
-            o.get("value_hash") for o in one.payload.get("conflict") or () if isinstance(o, Mapping)
-        ]
-        refused.update((*at, one_hash) for one_hash in hashes if one_hash != kept)
+    for one in item_proposals.turned_down(db, user_id, limit=DECIDED_MAX):
+        refused.update((one.section, one.key, h) for h in one.hashes if h != one.kept)
     written = conflicts = equal = rejected = removals = 0
     employers: list[tuple[items.Item, list[dict[str, Any]]]] = []
     for (section, key), variants in sorted(groups.items()):
@@ -353,6 +362,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
             left_out += 1
             log.warning("ingestion merge: an item was left out (%s)", type(exc).__name__)
             continue
+        superseded += outcome.superseded  # a pending item at this key it replaced
         if outcome.status == item_proposals.EQUAL_TO_PROFILE:
             equal += 1
         elif outcome.status == item_proposals.REJECTED_BEFORE:
@@ -370,6 +380,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
         equal_to_profile=equal,
         rejected_before=rejected,
         removals_dropped=removals,
+        removals_refused=refused_removals,
         left_out=left_out,
         superseded=superseded,
         deleted=deleted,
@@ -377,12 +388,14 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     )
     log.info(
         "ingestion merge: run %s wrote %d proposals (%d conflicts, %d equal to the profile, "
-        "%d rejected before, %d left out, %d superseded, %d items of a replaced text deleted)",
+        "%d rejected before, %d list removals refused, %d left out, %d superseded, "
+        "%d items of a replaced text deleted)",
         run_id,
         result.proposals,
         conflicts,
         equal,
         rejected,
+        refused_removals,
         left_out,
         superseded,
         deleted,

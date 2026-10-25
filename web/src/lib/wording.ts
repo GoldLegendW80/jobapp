@@ -61,6 +61,12 @@ export const WORDING = {
   payTo: "To",
   payCurrency: "Currency",
   payPer: "Per",
+  // Opportunities O8: the freelance and project sources.
+  freelanceSources: "Freelance and project sources",
+  readOnlyWithOptIn: "Read only with your opt in",
+  addMissionByHand: "Add a mission by hand",
+  noFreelanceSource:
+    "No freelance source is swept. Turn one on and it is read at the next search.",
   payInvalid:
     "The pay needs whole numbers from 1 to 10,000,000, the lowest first, a currency and a period. Leave both figures empty for none.",
 } as const;

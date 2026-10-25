@@ -3,12 +3,14 @@
     the achievements, the experience and the education. An empty section is not printed. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
+{% import "_base/layout.html.j2" as layout with context %}
 {% block body %}
 <div class="page">
 <main class="main">
 <header class="head">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+{{ layout.contact_across() }}
 </header>
 {% if content.summary %}
 <section class="block">
@@ -43,12 +45,7 @@
 </main>
 <aside class="side">
 {{ base.portrait() }}
-{% if contact %}
-<section class="block">
-<h2 class="label">{{ base.label("contact") }}</h2>
-{{ base.contact_lines() }}
-</section>
-{% endif %}
+{{ layout.contact_column("label") }}
 {% if content.competencies %}
 <section class="block">
 <h2 class="label">{{ base.label("competencies") }}</h2>

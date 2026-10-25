@@ -13,7 +13,8 @@ How a document's content is kept:
 - `text` holds the pages of a PDF in order, joined by a form feed (U+000C); a page waiting for
   its transcription is the empty string between two form feeds.
 - `ingestion_images.position` is the zero based page index of a PDF page, 0 for an uploaded image.
-- `transcribed_pages` lists the page indexes whose text a model wrote from an image. The images
+- `transcribed_pages` lists the pages whose text a model wrote from an image, as 0 based indexes
+  of the parts of `text` split at form feeds (the merge reads them so). The images
   are deleted once transcribed, so this is what still says, afterwards, which pages of a
   mixed PDF to show as "transcribed, check it".
 - `pending_since` is when the document last started to wait for its reader: the upload, a
@@ -133,6 +134,10 @@ class IngestionDocument(Base):
     size: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     sha256: Mapped[bytes] = mapped_column(pg.BYTEA, nullable=False)
     raw: Mapped[bytes | None] = mapped_column("bytes", pg.BYTEA, deferred=True)
+    # Sent to become a base CV: `raw` outlives the text (SPEC-ingestion.md, "Text extraction").
+    keep_bytes: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.text("false")
+    )
     text: Mapped[str | None] = mapped_column(sa.Text, deferred=True)
     text_source: Mapped[TextSource] = mapped_column(TEXT_SOURCE_ENUM, nullable=False)
     text_status: Mapped[TextStatus] = mapped_column(

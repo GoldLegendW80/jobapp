@@ -23,7 +23,8 @@ person's apply lock and the application's row lock, the checks of the spec in or
    (a newer version written since the fill: nothing frozen, nothing refused on content). In Full
    auto, apply's own rule (`documents_need_review`);
 7. Full auto only: `full_auto.checks` (A13a: the fit threshold, a supported source, nothing left,
-   no free text by the agent, no captcha, never apply in the posting's text).
+   no captcha, never apply in the posting's text; A13c: the check by model passed on the agent's
+   free text, `model_check.code`).
 
 Its audit event (`decision`, with the outcome and the code) is written whatever the outcome, and
 the caller commits before any click. A pass spends the authorisation (`used_at`), marks every
@@ -58,6 +59,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, service, states
+from app.apply.ats import base as ats_base
 from app.apply.models import (
     AnswerSource,
     Application,
@@ -104,6 +106,10 @@ SENTENCES = {
     "not_retryable": "Only an unconfirmed or refused application can be tried again.",
     "busy": "This posting is busy with another change. Try again in a moment.",
     "not_editable": "The answers of this application can no longer be changed.",
+    "signin_first": (
+        "Sign in to the site first. The form is filled again after that, and its answers can "
+        "then be changed."
+    ),
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
     "not_an_option": "This form does not offer that choice.",
@@ -214,16 +220,22 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
 
 
 def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
-    return list(
-        db.execute(
-            sa.select(ApplicationAnswer)
-            .where(
-                ApplicationAnswer.application_id == application.id,
-                ApplicationAnswer.user_id == application.user_id,
-            )
-            .order_by(ApplicationAnswer.field_key)
-        ).scalars()
-    )
+    """The form's fields, as shown, hashed, checked and refilled; never a credential's box (a
+    row of an older fill of a field that takes typed text, labelled as one: a fill records none).
+    A check box, a choice, a file field or a skipped widget so labelled is a row as any other."""
+    rows = db.execute(
+        sa.select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.application_id == application.id,
+            ApplicationAnswer.user_id == application.user_id,
+        )
+        .order_by(ApplicationAnswer.field_key)
+    ).scalars()
+    return [
+        row
+        for row in rows
+        if row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label)
+    ]
 
 
 def current_hash(db: Session, application: Application) -> bytes:
@@ -366,8 +378,11 @@ def _version_ids(versions: dict[str, Any]) -> dict[str, str]:
 
 def documents_code(db: Session, application: Application) -> str | None:
     """`documents_changed` when `documents.current` no longer returns the versions filled (and
-    covered by the hash), else None. Nothing is refused on content."""
+    covered by the hash), or while an approved version is still rendering (the one filled is
+    then an older one), else None. Nothing is refused on content."""
     found = documents.current(db, application.user_id, application.posting_id)
+    if found.cv.awaits_render or found.letter.awaits_render:
+        return "documents_changed"
     now_ids = {
         kind: str(slot.version.version_id)
         for kind, slot in (("cv", found.cv), ("letter", found.letter))
@@ -639,8 +654,10 @@ def set_answer(
     matches; an `approved` application goes back to `ready` (its approval spent, a new one
     needed); a `needs_person` one that waited only for required fields goes to `ready` once the
     last of them is answered. The submit lease refills and reads back this value as any other;
-    a refill by the run keeps it (`run.finish`). Raises NotFoundError, RefusedError
-    (`not_editable`) or InvalidAnswerError. The caller commits. No value goes into the event."""
+    a refill by the run keeps it (`run.finish`). A credential's box is no field (`unknown_field`),
+    and an application waiting for a sign in takes no answer until the fill after it
+    (`signin_first`). Raises NotFoundError, RefusedError (`not_editable`, `signin_first`) or
+    InvalidAnswerError. The caller commits. No value goes into the event."""
     application, _ = lock(db, user_id, application_id)
     if application.state not in EDITABLE:
         raise RefusedError("not_editable")
@@ -653,8 +670,15 @@ def set_answer(
         )
         .with_for_update()
     ).scalar_one_or_none()
-    if row is None or row.field_key.startswith("skipped:") or row.kind == "file":
+    if (
+        row is None
+        or row.field_key.startswith("skipped:")
+        or row.kind == "file"
+        or ats_base.typed_secret(row.kind, row.label)
+    ):
         raise InvalidAnswerError("unknown_field")
+    if application.state is State.needs_person and application.needs == "signin":
+        raise RefusedError("signin_first")
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
         raise InvalidAnswerError("wrong_type")
