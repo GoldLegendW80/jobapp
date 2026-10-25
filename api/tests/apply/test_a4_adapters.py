@@ -457,7 +457,16 @@ def test_without_a_stub_base_the_stub_addresses_are_nobodys() -> None:
         f"{STUB}/greenhouse/northwind-labs/jobs/4012345",
     ):
         assert adapter_for(url) is None
-    assert [cls.name for cls in ADAPTERS] == ["ashby", "greenhouse", "lever", "linkedin", "generic"]
+    assert [cls.name for cls in ADAPTERS] == [
+        "ashby",
+        "greenhouse",
+        "lever",
+        "workday",
+        "google_careers",
+        "vie",
+        "linkedin",
+        "generic",
+    ]
 
 
 def test_an_unknown_page_with_a_field_gets_the_generic_strategy() -> None:
