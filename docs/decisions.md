@@ -186,6 +186,7 @@ choice made by the build that stands until the owner says otherwise.
 - **Owner intent:** Find jobs should let the person choose websites and search parameters, then an actual LLM uses Playwright to browse and search those sites, like the owner's Claude Code workflow. This is broader than enabling the narrow company-site finder or platform consent alone.
 - **Approved for implementation, not yet implemented:** the setup, saved criteria/run scope, live run, provenance and measurable acceptance are in [SPEC-jobs](../SPEC-jobs.md#interactive-search-626), with guarded browser interactions in [SPEC-browser](../SPEC-browser.md#interactive-discovery-626). API/feed modes remain explicit; a selected model-driven mode cannot silently substitute them or fixed readers. Existing free service, credential/runtime, browser and never-apply rules stay in force.
 - **Confirmed target websites:** LinkedIn, Welcome to the Jungle, Indeed and Free-Work, plus the ability to add custom URLs, accepted by the owner on 2026-10-24. This approves the target set only. The owner subsequently instructed fresh subagents to continue the draft PR, approving implementation of the reviewed contract on the same date.
+- **Full-flow confirmation:** the owner also answered the explicit revised-flow question with "Implement this search flow". Continue the remaining executor, setup, guard, findings, cancellation and browser/live-view slices with independent reviews. New draft PR work remains authorized; merge/deploy and real-model/site acceptance remain separate.
 
 ## Browser and apply (2026-10-14)
 
@@ -214,6 +215,12 @@ choice made by the build that stands until the owner says otherwise.
   Built as the image's managed policy: every chrome:// page blocked but chrome://policy,
   chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
   dropped before every start.
+
+## Likes (2026-10-21)
+
+- The owner decided “no limit”: Likes have no per-click, session or daily cap. Application
+  guardrails remain in force, including fit checks, company caps, pacing, holds and the safety
+  ceiling.
 
 ## The short path to Full auto (2026-10-19)
 

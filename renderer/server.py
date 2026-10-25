@@ -25,13 +25,16 @@ Protocol, HTTP/1.1, one request per connection, no other path and no parameter:
                    500 render_failed. A code, never the engine's text.
     POST /check    the visibility check of a template a model wrote (documents D25b): a JSON
                    body {"html", "needles", "width", "name"}. The page is laid out for print at
-                   `width` CSS pixels, the width of an A4 page's text, and for each needle (a
-                   text the page must show) every occurrence in the body's text is measured
-                   glyph by glyph: its box, its font size, and whether `elementFromPoint` at
-                   the glyph's centre is the element that holds the text, so nothing lies over
-                   it. Then two screenshots: the page as it is, and the page with the needles
-                   painted transparent through a CSS highlight named `name`, which changes no
-                   layout; the worker compares their pixels (app/documents/design_check.py).
+                   `width` CSS pixels, the width of an A4 page's text, and its scroll width is
+                   measured (wider when a box overflows the page, which print then shrinks).
+                   For each needle (a text the page must show) every occurrence in the body's
+                   text is measured glyph by glyph: its box, its font size, whether
+                   `elementFromPoint` at the glyph's centre is the element that holds the text,
+                   so nothing lies over it, and the left and right edges it should stay within,
+                   those of its element and of every box that holds it. Then two screenshots:
+                   the page as it is, and the page with the needles painted transparent through
+                   a CSS highlight named `name`, which changes no layout; the worker compares
+                   their pixels (app/documents/design_check.py).
                    200 application/json, or the refusals of /render. The page's own scripts
                    stay off: the measures run through the DevTools protocol, which a page
                    without JavaScript cannot reach or change.
@@ -93,7 +96,7 @@ CHECK_FOUND = 8  # occurrences of one needle measured
 _NAME = re.compile(r"[a-z][a-z0-9]{7,39}")
 
 # How far down the page lays out, in CSS pixels: [the lowest text below the root element's top,
-# the lowest text or box of the body from the viewport's top].
+# the lowest text or box of the body from the viewport's top, the root's scroll width].
 # The viewport's own height does not count, as the document's scroll height would.
 HEIGHT_JS = """() => {
   let text = 0;
@@ -110,15 +113,28 @@ HEIGHT_JS = """() => {
     }
   }
   // The text's height from the top of the root element, below the sheet's own root margin.
-  const top = document.documentElement.getBoundingClientRect().top;
-  return [Math.ceil(Math.max(0, text - top)), Math.ceil(Math.max(text, box))];
+  const root = document.documentElement;
+  const top = root.getBoundingClientRect().top;
+  return [Math.ceil(Math.max(0, text - top)), Math.ceil(Math.max(text, box)), root.scrollWidth];
 }"""
-# Every occurrence of every needle in the body's text: [font size, [[x, y, w, h, own]]], a glyph
-# a line, `own` 1 when the element at its centre is the one that holds the text.
+# Every occurrence of every needle in the body's text: [font size, [[x, y, w, h, own]], [left,
+# right]], a glyph a line, `own` 1 when the element at its centre is the one that holds the text;
+# left and right: the edges shared by the element that holds the text and its ancestors up to
+# the body.
 MEASURE_JS = """(needles) => {
   const nodes = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) nodes.push(walker.currentNode);
+  const within = (element) => {
+    let left = -1e6;
+    let right = 1e6;
+    for (let box = element; box && box !== document.documentElement; box = box.parentElement) {
+      const rect = box.getBoundingClientRect();
+      left = Math.max(left, rect.left);
+      right = Math.min(right, rect.right);
+    }
+    return [left, right];
+  };
   return needles.map((needle) => {
     const found = [];
     const wanted = needle.toLowerCase();
@@ -147,7 +163,7 @@ MEASURE_JS = """(needles) => {
           }
           i += wide - 1;
         }
-        found.push([parseFloat(getComputedStyle(parent).fontSize) || 0, glyphs]);
+        found.push([parseFloat(getComputedStyle(parent).fontSize) || 0, glyphs, within(parent)]);
         at = data.indexOf(wanted, at + needle.length);
       }
     }
@@ -302,7 +318,7 @@ class Renderer:
         await page.set_content(
             asked.html, wait_until="load", timeout=self.timeout_s * 1000
         )
-        height, lowest = await page.evaluate(HEIGHT_JS)
+        height, lowest, scroll_width = await page.evaluate(HEIGHT_JS)
         height = int(height)
         shown = max(1, min(int(lowest), CHECK_MAX_HEIGHT))
         await page.set_viewport_size({"width": asked.width, "height": shown})
@@ -312,6 +328,7 @@ class Renderer:
         after = await page.screenshot(type="png")
         return {
             "width": asked.width,
+            "scroll_width": int(scroll_width),
             "height": height,
             "shown": shown,
             "scale": CHECK_SCALE,
