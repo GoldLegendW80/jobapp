@@ -74,7 +74,10 @@ def document(sections: dict[str, Any] | None = None, **extra: Any) -> dict[str, 
 
 
 def empty_sections() -> dict[str, Any]:
-    return {name: model().model_dump(mode="json") for name, model in SECTION_MODELS.items()}
+    sections = {name: model().model_dump(mode="json") for name, model in SECTION_MODELS.items()}
+    # No permission map is stored or exported until a dedicated writer records a decision.
+    del sections["search"]["platform_consents"]
+    return sections
 
 
 def export(api: Api, token: str) -> dict[str, Any]:
@@ -159,7 +162,7 @@ def test_export_keys_follow_the_model_order_not_jsonb_order(api: Api, alice: str
     import_ok(api, alice, document())
     sections = export(api, alice)["sections"]
     for name in SECTIONS:
-        assert list(sections[name]) == list(SECTION_MODELS[name].model_fields)
+        assert list(sections[name]) == list(empty_sections()[name])
 
 
 # --- round trip ---------------------------------------------------------------------------------

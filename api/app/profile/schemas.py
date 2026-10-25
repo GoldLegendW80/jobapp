@@ -1467,6 +1467,10 @@ class ExportDocument(BaseModel):
         body = self.model_dump(mode="json", exclude={"base_revision"})
         if body["photo"] is None:
             del body["photo"]
+        # The stored form (_stored_section): no permission map until a dedicated writer records
+        # a decision, so an export of a person without one stays readable by older releases.
+        if not body["sections"]["search"]["platform_consents"]:
+            del body["sections"]["search"]["platform_consents"]
         return json.dumps(body, ensure_ascii=False, indent=2) + "\n"
 
 
