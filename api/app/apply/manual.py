@@ -23,6 +23,8 @@ the lease's token for the session's whole length (one session at a time, like a 
      document; else the file input whose label the resolver reads as that document receives it;
      none or two of them: nothing is set and the panel asks the person to click the right one
      (the next chooser is answered). Code only, never a model; never a dialog over a folder.
+     The app's turn is claimed for the attach and given back after it, as for the fill below;
+     a chooser upload names the boundary (`chooser_id`) the watch read.
    - "Fill my details": the input goes to the app (browserd's `app_turn`), the adapter types the
      identity fields only (resolver answers whose source is `identity.*`) into fields that are
      still empty, then the input goes back to the person, whatever happened. A Take over during
@@ -171,6 +173,7 @@ class Live:
     placed: dict[str, str] = field(default_factory=dict)  # kind -> file name on the lease
     seen: bool = False  # the page showed a confirmation
     chooser: bool = False  # a file chooser the person opened waits for a document
+    chooser_id: int | None = None  # its boundary in browserd, named by the upload that answers it
     idle_left_s: int | None = None
     busy: str | None = None
     last: dict[str, str] = field(default_factory=dict)  # the last command and its outcome
@@ -368,13 +371,33 @@ def _ok(result: dict[str, Any]) -> str:
 
 
 async def _attach(
+    services: Services,
+    tools: run.RunTools,
+    reader: ats_base.Adapter,
+    plan: run.Plan,
+    s: Live,
+    command: str,
+) -> str:
+    """Attaching a document is the app's turn, as filling details is: browserd refuses an
+    upload while the person holds the input, so the turn is claimed and always given back."""
+    try:
+        await services.browser.live_input(s.lease_id, None)
+        return await _attach_owned(tools, reader, plan, s, command)
+    finally:
+        await _give_back(services, s)
+
+
+async def _attach_owned(
     tools: run.RunTools, reader: ats_base.Adapter, plan: run.Plan, s: Live, command: str
 ) -> str:
     kind, name = DOCUMENT_OF[command]
     if kind not in s.placed:
         return "no_document"
     if s.chooser:
-        code = _ok(await tools.call("browser_file_upload", {"paths": [name]}))  # type: ignore[attr-defined]
+        # The boundary the watch read: browserd answers chooser_changed when the person opened
+        # another chooser since, so a document never lands in a chooser it was not meant for.
+        args = {"paths": [name], "chooser_id": s.chooser_id}
+        code = _ok(await tools.call("browser_file_upload", args))  # type: ignore[attr-defined]
         s.chooser = False
         return code or "attached"
     found, code = await reader.read(tools)
@@ -445,6 +468,7 @@ async def _watch(
                 run._in_db, fill.sessions, lambda db: saw(db, s.application_id, fill.clock())
             )
         s.chooser = bool(shot.get("chooser"))
+        s.chooser_id = shot.get("chooser_id") if type(shot.get("chooser_id")) is int else None
     lease = (await services.browser.current()).get("lease") or {}
     if lease.get("lease_id") != s.lease_id:
         raise BrowserError("ended")
@@ -473,7 +497,7 @@ async def _loop(
             if command == "fill_details":
                 outcome = await _fill_details(services, tools, reader, plan, s)
             else:
-                outcome = await _attach(tools, reader, plan, s, command)
+                outcome = await _attach(services, tools, reader, plan, s, command)
             s.busy, s.last = None, {"action": command, "outcome": outcome}
             await asyncio.to_thread(
                 run._in_db,

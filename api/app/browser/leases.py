@@ -130,6 +130,10 @@ SEEN_TTL_S = 86400  # a sighting nobody refreshed for a day is forgotten (renewe
 HISTORY = 10
 DEFAULT_LEASE_S = 300  # the estimate's lease length while no lease has ended yet
 UPDATE_ATTEMPTS = 5
+# Apply's own person waits (browserd/leases.py APPLY_WAITS, APPLY_WAIT_S): their reasons and the
+# ceiling of the time left that a readback may mirror.
+APPLY_WAITS = frozenset({"captcha", "email_code", "forbidden"})
+APPLY_WAIT_S = 1800
 HOST_MAX = 253  # a DNS name's longest form: the host a sign in waits on, as browserd noted it
 
 # Drops the members whose ticket is gone, then, when ARGV[1] names a member, gives it the turn
@@ -554,8 +558,8 @@ class Leases:
                 raise BrowserError("refused")
             if found.get("state") == "active":
                 lease.resume(now)
-            elif found.get("wait_reason") in {"captcha", "email_code", "forbidden"}:
-                left = max(0, min(float(found.get("wait_left_s") or 0), 1800))
+            elif found.get("wait_reason") in APPLY_WAITS:
+                left = max(0, min(float(found.get("wait_left_s") or 0), APPLY_WAIT_S))
                 deadline = now + left
                 if lease.state == "waiting_person" and lease.wait_deadline is not None:
                     deadline = min(deadline, lease.wait_deadline)
@@ -702,10 +706,9 @@ class Leases:
                             0,
                             min(
                                 left,
-                                1800
+                                APPLY_WAIT_S
                                 if lease.purpose == "apply_fill"
-                                and found.get("wait_reason")
-                                in {"captcha", "email_code", "forbidden"}
+                                and found.get("wait_reason") in APPLY_WAITS
                                 else self.session_max_s,
                             ),
                         ),
