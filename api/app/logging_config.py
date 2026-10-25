@@ -28,10 +28,17 @@ a plaintext in a codec error. So the filter writes the trace of a record's excep
 `private_trace` renders it, the class and the frames (file, line, function) of the exception and
 of every one it was raised from or during, and nothing they hold: no message, no note, no
 argument, no source line, no local value. An exception passed as an argument of the message or
-as an extra field is written as its class name. This holds for every logger that ends in the
-handler: uvicorn's "Exception in ASGI application", arq's "failed" line, asyncio's "never
-retrieved". The price is a trace without its last words: the class, the file and the line say
-where to look; reproduce with the same input to see the message.
+as an extra field, at any depth of a list or a mapping, or used as the message itself
+(`logger.error(exc)`), is written as its class name. This holds for every logger that ends in the
+handler: uvicorn's "Exception in ASGI application", arq's "failed" line, the app's own calls.
+asyncio is the one library that writes reprs into the message itself: its exception handler
+puts its fixed sentence on the first line ("Task exception was never retrieved") and the repr of
+the task, the future or the callback after it, and a callback's repr holds its arguments, a
+task's repr its exception. Of an `asyncio` record only the first line is written, cut before the
+first character a repr opens with (`asyncio_message`): "Exception in callback f('...')" becomes
+"Exception in callback f". The exception itself stays on the record, as a private trace. The
+price is a trace without its last words: the class, the file and the line say where to look;
+reproduce with the same input to see the message.
 """
 
 import json
@@ -181,17 +188,63 @@ def _trace_of(exc_info: Any) -> str | None:
     return private_trace(error) if isinstance(error, BaseException) else None
 
 
-def _without_errors(args: Any) -> Any:
-    """The arguments of a message with every exception among them replaced by its class name:
-    `logger.exception("%s failed: %s", ref, exc)` writes what failed, not what it said."""
-    if isinstance(args, tuple):
-        return tuple(error_name(one) if isinstance(one, BaseException) else one for one in args)
-    if isinstance(args, Mapping):
+# How deep `_without_errors` looks into lists and mappings; a container deeper than this is
+# written as its type name, whatever it holds (a cycle cannot loop either).
+ERRORS_MAX_DEPTH = 8
+
+
+def _without_errors(value: Any, depth: int = 0) -> Any:
+    """`value` (the message or its arguments) with every exception in it replaced by its class
+    name, inside tuples, lists, sets and mappings too: `logger.exception("%s failed: %s", ref,
+    exc)` and `logger.error(exc)` write what failed, not what it said. A tuple stays a tuple
+    and a mapping a mapping, as %-formatting needs; a set a set; anything else is kept as it is."""
+    if isinstance(value, BaseException):
+        return error_name(value)
+    if not isinstance(value, tuple | list | set | frozenset | Mapping):
+        return value
+    if depth >= ERRORS_MAX_DEPTH:
+        return type(value).__name__
+    if isinstance(value, Mapping):
         return {
-            key: error_name(one) if isinstance(one, BaseException) else one
-            for key, one in args.items()
+            _without_errors(key, depth + 1): _without_errors(one, depth + 1)
+            for key, one in value.items()
         }
-    return args
+    items = [_without_errors(one, depth + 1) for one in value]
+    if isinstance(value, tuple):
+        return tuple(items)
+    return (
+        frozenset(items)
+        if isinstance(value, frozenset)
+        else set(items)
+        if isinstance(value, set)
+        else items
+    )
+
+
+# Where a repr starts in a line of asyncio: a callback's arguments `f('...')`, an object
+# `<Task ...>`, a field `exception=...`, a quoted value. Not the `<locals>` and `<lambda>` of a
+# function's qualified name (`test.<locals>.callback`), which is code, not data.
+_REPR_START = re.compile(r"""[('"\[{=]|<(?!locals>|lambda>)""")
+# The one message of asyncio whose sentence starts with a repr ("Task <Task ...> has errored
+# out but its parent task <Task ...> is already completed"): written as a fixed sentence.
+_ASYNCIO_FIXED = (
+    (
+        re.compile(r"Task .* has errored out but its parent task .* is already completed"),
+        "Task has errored out but its parent task is already completed",
+    ),
+)
+
+
+def asyncio_message(message: str) -> str:
+    """What is written of a message of the `asyncio` logger (module docstring): its first line,
+    cut before the first repr, or the fixed sentence of a known message that starts with one."""
+    first = message.split("\n", 1)[0]
+    for pattern, sentence in _ASYNCIO_FIXED:
+        if pattern.fullmatch(first):
+            return sentence
+    cut = _REPR_START.search(first)
+    first = first[: cut.start()] if cut else first
+    return first.rstrip(" :,") or "asyncio error"
 
 
 LOST = "a log record could not be written"
@@ -240,6 +293,7 @@ class SecretFilter(logging.Filter):
 
     @staticmethod
     def _scrub(record: logging.LogRecord) -> None:
+        record.msg = _without_errors(record.msg)
         record.args = _without_errors(record.args)
         try:
             message = record.getMessage()
@@ -248,7 +302,12 @@ class SecretFilter(logging.Filter):
             message = f"{record.msg!s} {record.args!r}"
         # The arguments are folded into the message: an argument can be any object, and only
         # its text in the message is what would be written.
-        record.msg, record.args = clean_text(message), None
+        message = clean_text(message)
+        if record.name == "asyncio" or record.name.startswith("asyncio."):
+            # Cut after the cleaning: a cut inside a credential would leave its beginning,
+            # which no longer equals it.
+            message = asyncio_message(message)
+        record.msg, record.args = message, None
         for key, value in list(vars(record).items()):
             if key not in _RESERVED and not key.startswith("_"):
                 setattr(record, key, clean(value))

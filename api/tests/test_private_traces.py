@@ -7,9 +7,12 @@ for the api what a real uvicorn wrote on stdout and stderr, and asks where the m
 `test_the_canary_sees_a_whole_trace` proves the same search finds a marker in the trace the
 logging module would have written, so that an empty answer means something."""
 
+import asyncio
+import gc
 import io
 import json
 import logging
+import secrets
 import socket
 import threading
 from collections.abc import Iterator
@@ -19,18 +22,22 @@ from typing import Any
 import httpx
 import pytest
 import uvicorn
+from arq.jobs import serialize_result
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
+from app import queue
 from app.identity.deps import default_deny
 from app.logging_config import (
     CAUSE,
     CONTEXT,
     CUT,
+    ERRORS_MAX_DEPTH,
     TRACE_MAX_ERRORS,
     JsonFormatter,
     SafeStreamHandler,
     SecretFilter,
+    asyncio_message,
     error_name,
     private_trace,
 )
@@ -176,7 +183,7 @@ def test_a_group_of_groups_is_walked_and_capped() -> None:
 # --- every logger, through the handler ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["app.documents", "uvicorn.error", "arq.worker", "asyncio"])
+@pytest.mark.parametrize("name", ["app.documents", "uvicorn.error", "arq.worker"])
 def test_no_logger_writes_what_an_error_says(lines: Lines, name: str) -> None:
     planted = marker()
     error = caught(planted)
@@ -196,6 +203,132 @@ def test_no_logger_writes_what_an_error_says(lines: Lines, name: str) -> None:
     assert written[2]["error"] == "tests.test_private_traces.HostileError"
     assert written[2]["nested"] == {"list": ["tests.test_private_traces.HostileError"]}
     assert "in raise_everything" in written[3]["exc"]
+
+
+def test_an_exception_as_the_message_is_written_as_its_class(lines: Lines) -> None:
+    """`logger.error(exc)`: the logging module writes `str(msg)`, which is what it says."""
+    planted = marker()
+    error = caught(planted)
+    logger = logging.getLogger("app.documents")
+    logger.error(error)
+    logger.error([error, {"inner": (error,)}])
+    logger.error("%s and %s", [error], {error})
+    logger.error("%(errors)s", {"errors": [[error]]})
+    deep: list[Any] = [error]
+    for _ in range(ERRORS_MAX_DEPTH + 2):
+        deep = [deep]
+    logger.error("%s", deep)
+    written = lines()
+    assert find([planted], logs=[json.dumps(written)]) == []
+    name = "tests.test_private_traces.HostileError"
+    assert [line["msg"] for line in written[:4]] == [
+        name,
+        f"['{name}', {{'inner': ('{name}',)}}]",
+        f"['{name}'] and {{'{name}'}}",
+        f"[['{name}']]",
+    ]
+    # The innermost list is past the depth looked into: written as its type name.
+    nested = ERRORS_MAX_DEPTH - 1
+    assert written[4]["msg"] == "[" * nested + "'list'" + "]" * nested
+
+
+async def _leave_a_failed_task(planted: str) -> None:
+    async def fail() -> None:
+        raise HostileError(planted)
+
+    task = asyncio.get_running_loop().create_task(fail(), name=f"task {planted}")
+    await asyncio.sleep(0)  # one turn of the loop: the task runs and fails
+    assert task.done()
+    del task
+    gc.collect()  # the task is finalized unretrieved: asyncio logs "never retrieved"
+
+
+async def _raise_in_a_callback(planted: str, short: str) -> None:
+    def callback(value: str) -> None:
+        raise HostileError(planted)
+
+    # reprlib cuts a long argument in the callback's repr, so the argument is a short token.
+    asyncio.get_running_loop().call_soon(callback, short)
+    await asyncio.sleep(0)
+
+
+def test_a_failed_task_never_retrieved_writes_no_repr(lines: Lines) -> None:
+    """asyncio's own handler writes `future: <Task ... exception=HostileError(...)>` into the
+    message (the task's name and its exception's repr); none of it reaches the line."""
+    planted = marker()
+    asyncio.run(_leave_a_failed_task(planted))
+    written = [line for line in lines() if line["logger"] == "asyncio" and line["level"] == "error"]
+    assert len(written) == 1
+    assert written[0]["msg"] == NEVER
+    assert written[0]["exc"].endswith("\ntests.test_private_traces.HostileError")
+    assert "in fail" in written[0]["exc"]
+    assert find([planted], logs=[json.dumps(lines())]) == []
+
+
+def test_a_callback_that_raises_writes_no_argument(lines: Lines) -> None:
+    """`Exception in callback f('<argument>')` and `handle: <Handle ...>`: the first line is cut
+    before the repr, the handle line is dropped."""
+    planted, short = marker(), secrets.token_hex(6)
+    asyncio.run(_raise_in_a_callback(planted, short))
+    written = [line for line in lines() if line["logger"] == "asyncio" and line["level"] == "error"]
+    assert len(written) == 1
+    assert written[0]["msg"] == ("Exception in callback _raise_in_a_callback.<locals>.callback")
+    assert "in callback" in written[0]["exc"]
+    assert find([planted, short], logs=[json.dumps(lines())]) == []
+
+
+NEVER = "Task exception was never retrieved"
+CALLBACK = "Exception in callback"
+
+
+@pytest.mark.parametrize(
+    ("message", "written"),
+    [
+        (f"{NEVER}\nfuture: <Task finished exception=E('x')>", NEVER),
+        (
+            "Future exception was never retrieved\nfuture: <F>",
+            "Future exception was never retrieved",
+        ),
+        (
+            "Task was destroyed but it is pending!\ntask: <T>",
+            "Task was destroyed but it is pending!",
+        ),
+        (
+            "Fatal read error on socket transport\ntransport: <T>",
+            "Fatal read error on socket transport",
+        ),
+        (f"{CALLBACK} f('x')\nhandle: <Handle f('x')>", f"{CALLBACK} f"),
+        (f"{CALLBACK} <TaskStepMethWrapper object>()", CALLBACK),
+        (f"{CALLBACK} g.<locals>.<lambda>('x')", f"{CALLBACK} g.<locals>.<lambda>"),
+        (f"{CALLBACK} <locals x='y'>", CALLBACK),
+        (f"{CALLBACK} <lambdas>", CALLBACK),
+        (f"{CALLBACK} functools.partial(<function g>, 'x')", f"{CALLBACK} functools.partial"),
+        (
+            "Fatal error: protocol.data_received() call failed.",
+            "Fatal error: protocol.data_received",
+        ),
+        (
+            "closing of asynchronous generator <async_generator g>",
+            "closing of asynchronous generator",
+        ),
+        ("Executing <Handle f('x')> took 0.200 seconds", "Executing"),
+        ("Getting address info host:'x' took 1.0ms: [('x',)]", "Getting address info host"),
+        ("<_SelectorSocketTransport fd=7> pauses reading", "asyncio error"),
+        ('Unclosed "x" client', "Unclosed"),
+        ("Unclosed [x] client", "Unclosed"),
+        ("Unclosed {x} client", "Unclosed"),
+        ("value=x", "value"),
+        ("", "asyncio error"),
+        ("\nfuture: <F>", "asyncio error"),
+        (
+            "Task <Task pending name='x'> has errored out but its parent task <Task y> is "
+            "already completed",
+            "Task has errored out but its parent task is already completed",
+        ),
+    ],
+)
+def test_an_asyncio_message_keeps_its_sentence_and_no_repr(message: str, written: str) -> None:
+    assert asyncio_message(message) == written
 
 
 def test_a_trace_cached_by_an_earlier_handler_is_replaced() -> None:
@@ -222,6 +355,25 @@ def test_the_formatter_alone_never_writes_a_whole_trace() -> None:
     assert json.loads(JsonFormatter().format(record))["exc"] == private_trace(error)
     record.exc_info = (None, None, None)
     assert "exc" not in json.loads(JsonFormatter().format(record))
+
+
+# --- what arq keeps in Redis -----------------------------------------------------------------
+
+
+def test_the_result_kept_of_a_failed_job_is_the_class_of_its_error() -> None:
+    """arq keeps the exception of a failed job as its result, for an hour (run_agent,
+    run_sweep): through the app's serializer it is its class name, never what it says."""
+    planted = marker()
+    error = caught(planted)
+    args = ("run_agent", ("run",), {}, 1, 0, False, error, 0, 1, "ref", "q", "id")
+    raw = serialize_result(*args, serializer=queue.serialize)
+    assert raw is not None
+    assert planted.encode() not in raw
+    kept = queue.deserialize(raw)
+    assert (kept["s"], kept["r"]) == (False, "tests.test_private_traces.HostileError")
+    assert kept["a"] == ["run"]
+    # Anything else JSON cannot hold is still its text.
+    assert queue.deserialize(queue.serialize({"x": b"bytes"})) == {"x": "b'bytes'"}
 
 
 # --- the api under a real uvicorn ---------------------------------------------------------------
