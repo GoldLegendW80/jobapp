@@ -18,6 +18,10 @@ import { defineConfig, devices } from "@playwright/test";
  *                posting also on Greenhouse as one row, another person's switch off (B10)
  *   browser-b12  the sign in hand off: the banner, the live view at the person's keyboard,
  *                I'm signed in, Cancel, and nobody watching (task B12b)
+ *   browser-j15  Find jobs on the person's chosen websites: the four job websites by name and
+ *                the invented one of tests/browser_pages/j15/, a permission per website, the
+ *                interactive finder's search, the company page's posting, nothing submitted,
+ *                pacing and the page cap (jobs J15)
  *
  * A task of the module adds its spec as browser-b<n>.spec.ts and it runs here: the local check
  * (ops/local-check.sh, group browser) names this config, not the specs, and
