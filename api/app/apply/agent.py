@@ -746,7 +746,9 @@ def eligible(outcomes: Sequence[base.Outcome]) -> list[Question]:
         item, left = outcome.field, outcome.answer
         if not isinstance(left, answers.Left) or left.reason not in AGENT_REASONS:
             continue
-        if item.key in seen or refusal(item.label, item.kind, item.options, left.reason):
+        if item.key in seen or item.credential:
+            continue  # a credential's box is the person's sign in: no model is asked about it
+        if refusal(item.label, item.kind, item.options, left.reason):
             continue
         seen.add(item.key)
         found.append(

@@ -14,9 +14,10 @@
   of the form (one left for them, `you_answer`, or one they override): source `person`, a new
   hash, any approval void (`approved` goes back to `ready`); the submit lease refills and reads it
   back, and a refill by the run keeps it. 200 with the approval view; 422 `{detail, code}` for an
-  unknown field (`unknown_field`: none, a file, a skipped widget) or a value that does not fit it
-  (`wrong_type`: a text for a text, select or combobox, at most 5000 characters; true or false for
-  a checkbox or a yes or no question); 409 `not_editable` once the app clicked or after an end.
+  unknown field (`unknown_field`: none, a file, a skipped widget, a password's box) or a value that
+  does not fit it (`wrong_type`: a text for a text, select or combobox, at most 5000 characters;
+  true or false for a checkbox or a yes or no question); 409 `not_editable` once the app clicked
+  or after an end, `signin_first` while it waits for a sign in.
 - POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
   an approval; cancel: anything before the click).
 - POST /api/applications/{id}/submitted: "It was submitted" on `submit_unknown`.

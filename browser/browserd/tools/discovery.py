@@ -38,6 +38,19 @@ ACCOUNT_STEMS = (
     "payment",
     "paiement",
 )
+# Read inside every folded path word, so glued forms refuse too: /easyapply, /QuickApply,
+# /oneclickapply, /jobs/42/candidature, /candidater, /jetzt-bewerben, /bewirb, /solliciteer.
+# Never a stem of an English job slug: "applied", "supply", "candidate" and "solicitor" stay.
+APPLY_PARTS = (
+    "apply",
+    "postul",
+    "candidatur",
+    "candidater",
+    "candidatez",
+    "bewerb",
+    "bewirb",
+    "sollicit",
+)
 CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
 
 
@@ -109,6 +122,7 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
             detect.says_submit(segments, profile_edit=True)
             or detect.says_danger(segments)
             or any(t.startswith(ACCOUNT_STEMS) for t in tokens)
+            or any(part in t for t in tokens for part in APPLY_PARTS)
         )
         complete = bool(pairs) or (
             url != (scope.start if scope else url) and segments[-1] in ENDPOINTS
