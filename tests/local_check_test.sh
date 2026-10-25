@@ -1290,6 +1290,11 @@ done
 printf 'URL = "x"\n' >"$REPO/api/app/db.py"
 printf 'from app import db\n' >"$REPO/api/app/mail/__init__.py"
 printf 'from app import db\n' >"$REPO/api/app/apply/__init__.py"
+# The shared web pages the api reader reads (ci_plan.py WEB_SHARED_PAGES), calling nothing.
+while IFS= read -r page; do
+  mkdir -p "$(dirname "$REPO/$page")"
+  : >"$REPO/$page"
+done < <(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import ci_plan; print("\n".join(ci_plan.WEB_SHARED_PAGES))' "$ROOT/.github/scripts")
 printf 'notes\n' >"$REPO/.claude/notes.md"
 git -C "$REPO" add -A
 git -C "$REPO" commit -q -m "mapped"

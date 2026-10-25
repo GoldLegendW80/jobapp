@@ -372,7 +372,10 @@ def verify_problems(
 # 1. An api/app/ file (owner's decision of 2026-10-25: narrow the gate) runs the groups of its
 #    own module (API_AREAS) and those of every api file that imports it, directly or
 #    transitively, read from the Python imports of the tree (Imports.api). main.py and worker.py
-#    are wiring and carry nothing on, as routes.tsx does for the web. Every group runs for a
+#    are wiring and carry nothing on, as routes.tsx does for the web, save what main.py runs
+#    beyond the wiring (a middleware, a handler, what the start builds: Imports.main_reach),
+#    which runs every group. So does a file whose routes a page of WEB_SHARED_PAGES calls
+#    (Imports.shared_api: the HTTP consumers the imports cannot see). Every group runs for a
 #    shared file (app/*.py), a module's __init__.py, the models, a worker registration module
 #    (worker.py REGISTRATION_MODULES), an asset, a module no line decides, and whenever the
 #    reader is unsure: any dynamic import outside the reviewed loaders of API_LOADERS, an
@@ -627,6 +630,37 @@ STREAM_OWNERS = {
 NAMED_REGISTRIES = frozenset(
     {"api/app/agents/definitions.py", "api/app/agents/tools.py"}
 )
+# The web pages that journeys of many groups open, with failed requests watched: an api file
+# whose routes their code calls runs every group, whatever its module (the imports above see no
+# HTTP call). Read from the web tree (Imports.shared_api): the files each page imports, the
+# request paths they hold, matched against the routes the api files declare. A new card on one
+# of these pages widens its api file by itself; a new page shared this way is added here.
+WEB_SHARED_PAGES = {
+    "web/src/features/shell/app-shell.tsx": "the shell of every signed in page",
+    "web/src/features/auth/auth-provider.tsx": "the session of every page",
+    "web/src/features/auth/login-page.tsx": "the sign in of every journey",
+    "web/src/features/onboarding/onboarding-gate.tsx": "the onboarding gate",
+    "web/src/features/onboarding/welcome-page.tsx": "the onboarding",
+    "web/src/features/jobs/jobs-page.tsx": "the job list",
+    "web/src/features/jobs/job-detail-page.tsx": "the job page",
+    "web/src/features/profile/profile-page.tsx": "the profile page",
+    "web/src/features/account/account-page.tsx": "the account page",
+}
+# A string of the web code that is a page address, not a request: a link or a navigation.
+WEB_LINK = re.compile(r"(?:\b(?:to|href|path)\s*[=:]\s*\{?\s*|\bnavigate\(\s*)$")
+WEB_STRING = re.compile(r"""(["'`])(/(?:(?!\1)[^\n\\])*)\1""")
+WEB_CONSTANT = re.compile(
+    r"""\bconst\s+(\w+)(?:\s*:\s*\w+)?\s*=\s*(["'`])(/[^"'`$\n\\]*)\2"""
+)
+WEB_LEADING = re.compile(r"`\$\{(\w+)\}((?:[^`\n\\])*)`")
+WEB_IMPORT = re.compile(r"""(?:\bfrom|\bimport)\s*\(?\s*["']([^"'\n]+)["']""")
+ROUTE_DECORATOR = re.compile(
+    r"@\s*[\w.]+\s*\.\s*(?:get|post|put|patch|delete|head|options|api_route|websocket)\b"
+)
+ROUTE_METHODS = frozenset(
+    {"get", "post", "put", "patch", "delete", "head", "options", "api_route"}
+    | {"websocket"}
+)
 
 
 WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
@@ -727,6 +761,54 @@ class Imports:
         self.root = root
         self._web: dict[str, set[str]] | None = None
         self._api: dict[str, set[str]] | None = None
+        self._shared: dict[str, str] | None = None
+        self._main: dict[str, set[str]] | None = None
+        self._reach: dict[str, str] | None = None
+        self._trees: dict[str, ast.Module] = {}
+
+    def parsed(self, path: str) -> ast.Module:
+        """The syntax tree of one api file, parsed once."""
+        if path not in self._trees:
+            text = (self.root / path).read_text(encoding="utf-8")
+            self._trees[path] = ast.parse(text, filename=path)
+        return self._trees[path]
+
+    def shared_api(self) -> dict[str, str]:
+        """The api files whose routes a page of WEB_SHARED_PAGES calls, and why."""
+        if self._shared is None:
+            routes = api_routes(self.root, self.parsed)
+            found: dict[str, str] = {}
+            for page, what in WEB_SHARED_PAGES.items():
+                for request in sorted(web_requests(self.root, page)):
+                    for file, patterns in routes.items():
+                        if file not in found and any(
+                            route_matches(request, p) for p in patterns
+                        ):
+                            found[file] = (
+                                f"{what} calls its routes (/{'/'.join(request)})"
+                            )
+            self._shared = found
+        return self._shared
+
+    def main_uses(self) -> dict[str, set[str]]:
+        if self._main is None:
+            self._main = main_uses(self.root)
+        return self._main
+
+    def main_reach(self) -> dict[str, str]:
+        """The api files that what main.py runs on every request or start reaches: a whole
+        module it uses, and the files the names it uses call."""
+        if self._reach is None:
+            reach: dict[str, str] = {}
+            for path, names in sorted(self.main_uses().items()):
+                why = f"main.py runs {shown(path)} for every request or start"
+                if "*" in names:
+                    reach[path] = why
+                    continue
+                for other in sorted(member_reach(self.root, path, names)):
+                    reach.setdefault(other, why)
+            self._reach = reach
+        return self._reach
 
     def api(self) -> dict[str, set[str]]:
         """api/app/ files and the files that import them, with the reviewed loaders and the
@@ -735,9 +817,7 @@ class Imports:
             graph: dict[str, set[str]] = {}
             for path in source_files(self.root / "api/app", (".py",)):
                 me = path.relative_to(self.root).as_posix()
-                imported, hosts = python_edges(
-                    self.root, me, path.read_text(encoding="utf-8")
-                )
+                imported, hosts = python_edges(self.root, me, self.parsed(me))
                 for target in imported:
                     if target != me:
                         graph.setdefault(target, set()).add(me)
@@ -756,27 +836,9 @@ class Imports:
                 me = path.relative_to(self.root).as_posix()
                 text = path.read_text(encoding="utf-8")
                 for spec in ts_imports(text):
-                    if spec.startswith("@/"):
-                        target = src / spec[2:]
-                    elif spec.startswith("."):
-                        target = path.parent / spec
-                    else:
-                        continue
-                    for candidate in (
-                        target,
-                        target.with_name(target.name + ".ts"),
-                        target.with_name(target.name + ".tsx"),
-                        target / "index.ts",
-                        target / "index.tsx",
-                    ):
-                        if candidate.is_file():
-                            name = Path(os.path.normpath(candidate)).relative_to(
-                                self.root
-                            )
-                            graph.setdefault(name.as_posix(), set()).add(me)
-                            break
-                    else:
-                        raise MappingError(f"unresolved TypeScript import {spec}")
+                    target = resolve_web(self.root, path, spec)
+                    if target is not None:
+                        graph.setdefault(target, set()).add(me)
             self._web = graph
         return self._web
 
@@ -798,9 +860,8 @@ def python_files(root: Path, dotted: str) -> list[str] | None:
     return found
 
 
-def python_edges(root: Path, me: str, text: str) -> tuple[set[str], set[str]]:
+def python_edges(root: Path, me: str, tree: ast.Module) -> tuple[set[str], set[str]]:
     """(the api files `me` imports, the files of the hooks it registers a callback with)."""
-    tree = ast.parse(text, filename=me)
     package = ".".join(Path(me).parent.parts[1:])  # api/app/mail/x.py: app.mail
     parents = {
         child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
@@ -944,7 +1005,6 @@ def hook_hosts(
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     hosts: set[str] = set()
-    named = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -976,24 +1036,51 @@ def hook_hosts(
             raise MappingError(f"a hook of an unknown module in {me}")
         host = files[-1]
         if host in NAMED_REGISTRIES and getattr(func, "attr", "") == "register":
-            named += host.endswith("definitions.py")
+            if host.endswith("definitions.py") and not registers_internal(node, tree):
+                hosts.add(
+                    host
+                )  # a listed agent: GET /api/agents names it to every page
             continue
         hosts.add(host)
-    internal = sum(
-        1
-        for n in ast.walk(tree)
-        if isinstance(n, ast.keyword)
-        and n.arg == "internal"
-        and isinstance(n.value, ast.Constant)
-        and n.value.value is True
-    )
-    if named > internal:
-        hosts.add("api/app/agents/definitions.py")  # listed by GET /api/agents
     return hosts
 
 
-def api_own(path: str) -> tuple[frozenset[str] | str, str]:
-    """The groups an api/app/ file runs for itself, before the files that import it."""
+def registers_internal(call: ast.Call, tree: ast.Module) -> bool:
+    """`definitions.register(x)` where the definition x builds says `internal=True`, and no
+    other `internal` of it says otherwise: x inline, a name of the file, or a call of one of
+    its functions. Anything else counts as a listed agent."""
+    if len(call.args) != 1 or call.keywords:
+        return False
+    arg = call.args[0]
+    named = arg.func if isinstance(arg, ast.Call) else arg
+    built: ast.AST = arg
+    if isinstance(named, ast.Name):
+        found = [
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+            and n.name == named.id
+            or isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == named.id for t in n.targets)
+        ]
+        if len(found) != 1 and not isinstance(arg, ast.Call):
+            return False
+        built = found[0] if len(found) == 1 else arg
+    flags = [
+        n.value
+        for n in ast.walk(built)
+        if isinstance(n, ast.keyword) and n.arg == "internal"
+    ]
+    return bool(flags) and all(
+        isinstance(v, ast.Constant) and v.value is True for v in flags
+    )
+
+
+def api_own(
+    path: str, imports: Imports | None = None
+) -> tuple[frozenset[str] | str, str]:
+    """The groups an api/app/ file runs for itself, before the files that import it. Without
+    `imports`, its module's groups only (what the pages and main.py call is not read)."""
     parts = path.split("/")
     stream = path.removeprefix("api/app/agents/fake_streams/")
     owner = STREAM_OWNERS.get(stream.partition("_")[0]) if stream != path else None
@@ -1013,6 +1100,14 @@ def api_own(path: str) -> tuple[frozenset[str] | str, str]:
         parts[3].removesuffix(".py") in REGISTRATION_NAMES
     ) and path not in SCOPED_REGISTRATIONS:
         return EVERY, "a worker registration module, its hooks reach every module"
+    if imports is not None:
+        if path in imports.shared_api():
+            return EVERY, imports.shared_api()[path]
+        if path in imports.main_reach():
+            return EVERY, imports.main_reach()[path]
+        if path in imports.main_uses():
+            names = ", ".join(sorted(imports.main_uses()[path]))
+            return EVERY, f"main.py runs its {names} for every request or start"
     for pattern, groups, why in API_AREAS:
         if matches(pattern, path):
             return groups, why
@@ -1021,13 +1116,17 @@ def api_own(path: str) -> tuple[frozenset[str] | str, str]:
 
 def api_groups(path: str, imports: Imports) -> tuple[frozenset[str] | str, str]:
     """An api/app/ file: its own groups and those of every api file that imports it."""
-    own, why = api_own(path)
+    own, why = api_own(path, imports)
     if own == EVERY:
         return EVERY, why
     users = importers(path, imports.api(), lambda name: name in API_WIRING)
     groups: set[str] = set()
     for user in sorted(users):
-        decided, reason = api_own(user)
+        decided, reason = api_own(user, imports)
+        if decided == EVERY and user in imports.main_uses():
+            # main.py runs some names of `user` (a middleware), and those reach no file that
+            # imports `path` (main_reach): the rest of `user` is its module's.
+            decided, reason = api_own(user)
         if decided == EVERY:
             return EVERY, f"imported by {shown(user)}: {reason}"
         groups |= decided
@@ -1038,6 +1137,278 @@ def api_groups(path: str, imports: Imports) -> tuple[frozenset[str] | str, str]:
         else ""
     )
     return frozenset(groups), f"{why}{by}"
+
+
+def app_import_files(
+    root: Path,
+    me: str,
+    node: ast.Import | ast.ImportFrom,
+    only: ast.alias | None = None,
+) -> set[str]:
+    """The api file each name of one import statement of `me` names (a module or a member's),
+    or the one name `only`."""
+    found: set[str] = set()
+    names = [only] if only is not None else node.names
+    if isinstance(node, ast.Import):
+        dotted = [a.name for a in names if a.name.startswith("app.")]
+    else:
+        base = node.module or ""
+        if node.level:
+            parts = ".".join(Path(me).parent.parts[1:]).split(".")
+            base = ".".join(
+                parts[: len(parts) - node.level + 1] + ([base] if base else [])
+            )
+        if base != "app" and not base.startswith("app."):
+            return found
+        dotted = [f"{base}.{a.name}" for a in names if a.name != "*"] or [base]
+    for name in dotted:
+        files = python_files(root, name) or python_files(root, name.rpartition(".")[0])
+        if not files:
+            raise MappingError(f"unresolved Python import {name} in {me}")
+        found.add(files[-1])
+    return found
+
+
+def main_uses(root: Path) -> dict[str, set[str]]:
+    """The api files main.py calls beyond the wiring (`app.include_router(x)`, `x.include(app)`,
+    `x.load()`, a loop over a list of routers), each with the names it uses: a middleware, an
+    exception handler, what the start builds. "*" is the whole module."""
+    main = root / "api/app/main.py"
+    if not main.is_file():
+        return {}
+    tree = ast.parse(main.read_text(encoding="utf-8"), filename="api/app/main.py")
+    parents = {
+        child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+    }
+    bound: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app"):
+            for alias in node.names:
+                bound[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("app.") and alias.asname:
+                    bound[alias.asname] = alias.name
+    uses: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name) and node.id in bound):
+            continue
+        dotted = bound[node.id]
+        files = python_files(root, dotted)
+        use: ast.AST = node
+        if files:
+            parent = parents.get(node)
+            if isinstance(parent, ast.Attribute):
+                member, use = parent.attr, parent
+            else:
+                member = "*"
+        else:
+            files = python_files(root, dotted.rpartition(".")[0])
+            member = dotted.rpartition(".")[2]
+        if not files:
+            raise MappingError(f"unresolved Python import {dotted} in api/app/main.py")
+        around = parents.get(use)
+        wiring = (
+            isinstance(around, ast.Call)
+            and (
+                around.func is use
+                and member in ("include", "load")
+                or use in around.args
+                and isinstance(around.func, ast.Attribute)
+                and around.func.attr == "include_router"
+            )
+            or isinstance(around, ast.For)
+            and around.iter is use
+        )
+        if not wiring:
+            uses.setdefault(files[-1], set()).add(member)
+    return uses
+
+
+def member_reach(root: Path, path: str, names: set[str]) -> set[str]:
+    """The other api files the given top level names of `path` reach through its own code:
+    the imported names their bodies use, read transitively inside the file."""
+    tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=path)
+    defined: dict[str, list[ast.AST]] = {}
+    imported: dict[str, tuple[ast.Import | ast.ImportFrom, ast.alias]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            defined.setdefault(node.name, []).append(node)
+        elif isinstance(node, ast.Assign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for n in ast.walk(target):
+                    if isinstance(n, ast.Name):
+                        defined.setdefault(n.id, []).append(node)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            for alias in node.names:
+                local = alias.asname or alias.name.split(".")[0]
+                imported[local] = (node, alias)
+    reached: set[str] = set()
+    todo, seen = list(names), set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in imported:
+            reached |= app_import_files(root, path, *imported[name])
+        for node in defined.get(name, []):
+            for n in ast.walk(node):
+                if isinstance(n, ast.Name):
+                    todo.append(n.id)
+                elif isinstance(n, ast.Import | ast.ImportFrom):
+                    reached |= app_import_files(root, path, n)
+    reached.discard(path)
+    return reached
+
+
+def resolve_web(root: Path, path: Path, spec: str) -> str | None:
+    """The web file an import of `path` names, None for a package; fails on a missing file."""
+    if spec.startswith("@/"):
+        target = root / "web/src" / spec[2:]
+    elif spec.startswith("."):
+        target = path.parent / spec
+    else:
+        return None
+    for candidate in (
+        target,
+        target.with_name(target.name + ".ts"),
+        target.with_name(target.name + ".tsx"),
+        target / "index.ts",
+        target / "index.tsx",
+    ):
+        if candidate.is_file():
+            return Path(os.path.normpath(candidate)).relative_to(root).as_posix()
+    raise MappingError(f"unresolved TypeScript import {spec}")
+
+
+def web_requests(root: Path, page: str) -> set[tuple[str, ...]]:
+    """The request paths (as segments, a `${...}` part as "*") that a web page and every web
+    file it imports hold, links and navigations left out."""
+    if not (root / page).is_file():
+        raise MappingError(f"the shared web page {page} is missing")
+    seen, todo = {page}, [page]
+    texts: dict[str, str] = {}
+    while todo:
+        name = todo.pop()
+        texts[name] = (root / name).read_text(encoding="utf-8")
+        for spec in WEB_IMPORT.findall(texts[name]):
+            if spec.endswith((".css", ".svg", ".png", ".json")):
+                continue
+            target = resolve_web(root, root / name, spec)
+            if (
+                target is None
+                or target in seen
+                or target in WEB_WIRING
+                or web_test_file(target)
+            ):
+                continue
+            seen.add(target)
+            todo.append(target)
+    constants: dict[str, set[str]] = {}
+    for text in texts.values():
+        for name, _, value in WEB_CONSTANT.findall(text):
+            constants.setdefault(name, set()).add(value)
+    found: set[tuple[str, ...]] = set()
+    for text in texts.values():
+        values = [
+            m.group(2)
+            for m in WEB_STRING.finditer(text)
+            if not WEB_LINK.search(text[max(0, m.start() - 40) : m.start()])
+        ]
+        for m in WEB_LEADING.finditer(text):
+            values += [base + m.group(2) for base in constants.get(m.group(1), ())]
+        for value in values:
+            parts = [
+                "*" if "${" in p else p
+                for p in re.split(r"[?#]", value, maxsplit=1)[0].split("/")
+                if p
+            ]
+            if parts and parts[0] != "api":
+                parts.insert(0, "api")
+            if len(parts) > 1 and parts[1] != "*":
+                found.add(tuple(parts))
+    return found
+
+
+def api_routes(root: Path, parsed) -> dict[str, list[tuple[str, ...]]]:
+    """The route paths each api/app/ file declares (`@router.get("/x")` on an APIRouter of the
+    file, its literal prefix in front), as segments: a parameter is "*", a path parameter "**".
+    A route whose prefix is not a literal under /api starts with "**" (any prefix)."""
+    routes: dict[str, list[tuple[str, ...]]] = {}
+    for file in source_files(root / "api/app", (".py",)):
+        me = file.relative_to(root).as_posix()
+        text = file.read_text(encoding="utf-8")
+        if "APIRouter" not in text and not ROUTE_DECORATOR.search(text):
+            continue
+        tree = parsed(me)
+        prefixes: dict[str, str | None] = {}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign | ast.AnnAssign)
+                and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", getattr(node.value.func, "attr", ""))
+                == "APIRouter"
+            ):
+                prefix: str | None = ""
+                for keyword in node.value.keywords:
+                    if keyword.arg == "prefix":
+                        value = keyword.value
+                        prefix = (
+                            value.value
+                            if isinstance(value, ast.Constant)
+                            and isinstance(value.value, str)
+                            else None
+                        )
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        prefixes[target.id] = prefix
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                func = getattr(decorator, "func", None)
+                if not (isinstance(func, ast.Attribute) and func.attr in ROUTE_METHODS):
+                    continue
+                if not (
+                    isinstance(func.value, ast.Name)
+                    and func.value.id in prefixes
+                    and decorator.args
+                    and isinstance(decorator.args[0], ast.Constant)
+                    and isinstance(decorator.args[0].value, str)
+                ):
+                    raise MappingError(f"a route the reader cannot place in {me}")
+                prefix = prefixes[func.value.id]
+                full = f"{prefix or ''}{decorator.args[0].value}"
+                parts = tuple(
+                    "**" if p.endswith(":path}") else "*" if p.startswith("{") else p
+                    for p in full.split("/")
+                    if p
+                )
+                if prefix is None or parts[:1] != ("api",):
+                    parts = ("**", *parts)
+                routes.setdefault(me, []).append(parts)
+    return routes
+
+
+def route_matches(path: tuple[str, ...], route: tuple[str, ...]) -> bool:
+    """A web request path against an api route, both as segments ("*" matches one segment,
+    "**" in a route the rest; a route starting with "**" matches any prefix)."""
+    if route[:1] == ("**",) and len(route) > 1:
+        return any(route_matches(path[i:], route[1:]) for i in range(len(path) + 1))
+    if not route:
+        return not path
+    if route[0] == "**":
+        return True
+    if not path:
+        return False
+    if path[0] != route[0] and "*" not in (path[0], route[0]):
+        return False
+    return route_matches(path[1:], route[1:])
 
 
 def web_area(path: str) -> str:

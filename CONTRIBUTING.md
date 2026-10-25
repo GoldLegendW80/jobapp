@@ -70,6 +70,13 @@ in the job folder that holds this repository (it is not part of the repository).
    shared api files (`app/*.py`, worker.py included), a module's `__init__.py`, the models, a
    worker registration module and what it imports (save `SCOPED_REGISTRATIONS`), assets other
    than an agent's fake streams, deleted paths, and any dynamic import the reader cannot follow.
+   Every group also runs for an api file whose routes a page that journeys of many groups open
+   calls (`WEB_SHARED_PAGES`: the shell, the sign in and onboarding, the job list and page, the
+   profile, the account page), read from the request paths of each page and the web files it
+   imports, matched against the routes the api files declare; and for a file main.py runs beyond
+   the wiring (a middleware, the 500 handler, what the start builds) with what that code reaches.
+   The web is read file by file, so a page that imports an api client file counts every route of
+   it: most route files of apply, browser, documents and ingestion run every group today.
    `browser/Dockerfile` runs apply and browser, `renderer/Dockerfile` documents and apply. A web feature
    (`web/src/features/<feature>/`) runs its groups (`AREA_GROUPS`) and those of every feature
    that imports the file, read from the imports file by file; a spec or a group config runs its

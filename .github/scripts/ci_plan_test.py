@@ -1414,6 +1414,8 @@ class JourneysTest(unittest.TestCase):
         "web/src/features/mail/Badge.tsx": "",
         "web/src/features/mail/Mail.test.tsx": 'import { Badge } from "./Badge";\n',
         "web/src/features/account/Account.tsx": 'import { Badge } from "@/features/mail/Badge";\n',
+        # The shared pages the api reader reads (ci_plan.WEB_SHARED_PAGES), calling nothing.
+        **dict.fromkeys(ci_plan.WEB_SHARED_PAGES, ""),
     }
 
     def plan(
@@ -2228,16 +2230,9 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(sorted(modules - decided), [], "an api module with no groups")
 
     API_PINS: ClassVar[dict[str, frozenset[str] | str]] = {
-        # Apply runs its own groups, those that reach its routes (browser B10, the opportunities
-        # Like) and, through the browser sources that import its agents, sweep.
-        "api/app/apply/agent.py": frozenset(
-            {"apply", "browser", "opportunities", "sweep"}
-        ),
-        "api/app/apply/failures.py": frozenset({"apply", "browser", "opportunities"}),
-        "api/app/apply/agents.py": frozenset(
-            {"apply", "browser", "opportunities", "sweep"}
-        ),
-        "api/app/browser/live_router.py": frozenset({"apply", "browser"}),
+        # Narrowed: what reaches a browser source (every sweep), a sandbox handler, a mail
+        # parser, the deck, an apply agent's fake answers.
+        "api/app/apply/submit.py": frozenset({"apply", "browser", "opportunities"}),
         "api/app/browser/sources/linkedin.py": frozenset(
             {"apply", "browser", "opportunities", "sweep"}
         ),
@@ -2245,9 +2240,35 @@ class JourneysTest(unittest.TestCase):
         "api/app/ingestion/sandbox/pdf_text.py": frozenset(
             {"documents", "ingestion", "opportunities"}
         ),
+        "api/app/mail/parse.py": frozenset({"mail"}),
         "api/app/agents/fake_streams/apply_form.json": frozenset(
             {"apply", "browser", "opportunities"}
         ),
+        # Imported by ingestion/routers.py, whose middleware main.py runs on every request,
+        # but not by the middleware's own code: the module's groups.
+        "api/app/ingestion/prompt_router.py": frozenset(
+            {"documents", "ingestion", "opportunities"}
+        ),
+        # The routes a shared web page calls (WEB_SHARED_PAGES): the /account cards, the queue
+        # count of the shell, the job page's apply and documents sections, the profile's
+        # Search tab, and what imports them (the apply agents through approval_router.py).
+        "api/app/browser/router.py": ci_plan.EVERY,
+        "api/app/browser/live_router.py": ci_plan.EVERY,
+        "api/app/mail/account_router.py": ci_plan.EVERY,
+        "api/app/apply/queue_router.py": ci_plan.EVERY,
+        "api/app/apply/router.py": ci_plan.EVERY,
+        "api/app/apply/agent.py": ci_plan.EVERY,
+        "api/app/apply/agents.py": ci_plan.EVERY,
+        "api/app/apply/failures.py": ci_plan.EVERY,
+        "api/app/documents/router.py": ci_plan.EVERY,
+        "api/app/opportunities/feeds_router.py": ci_plan.EVERY,
+        "api/app/opportunities/starter_router.py": ci_plan.EVERY,
+        # main.py runs their middleware and the 500 handler uses them; the start builds the
+        # mail client (accounts.py), which reaches google.py.
+        "api/app/mail/routers.py": ci_plan.EVERY,
+        "api/app/ingestion/routers.py": ci_plan.EVERY,
+        "api/app/mail/accounts.py": ci_plan.EVERY,
+        "api/app/mail/google.py": ci_plan.EVERY,
         # Shared core and what every journey passes through.
         "api/app/main.py": ci_plan.EVERY,
         "api/app/worker.py": ci_plan.EVERY,
@@ -2298,15 +2319,23 @@ class JourneysTest(unittest.TestCase):
         for path, constant in ci_plan.API_LOADERS.items():
             with self.subTest(path=path):
                 self.assertIn(constant, (ROOT / path).read_text())
-        # The scoped registration registers internal agents only (GET /api/agents lists none).
+        # The scoped registration registers internal agents only (GET /api/agents lists none):
+        # each register call of its files builds a definition that says internal=True.
         for path in ci_plan.SCOPED_REGISTRATIONS:
             for name in ("agents.py", "form_agent.py", "model_check.py"):
                 text = (ROOT / path).with_name(name).read_text()
-                self.assertEqual(
-                    text.count("definitions.register("),
-                    text.count("internal=True"),
-                    name,
-                )
+                tree = ast.parse(text)
+                calls = [
+                    n
+                    for n in ast.walk(tree)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "register"
+                    and getattr(n.func.value, "id", "") == "definitions"
+                ]
+                self.assertEqual(len(calls), 1, name)
+                for call in calls:
+                    self.assertTrue(ci_plan.registers_internal(call, tree), name)
         hook = "from app.documents import hooks\nhooks.register_check(print)\n"
         cases = {
             # A hook makes its module a consumer of the file that registers the callback.
@@ -2331,6 +2360,21 @@ class JourneysTest(unittest.TestCase):
             "thing.register_check(print)",  # an object the reader cannot name
             "register_check(print)",  # a function nobody imported
             "from app.agents import definitions\ndefinitions.register(make())",  # a listed agent
+            # A listed agent beside an unrelated internal=True, or one whose builder says False.
+            (
+                "from app.agents import definitions\ndefinitions.register(make())\n"
+                "OTHER = thing(internal=True)\n"
+            ),
+            (
+                "from app.agents import definitions\n"
+                "def _definition():\n    return make(internal=False)\n"
+                "definitions.register(_definition())\n"
+            ),
+            (
+                "from app.agents import definitions\n"
+                "def _definition():\n    return make(internal=True)\n"
+                "definitions.register(_definition(), extra=1)\n"
+            ),
         ]:
             with self.subTest(source=source):
                 files = {
@@ -2341,6 +2385,8 @@ class JourneysTest(unittest.TestCase):
                 self.assertEqual(self.ran(["api/app/mail/rules.py"], files), everything)
         files = {
             "api/app/mail/rules.py": "from app.agents import definitions\n"
+            "def _definition():\n    return make(internal=True)\n"
+            "ANSWER = definitions.register(_definition())\n"
             "definitions.register(make(internal=True))\n",
             "api/app/agents/__init__.py": "",
             "api/app/agents/definitions.py": "",
@@ -2365,6 +2411,108 @@ class JourneysTest(unittest.TestCase):
                         ),
                         everything,
                     )
+
+    def test_routes_of_a_shared_page_and_main_middleware_run_every_group(self) -> None:
+        everything = [g for g, _ in self.GROUPS]
+        shell = "web/src/features/shell/app-shell.tsx"
+        router = (
+            "from fastapi import APIRouter\n"
+            'router = APIRouter(prefix="/api/mail")\n'
+            '@router.get("/thing/{thing_id}/state")\n'
+            "def state():\n    pass\n"
+        )
+        base = {"api/app/mail/thing_router.py": router}
+        card = {
+            shell: 'import { Card } from "@/features/mail/card";\n',
+            "web/src/features/mail/card.tsx": 'import { load } from "./mail-api";\n',
+        }
+        cases = {
+            # The api file serving a request of a shared page, through the files it imports.
+            "template": ("request(`/mail/thing/${id}/state`)", everything),
+            "constant": (
+                'const BASE = "/mail/thing";\nrequest(`${BASE}/${id}/state`)',
+                everything,
+            ),
+            "full path": ('fetch("/api/mail/thing/1/state")', everything),
+            "query": ("request(`/mail/thing/${id}/state?full=1`)", everything),
+            # A link or a navigation is a page, and another route is another file.
+            "link": ('<Link to="/mail/thing/1/state" />', ["mail"]),
+            "navigate": ('navigate("/mail/thing/1/state")', ["mail"]),
+            "other route": ('request("/mail/thing/1")', ["mail"]),
+        }
+        for name, (code, expected) in cases.items():
+            with self.subTest(name=name):
+                files = {**base, **card, "web/src/features/mail/mail-api.ts": code}
+                self.assertEqual(
+                    self.ran(["api/app/mail/thing_router.py"], files), expected
+                )
+        # The same call from a page no group shares, or from a test file, narrows.
+        files = {
+            **base,
+            "web/src/features/mail/Mail.tsx": 'request("/mail/thing/1/state")\n',
+            "web/src/features/mail/card.test.tsx": 'request("/mail/thing/1/state")\n',
+            shell: 'import { x } from "@/features/mail/card.test";\n',
+        }
+        self.assertEqual(self.ran(["api/app/mail/thing_router.py"], files), ["mail"])
+        # What the reader cannot place fails closed: a missing shared page, an unresolved
+        # import of one, a route declared on an unknown router or with a computed path.
+        for files in (
+            {**base, shell: 'import { x } from "./gone";\n'},
+            {**base, "api/app/mail/odd.py": '@other.get("/x")\ndef f():\n    pass\n'},
+            {
+                **base,
+                "api/app/mail/odd.py": "from fastapi import APIRouter\n"
+                "router = APIRouter()\n@router.get(PATH)\ndef f():\n    pass\n",
+            },
+        ):
+            with self.subTest(files=sorted(files)):
+                self.assertEqual(
+                    self.ran(["api/app/mail/thing_router.py"], files), everything
+                )
+        root = self.tree({p: t for p, t in self.BASE.items() if p != shell})
+        self.assertEqual(
+            [
+                g
+                for v, g, _ in ci_plan.journey_plan(
+                    root, ["api/app/mail/rules.py"], self.GROUPS
+                )
+                if v == "run"
+            ],
+            everything,
+        )
+        # main.py: a middleware or a handler of a module runs every group, and what its code
+        # reaches; the routers its module lists for app.include_router stay the module's.
+        main = (
+            "from app.mail import web as mail_web\n"
+            "from app.mail import hub\n"
+            "app.middleware('http')(mail_web.no_store)\n"
+            "for r in mail_web.load():\n    app.include_router(r)\n"
+            "hub.include(app)\n"
+        )
+        routers = (
+            "from app.mail import headers, thing_router\n"
+            "ROUTERS = (thing_router.router,)\n"
+            "def load():\n    return ROUTERS\n"
+            "async def no_store(request, call_next):\n"
+            "    return headers.extra(await call_next(request))\n"
+        )
+        files = {
+            **base,
+            "api/app/main.py": main,
+            "api/app/mail/web.py": routers,
+            "api/app/mail/headers.py": "from app.mail import parse\n",
+            "api/app/mail/parse.py": "",
+            "api/app/mail/hub.py": "",
+        }
+        for path, expected in {
+            "api/app/mail/web.py": everything,
+            "api/app/mail/headers.py": everything,
+            "api/app/mail/parse.py": everything,  # headers.py imports it
+            "api/app/mail/thing_router.py": ["mail"],
+            "api/app/mail/hub.py": ["mail"],
+        }.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.ran([path], files), expected)
 
 
 if __name__ == "__main__":
