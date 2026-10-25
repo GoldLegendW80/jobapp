@@ -52,7 +52,7 @@ export function needOf(application: Application): Need {
     case "signin":
       return {
         title: `Needs you: sign in to ${siteOf(application)}`,
-        what: "The assistant never signs in for you. Sign in to the site yourself, then apply yourself or try again.",
+        what: "Open the live view to sign in or sign up yourself. The assistant then fills the form again and waits for your approval.",
       };
     default:
       return {

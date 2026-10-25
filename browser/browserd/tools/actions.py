@@ -59,6 +59,7 @@ MESSAGES = {
     "submit": "Refused: this element submits the form, which only the person's approval does.",
     "danger": "Refused: this element deletes, withdraws or pays, which no tool does.",
     "card_field": "Refused: a payment card field is never filled nor clicked.",
+    "credential": "Refused: a password, a one time code or a sign in's user name is the person's.",
     "bad_selector": "Refused: a submit selector of this lease is not valid, so nothing is clicked.",
     "unreadable": "Refused: the element could not be read, so nothing is clicked.",
     "stale_ref": "This ref is not on the page any more: take a new snapshot.",
@@ -296,11 +297,15 @@ async def _here(tab: Tab) -> dict[str, Any]:
 async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     page = await tab.page()
     text, cut = policy.cut_snapshot(await pages.snapshot_for_ai(page))
+    native_files = await pages.native_files(page, text)
+    credentials = await pages.credentials(page, text)
     return {
         "ok": True,
         "url": page.url,
         "title": await title(page),
         "snapshot": text,
+        "native_files": native_files,
+        "credentials": credentials,
         "cut": cut,
         **_chooser(tab),
     }

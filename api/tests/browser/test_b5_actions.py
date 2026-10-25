@@ -41,6 +41,7 @@ def facts(*names: str, tag: str = "input", kind: str = "text", **more: Any) -> d
         "editable": False,
         "field": "",
         "form_fields": [],
+        "credential": False,
         **more,
     }
 
