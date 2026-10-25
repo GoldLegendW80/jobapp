@@ -19,7 +19,7 @@ from app.apply.models import (
     Mode,
     State,
 )
-from app.jobs.models import Job, JobStatus
+from app.jobs.models import Job
 from tests.apply import a11_support as a11
 from tests.apply.a6_support import submit_ashby
 from tests.apply.conftest import AT
@@ -257,6 +257,8 @@ def test_browser_post_commit_stop_keeps_audit_without_click_or_freeze(
             elif fault == "rules":
                 monkeypatch.setattr(submit.guardrails, "never_apply", lambda *a, **k: "never_apply")
             elif fault in {"closed", "applied"}:
+                from app.jobs.models import JobStatus
+
                 posting = session.get(Job, person_a.posting_id)
                 posting.status = JobStatus.closed if fault == "closed" else JobStatus.applied
             elif fault == "documents":
