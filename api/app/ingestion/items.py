@@ -88,10 +88,11 @@ start, and a school with no date at all last. Every other list appends.
 **Never proposable.** A setting is the user's choice about how the app behaves, not a claim a
 document supports: a gate's `penalty`, a board's `enabled` and `extra_exclude`, every
 `advanced_regex`, `search.min_fit`, `search.days`, `search.browser_sources`,
-`search.sweep_schedule`, `search.documents`, `search.feeds`, `search.company_types` and
-`search.compensation` (wishes and pay a document does not state for the person), the whole
-`preferences` section (how the app behaves, and the wizard's dates), and the apply fields of
-`answers` (EEO, salary stance and ranges, consents, preferred name and the like). They are typed
+`search.sweep_schedule`, `search.documents`, `search.feeds`, `search.interactive_sites`,
+`search.interactive_instructions`, `search.company_types` and `search.compensation` (wishes
+and pay a document does not state for the person), the whole `preferences` section (how the
+app behaves, and the wizard's dates), and the apply fields of `answers` (EEO, salary stance and
+ranges, consents, preferred name and the like). They are typed
 `setting` in `FIELD_TYPES`, and `build` refuses them for an agent whatever is cited.
 `search.seniority` (a CV shows the levels held) and `search.industries` (a CV names the sectors
 worked in) may be proposed. The photo is not a section and has no key. `skills.years_experience` is
@@ -358,6 +359,13 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.feeds[].kind": _T.SETTING,
         "search.feeds[].enabled": _T.SETTING,
         **_terms("search.feeds[].terms", _T.SETTING),
+        # Jobs J9: the websites an interactive search visits and the instructions it follows are
+        # the person's saved intent, never read from a document.
+        "search.interactive_sites[].platform": _T.SETTING,
+        "search.interactive_sites[].url": _T.SETTING,
+        "search.interactive_sites[].enabled": _T.SETTING,
+        "search.interactive_sites[].mode": _T.SETTING,
+        "search.interactive_instructions": _T.SETTING,
         "preferences.onboarding.completed_at": _T.SETTING,
         "preferences.onboarding.dismissed_at": _T.SETTING,
         "preferences.onboarding.steps_passed[]": _T.SETTING,
@@ -511,6 +519,8 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             company_types=_K.setting,
             compensation=_K.setting,
             feeds=_K.setting,
+            interactive_sites=_K.setting,
+            interactive_instructions=_K.setting,
         ),
         "answers": _slots(
             "answers",

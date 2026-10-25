@@ -30,6 +30,7 @@ from app.profile.schemas import (
     PHOTO_MAX_BYTES,
     SECTION_MODELS,
     SECTIONS,
+    validate_section,
 )
 from tests.identity.api_helpers import Api, Clock, make_user
 from tests.profile import images
@@ -74,7 +75,8 @@ def document(sections: dict[str, Any] | None = None, **extra: Any) -> dict[str, 
 
 
 def empty_sections() -> dict[str, Any]:
-    return {name: model().model_dump(mode="json") for name, model in SECTION_MODELS.items()}
+    """Each section in its empty stored form (a search without the interactive keys, jobs J9)."""
+    return {name: validate_section(name, {}) for name in SECTION_MODELS}
 
 
 def export(api: Api, token: str) -> dict[str, Any]:

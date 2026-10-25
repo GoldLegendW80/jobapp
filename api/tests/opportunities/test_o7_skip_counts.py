@@ -141,7 +141,15 @@ def test_feed_only_start_and_stored_counts_are_private_in_every_sweep_response(
     assert response.status_code == 202, response.text
     assert response.headers["cache-control"] == "no-store"
     started = response.json()
-    assert started["sources"] == []
+    # The start lists the frozen sources (jobs J9) as pending, with no count of any kind yet.
+    [pending] = started["sources"]
+    assert (pending["kind"], pending["phase"], pending["outcome"]) == (
+        "remoteok",
+        "pending",
+        "not_attempted",
+    )
+    assert (pending["found"], pending["new"], pending["skipped_by_rule"]) == (0, 0, 0)
+    assert (pending["items_skipped"], pending["error"]) == (0, None)
     assert len(queue.calls) == 1
     sweep_id = uuid.UUID(started["id"])
     with factory() as db, db.begin():
