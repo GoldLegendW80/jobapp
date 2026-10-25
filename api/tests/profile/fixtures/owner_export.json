@@ -1189,6 +1189,7 @@
         "No cybersecurity roles: cyber, security, pentest, threat (Harald, 2026-10-06)"
       ],
       "browser_sources": [],
+      "platform_consents": {},
       "interactive_sites": [],
       "interactive_instructions": null,
       "sweep_schedule": {

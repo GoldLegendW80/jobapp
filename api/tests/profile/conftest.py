@@ -133,10 +133,12 @@ FULL: dict[str, dict[str, Any]] = {
                 "query": "data engineer",
                 "location": "Germany",
                 "enabled": False,
+                "interactive_only": False,
                 "accepted_at": None,
                 "text_version": None,
             }
         ],
+        "platform_consents": {},
         "interactive_sites": [],
         "interactive_instructions": None,
         "sweep_schedule": {
