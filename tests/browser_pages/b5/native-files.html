@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Native file readback</title></head>
+<body>
+<form>
+  <div><label for="resume">Resume *</label><input id="resume" type="file" multiple></div>
+  <p>cv.pdf</p>
+  <button type="button" id="reset">Reset upload</button>
+  <label><input type="checkbox" id="reject">Reject uploads</label>
+  <button type="submit">Submit application</button>
+</form>
+<div role="alert" id="error"></div>
+<script>
+  const bind = () => document.querySelector('#resume').addEventListener('change', (event) => {
+    if (document.querySelector('#reject').checked) {
+      event.target.value = '';
+      document.querySelector('#error').textContent = 'This file type is not supported.';
+    }
+  });
+  bind();
+  document.querySelector('#reset').addEventListener('click', () => {
+    const old = document.querySelector('#resume');
+    const fresh = old.cloneNode();
+    fresh.value = '';
+    old.replaceWith(fresh);
+    bind();
+  });
+</script>
+</body>
+</html>

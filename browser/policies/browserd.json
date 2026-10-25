@@ -14,5 +14,6 @@
   "ExtensionInstallBlocklist": ["*"],
   "PasswordManagerEnabled": false,
   "BrowserLabsEnabled": false,
-  "AllowFileSelectionDialogs": false
+  "AllowFileSelectionDialogs": false,
+  "CommandLineFlagSecurityWarningsEnabled": false
 }

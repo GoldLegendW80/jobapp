@@ -22,6 +22,8 @@ const leaseSchema = z.object({
   started_at: z.string(),
   active_s: z.number(),
   max_s: z.number(),
+  // The id of the application a submit lease sends (apply), else null.
+  application_id: z.string().nullable().optional(),
 });
 export type Lease = z.infer<typeof leaseSchema>;
 
