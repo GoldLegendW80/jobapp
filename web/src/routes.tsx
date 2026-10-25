@@ -1,3 +1,5 @@
+import { SiteProfileRunPage } from "@/features/apply/site-profile/run-page";
+
 import { Outlet, type RouteObject } from "react-router";
 
 import { Toaster } from "@/components/ui/sonner";
@@ -73,7 +75,11 @@ export const routes: RouteObject[] = [
           { path: "discover", element: <DeckPage /> },
           { path: "welcome", element: <WelcomePage /> },
           { path: "documents/templates", element: <TemplatesPage /> },
-          { path: "account", element: <AccountPage /> },
+          { path: "site-profiles/:id", element: <SiteProfileRunPage /> },
+          {
+            path: "account",
+            element: <AccountPage />,
+          },
           { path: "profile", element: <ProfilePage /> },
           { path: "profile/cv/:id?", element: <ProfilePage /> },
           { path: "profile/fill", element: <FillPage /> },
