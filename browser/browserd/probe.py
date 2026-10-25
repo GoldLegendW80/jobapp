@@ -11,7 +11,8 @@ no agent ever runs it (SPEC-browser: CDP never leaves the container). It prints 
                            visibility and focus after pages.front
   webrtc <url> <servers>   on that page, an RTCPeerConnection with the ICE servers given as
                            JSON, an offer, the gathering to its end: the candidates gathered
-  policy                   how often chrome://policy shows our policies' names and value
+  policy                   per policy of ours, the rows of chrome://policy that show it
+                           applied (status OK); how often the WebRTC value shows
 """
 
 import asyncio
@@ -110,13 +111,17 @@ async def run(action: str, args: list[str]) -> dict:
             )
         if action == "policy":
             await page.goto("chrome://policy")
-            # The page is built of shadow roots, which inner_text does not enter and
-            # get_by_text does: how many times each policy name and value is shown.
+            # The page is built of shadow roots, which inner_text does not enter and locators
+            # do. An unset policy keeps a hidden row, which no role query finds: each policy
+            # gets the number of shown rows that name it with the status OK.
             await page.get_by_text("WebRtcIPHandling").first.wait_for(timeout=10000)
-            shown = ["WebRtcIPHandling", "disable_non_proxied_udp", "QuicAllowed", "URLBlocklist",
-                     "URLAllowlist", "PolicyTestPageEnabled", "ExtensionInstallBlocklist",
-                     "PasswordManagerEnabled"]  # fmt: skip
-            return {t: await page.get_by_text(t, exact=True).count() for t in shown}
+            names = ["WebRtcIPHandling", "QuicAllowed", "URLBlocklist", "URLAllowlist",
+                     "PolicyTestPageEnabled", "ExtensionInstallBlocklist", "PasswordManagerEnabled",
+                     "CommandLineFlagSecurityWarningsEnabled"]  # fmt: skip
+            ok = page.get_by_role("row").filter(has=page.get_by_role("cell", name="OK", exact=True))
+            shown = {n: await ok.filter(has=page.get_by_text(n, exact=True)).count() for n in names}
+            value = page.get_by_text("disable_non_proxied_udp", exact=True)
+            return {**shown, "disable_non_proxied_udp": await value.count()}
         raise SystemExit(f"unknown action {action}")
 
 

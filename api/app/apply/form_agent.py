@@ -18,7 +18,10 @@ profile, moves through its steps and names its submit element. It asks of the ru
   * `resolve_answer(ref)`: `answers.resolve` on that field: whether the profile answers it and from
     which source, never the value;
   * `fill_field(ref)`: that field filled by code with the resolver's answer (`Adapter.fill`); a
-    field the resolver leaves stays for the person;
+    field the resolver leaves stays for the person, and a credential's box
+    (`ats_base.Field.credential`) is refused here as in `resolve_answer`; a typing browserd
+    refuses as a credential input stops the fill there as `needs_person: signin`, keeping none
+    of that step's boxes;
   * `next_step(ref)`: a button named as a step (`generic.NEXT_NAMES`) clicked through the tool
     layer, which refuses a submit; the step and its fields recorded for the refill;
   * `designate_submit(ref)`: the designation, accepted only when `generic.check_designation` and
@@ -91,6 +94,8 @@ WALL = (
     "why, then read the form again."
 )
 SIGNIN_OVER = "The person was not signed in. Stop now."
+CREDENTIAL = "Refused: this box belongs to a sign in, which only the person fills. Leave it."
+REFUSED = "Refused: this page asks for a sign in, which only the person does. Stop now."
 TEXT_MAX = 4_000
 BUTTONS_MAX = 40
 FIRST_MESSAGE = (
@@ -139,7 +144,7 @@ class FormSession:
     stopped: str = ""
     pending: str = ""
     addressed: bool = False
-    signin_over: bool = False  # a hand off that ended without the person signed in
+    signin_over: bool = False  # a wall the run stops at: a hand off not signed in, or a refusal
     deadline: float | None = None  # on `clock`: the end of the run's wall time
     clock: Callable[[], float] = time.monotonic
 
@@ -200,6 +205,9 @@ class FormSession:
         if found is None:
             return None, problem
         item = next((f for f in found.fields if f.ref == ref), None)
+        if item is not None and item.credential:
+            self.refused["credential"] += 1
+            return None, CREDENTIAL
         return item, "" if item is not None else "No field has this ref. Read the form again."
 
     async def resolve_answer(self, ref: str) -> tuple[str, bool]:
@@ -223,6 +231,11 @@ class FormSession:
             return problem, True
         answer = answers.resolve(item.form_field(), self.context)
         filled = await self.adapter.fill(self.tools, item, answer)
+        if filled.status == "failed" and filled.code == ats_base.CREDENTIAL:
+            # browserd refused it as a credential input: a wall, and no box of this step is kept
+            self.pending, self.signin_over = "signin", True
+            self.refused[filled.code] += 1
+            return REFUSED, True
         self.outcomes[item.key] = ats_base.Outcome(item, answer, filled)
         if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
             self.pending = filled.code
@@ -314,6 +327,10 @@ class FormSession:
         report.skipped = list(self.skipped)
         if found is None:
             report.stopped = code
+            return report
+        if found.pending in ats_base.CREDENTIAL_STEPS:
+            # A wall's boxes (an e-mail, a password, a code) are the person's sign in, not the form.
+            report.stopped, report.needs_person = "needs_person", found.pending
             return report
         report.outcomes += [self._outcome(f) for f in found.fields]
         report.skipped += found.skipped
