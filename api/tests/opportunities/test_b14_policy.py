@@ -251,7 +251,18 @@ def test_checkpoint_is_committed_before_the_page_returns_and_survives_stale_writ
     stored = entries(factory, sweep_id)[0]
     assert stored["checkpoint_at"] == clock().isoformat()
     # A stale progress write, then a stale final write, of the same entry keep the record.
-    stale = sweep.Stats(sources=[{"source_id": ctx.source_id, "error": None}])
+    # The stale copy was read before the records: it holds their old values.
+    stale = sweep.Stats(
+        sources=[
+            {
+                "source_id": ctx.source_id,
+                "error": None,
+                "opened_at": None,
+                "checkpoint_at": None,
+                "platform": "custom",
+            }
+        ]
+    )
     sweep.save_progress(factory, sweep_id, stale, clock())
     sweep.finish_done(factory, sweep_id, stale, clock())
     final = entries(factory, sweep_id)[0]

@@ -783,8 +783,11 @@ def _protected_site(source: BrowserSource) -> str | None:
     """The protected platform a `site` source's address names (B14), None for any other."""
     if source.kind != "site":
         return None
+    from app.browser import finder
     from app.browser.platform_policy import CUSTOM, platform_of
 
+    if finder.not_a_site(source.query):
+        return None  # LinkedIn's addresses: refused as bad_address by site.py, as before
     platform = platform_of(source.query)
     return None if platform == CUSTOM else platform
 
