@@ -26,7 +26,11 @@ services:
       # Relative to the project directory, the folder of compose.yml.
       - ./tests/browser_pages:/pages:ro
     networks:
-      - egress
+      egress:
+        # Jobs J15: the invented job website of tests/browser_pages/j15/ under a name with a dot,
+        # as a saved website needs. `.test` is reserved (RFC 2606): no public DNS answers it, so
+        # outside this network the name leads nowhere.
+        aliases: [jobs.example-robotics.test]
     healthcheck:
       test:
         - CMD
@@ -42,7 +46,7 @@ services:
 
   browser:
     environment:
-      BROWSER_PROXY_ALLOW_PRIVATE: pages
+      BROWSER_PROXY_ALLOW_PRIVATE: pages,jobs.example-robotics.test
 
   api:
     environment:
