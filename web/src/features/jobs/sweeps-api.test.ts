@@ -73,7 +73,7 @@ it.each([
     ...metadata,
   };
   expect(sweepSchema.parse({ ...running, sources: [source] }).sources).toEqual([
-    { ...source, skipped_by_rule: 0 },
+    { ...source, skipped_by_rule: 0, items_skipped: 0 },
   ]);
 });
 
