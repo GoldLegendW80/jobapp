@@ -1,5 +1,6 @@
 """Owner-only draft review, the single explicit send click, and unknown-send decisions."""
 
+import asyncio
 import uuid
 from contextlib import suppress
 from typing import Annotated, Any, Literal
@@ -187,16 +188,19 @@ def resolve(
 
 @router.post("/api/mail/sends/{send_id}/reconcile")
 async def reconcile(send_id: str, request: Request, user: CurrentUser) -> dict[str, int]:
-    with request.app.state.sessionmaker() as db:
-        if (
-            db.scalar(
-                sa.select(MailSend.id).where(
-                    MailSend.id == _id(send_id), MailSend.user_id == user.id
+    wanted = _id(send_id)
+
+    def owned() -> bool:
+        with request.app.state.sessionmaker() as db:
+            return (
+                db.scalar(
+                    sa.select(MailSend.id).where(MailSend.id == wanted, MailSend.user_id == user.id)
                 )
+                is not None
             )
-            is None
-        ):
-            raise HTTPException(404, "No such send.")
+
+    if not await asyncio.to_thread(owned):
+        raise HTTPException(404, "No such send.")
     mcp = dispatch.client(request.app)
     found = (
         await reconciling.reconcile(

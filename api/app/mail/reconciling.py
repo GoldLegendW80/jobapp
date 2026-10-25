@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
@@ -20,32 +21,44 @@ async def reconcile(
     mcp: GmailMcp,
     now: datetime,
 ) -> int:
+    """Look in Sent for the person's unknown sends. Database steps run in a thread
+    (`gate._blocking`): a send in flight holds the send lock across its provider call, and
+    waiting for it on the event loop would freeze the API."""
     with sessions() as db:
-        gate.expire_pending(db, user_id, now)
-        rows = list(
-            db.scalars(
-                sa.select(MailSend)
-                .where(
-                    MailSend.user_id == user_id,
-                    MailSend.result == "unknown",
-                    MailSend.resolved_by.is_(None),
+
+        def load() -> tuple[list[MailSend], MailAccount | None]:
+            gate.expire_pending(db, user_id, now)
+            rows = list(
+                db.scalars(
+                    sa.select(MailSend)
+                    .where(
+                        MailSend.user_id == user_id,
+                        MailSend.result == "unknown",
+                        MailSend.resolved_by.is_(None),
+                    )
+                    .order_by(MailSend.updated_at, MailSend.id)
+                    .limit(5)
                 )
-                .order_by(MailSend.updated_at, MailSend.id)
-                .limit(5)
             )
-        )
-        account = db.scalar(
-            sa.select(MailAccount)
-            .where(MailAccount.user_id == user_id)
-            .options(undefer(MailAccount.refresh_token_encrypted))
-        )
-        db.commit()
+            account = db.scalar(
+                sa.select(MailAccount)
+                .where(MailAccount.user_id == user_id)
+                .options(undefer(MailAccount.refresh_token_encrypted))
+            )
+            db.commit()
+            return rows, account
+
+        rows, account = await gate._blocking(load)
         if account is None or account.disconnecting_at is not None:
             return 0
         found = 0
         for row in rows:
-            row.updated_at = now
-            db.commit()
+
+            def touch(row: MailSend = row) -> None:
+                row.updated_at = now
+                db.commit()
+
+            await gate._blocking(touch)
             try:
                 query = (
                     f"in:sent rfc822msgid:{row.message_id_header}"
@@ -78,22 +91,28 @@ async def reconcile(
                         break
                 if match is None:
                     continue
-                locks.lock_send(db, user_id)
-                current = db.get(MailSend, row.id, populate_existing=True)
-                if current and current.result == "unknown":
-                    gate._finish(
-                        db,
-                        current,
-                        "sent",
-                        now,
-                        message_id=match["id"],
-                        thread_id=match.get("threadId"),
-                        resolved_by="reconcile",
-                    )
-                    found += 1
-                db.commit()
+
+                def settle(row: MailSend = row, match: dict[str, Any] = match) -> int:
+                    locks.lock_send(db, user_id)
+                    current = db.get(MailSend, row.id, populate_existing=True)
+                    settled = 0
+                    if current and current.result == "unknown":
+                        gate._finish(
+                            db,
+                            current,
+                            "sent",
+                            now,
+                            message_id=match["id"],
+                            thread_id=match.get("threadId"),
+                            resolved_by="reconcile",
+                        )
+                        settled = 1
+                    db.commit()
+                    return settled
+
+                found += await gate._blocking(settle)
             except Exception:
-                db.rollback()
+                await gate._blocking(db.rollback)
                 break
         return found
 

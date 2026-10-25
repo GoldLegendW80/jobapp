@@ -4,11 +4,12 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
 
-from app.apply import admin, full_auto
+from app.apply import admin, full_auto, submit
 from app.apply import email as apply_email
 from app.apply import gate as apply_gate
 from app.apply.models import Application, State
@@ -27,9 +28,12 @@ def client(app: Any) -> GmailMcp | None:
     return GmailMcp(app.state.settings, oauth, keyring)
 
 
-async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
-    sessions, now = app.state.sessionmaker, app.state.clock()
-    with sessions() as db:
+def _authorise(app: Any, application_id: uuid.UUID, now: datetime) -> gate.Authorisation | None:
+    """The send authority of an approved or held over application, in one transaction. A draft
+    the approval no longer fits (the posting's address edited after the Approve, so its
+    recipient is gone) is a visible stop: `ready` with the code and a sentence in the review
+    queue, never an approved item left without a message."""
+    with app.state.sessionmaker() as db:
         row = db.get(Application, application_id)
         if row is None or row.ats != "email" or row.state not in {State.approved, State.held}:
             return None
@@ -37,8 +41,25 @@ async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
             until = full_auto.hold_until(db, row)
             if until is None or now < until:
                 return None
-        auth = gate.authorise_application(db, row, now)
+        user_id = row.user_id
+        try:
+            auth = gate.authorise_application(db, row, now)
+        except apply_gate.InvalidAnswerError as exc:
+            db.rollback()
+            application, _ = apply_gate.lock(db, user_id, application_id)
+            if application.state in {State.approved, State.held}:
+                submit._stop(db, application, submit.Stop(State.ready, exc.code), now)
+            db.commit()
+            log.event("mail.dispatch.refused", user_id=user_id, code=exc.code)
+            return None
         db.commit()
+        return auth
+
+
+async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
+    now = app.state.clock()
+    # Database work runs in a thread: the event loop never waits on a lock (gate.send).
+    auth = await asyncio.to_thread(_authorise, app, application_id, now)
     if auth is None:
         return None
     settings = app.state.settings
@@ -53,7 +74,7 @@ async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
         )
 
     return await gate.send(
-        sessions,
+        app.state.sessionmaker,
         auth,
         now,
         settings=settings,
@@ -64,14 +85,16 @@ async def application(app: Any, application_id: uuid.UUID) -> MailSend | None:
     )
 
 
-async def once(app: Any) -> int:
-    sessions = app.state.sessionmaker
-    with sessions() as db:
-        retention.prune(db, app.state.clock(), keep_days=app.state.settings.mail_sends_keep_days)
+def _batch(app: Any) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    """Recover what a connection fixed, then pick the due applications and the users with an
+    unresolved send, each bounded and rotated by `updated_at`."""
+    clock = app.state.clock
+    with app.state.sessionmaker() as db:
+        retention.prune(db, clock(), keep_days=app.state.settings.mail_sends_keep_days)
         db.commit()
         waiting = list(
             db.scalars(
-                sa.select(Application)
+                sa.select(Application.id)
                 .where(
                     Application.ats == "email",
                     Application.state == State.needs_person,
@@ -88,11 +111,23 @@ async def once(app: Any) -> int:
                 .limit(5)
             )
         )
-        for item in waiting:
-            apply_email.recover(
-                db, item, app.state.clock(), configured=bool(app.state.settings.mail_send_key)
-            )
-            item.updated_at = app.state.clock()
+        for wanted in waiting:
+            try:
+                item = db.get(Application, wanted)
+                apply_email.recover(
+                    db, item, clock(), configured=bool(app.state.settings.mail_send_key)
+                )
+                item.updated_at = clock()
+                db.commit()
+            except Exception:
+                db.rollback()
+                log.event("mail.dispatch.failed", code="recover")
+                db.execute(
+                    sa.update(Application)
+                    .where(Application.id == wanted)
+                    .values(updated_at=clock())
+                )
+                db.commit()
         due = list(
             db.scalars(
                 sa.select(Application.id)
@@ -102,7 +137,7 @@ async def once(app: Any) -> int:
                         Application.state == State.approved,
                         sa.and_(
                             Application.state == State.held,
-                            Application.id.in_(full_auto.held_over(app.state.clock())),
+                            Application.id.in_(full_auto.held_over(clock())),
                         ),
                     ),
                 )
@@ -110,11 +145,7 @@ async def once(app: Any) -> int:
                 .limit(5)
             )
         )
-        db.execute(
-            sa.update(Application)
-            .where(Application.id.in_(due))
-            .values(updated_at=app.state.clock())
-        )
+        db.execute(sa.update(Application).where(Application.id.in_(due)).values(updated_at=clock()))
         unknown_users = list(
             db.scalars(
                 sa.select(MailSend.user_id)
@@ -126,12 +157,25 @@ async def once(app: Any) -> int:
             )
         )
         db.commit()
+    return due, unknown_users
+
+
+async def once(app: Any) -> int:
+    """One tick. Each item stands alone: one that fails is logged and the rest of the batch,
+    any user's, and every reconciliation still run."""
+    due, unknown_users = await asyncio.to_thread(_batch, app)
     for wanted in due:
-        await application(app, wanted)
+        try:
+            await application(app, wanted)
+        except Exception:
+            log.event("mail.dispatch.failed", code="application")
     mcp = client(app)
     if mcp:
         for user_id in unknown_users:
-            await reconciling.reconcile(sessions, user_id, mcp, app.state.clock())
+            try:
+                await reconciling.reconcile(app.state.sessionmaker, user_id, mcp, app.state.clock())
+            except Exception:
+                log.event("mail.dispatch.failed", user_id=user_id, code="reconcile")
     return len(due)
 
 

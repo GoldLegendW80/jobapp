@@ -4,6 +4,7 @@ Only a session route creates user_click. Application approvals are loaded from a
 gate decision, never supplied by an agent. Their authority fits application drafts only.
 """
 
+import asyncio
 import base64
 import dataclasses
 import hashlib
@@ -490,7 +491,10 @@ async def _call_send(
     clock: Callable[[], datetime] | None = None,
     authorisation_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    db.commit()
+    # Every database step below runs in a thread (`_blocking`): the send lock is held across
+    # the provider call, so a lock wait on the event loop would freeze every request until the
+    # wait times out, the send's own included. The steps run one after another on one session.
+    await _blocking(db.commit)
 
     async def live_switches() -> apply_gate.Switches:
         if switches_for is None:
@@ -504,44 +508,51 @@ async def _call_send(
     # reads, immediately before the capability leaves the API process.
     fresh_switches = await live_switches()
     code = apply_gate.switch_code(fresh_switches)
-    locks.lock_send(db, row.user_id)
-    db.expire_all()
-    if row.result != "pending":
-        return {"result": row.result}
-    code = code or application_email.account_code(db, row.user_id)
-    application, stop = None, None
-    if draft.application_id:
-        application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
-        now = clock() if clock else now
-        if application.state not in states.DECIDED or application.mail_send_id != row.id:
-            code = code or "not_open"
-        elif (spent := submit._spent(db, application)) is None or spent.id != authorisation_id:
-            code = code or "not_authorised"
-        elif apply_gate.current_hash(db, application) != bytes(application.answers_hash or b""):
-            code = code or "stale"
-        elif refused := submit.recheck(db, application, posting, now):
-            code, stop = code or refused.code, refused
-    else:
-        now = clock() if clock else now
-    if application and application.state in {
-        State.submitting,
-        State.submit_unknown,
-        State.submitted,
-    }:
-        return {"result": "unknown"}
+    application: Application | None = None
+    posting: Job | None = None
+    stop: Any = None
     until = None
-    if application and not code:
-        until = caps.reserve(db, application, now, clock=clock)
-        # The shared host lock can wait after the person's locks. Recheck validity
-        # under it before recording a click, even when the host is now paced.
-        now = clock() if clock else now
-        if refused := submit.recheck(db, application, posting, now):
-            code, stop = refused.code, refused
+    thread_id: str | None = None
+
+    def first_checks() -> dict[str, Any] | None:
+        nonlocal code, application, posting, stop, until, now
+        locks.lock_send(db, row.user_id)
+        db.expire_all()
+        if row.result != "pending":
+            return {"result": row.result}
+        code = code or application_email.account_code(db, row.user_id)
+        if draft.application_id:
+            application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
+            now = clock() if clock else now
+            if application.state not in states.DECIDED or application.mail_send_id != row.id:
+                code = code or "not_open"
+            elif (spent := submit._spent(db, application)) is None or spent.id != authorisation_id:
+                code = code or "not_authorised"
+            elif apply_gate.current_hash(db, application) != bytes(application.answers_hash or b""):
+                code = code or "stale"
+            elif refused := submit.recheck(db, application, posting, now):
+                code, stop = code or refused.code, refused
+        else:
+            now = clock() if clock else now
+        if application and application.state in {
+            State.submitting,
+            State.submit_unknown,
+            State.submitted,
+        }:
+            return {"result": "unknown"}
+        if application and not code:
+            until = caps.reserve(db, application, now, clock=clock)
+            # The shared host lock can wait after the person's locks. Recheck validity
+            # under it before recording a click, even when the host is now paced.
+            now = clock() if clock else now
+            if refused := submit.recheck(db, application, posting, now):
+                code, stop = refused.code, refused
+        return None
+
+    if (early := await _blocking(first_checks)) is not None:
+        return early
     fresh_switches = await live_switches()
     code = apply_gate.switch_code(fresh_switches) or code
-    now = clock() if clock else now
-    if application and not code and (refused := submit.recheck(db, application, posting, now)):
-        code, stop = refused.code, refused
 
     def local_stop(code: str, stop: Any = None) -> dict[str, Any]:
         if application and application.mail_send_id == row.id:
@@ -575,65 +586,82 @@ async def _call_send(
         db.commit()
         return {"result": "not_sent", "code": code}
 
-    if code:
-        return local_stop(code, stop)
-    if application and until is not None:
-        run._wait(db, application, "host_pace", now, until=until.isoformat())
-        draft.status, draft.updated_at = "draft", now
-        application.mail_send_id = None
-        row.result, row.refusal_code, row.updated_at = "failed", "paced", now
-        db.commit()
-        return {"result": "not_sent", "code": "paced"}
-    thread_id = db.get(MailThread, draft.thread_id).gmail_thread_id if draft.thread_id else None
-    if application:
-        states.move(application, State.submitting, now)
-        apply_gate._event(db, application, "click", now, send_id=str(row.id))
-        db.commit()  # the irreversible state is visible before minting any provider capability
-        locks.lock_send(db, row.user_id)
-        db.expire_all()
-        # Disconnect can win the lock after that commit. A revoked connection cannot call
-        # the provider; uncertainty remains conservative once submitting was committed.
-        if application_email.account_code(db, row.user_id):
-            return {"result": "unknown"}
-        application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
-        if row.result != "pending":
-            return {"result": row.result}
+    def to_submitting() -> dict[str, Any] | None:
+        nonlocal code, stop, now, application, posting, thread_id
+        now = clock() if clock else now
+        if application and not code and (refused := submit.recheck(db, application, posting, now)):
+            code, stop = refused.code, refused
+        if code:
+            return local_stop(code, stop)
+        if application and until is not None:
+            run._wait(db, application, "host_pace", now, until=until.isoformat())
+            draft.status, draft.updated_at = "draft", now
+            application.mail_send_id = None
+            row.result, row.refusal_code, row.updated_at = "failed", "paced", now
+            db.commit()
+            return {"result": "not_sent", "code": "paced"}
+        thread_id = db.get(MailThread, draft.thread_id).gmail_thread_id if draft.thread_id else None
+        if application:
+            states.move(application, State.submitting, now)
+            apply_gate._event(db, application, "click", now, send_id=str(row.id))
+            db.commit()  # the irreversible state is visible before minting any provider capability
+            locks.lock_send(db, row.user_id)
+            db.expire_all()
+            # Disconnect can win the lock after that commit. A revoked connection cannot call
+            # the provider; uncertainty remains conservative once submitting was committed.
+            if application_email.account_code(db, row.user_id):
+                return {"result": "unknown"}
+            application, posting = apply_gate.lock(db, row.user_id, draft.application_id)
+            if row.result != "pending":
+                return {"result": row.result}
+        return None
+
+    if (early := await _blocking(to_submitting)) is not None:
+        return early
     # This send lock can itself wait after the submitting commit. A pause or expiry
     # before minting is still a proven local non-send, settled in one transaction.
     fresh_switches = await live_switches()
     code = apply_gate.switch_code(fresh_switches)
-    now = clock() if clock else now
-    if application and (
-        application.state is not State.submitting or application.mail_send_id != row.id
-    ):
-        code = code or "not_open"
-    if application and not code:
-        spent = submit._spent(db, application)
-        if (
-            spent is None
-            or spent.id != authorisation_id
-            or full_auto.expired(application, spent, now)
+
+    def mint() -> dict[str, Any] | str:
+        nonlocal code, now
+        now = clock() if clock else now
+        if application and (
+            application.state is not State.submitting or application.mail_send_id != row.id
         ):
-            code = "authorisation_expired"
-        elif apply_gate.current_hash(db, application) != bytes(application.answers_hash or b""):
-            code = "stale"
-        elif refused := submit.recheck(db, application, posting, now):
-            code = refused.code
-    if code:
-        return local_stop(code)
-    key = send_key.mint(
-        settings.mail_send_key.get_secret_value(),
-        row.id,
-        row.user_id,
-        account.email,
-        draft.id,
-        thread_id,
-        row.content_hash,
-        raw,
-        now,
-    )
+            code = code or "not_open"
+        if application and not code:
+            spent = submit._spent(db, application)
+            if (
+                spent is None
+                or spent.id != authorisation_id
+                or full_auto.expired(application, spent, now)
+            ):
+                code = "authorisation_expired"
+            elif apply_gate.current_hash(db, application) != bytes(application.answers_hash or b""):
+                code = "stale"
+            elif refused := submit.recheck(db, application, posting, now):
+                code = refused.code
+        if code:
+            return local_stop(code)
+        return send_key.mint(
+            settings.mail_send_key.get_secret_value(),
+            row.id,
+            row.user_id,
+            account.email,
+            draft.id,
+            thread_id,
+            row.content_hash,
+            raw,
+            now,
+        )
+
+    key = await _blocking(mint)
+    if isinstance(key, dict):
+        return key
     # Keep the send lock through this bounded provider call. Disconnect waits for its result
     # before revoking or purging; the pending audit was committed in the earlier transaction.
+    # Other paths wait for it in their threads, never on the event loop.
     return await mcp.call(
         account,
         "send_message",
@@ -657,10 +685,13 @@ async def send(
     clock: Callable[[], datetime] | None = None,
 ) -> MailSend:
     with sessions() as db:
-        row, draft, account, raw = _decide(
-            db, auth, now, settings, switches, available=mcp is not None
-        )
-        db.commit()  # irreversible boundary: another connection sees pending before Gmail.
+
+        def decide() -> tuple[MailSend, MailDraft | None, MailAccount | None, bytes | None]:
+            decided = _decide(db, auth, now, settings, switches, available=mcp is not None)
+            db.commit()  # irreversible boundary: another connection sees pending before Gmail.
+            return decided
+
+        row, draft, account, raw = await _blocking(decide)
         if draft is None:
             return row
         try:
@@ -686,20 +717,25 @@ async def send(
                 else "gmail_error"
             )
             result = "failed"
-        locks.lock_send(db, row.user_id)
-        row = db.get(MailSend, row.id, populate_existing=True)
-        if row.result == "pending":
-            _finish(
-                db,
-                row,
-                result,
-                now,
-                code=code,
-                message_id=answer.get("id"),
-                thread_id=answer.get("threadId"),
-                resolved_by="gmail" if result == "sent" else None,
-            )
-        db.commit()
+
+        def finish() -> MailSend:
+            locks.lock_send(db, row.user_id)
+            current = db.get(MailSend, row.id, populate_existing=True)
+            if current.result == "pending":
+                _finish(
+                    db,
+                    current,
+                    result,
+                    now,
+                    code=code,
+                    message_id=answer.get("id"),
+                    thread_id=answer.get("threadId"),
+                    resolved_by="gmail" if result == "sent" else None,
+                )
+            db.commit()
+            return current
+
+        row = await _blocking(finish)
         if result == "sent" and row.gmail_message_id:
             try:
                 headers = await mcp.get_message(
@@ -718,7 +754,26 @@ async def send(
                 )
                 if kept:
                     row.message_id_header = kept
-                    db.commit()
+                    await _blocking(db.commit)
             except Exception:
-                db.rollback()
+                await _blocking(db.rollback)
         return row
+
+
+async def _blocking[T](step: Callable[[], T]) -> T:
+    """Run one database step of an async path in a thread, so a lock wait (the send lock, the
+    application's row) blocks that thread and never the event loop. A cancellation waits for
+    the step to end before it goes on, so the session is never used by two threads at once."""
+    task = asyncio.ensure_future(asyncio.to_thread(step))
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                raise
+            cancelled = True
+            continue
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
