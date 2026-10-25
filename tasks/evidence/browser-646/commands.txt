@@ -1,0 +1,75 @@
+Issue #646: no unsupported flag infobar in the person's live view. Commands run on 2026-10-24 on
+the Mac (Docker Desktop, arm64) from the worktree of browser/646-flag-infobar; the PNG and JSON
+files of this folder are their results. Invented data only: the fake form of the browser tests
+(tests/browser_pages/form.html), profiles with fresh uuids, user e2e-b646.
+
+Images: only the browser image, each under a tag of its own, built with JOBAPP_EXTRA_CA set
+(README, "Behind a TLS inspecting proxy"); every layer but the two COPY steps came from the cache.
+  docker compose -p b646 -f compose.yml -f compose.mac.yml -f <override naming the tag> \
+    -f compose.extra-ca.yml --profile browser build browser
+  jobapp-b646-browser:latest   browser/ of this branch: Chromium 155.0.8059.79-1~deb12u1 and
+                               CommandLineFlagSecurityWarningsEnabled false in the policy file
+  jobapp-b646-browser:before   browser/ of origin/main at 8ca71e67 (git archive): the same
+                               Chromium, the policy file without the key
+  jobapp-b646-browser:control  origin/main's browser/ with this branch's browserd/probe.py only
+
+Proof, once per image (before, latest), on the test stack of tests/browser.compose.yml (browser,
+pages, client) as test_browser_container.py starts it:
+  1. a person's own session (purpose signin, no debugging port) at http://pages:8080/form.html;
+     once xwininfo shows its title, the whole display :1 grabbed as uid 1000 (XGetImage on the
+     root window through ctypes and libX11, the framebuffer x11vnc serves to the live view):
+     <image>-person-session.png
+  2. an agent's lease (apply_fill: debugging port, --disable-blink-features too) sent to the same
+     form by browserd.probe navigate, the display grabbed: <image>-agent-lease.png; over the
+     lease's CDP, the first tab's window and page heights, then chrome://policy filtered on the
+     key: <image>-chrome-policy.png; then browserd.probe policy (the JSON's probe_policy, from the
+     probe of that image)
+  3. the stack down with its volumes
+  The Chromium switches of both sessions, read from /proc, are in the JSON: --host-resolver-rules
+  is passed in both images and in both kinds of session.
+
+What the files show:
+  before  "You are using an unsupported command-line flag: --host-resolver-rules=MAP * ~NOTFOUND ,
+          EXCLUDE 127.0.0.1. Stability and security will suffer." across the top of the page, in
+          the person's session and in the agent's lease; window 899 px high, page 756 px;
+          chrome://policy lists the key as "Not set."
+  latest  no bar in either session, the page starts right under the toolbar; window 899 px, page
+          812 px (the bar took 56 px); chrome://policy: CommandLineFlagSecurityWarningsEnabled,
+          value false, source Platform, applies to Machine, level Mandatory, status OK
+
+Tests:
+  ops/agent-test.sh --name b646 tests/browser -m "not docker"
+      2035 passed, 98 deselected
+  BROWSER_TEST_IMAGE=jobapp-b646-browser:latest ops/agent-test.sh --name b646 \
+    tests/browser/test_browser_container.py::test_webrtc_sends_no_udp_outside_the_proxy \
+    tests/browser/test_b7_container.py::test_the_chrome_pages_the_image_needs_stay_open
+      2 passed
+  the same two with BROWSER_TEST_IMAGE=jobapp-b646-browser:control
+      2 failed, each on all(policy.values()) with CommandLineFlagSecurityWarningsEnabled 0: the
+      check goes red without the policy. The probe of origin/main counted a policy's name even
+      when it was unset (chrome://policy keeps a hidden "Not set." row for every known policy), so
+      it would have counted the key 1 on the before image; it now counts only shown rows whose
+      status is OK.
+
+Chromium at the pinned version, tag 155.0.8059.79 of chromium.googlesource.com/chromium/src:
+  chrome/browser/ui/startup/bad_flags_prompt.cc:83-85   kBadFlags starts with
+      network::switches::kHostResolverRules ("These flags allow redirecting user traffic")
+  chrome/browser/ui/startup/bad_flags_prompt.cc:283-291 ShowBadFlagsPrompt: the first of
+      kBadFlags on the command line gets the bar IDS_BAD_FLAGS_WARNING_MESSAGE
+  chrome/browser/ui/startup/infobar_utils.cc:75-92      ShouldShowBadFlagsSecurityWarnings is
+      false when the local state pref kCommandLineFlagSecurityWarningsEnabled is managed and
+      false (every platform but ChromeOS)
+  chrome/browser/ui/startup/infobar_utils.cc:179,249-250 ShowBadFlagsPrompt runs only when it
+      is true
+  chrome/browser/policy/configuration_policy_handler_list_factory.cc:2134-2136 the policy
+      CommandLineFlagSecurityWarningsEnabled sets that pref (not on Android, not on ChromeOS)
+  components/policy/resources/templates/policy_definitions/Miscellaneous/
+      CommandLineFlagSecurityWarningsEnabled.yaml: supported_on chrome.*:76-, dynamic_refresh
+      false (read when Chromium starts; browserd starts one for every lease), per_profile false
+  components/policy/core/common/config_dir_policy_loader.cc: the Linux loader of
+      /etc/chromium/policies/managed reads it as mandatory, source platform, and never calls
+      FilterSensitivePolicies (policy_loader_common.cc), which blocks the policies that
+      GetSensitivePolicies lists; chrome://policy above shows the key with status OK
+
+Left behind: nothing. Each b646 stack was taken down with its volumes; the tags
+jobapp-b646-browser:before, :control and :latest were removed after the runs.
