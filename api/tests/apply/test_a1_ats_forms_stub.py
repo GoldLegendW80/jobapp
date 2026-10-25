@@ -12,6 +12,7 @@ import re
 import shlex
 import socket
 import urllib.request
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -25,6 +26,12 @@ GH = "/greenhouse/northwind-labs/jobs/4012345"
 ROOT = s.STUB_PATH.parents[1]
 STUB = s.load_stub()
 MAX_BODY = STUB.MAX_BODY
+
+
+@pytest.fixture
+def forms() -> Iterator[Forms]:
+    with s.running(clock=s.Clock()) as server:
+        yield server
 
 
 def ashby(variant: str = "") -> str:
@@ -49,7 +56,7 @@ def post_part(forms: Forms, path: str, headers: str, payload: bytes) -> int:
 def test_the_invisible_check_rejects_a_fill_with_no_dwell_and_accepts_a_paced_one(
     forms: Forms,
 ) -> None:
-    quick = forms.post(ashby(), {**ASHBY_GOOD, "_signal_dwell_ms": "400"}, ASHBY_FILES)
+    quick = forms.post(ashby(), ASHBY_GOOD, ASHBY_FILES, dwell_ms=400)
     assert quick.json()["ok"] is False
     assert "flagged as possible spam" in quick.json()["message"]
     paced = forms.post(ashby(), ASHBY_GOOD, ASHBY_FILES)
@@ -63,7 +70,7 @@ def test_the_invisible_check_rejects_a_fill_with_no_dwell_and_accepts_a_paced_on
 
 
 def test_the_invisible_check_rejects_a_webdriver_browser_whatever_its_dwell(forms: Forms) -> None:
-    sent = forms.post(ashby(), {**ASHBY_GOOD, "_signal_webdriver": "1"}, ASHBY_FILES)
+    sent = forms.post(ashby(), ASHBY_GOOD, ASHBY_FILES, webdriver=True)
     assert sent.json()["ok"] is False
     assert forms.submissions()[0]["reason"] == "invisible_check"
     assert forms.submissions()[0]["signals"] == {"dwell_ms": 5000, "webdriver": True}
@@ -71,13 +78,12 @@ def test_the_invisible_check_rejects_a_webdriver_browser_whatever_its_dwell(form
 
 def test_a_post_with_no_signal_at_all_is_not_a_paced_one(forms: Forms) -> None:
     bare = {k: v for k, v in ASHBY_GOOD.items() if not k.startswith("_signal")}
-    assert forms.post(ashby(), bare, ASHBY_FILES).json()["ok"] is False
+    assert forms.post(ashby(), bare, ASHBY_FILES, behaviour=False).json()["ok"] is False
 
 
 def test_the_threshold_is_the_servers_own_setting() -> None:
-    with s.running(min_dwell_ms=50) as forms:
-        quick = {**ASHBY_GOOD, "_signal_dwell_ms": "60"}
-        assert forms.post(ashby(), quick, ASHBY_FILES).json()["ok"] is True
+    with s.running(min_dwell_ms=50, clock=s.Clock()) as forms:
+        assert forms.post(ashby(), ASHBY_GOOD, ASHBY_FILES, dwell_ms=60).json()["ok"] is True
 
 
 # --- what is recorded ----------------------------------------------------------------------------
@@ -220,7 +226,7 @@ def test_the_plain_variant_asks_only_what_any_profile_answers(forms: Forms, ats:
     else:
         assert names == {"first_name", "last_name", "email", "resume", "cover_letter", "privacy"}
     page = forms.get(forms.posting_path(ats, "plain")).text
-    for left_out in ("arbitration", "marketing", "q_authorised", "q_eu_work", "q_why", "phone"):
+    for left_out in ("arbitration", "marketing", "question_1001", "q_eu_work", "q_why", "phone"):
         assert f'name="{left_out}"' not in page
 
 
@@ -664,3 +670,16 @@ def test_every_container_of_the_stub_listens_on_its_own_address_at_the_port_it_p
         probe = " ".join(service["healthcheck"]["test"])
         assert f":{port}/healthz" in probe
         assert not re.search(r"127\.0\.0\.1|localhost", probe)
+
+
+def test_known_fallback_uses_native_fixture_only_for_an_existing_ashby_posting(
+    forms: Forms,
+) -> None:
+    response = forms.get(ashby("known-fallback"))
+    assert response.status == 200
+    assert 'data-kind="known-fallback"' in response.text
+    assert "/forms/a8/custom.js" in response.text
+    assert forms.get("/ashby/example-robotics/missing--known-fallback/application").status == 404
+    assert 'data-kind="known-fallback"' not in forms.get(ashby()).text
+    for name in ("hosted", "framed", "mid-fill", "no-credential"):
+        assert forms.get(f"/forms/apply-fallback/{name}.html").status == 200

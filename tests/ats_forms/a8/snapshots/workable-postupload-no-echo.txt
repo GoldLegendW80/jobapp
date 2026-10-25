@@ -1,0 +1,33 @@
+- main [ref=e2]:
+  - heading "Applied AI Engineer" [level=1] [ref=e3]
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: First name *
+      - textbox "First name *" [ref=e7]
+    - generic [ref=e8]:
+      - generic [ref=e9]: Last name *
+      - textbox "Last name *" [ref=e10]
+    - generic [ref=e11]:
+      - generic [ref=e12]: Email *
+      - textbox "Email *" [ref=e13]
+    - generic [ref=e14]:
+      - generic [ref=e15]: Phone
+      - textbox "Phone" [ref=e16]
+    - generic [ref=e17]:
+      - generic [ref=e18]: Resume *
+      - button "Resume *" [ref=e19]
+    - generic [ref=e20]:
+      - generic [ref=e21]: How did you hear about us?
+      - combobox "How did you hear about us?" [ref=e22]:
+        - option "Select..." [selected]
+        - option "LinkedIn"
+        - option "Company website"
+        - option "Other"
+    - generic [ref=e23]:
+      - generic [ref=e24]: Summary
+      - textbox "Summary" [ref=e25]
+    - button "Submit application" [ref=e26]
+  - paragraph [ref=e27]:
+    - link "Apply" [ref=e28] [cursor=pointer]:
+      - /url: "#form"
+  - button "Subscribe" [ref=e30]
