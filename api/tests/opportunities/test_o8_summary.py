@@ -82,7 +82,16 @@ def test_the_summary_answer_names_the_counter() -> None:
         "new",
         "skipped_by_rule",
         "error",
+        "source_id",
+        "mode",
+        "host",
+        "phase",
+        "action",
+        "outcome",
+        "reason",
     }
+    metadata = ("source_id", "mode", "host", "phase", "action", "outcome", "reason")
+    assert {key: body["sources"][0][key] for key in metadata} == dict.fromkeys(metadata)
 
 
 def test_the_web_has_words_for_every_feed_code() -> None:

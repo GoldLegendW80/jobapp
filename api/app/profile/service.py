@@ -22,11 +22,21 @@ The photo is not a section: storing or removing it adds no revision, but updates
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
 The LinkedIn consent (browser B10) cannot be written through a section: on the `search`
-section's `linkedin` entry, `enabled`, `accepted_at` and `text_version` keep their stored values
+section's `linkedin` entry, `enabled`, `accepted_at`, `text_version` and `interactive_only` keep
+their stored values
 (off and none when nothing is stored) on every save and import, unless the caller passes
 `linkedin_consent=True`, which only PUT /api/browser/linkedin does (it shows the sentence and
 records the person's accept). The words and the location of the entry are saved as sent, and an
-entry left out removes it, which turns LinkedIn off.
+entry left out removes it, which turns LinkedIn off, unless it is a permission-only row.
+Permission-only LinkedIn rows are retained so an ordinary save cannot clear their reader intent.
+Free-Work consent follows the same dedicated-route rule, and goes further: once stored, its words
+and location also keep their stored values on every other save and import (a generic save that
+creates the entry keeps them as sent, off and unaccepted), and an omitted Free-Work entry is
+retained, so generic Search saves and imports cannot remove or rewrite its protected settings.
+Restoring it must still satisfy the Search rules, including the ten-source limit, before anything
+is written.
+The separate `platform_consents` map belongs to the browser: generic saves and imports keep it,
+and a dedicated platform writer can update only its own entry under the same revision lock.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -36,12 +46,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
+from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
 from app.profile.photo import Photo
-from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS
+from app.profile.schemas import (
+    PLATFORM_CONSENT_KINDS,
+    SECTION_MODELS,
+    SECTIONS,
+    WIZARD_STEPS,
+    validate_section,
+)
 
 REVISIONS_PAGE_MAX = 100
 
@@ -51,6 +68,14 @@ ONBOARDING_FIELDS = ("completed_at", "dismissed_at")
 
 class ReservedFieldError(Exception):
     """A save tried to change a field only the app writes (preferences.onboarding)."""
+
+
+class PreservedSearchError(Exception):
+    """Preserving protected settings would break a Search rule, before any profile write."""
+
+    def __init__(self, error: ValidationError) -> None:
+        super().__init__("preserved search does not validate")
+        self.error = error
 
 
 class StaleRevisionError(Exception):
@@ -69,8 +94,10 @@ def _ensure(db: Session, user_id: uuid.UUID, now: datetime) -> None:
     )
 
 
-def get_profile(db: Session, user_id: uuid.UUID, now: datetime) -> Profile:
+def get_profile(db: Session, user_id: uuid.UUID, now: datetime, *, lock: bool = False) -> Profile:
     """The user's profile, created empty on first read."""
+    if lock:
+        return _locked(db, user_id, now)
     _ensure(db, user_id, now)
     profile = db.execute(
         sa.select(Profile)
@@ -96,13 +123,18 @@ def sections_view(profile: Profile) -> dict[str, dict[str, Any] | None]:
     return {name: stored.get(name) for name in SECTIONS}
 
 
-CONSENT_FIELDS = ("enabled", "accepted_at", "text_version")
+BROWSER_FIELDS = ("enabled", "accepted_at", "text_version", "interactive_only")
 LINKEDIN = "linkedin"
+PROTECTED_SOURCES = frozenset({LINKEDIN, "freework"})
 
 
-def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
-    """`data` (a validated search section) with its linkedin entry's consent fields put back to
-    the stored ones: off and none when no linkedin entry is stored."""
+def _keep_consent(
+    stored: dict[str, Any] | None, data: dict[str, Any], trusted: str | None = None
+) -> dict[str, Any]:
+    """Keep protected browser fields; only each kind's dedicated route may change them."""
+    consents = dict((stored or {}).get("platform_consents") or {})
+    if trusted in PLATFORM_CONSENT_KINDS and trusted in data.get("platform_consents", {}):
+        consents[trusted] = data["platform_consents"][trusted]
     # Old editors and imports cannot accidentally erase the new saved search fields.
     data = {
         **{
@@ -111,34 +143,48 @@ def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[s
             if name not in data and name in (stored or {})
         },
         **data,
+        "platform_consents": consents,
     }
+    if not consents:
+        # No dedicated decision yet: store no map at all (schemas._stored_section).
+        del data["platform_consents"]
     sources = data.get("browser_sources")
-    if not isinstance(sources, list) or not any(
-        isinstance(s, dict) and s.get("kind") == LINKEDIN for s in sources
-    ):
+    if not isinstance(sources, list):
         return data
-    before = next(
-        (
-            s
-            for s in (stored or {}).get("browser_sources") or []
-            if isinstance(s, dict) and s.get("kind") == LINKEDIN
-        ),
-        None,
-    )
-    kept = {
-        "enabled": bool(before.get("enabled")) if before else False,
-        "accepted_at": before.get("accepted_at") if before else None,
-        "text_version": before.get("text_version") if before else None,
+    previous = {
+        s["kind"]: s
+        for s in (stored or {}).get("browser_sources") or []
+        if isinstance(s, dict) and s.get("kind") in PROTECTED_SOURCES
     }
-    if (kept["accepted_at"] is None) != (kept["text_version"] is None):
-        kept = {"enabled": False, "accepted_at": None, "text_version": None}
-    return {
-        **data,
-        "browser_sources": [
-            {**s, **kept} if isinstance(s, dict) and s.get("kind") == LINKEDIN else s
-            for s in sources
-        ],
-    }
+    restored = [
+        before
+        for kind, before in previous.items()
+        if (kind == "freework" or before.get("interactive_only") is True)
+        and not any(isinstance(source, dict) and source.get("kind") == kind for source in sources)
+    ]
+    if restored:
+        sources = [*sources, *restored]
+    kept = []
+    for source in sources:
+        if not isinstance(source, dict) or source.get("kind") not in PROTECTED_SOURCES - {trusted}:
+            kept.append(source)
+            continue
+        before = previous.get(source["kind"], {})
+        browser = {key: before.get(key) for key in BROWSER_FIELDS}
+        browser["enabled"] = browser["enabled"] is True
+        browser["interactive_only"] = browser["interactive_only"] is True
+        if (browser["accepted_at"] is None) != (browser["text_version"] is None):
+            browser.update(enabled=False, accepted_at=None, text_version=None)
+        if source["kind"] == "freework" and source["kind"] in previous:
+            # A stored Free-Work entry's words change through its own route only: a stale draft
+            # (a 409 then Keep editing, an old export) must not undo a newer dedicated save.
+            browser |= {key: before.get(key) for key in ("query", "location")}
+        kept.append({**source, **browser})
+    result = {**data, "browser_sources": kept}
+    try:
+        return validate_section("search", result)
+    except ValidationError as exc:
+        raise PreservedSearchError(exc) from None
 
 
 def save_section(
@@ -150,6 +196,7 @@ def save_section(
     now: datetime,
     *,
     linkedin_consent: bool = False,
+    platform_consent: str | None = None,
     onboarding_sent: frozenset[str] | None = None,
 ) -> Profile:
     """Replace one section with already validated `data` and record the revision.
@@ -158,7 +205,8 @@ def save_section(
     is not the stored revision, and ReservedFieldError when a `preferences` save changes the
     onboarding dates. `onboarding_sent` names the onboarding keys the client sent (None: all of
     them): a key left out keeps its stored value, and so do the steps passed. The LinkedIn
-    consent of a `search` section is kept as stored unless `linkedin_consent` (the module
+    consent of a `search` section is kept as stored unless `linkedin_consent`, and the Free-Work
+    entry (consent, words and location) unless `platform_consent="freework"` (the module
     docstring).
     """
     if section not in SECTIONS:
@@ -166,8 +214,13 @@ def save_section(
     profile = _locked(db, user_id, now)
     if profile.revision != base_revision:
         raise StaleRevisionError(profile)
-    if section == "search" and not linkedin_consent:
-        data = _keep_consent((profile.sections or {}).get("search"), data)
+    if platform_consent not in {None, "freework", *PLATFORM_CONSENT_KINDS}:
+        raise ValueError("unknown platform consent")
+    if linkedin_consent and platform_consent is not None:
+        raise ValueError("one dedicated consent route per save")
+    if section == "search":
+        trusted = LINKEDIN if linkedin_consent else platform_consent
+        data = _keep_consent((profile.sections or {}).get("search"), data, trusted)
     if section == "preferences":
         data = _keep_onboarding(profile, data, onboarding_sent)
         if data.get("onboarding") != _onboarding(profile):

@@ -72,7 +72,7 @@ def test_start_revision_and_owner_safe_reopened_views(
         "llm_browser",
         "pending",
         "not_attempted",
-        "interactive_executor_pending",
+        None,
     )
     assert entry["source_id"]
     assert entry["host"] == "jobs.example.org"
@@ -197,7 +197,7 @@ def test_scheduled_creation_freezes_current_revision_and_keeps_slot(
     assert row.stats["schedule_slot"] == due.slot.key
 
 
-def test_interactive_only_run_defers_without_legacy_fallback(
+def test_interactive_only_run_explains_unsupported_criteria_without_legacy_fallback(
     clock: Clock,
     api: Api,
     factory: sessionmaker[Session],
@@ -217,12 +217,19 @@ def test_interactive_only_run_defers_without_legacy_fallback(
     async def no_hook(*args: Any) -> None:
         pytest.fail("interactive intent reached a fixed source reader")
 
-    asyncio.run(sweep.run_sweep(factory, sweep_id, NoAts(), clock, browser=no_hook, feeds=no_hook))
+    from tests.browser.test_b8_sources import FakeTools
+    from tests.jobs.test_sweep_browser_sources import runner
+
+    asyncio.run(
+        sweep.run_sweep(
+            factory, sweep_id, NoAts(), clock, browser=runner(FakeTools({})), feeds=no_hook
+        )
+    )
     row = read_sweep(factory, sweep_id)
     assert row.status is SweepStatus.done
     [entry] = row.stats["sources"]
-    assert entry["outcome"] == "not_attempted"
-    assert entry["reason"] == "interactive_executor_pending"
+    assert entry["outcome"] == "failed"
+    assert entry["reason"] == "unsupported_criteria"
     assert entry["phase"] == "done"
     assert CANARY not in caplog.text
 
