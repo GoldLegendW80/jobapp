@@ -672,7 +672,9 @@ class SourceOut(BaseModel):
     browser_busy, browser_unavailable, or not_started for a source after one that stopped the
     sweep's sources). A freelance and project feed (opportunities O7) is listed here too, its
     `kind` the feed's, with its own codes (app/opportunities/sources ERRORS) and the postings the
-    never apply rules set aside (`skipped_by_rule`, opportunities O8)."""
+    never apply rules set aside (`skipped_by_rule`, opportunities O8), plus items whose parser
+    raised (`items_skipped`, opportunities O7). Unread Hacker News comments beyond its read
+    cap and ordinary filtering are not parser failures."""
 
     kind: str
     query: str
@@ -681,6 +683,7 @@ class SourceOut(BaseModel):
     found: int = 0
     new: int = 0
     skipped_by_rule: int = 0
+    items_skipped: int = Field(default=0, ge=0)
     error: str | None = None
 
 
