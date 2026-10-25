@@ -7,7 +7,7 @@ from app.apply.ats.wizard import Wizard, fixture_apply, fixture_job, fixture_url
 
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.wd[1-9][0-9]?)?\.myworkdayjobs\.com")
 PATH = re.compile(
-    r"(?P<job>/(?:[a-z]{2}-[A-Z]{2}/)?[A-Za-z0-9_-]{1,100}/job/"
+    r"(?P<job>/(?P<locale>[a-z]{2}-[A-Z]{2}/)?[A-Za-z0-9_-]{1,100}/job/"
     r"(?:[A-Za-z0-9_.~-]{1,200}/){0,3}[A-Za-z0-9_.~-]{1,200}_[A-Za-z0-9_-]{1,80})(?:/apply(?:/applyManually)?)?/?"
 )
 
@@ -22,7 +22,11 @@ class Workday(Wizard):
             return f"fixture:{job}" if job else ""
         parts = parts_of(url)
         match = PATH.fullmatch(parts.path) if parts and HOST.fullmatch(parts.hostname) else None
-        return f"{parts.hostname}{match['job']}" if match else ""
+        if not match:
+            return ""
+        # One job in every language: /en-US/... and /fr-FR/... share one key (the form keeps it).
+        job = match["job"][len(match["locale"] or "") :]
+        return f"{parts.hostname}{job}"
 
     def form_url(self, posting_url: str) -> str | None:
         if not self.job_of(posting_url):

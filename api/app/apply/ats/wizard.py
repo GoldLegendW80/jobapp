@@ -81,6 +81,20 @@ def fixture_apply(url: str) -> str:
     return urlunsplit(parts._replace(query=urlencode(query, doseq=True)))
 
 
+# The site's own header, menu and footer: a "Sign in" there is offered to every visitor and is
+# no wall in front of the form (a credential box anywhere still is, `base.Adapter.pending_of`).
+_CHROME = frozenset({"banner", "navigation", "contentinfo"})
+
+
+def _in_chrome(node: base.Node) -> bool:
+    parent = node.parent
+    while parent is not None:
+        if parent.role in _CHROME:
+            return True
+        parent = parent.parent
+    return False
+
+
 class Wizard(generic.Deterministic):
     review_only = True
     require_summary = False
@@ -124,7 +138,9 @@ class Wizard(generic.Deterministic):
         return (
             "signin"
             if any(
-                n.role in ("heading", "button", "link") and base.fold(n.name) in SIGNIN
+                n.role in ("heading", "button", "link")
+                and base.fold(n.name) in SIGNIN
+                and not _in_chrome(n)
                 for n in root.walk()
             )
             else ""

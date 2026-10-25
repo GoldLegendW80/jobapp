@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
-import { clickInView, typeInView } from "./apply-a9-helpers";
+import { clickInView } from "./apply-a9-helpers";
 import { waitForPostingDocuments } from "./apply-document-helpers";
 import { stub } from "./apply-helpers";
 import {
@@ -142,148 +142,179 @@ test("an invented candidate prepares documents", async () => {
   await waitForRender(page.request, base_cv.id, 1);
 });
 
-for (const reason of ["captcha", "email_code"]) {
-  test(`later Workday ${reason} preserves earlier answers and submits once after a fresh approval`, async () => {
-    const before = (await stub.submissions()).length;
-    const job = await posting(reason);
-    await page.goto(`/jobs/${job}`);
-    const section = page.getByRole("region", { name: "Apply", exact: true });
-    await section
-      .getByRole("button", { name: "Apply (Review first)", exact: true })
-      .click();
-    await expect
-      .poll(async () => (await application(job))?.needs, { timeout: 180_000 })
-      .toBe(reason);
-    await expect
-      .poll(async () => (await lease())?.state, { timeout: 30_000 })
-      .toBe("waiting_person");
-    const waiting = await lease();
-    expect(waiting?.wait_reason).toBe(reason);
-    expect(waiting?.active_s).toBeLessThan(900);
-    await expect(
-      page.getByRole("region", { name: "Sign in to atsforms", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "I'm signed in", exact: true }),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("live-screen").locator("canvas")).toBeVisible(
-      { timeout: 60_000 },
-    );
-    await expect(
-      page.getByText(
-        reason === "captcha"
-          ? "A captcha needs you"
-          : "An e-mail code needs you",
-        { exact: true },
-      ),
-    ).toBeVisible();
-    expect((await stub.submissions()).length).toBe(before);
-    await expect(
-      page.getByRole("button", { name: "Take over", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "Keyboard", exact: true }),
-    ).toBeVisible();
-    await expect
-      .poll(
-        async () =>
-          page.getByTestId("live-screen").evaluate((screen) => {
-            const canvas = screen.querySelector("canvas");
-            const context = canvas?.getContext("2d");
-            if (!canvas || !context || canvas.width === 0) return false;
-            const { data } = context.getImageData(
-              0,
-              0,
-              canvas.width,
-              canvas.height,
-            );
-            for (let i = 4; i < data.length; i += 4 * 97)
-              for (let c = 0; c < 3; c += 1)
-                if (data[i + c] !== data[c]) return true;
-            return false;
-          }),
-        { timeout: 60_000 },
-      )
-      .toBe(true);
-    await shots(page, `${reason}-waiting`);
-    const stillWaiting = await lease();
-    expect(stillWaiting?.id).toBe(waiting?.id);
-    expect(stillWaiting?.wait_deadline).toBe(waiting?.wait_deadline);
-    expect(stillWaiting?.active_s).toBe(waiting?.active_s);
-    await clickInView(page, "#person-challenge");
-    if (reason === "email_code") await typeInView(page, "482615");
-    await clickInView(page, "#person-continue");
-    await expect
-      .poll(async () => (await application(job))?.state, { timeout: 240_000 })
-      .toBe("ready");
-    const app = (await application(job))!;
-    const ready = await detail(app.id);
-    expect(
-      ready.answers.some(
-        (row) => row.label === "First name" && row.value === "Morgan",
-      ),
-    ).toBe(true);
-    expect(
-      ready.answers.some(
-        (row) => row.label === "Email" && row.value === person.email,
-      ),
-    ).toBe(true);
-    expect(
-      ready.answers
-        .filter((row) => row.field_key.startsWith("designated:step:"))
-        .map((row) => row.value),
-    ).toEqual(["Save and Continue", "Save and Continue"]);
-    expect(
-      ready.answers.some((row) => row.field_key === "designated:submit"),
-    ).toBe(true);
-    expect(ready.events.filter((event) => event.kind === "lease")).toHaveLength(
-      1,
-    );
-    expect(ready.events.some((event) => event.kind === "approval")).toBe(false);
-    expect((await stub.submissions()).length).toBe(before);
-    await expect(
-      section.getByRole("button", { name: "Approve and submit", exact: true }),
-    ).toBeVisible();
-    await shots(page, `${reason}-ready`);
-    await section
-      .getByRole("button", { name: "Approve and submit", exact: true })
-      .click();
-    await page
-      .getByRole("alertdialog")
-      .getByRole("button", { name: "Approve and submit", exact: true })
-      .click();
-    await expect
-      .poll(async () => (await application(job))?.state, { timeout: 240_000 })
-      .toBe("submitted");
-    const sent = await stub.submissions();
-    expect(sent.length).toBe(before + 1);
-    expect(sent.at(-1)?.org).toBe("a15-workday");
-    expect(sent.at(-1)?.fields.email).toBe(person.email);
-    expect(
-      sent
-        .at(-1)
-        ?.files.map((file) => file.filename)
-        .sort(),
-    ).toEqual(["cv.pdf", "letter.pdf"]);
-    const done = await detail(app.id);
-    expect(done.events.filter((event) => event.kind === "click")).toHaveLength(
-      1,
-    );
-    const currentApproval = await page.request.get(
-      `/api/applications/${app.id}/approval`,
-    );
-    const { answers_hash } = (await currentApproval.json()) as {
-      answers_hash: string;
-    };
-    const repeated = await page.request.post(
-      `/api/applications/${app.id}/approve`,
-      { headers: CSRF, data: { answers_hash } },
-    );
-    expect(repeated.status()).toBe(409);
-    expect((await stub.submissions()).length).toBe(before + 1);
-    await shots(page, `${reason}-submitted`);
+test("later Workday captcha: the person takes over, solves it, gives back; earlier answers kept, submitted once after a fresh approval", async () => {
+  const reason = "captcha";
+  const before = (await stub.submissions()).length;
+  const job = await posting(reason);
+  await page.goto(`/jobs/${job}`);
+  const section = page.getByRole("region", { name: "Apply", exact: true });
+  await section
+    .getByRole("button", { name: "Apply (Review first)", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await application(job))?.needs, { timeout: 180_000 })
+    .toBe(reason);
+  await expect
+    .poll(async () => (await lease())?.state, { timeout: 30_000 })
+    .toBe("waiting_person");
+  const waiting = await lease();
+  expect(waiting?.wait_reason).toBe(reason);
+  expect(waiting?.active_s).toBeLessThan(900);
+  await expect(
+    page.getByRole("region", { name: "Sign in to atsforms", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "I'm signed in", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("live-screen").locator("canvas")).toBeVisible({
+    timeout: 60_000,
   });
-}
+  await expect(
+    page.getByText("A captcha needs you", { exact: true }),
+  ).toBeVisible();
+  expect((await stub.submissions()).length).toBe(before);
+  // Main's live view (SPEC-browser, "View only while an agent works"): the person watches the
+  // assistant's lease and takes over to solve the captcha; no keyboard before that.
+  const takeOver = page.getByRole("button", { name: "Take over", exact: true });
+  await expect(takeOver).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Keyboard", exact: true }),
+  ).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        page.getByTestId("live-screen").evaluate((screen) => {
+          const canvas = screen.querySelector("canvas");
+          const context = canvas?.getContext("2d");
+          if (!canvas || !context || canvas.width === 0) return false;
+          const { data } = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          for (let i = 4; i < data.length; i += 4 * 97)
+            for (let c = 0; c < 3; c += 1)
+              if (data[i + c] !== data[c]) return true;
+          return false;
+        }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  await shots(page, `${reason}-waiting`);
+  const stillWaiting = await lease();
+  expect(stillWaiting?.id).toBe(waiting?.id);
+  expect(stillWaiting?.wait_deadline).toBe(waiting?.wait_deadline);
+  expect(stillWaiting?.active_s).toBe(waiting?.active_s);
+  await takeOver.click();
+  await expect(
+    page.getByRole("button", { name: "Keyboard", exact: true }),
+  ).toBeVisible();
+  await clickInView(page, "#person-challenge");
+  await clickInView(page, "#person-continue");
+  await page.getByRole("button", { name: "Give back", exact: true }).click();
+  await expect
+    .poll(async () => (await application(job))?.state, { timeout: 240_000 })
+    .toBe("ready");
+  const app = (await application(job))!;
+  const ready = await detail(app.id);
+  expect(
+    ready.answers.some(
+      (row) => row.label === "First name" && row.value === "Morgan",
+    ),
+  ).toBe(true);
+  expect(
+    ready.answers.some(
+      (row) => row.label === "Email" && row.value === person.email,
+    ),
+  ).toBe(true);
+  expect(
+    ready.answers
+      .filter((row) => row.field_key.startsWith("designated:step:"))
+      .map((row) => row.value),
+  ).toEqual(["Save and Continue", "Save and Continue"]);
+  expect(
+    ready.answers.some((row) => row.field_key === "designated:submit"),
+  ).toBe(true);
+  expect(ready.events.filter((event) => event.kind === "lease")).toHaveLength(
+    1,
+  );
+  expect(ready.events.some((event) => event.kind === "approval")).toBe(false);
+  expect((await stub.submissions()).length).toBe(before);
+  await expect(
+    section.getByRole("button", { name: "Approve and submit", exact: true }),
+  ).toBeVisible();
+  await shots(page, `${reason}-ready`);
+  await section
+    .getByRole("button", { name: "Approve and submit", exact: true })
+    .click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Approve and submit", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await application(job))?.state, { timeout: 240_000 })
+    .toBe("submitted");
+  const sent = await stub.submissions();
+  expect(sent.length).toBe(before + 1);
+  expect(sent.at(-1)?.org).toBe("a15-workday");
+  expect(sent.at(-1)?.fields.email).toBe(person.email);
+  expect(
+    sent
+      .at(-1)
+      ?.files.map((file) => file.filename)
+      .sort(),
+  ).toEqual(["cv.pdf", "letter.pdf"]);
+  const done = await detail(app.id);
+  expect(done.events.filter((event) => event.kind === "click")).toHaveLength(1);
+  const currentApproval = await page.request.get(
+    `/api/applications/${app.id}/approval`,
+  );
+  const { answers_hash } = (await currentApproval.json()) as {
+    answers_hash: string;
+  };
+  const repeated = await page.request.post(
+    `/api/applications/${app.id}/approve`,
+    { headers: CSRF, data: { answers_hash } },
+  );
+  expect(repeated.status()).toBe(409);
+  expect((await stub.submissions()).length).toBe(before + 1);
+  await shots(page, `${reason}-submitted`);
+});
+
+test("later Workday e-mail code is a sign in wall: the sign in handoff, nothing submitted", async () => {
+  const before = (await stub.submissions()).length;
+  const job = await posting("email_code");
+  await page.goto(`/jobs/${job}`);
+  const section = page.getByRole("region", { name: "Apply", exact: true });
+  await section
+    .getByRole("button", { name: "Apply (Review first)", exact: true })
+    .click();
+  // Main's rule (base.secret): a code box on any adapter but Greenhouse is a sign in wall, so
+  // the person gets the sign in handoff, never a wait on the page for the code.
+  const banner = page.getByRole("region", {
+    name: "Sign in to atsforms",
+    exact: true,
+  });
+  await expect(banner).toBeVisible({ timeout: 180_000 });
+  await expect(
+    page.getByText("An e-mail code needs you", { exact: true }),
+  ).toHaveCount(0);
+  expect((await stub.submissions()).length).toBe(before);
+  await shots(page, "email_code-signin");
+  await page.request.post("/api/browser/handoff/cancel", { headers: CSRF });
+  await expect
+    .poll(async () => (await application(job))?.needs, { timeout: 180_000 })
+    .toBe("signin");
+  const app = (await application(job))!;
+  expect(app.state).toBe("needs_person");
+  const read = await page.request.get(`/api/applications/${app.id}`);
+  expect(read.status()).toBe(200);
+  const { events } = (await read.json()) as Pick<Detail, "events">;
+  expect(events.some((event) => event.kind === "approval")).toBe(false);
+  expect(events.some((event) => event.kind === "click")).toBe(false);
+  expect((await stub.submissions()).length).toBe(before);
+});
 test("no page error was logged", () => {
   expect(errors).toEqual([]);
 });

@@ -421,3 +421,70 @@ def test_summary_duplicate_labels_keep_boolean_and_text_provenance():
     snapshot = '- region "Application summary":\n  - group "Answer": No\n  - group "Answer": Non'
     assert not adapter.summary_problem(base.parse_snapshot(snapshot))
     assert adapter.summary_problem(base.parse_snapshot(snapshot.replace("Non", "Oui")))
+
+
+SIGNED_OUT_HEADER = """- banner:
+  - link "Sign in" [ref=e1]
+  - button "Create Account" [ref=e2]
+- navigation:
+  - link "Sign In" [ref=e3]
+- main:
+  - heading "Robotics Engineer" [ref=e4]
+  - textbox "First name" [ref=e5]
+- contentinfo:
+  - link "Connectez-vous" [ref=e6]
+"""
+
+
+@pytest.mark.parametrize("adapter", [Workday, GoogleCareers, Vie])
+def test_a_sign_in_in_the_site_header_menu_or_footer_is_no_wall(adapter):
+    assert adapter(BASE).pending_at(base.parse_snapshot(SIGNED_OUT_HEADER)) == ""
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        '- main:\n  - heading "Sign in" [ref=e1]\n  - textbox "Email" [ref=e2]\n',
+        '- dialog "Apply":\n  - button "Create Account" [ref=e1]\n  - button "Sign In" [ref=e2]\n',
+        '- heading "Sign in to apply" [ref=e1]\n',
+        '- banner:\n  - link "Sign in" [ref=e1]\n- main:\n  - button "Sign in" [ref=e2]\n',
+    ],
+)
+def test_a_sign_in_in_the_page_body_is_still_a_wall(page):
+    assert Workday(BASE).pending_at(base.parse_snapshot(page)) == "signin"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/en-US/Careers/job/Paris/Robotics-Engineer_R1234",
+        "/fr-FR/Careers/job/Paris/Robotics-Engineer_R1234",
+        "/Careers/job/Paris/Robotics-Engineer_R1234",
+        "/de-DE/Careers/job/Paris/Robotics-Engineer_R1234/apply",
+    ],
+)
+def test_workday_key_is_one_job_in_every_locale(path):
+    from app.apply import guardrails
+
+    url = "https://example.wd3.myworkdayjobs.com" + path
+    assert guardrails.canonical_key(url) == (
+        "workday:example.wd3.myworkdayjobs.com/Careers/job/Paris/Robotics-Engineer_R1234"
+    )
+    assert Workday().form_url(url) == (
+        "https://example.wd3.myworkdayjobs.com"
+        + path.removesuffix("/apply").removesuffix("/")
+        + "/apply/applyManually"
+    )
+
+
+def test_workday_key_keeps_other_tenants_and_jobs_apart():
+    from app.apply import guardrails
+
+    one = "https://example.wd3.myworkdayjobs.com/en-US/Careers/job/Paris/Robotics-Engineer_R1234"
+    assert guardrails.canonical_key(one) != guardrails.canonical_key(
+        one.replace("example.", "northwind.")
+    )
+    assert guardrails.canonical_key(one) != guardrails.canonical_key(one.replace("R1234", "R1235"))
+    assert guardrails.canonical_key(one) != guardrails.canonical_key(
+        one.replace("/en-US/Careers", "/en-US/Interns")
+    )
