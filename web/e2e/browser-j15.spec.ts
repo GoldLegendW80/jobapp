@@ -224,6 +224,27 @@ test("A chooses websites, opts in per website, sets criteria and starts Find job
 });
 
 test("the websites end in words, the company page's posting is saved, nothing is submitted", async () => {
+  // The summary the page opens when the search ends names every website and says why each
+  // ended as it did.
+  const summary = page.getByRole("dialog", { name: /new posting/ });
+  await expect(summary).toBeVisible({ timeout: 300_000 });
+  const sites = summary.getByRole("region", {
+    name: "Job sites in your browser",
+  });
+  for (const name of WEBSITES)
+    await expect(
+      sites.getByRole("listitem").filter({ hasText: `${name}:` }),
+    ).toContainText("needs a browser permission the search cannot check yet");
+  await expect(
+    sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
+  ).toContainText(
+    "1 posting found, 0 new. Postings were read on this website, but saving them comes with a later update.",
+  );
+  await expect(summary).not.toContainText(/[–—]| - /);
+  await shots(page, "summary");
+  await page.keyboard.press("Escape");
+  await expect(summary).toBeHidden();
+
   let last: Sweep | undefined;
   await expect
     .poll(
@@ -297,24 +318,12 @@ test("the websites end in words, the company page's posting is saved, nothing is
   };
   expect(after.revision).toBe(revision);
 
-  // The summary names every website and says why each ended as it did.
+  // The postings list, after the summary: the company page's posting, not the one read only.
   await page.goto("/jobs");
-  const sites = page.getByRole("region", { name: "Job sites in your browser" });
-  await expect(sites).toBeVisible({ timeout: 30_000 });
-  for (const name of WEBSITES)
-    await expect(
-      sites.getByRole("listitem").filter({ hasText: `${name}:` }),
-    ).toContainText("needs a browser permission the search cannot check yet");
-  await expect(
-    sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
-  ).toContainText(
-    "1 posting found, 0 new. Postings were read on this website, but saving them comes with a later update.",
-  );
   const main = page.getByRole("main");
   await expect(main).toContainText("AI Engineer");
   await expect(main).not.toContainText("Robot Engineer");
   await expect(page.locator("body")).not.toContainText(/[–—]| - /);
-  await shots(page, "summary");
   expect(errors).toEqual([]);
 });
 
