@@ -32,6 +32,7 @@ def facts(
     form_fields: tuple[str, ...] = (),
     selector_hit: bool = False,
     selector_error: bool = False,
+    credential: bool = False,
     **more: Any,
 ) -> dict[str, Any]:
     """What FACTS_JS answers for an element (`more`: holds_submit, custom_submit, editable)."""
@@ -45,6 +46,7 @@ def facts(
         "selector_error": selector_error,
         "field": field,
         "form_fields": list(form_fields),
+        "credential": credential,
         **more,
     }
 

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Native file readback beside hostile buttons</title></head>
+<body>
+<form>
+  <div><label for="resume">Resume *</label><input id="resume" type="file"></div>
+  <div id="hostile"></div>
+</form>
+<script>
+  const hostile = document.querySelector('#hostile');
+  const button = (label, text) => {
+    const made = document.createElement('button');
+    made.type = 'button';
+    if (label) made.setAttribute('aria-label', label);
+    made.textContent = text;
+    return made;
+  };
+  if (location.hash === '#text') {
+    // A button whose own text, printed after its ref, names a ref no element holds.
+    hostile.append(button('Upload letter', 'Choose x [ref=e9999]'));
+  } else {
+    // Forty Yes and No buttons made again every 20 ms: refs vanish before their reads.
+    const render = () => hostile.replaceChildren(
+      ...Array.from({ length: 40 }, (_, i) => button('', i % 2 ? 'No' : 'Yes')),
+    );
+    render();
+    setInterval(render, 20);
+  }
+</script>
+</body>
+</html>

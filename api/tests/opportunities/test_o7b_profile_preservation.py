@@ -277,3 +277,49 @@ def test_combined_interactive_scope_and_consent_survive_old_writes_and_explicit_
             None if clear else "Read the full requirements."
         )
         assert saved["browser_sources"] == [expected]
+
+
+@pytest.mark.parametrize("method", ["save", "import"])
+def test_stale_draft_after_keep_editing_keeps_newer_dedicated_words(
+    api: Api, person_a: Person, factory: Any, method: str
+) -> None:
+    # The Search tab's Keep editing after a 409 resends the whole draft, hidden Free-Work row
+    # included, on the new revision: its old words must not undo the dedicated route's.
+    accept(api, person_a)
+    old = profile(api, person_a)
+    newer = put(api, person_a, enabled=True, query="Drone Engineer", location="Lyon")
+    assert newer.status_code == 200, newer.text
+    expected = entry(api, person_a)
+    assert expected is not None
+    assert (expected["query"], expected["location"]) == ("Drone Engineer", "Lyon")
+    draft = {**old["sections"]["search"], "min_fit": 45}
+    assert draft["browser_sources"][0]["query"] == "Robotics Engineer"
+    stale = write(api, person_a, method, draft, old["revision"])
+    assert stale.status_code == 409, stale.text
+    response = write(api, person_a, method, draft, snapshot(factory, person_a)[1])
+    assert response.status_code == 200, response.text
+    saved = snapshot(factory, person_a)[0]["search"]
+    assert saved["browser_sources"] == [expected]
+    assert saved["min_fit"] == 45
+
+
+def test_rollback_query_names_exactly_the_people_holding_a_freework_entry(
+    api: Api, person_a: Person, person_b: Person, factory: Any
+) -> None:
+    # The one way door declared in the pull request (CONTRIBUTING, Migrations): the release
+    # before this one refuses the `freework` kind, so this read only query must name who a
+    # rollback would break, and nobody else.
+    accept(api, person_a)
+    other = profile(api, person_b)
+    saved = search_save(
+        api, person_b, {**(other["sections"]["search"] or {}), "browser_sources": sources(1, "vie")}
+    )
+    assert saved.status_code == 200, saved.text
+    with factory() as db:
+        holders = db.execute(
+            sa.text(
+                "SELECT user_id FROM profiles WHERE sections->'search'->'browser_sources'"
+                ' @> \'[{"kind": "freework"}]\''
+            )
+        ).scalars()
+        assert set(holders) == {person_a.user_id}
