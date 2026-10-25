@@ -180,7 +180,7 @@ def test_an_approval_submits_once_and_records_the_application(
     assert form.gate_clicks[0]["capability"] == CAPABILITY
     assert form.submit_clicks == 0  # the adapter never clicked it
     (asked,) = leases.acquired
-    assert asked["purpose"] == "apply_submit"
+    assert (asked["purpose"], asked["application_id"]) == ("apply_submit", str(app_id))
     assert len(leases.released) == 1
     # the approved values were typed again, the left fields were not touched
     typed = [c[1]["text"] for c in form.calls if c[0] == "type"]

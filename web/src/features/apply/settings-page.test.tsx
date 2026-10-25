@@ -189,6 +189,17 @@ const cardOf = (heading: string) =>
     .closest<HTMLElement>("[data-slot=card]") as HTMLElement;
 
 describe("the Applications page", () => {
+  it("has a distinct settings title and heading", async () => {
+    fakeSettings();
+    fakeCaps([]);
+    fakeBank([]);
+    await openPage();
+    expect(document.title).toMatch(/^Application settings/);
+    expect(
+      screen.getByRole("heading", { name: "Application settings" }),
+    ).toBeVisible();
+  });
+
   it("labels the three thresholds apart and changes only the third", async () => {
     fakeSettings();
     fakeCaps([]);

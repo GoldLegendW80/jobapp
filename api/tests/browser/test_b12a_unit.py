@@ -504,6 +504,8 @@ def test_a_stop_that_fails_in_the_swap_ends_the_lease_and_starts_nothing() -> No
         assert w.manager.current() is None
         assert w.manager.last_end["reason"] == "browser_failed"
         assert not w.running
+        assert (await w.lease()) is w.manager.current()  # that end left browserd free
+        assert len(w.started) == 2
 
     run(go())
 

@@ -57,7 +57,6 @@ from app.apply.ats.base import (
     Adapter,
     Discovery,
     Node,
-    Skipped,
     Tools,
     discover_fields,
     fold,
@@ -255,7 +254,7 @@ class Generic(Adapter):
             mark = f"s{self.step + 1}/"
             found.fields = [_rekey(f, mark + f.key) for f in found.fields]
             found.skipped = [
-                Skipped(f"Step {self.step + 1}: {s.label}", s.role, s.reason) for s in found.skipped
+                replace(s, label=f"Step {self.step + 1}: {s.label}") for s in found.skipped
             ]
         return found, code
 

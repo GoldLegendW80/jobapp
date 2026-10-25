@@ -29,7 +29,7 @@ const shots = makeShots("identity-i4", "invites");
  *     pnpm --dir web exec playwright test invites.spec.ts
  *   docker compose -p jobapp-i4 -f compose.yml down -v
  *
- * On the Jetson, through the public URL, with throwaway accounts removed afterwards (README):
+ * On the Jetson, through the public URL, with throwaway accounts removed afterwards (docs/runbooks/accounts.md):
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
  *     E2E_FRIEND_EMAIL=e2e-friend@example.org E2E_SHOT_PREFIX=jetson- \
  *     pnpm --dir web exec playwright test invites.spec.ts

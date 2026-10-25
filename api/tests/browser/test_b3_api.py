@@ -184,11 +184,31 @@ def test_a_session_does_not_end_an_agents_lease(
 
     api.client.portal.call(take)  # type: ignore[union-attr]
     shown = api.get("/api/browser", token=a).json()
-    assert shown["lease"]["purpose"] == "apply_fill"
+    assert (shown["lease"]["purpose"], shown["lease"]["application_id"]) == ("apply_fill", None)
     assert shown["holder"] == "you"
     answer = api.request("DELETE", "/api/browser/sessions/current", token=a)
     assert answer.status_code == 404
     assert api.get("/api/browser", token=a).json()["lease"]["purpose"] == "apply_fill"
+
+
+def test_the_holder_reads_the_application_of_its_submit_lease_and_b_never_does(
+    app: FastAPI, api: Api, user_a: tuple[uuid.UUID, str], user_b: tuple[uuid.UUID, str]
+) -> None:
+    a_id, a = user_a
+    store: Leases = app.state.browser_leases
+    sent = str(uuid.uuid4())
+
+    async def take() -> None:
+        got = await store.acquire(str(a_id), "apply_submit", True, application_id=sent)
+        assert got.lease is not None
+
+    api.client.portal.call(take)  # type: ignore[union-attr]
+    shown = api.get("/api/browser", token=a).json()
+    assert (shown["holder"], shown["lease"]["purpose"]) == ("you", "apply_submit")
+    assert shown["lease"]["application_id"] == sent
+    theirs = api.get("/api/browser", token=user_b[1])
+    assert (theirs.json()["holder"], theirs.json()["lease"]) == ("other", None)
+    assert sent not in theirs.text
 
 
 def test_one_profile_for_every_lease_of_a_person(

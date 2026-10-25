@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, HttpResponse } from "msw";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
@@ -24,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  toast.dismiss();
   vi.useRealTimers();
 });
 
@@ -314,6 +316,67 @@ describe("fit set by hand", () => {
 });
 
 describe("edit details", () => {
+  it("saves an unrelated title with unchanged fractional pay without writing pay", async () => {
+    const api = fakeEditableJob(
+      makeDetail({
+        pay_min: 4.35,
+        pay_max: 5.1,
+        pay_currency: "EUR",
+        pay_period: "hour",
+      }),
+    );
+    const user = userEvent.setup();
+    await openDetail();
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit details" });
+    expect(within(dialog).getByLabelText("Lowest pay")).toHaveValue("4.35");
+    await user.clear(within(dialog).getByLabelText("Title"));
+    await user.type(within(dialog).getByLabelText("Title"), "Research intern");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await screen.findByText("Details saved.");
+    expect(api.patches).toEqual([
+      {
+        title: "Research intern",
+        updated_at: "2026-10-09T08:00:00Z",
+      },
+    ]);
+    expect(screen.getByText("4.35 to 5.10 EUR an hour")).toBeVisible();
+  });
+
+  it("closes unchanged fractional pay without a write", async () => {
+    const api = fakeEditableJob(
+      makeDetail({
+        pay_min: 4.35,
+        pay_max: 4.35,
+        pay_currency: "EUR",
+        pay_period: "hour",
+      }),
+    );
+    const user = userEvent.setup();
+    await openDetail();
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit details" });
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(api.patches).toEqual([]);
+  });
+
+  it("rejects changed fractional pay while writers remain whole only", async () => {
+    const api = fakeEditableJob(makeDetail());
+    const user = userEvent.setup();
+    await openDetail();
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit details" });
+    await user.type(within(dialog).getByLabelText("Lowest pay"), "4.35");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(
+      await within(dialog).findByText(/The pay needs whole numbers/),
+    ).toBeVisible();
+    expect(api.patches).toEqual([]);
+  });
+
   it("sends only what changed and closes", async () => {
     const api = fakeEditableJob(makeDetail({ company: "Acme", url: null }));
     const user = userEvent.setup();
