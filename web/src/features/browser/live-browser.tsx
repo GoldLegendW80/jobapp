@@ -42,6 +42,7 @@ const STATUS: Record<InputHolder, string> = {
 };
 const OWN_SESSION =
   "This is your own session: you have the keyboard and the mouse.";
+const WATCHING = "You are watching your browser.";
 
 function sentence(error: unknown): string {
   return errorDetail(error) ?? describeError(error);
@@ -54,14 +55,18 @@ function sentence(error: unknown): string {
  * caller's sentence for the status line while the assistant has the browser ("The assistant is
  * filling the form"), or while the person has it (a sign in hand off). `person`: the person's own session (no assistant, browser B7), where this
  * view has the keyboard and the mouse from the start and there is nothing to take over or give
- * back. Used by Account's "Your browser" card and by the apply module's job page.
+ * back. `watchOnly`: the person only watches, with no Take over and no keyboard (the submit lease,
+ * whose read back a person's input would void). Used by Account's "Your browser" card and by the
+ * apply module's job page.
  */
 export function LiveBrowser({
   status,
   person = false,
+  watchOnly = false,
 }: {
   status?: string;
   person?: boolean;
+  watchOnly?: boolean;
 }) {
   const [viewer] = useState(() => crypto.randomUUID());
   const target = useRef<HTMLDivElement>(null);
@@ -186,7 +191,7 @@ export function LiveBrowser({
           ? (status ?? OWN_SESSION)
           : input === "you"
             ? STATUS.you
-            : (status ?? STATUS.assistant);
+            : (status ?? (watchOnly ? WATCHING : STATUS.assistant));
 
   return (
     <section
@@ -214,7 +219,7 @@ export function LiveBrowser({
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        {person ? null : input === "you" ? (
+        {person || watchOnly ? null : input === "you" ? (
           <Button
             type="button"
             disabled={busy}
@@ -264,17 +269,19 @@ export function LiveBrowser({
         )}
       </div>
       {/* The on screen keyboard of a phone: what is typed here goes to the browser, key by key. */}
-      <textarea
-        ref={keyboard}
-        aria-label="Type into your browser"
-        autoCapitalize="off"
-        autoComplete="off"
-        autoCorrect="off"
-        spellCheck={false}
-        onInput={typed}
-        onKeyDown={special}
-        className="sr-only"
-      />
+      {watchOnly ? null : (
+        <textarea
+          ref={keyboard}
+          aria-label="Type into your browser"
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          onInput={typed}
+          onKeyDown={special}
+          className="sr-only"
+        />
+      )}
     </section>
   );
 }

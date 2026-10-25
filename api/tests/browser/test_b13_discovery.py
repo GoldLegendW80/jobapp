@@ -388,6 +388,16 @@ def test_destructive_path_families_refuse_actions_and_requests(endpoint, variant
         "/jobs/software-engineer",
         "/jobs/pays",
         "/jobs/paysage",
+        # Neighbours of the apply shaped paths (round 3) that are job slugs, not applications.
+        "/jobs/applied-scientist",
+        "/jobs/applied-ai-engineer",
+        "/jobs/supply-chain-analyst",
+        "/jobs/candidate-experience-lead",
+        "/jobs/solicitor",
+        "/jobs/happy-path-engineer",
+        "/jobs/bewertung-analyst",
+        "/jobs/postdoc-robotics",
+        "/careers/candidates",
     ],
 )
 def test_supported_read_destinations_stay_untouched(path):
@@ -468,3 +478,49 @@ def test_memory_eviction_reaches_discovery_context_and_stops_its_tools():
     assert not persistent.closed
     assert events == [{"event": "tab_closed", "reason": "memory", "used_mib": 0}]
     assert call(native, "browser_snapshot", {}, tab)["error"] == "unsupported_discovery"
+
+
+APPLY_SHAPED = [
+    "/easyapply",
+    "/quickapply",
+    "/oneclickapply",
+    "/applynow",
+    "/reapply",
+    "/jobs/42/easyapply",
+    "/jobs/42/apply",
+    "/jobs/42/candidature",
+    "/candidature-simplifiee",
+    "/candidatures",
+    "/candidater",
+    "/candidatez",
+    "/jobs/robot/postuler",
+    "/postulation",
+    "/bewerben",
+    "/jetzt-bewerben",
+    "/jetztbewerben",
+    "/bewerbung",
+    "/bewirb-dich",
+    "/solliciteer",
+    "/sollicitatie",
+    "/candidatura",
+]
+
+
+@pytest.mark.parametrize("path", APPLY_SHAPED)
+@pytest.mark.parametrize(
+    "variant", [str, str.upper, str.title, lambda p: p + "/", lambda p: p + ".html", "{}?page=2"]
+)
+def test_apply_shaped_paths_refuse_links_and_requests(path, variant):
+    path = variant.format(path) if isinstance(variant, str) else variant(path)
+    url = "https://jobs.example.test" + path
+    shape = search(href=url)
+    shape.update(tag="a", type="", names=["Next page"])
+    assert not discovery.read_url(url, "https://jobs.example.test/")
+    assert discovery.verdict(shape, "browser_click", "https://jobs.example.test/")
+
+
+@pytest.mark.parametrize(
+    "path", ["/ＥａｓｙＡｐｐｌｙ", "/Quick_Apply", "/QuickApply", "/easy%61pply"]
+)
+def test_apply_shaped_paths_refuse_in_other_spellings(path):
+    assert not discovery.read_url("https://jobs.example.test" + path, "https://jobs.example.test/")

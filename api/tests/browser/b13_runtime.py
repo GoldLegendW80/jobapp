@@ -28,14 +28,17 @@ STEPS = [
 
 
 class Recording(FakeBackend):
-    def __init__(self):
+    """Plays `steps`; `obeys_page` is a hostile model whose calls are expected to be refused."""
+
+    def __init__(self, steps=STEPS, obeys_page=False):
         super().__init__(speed=0)
+        self.steps, self.obeys_page = steps, obeys_page
         self.results = []
 
     async def stream(self, request):
         variables = {"session_id": str(uuid.uuid4()), "model": request.options.model}
         snapshot = ""
-        for index, (name, arguments) in enumerate(STEPS):
+        for index, (name, arguments) in enumerate(self.steps):
             args = dict(arguments)
             if isinstance(args.get("ref"), tuple):
                 role, label = args["ref"]
@@ -63,9 +66,12 @@ class Recording(FakeBackend):
             )
             result = await self._call(request, block)
             self.results.append(result)
-            assert not result["is_error"], result
+            assert self.obeys_page or not result["is_error"], result
             text = result["content"][0]["text"]
-            payload = json.loads(text)
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                payload = {}  # a plain refusal sentence
             snapshot = payload.get("untrusted_page_snapshot", snapshot)
             yield parse_message(
                 {
@@ -74,4 +80,4 @@ class Recording(FakeBackend):
                     "message": {"role": "user", "content": [result]},
                 }
             )
-        yield self._result(variables, time.monotonic(), len(STEPS), "success", False)
+        yield self._result(variables, time.monotonic(), len(self.steps), "success", False)
