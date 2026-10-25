@@ -7,6 +7,7 @@ from app.apply.ats.base import Adapter
 from app.apply.ats.generic import Generic
 from app.apply.ats.greenhouse import Greenhouse
 from app.apply.ats.lever import Lever
+from app.apply.ats.linkedin import LinkedIn
 
 ADAPTERS: tuple[type[Adapter], ...] = (
     Ashby,
@@ -15,7 +16,7 @@ ADAPTERS: tuple[type[Adapter], ...] = (
     # Workday,  # apply A15, workday.py
     # GoogleCareers,  # apply A15, google_careers.py
     # Vie,  # apply A15, vie.py
-    # LinkedIn,  # apply A16, linkedin.py
+    LinkedIn,  # apply A16: Easy Apply, only with the person's LinkedIn opt in (browser B10)
     Generic,  # last: any page that shows a field, filled by the form agent in Review first only
 )
 

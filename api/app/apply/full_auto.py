@@ -73,7 +73,7 @@ from app.apply.models import (
 )
 from app.jobs.models import Job
 
-FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever", "email"})
+FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever", "email", "linkedin"})
 LIKE_VALID = timedelta(days=7)
 DESIGNATED = "designated"
 

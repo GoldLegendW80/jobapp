@@ -42,7 +42,9 @@ jobs(.eu).lever.co/<org>/<id>. A path is read only on the ATS's own domain or a 
 Any other address is `url:` and the jobs module's normalised address (`slug.url_key`: http and
 https alike, host lowercase without www, no fragment, no trailing slash, no tracking parameter).
 Hosts are read through IDNA, including full width dots, and legacy stored `url:` keys are read
-through the current canonical rules. An address that is not http or https has no form (`None`).
+through the current canonical rules. LinkedIn job aliases share duplicate identity, including
+http/https as ordinary URL keys already did; its adapter and consent still inspect the original
+address. An address that is not http or https has no form (`None`).
 
 Declared open points (what these rules still miss, each toward applying):
 - a never apply term in another language than the rule's ("sécurité" for "security") or a
@@ -82,7 +84,7 @@ from app.jobs.never_apply import NeverApplyRule, fold, matching_rule
 SAME_ROLE_DAYS = 180
 FULL_AUTO_TEXT_CHARS = 1500
 APPLIED_STATUSES = frozenset({JobStatus.applied, JobStatus.interview, JobStatus.rejected})
-SUPPORTED_ATS = ("ashby", "greenhouse", "lever")
+SUPPORTED_ATS = ("ashby", "greenhouse", "lever", "linkedin")
 
 NEVER_APPLY = "Your rules exclude this role."
 NEVER_APPLY_REFUSED = (
@@ -239,6 +241,7 @@ def unstub(url: str, stub_base: str | None) -> str:
     first, _, tail = rest.partition("/")
     hosts = {"ashby": "jobs.ashbyhq.com", "greenhouse": "boards.greenhouse.io"}
     hosts["lever"] = "jobs.lever.co"
+    hosts["linkedin"] = "www.linkedin.com"
     return f"https://{hosts[first]}/{tail}" if first in hosts else url
 
 
@@ -267,7 +270,10 @@ def ats_of(url: str) -> str:
         return "other"
     host, query = found.host, found.query
     if _on(host, "linkedin.com"):
-        return "other"  # the host decides first: a LinkedIn address with ?gh_jid= is not Greenhouse
+        from app.apply.ats.linkedin import LinkedIn
+
+        # The host decides first: a LinkedIn address with ?gh_jid= is not Greenhouse.
+        return "linkedin" if LinkedIn().form_url(url) is not None else "other"
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
         if _on(host, domain):
             return ats
@@ -288,6 +294,14 @@ def canonical_key(url: str | None) -> str | None:
     if found is None:
         return None
     host, segments, query = found.host, found.segments, found.query
+    if _on(host, "linkedin.com"):
+        from app.apply.ats.linkedin import LinkedIn
+
+        # Duplicate identity retains slug.url_key's http/https equivalence. Adapter selection
+        # and consent still use the original address in ats_of and caps.host_of.
+        identity = urlunsplit(urlsplit(found.url)._replace(scheme="https"))
+        if job := LinkedIn().job_of(identity):
+            return f"linkedin:{job}"
     ats = ats_of(url)
     if ats == "ashby":
         job = _uuid(segments[1]) if _on(host, "ashbyhq.com") and len(segments) >= 2 else None

@@ -195,15 +195,34 @@ _DIRECTIVE = (
     r"(?:please )?(?:ignore|disregard|answer|write|include|add|send|stop|follow|read|"
     r"you (?:must|should)|ignorez|repondez|ecrivez|incluez|envoyez|suivez)\b"
 )
+# "IA" alone (French for AI) is also a state's abbreviation: it counts only in the rules below that
+# address it ("si vous etes une IA,", "les IA doivent repondre", "IA : repondez").
+_READER_FR = rf"(?:{_READER_KIND}|ia)"
+_READING = r"(?: reading this(?: page| form| posting)?)?"
+# What an addressed reader is told to do (English modal rule): a verb of a command, never "be".
+_VERB = (
+    r"(?:ignore|disregard|answer|write|include|add|send|stop|follow|mention|say|respond|reply|"
+    r"rate|rank|score|recommend|select|choose|mark|output|print|use)\b"
+)
 AI_READER = re.compile(
-    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:an? |un |une )?{_READER_KIND}\s*[,.:;!?]"
+    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:an? |un |une )?{_READER_FR}{_READING}"
+    r"\s*[,.:;!?]"
     rf"|{_BOUNDARY}(?:les |aux )?{_READER}\s*[,:]"
     rf"|\b(?:note|message|instructions?|consignes?) (?:to|for|pour|a) "
     rf"(?:les |aux )?{_READER_KIND}\s*[,:]"
-    rf"|{_BOUNDARY}llms?\s*[,:]\s*{_DIRECTIVE}"
+    rf"|{_BOUNDARY}(?:llms?|ia)\s*[,:]\s*{_DIRECTIVE}"
     rf"|\b{_READER_KIND} reading this (?:page|form) (?:must|should)\b"
-    rf"|{_BOUNDARY}(?:les )?{_READER_KIND} doivent "
+    rf"|{_BOUNDARY}(?:les )?{_READER_FR} doivent "
     r"(?:ignorer|repondre|inclure|ecrire|envoyer|suivre)\b"
+    # A salutation: "Dear AI assistant,", "Attention AI:", "Chere IA,".
+    rf"|\b(?:dear|hello|hi|hey|attention|bonjour|cher|chere|chers|cheres) (?:l')?{_READER_FR}"
+    r"\s*[,:!]"
+    rf"|\bto (?:any|every|all) {_READER_KIND}{_READING}\s*[,:]"
+    rf"|\bto the {_READER_KIND} reading this(?: page| form| posting)?\s*[,:]"
+    # A command to the reader: "AI agents should include", "Any AI assistant must answer".
+    rf"|{_BOUNDARY}(?:all |any |every )?{_READER_KIND}{_READING} (?:must|should) {_VERB}"
+    # An aside in brackets, then a command: "(AI assistants: answer yes.)".
+    rf"|\(\s*(?:les |aux )?{_READER_FR}\s*:\s*{_DIRECTIVE}"
 )
 # A model's own name is also a person's (a recruiter named Claude): only an address counts.
 _VERSION = r"\d+(?:\.\d+)?"
@@ -220,7 +239,9 @@ AI_NAMED = re.compile(
 
 def addressed(text: str) -> bool:
     """The page names an AI reader (SPEC-apply: a form that addresses AI assistants is reported).
-    Reported only: nothing the page asks is done."""
+    Reported only: nothing the page asks is done. Still missed: an address in another language
+    than English or French, a reader named otherwise ("bot", "crawler", "GPT-like tool"), and a
+    command without a salutation, a colon or a modal ("AI assistants answer yes here")."""
     folded = "\n".join(fold(line) for line in text.splitlines())
     return AI_READER.search(folded) is not None or AI_NAMED.search(folded) is not None
 
