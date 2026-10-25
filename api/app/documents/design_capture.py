@@ -1,12 +1,16 @@
 """The design capture of an uploaded CV (task D25b; SPEC-documents.md, "Design capture of an
 upload", steps 1 to 6): the second step of a conversion, after its content.
 
-**The request.** `enqueue(final, document_id)` is the hook the base writer's final hook calls once
-an upload's content conversion is done (D24); `request` makes one `template_capture` generation of
-the base CV, `queued`, or `waiting` with `consent` or `credential` (`writer_base.wait_reason`),
-and starts its run (`writer_design`); `start_ready`, which `writer_base.start_ready` calls, starts
-a waiting one once its reason is gone (D10's tick). Its estimate and ceiling are
-`design_estimate`'s. The run's input holds ids, the file's kind and numbers only.
+**The request.** `prepare_after_conversion` records the capture of an upload whose content
+conversion is done (D24) in the conversion's own transaction, under a savepoint: one
+`template_capture` generation of the base CV, `queued`, `waiting` with `consent` or `credential`
+(`writer_base.wait_reason`), or `failed` with `binding_gone` when the file's bytes are gone.
+`start_prepared` starts that generation's run (`writer_design`) once the bytes and the reason to
+wait are read again under the document lock: `enqueue(final, generation_id)` calls it after the
+conversion's commit, `request` right after preparing one, and `start_ready`, which
+`writer_base.start_ready` calls, for each open one (D10's tick); one that meets the person's
+limit of active runs stays `queued`. Its estimate and ceiling are `design_estimate`'s. The run's
+input holds ids, the file's kind and numbers only.
 
 **The inputs** (`read_inputs`), read by the run's tools from the ingestion document's bytes,
 never stored: for a PDF the sandbox's layout extraction (`design_pdf`) and its page render of the
@@ -460,24 +464,17 @@ class CaptureRefusedError(Exception):
     """`not_uploaded`: the document is not a base CV converted from an upload of the person."""
 
 
-def request(
+def _prepare(
     db: Session,
-    user_id: uuid.UUID,
-    document_id: uuid.UUID,
+    document: Document,
     *,
     at: datetime,
     trigger: GenerationTrigger = GenerationTrigger.click,
-    script: str | None = None,
-    settings: Any = None,
-) -> tuple[DocumentGeneration, uuid.UUID | None]:
-    """A capture generation of the base CV, started when it may: `(generation, run id to
-    enqueue after the caller's commit)`. Raises CaptureRefusedError, store.GenerationOpenError."""
-    from app.agents import runs as agent_runs
-    from app.documents import design_estimate, generate, writer_base, writer_design
+) -> DocumentGeneration:
+    """Price and persist capture intent under the document lock, without starting a run."""
+    from app.documents import design_estimate, generate, writer_base
 
-    document = store.lock_document(db, user_id, document_id)
-    if document.scope != Scope.base or document.source_document_id is None:
-        raise CaptureRefusedError("not_uploaded")
+    user_id = document.user_id
     figures = design_estimate.for_capture(db, user_id, document)
     kept = db.scalar(
         sa.select(sa.func.coalesce(sa.func.octet_length(IngestionDocument.raw), 0)).where(
@@ -509,22 +506,105 @@ def request(
         generation.error, generation.finished_at = "binding_gone", at
         db.flush()
         logger.info("documents.design.no_bytes", extra={"generation_id": str(generation.id)})
-    if status is not GenerationStatus.queued:
-        return generation, None
+    return generation
+
+
+def prepare_after_conversion(
+    db: Session, conversion: DocumentGeneration, *, at: datetime
+) -> DocumentGeneration | None:
+    """Intent in a fresh conversion's completion transaction, even if its source is gone. It
+    has its own savepoint: a preparation that fails records no intent, logs its class and
+    returns None, and the converted content still commits (SPEC-documents.md, Failure modes)."""
+    if (
+        conversion.mode is not GenerationMode.base_upload
+        or conversion.status is not GenerationStatus.done
+    ):
+        raise ValueError("not a completed upload conversion")
     try:
-        run = writer_design.start(db, generation, at=at, script=script, settings=settings)
-    except agent_runs.ActiveRunsError:
-        return generation, None  # stays `queued`: start_ready takes it later
-    return generation, run.id
+        with db.begin_nested():
+            document = store.lock_document(db, conversion.user_id, conversion.document_id)
+            return _prepare(db, document, at=at)
+    except Exception as exc:
+        # The class only: a database error's message can carry values.
+        logger.error(
+            "documents.design.not_prepared",
+            extra={"generation_id": str(conversion.id), "error": type(exc).__name__},
+        )
+        return None
+
+
+def request(
+    db: Session,
+    user_id: uuid.UUID,
+    document_id: uuid.UUID,
+    *,
+    at: datetime,
+    trigger: GenerationTrigger = GenerationTrigger.click,
+    script: str | None = None,
+    settings: Any = None,
+) -> tuple[DocumentGeneration, uuid.UUID | None]:
+    """Prepare and attempt a capture; the caller commits before enqueueing its run ID."""
+    document = store.lock_document(db, user_id, document_id)
+    if document.scope != Scope.base or document.source_document_id is None:
+        raise CaptureRefusedError("not_uploaded")
+    generation = _prepare(db, document, at=at, trigger=trigger)
+    return generation, start_prepared(
+        db, user_id, generation.id, at=at, script=script, settings=settings
+    )
+
+
+def start_prepared(
+    db: Session,
+    user_id: uuid.UUID,
+    generation_id: uuid.UUID,
+    *,
+    at: datetime,
+    script: str | None = None,
+    settings: Any = None,
+) -> uuid.UUID | None:
+    """Start only this owned capture, after refreshing its binding and permission."""
+    from app.agents import runs as agent_runs
+    from app.documents import writer_base, writer_design
+
+    generation = db.get(DocumentGeneration, generation_id)
+    if (
+        generation is None
+        or generation.user_id != user_id
+        or generation.mode is not GenerationMode.template_capture
+    ):
+        return None
+    try:
+        document = store.lock_document(db, user_id, generation.document_id)
+    except store.NotFoundError:
+        return None
+    db.refresh(generation)
+    if generation.status not in (GenerationStatus.waiting, GenerationStatus.queued):
+        return None
+    kept = db.scalar(
+        sa.select(sa.func.coalesce(sa.func.octet_length(IngestionDocument.raw), 0)).where(
+            IngestionDocument.id == document.source_document_id,
+            IngestionDocument.user_id == user_id,
+        )
+    )
+    reason = writer_base.wait_reason(db, user_id)
+    if not kept:
+        generation.status, generation.wait_reason = GenerationStatus.failed, None
+        generation.error, generation.finished_at = "binding_gone", at
+        logger.info("documents.design.no_bytes", extra={"generation_id": str(generation.id)})
+    elif reason is not None:
+        generation.status, generation.wait_reason = GenerationStatus.waiting, reason
+    else:
+        try:
+            return writer_design.start(db, generation, at=at, script=script, settings=settings).id
+        except agent_runs.ActiveRunsError:
+            # Set here, not before the start: its refresh drops changes not yet flushed.
+            generation.status, generation.wait_reason = GenerationStatus.queued, None
+    db.flush()
+    return None
 
 
 def start_ready(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Any = None) -> list:
     """Start the person's open captures that may start now (writer_base.start_ready's twin)."""
-    from app.agents import runs as agent_runs
-    from app.documents import writer_base, writer_design
-
-    if writer_base.wait_reason(db, user_id) is not None:
-        return []
     started: list[uuid.UUID] = []
     open_ids = db.scalars(
         sa.select(DocumentGeneration.id)
@@ -536,33 +616,23 @@ def start_ready(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Any 
         .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
     ).all()
     for generation_id in open_ids:
-        generation = db.get(DocumentGeneration, generation_id)
-        if generation is None:
-            continue
-        try:
-            started.append(writer_design.start(db, generation, at=at, settings=settings).id)
-        except agent_runs.ActiveRunsError:
-            generation.status, generation.wait_reason = GenerationStatus.queued, None
-            break
-        except ValueError:
-            continue
+        run_id = start_prepared(db, user_id, generation_id, at=at, settings=settings)
+        if run_id is not None:
+            started.append(run_id)
     db.flush()
     return started
 
 
-async def enqueue(final: FinalRun, document_id: uuid.UUID) -> None:
-    """Start the design capture of a converted base CV (D24's hook)."""
+async def enqueue(final: FinalRun, generation_id: uuid.UUID) -> None:
+    """Dispatch the exact capture prepared by the committed conversion, at most once."""
     from app import queue as queues
     from app.documents import generate
 
     def made() -> uuid.UUID | None:
         with final.sessions() as db:
-            try:
-                _, run_id = request(
-                    db, final.user_id, document_id, at=final.clock(), settings=final.settings
-                )
-            except (CaptureRefusedError, store.GenerationOpenError, store.NotFoundError):
-                return None
+            run_id = start_prepared(
+                db, final.user_id, generation_id, at=final.clock(), settings=final.settings
+            )
             store.commit(db)
             return run_id
 
