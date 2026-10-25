@@ -1237,6 +1237,10 @@ def _stored_section(model: BaseModel) -> dict[str, Any]:
         for name in INTERACTIVE_FIELDS:
             if name not in model.model_fields_set:
                 data.pop(name)
+        # Stored only once a dedicated writer records a decision: the release before this one
+        # refuses the key, so an empty map would make every saved Search a rollback hazard.
+        if not data["platform_consents"]:
+            data.pop("platform_consents")
     return data
 
 
@@ -1463,6 +1467,10 @@ class ExportDocument(BaseModel):
         body = self.model_dump(mode="json", exclude={"base_revision"})
         if body["photo"] is None:
             del body["photo"]
+        # The stored form (_stored_section): no permission map until a dedicated writer records
+        # a decision, so an export of a person without one stays readable by older releases.
+        if not body["sections"]["search"]["platform_consents"]:
+            del body["sections"]["search"]["platform_consents"]
         return json.dumps(body, ensure_ascii=False, indent=2) + "\n"
 
 

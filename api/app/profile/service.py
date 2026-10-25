@@ -27,9 +27,12 @@ section's `linkedin` entry, `enabled`, `accepted_at` and `text_version` keep the
 `linkedin_consent=True`, which only PUT /api/browser/linkedin does (it shows the sentence and
 records the person's accept). The words and the location of the entry are saved as sent, and an
 entry left out removes it, which turns LinkedIn off.
-Free-Work consent follows the same dedicated-route rule, but an omitted Free-Work entry is
-retained: generic Search saves and imports cannot remove its protected settings. Restoring it
-must still satisfy the Search rules, including the ten-source limit, before anything is written.
+Free-Work consent follows the same dedicated-route rule, and goes further: once stored, its words
+and location also keep their stored values on every other save and import (a generic save that
+creates the entry keeps them as sent, off and unaccepted), and an omitted Free-Work entry is
+retained, so generic Search saves and imports cannot remove or rewrite its protected settings.
+Restoring it must still satisfy the Search rules, including the ten-source limit, before anything
+is written.
 The separate `platform_consents` map belongs to the browser: generic saves and imports keep it,
 and a dedicated platform writer can update only its own entry under the same revision lock.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
@@ -138,6 +141,9 @@ def _keep_consent(
         **data,
         "platform_consents": consents,
     }
+    if not consents:
+        # No dedicated decision yet: store no map at all (schemas._stored_section).
+        del data["platform_consents"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data
@@ -161,6 +167,10 @@ def _keep_consent(
         consent["enabled"] = consent["enabled"] is True
         if (consent["accepted_at"] is None) != (consent["text_version"] is None):
             consent = {"enabled": False, "accepted_at": None, "text_version": None}
+        if source["kind"] == "freework" and source["kind"] in previous:
+            # A stored Free-Work entry's words change through its own route only: a stale draft
+            # (a 409 then Keep editing, an old export) must not undo a newer dedicated save.
+            consent |= {key: before.get(key) for key in ("query", "location")}
         kept.append({**source, **consent})
     result = {**data, "browser_sources": kept}
     if restored:
@@ -189,7 +199,8 @@ def save_section(
     is not the stored revision, and ReservedFieldError when a `preferences` save changes the
     onboarding dates. `onboarding_sent` names the onboarding keys the client sent (None: all of
     them): a key left out keeps its stored value, and so do the steps passed. The LinkedIn
-    consent of a `search` section is kept as stored unless `linkedin_consent` (the module
+    consent of a `search` section is kept as stored unless `linkedin_consent`, and the Free-Work
+    entry (consent, words and location) unless `platform_consent="freework"` (the module
     docstring).
     """
     if section not in SECTIONS:

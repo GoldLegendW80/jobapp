@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 
 from app.opportunities.platforms import guard
 from app.profile import schemas, service
@@ -65,7 +66,7 @@ def test_default_off_current_acceptance_server_time_and_person_isolation(
     assert state["text_version"] == 1
     assert state["text"] == TEXT
     assert put(api, person_a, kind, enabled=False).status_code == 200
-    assert profile(api, person_a)["sections"]["search"].get("platform_consents", {}) == {}
+    assert "platform_consents" not in (profile(api, person_a)["sections"]["search"] or {})
     assert put(api, person_a, kind, enabled=True).status_code == 409
     assert put(api, person_a, kind, enabled=True, accept_version=2).status_code == 409
     accepted = accept(api, person_a, kind)
@@ -187,7 +188,7 @@ def test_generic_writes_keep_map_off_and_interactive_omission_or_explicit_clear(
         api, person_a, "import" if method == "cli" else method, forged, current["revision"]
     )
     assert response.status_code == 200, response.text
-    assert profile(api, person_a)["sections"]["search"]["platform_consents"] == {}
+    assert "platform_consents" not in profile(api, person_a)["sections"]["search"]
     accept(api, person_a, kind)
     assert put(api, person_a, kind, enabled=False).status_code == 200
     expected = deepcopy(profile(api, person_a)["sections"]["search"]["platform_consents"])
@@ -363,3 +364,26 @@ def test_held_off_update_makes_waiting_generic_write_stale(
     saved = snapshot(factory, person_a)
     assert saved[1] == old["revision"] + 1
     assert saved[0]["search"]["platform_consents"]["indeed"]["enabled"] is False
+
+
+def test_rollback_query_names_exactly_the_people_holding_a_platform_decision(
+    api: Api, person_a: Person, person_b: Person, factory: Any
+) -> None:
+    # The one way door declared in the pull request (CONTRIBUTING, Migrations): the release
+    # before this one refuses the `platform_consents` key, so it is stored only once a dedicated
+    # writer records a decision, and this read only query names exactly who a rollback breaks.
+    accept(api, person_a, "indeed")
+    assert put(api, person_a, "indeed", enabled=False).status_code == 200
+    assert put(api, person_b, "welcome_to_the_jungle", enabled=False).status_code == 200
+    other = profile(api, person_b)
+    saved = search_save(api, person_b, {**(other["sections"]["search"] or {}), "min_fit": 40})
+    assert saved.status_code == 200, saved.text
+    assert "platform_consents" not in profile(api, person_b)["sections"]["search"]
+    with factory() as db:
+        holders = db.execute(
+            sa.text(
+                "SELECT user_id FROM profiles"
+                " WHERE sections->'search'->'platform_consents' IS NOT NULL"
+            )
+        ).scalars()
+        assert set(holders) == {person_a.user_id}
