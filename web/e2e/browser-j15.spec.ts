@@ -36,9 +36,10 @@ import {
  *   fewer than the page cap (finder.PAGES_MAX, 20).
  * - Reopened at 375 px in the dark, by keyboard, the setup holds her websites and criteria.
  *
- * What the stack does not do yet, so this journey asserts the current truth: the four job
- * websites end "not opened" because the per website permission check of the search (#631) is
- * not wired, and a posting read on a website is counted but not saved (J11, #632 and #655).
+ * What the stack does not do yet, so this journey asserts the current truth: the job websites
+ * with a permission open the pages service instead of their real host and no fake of their
+ * search exists yet (browser B14, #631, wires the permission check), and a posting read on a
+ * website is counted but not saved (J11, #632 and #655).
  * When those land, the matching assertions flip (the PR of J15 lists them).
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
@@ -231,10 +232,13 @@ test("the websites end in words, the company page's posting is saved, nothing is
   const sites = summary.getByRole("region", {
     name: "Job sites in your browser",
   });
-  for (const name of WEBSITES)
-    await expect(
-      sites.getByRole("listitem").filter({ hasText: `${name}:` }),
-    ).toContainText("needs a browser permission the search cannot check yet");
+  // The search checks each website's permission (#631): the two without one are not opened.
+  for (const name of WEBSITES) {
+    const line = sites.getByRole("listitem").filter({ hasText: `${name}:` });
+    if (ALLOWED.includes(name))
+      await expect(line).not.toContainText("needs your permission");
+    else await expect(line).toContainText("needs your permission for it");
+  }
   await expect(
     sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
   ).toContainText(
@@ -259,14 +263,11 @@ test("the websites end in words, the company page's posting is saved, nothing is
   const sources = last?.sources ?? [];
   const detail = JSON.stringify(sources);
 
-  // The four job websites: chosen, named, and not opened while the search cannot check their
-  // permission (#631), whether or not A turned it on.
-  for (const kind of [
-    "linkedin",
-    "welcome_to_the_jungle",
-    "indeed",
-    "freework",
-  ]) {
+  // The four job websites, chosen and named. The search reads each one's permission (#631):
+  // LinkedIn and Free-Work, chosen without one, are never opened; Indeed and Welcome to the
+  // Jungle, turned on, pass the check and open their first page. Under BROWSER_SOURCES_BASE_URL they open the pages service's /b8/<platform>/, never
+  // the real host; what that page holds is not asserted here (no fake of their search yet).
+  for (const kind of ["linkedin", "freework"]) {
     const source = sources.find((item) => item.kind === kind);
     expect(source, detail).toMatchObject({
       mode: "llm_browser",
@@ -274,6 +275,12 @@ test("the websites end in words, the company page's posting is saved, nothing is
       result_pages: 0,
       found: 0,
     });
+  }
+  for (const kind of ["welcome_to_the_jungle", "indeed"]) {
+    const source = sources.find((item) => item.kind === kind);
+    expect(source, detail).toMatchObject({ mode: "llm_browser" });
+    expect(source?.error ?? "", detail).not.toMatch(/^permission_/);
+    expect(source?.result_pages ?? 0, detail).toBeGreaterThanOrEqual(1);
   }
   // Her own website: searched through the finder's tools, the posting read and counted, not
   // yet saved (J11).

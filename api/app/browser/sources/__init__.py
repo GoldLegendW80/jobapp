@@ -110,6 +110,10 @@ ERRORS = (
     "permission_unavailable",
     "permission_checkpoint",
     "permission_revoked",
+    # The job websites' platform guard (browser B14, app/browser/platform_policy.py).
+    "page_budget",
+    "platform_daily",
+    "platform_signin",
     # LinkedIn (browser B10, linkedin.py and app/browser/linkedin_guard.py)
     "linkedin_off",
     "linkedin_paused",
@@ -573,7 +577,8 @@ class Runner:
             entry = sweep.bind_source(
                 stats, "legacy_browser", (source.kind, source.query, source.location or ""), entry
             )
-            if source.kind in interactive_platforms:
+            protected = _protected_site(source)
+            if source.kind in interactive_platforms or protected in interactive_platforms:
                 entry.update(
                     error=NOT_STARTED,
                     phase="done",
@@ -584,6 +589,13 @@ class Runner:
                 continue
             if stop is not None:
                 sweep.finish_source(entry)
+                continue
+            if protected is not None:
+                # A careers page saved at a protected platform's address never runs the generic
+                # finder there: the platform is searched only as a chosen job website (B14).
+                entry["error"] = "permission_unavailable"
+                sweep.finish_source(entry)
+                await progress()
                 continue
             stats.current_board = source_name(source)
             await progress()
@@ -767,6 +779,16 @@ class Runner:
         )
 
 
+def _protected_site(source: BrowserSource) -> str | None:
+    """The protected platform a `site` source's address names (B14), None for any other."""
+    if source.kind != "site":
+        return None
+    from app.browser.platform_policy import CUSTOM, platform_of
+
+    platform = platform_of(source.query)
+    return None if platform == CUSTOM else platform
+
+
 def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = None) -> Runner:
     """The hook as the worker runs it: the lease store and the tools of B3 and B5 on its Redis,
     and the finder agent of B9 on the runner's context (`agent_context`, worker.agent_context)."""
@@ -789,7 +811,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         session_max_s=settings.browser_session_max_s,
         max_table=lease_max_table(settings.browser_lease_max_s),
     )
-    from app.browser import linkedin_guard
+    from app.browser import linkedin_guard, platform_policy
 
     return Runner(
         leases,
@@ -800,6 +822,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         walls={"linkedin": linkedin_guard.sweep_wall(sessions)},
         finder=None if agent_context is None else _finder(agent_context),
         add_board=_add_board(sessions),
+        interactive_policy=platform_policy.runtime_policy(settings, sessions),
     )
 
 

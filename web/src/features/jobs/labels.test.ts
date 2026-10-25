@@ -63,6 +63,10 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
   it("says each outcome of a website search in words, without dashes", () => {
     for (const code of [
       "permission_unavailable",
+      "permission_revoked",
+      "permission_checkpoint",
+      "platform_daily",
+      "platform_signin",
       "finding_persistence_pending",
       "unsupported_interaction",
       "unsupported_criteria",
