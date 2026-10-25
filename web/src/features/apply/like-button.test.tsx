@@ -10,8 +10,6 @@ import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import { LIKE_MAX } from "./queue-state";
-
 const SAME_ROLE =
   "An application to the same role at this company is already under way.";
 
@@ -94,28 +92,26 @@ describe("Like on the jobs list", () => {
     expect(liked).toHaveLength(3);
   });
 
-  it(`takes at most ${LIKE_MAX} postings a click, and says so`, async () => {
+  it("likes every selected posting in one click", async () => {
     fakeQueue([]);
     const liked = fakeLikes();
     const user = userEvent.setup();
-    const { rows } = await openJobs(LIKE_MAX + 2);
+    const { rows } = await openJobs(12);
     await user.click(
       screen.getByRole("checkbox", {
         name: "Select every posting in this view",
       }),
     );
 
-    const like = await within(bar()).findByRole("button", {
-      name: `Like the first ${LIKE_MAX}`,
-    });
+    const like = await within(bar()).findByRole("button", { name: "Like" });
     await user.click(like);
-    await screen.findByText(new RegExp(`^${LIKE_MAX} postings liked\\.`));
-    expect(liked).toEqual(rows.slice(0, LIKE_MAX).map((row) => row.id));
+    await screen.findByText("12 postings liked.", { exact: false });
+    expect(liked).toEqual(rows.map((row) => row.id));
   });
   it.each([
     [
       false,
-      "1 posting liked. In Full auto, the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.",
+      "1 posting liked. In Full auto, your Like is your approval: the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.",
     ],
     [
       true,
