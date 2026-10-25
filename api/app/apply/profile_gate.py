@@ -30,6 +30,7 @@ from app.browser import linkedin_guard
 from app.browser.tools import gate_click
 
 TTL = timedelta(hours=24)
+NO_SAVE = frozenset({"save_missing", "screenshot_or_save_missing"})
 
 
 def authorise_section(
@@ -53,12 +54,18 @@ def authorise_section(
         raise site_profile.RefusedError("not_ready")
     if values_hash != profile_sources.value_hash(part, rows):
         raise site_profile.RefusedError("stale")
-    if part.error_code or (not autosave and not part.save_name):
+    # Only a missing Save or a Save of unknown outcome needs the person before a new approval;
+    # every other code (paused, approval_expired, stale, value_differs, ...) is cleared by a fresh
+    # approval, since the save job rechecks the page, the switches and the values anyway.
+    if part.error_code in NO_SAVE or (not autosave and not part.save_name):
         raise site_profile.RefusedError("save_missing")
+    if part.error_code == "save_unknown":
+        raise site_profile.RefusedError("save_unknown")
     if run.site_kind is SiteKind.linkedin and not linkedin_guard.allowed(db, user_id, now):
         raise site_profile.RefusedError("linkedin_off")
     if autosave and not run.autosave_confirmed:
         raise site_profile.RefusedError("autosave_confirmation")
+    part.error_code = None
     made = Authorisation(
         id=uuid.uuid4(),
         user_id=user_id,
@@ -201,6 +208,11 @@ async def save_section(
             run = site_profile.lock(db, user_id, run_id)
             part = site_profile.section_of(db, run, section)
             if run.state is SiteRunState.cancelled:
+                # A cancel during the save: the section ends, it never stays in saving.
+                if part.state == "saving":
+                    part.state = "left"
+                    part.error_code = "save_unknown" if code == "save_unknown" else "cancelled"
+                    site_profile.event(part, "cancelled", services.clock(), code=code)
                 return
             part.state, part.error_code = "ready", code
             site_profile.event(

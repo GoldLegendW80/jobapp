@@ -48,6 +48,7 @@ LIVE = (
     SiteRunState.ready,
     SiteRunState.saving,
 )
+EVENTS_KEPT = 200
 AUTOSAVE_SENTENCE = (
     "This site saves as you type, so a section cannot be reviewed before it is written. "
     "Only empty fields will be filled."
@@ -63,6 +64,8 @@ SENTENCES = {
     "Review the current values and approve again.",
     "save_missing": "The section has no safely designated Save. "
     "You can skip it or save it yourself.",
+    "save_unknown": "We could not confirm whether this section was saved. "
+    "Check it on the site, then edit a field to review it again, or skip it.",
     "protected": "This protected field can only be changed by you on the site.",
     "autosave_confirmation": AUTOSAVE_SENTENCE,
 }
@@ -135,7 +138,8 @@ def section_of(db: Session, run: SiteProfileRun, key: str) -> SiteProfileSection
 
 
 def event(section: SiteProfileSection, kind: str, at: datetime, **data: Any) -> None:
-    section.events = [*section.events, {"kind": kind, "at": at.isoformat(), **data}]
+    """Append to the section's history, keeping only the last EVENTS_KEPT entries."""
+    section.events = [*section.events, {"kind": kind, "at": at.isoformat(), **data}][-EVENTS_KEPT:]
     section.updated_at = at
 
 
@@ -173,7 +177,11 @@ def start(
         valid = False
     if not valid or any(c.isspace() or ord(c) < 32 for c in url):
         raise RefusedError("bad_url")
-    host = (parsed.hostname or "").lower()
+    # One spelling per host: the kind, the LinkedIn guard and the one live run per host check
+    # all read the host Chrome opens, never the raw spelling (www.linkedin.com. is LinkedIn).
+    host = profile_sites.normal_host(parsed.hostname or "")
+    if host is None:
+        raise RefusedError("bad_url")
     kind = SiteKind(profile_sites.kind(url, stub_base))
     if kind is SiteKind.linkedin and (code := linkedin_guard.refusal(db, user_id, now)):
         raise RefusedError(code)
@@ -184,7 +192,10 @@ def start(
         sa.select(SiteProfileRun.id)
         .where(
             SiteProfileRun.user_id == user_id,
-            SiteProfileRun.host == host,
+            # Every LinkedIn host is one account: one live LinkedIn run, whatever its subdomain.
+            SiteProfileRun.site_kind == SiteKind.linkedin
+            if kind is SiteKind.linkedin
+            else SiteProfileRun.host == host,
             SiteProfileRun.state.in_(LIVE),
         )
         .limit(1)
@@ -831,6 +842,24 @@ def reset_interrupted(db: Session, now: datetime) -> int:
                     part.state, part.error_code = "ready", "save_unknown"
                     event(part, "save_interrupted", now)
         run.updated_at = now
+    # A run cancelled while its Save was in flight: the section ends as left, outcome unknown.
+    for part in db.scalars(
+        sa.select(SiteProfileSection)
+        .join(
+            SiteProfileRun,
+            sa.and_(
+                SiteProfileRun.id == SiteProfileSection.run_id,
+                SiteProfileRun.user_id == SiteProfileSection.user_id,
+            ),
+        )
+        .where(
+            SiteProfileRun.state == SiteRunState.cancelled,
+            SiteProfileSection.state == "saving",
+        )
+        .with_for_update(of=SiteProfileSection)
+    ):
+        part.state, part.error_code = "left", "save_unknown"
+        event(part, "save_interrupted", now)
     return len(runs)
 
 

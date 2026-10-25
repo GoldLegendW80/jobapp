@@ -1,8 +1,9 @@
 """Accessible section helpers, with a strict section-local Save designation."""
 
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
+from app.apply import guardrails
 from app.apply.ats import base, generic
 
 SAVE_NAMES = frozenset(
@@ -170,7 +171,22 @@ async def close_section(tools, kind: str, key: str) -> bool:
     return True
 
 
+def normal_host(hostname: str) -> str | None:
+    """The host Chrome opens for this spelling (guardrails.browser_host: IDNA 2003, the dot
+    variants, percent escapes, case, a trailing dot), or None when it does not encode or still
+    holds a character no host has: the caller refuses the address (fail closed)."""
+    try:
+        unquote(hostname).encode("idna")
+    except UnicodeError:
+        return None
+    host = guardrails.browser_host(hostname)
+    if not host or any(c in host for c in "/\\?#@%[] ") or (":" in host and ":" not in hostname):
+        return None
+    return host
+
+
 def for_host(host: str):
+    host = normal_host(host) or ""
     if host == "linkedin.com" or host.endswith(".linkedin.com"):
         from . import linkedin
 
@@ -183,8 +199,11 @@ def for_host(host: str):
 
 
 def kind(url: str, stub_base: str | None = None) -> str:
-    parsed = urlsplit(url)
-    helper = for_host(parsed.hostname or "")
+    try:
+        hostname = urlsplit(url.strip()).hostname or ""
+    except ValueError:
+        hostname = ""
+    helper = for_host(hostname)
     if helper:
         return helper.KIND
     if stub_base and url.startswith(stub_base.rstrip("/") + "/forms/a18/linkedin"):

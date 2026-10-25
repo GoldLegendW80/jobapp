@@ -524,3 +524,95 @@ def test_linkedin_checkpoint_records_seven_day_pause_before_any_write(
         days=7
     )
     assert portal.typed == []
+
+
+@pytest.mark.parametrize(
+    ("code", "refused"),
+    [
+        ("approval_expired", None),
+        ("stale", None),
+        ("paused", None),
+        ("value_differs", None),
+        ("linkedin_off", None),
+        ("save_missing", "save_missing"),
+        ("screenshot_or_save_missing", "save_missing"),
+        ("save_unknown", "save_unknown"),
+    ],
+)
+def test_approve_after_an_error_code_answers_the_right_sentence(
+    db, factory, person_a, code, refused
+):
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(services(factory, Portal()), run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    part.error_code = code
+    db.commit()
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    digest = profile_sources.value_hash(part, rows)
+    if refused is None:
+        profile_gate.authorise_section(db, person_a.user_id, run_id, part.section, digest, AT)
+        assert (part.state, part.error_code) == ("approved", None)
+        return
+    with pytest.raises(site_profile.RefusedError) as error:
+        profile_gate.authorise_section(db, person_a.user_id, run_id, part.section, digest, AT)
+    assert error.value.code == refused
+    assert str(error.value) == site_profile.SENTENCES[refused]
+
+
+def test_section_events_are_capped(db, factory, person_a):
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(services(factory, Portal()), run_id))
+    _run, part, _rows = section(db, person_a.user_id, run_id)
+    for i in range(site_profile.EVENTS_KEPT + 50):
+        site_profile.event(part, "edited", AT, n=i)
+    assert len(part.events) == site_profile.EVENTS_KEPT
+    assert part.events[-1]["n"] == site_profile.EVENTS_KEPT + 49
+
+
+@pytest.mark.parametrize("readback", [True, False])
+def test_cancel_during_the_save_never_leaves_the_section_saving(
+    db, factory, person_a, monkeypatch, readback
+):
+    portal = Portal(changed=readback)
+    env = services(factory, portal)
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(env, run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    key, auth_id = part.section, auth.id
+    db.commit()
+
+    async def click(*args, **kwargs):
+        with factory() as other:
+            other.get(SiteProfileRun, run_id).state = SiteRunState.cancelled
+            other.commit()
+        if not readback:
+            raise RuntimeError("the browser went away")
+        return await portal.save(*args, **kwargs)
+
+    monkeypatch.setattr(profile_gate, "gate_click", click)
+    asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    run, part, _ = section(db, person_a.user_id, run_id)
+    assert run.state is SiteRunState.cancelled
+    assert (part.state, part.error_code) == ("left", "cancelled" if readback else "save_unknown")
+
+
+def test_startup_recovery_ends_a_cancelled_runs_save(db, factory, person_a):
+    run_id = make(db, person_a.user_id)
+    asyncio.run(site_profile.fill(services(factory, Portal()), run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    run, part, _rows = profile_gate.consume(
+        db, person_a.user_id, run_id, part.section, auth.id, AT, True, False
+    )
+    run.state = SiteRunState.cancelled
+    db.commit()
+    site_profile.reset_interrupted(db, AT)
+    db.commit()
+    run, part, _ = section(db, person_a.user_id, run_id)
+    assert run.state is SiteRunState.cancelled
+    assert (part.state, part.error_code) == ("left", "save_unknown")
