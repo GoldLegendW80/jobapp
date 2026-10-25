@@ -28,7 +28,7 @@ const shots = makeShots("identity-i7", "throttle");
  *   docker compose -p jobapp-i7 -f compose.yml down -v
  *
  * On the Jetson, through the public URL, with the throwaway admin only, removed afterwards with
- * its sign in attempts (README, "Sign in throttling"):
+ * its sign in attempts (docs/runbooks/accounts.md, "Sign in throttling"):
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
  *     E2E_SHOT_PREFIX=jetson- pnpm --dir web exec playwright test throttle.spec.ts
  */

@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { server } from "@/test/server";
 
-import { sweepSchema, watchSweep, type Sweep } from "./sweeps-api";
+import {
+  getSweep,
+  listSweeps,
+  startSweep,
+  sweepSchema,
+  sweepSourceSchema,
+  watchSweep,
+  type Sweep,
+} from "./sweeps-api";
 
 const ID = "11111111-2222-4333-8444-555555555555";
 
@@ -65,7 +73,7 @@ it.each([
     ...metadata,
   };
   expect(sweepSchema.parse({ ...running, sources: [source] }).sources).toEqual([
-    { ...source, skipped_by_rule: 0 },
+    { ...source, skipped_by_rule: 0, items_skipped: 0 },
   ]);
 });
 
@@ -160,4 +168,83 @@ describe("watchSweep over server-sent events", () => {
     FakeEventSource.last!.emit("done", done);
     expect(finished).not.toHaveBeenCalled();
   });
+});
+
+const feedSource = {
+  kind: "remoteok",
+  query: "",
+  location: null,
+  result_pages: 0,
+  found: 4,
+  new: 2,
+  skipped_by_rule: 1,
+  items_skipped: 3,
+  error: "store_failed",
+};
+
+describe("parser skips in sweep sources", () => {
+  it("preserves positive counts in start, list, detail, progress and done", async () => {
+    const current = { ...running, sources: [feedSource] };
+    const final = { ...done, sources: [feedSource] };
+    const list = {
+      items: [
+        {
+          ...running,
+          status: "done",
+          boards_done: 2,
+          current_board: null,
+          sources: [feedSource],
+        },
+      ],
+      schedule: {
+        enabled: false,
+        days: ["monday"],
+        times: ["06:17"],
+        timezone: "Europe/Paris",
+        active: false,
+        next_run: null,
+      },
+    };
+    server.use(
+      http.post("*/api/jobs/sweeps", () =>
+        HttpResponse.json(current, { status: 202 }),
+      ),
+      http.get("*/api/jobs/sweeps", () => HttpResponse.json(list)),
+      http.get("*/api/jobs/sweeps/:id", () => HttpResponse.json(final)),
+    );
+    expect(await startSweep()).toEqual(current);
+    expect(await listSweeps()).toEqual(list);
+    expect(await getSweep(ID)).toEqual(final);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const progress = vi.fn();
+    const finished = vi.fn();
+    watchSweep(ID, {
+      onProgress: progress,
+      onDone: finished,
+      onError: vi.fn(),
+    });
+    FakeEventSource.last!.emit("progress", current);
+    FakeEventSource.last!.emit("done", final);
+    expect(progress).toHaveBeenCalledWith(current);
+    expect(finished).toHaveBeenCalledWith(final);
+  });
+
+  it("defaults an older source's absent count to zero", () => {
+    const older: Record<string, unknown> = { ...feedSource };
+    delete older.items_skipped;
+    expect(sweepSourceSchema.parse(older)).toEqual({
+      ...older,
+      items_skipped: 0,
+    });
+  });
+
+  it.each([-1, 1.5, "3", true, null])(
+    "rejects an explicit invalid count %s",
+    (value) => {
+      expect(
+        sweepSourceSchema.safeParse({ ...feedSource, items_skipped: value })
+          .success,
+      ).toBe(false);
+    },
+  );
 });

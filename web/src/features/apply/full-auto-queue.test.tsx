@@ -1,11 +1,13 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { http, HttpResponse } from "msw";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fakeAnswer } from "@/test/apply";
 import { fakeQueue, queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
 
 const PATH = "/applications";
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
@@ -192,6 +194,54 @@ describe("Full auto in the review queue", () => {
         "This application can no longer be cancelled.",
       ),
     ).toBeVisible();
+  });
+
+  it("waits for the server's hold expiry, then follows the application until it leaves the queue", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const pageStart = Date.now();
+      const serverStart = Date.parse(SERVER_NOW);
+      const item = queueItem(1, "held", {
+        mode: "full_auto",
+        hold_until: TEN_MINUTES_LATER,
+      });
+      fakeQueue([item]);
+      let reads = 0;
+      server.use(
+        http.get("*/api/apply/queue", () => {
+          reads += 1;
+          return HttpResponse.json({
+            items: reads < 3 ? [item] : [],
+            waiting_on_you: 0,
+            now: new Date(serverStart + Date.now() - pageStart).toISOString(),
+          });
+        }),
+      );
+      const { unmount } = renderApp(PATH);
+      await screen.findByRole("timer");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(599_000);
+      });
+      expect(reads).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await waitFor(() => {
+        expect(reads).toBe(2);
+      });
+      expect(screen.queryByText(/Your queue is empty/)).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      await screen.findByText(/Your queue is empty/);
+      expect(reads).toBe(3);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a held item turned into a review item with its reason", async () => {

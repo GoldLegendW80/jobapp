@@ -30,6 +30,7 @@ entry left out removes it, which turns LinkedIn off.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -44,6 +45,7 @@ from app.profile.photo import Photo
 from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS
 
 REVISIONS_PAGE_MAX = 100
+logger = logging.getLogger(__name__)
 
 
 ONBOARDING_FIELDS = ("completed_at", "dismissed_at")
@@ -159,11 +161,21 @@ def save_section(
         raise StaleRevisionError(profile)
     if section == "search" and not linkedin_consent:
         data = _keep_consent((profile.sections or {}).get("search"), data)
+    ignored_steps = False
     if section == "preferences":
+        submitted = data.get("onboarding") or {}
         data = _keep_onboarding(profile, data, onboarding_sent)
+        ignored_steps = (
+            "steps_passed" in submitted
+            and (onboarding_sent is None or "steps_passed" in onboarding_sent)
+            and submitted["steps_passed"] != data["onboarding"]["steps_passed"]
+        )
         if data.get("onboarding") != _onboarding(profile):
             raise ReservedFieldError("onboarding")
-    return _write(db, profile, section, data, now)
+    saved = _write(db, profile, section, data, now)
+    if ignored_steps:
+        logger.info("profile_onboarding_steps_ignored")
+    return saved
 
 
 def _onboarding(profile: Profile) -> dict[str, Any]:
