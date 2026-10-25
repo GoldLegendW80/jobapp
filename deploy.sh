@@ -1376,7 +1376,7 @@ cmd_backup_schedule() {
 # workflow (.github/workflows/deploy.yml) runs docker compose there exactly as this script does.
 # Registration and removal tokens come from `gh api` on this Mac, go to the container on stdin and
 # are never written anywhere. Docker socket access makes the runner root-equivalent on the Jetson
-# (README, Continuous delivery).
+# (docs/runbooks/continuous-delivery.md).
 RUNNER_REPO="$(setting JOBAPP_RUNNER_REPO GoldLegendW80/jobapp)"
 RUNNER_NAME="$(setting JOBAPP_RUNNER_NAME jetson)"
 RUNNER_LABELS="jetson,arm64" # GitHub adds self-hosted, Linux and ARM64 itself

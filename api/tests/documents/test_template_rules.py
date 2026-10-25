@@ -51,14 +51,16 @@ WHOLE = {"classic", "compact", "grid"}
 _CUT = ("literal", "markup cut by a Jinja construct")
 _OUTSIDE = ("property", "a property outside the allowed list")
 _SELECTOR = ("selector", "a selector outside the allowed forms")
-# A full bleed sheet sets its own page margin, executive's band a fixed height and sidebar's
-# column a page high minimum: a template from an upload may not, the render check lays out the
-# step's page box and one content shape.
+# A full bleed sheet sets its own page margin, executive's band a fixed height and its headline
+# an inline size containment, sidebar's column a page high minimum: a template from an upload may
+# not, the render check lays out the step's page box and its canary shapes only.
 _PAGE = ("page", "@page: margin: var(--margin)")
 _HEIGHT = ("property", "height: auto, a length only on the photo (img or .photo)")
 _MIN_HEIGHT = ("property", "min-height: auto, a length only on the photo (img or .photo)")
 # banner and sidebar are pinned in REPOSITORY below, with the rest of what they use
-GEOMETRY = {"executive": {_HEIGHT}}
+GEOMETRY = {
+    "executive": {_HEIGHT, ("property", "contain: a value outside the allowed list")},
+}
 # the helpers of _base/layout.html.j2, which only the repository's templates import
 _LAYOUT = {
     ("construct", "import only _base/macros.html.j2 as base with context"),
@@ -773,6 +775,7 @@ def test_whatever_the_sheet_the_check_ends_with_problems_of_its_codes_not_an_err
 
 # --- round 3: a static filter of allow lists, the browser not modelled (issue #220) -------------
 
+_HEAD_125 = ".headtext { flex: 0 0 125mm; min-width: 0; } .photo { order: 2; }"
 LEFT_TO_THE_RENDER_CHECK = [
     # a colour on a background another rule sets: since round 3 the static filter holds only a
     # rule's own pair, and D25b's render check judges the rest; these rows were refused before
@@ -791,6 +794,20 @@ LEFT_TO_THE_RENDER_CHECK = [
     # smaller than its text lets it run under a later positioned box
     "span { padding: 30mm 0; background: #ffffff; }",
     ".summary { width: 1mm; } .row { position: relative; background: #ffffff; }",
+    # the review of #613: a box sized by its unwrapped text, or wider than its column or the
+    # page, under #575's 125 mm header; the render check's identity shape refuses each
+    # (test_design_check_docker.py)
+    *(
+        f"{_HEAD_125} {contact}"
+        for contact in (
+            ".contact li { flex: none; }",
+            ".contact li { flex-shrink: 0; }",
+            ".contact { display: grid; grid-template-columns: max-content; }",
+            ".contact { display: grid; grid-template-columns: minmax(max-content, 1fr); }",
+            ".contact { display: block; } .contact li { width: 150mm; }",
+            ".contact { display: block; } .contact li { min-width: 300mm; }",
+        )
+    ),
 ]
 
 
@@ -820,6 +837,7 @@ ROUND_THREE_SHEET_REFUSED = [
     (".x { contain: paint; }", "property"),
     (".x { contain: size; }", "property"),
     (".x { contain: strict; }", "property"),
+    (".x { contain: inline-size; }", "property"),
     (".x { contain: inline-size layout; }", "property"),
     ('.x::before { content: "#a"; }', "content"),
     ('.x::before { content: "+1"; }', "content"),
@@ -890,7 +908,7 @@ def test_round_three_sheet_probes_are_refused(addition, code):
 
 ROUND_THREE_SHEET_ACCEPTED = [
     '.x::before { content: "#"; } .y::before { content: ">"; } .z::after { content: "+"; }',
-    ".x { contain: inline-size; } .y { contain: none; }",
+    ".x { contain: none; }",
     '.x::before { content: "•"; color: var(--accent); font-weight: 700; padding: 0 6pt; }',
     ".x::marker { color: var(--accent); font-weight: 700; font-family: 'Nunito Sans'; }",
     ".x { list-style: decimal outside; } .y { list-style-type: circle; }",
@@ -1231,6 +1249,62 @@ ENFORCED_ACCEPTED = [
 @pytest.mark.parametrize("addition", ENFORCED_ACCEPTED)
 def test_a_sheet_the_apps_rules_still_end_passes(addition):
     assert _check(_css(addition)) == []
+
+
+# Issue #575: nowrap beats overflow-wrap even when the app's declaration is important.
+HEADER_125_SHEET = (
+    ".headtext { flex: 0 0 125mm; } .photo { order: 2; }"
+    " .contact { display: block; } .contact li { white-space: nowrap; }"
+)
+DATA_SELECTORS = [
+    "html", "body", ".headtext", ".contact", ".contact li", ".contact a",
+    ".contact li:first-child", ".headtext, .contact a",
+]  # fmt: skip
+
+
+def test_the_reviewers_125mm_nowrap_header_is_refused():
+    found = _check(_css(HEADER_125_SHEET))
+    assert [(p.code, p.detail) for p in found] == [
+        ("property", "white-space: a value outside the allowed list")
+    ]
+
+
+@pytest.mark.parametrize("selector", DATA_SELECTORS)
+@pytest.mark.parametrize(
+    ("prop", "value"),
+    [
+        ("white-space", "nowrap"),
+        ("WHITE-SPACE", "NOWRAP"),
+        ("white-space", "/* before */ nowrap /* after */"),
+        ("white-space", "nowrap ! /* priority */ IMPORTANT"),
+        ("contain", "inline-size"),
+        ("CONTAIN", "INLINE-SIZE"),
+        ("contain", "/* before */ inline-size /* after */"),
+        ("contain", "inline-size ! /* priority */ IMPORTANT"),
+    ],
+)
+def test_captured_data_cannot_disable_wrapping_or_inline_sizing(selector, prop, value):
+    addition = f"{selector} {{ {prop}: {value}; }} .contact a {{ {prop}: inherit; }}"
+    assert [(p.code, p.detail) for p in _check(_css(addition))] == [
+        ("property", f"{prop.lower()}: a value outside the allowed list")
+    ]
+
+
+@pytest.mark.parametrize("selector", DATA_SELECTORS)
+@pytest.mark.parametrize("value", ["normal", "pre-line", "pre-wrap", "inherit"])
+def test_wrapping_values_and_uncontained_boxes_still_pass(selector, value):
+    addition = (
+        f"{selector} {{ white-space: {value}; contain: none; }}"
+        " .contact a { white-space: inherit; contain: inherit; }"
+        " .contact { flex-wrap: nowrap; }"
+    )
+    assert _check(_css(addition)) == []
+
+
+@pytest.mark.parametrize("value", ["normal", "pre-line", "pre-wrap"])
+def test_the_reviewers_header_passes_when_its_contact_text_may_wrap(value):
+    sheet = HEADER_125_SHEET.replace("white-space: nowrap", f"white-space: {value}")
+    assert _check(_css(sheet)) == []
 
 
 PHOTO_CLASS_REFUSED = [

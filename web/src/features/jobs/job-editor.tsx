@@ -460,21 +460,23 @@ function EditDetailsDialog({
       else if (name === "work_mode") patch.work_mode = values.work_mode || null;
       else patch[name] = values[name].trim();
     }
-    const pay = typedPay(
-      values.pay_min,
-      values.pay_max,
-      values.pay_currency,
-      values.pay_period,
-    );
-    if (pay === undefined) {
-      setError({ text: WORDING.payInvalid });
-      return;
-    }
     const payChanged = PAY_KEYS.some(
       (name) => values[name].trim() !== initial[name].trim(),
     );
-    const hadPay = initial.pay_min !== "" || initial.pay_max !== "";
-    if (payChanged && (pay !== null || hadPay)) patch.pay = pay;
+    if (payChanged) {
+      const pay = typedPay(
+        values.pay_min,
+        values.pay_max,
+        values.pay_currency,
+        values.pay_period,
+      );
+      if (pay === undefined) {
+        setError({ text: WORDING.payInvalid });
+        return;
+      }
+      const hadPay = initial.pay_min !== "" || initial.pay_max !== "";
+      if (pay !== null || hadPay) patch.pay = pay;
+    }
     if (Object.keys(patch).length === 0) {
       onClose();
       return;

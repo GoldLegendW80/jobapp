@@ -18,7 +18,7 @@
 # kind is installed alongside the browser in that namespace: both checks pass, reapply is
 # idempotent, mail drift is detected, and either uninstall preserves the other's rules.
 # Set EGRESS_TEST_DOCKER=0 to skip the Docker part.
-# Behind a TLS inspecting proxy, JOBAPP_EXTRA_CA (README) reaches the package install of that part
+# Behind a TLS inspecting proxy, JOBAPP_EXTRA_CA (docs/runbooks/develop-new-machine.md) reaches the package install of that part
 # alone, as the BuildKit secret of a throwaway image build; a line planted in it is then looked for
 # in the files, variables, labels and history of that image, and must be in none.
 set -euo pipefail
@@ -284,7 +284,7 @@ if [[ "${EGRESS_TEST_DOCKER:-1}" == 1 ]]; then
   if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
     [[ "$JOBAPP_EXTRA_CA" == /* && -f "$JOBAPP_EXTRA_CA" && -r "$JOBAPP_EXTRA_CA" ]] ||
       fail "JOBAPP_EXTRA_CA is set but does not name a readable file by its absolute path"
-    # Behind a TLS inspecting proxy (README): the install alone reads the bundle, as the BuildKit
+    # Behind a TLS inspecting proxy (docs/runbooks/develop-new-machine.md): the install alone reads the bundle, as the BuildKit
     # secret of a throwaway image build; a planted line in it must then be nowhere in the image.
     canary="egress-test-canary-$$-$RANDOM$RANDOM"
     { cat "$JOBAPP_EXTRA_CA" && printf '\n# %s\n' "$canary"; } >"$WORK/extra-ca.pem"

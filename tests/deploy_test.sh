@@ -1965,8 +1965,8 @@ NEW_LINE='17 3 * * * JOBAPP_DIR=jobapp BACKUP_DIR=jobapp-backups "$HOME/jobapp/o
 grep -qxF "$NEW_LINE" "$JH/home/.crontab" || fail "the installed line is not the expected one: $(cat "$JH/home/.crontab")"
 out_has "the line carries no BACKUP_KEEP: each run reads it from jobapp/.env on fakejetson, then from the default of the ops/db.sh deployed there"
 out_has "retention: BACKUP_KEEP=7 (the default of ops/db.sh)"
-grep -qF "$NEW_LINE" README.md || fail "the README does not show the line that install writes: $NEW_LINE"
-ok "install, twice: one line, without a BACKUP_KEEP, the 14 gone, the foreign line kept; install shows the retention its runs apply (7), and the README shows this very line"
+grep -qF "$NEW_LINE" docs/runbooks/backups-and-restores.md || fail "the backups runbook does not show the line that install writes: $NEW_LINE"
+ok "install, twice: one line, without a BACKUP_KEEP, the 14 gone, the foreign line kept; install shows the retention its runs apply (7), and the backups runbook shows this very line"
 cron_run 2026-10-12T011700
 [[ "$(jet_holds)" == "$(d 1) $(d 0) jobapp-2026-10-12T011700.dump " ]] || fail "the new line did not apply 7 days: $(jet_holds)"
 grep -q "BACKUP_KEEP=7, the default of ops/db.sh" "$JH/home/jobapp-backups/backup.log" || fail "backup.log lacks the retention: $(cat "$JH/home/jobapp-backups/backup.log")"
@@ -2046,7 +2046,7 @@ grep -q '^BACKUP_KEEP=$' .env.example || fail ".env.example does not document BA
 # shellcheck disable=SC2016 # a pattern for the literal text of the scripts
 grep -nE 'BACKUP_KEEP:-[0-9]|setting BACKUP_KEEP [0-9]|BACKUP_KEEP=[0-9]+ (bash|"\$HOME)|default 14' deploy.sh ops/db.sh .github/workflows/deploy.yml .env.example &&
   fail "a retention other than the default of ops/db.sh is written in a script, the workflow or .env.example"
-grep -q "newest 10 kept" README.md && fail "the README still says the newest 10 predeploy dumps are kept"
+grep -q "newest 10 kept" README.md docs/runbooks/backups-and-restores.md && fail "the documentation still says the newest 10 predeploy dumps are kept"
 ok "ops/db.sh holds the only default (7); deploy.sh, the deploy workflow and .env.example name no number of their own"
 
 step "deploy lock: the Jetson releases it after DEPLOY_LOCK_MAX_S even if the Mac never closes it"
@@ -2424,11 +2424,11 @@ out_has "migration sessions ended in Postgres: 1"
 ok "exit 137 before the limit: reported as killed, possibly out of memory, not as a timeout, its session ended and the stack untouched; exit 137 at the limit: a timeout"
 # The README's recovery block gives a human the same statement, and no longer says that removing
 # the container ends the transaction.
-readme_where="$(tr '\n' ' ' <README.md | tr -s ' ' | grep -o "from pg_locks where [^;]* pid <> pg_backend_pid()" || true)"
-[[ "$readme_where" == "$SESSIONS_WHERE" ]] || fail "the README's recovery statement is not the one ops/migrate.sh runs: $readme_where"
-grep -q "remove it (ends its transaction)" README.md && fail "the README still says docker rm ends the transaction"
-grep -q "this alone does not end its transaction" README.md || fail "the README does not say that docker rm alone leaves the session"
-ok "README recovery: docker rm alone does not end the transaction, and the statement to end the session is the one ops/migrate.sh runs"
+runbook_where="$(tr '\n' ' ' <docs/runbooks/continuous-delivery.md | tr -s ' ' | grep -o "from pg_locks where [^;]* pid <> pg_backend_pid()" || true)"
+[[ "$runbook_where" == "$SESSIONS_WHERE" ]] || fail "the runbook's recovery statement is not the one ops/migrate.sh runs: $runbook_where"
+grep -q "remove it (ends its transaction)" docs/runbooks/continuous-delivery.md && fail "the runbook still says docker rm ends the transaction"
+grep -q "this alone does not end its transaction" docs/runbooks/continuous-delivery.md || fail "the runbook does not say that docker rm alone leaves the session"
+ok "runbook recovery: docker rm alone does not end the transaction, and the statement to end the session is the one ops/migrate.sh runs"
 for state in running restarting created; do
   mig 1 FAKE_MIGRATE_STATE="$state"
   out_has "another migration is in progress (container jobapp-migrate is $state): nothing was run"
