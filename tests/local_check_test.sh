@@ -9,6 +9,11 @@
 # With a Docker daemon it also starts a container, a volume and a bystander container to show
 # what the cleanup removes and what it leaves; without one that part is skipped and says so.
 set -euo pipefail
+# The caller's gate settings must not reach the gates this file starts: a gate run with
+# LOCAL_CHECK_FULL=1 ran these tests with every journey group instead of the scoped plan.
+unset LOCAL_CHECK_FULL LOCAL_CHECK_STUB LOCAL_CHECK_STACKS LOCAL_CHECK_JOURNEY_SHARDS \
+  LOCAL_CHECK_VITEST_WORKERS LOCAL_CHECK_MIN_FREE_GB LOCAL_CHECK_STEP_TIMEOUT \
+  LOCAL_CHECK_INT_GRACE LOCAL_CHECK_NET_BASE
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"

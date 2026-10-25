@@ -2244,12 +2244,11 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(sorted(modules - decided), [], "an api module with no groups")
 
     API_PINS: ClassVar[dict[str, frozenset[str] | str]] = {
-        # Narrowed: what reaches a browser source (every sweep), a sandbox handler, a mail
-        # parser, the deck, an apply agent's fake answers.
+        # Narrowed: an apply submit, the browser registry, a sandbox handler, a mail parser,
+        # the deck, an apply agent's fake answers. (A browser source follows its finder, see
+        # test_a_browser_source_runs_what_its_finder_runs.)
         "api/app/apply/submit.py": frozenset({"apply", "browser", "opportunities"}),
-        "api/app/browser/sources/linkedin.py": frozenset(
-            {"apply", "browser", "opportunities", "sweep"}
-        ),
+        "api/app/browser/registry.py": frozenset({"apply", "browser"}),
         "api/app/opportunities/deck.py": frozenset({"opportunities"}),
         "api/app/ingestion/sandbox/pdf_text.py": frozenset(
             {"documents", "ingestion", "opportunities"}
@@ -2304,6 +2303,44 @@ class JourneysTest(unittest.TestCase):
                 self.assertTrue((ROOT / path).is_file())
                 groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
                 self.assertEqual(groups, expected, why)
+
+    def test_a_browser_source_runs_what_its_finder_runs(self) -> None:
+        # Every sweep runs the sources, so a source plans at least the sweep's groups, and it
+        # plans every group as soon as a file every journey uses imports the finder (a lazy
+        # import of profile/schemas.py, imported by agents/tools.py, does).
+        imports = ci_plan.Imports(ROOT)
+        finder, _ = ci_plan.journey_groups_for(
+            "api/app/browser/finder.py", {}, {}, imports
+        )
+        sources = sorted((ROOT / "api/app/browser/sources").glob("*.py"))
+        self.assertGreater(len(sources), 2)
+        for source in sources:
+            path = str(source.relative_to(ROOT))
+            with self.subTest(path=path):
+                groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
+                self.assertEqual(groups, finder, why)
+                if groups != ci_plan.EVERY:
+                    self.assertLessEqual(
+                        {"apply", "browser", "opportunities", "sweep"}, groups
+                    )
+
+    def test_what_the_model_backend_imports_runs_every_group(self) -> None:
+        # api/app/agents/backend.py sets the model credential of every journey: no file it
+        # reaches, directly or not, may be narrowed.
+        imports = ci_plan.Imports(ROOT)
+        graph = imports.api()
+        backend = "api/app/agents/backend.py"
+        reached = [
+            path
+            for path in sorted(graph)
+            if backend
+            in ci_plan.importers(path, graph, lambda name: name in ci_plan.API_WIRING)
+        ]
+        self.assertIn("api/app/agents/tools.py", reached)
+        for path in reached:
+            with self.subTest(path=path):
+                groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
+                self.assertEqual(groups, ci_plan.EVERY, why)
 
     def test_images_run_the_groups_whose_stacks_start_them(self) -> None:
         # Only the stacks that set COMPOSE_PROFILES=browser start the browser service.
