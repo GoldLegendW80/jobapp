@@ -221,6 +221,11 @@ class Lease:
     active_since: float = 0.0
     last_input: float = 0.0
     application_id: str | None = None
+    # A person's live takeovers of this lease, all of them together, pause its clock for
+    # TAKEOVER_WAIT_S at most: the takeover seconds banked by the earlier ones, and the start of
+    # the current one, so the apply job's timeout (one TAKEOVER_WAIT_S) outlives every pause.
+    takeover_s: float = 0.0
+    takeover_since: float | None = None
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
@@ -238,6 +243,9 @@ class Lease:
     def resume(self, now: float) -> None:
         if self.state != "waiting_person":
             return
+        if self.wait_reason == "takeover" and self.takeover_since is not None:
+            self.takeover_s += max(0.0, now - self.takeover_since)
+        self.takeover_since = None
         self.state, self.wait_reason, self.wait_host, self.wait_deadline = (
             "active",
             None,
@@ -750,6 +758,11 @@ class Leases:
                 deadline = now + left
                 if lease.wait_reason == "takeover" and lease.wait_deadline is not None:
                     deadline = min(deadline, lease.wait_deadline)
+                if lease.wait_reason != "takeover" or lease.takeover_since is None:
+                    # browserd counts this takeover down from TAKEOVER_WAIT_S: it began then.
+                    lease.takeover_since = now - (TAKEOVER_WAIT_S - left)
+                # Every takeover of the lease together: what the earlier ones left of the bound.
+                deadline = min(deadline, lease.takeover_since + TAKEOVER_WAIT_S - lease.takeover_s)
                 lease.wait_person(now, "takeover", "", 0)
                 lease.active_before = float(current.get("active_s") or 0)
                 lease.wait_deadline = deadline
