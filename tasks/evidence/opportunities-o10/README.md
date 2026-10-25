@@ -1,11 +1,20 @@
 # O10 implementation and pending evidence
 
-Status: draft. No O10 screenshots have been captured, no 375px walkthrough has run, and no
-follow-up issue is claimed as filed. Runtime execution is paused by the coordinating session
-because the shared host has load above 32 and about 10.9 GiB of compressed memory occupied.
-The pure pytest attempt was stopped during dependency import before collection. Vitest could
-not start because the worktree lacked dependencies. An offline install downloaded nothing;
-its independent dependency copy was stopped and leaves only ignored partial output.
+Status: draft. Source, unit and API checks ran on 2026-10-25 after merging main (Round 2,
+below). No O10 screenshots have been captured, no 375px walkthrough has run, and no follow-up
+issue is filed yet: those need an owned fake stack, which waits for the merge gate's lock.
+
+## Round 2 checks (2026-10-25, after merging main at 0c069f85)
+
+- Behavioral RED: with main's page source and the O10 tests, 18 tests fail in 4 files (the
+  label regression for all eight product files, the four simple wizard panel tests, the folded
+  starter choices, and five wizard flows that now open Advanced). GREEN: the same tests pass on
+  the branch.
+- Vitest, onboarding, opportunities, profile and lib folders: 35 files, 1024 tests passed.
+- Web typecheck (web and e2e) and lint: passed.
+- API: `ops/agent-test.sh` on `tests/opportunities` (with `test_o10_begin.py`): 1132 passed;
+  ruff check and format on the new test: passed.
+- `ci_plan_test.py` and `e2e_groups.py`: passed.
 
 ## Product control inventory
 
@@ -26,7 +35,7 @@ This is a source inventory for the runtime check, not a claim that the journey p
 The shared component keeps the user's expanded preference. A pay validation error forces the
 section open and focuses the invalid field; it stays open while the person corrects the draft.
 `simple-panels.test.tsx`, the wizard pay regression, existing source-card error tests and the
-new O10 journey cover these behaviors, but their execution is pending.
+new O10 journey cover these behaviors; the unit tests pass (Round 2), the journey has not run yet.
 
 ## Other-page walkthrough and issue work remaining
 
@@ -59,14 +68,8 @@ other-page source files is changed by O10.
 
 ## Required checks before approval
 
-- Obtain a resource slot, finish the independent dependency preparation and verify it resolves
-  inside this worktree. Keep lockfiles and main dependencies unchanged.
-- Demonstrate behavioral RED and GREEN for the new regressions. Startup failures are not RED.
-- Run the pure enabled/disabled feed-only `sweep.begin` regression.
-- Run the full opportunities and jobs API module tests via `ops/agent-test.sh`, then API lint
-  and formatting, because the authorized prerequisite integration carries one backend predicate.
-- Run the full onboarding, opportunities, profile and wording Vitest suites with maxWorkers=1,
-  web typecheck, lint and build. Re-run affected hooks after any fix.
+- Done in Round 2: dependencies, behavioral RED and GREEN, the feed-only `sweep.begin`
+  regression, the opportunities API tests, the touched Vitest folders, web typecheck and lint.
 - On one owned fake stack, run the complete opportunities journey group, including O10.
 - Review collapsed/open screenshots at desktop and 375px in light and dark. Confirm each
   existing option and saved setting from the product inventory remains reachable.
@@ -75,17 +78,11 @@ other-page source files is changed by O10.
 
 ## Prerequisite integration
 
-The branch includes approved #538 and #553, with their implementation and evidence unchanged
-except for additive merge compatibility. The O8 merge keeps main's shared `sweep.begin` handler
-and removes its obsolete router-local `_start`. The O5c merge keeps both source imports and
-cards in Search, combines the starter summary specification with `sweep.begin`, and preserves
-main's no-revision behavior for passed wizard steps. The profile service conflict was a
-comment-only overlap. Its wording now accurately distinguishes preserved steps from forbidden
-changes to dates or starter history.
-
-A separate O10 integration commit carries O8's `or enabled_feeds(search)` predicate into the
-canonical shared insertion check and adds the focused pure regression. No other backend
-behavior is intentionally changed by O10.
+#538 and #553 are on main. After the merge of main on 2026-10-25 the branch changes no backend
+code: main's `sweep.begin` and `_insert` already hold the `enabled_feeds(search)` predicate, and
+the profile service comment conflict was resolved to main's wording. `test_o10_begin.py` stays
+as the pure feed-only start regression. The O10 change is the product pages, `wording.ts`,
+their tests and the journeys.
 
 ## Sources checked
 
