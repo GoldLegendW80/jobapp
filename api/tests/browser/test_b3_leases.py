@@ -8,6 +8,7 @@ only.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
@@ -95,6 +96,26 @@ def test_wait_counts_against_neither_the_maximum_nor_the_idle_timer() -> None:
     assert lease.expired(now) is None
     assert lease.active_s(now) == 840
     assert lease.state == "active"
+
+
+def test_a_lease_stored_with_the_older_wait_site_still_loads() -> None:
+    lease = apply_lease()
+    lease.wait_person(0.0, "signin", "jobs.example.org", SESSION_MAX_S)
+    stored = json.loads(lease.dumps())
+    stored["wait_site"] = stored.pop("wait_host")
+    loaded = Lease.loads(json.dumps(stored))
+    assert (loaded.state, loaded.wait_host, loaded.lease_id) == (
+        "waiting_person",
+        None,
+        lease.lease_id,
+    )
+
+
+def test_a_lease_stored_without_an_application_still_loads() -> None:
+    stored = json.loads(apply_lease().dumps())
+    del stored["application_id"]
+    loaded = Lease.loads(json.dumps(stored))
+    assert (loaded.lease_id, loaded.application_id) == ("l", None)
 
 
 @pytest.mark.parametrize(
@@ -543,6 +564,37 @@ def test_b_never_sees_nor_ends_as_lease(world: World) -> None:
         assert not await world.store.release(A, "another-id")
         assert not await world.store.release(A, purposes=("takeover",))
         assert await world.store.release(A, held.lease.lease_id)
+
+    run(world, go)
+
+
+def test_a_submit_lease_names_the_application_of_the_call_that_started_it(world: World) -> None:
+    x, y = "00000000-0000-4000-9000-0000000000a1", "00000000-0000-4000-9000-0000000000a2"
+
+    async def go() -> None:
+        store = world.store
+        assert (await store.acquire(B, "takeover", False)).lease is not None
+        # A's two approvals wait behind B: one place in the queue, whichever job asks.
+        assert (await store.acquire(A, "apply_submit", True, application_id=x)).waiting
+        assert await store.release(B)
+        started = await store.acquire(A, "apply_submit", True, application_id=y)
+        assert started.lease is not None
+        assert started.token is not None
+        assert started.lease.application_id == y
+        # Another job finds it held: that lease, no token, and the name stays the starter's.
+        again = await store.acquire(A, "apply_submit", True, application_id=x)
+        assert again.lease is not None
+        assert (again.lease.application_id, again.token) == (y, None)
+        mine = (await store.current(A)).lease
+        assert mine is not None
+        assert mine.application_id == y
+        theirs = await store.current(B)
+        assert (theirs.lease, theirs.held_by_other) == (None, True)
+        assert y not in repr(theirs)
+        await world.flush()  # Redis lost its keys: browserd's lease comes back without a name
+        back = (await store.current(A)).lease
+        assert back is not None
+        assert (back.lease_id, back.application_id) == (started.lease.lease_id, None)
 
     run(world, go)
 

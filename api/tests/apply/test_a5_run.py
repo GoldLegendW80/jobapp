@@ -75,9 +75,17 @@ def services(
     answer_agent: FakeAgent | None = None,
     **rest: Any,
 ) -> run.Services:
+    clock = Clock()
+
+    async def nobody_comes(seconds: float) -> None:
+        clock.now += timedelta(seconds=seconds)
+
+    # A10a's wait for the person: never a real sleep, and nobody comes unless a test says so.
+    rest.setdefault("sleep", nobody_comes)
+    rest.setdefault("needs_person_wait_s", 10)
     return run.Services(
         sessions=factory,
-        clock=Clock(),
+        clock=clock,
         leases=leases or FakeLeases(),
         tools_for=lambda user, lease, token: form,
         answer_agent=answer_agent,
@@ -335,7 +343,9 @@ def test_the_browser_crashing_mid_fill_fails_it_and_releases_the_lease(
     app_id = started(db, person_a)
     form, leases = run_ashby(), FakeLeases()
     form.crash_at = 8
-    assert fill(services(factory, form, leases, stub_base=stub), app_id) == "failed"
+    # No retry left (A10a retries it otherwise, test_a10a_failures).
+    svc = services(factory, form, leases, stub_base=stub, retry_delays_s=())
+    assert fill(svc, app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "ended")
     assert len(leases.released) == 1
@@ -559,7 +569,8 @@ def _outcome(label: str, kind: str, reason: str, options: tuple[str, ...] = ()) 
         ("Do you enjoy puzzles?", "yes_no", "not_a_known_question", (), False),  # a yes or no
         # a bare noun phrase the resolver does not know stays the person's, options or not
         ("Team preference", "combobox", "not_a_known_question", ("Ops", "Research"), False),
-        ("Team preference", "combobox", "free_text_for_the_agent", ("Ops", "Research"), True),
+        # an employer word alone is no topic, even in A3's free text (issue #317)
+        ("Team preference", "combobox", "free_text_for_the_agent", ("Ops", "Research"), False),
         ("Team preference", "combobox", "not_a_known_question", (), False),  # options unknown
         ("Gender", "select", "not_a_known_question", ("Male", "Female"), False),  # EEO
         ("What is your race or ethnicity?", "text", "not_a_known_question", (), False),
@@ -615,7 +626,8 @@ def _judge(question: agent.Question, value: str | None, source: str = "facts") -
 
 
 TEXT = agent.Question("q", "Tell us about a project", "text")
-CHOICE = agent.Question("c", "Which team?", "select", ("Ops", "Research"))
+# "Which team?" alone is the person's since issue #317 (an employer word outside a motivation)
+CHOICE = agent.Question("c", "Which team interests you?", "select", ("Ops", "Research"))
 YES_NO = agent.Question("y", "Do you enjoy puzzles?", "yes_no")
 YES_NO_SELECT = agent.Question("s", "Kubernetes in production", "select", ("Yes", "No"))
 CLEARANCE = agent.Question("k", "Security clearance level", "text")
@@ -731,7 +743,8 @@ def test_the_apply_queue_runs_one_fill_at_a_time_and_ticks_every_30_seconds() ->
     assert spec.name == queue.APPLY == "jobapp:apply"
     assert spec.max_jobs == 1
     functions = {f.name: f for f in spec.functions}
-    assert set(functions) == {"apply_fill", "apply_submit", "apply_tick"}  # submit: A6
+    # submit: A6; manual: A9's Apply myself session
+    assert set(functions) == {"apply_fill", "apply_submit", "apply_tick", "apply_manual"}
     assert all(f.keep_result_s == 0 and f.max_tries == 1 for f in functions.values())
     (tick,) = spec.cron_jobs
     assert tick.second == {0, 30}

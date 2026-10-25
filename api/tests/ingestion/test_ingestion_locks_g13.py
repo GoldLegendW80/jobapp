@@ -29,11 +29,11 @@ from app.profile.models import Profile
 from tests.agents.run_helpers import add_user, now, save_credential
 from tests.ingestion import merge_helpers as mh
 from tests.ingestion.extract_helpers import key, keyring, settings
-from tests.ingestion.test_ingestion_locks import Path
+from tests.ingestion.test_ingestion_locks import Path, lock_probe
 from tests.ingestion.test_ingestion_locks_g12 import about_to_merge, free, merging, status_of
 from tests.ingestion.test_item_proposals import revisions, stored
 
-_FIXTURES = (key, keyring, settings)
+_FIXTURES = (key, keyring, lock_probe, settings)
 Factory = sessionmaker[Session]
 TRAVEL = ("answers", "travel", "Sometimes", "Alice Martin")
 START = ("answers", "earliest_start", "In January", "June 2023")

@@ -14,9 +14,10 @@
   of the form (one left for them, `you_answer`, or one they override): source `person`, a new
   hash, any approval void (`approved` goes back to `ready`); the submit lease refills and reads it
   back, and a refill by the run keeps it. 200 with the approval view; 422 `{detail, code}` for an
-  unknown field (`unknown_field`: none, a file, a skipped widget) or a value that does not fit it
-  (`wrong_type`: a text for a text, select or combobox, at most 5000 characters; true or false for
-  a checkbox or a yes or no question); 409 `not_editable` once the app clicked or after an end.
+  unknown field (`unknown_field`: none, a file, a skipped widget, a password's box) or a value that
+  does not fit it (`wrong_type`: a text for a text, select or combobox, at most 5000 characters;
+  true or false for a checkbox or a yes or no question); 409 `not_editable` once the app clicked
+  or after an end, `signin_first` while it waits for a sign in.
 - POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
   an approval; cancel: anything before the click).
 - POST /api/applications/{id}/submitted: "It was submitted" on `submit_unknown`.
@@ -40,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.orm import Session
 
 from app import queue as queues
-from app.apply import admin, gate, service, shots
+from app.apply import admin, gate, model_check, service, shots
 from app.apply.models import AnswerSource, Application
 from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
 from app.db import get_session
@@ -94,6 +95,21 @@ class ShotOut(BaseModel):
     created_at: datetime
 
 
+class ClaimOut(BaseModel):
+    field: str | None  # the answer's field_key; None for an answer the checker was not given
+    code: str
+    start: int | None  # where the flagged words stand in the answer's value, when found
+    end: int | None
+
+
+class CheckOut(BaseModel):
+    """The last check by model of this item's free text (A13c, `model_check.view`)."""
+
+    verdict: str
+    current: bool  # it covers the answers shown now
+    claims: list[ClaimOut]
+
+
 class ApprovalView(BaseModel):
     state: str
     dry_run: bool
@@ -101,6 +117,7 @@ class ApprovalView(BaseModel):
     answers: list[AnswerOut]
     documents: dict[str, dict[str, Any]]
     screenshots: list[ShotOut]
+    check: CheckOut | None = None
 
 
 class GateRefusalOut(BaseModel):
@@ -207,6 +224,7 @@ def read_approval(application_id: str, user: CurrentUser, db: Db) -> ApprovalVie
             ShotOut(id=s.id, kind=s.kind.value, created_at=s.created_at)
             for s in shots.of_application(db, user.id, application.id)
         ],
+        check=model_check.view(db, application),
     )
 
 

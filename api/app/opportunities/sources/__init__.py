@@ -33,10 +33,10 @@ reads already in flight finish).
    window, duplicates (same address, same company, title and location, or for a feed same
    company and title, unless the company is the placeholder of an unnamed client: one row
    naming every source that found it), the score, status `found`; a posting the person's never
-   apply rules match (the sweep's whole word match, as for a board) is stored `skipped` with the
-   rule as its note and the `never_apply` events, and counted in the feed's `skipped_by_rule`.
-   The deck and apply read the rules folded (app/apply/guardrails.py), so a "Cybersecurity
-   Engineer" the whole word match lets through is never shown nor applied to. The source is
+   apply rules match (the sweep's folded match of app/jobs/never_apply.py, as for a board and
+   as apply reads them, so "Cybersecurity" or a soft hyphen inside "Security" match too) is
+   stored `skipped` with the rule as its note and the `never_apply` events, and counted in the
+   feed's `skipped_by_rule`; the deck checks the rules again. The source is
    recorded as `remoteok`, `weworkremotely`, `hackernews:freelance` or `hackernews:hiring`; the
    card says "via Remote OK" and links to the posting's address there, as the sources ask.
 

@@ -32,16 +32,20 @@ function count(n: number): string {
  * added goes to Search options, enabled.
  *
  * In Search options (`place="search"`) the card around it carries the title, `held` names why
- * the list cannot change right now (the search has unsaved changes), and `onChanged` runs after
- * every choice that changed the profile, so the page reloads its forms.
+ * the list cannot change right now (the search has unsaved changes), `onChoosing(true)` runs at
+ * the click and `onChoosing(false)` when the choice changed nothing (or failed), and `onChanged`
+ * runs after every choice that changed the profile, so the page reloads its forms and only then
+ * lets them be edited again.
  */
 export function StarterBoards({
   place = "wizard",
   held,
+  onChoosing,
   onChanged,
 }: {
   place?: "wizard" | "search";
   held?: string;
+  onChoosing?: (busy: boolean) => void;
   onChanged?: () => void | Promise<void>;
 } = {}) {
   const inSearch = place === "search";
@@ -58,6 +62,9 @@ export function StarterBoards({
 
   const choose = useMutation({
     mutationFn: chooseStarter,
+    onMutate: () => {
+      onChoosing?.(true);
+    },
     onSuccess: (answer, asked) => {
       client.setQueryData<StarterList>(starterKey, answer.list);
       setTicked((old) =>
@@ -67,6 +74,7 @@ export function StarterBoards({
       );
       setProblem(null);
       if (answer.added.length || asked.remove?.length) void onChanged?.();
+      else onChoosing?.(false);
       if (answer.added.length) {
         // The boards are in the search section now: the summary's figures read it again.
         void client.invalidateQueries({ queryKey: profileKey });
@@ -82,6 +90,7 @@ export function StarterBoards({
       }
     },
     onError: (error) => {
+      onChoosing?.(false);
       setProblem(`That did not work. ${describeError(error)}`);
     },
   });
@@ -194,8 +203,11 @@ export function StarterBoards({
   );
 
   return (
+    // In Search options the card around it holds the one visible heading: the region is named
+    // without a second heading, so a screen reader hears one heading for the card.
     <section
-      aria-labelledby={`${id}-title`}
+      aria-labelledby={inSearch ? undefined : `${id}-title`}
+      aria-label={inSearch ? "Boards and sites to search" : undefined}
       className={
         inSearch
           ? "flex flex-col gap-3"
@@ -203,15 +215,15 @@ export function StarterBoards({
       }
       data-testid="starter-boards"
     >
-      <h3
-        id={`${id}-title`}
-        className={inSearch ? "sr-only" : "text-base font-semibold"}
-      >
-        {WORDING.boardsAndSites}
-      </h3>
-      {held ? (
-        <p className="text-sm font-medium" role="note">
-          {held}
+      {inSearch ? null : (
+        <h3 id={`${id}-title`} className="text-base font-semibold">
+          {WORDING.boardsAndSites}
+        </h3>
+      )}
+      {inSearch ? (
+        // Always in the page, so the reason is announced when the buttons go disabled.
+        <p className={held ? "text-sm font-medium" : "sr-only"} role="status">
+          {held ?? ""}
         </p>
       ) : null}
       {problem ? (

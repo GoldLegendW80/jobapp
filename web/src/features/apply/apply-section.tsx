@@ -27,6 +27,7 @@ import {
   type Approval,
 } from "./apply-api";
 import {
+  APPLY_POLL_MS,
   blockingFields,
   documentLine,
   hasForm,
@@ -41,7 +42,10 @@ import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
-import { LiveViewSlot } from "./live-view-slot";
+import { LiveViewSlot, type LeaseOf } from "./live-view-slot";
+import { ManualPanel } from "./manual-panel";
+import { NeedsPerson } from "./needs-person";
+import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
 import { ShotView } from "./shot-view";
 
@@ -86,6 +90,16 @@ const POLL_RETRY_MS = 1000;
 const STALE_NOTICE =
   "The form or your documents changed since you looked. Check the answers shown now and approve again.";
 
+/** The submit lease in the live view, and the words before it starts. */
+const SUBMIT_STATUS =
+  "The assistant fills the form again with your approved answers, then submits it.";
+const REHEARSAL_STATUS =
+  "A rehearsal: the assistant fills the form again with your approved answers, then stops without submitting it.";
+const SUBMIT_WAITS =
+  "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn. Then you can watch the assistant fill the form again here.";
+const HOLD_WAITS =
+  "After the hold, you can watch the assistant fill the form again here.";
+
 /**
  * The "Apply" section of the job page (SPEC-apply.md, "Frontend"): Apply with Review first, the
  * state of the fill, the answers and what is left for the person, the screenshots and documents,
@@ -113,6 +127,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const application = latest.data ?? null;
   const phase = phaseOf(application);
   const id = application?.id;
+  const manual = application?.mode === "manual";
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(id ?? ""),
@@ -125,16 +140,31 @@ export function ApplySection({ job }: { job: JobDetail }) {
     retryDelay: POLL_RETRY_MS,
   });
   const approval = approvalQuery.data;
+  // A step on the page: the run may wait for the person, and its events say until when.
+  const onPage =
+    application?.state === "needs_person" &&
+    ON_PAGE.has(application.needs ?? "");
+  const retrying =
+    application?.state === "queued" && application.needs === "retry";
   const detail = useQuery({
     queryKey: applicationKey(id ?? ""),
     queryFn: ({ signal }) => getApplication(id as string, signal),
     enabled:
       id !== undefined &&
-      (hasReport(application) || application?.state === "held"),
+      (hasReport(application) ||
+        application?.state === "held" ||
+        onPage ||
+        retrying),
+    refetchInterval: (current) => {
+      const events = current.state.data?.events;
+      const wait = onPage && events ? waitOf(events) : null;
+      return wait && !wait.over ? APPLY_POLL_MS : false;
+    },
   });
 
   const holdUntil =
     application?.state === "held" ? detail.data?.hold_until : undefined;
+  const submitLease = submitLeaseOf(application);
 
   // The state moved: read the form, the report and the posting (it may have become `applied`).
   const state = application?.state;
@@ -147,6 +177,16 @@ export function ApplySection({ job }: { job: JobDetail }) {
     void queryClient.invalidateQueries({ queryKey: applicationKey(id) });
     void queryClient.invalidateQueries({ queryKey: jobKey(job.id) });
   }, [state, id, job.id, queryClient]);
+
+  // The person took the step in the live view and the run went on: follow it.
+  const detailState = detail.data?.state;
+  useEffect(() => {
+    if (onPage && detailState !== undefined && detailState !== state) {
+      void queryClient.invalidateQueries({
+        queryKey: applicationsKey(job.id),
+      });
+    }
+  }, [onPage, detailState, state, job.id, queryClient]);
 
   const settle = (changed?: Application) => {
     if (changed) {
@@ -173,7 +213,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   };
 
   const start = useMutation({
-    mutationFn: () => startApplication(job.id),
+    mutationFn: (mode: "review" | "manual") => startApplication(job.id, mode),
     onMutate: () => {
       setNotice(null);
     },
@@ -316,11 +356,51 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
-          {phase === "waiting" || phase === "filling" ? (
-            <LiveViewSlot waiting={phase === "waiting"} />
+          {!manual ? (
+            <NeedsPerson
+              application={application}
+              job={job}
+              events={onPage ? detail.data?.events : undefined}
+            />
+          ) : null}
+          {phase === "filling" && !manual ? (
+            <LiveViewSlot
+              idle="The assistant is filling the form. A screenshot of the filled form appears here when it is done."
+              leaseOf="any"
+            />
+          ) : null}
+          {phase === "waiting" && !manual ? (
+            <LiveViewSlot
+              idle={
+                retrying
+                  ? detail.data
+                    ? retrySentence(detail.data.events)
+                    : "The last attempt did not finish. The assistant tries again by itself."
+                  : "The browser starts soon. A screenshot of the filled form appears here when it is done."
+              }
+              leaseOf="none"
+            />
+          ) : null}
+          {submitLease && !manual ? (
+            <LiveViewSlot
+              idle={application?.state === "held" ? HOLD_WAITS : SUBMIT_WAITS}
+              leaseOf={submitLease}
+              status={application?.dry_run ? REHEARSAL_STATUS : SUBMIT_STATUS}
+              stopped={application?.state === "held"}
+              submit
+            />
+          ) : null}
+          {application && manual ? (
+            <ManualPanel
+              application={application}
+              onChanged={settle}
+              onFailed={failed}
+            />
           ) : null}
 
-          {application && hasForm(application) ? (
+          {application &&
+          application.needs !== "signin" &&
+          hasForm(application) ? (
             approval ? (
               <FormPanel
                 application={application}
@@ -369,10 +449,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   className="w-full sm:w-fit"
                   disabled={busy}
                   onClick={() => {
-                    start.mutate();
+                    start.mutate("review");
                   }}
                 >
-                  {start.isPending ? (
+                  {start.isPending && start.variables === "review" ? (
                     <LoaderCircle aria-hidden="true" className="animate-spin" />
                   ) : null}
                   Apply (Review first)
@@ -380,10 +460,15 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 <Button
                   variant="outline"
                   className="w-full sm:w-fit"
-                  disabled
-                  title="Coming soon"
+                  disabled={busy}
+                  onClick={() => {
+                    start.mutate("manual");
+                  }}
                 >
-                  Apply myself (coming soon)
+                  {start.isPending && start.variables === "manual" ? (
+                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  ) : null}
+                  Apply myself
                 </Button>
               </>
             ) : null}
@@ -435,7 +520,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 Try again
               </Button>
             ) : null}
-            {canCancel(application) && !holdUntil ? (
+            {canCancel(application) && !manual && !holdUntil ? (
               <Button
                 variant="outline"
                 className="w-full sm:w-fit"
@@ -451,7 +536,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
           {phase === "idle" ? (
             <p className="text-sm text-muted-foreground">
               The assistant fills the form and stops. You look at every answer,
-              then approve.
+              then approve. With Apply myself, you fill and send the form
+              yourself in your browser here.
             </p>
           ) : null}
 
@@ -485,12 +571,27 @@ export function ApplySection({ job }: { job: JobDetail }) {
   );
 }
 
-/** Cancel is offered where the api accepts it and no click happened yet. */
+/**
+ * Cancel is offered where the api accepts it and no click happened yet, a Full auto item the app
+ * still decides on included (a `ready` one in Review first has Reject instead).
+ */
 function canCancel(application: Application | null): boolean {
   if (!application) return false;
+  if (application.state === "ready") return application.mode === "full_auto";
   return ["queued", "filling", "needs_person", "approved", "held"].includes(
     application.state,
   );
+}
+
+/**
+ * This application's submit lease among the person's leases: the one the api names for it, as the
+ * person may have several applications approved or held; null in a state without one.
+ */
+function submitLeaseOf(application: Application | null): LeaseOf | null {
+  if (!application || application.ats === "email") return null;
+  return ["approved", "held", "submitting"].includes(application.state)
+    ? { application: application.id }
+    : null;
 }
 
 function ReviewButtons({

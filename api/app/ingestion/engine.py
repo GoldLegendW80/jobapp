@@ -25,7 +25,7 @@ Rules that hold everywhere in this file:
 * Every change of a run happens under its row lock (`FOR UPDATE`), in the plan's lock order: the
   run row (3), the step row (5), the user's advisory lock of `runs.create_run` (6), the
   `agent_runs` row (7). A document row is only read, never locked, except by `create`, which
-  holds the documents of the new run `FOR KEY SHARE` (4) so that a delete cannot pass it.
+  holds the documents of the new run `FOR NO KEY UPDATE` (4) so that a delete cannot pass it.
 * The `agent_runs` row of a step is read without a lock and written only by the short update of
   a cancel request: a lock held on it would hold back that run's event writes.
 * A step gets its final status only once its agent run has ended (the tools of G9 answer "not
@@ -44,7 +44,7 @@ import logging
 import math
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -220,7 +220,7 @@ def create(
             db.flush()
     except IntegrityError:
         raise ActiveRunError(active_run_id(db, user_id)) from None
-    # The documents `FOR KEY SHARE` (4), after the run row (3): a start waits for the delete of
+    # The documents `FOR NO KEY UPDATE` (4), after the run row (3): a start waits for the delete of
     # one of them in flight and then finds it gone, and a delete that comes after the start
     # finds the run and its steps (G15, `deletion`).
     doc = IngestionDocument
@@ -1065,6 +1065,28 @@ def advance_failed(
     run.advance_failed_at = now
     if not cancelled and run.advance_failures < bound:
         return False
+    _close_stuck(db, run, now)
+    logger.error(
+        "ingestion_run_closed_stuck",
+        extra={
+            "ingestion_run_id": str(run.id),
+            "user_id": str(run.user_id),
+            "failures": run.advance_failures,
+            "status": run.status.value,
+        },
+    )
+    return True
+
+
+def _stuck_end(run: IngestionRun) -> RunStatus:
+    """The status `_close_stuck` closes this run on: `cancelled` when its cancel was asked."""
+    return RunStatus.cancelled if run.cancel_requested_at is not None else RunStatus.failed
+
+
+def _close_stuck(db: Session, run: IngestionRun, now: datetime) -> None:
+    """Close the locked active run that cannot move: `failed` with `STUCK`, or `cancelled` when
+    its cancel was asked (`_stuck_end`)."""
+    cancelled = _stuck_end(run) is RunStatus.cancelled
     current = _running(_steps(db, run.id))
     if current is not None and current.agent_run_id is not None:
         try:
@@ -1102,16 +1124,53 @@ def advance_failed(
     run.paused_at = None
     run.closed_reason = None if cancelled else STUCK
     run.finished_at = now
-    logger.error(
-        "ingestion_run_closed_stuck",
+
+
+@dataclass(frozen=True)
+class HandClose:
+    """What `close_by_hand` found, and did: the run's status before it, the status it ends on
+    (or would end on, on a dry run), its planned steps, the agent run of its running step (asked
+    to stop by the close), and whether it closed the run."""
+
+    status: RunStatus
+    ends: RunStatus
+    planned: int
+    agent_run_id: uuid.UUID | None
+    closed: bool
+
+
+def close_by_hand(
+    db: Session, run_id: uuid.UUID, now: datetime, dry_run: bool = False
+) -> HandClose | None:
+    """The operator's close of a run that cannot move (`python -m app.ingestion.cli close-run`):
+    the close `advance_failed` makes at its last failure, at once, under the run's row lock, in
+    the caller's transaction. A run that has already ended is left untouched, so a second call
+    changes nothing; so is any run on a dry run. None when there is no such run."""
+    run = _lock(db, run_id)
+    if run is None:
+        return None
+    steps = _steps(db, run.id)
+    current = _running(steps)
+    active = run.status in ACTIVE
+    found = HandClose(
+        status=run.status,
+        ends=_stuck_end(run) if active else run.status,
+        planned=sum(1 for step in steps if step.status is StepStatus.planned),
+        agent_run_id=current.agent_run_id if current is not None else None,
+        closed=False,
+    )
+    if dry_run or not active:
+        return found
+    _close_stuck(db, run, now)
+    logger.warning(
+        "ingestion_run_closed_by_hand",
         extra={
             "ingestion_run_id": str(run.id),
             "user_id": str(run.user_id),
-            "failures": run.advance_failures,
             "status": run.status.value,
         },
     )
-    return True
+    return replace(found, closed=True)
 
 
 def _advance_failed(

@@ -42,8 +42,10 @@ location and URL say it, as before.
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
 security, pentest, threat (Harald, 2026-10-06)" has the terms cyber, security, pentest, threat.
-They match as plain terms (whole word, optional plural, case-insensitive) on the company and the
-title. A rule without a colon has no terms and matches nothing.
+They use apply's shared matcher (`jobs.never_apply`) on the company and title: case, accents,
+compatibility forms, hidden characters and lookalike letters are folded, and terms match whole
+words, optional plurals and the start or end of a glued word. A rule without a colon has no
+terms and matches nothing.
 
 Stale sweeps: a running sweep beats every HEARTBEAT_S (`heartbeat_at`), whatever its boards do.
 One picked by a worker whose heartbeat is older than STALE_AFTER (the worker died), or one never
@@ -90,6 +92,7 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
 )
+from app.jobs.never_apply import NeverApplyRule
 from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
@@ -139,27 +142,6 @@ QUEUE_DOWN = "The sweep could not be queued. Try again in a minute."
 
 
 # --- filters ------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class NeverApplyRule:
-    text: str
-    terms: tuple[str, ...]
-    pattern: re.Pattern[str] | None
-
-    @classmethod
-    def parse(cls, text: str) -> "NeverApplyRule":
-        _, colon, body = text.partition(":")
-        body = re.sub(r"\([^)]*\)", " ", body) if colon else ""
-        terms = tuple(
-            term
-            for term in (part.strip(" .!\t") for part in re.split(r"[,;]", body))
-            if term and len(term) <= 200
-        )
-        return cls(text=text, terms=terms, pattern=matching.compile_terms(terms, False))
-
-    def matches(self, company: str, title: str) -> bool:
-        return self.pattern is not None and self.pattern.search(f"{company} {title}") is not None
 
 
 def never_apply_rules(search: SearchSection) -> list[NeverApplyRule]:

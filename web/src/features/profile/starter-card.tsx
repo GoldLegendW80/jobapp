@@ -16,15 +16,20 @@ import { Group } from "./section-ui";
 
 export const STARTER_HELD =
   "Save or undo your changes to the search first: the list adds to your saved search.";
+export const STARTER_BUSY =
+  "Updating your search from the list. The fields below are read only until it is done.";
 
 export function StarterCard({
   profile,
   dirty,
+  onChoosing,
   onChanged,
 }: {
   profile: Profile;
   /** the tab has unsaved changes: the list waits, so a choice never races a pending save */
   dirty: boolean;
+  /** true at the click on a choice, false when it changed nothing or failed */
+  onChoosing: (busy: boolean) => void;
   onChanged: () => void | Promise<void>;
 }) {
   const search = profile.sections.search;
@@ -61,6 +66,7 @@ export function StarterCard({
           <StarterBoards
             place="search"
             held={dirty ? STARTER_HELD : undefined}
+            onChoosing={onChoosing}
             onChanged={onChanged}
           />
         ) : null}

@@ -39,11 +39,12 @@ bonus ("bonus", "prime", "equity", "stock", "RSU", "BSPCE", "commission", "varia
 "signing", "sign-on", "relocation", "allowance", "indemnité", "intéressement", "participation",
 "abondement", "13e mois", "profit sharing", "options", "OTE") or a perk, in English or French
 ("tickets restaurant", "titres restaurant", "meal", "lunch", "voucher", "Swile", "mutuelle",
-"budget", "stipend", "membership", "gym", "credits", "conference", "formation", "training",
-"transport", "Navigo", "home office", "insurance", "per diem", ...): "Tickets restaurant 9 € par
-jour", "Learning budget of €1,000 a year". A comma, a parenthesis, a semicolon, a bar, a bullet
-or a plus right after such a word does not end the clause ("Bonus, €5,000 per year", "Bonus |
-€5,000 per year"), nor does a line break the figure follows at once ("Bonus\\n€5,000 per year").
+"budget", "stipend" (but see below), "membership", "gym", "credits", "conference", "formation",
+"training", "transport", "Navigo", "home office", "insurance", "per diem", ...): "Tickets
+restaurant 9 € par jour", "Learning budget of €1,000 a year". A comma, a parenthesis, a
+semicolon, a bar, a bullet or a plus right after such a word does not end the clause ("Bonus,
+€5,000 per year", "Bonus | €5,000 per year"), nor does a line break the figure follows at once
+("Bonus\\n€5,000 per year").
 After the statement, such a word anywhere in its clause refuses it ("45 K€ brut annuel
 variable", "$5,000 a year annual bonus", "€1,000 a year to spend on conferences", "€60,000 a
 year on target earnings"), with two exceptions: a clause that opens with "with", "avec",
@@ -53,6 +54,17 @@ with great benefits", "40 000 € brut par an hors variable"; "€5,000 a year w
 is refused); and "for a" or "as a" followed by a capitalised run whose last word is not a bonus
 or perk word is a role ("€50,000 per year for a Training Manager"; "as a Performance Bonus" is
 refused).
+A mark right after the figure ("€5,000 a year, bonus", "(bonus)", "+ bonus", "plus bonus", "and a
+bonus") hides nothing (issue #540): the clause one further is read, unless it starts a new sentence
+(a full stop, a line break) or holds a figure of its own, and a bonus or perk word there refuses a
+figure under SALARY_MIN, as an addition does ("€60,000 a year, bonus" is kept). On target
+earnings include the variable part, so OTE refuses the figure right after it, after a mark or
+after "with" ("€60,000 per year (OTE)", "€60,000 a year with OTE"), but not after "plus", "+",
+"excluding", "without" or "hors" (an addition to a base).
+"Stipend" is the person's own pay after an intern word ("Internship stipend of €1,200 per month",
+"PhD stipend", "trainee stipend") or as the first word of the clause before the figure
+("Stipend: €600 per month"), and a perk anywhere else ("Home office stipend", "€1,000 a year
+education stipend").
 "Competitive" and "selon profil" hold no figure, so nothing is found.
 
 A text may state several pays (a salary and a daily rate, or one pay in two currencies): `pays`
@@ -67,7 +79,7 @@ after "no", "not", "non", "pas de", "sans" or "without", is refused (None).
 
 Not found (declared open point): a pay written only in an image, a PDF attachment or a table cell
 the text extraction lost; a pay with a currency the allow list does not name; an hourly rate with
-cents.
+cents ("gratification 4,35 € de l'heure": the columns hold whole figures, issue #540).
 """
 
 import math
@@ -214,6 +226,26 @@ _REFUSED_END = re.compile(
 _ADDITION = re.compile(
     r"\s{0,3}(?:with|avec|hors|excluding|without|plus)(?![^\W\d_])", re.IGNORECASE
 )
+# "stipend" is a perk in a perk phrase ("home office stipend", "education stipend") and the
+# person's own pay after an intern word ("Internship stipend of €1,200 per month") or as the
+# first word of the clause before the figure ("Stipend: €600 per month"), issue #540.
+_STIPEND = re.compile(r"stipends?", re.IGNORECASE)
+_PAY_STIPEND_LEAD = re.compile(
+    r"(?<![^\W\d_])(?:internship|internships|intern|interns|trainee|trainees|student|students|"
+    r"apprentice|apprentices|apprenticeship|phd|doctoral|graduate)\s{1,3}$",
+    re.IGNORECASE,
+)
+_MARK_CHARS = " \t\r\n.,(;|•+:"
+# On target earnings include the variable part: an OTE figure is never the base pay, after the
+# figure at once, between parentheses or after "with" ("€60,000 per year (OTE)", "€60,000 a year
+# with OTE"), issue #540. "plus OTE", "+ OTE", "excluding OTE" add to a base and stay a pay.
+_OTE = re.compile(r"(?<![^\W\d_])(?:ote|on[\s-]+target[\s-]+earnings?)(?![^\W\d_])", re.IGNORECASE)
+_WITH = re.compile(r"\s{0,3}(?:with|avec)(?![^\W\d_])", re.IGNORECASE)
+# The marks after which the clause one further still speaks of the figure ("€5,000 a year,
+# bonus", "(bonus)", "+ bonus", "plus bonus", "and a bonus"); a full stop or a line break starts
+# another sentence.
+_SENTENCE_END = (".", "\n")
+_ADDITION_MARK = re.compile(r"\+|plus", re.IGNORECASE)
 _ROLE_LEAD = re.compile(r"\s{0,3}(?:for|as)\s{1,3}(?:a|an)\s{1,3}", re.IGNORECASE)
 _CAPITALISED_RUN = re.compile(r"[A-Z][\w-]{0,40}(?:\s{1,3}[A-Z][\w-]{0,40}){0,3}")
 _REFUSED_LAST = re.compile(
@@ -229,7 +261,7 @@ _YEAR_FIGURE = re.compile(r"(?:19|20)\d\d|2100")
 # A word that names a pay, before a figure: then a figure from 1900 to 2100 is a pay, not a year.
 _PAY_WORD = re.compile(
     r"(?<![^\W\d_])(?:salaire|salaires|salary|salaries|rémunération|remuneration|"
-    r"gratification|gratifications|pay|wage|wages)(?![^\W\d_])",
+    r"gratification|gratifications|stipend|stipends|pay|wage|wages)(?![^\W\d_])",
     re.IGNORECASE,
 )
 # A word that dates what follows: a figure from 1900 to 2100 right after it is a year, whatever
@@ -310,13 +342,52 @@ def _clause_before(text: str, start: int, *, labelled: bool = False) -> str:
     return window
 
 
-def _clause_after(text: str, end: int) -> str:
+def _refused_word(clause: str, *, opens: bool = False) -> bool:
+    """Whether the clause names a bonus or a perk. "stipend" is pay after an intern word, or as
+    the clause's first word when `opens` (the whole clause before a figure is in view)."""
+    for word in _REFUSED.finditer(clause):
+        if _STIPEND.fullmatch(word.group()):
+            lead = clause[: word.start()]
+            if _PAY_STIPEND_LEAD.search(lead) or (opens and not lead.strip(_MARK_CHARS)):
+                continue
+        return True
+    return False
+
+
+def _refused_after(text: str, end: int, low: Decimal, period: str) -> bool:
+    """Whether what follows a statement makes it a bonus or a perk. A mark right after the
+    figure ("€5,000 a year, bonus", "(bonus)", "+ bonus", "plus bonus", "and a bonus") hides
+    nothing: the clause one further is read (issue #540), unless it is a new sentence or holds
+    a figure of its own. There, OTE refuses the figure (but after "+" or "plus", or after an
+    "excluding" or "hors"), and a bonus or perk word refuses a figure under SALARY_MIN for its
+    period, as an addition does ("€60,000 a year, with bonus" is kept)."""
     window = text[end : end + WINDOW]
     mark = _CLAUSE_MARK.search(window)
-    return window[: mark.start()] if mark else window
+    first = window[: mark.start()] if mark else window
+    if mark is None or first.strip():
+        return _refused_first(first, low, period)
+    # A run of marks with nothing between them is one gap (", plus bonus", ", and a bonus").
+    marks = [mark]
+    while True:
+        if marks[-1].group() in _SENTENCE_END:
+            return False
+        following = _CLAUSE_MARK.search(window, marks[-1].end())
+        second = window[marks[-1].end() : following.start() if following else len(window)]
+        if following is None or second.strip():
+            break
+        marks.append(following)
+    if re.search(r"\d", second):
+        return False  # "€60,000 a year base, €80,000 OTE": the clause is the next figure's
+    if (
+        _OTE.search(second)
+        and not any(_ADDITION_MARK.fullmatch(m.group()) for m in marks)
+        and (not _ADDITION.match(second) or _WITH.match(second))
+    ):
+        return True
+    return _refused_word(second) and low < SALARY_MIN[period]
 
 
-def _refused_after(after: str, low: Decimal, period: str) -> bool:
+def _refused_first(after: str, low: Decimal, period: str) -> bool:
     """Whether the clause right after a statement makes it a bonus or a perk: a refused word
     anywhere in it refuses the figure ("45 K€ brut annuel variable", "$5,000 a year annual
     bonus", "€1,000 a year to spend on conferences", "€60,000 a year on target earnings").
@@ -328,13 +399,15 @@ def _refused_after(after: str, low: Decimal, period: str) -> bool:
     - "for a" or "as a" then a capitalised run whose last word is not refused: a role ("for a
       Training Manager", "as a Senior Equity Analyst"); "as a Performance Bonus" is refused."""
     if _ADDITION.match(after):
-        return _REFUSED.search(after) is not None and low < SALARY_MIN[period]
+        if _WITH.match(after) and _OTE.search(after) and not re.search(r"\d", after):
+            return True  # "€60,000 a year with OTE": an OTE figure, not the base pay
+        return _refused_word(after) and low < SALARY_MIN[period]
     role = _ROLE_LEAD.match(after)
     if role:
         run = _CAPITALISED_RUN.match(after, role.end())
         if run and not _REFUSED_LAST.search(run.group()):
             return False
-    return _REFUSED.search(after) is not None
+    return _refused_word(after)
 
 
 def _a_year(match: re.Match[str], period: str, before: str) -> bool:
@@ -386,7 +459,9 @@ def _statement(text: str, match: re.Match[str]) -> Pay | None:
     if low < max(1, FLOOR[period]) or high > PAY_MAX or low > high:
         return None
     before = _clause_before(text, match.start(), labelled=bool(match.group("before")))
-    if _REFUSED.search(before) or _refused_after(_clause_after(text, match.end()), low, period):
+    begin = match.start() - len(before)
+    opens = begin == 0 or begin > match.start() - WINDOW  # not cut by the window
+    if _refused_word(before, opens=opens) or _refused_after(text, match.end(), low, period):
         return None
     if not ranged and _OPEN_BOUND.search(before):
         return None

@@ -100,8 +100,32 @@ echo "${FAKE_NODE_VERSION:-v22.12.0}"
 EOF
 fake pnpm <<'EOF'
 #!/usr/bin/env bash
-printf 'pnpm %s (in %s, switch %s, on fail %s)\n' "$*" "$PWD" "${npm_config_manage_package_manager_versions:-on}" "${pnpm_config_pm_on_fail:-download}" >>"$CALLS"
-echo "${FAKE_PNPM_VERSION:-9.15.9}"
+printf 'pnpm %s (in %s, switch %s, on fail %s, network %s, auto pin %s, latest %s, no compile cache %s)\n' "$*" "$PWD" "${npm_config_manage_package_manager_versions:-on}" "${pnpm_config_pm_on_fail:-download}" "${COREPACK_ENABLE_NETWORK:-on}" "${COREPACK_ENABLE_AUTO_PIN:-on}" "${COREPACK_DEFAULT_TO_LATEST:-on}" "${NODE_DISABLE_COMPILE_CACHE:-0}" >>"$CALLS"
+# A Corepack shim cannot answer with an empty cache when downloads are disabled.
+if [[ -n "${FAKE_COREPACK_EMPTY:-}" ]]; then
+  [[ "${COREPACK_ENABLE_NETWORK:-}" == 0 ]] || printf 'DOWNLOAD attempted\n' >>"$CALLS"
+  echo 'Network access disabled by the environment: pnpm-10.13.1.tgz' >&2
+  exit 1
+fi
+# A hostile boundary models runtime provisioning before non-version command handlers.
+# pnpm 10's config get follows this path despite Corepack guards; keep 11 version-only too.
+if [[ "$*" != --version && -n "${FAKE_PNPM_USERCONFIG:-}" ]] &&
+  grep -qE '^(use-node-version=|useNodeVersion: )' "$FAKE_PNPM_USERCONFIG"; then
+  mkdir -p "$PNPM_HOME/nodejs"
+  printf 'DOWNLOAD Node runtime attempted\n' >>"$CALLS"
+fi
+if [[ "$1 $2" == 'config get' ]]; then
+  # A query in a pinned project can switch versions before it reads the requested setting.
+  [[ "$PWD" == / && "${COREPACK_ENABLE_NETWORK:-}" == 0 ]] || printf 'DOWNLOAD attempted\n' >>"$CALLS"
+  [[ -z "${FAKE_PNPM_CONFIG_FAILS:-}" ]] || exit 1
+  case "$3" in
+  manage-package-manager-versions) echo "${FAKE_PNPM_MANAGE:-undefined}" ;;
+  pm-on-fail) echo "${FAKE_PNPM_ON_FAIL:-undefined}" ;;
+  *) exit 1 ;;
+  esac
+else
+  echo "${FAKE_PNPM_VERSION-9.15.9}"
+fi
 EOF
 fake python3 <<'EOF'
 #!/usr/bin/env bash
@@ -132,7 +156,7 @@ EOF
 export CALLS
 export PATH="$BIN:$SYS"
 unset FAKE_GH_SIGNED_OUT FAKE_GH_NO_SCOPES FAKE_GH_SCOPES FAKE_DOCKER_DOWN FAKE_SC_LOCAL FAKE_SC_UNREACHABLE \
-  FAKE_NODE_VERSION FAKE_PNPM_VERSION FAKE_PYTHON_VERSION FAKE_SSH_NO_ALIAS FAKE_SSH_FAILS \
+  FAKE_NODE_VERSION FAKE_PNPM_VERSION FAKE_PNPM_MANAGE FAKE_PNPM_ON_FAIL FAKE_PNPM_CONFIG_FAILS FAKE_PNPM_USERCONFIG FAKE_COREPACK_EMPTY FAKE_PYTHON_VERSION FAKE_SSH_NO_ALIAS FAKE_SSH_FAILS \
   DEV_SETUP_JETSON_ALIAS
 export DEV_SETUP_MIN_FREE_GIB=0
 
@@ -167,7 +191,7 @@ misses() { # misses <n>: exactly n MISS lines and the matching last line
 calls_lack() { if grep -qE -- "$1" "$CALLS"; then fail "a call matches '$1': $(cat "$CALLS")"; fi; }
 # The one pnpm call: its version, from / (no packageManager above) with both version switches off.
 pnpm_asked_from_root() {
-  local want='pnpm --version (in /, switch false, on fail ignore)' others
+  local want='pnpm --version (in /, switch false, on fail ignore, network 0, auto pin 0, latest 0, no compile cache 1)' others
   grep -qxF "$want" "$CALLS" || fail "pnpm --version not asked from / with the switches off: $(cat "$CALLS")"
   others="$(grep '^pnpm ' "$CALLS" | grep -vxF "$want" || true)"
   [[ -z "$others" ]] || fail "another pnpm call: $others"
@@ -291,17 +315,74 @@ for v in 8.15.9 7.33.0; do
   out_has "fix: npm install -g pnpm@9.15.9"
   out_lacks "corepack"
 done
-FAKE_PNPM_VERSION=9.0.1 run 0
-out_has "ok    pnpm 9.0.1 (web/package.json pins 9.15.9)"
+for v in 9.0.1 9.1.0 9.1.9; do
+  FAKE_PNPM_VERSION="$v" run 1
+  misses 1
+  out_has "MISS  pnpm $v, web/package.json pins 9.15.9"
+  out_has "pnpm 9.2.0 or newer is needed for a different 9.x pin"
+done
+FAKE_PNPM_VERSION=9.2.0 run 0
+out_has "ok    pnpm 9.2.0 (web/package.json pins 9.15.9)"
+# Invented user runtime settings must not trigger pnpm's pre-handler provisioning path.
+for v in 10.0.0 10.17.1 11.0.0 11.2.0; do
+  if [[ "$v" == 10.* ]]; then
+    printf 'use-node-version=22.12.0\n' >"$WORK/node-config"
+  else
+    printf 'useNodeVersion: 22.12.0\n' >"$WORK/node-config"
+  fi
+  FAKE_PNPM_VERSION="$v" FAKE_PNPM_USERCONFIG="$WORK/node-config" PNPM_HOME="$WORK/pnpm-home" run 0
+  [[ ! -e "$WORK/pnpm-home" ]] || fail "pnpm $v created a runtime cache during the read-only check"
+  calls_lack '^DOWNLOAD'
+  pnpm_asked_from_root
+done
+ok "pnpm 10 and 11 with user Node runtime settings: only the version probe, no runtime cache or download attempt"
 for v in 10.0.0 10.17.1 11.2.0; do
   FAKE_PNPM_VERSION="$v" run 0
-  out_has "ok    pnpm $v, runs the pinned 9.15.9 itself (packageManager of web/package.json)"
+  out_has "WARN  pnpm $v, version switching could not be checked for the 9.15.9 pin"
+  out_lacks "runs the pinned"
+  out_lacks "ok    pnpm $v"
+  calls_lack '^DOWNLOAD'
+  pnpm_asked_from_root
 done
-ok "pnpm: the pinned major passes, 10 or later runs the 9.15.9 pin itself and passes, an older major is a MISS fixed with npm"
+ok "pnpm: 9.x below 9.2 is a MISS, compatible 9.x passes, newer majors warn about project settings"
+
+for setting in undefined true false unprinted-config-value; do
+  FAKE_PNPM_VERSION=10.17.1 FAKE_PNPM_MANAGE="$setting" run 0
+  out_has "WARN  pnpm 10.17.1, version switching could not be checked"
+  out_has "check managePackageManagerVersions=true (the default) and any user or web project overrides"
+  out_lacks "unprinted-config-value"
+  pnpm_asked_from_root
+done
+for setting in undefined download ignore warn error false; do
+  FAKE_PNPM_VERSION=11.2.0 FAKE_PNPM_ON_FAIL="$setting" run 0
+  out_has "WARN  pnpm 11.2.0, version switching could not be checked"
+  out_has "check pmOnFail=download (the default) and any user or web project overrides"
+  pnpm_asked_from_root
+done
+FAKE_PNPM_VERSION=10.17.1 FAKE_PNPM_CONFIG_FAILS=1 run 0
+out_has "WARN  pnpm 10.17.1, version switching could not be checked"
+pnpm_asked_from_root
+FAKE_PNPM_VERSION=12.0.0 run 0
+out_has "WARN  pnpm 12.0.0, version switching could not be checked"
+pnpm_asked_from_root
+ok "pnpm: default, enabled and disabled user switching stay unverified with a setting reminder; unavailable config commands and future majors warn without a query"
+
+FAKE_COREPACK_EMPTY=1 run 1
+misses 1
+out_has "pnpm is installed but its version could not be read with downloads disabled"
+out_lacks "Network access disabled"
+calls_lack '^DOWNLOAD'
+FAKE_PNPM_VERSION='' run 1
+misses 1
+out_has "pnpm is installed but its version could not be read with downloads disabled"
+ok "an empty Corepack cache and an unreadable version report a MISS without downloading or leaking the probe error"
 
 pin_pnpm() { # pin_pnpm <version>: the packageManager of the throwaway web/package.json
   printf '{\n  "name": "web",\n  "packageManager": "pnpm@%s",\n  "engines": {\n    "node": ">=22.12.0"\n  }\n}\n' "$1" >"$REPO/web/package.json"
 }
+pin_pnpm 9.1.0
+FAKE_PNPM_VERSION=9.1.0 run 0
+out_has "ok    pnpm 9.1.0 (web/package.json pins 9.1.0)"
 pin_pnpm 8.15.9
 FAKE_PNPM_VERSION=9.15.9 run 1
 misses 1
@@ -312,7 +393,7 @@ FAKE_PNPM_VERSION=10.17.1 run 1
 misses 1
 out_has "fix: npm install -g pnpm@11.1.0"
 pin_pnpm 9.15.9
-ok "pnpm above the pinned major passes only from 10 on (9 over an 8 pin is a MISS), and under the pin is a MISS (10 under 11)"
+ok "pnpm above the pinned major warns only from 10 on (9 over an 8 pin is a MISS), and under the pin is a MISS (10 under 11)"
 
 mv "$BIN/pnpm" "$WORK/pnpm.saved"
 run 1

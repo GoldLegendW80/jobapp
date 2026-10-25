@@ -2,7 +2,8 @@
 
 - GET /api/browser answers `{available, profile, lease, holder, queue}`: whether browserd answers,
   the person's profile (size and last use; never a file of it), their own current lease (with,
-  during a sign in hand off, `waiting_person`, the site and the minutes left: B12a), who
+  during a sign in hand off, `waiting_person`, the site and the minutes left: B12a; on apply's
+  submit lease, the id of the application it sends), who
   holds the browser as seen by this person (`you`, `other`, or null: never who, nor why), and
   their places in the queue with the estimated wait.
 - POST /api/browser/sessions `{purpose: "look" | "signin", address?}` starts a session of the
@@ -110,13 +111,16 @@ class LeaseOut(BaseModel):
     automation: bool
     state: Literal["starting", "active", "waiting_person"]
     wait_reason: str | None
-    wait_site: str | None
+    # B12b: the host of the address browserd noted for the sign in, never the model's words.
+    wait_host: str | None
     wait_deadline: datetime | None
     # B12a: the whole minutes a sign in hand off still waits for the person, rounded up.
     wait_minutes_left: int | None
     started_at: datetime
     active_s: int
     max_s: int
+    # The application a submit lease sends: its job page shows that application's lease only.
+    application_id: str | None
 
 
 class QueueOut(BaseModel):
@@ -165,12 +169,13 @@ def _lease_out(lease: Lease, now: float) -> LeaseOut:
         automation=lease.automation,
         state=lease.state,  # type: ignore[arg-type]
         wait_reason=lease.wait_reason,
-        wait_site=lease.wait_site,
+        wait_host=lease.wait_host,
         wait_deadline=_when(lease.wait_deadline),
         wait_minutes_left=_minutes_left(lease, now),
         started_at=datetime.fromtimestamp(lease.started_at, UTC),
         active_s=int(lease.active_s(now)),
         max_s=lease.max_s,
+        application_id=lease.application_id,
     )
 
 

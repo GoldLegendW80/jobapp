@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -318,14 +319,19 @@ def test_plain_text_keeps_paragraphs_and_drops_markup() -> None:
 # --- the client --------------------------------------------------------------------------------
 
 
-def read_all(server: Any, variant: str, **client: Any) -> dict[str, Any]:
-    """Each kind's postings, or its error code, from `variant` of the fake server."""
+def read_all(
+    server: Any, variant: str, *, kinds: set[str] | None = None, **client: Any
+) -> dict[str, Any]:
+    """Each kind's postings (or only `kinds`), or its error code, from `variant` of the fake
+    server."""
 
     async def go() -> dict[str, Any]:
         answers: dict[str, Any] = {}
         options = {"timeout_s": 1.0, "sleep": no_sleep, **client}
         async with FeedClient(stub_base_url=server.base(variant), **options) as c:
             for kind, reader in sources.readers(50).items():
+                if kinds is not None and kind not in kinds:
+                    continue
                 try:
                     answers[kind] = await reader(c, Feed(kind=kind))
                 except FeedError as exc:
@@ -362,13 +368,42 @@ def test_429_once_is_retried(feeds_stub: Any) -> None:
     assert len(answers["weworkremotely"]) == 3
 
 
-def test_one_request_per_feed_and_the_thread_reads_its_comments_only(feeds_stub: Any) -> None:
-    read_all(feeds_stub, "many")
-    assert requests_to(feeds_stub, "/many/remoteok/api") == 1
-    assert requests_to(feeds_stub, "/many/weworkremotely/") == 1
-    # Two threads: the account twice, the submissions up to each thread, 50 comments each.
-    assert requests_to(feeds_stub, "/user/whoishiring.json") == 2
-    assert requests_to(feeds_stub, "/many/hackernews/v0/item/") == 2 + 3 + 50 * 2
+@pytest.fixture
+def get_calls(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
+    """Calls of `FeedClient.get` per address. A retry happens inside `get`, so a read past the
+    client's timeout on a loaded machine is still one call, and a real duplicate read is two."""
+    calls: Counter[str] = Counter()
+    real = FeedClient.get
+
+    async def counted(self: FeedClient, url: str, *args: Any, **options: Any) -> bytes:
+        calls[url] += 1
+        return await real(self, url, *args, **options)
+
+    monkeypatch.setattr(FeedClient, "get", counted)
+    return calls
+
+
+def test_one_request_per_feed_and_the_thread_reads_its_comments_only(
+    feeds_stub: Any, get_calls: Counter[str]
+) -> None:
+    read: dict[str, Counter[str]] = {}
+    for kind in sources.readers(50):
+        get_calls.clear()
+        read_all(feeds_stub, "many", kinds={kind}, timeout_s=10.0)
+        read[kind] = Counter(get_calls)
+    # Every address is asked for exactly once.
+    for kind, urls in read.items():
+        assert set(urls.values()) == {1}, (kind, urls)
+    assert len(read["remoteok"]) == 1
+    assert next(iter(read["remoteok"])).endswith("/many/remoteok/api")
+    assert len(read["weworkremotely"]) == 1
+    assert "/many/weworkremotely/" in next(iter(read["weworkremotely"]))
+    # Each thread: the account, the submissions up to the thread (3003, 3002, then 3001 for
+    # the hiring one), 50 comments.
+    for kind, submissions in (("hackernews_freelance", 2), ("hackernews_hiring", 3)):
+        assert sum("/user/whoishiring.json" in url for url in read[kind]) == 1, kind
+        items = [url for url in read[kind] if "/many/hackernews/v0/item/" in url]
+        assert len(items) == submissions + 50, kind
 
 
 def test_a_thread_whose_every_comment_failed_reports_the_error() -> None:
@@ -440,14 +475,17 @@ def test_a_sweep_reads_the_enabled_feeds_and_stores_their_missions(
         "Forward Deployed Engineer",  # We Work Remotely, contract
         "GenAI engineer for an LLM evaluation pipeline",  # Hacker News, a client
         "AI engineer",  # Hacker News, the long post
-        # Spellings the sweep's whole word match lets through, for a feed as for a board (the
-        # deck and apply read the rules folded: test_the_deck_shows_the_missions...).
+    }
+    # The never apply rule, as for a board: stored `skipped`, the rule as the note. The sweep
+    # reads the rules folded, as apply does (app/jobs/never_apply.py, #601), so "Cybersecurity"
+    # and a soft hyphen inside "Security" are skipped too.
+    ruled = {title: job for title, job in found.items() if job.status is JobStatus.skipped}
+    assert set(ruled) == {
+        "Threat AI Engineer",
+        "Security AI engineer",
         "Cybersecurity AI Engineer",
         "Secu\u00adrity AI Engineer",
     }
-    # The never apply rule, as for a board: stored `skipped`, the rule as the note.
-    ruled = {title: job for title, job in found.items() if job.status is JobStatus.skipped}
-    assert set(ruled) == {"Threat AI Engineer", "Security AI engineer"}
     assert all(job.notes == OWNER_RULE for job in ruled.values())
     assert ruled["Threat AI Engineer"].source == "remoteok"
     assert ruled["Security AI engineer"].source == "hackernews:freelance"
@@ -477,10 +515,10 @@ def test_a_sweep_reads_the_enabled_feeds_and_stores_their_missions(
     assert not any("Ingénieur" in title for title in found)
     reported = entries(done)
     assert reported["remoteok"]["error"] is None
-    assert reported["remoteok"]["skipped_by_rule"] == 1
+    assert reported["remoteok"]["skipped_by_rule"] == 3
     assert reported["weworkremotely"]["skipped_by_rule"] == 0
     assert reported["hackernews_freelance"]["skipped_by_rule"] == 1
-    assert done.stats["skipped_by_rule"] == 2
+    assert done.stats["skipped_by_rule"] == 4
     assert reported["remoteok"]["postings"] == 6
     assert reported["weworkremotely"]["postings"] == 1  # Larkspur's was a duplicate
     assert reported["hackernews_freelance"]["postings"] == 3
@@ -517,8 +555,8 @@ def test_the_deck_shows_the_missions_with_their_source(
     assert mission["source"] == "remoteok"
     assert mission["url"].startswith("https://remoteok.com/remote-jobs/")
     assert mission["contract_type"] == "Freelance"
-    # Every never apply spelling: skipped by the sweep ("Threat"), or stored by its whole word
-    # match and hidden by the deck's folded one ("Cybersecurity", a soft hyphen in "Security").
+    # Every never apply spelling is skipped by the sweep's folded match ("Threat",
+    # "Cybersecurity", a soft hyphen in "Security"), and the deck checks again.
     titles = [card["title"] for card in cards]
     assert not any("ecur" in t or "Cyber" in t or "Threat" in t for t in titles), titles
 
@@ -672,14 +710,21 @@ def test_the_days_window_applies_to_a_feed(
 
 
 def test_the_thread_reads_at_most_the_comments_allowed(
-    factory: sessionmaker[Session], person_a: Person, fake_ats: FakeAts, feeds_stub: Any
+    factory: sessionmaker[Session],
+    person_a: Person,
+    fake_ats: FakeAts,
+    feeds_stub: Any,
+    get_calls: Counter[str],
 ) -> None:
     set_profile(factory, person_a.user_id, feeds_search(feed("hackernews_freelance")))
-    done = sweep_feeds(factory, person_a, fake_ats, runner(feeds_stub, "many", max_comments=10))
+    hook = runner(feeds_stub, "many", max_comments=10, timeout_s=10.0)
+    done = sweep_feeds(factory, person_a, fake_ats, hook)
     assert done.status is SweepStatus.done
     assert entries(done)["hackernews_freelance"]["postings"] == 10
     # The account, the submissions up to the freelance thread (3003 then 3002), 10 comments.
-    assert requests_to(feeds_stub, "/many/hackernews/") == 1 + 2 + 10
+    read = {url: n for url, n in get_calls.items() if "/many/hackernews/" in url}
+    assert set(read.values()) == {1}
+    assert len(read) == 1 + 2 + 10
 
 
 def test_a_store_failure_is_reported_without_the_text(

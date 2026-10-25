@@ -28,6 +28,7 @@ import { HandoffBanner } from "./handoff-banner";
 import { LinkedInCard } from "./linkedin-card";
 import { LiveBrowser } from "./live-browser";
 import { SignInButton } from "./signin-button";
+import { handoffOf } from "./use-handoff";
 
 // A place in the queue is kept by asking again within 60 s (browser B3); the card asks every 20 s.
 const KEEP_PLACE_MS = 20_000;
@@ -62,6 +63,8 @@ export function BrowserCard() {
     },
   });
   const lease = mine(query.data);
+  // A sign in hand off shows its own live view, with the person at the keyboard, in the banner.
+  const handoff = handoffOf(query.data);
   // Once the browser is ours the place in the queue is spent.
   const waiting = lease ? null : queued;
   const place = waiting?.place ?? null;
@@ -116,7 +119,7 @@ export function BrowserCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <HandoffBanner />
+        <HandoffBanner liveOpen />
         {query.isPending ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle aria-hidden className="size-4 animate-spin" />
@@ -126,7 +129,7 @@ export function BrowserCard() {
           <p role="status" className="text-sm text-muted-foreground">
             Your browser is starting.
           </p>
-        ) : lease ? (
+        ) : handoff ? null : lease ? (
           <LiveBrowser key={lease.id} person={!lease.automation} />
         ) : place ? (
           <p role="status" className="text-sm text-muted-foreground">

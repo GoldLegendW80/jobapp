@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.browser.client import BrowserError, ended_of
-from app.browser.leases import MAX_GRACE_S, StoreUnavailableError
+from app.browser.leases import HOST_MAX, MAX_GRACE_S, StoreUnavailableError
 from app.browser.tools import LeaseTools
 
 POLL_S = 2.0
@@ -105,6 +105,8 @@ async def request_signin(
     if code != "waiting_person":
         if code == "nobody_watching":
             return Outcome("nobody_watching")
+        if code == "lease_ended":  # a Cancel during the swap, or a swap that failed
+            return Outcome("ended")
         message = answer.get("message")
         return Outcome(
             code if isinstance(code, str) else "refused",
@@ -114,7 +116,7 @@ async def request_signin(
     if left is None:  # a second call: the hand off under way has its own seconds left
         left = await _left_now(tools)
     left = tools.leases.session_max_s if left is None else min(left, tools.leases.session_max_s)
-    return await _poll(tools, site, clock() + left + MAX_GRACE_S, budget_s, clock, sleep)
+    return await _poll(tools, clock() + left + MAX_GRACE_S, budget_s, clock, sleep)
 
 
 async def _left_now(tools: LeaseTools) -> int | None:
@@ -131,7 +133,6 @@ async def _left_now(tools: LeaseTools) -> int | None:
 
 async def _poll(
     tools: LeaseTools,
-    site: str,
     end_at: float,
     budget_s: float | None,
     clock: Callable[[], float],
@@ -154,9 +155,9 @@ async def _poll(
                 return Outcome(reason if reason in TEXTS else "ended")
             try:
                 if lease.get("state") == "waiting_person" and not synced:
-                    shown = plain(lease.get("wait_site"), 80) or plain(site, 80)
+                    host = plain(lease.get("wait_host"), HOST_MAX)
                     left = _seconds(lease.get("wait_left_s"))
-                    await tools.leases.wait_person(user_id, lease_id, "signin", shown, left)
+                    await tools.leases.wait_person(user_id, lease_id, "signin", host, left)
                     synced = True
                 elif lease.get("state") == "active":
                     await tools.leases.resume(user_id, lease_id)

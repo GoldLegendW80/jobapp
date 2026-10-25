@@ -1,11 +1,11 @@
 """The edge cases of templates 9 to 12 (task D20), beside the table driven tests of
 test_templates.py that every folder passes: `grid` with competencies and skills of very different
 lengths, `mono` with accented text in its monospace runs, `executive` with its small caps headings
-in French; the contrast of every text colour of the four, no dash printed as a separator, and each
-of the four distinct in layout from every other template (not a recolour). Marked `docker`: the
-same cases through the real renderer, with the geometry and the fonts of the PDF (pypdfium2
-character boxes and font names), a long name and long contact lines kept whole in the header,
-and the text order of the two tagged ats friendly.
+in French; the contrast of every text colour of the four, and each of the four distinct in layout
+from every other template (not a recolour); no dash as a separator is in test_templates_every.py,
+over every template. Marked `docker`: the same cases through the real renderer, with the
+geometry and the fonts of the PDF (pypdfium2 character boxes and font names), a long name and
+long contact lines kept whole in the header, and the text order of the two tagged ats friendly.
 
 `grid` runs with eight competencies, the content's cap (`content.COMPETENCIES_MAX`, D2), beside
 twelve skills of the same spread of lengths, all in the grid of tags.
@@ -27,7 +27,6 @@ from PIL import Image, ImageChops
 from app.documents import content as c
 from app.documents import templates
 from app.documents.profile_view import Employer, Identity, Language, ProfileView, School
-from app.documents.templates import thumbnails
 from tests.documents.test_templates import (
     ON,
     SLUGS,
@@ -53,7 +52,6 @@ from tests.documents.test_templates_d19 import (
 
 D20 = ("accent", "executive", "grid", "mono")
 ATS = [slug for slug in D20 if "ats friendly" in template(slug).tags]
-DASHES = ("—", "–", " - ")
 
 # Eight competencies (the content's cap) from 2 to 98 characters, and twelve skills from 1 to 100.
 COMPETENCIES = [
@@ -279,24 +277,6 @@ def css_content_strings(css: str) -> list[str]:
 )
 def test_css_content_strings_reads_both_quotes_and_escapes(css: str, strings: list[str]) -> None:
     assert css_content_strings(css) == strings
-
-
-@pytest.mark.parametrize("slug", SLUGS)
-def test_no_dash_is_printed_as_a_separator(slug: str) -> None:
-    """The text a template prints of its own: its manifest's names and descriptions, the text of
-    its CSS `content` (either quotes, escapes decoded), and the page it builds from the sample in
-    both languages."""
-    found = template(slug)
-    own = [*found.name.values(), *found.description.values()]
-    own += css_content_strings(found.files["style.css"])
-    for kind in templates.KINDS:
-        for language in templates.LANGUAGES:
-            sample = thumbnails.sample()[kind]
-            view = thumbnails.sample_view()
-            html = templates.build_html(found, kind, sample, view, language, 0, ON)
-            own.append(assert_authoring(html).body)
-    for text in own:
-        assert not any(dash in text for dash in DASHES), (slug, text[:120])
 
 
 def normalised(found: templates.Template) -> str:

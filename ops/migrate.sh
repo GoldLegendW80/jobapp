@@ -15,6 +15,11 @@
 # Fails safe. Any failure exits non zero before anything was restarted:
 #   a failing migration   alembic runs the whole upgrade in one transaction (alembic/env.py), so
 #                         Postgres rolls it back and the schema is what it was
+#   a lock timeout        a statement that waited LOCK_TIMEOUT (5 s) for a lock the running
+#                         release holds fails with SQLSTATE 55P03 and the upgrade rolls back
+#                         whole. That is no fault of the migration, so it is run again, at most
+#                         MIGRATE_ATTEMPTS times in all, MIGRATE_RETRY_WAIT_S apart (issue #408);
+#                         after the last one it stops with "lock timeout: run the deploy again"
 #   a timeout             the container is killed after MIGRATE_TIMEOUT_S. Postgres only notices
 #                         a client that went away when the running statement ends, and would
 #                         keep the migration's locks until then, so the sessions of this database
@@ -42,12 +47,15 @@
 #
 # Settings from the environment: COMPOSE (default: docker compose -f compose.yml --profile tunnel),
 # MIGRATE_TIMEOUT_S (default 300), MIGRATE_CONTAINER (default jobapp-migrate, one per project),
-# MIGRATE_LOG_DIR (default: logs in BACKUP_DIR, else ~/jobapp-backups/logs).
+# MIGRATE_LOG_DIR (default: logs in BACKUP_DIR, else ~/jobapp-backups/logs), MIGRATE_ATTEMPTS
+# (default 3) and MIGRATE_RETRY_WAIT_S (default 5) for a lock timeout.
 set -euo pipefail
 export LC_ALL=C
 
 COMPOSE="${COMPOSE:-docker compose -f compose.yml --profile tunnel}"
 TIMEOUT_S="${MIGRATE_TIMEOUT_S:-300}"
+ATTEMPTS="${MIGRATE_ATTEMPTS:-3}"
+RETRY_WAIT_S="${MIGRATE_RETRY_WAIT_S:-5}"
 NAME="${MIGRATE_CONTAINER:-jobapp-migrate}"
 LOG_DIR="${MIGRATE_LOG_DIR:-${BACKUP_DIR:-$HOME/jobapp-backups}/logs}"
 LOG_KEEP=20
@@ -80,21 +88,34 @@ figures() {
       printf "   step: %s -> %s\n", from, to; fflush()
     }'
 }
-# failed_at <file>: the step a failed run was in, then the class of the last exception (a dotted
-# name or one ending in Error or Exception, at the start of a line), each `-` when there is none.
+# attempt_mark <n>: the line written to the kept file before each attempt (through figures, so it
+# never reaches the output), where the figures of failed_at start again.
+attempt_mark() { printf '== migrate.sh attempt %s of %s ==\n' "$1" "$ATTEMPTS"; }
+# failed_at <file>: four figures of the last attempt in <file> (the lines after the last attempt
+# mark): the step it was in, the class of its last exception (a dotted name or one ending in Error
+# or Exception, at the start of a line), each `-` when there is none; then `lock` when that last
+# exception line is a lock timeout (SQLSTATE 55P03, psycopg's LockNotAvailable: the upgrade waited
+# on the running release), `-` otherwise; then how many steps it started. Only the last exception
+# line decides the lock timeout, so a migration that printed those words, or a lock timeout caught
+# before another failure, is that other failure.
 failed_at() {
   awk '
-    /Running upgrade / { s = $0; sub(/.*Running upgrade /, "", s); split(s, a, " -> "); from = a[1]; to = a[2]; sub(/,.*/, "", to); if (from == "") from = "base"; step = from " -> " to }
-    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { c = $0; sub(/:.*/, "", c); cls = c }
+    /^== migrate\.sh attempt [0-9]+ of [0-9]+ ==$/ { step = ""; cls = ""; last = ""; n = 0; next }
+    /Running upgrade / { n++; s = $0; sub(/.*Running upgrade /, "", s); split(s, a, " -> "); from = a[1]; to = a[2]; sub(/,.*/, "", to); if (from == "") from = "base"; step = from " -> " to }
+    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { last = $0; c = $0; sub(/:.*/, "", c); cls = c }
     END {
       if (step !~ /^[A-Za-z0-9_]+ -> [A-Za-z0-9_]+$/) step = "-"
       if (cls == "") cls = "-"
       print step; print cls
+      print ((last ~ /LockNotAvailable|55P03|canceling statement due to lock timeout/) ? "lock" : "-")
+      print n + 0
     }' "$1"
 }
 
 [[ $# -eq 0 ]] || die "usage: ops/migrate.sh (no argument; settings come from the environment)"
 [[ "$TIMEOUT_S" =~ ^[1-9][0-9]*$ ]] || die "MIGRATE_TIMEOUT_S must be a whole number of seconds, got '$TIMEOUT_S'"
+[[ "$ATTEMPTS" =~ ^[1-9]$ ]] || die "MIGRATE_ATTEMPTS must be a whole number from 1 to 9, got '$ATTEMPTS'"
+[[ "$RETRY_WAIT_S" =~ ^[0-9]+$ ]] || die "MIGRATE_RETRY_WAIT_S must be a whole number of seconds, got '$RETRY_WAIT_S'"
 [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "MIGRATE_CONTAINER must be a container name, got '$NAME'"
 [[ -f compose.yml && -f .env ]] || die "no deployed tree here ($PWD): compose.yml and .env are needed"
 command -v timeout >/dev/null || die "the timeout command (coreutils) is missing: nothing was run"
@@ -139,10 +160,24 @@ LOG="$LOG_DIR/migrate-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 info "alembic upgrade head in the one off container $NAME (new api image, at most ${TIMEOUT_S}s); its output is kept on this machine in ${LOG##*/}"
 STARTED=1
 start=$SECONDS
-rc=0
-# shellcheck disable=SC2086 # $COMPOSE is a command with its arguments
-timeout -k 20 "$TIMEOUT_S" $COMPOSE run --rm --no-deps -T --name "$NAME" api \
-  sh -c 'alembic upgrade head && alembic current' </dev/null 2>&1 | figures "$LOG" || rc="${PIPESTATUS[0]}"
+attempt=1
+while :; do
+  rc=0
+  attempt_mark "$attempt" | figures "$LOG"
+  # shellcheck disable=SC2086 # $COMPOSE is a command with its arguments
+  timeout -k 20 "$TIMEOUT_S" $COMPOSE run --rm --no-deps -T --name "$NAME" api \
+    sh -c 'alembic upgrade head && alembic current' </dev/null 2>&1 | figures "$LOG" || rc="${PIPESTATUS[0]}"
+  locked=0
+  if ((rc != 0 && rc != 124 && rc != 137)); then
+    { read -r _ && read -r _ && read -r lock; } < <(failed_at "$LOG")
+    [[ "$lock" != lock ]] || locked=1
+  fi
+  ((locked == 1 && attempt < ATTEMPTS)) || break
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  info "lock timeout (SQLSTATE 55P03) in attempt $attempt of $ATTEMPTS: the upgrade was rolled back whole; trying again in ${RETRY_WAIT_S}s"
+  sleep "$RETRY_WAIT_S"
+  attempt=$((attempt + 1))
+done
 
 elapsed=$((SECONDS - start))
 if ((rc == 124 || rc == 137)); then
@@ -172,12 +207,16 @@ if ((rc != 0)); then
   { read -r step && read -r cls; } < <(failed_at "$LOG")
   info "failed in step: $step"
   info "error: $cls"
+  if ((locked == 1)); then
+    die "lock timeout: run the deploy again. A statement waited more than 5s for a lock the running release holds (SQLSTATE 55P03) in each of $attempt attempts; the upgrade runs in one transaction, so the schema is what it was, and nothing was restarted"
+  fi
   die "alembic upgrade head failed (exit $rc; the whole output is on this machine in ${LOG##*/}): the upgrade runs in one transaction, so the schema is what it was, and nothing was restarted. Fix the migration and deploy again"
 fi
 
 revision="$(grep -E '^[A-Za-z0-9_]+ \(head\)$' "$LOG" | tail -n 1 || true)"
 info "revision: ${revision:--}"
-applied="$(grep -c 'Running upgrade ' "$LOG" || true)"
+# The steps of the attempt that succeeded: an earlier one rolled back after a lock timeout.
+{ read -r _ && read -r _ && read -r _ && read -r applied; } < <(failed_at "$LOG")
 if ((applied > 0)); then
   info "migrations applied: $applied, in $((SECONDS - start))s; the schema is at head and the previous release still serves"
 else

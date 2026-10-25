@@ -105,13 +105,36 @@ function waitingLine(needs: string | null): string {
   if (needs?.startsWith("documents:")) {
     return "Waiting for your CV and letter to be written. The form is filled once they are ready.";
   }
+  if (needs === "retry") {
+    return "The last attempt did not finish, so the assistant tries again later by itself. Nothing was sent.";
+  }
+  if (needs === "browser_signin") {
+    return "Waiting for you to finish signing in to a site in your browser. The form is filled after that.";
+  }
   return "Waiting for a browser. Starting in a few seconds, and it can take up to a minute.";
 }
+
+/** Apply myself: the person fills and sends the form, the app only records it (A9). */
+const MANUAL_LINES: Record<string, string> = {
+  queued: "Opening your browser on the form. It can take up to a minute.",
+  filling:
+    "The form is open in your browser below. You fill it and click its Submit button yourself.",
+  cancelled:
+    "You closed the last session without recording it as sent. Nothing was submitted by the app.",
+};
 
 /** The status line under the section's title. */
 export function statusLine(application: Application | null | undefined) {
   if (!application)
     return "No application yet. Nothing is sent without your approval.";
+  if (
+    application.mode === "manual" &&
+    application.state === "queued" &&
+    application.needs === "session_ended"
+  )
+    return "Your browser closed before the app saw the site's confirmation. Nothing is recorded as sent yet.";
+  if (application.mode === "manual" && application.state in MANUAL_LINES)
+    return MANUAL_LINES[application.state];
   switch (application.state) {
     case "queued":
       return waitingLine(application.needs);
