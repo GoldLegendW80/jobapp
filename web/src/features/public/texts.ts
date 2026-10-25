@@ -2,7 +2,7 @@
  * The words of /privacy, /terms and the public home page, in one module. Every sentence of the
  * privacy page is a named constant here, copied from tasks/mail/todo.md (M2) and tested against
  * the code by M21: a sentence changes with the code it describes, in the task that changes the
- * code, and `VERSION` changes with it. M4 records `VERSION` with the consent of the user.
+ * code, and `VERSION` changes with it. M4 records its own integer `CONSENT_VERSION`, not this date.
  *
  * Every figure is a constant of its own, interpolated once, so no number is typed twice.
  */

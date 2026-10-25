@@ -21,6 +21,7 @@ and the live view through Caddy (web/e2e/browser-b11.spec.ts).
 """
 
 import asyncio
+import inspect
 import logging
 import secrets
 import uuid
@@ -245,6 +246,14 @@ def test_the_table_is_every_route_of_the_module_and_no_path_names_an_id(app: Fas
     }
     assert mounted == set(ROUTES)
     assert not [path for _, path in mounted if "{" in path]
+    # A websocket or a mount of the module is no APIRoute: none may slip past the table.
+    others = [
+        context.path
+        for context in iter_route_contexts(app.routes)
+        if not isinstance(context.original_route, APIRoute)
+        and (context.path or "").startswith("/api/browser")
+    ]
+    assert others == []
 
 
 # --- signed out --------------------------------------------------------------------------------
@@ -406,6 +415,17 @@ def test_b_can_neither_end_as_hand_off_nor_drive_as_lease_with_any_tool(
         gate_click(tools, "e1", "x" * 43),
     ]
 
+    # A new public tool of LeaseTools must join the list above, as a new route joins the table.
+    tool_names = {
+        name
+        for name, member in inspect.getmembers(LeaseTools, inspect.iscoroutinefunction)
+        if not name.startswith("_")
+    }
+    assert tool_names == {
+        "snapshot", "navigate", "click", "type", "select_option", "check", "upload", "press_key",
+        "wait_for", "screenshot", "box", "tabs", "call", "put_file", "ask_signin",
+    }  # fmt: skip
+
     async def each() -> list[str]:
         refused = []
         for call in every:
@@ -510,7 +530,8 @@ def test_no_cookie_ticket_token_typed_address_or_page_text_reaches_a_log_redis_a
     # The sign in, the look and the agent's lease; I'm signed in restarts Chromium on that lease.
     assert len(browserd.tokens) == 3
     none_of([seen(answer) for answer in answers], canaries)
-    none_of([caplog.text], canaries)
+    # caplog.text holds the messages only; the JSON log also writes every extra field.
+    none_of([caplog.text, *(repr(vars(record)) for record in caplog.records)], canaries)
     none_of([api.client.portal.call(redis_text, app)], canaries)  # type: ignore[union-attr]
     none_of([tables_text(factory)], canaries)
     assert ticket in issued.text  # the one answer that hands it out, to A
@@ -565,8 +586,7 @@ VOLUME = "browserprofiles"
 ROOT = Path(__file__).resolve().parents[3]
 STACK_FILES = [
     ("compose.yml",),
-    ("compose.yml", "compose.dev.yml"),
-    ("compose.yml", "compose.mac.yml"),
+    *(("compose.yml", path.name) for path in sorted(ROOT.glob("compose.*.yml"))),
     *(
         ("compose.yml", str(path.relative_to(ROOT)))
         for path in sorted(ROOT.glob("tests/*.compose.yml"))
