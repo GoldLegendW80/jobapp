@@ -1,0 +1,13 @@
+{
+  "source_head": "f61962cb14728da8076e5b0634e70679e70ee87e",
+  "source_tree": "1c8ec507a0f78f56f705f059da24e7924d772d86",
+  "result": "1 PASS, 1 FAIL, 3 NOT RUN; zero retries; zero required layout captures",
+  "root_inspection": "Directly inspected original failed-case screenshot; shows retry explanation and no pre-click site image. This is not an accepted layout quartet.",
+  "files": [
+    {
+      "path": "first-fill-failed-desktop.png",
+      "sha256": "bc34798dfc51ccc03ab8c08063ed89d9b3117ede138ceebd6d78a09521b4daba",
+      "bytes": 86204
+    }
+  ]
+}

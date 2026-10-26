@@ -1,0 +1,21 @@
+Pinned browserd Playwright 1.55 and Chromium, local synthetic fixture only.
+Snapshot after Next, upload and Review. Submit was not clicked.
+
+- main [ref=e2]:
+  - heading "Applied AI Engineer at Example Robotics" [level=1] [ref=e3]
+  - dialog "Apply to Example Robotics" [ref=e4]:
+    - generic [ref=e6]:
+      - heading "Review your application" [level=2] [ref=e7]
+      - region "Application summary" [ref=e8]:
+        - group "First name" [ref=e9]: Example
+        - group "Last name" [ref=e10]: Cedar
+        - group "Email" [ref=e11]: e2e-a16-proof@example.org
+      - generic [ref=e12]:
+        - checkbox "Follow this company" [checked] [ref=e13]
+        - text: Follow this company
+      - button "Submit application" [ref=e14]
+
+The failed application stored four outcomes (identity x3, Resume), both Next/Review step
+designations and three field-structure rows, but neither Follow nor a final Submit designation.
+It had needs_person / form_changed and zero counted submissions. The new inline-text helper
+fix is covered by pure and database checks; runtime acceptance is still pending a rebuild.

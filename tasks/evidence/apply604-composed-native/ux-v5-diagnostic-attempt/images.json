@@ -1,0 +1,32 @@
+{
+  "source": "ba93a08a156628c8afaeb57ee6df7b04df499fb6",
+  "tree": "e4dca667e025524baacedd9960e6f45406f98409",
+  "playwright_seconds": 191.821,
+  "playwright_exit": 1,
+  "controller_exit": 1,
+  "passed": 1,
+  "failed": 1,
+  "not_selected": 3,
+  "required_layouts_produced": 0,
+  "required_layouts_total": 16,
+  "root_visually_inspected": true,
+  "image_editing": false,
+  "images": [
+    {
+      "file": "failure.png",
+      "original": "/tmp/jobapp-605-attribution-v5/runtime-evidence/ux/playwright-artifacts/apply-review-ux-the-truste-ba531-after-repeated-person-edits/test-failed-1.png",
+      "sha256": "80acf5241eb5f18274614bf5d738d0d50a1741b8ee97f684e230b5eae3769f0e",
+      "bytes": 85053,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "preparation.png",
+      "original": "/tmp/jobapp-605-attribution-v5/runtime-evidence/ux/playwright-artifacts/apply-review-ux-an-invented-candidate-prepares-documents/test-finished-1.png",
+      "sha256": "3878570f4a62a0d65f57cf1754e0269e56ec797f4e36e26b44c172eb6e800401",
+      "bytes": 4254,
+      "width": 1280,
+      "height": 720
+    }
+  ]
+}

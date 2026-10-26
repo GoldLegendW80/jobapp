@@ -75,6 +75,18 @@ duplicate.
 A8b, the generic strategy (#332), is being built from the owner's second laptop on branch
 `apply/a8b-generic`, stacked on #331.
 
+## PR 604 delivered in parts
+
+The Apply completion draft (#604) was carved into parts, each reviewed and gated alone (plan in
+its comment of 2026-10-25): part 1 browser service #680, part 2 Gmail MCP mail transport #681,
+part 3a answers #684, part 3b ATS adapters #685, part 4a Apply core #686, part 4b applications
+by e-mail #687, part 5 Apply myself recovery #688, part 6a LinkedIn Easy Apply #691, part 6b
+Workday, Google Careers and VIE #692, part 6c site profile API #690, part 6d site profile pages
+#689, part 7a saved answers and review screens #710, part 7b the review journeys #711, part 8
+the ledger and the evidence #712. Journey screenshots named in the evidence notes are not
+committed (the gate writes them again on every run); a few of the A18 and saved answers screens
+are kept.
+
 ## Next steps, in order
 
 1. **Ship #330 and #333, then review the rest** (#329, #331 and #334 on their new heads): a

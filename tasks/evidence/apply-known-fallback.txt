@@ -1,0 +1,64 @@
+Known ATS fallback, source checkpoint, 2026-10-22
+
+Refs #343 and #563. Implements SPEC-apply's owner decision of 2026-10-19.
+
+Only a known adapter's form_changed fill error may start generic filling. It keeps the same
+page, lease, tools, profile context and person answers, and starts at most once per attempt.
+Known filled values are retained only for the same field structure and refilled by code.
+Recorded earlier wizard steps and their outcomes remain part of the approved replay record.
+Payment, captcha, sign in, e-mail code and LinkedIn checks still precede generic model work.
+
+The code-owned designated:strategy row holds version 1, vendor, original form_url and replay
+target. It has source identity and kind designated. Model tools accept refs only. The normal
+person edit route refuses every designated key, and the fill never accepts such a key from
+an ordinary field outcome. Composite ownership and the canonical answers/documents hash bind
+this row without copying owner IDs or document version payloads into its JSON value.
+The central approval serializer omits the row. Queue output only counts required Left rows.
+
+The submit lease selects generic only from this exact saved strategy and the known hosted
+form target. It never starts a model or a fallback on a submit readback failure. It replays
+approved steps and values, verifies field structures and designation, and preserves A6's
+fresh readback, hash, document, clock, approval, kill switch and host locks before the click.
+
+A valid saved known-ATS binding is the only exception to Full auto's agent_designated
+refusal. FULL_AUTO_SOURCES is unchanged. Every other Full auto and model-check refusal stays.
+Unknown-site generic filling remains Review first only. Unrecognised widgets are not ignored.
+
+Budget interpretation: fallback shares the known attempt's 34,000 token allowance, subtracting
+all previous answer-agent input and output. A reported token limit leaves zero allowance.
+The generic agent retains its existing 30-turn per-agent cap; the answer agent's three turns
+remain that agent's cap. The original form deadline starts before the known fill, the runtime
+preserves it, and the fallback runs under its remaining wall window. Its original lease is
+never reacquired or extended, so the browser's unchanged active and wait clocks still govern.
+No model, turn, token, active, wait, resource or configured timeout limit has been raised.
+
+Source verification completed:
+86 pure pytest cases, 0.76 s. The original implementation failed all four mode/phase cases
+and the model-free saved-strategy test before routing was implemented. Cases cover Ashby,
+Greenhouse and Lever in Review and Full auto, open and midway form_changed, exact approved
+generic refill, changed required structure, earlier wizard step replay, unknown Full auto,
+other adapter failures, no repeated fallback, remaining/exhausted tokens, expired window,
+Full auto's remaining refusals, code-owned metadata immutability, hash binding and UI omission.
+56 apply-state Vitest cases pass, one worker. Whole API Ruff check and format check pass
+(754 files). CI plan: 81 tests pass. Journey registry check passes.
+
+Pending at this source checkpoint:
+Real Postgres/Redis whole Apply suite, whole affected UI suite/typecheck/lint, native known-ATS
+fallback journey with default worker wiring, exact approved fake Submit, fresh independent
+review and final composed gate. This checkpoint alone does not claim native acceptance.
+
+Declared boundary at this historical checkpoint: a fallback can bind only the same recognised hosted ATS form, without a
+frame or external origin. Unsupported sources stay outside Full auto. A wizard whose changed
+page can no longer replay the recorded earlier steps returns form_changed for fresh approval;
+the app never guesses a step or bypasses the readback to make it submit.
+
+Subsequent checkpoints, 2026-10-23
+
+The original unframed fallback slice passed all 7,563 whole Apply cases in 399 seconds.
+Later integration adds framed recovery on the same lease and original budget, with a
+hash-bound frame ordinal and shape. Unverified framed Full auto is handed to Review with
+frame_origin_unverified; this does not expand the Full auto source allowlist. Credential-free
+generic filling now uses exact code-resolvable values while leaving unknown questions for
+the person. Its final source module run and actual default-worker fallback journeys are
+tracked separately in tasks/apply/completion.md and the PR; this historical report alone
+does not establish their combined acceptance.
