@@ -758,6 +758,8 @@ def test_the_apply_queue_runs_one_fill_at_a_time_and_ticks_every_30_seconds() ->
         "apply_tick",
         "apply_manual",
         "prune_apply_screenshots",
+        "site_profile_run",
+        "site_profile_save",
     }
     assert all(f.keep_result_s == 0 and f.max_tries == 1 for f in functions.values())
     tick, prune = spec.cron_jobs

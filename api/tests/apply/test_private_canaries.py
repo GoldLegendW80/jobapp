@@ -18,16 +18,18 @@ from arq.constants import job_key_prefix
 from arq.jobs import Job
 
 from app import queue, worker
-from app.apply import gate, service
+from app.apply import form_agent, gate, profile_gate, profile_sources, service, site_profile
 from app.apply.models import (
     ApplicationAnswer,
     ApplicationEvent,
     ApplicationScreenshot,
     Mode,
+    SiteProfileShot,
     State,
 )
 from app.mail import gate as mail_gate
 from app.profile import service as profiles
+from tests.apply import a18_support
 from tests.apply.a5_support import FakeAgent, FakeLeases, run_ashby
 from tests.apply.a6_support import GateLeases, submit_ashby
 from tests.apply.conftest import AT
@@ -233,6 +235,69 @@ def test_complete_application_modes_keep_private_bytes_out_of_worker_sinks(
         values=list(db.scalars(sa.select(ApplicationEvent.data))),
         client=proof.client,
     )
+
+
+def test_profile_fill_approval_and_save_keep_private_bytes_out_of_worker_sinks(
+    db, factory, person_a, proof, monkeypatch
+):
+    name, image, token, capability = proof.markers
+    plant_name(db, person_a, name)
+    portal = a18_support.Portal()
+    portal.jpeg += image.encode()
+    proof.markers.append(base64.b64encode(portal.jpeg).decode())
+    env = a18_support.services(factory, portal)
+    original_type = portal.type
+    original_acquire = env.leases.acquire
+
+    async def acquired(*args, **kwargs):
+        got = await original_acquire(*args, **kwargs)
+        return dataclasses.replace(got, token=token, capability=capability)
+
+    async def observed_type(*args, **kwargs):
+        proof.observe()
+        return await original_type(*args, **kwargs)
+
+    monkeypatch.setattr(portal, "type", observed_type)
+    monkeypatch.setattr(env.leases, "acquire", acquired)
+    run_id = site_profile.start(
+        db, person_a.user_id, "https://portal.example.org/profile", now=AT
+    ).id
+    db.commit()
+
+    async def fake_agent(session):
+        return form_agent.Ran()
+
+    proof.run(
+        {"site_profile_services": env, "site_profile_agent": fake_agent},
+        "site_profile_run",
+        str(run_id),
+    )
+    run = site_profile.lock(db, person_a.user_id, run_id)
+    part = site_profile.sections(db, run)[0]
+    fields = site_profile.fields(db, run, part.section)
+    assert next(row.value for row in fields if row.label == "Full name") == name
+    assert part.state == "ready", part.error_code
+    # The Save outline re-encodes this JPEG; the private source image itself is watched too.
+    assert db.scalar(sa.select(SiteProfileShot.jpeg)) is not None
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, fields), AT
+    )
+    args = str(run_id), part.section, str(auth.id)
+    db.commit()
+
+    async def save(tools, ref, given, element=""):
+        assert given == capability
+        proof.observe()
+        return await portal.save(tools, ref, "test-profile-capability", element)
+
+    monkeypatch.setattr(profile_gate, "gate_click", save)
+    proof.run({"site_profile_services": env}, "site_profile_save", *args)
+    db.expire_all()
+    part = site_profile.sections(db, site_profile.lock(db, person_a.user_id, run_id))[0]
+    assert part.state == "saved"
+    assert portal.saved["Full name"] == name
+    assert portal.clicks == 1
+    no_leak(proof.markers, values=[part.events])
 
 
 def test_explicit_email_approval_and_fake_provider_capture_no_private_logs(
