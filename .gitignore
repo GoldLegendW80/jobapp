@@ -40,3 +40,8 @@ backups/
 
 # Records and logs of ops/local-check.sh (the batch check): local to this machine
 .local-check/
+
+# API-only mail send authority and provider Redis ACL credentials.
+.env.mailsend
+.env.redis
+.secrets/

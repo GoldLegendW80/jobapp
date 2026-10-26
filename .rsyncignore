@@ -46,3 +46,6 @@ tasks/evidence/
 
 # Commit the deploy workflow last deployed (written on the Jetson after its smoke passed)
 .deployed-commit
+
+# Operator mail ACL and provider password files stay on the Jetson.
+.secrets/

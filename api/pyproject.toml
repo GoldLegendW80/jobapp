@@ -22,6 +22,7 @@ dependencies = [
     "fastapi==0.142.4",
     "httpx==0.28.1",
     "jinja2==3.1.6",
+    "mcp==2.3.0",
     "pillow==12.3.0",
     # Also in the api (documents D6): page 1 of a rendered CV as a PNG for phones and cards
     # (render_client.page1_png, GET .../versions/{n}/page1.png), from a PDF the app's own

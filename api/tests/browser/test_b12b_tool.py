@@ -10,6 +10,7 @@ import functools
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,7 +18,7 @@ import pytest
 from app.agents import tools as app_tools
 from app.apply import form_agent, form_tools  # noqa: F401  (registers the tools and the hold)
 from app.browser import handoff, signin_tool
-from app.browser.client import BrowserError
+from app.browser.client import TAKEOVER_WAIT_S, BrowserError
 from app.browser.handoff import Outcome
 
 SITE = "Example Jobs"
@@ -111,8 +112,82 @@ def test_the_form_agent_names_the_tool_and_its_run_outlives_the_wait() -> None:
     assert form_agent.SIGNIN in form_agent.APPLY_FORM.tools
     assert app_tools.FACTORIES[form_agent.SIGNIN] is signin_tool._signin
     assert form_agent.SIGNIN_WAIT_S == 1800
-    assert form_agent.APPLY_FORM.wall_time_s == form_agent.WALL_TIME_S + 1800
+    assert TAKEOVER_WAIT_S == 900
+    assert form_agent.WALL_TIME_S == 900
+    assert form_agent.APPLY_FORM.wall_time_s == 900 + 1800 + TAKEOVER_WAIT_S
+    assert form_agent.APPLY_FORM.max_turns == form_agent.MAX_TURNS == 30
+    assert form_agent.TOKEN_BUDGET == 820_000
     assert app_tools.TOOL_NAME.fullmatch(signin_tool.TOOL)
+
+
+@pytest.mark.parametrize("takeover_first", [False, True])
+def test_signin_and_takeover_share_the_aggregate_deadline_without_using_active_time(
+    takeover_first: bool,
+) -> None:
+    now = [1_000.0]
+    session = _session(FakeTools())
+    session.clock = lambda: now[0]
+    session.deadline = now[0] + form_agent.APPLY_FORM.wall_time_s
+    # The order of the two human pauses does not consume the remaining active allowance.
+    if takeover_first:
+        now[0] += TAKEOVER_WAIT_S
+    assert session.signin_budget() >= form_agent.SIGNIN_WAIT_S
+    now[0] += form_agent.SIGNIN_WAIT_S
+    if not takeover_first:
+        now[0] += TAKEOVER_WAIT_S
+    assert session.deadline - now[0] == form_agent.WALL_TIME_S == 900
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+@sync
+async def test_runtime_uses_the_aggregate_deadline_and_keeps_cancellation_cleanup(
+    monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    from app.agents import runner
+    from app.agents.models import RunStatus
+
+    now = [1_000.0]
+    session = _session(FakeTools())
+    session.clock = lambda: now[0]
+    run_id = uuid.uuid4()
+    released = []
+    keys_before = set(form_agent._KEYS)
+    context = SimpleNamespace(sessions=None, clock=lambda: 0)
+    db = SimpleNamespace(get=lambda *_: SimpleNamespace(output={"turns": 2}))
+    monkeypatch.setattr(form_agent.credentials, "get", lambda *_: object())
+    monkeypatch.setattr(form_agent.runs, "create_run", lambda *_: SimpleNamespace(id=run_id))
+    monkeypatch.setattr(form_agent.answer_agents, "_in_db", lambda _, operation: operation(db))
+    monkeypatch.setattr(
+        form_agent.answer_agents,
+        "_ended",
+        lambda *_: SimpleNamespace(status=RunStatus.done, input_tokens=0, output_tokens=0),
+    )
+
+    async def execute(given_context, given_id):
+        assert given_context is context
+        assert given_id == run_id
+        assert form_agent.session_of(run_id) is session
+        assert session.deadline == 1_000 + 900 + 1800 + TAKEOVER_WAIT_S
+        now[0] += TAKEOVER_WAIT_S + form_agent.SIGNIN_WAIT_S
+        assert session.deadline - now[0] == 900
+        if cancel:
+            raise asyncio.CancelledError
+
+    async def release(given_context, given_id):
+        released.append(given_id)
+
+    monkeypatch.setattr(runner, "execute", execute)
+    monkeypatch.setattr(form_agent.answer_agents, "_release", release)
+    agent = form_agent.RuntimeFormAgent(lambda: context)
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await agent(session)
+        assert released == [run_id]
+    else:
+        assert (await agent(session)).turns == 2
+        assert released == []
+    assert form_agent.session_of(run_id) is None
+    assert keys_before == form_agent._KEYS
 
 
 def test_the_tool_takes_a_site_and_a_reason_only() -> None:

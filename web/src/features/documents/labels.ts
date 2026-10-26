@@ -91,10 +91,13 @@ export const WAITING_POLL_MS = 10_000;
 export function pollInterval(
   renderState: DocumentOut["render"]["state"],
   generation: Generation | GenerationBrief | null,
+  capture?: Generation | null,
 ): number | false {
   if (renderState !== "idle") return POLL_MS;
-  if (!isOpen(generation)) return false;
-  return generation?.status === "waiting" ? WAITING_POLL_MS : POLL_MS;
+  const intervals = [generation, capture]
+    .filter(isOpen)
+    .map((one) => (one?.status === "waiting" ? WAITING_POLL_MS : POLL_MS));
+  return intervals.length > 0 ? Math.min(...intervals) : false;
 }
 
 /** The state of a version in a few words: one page, overflow, or not rendered yet. */

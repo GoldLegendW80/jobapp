@@ -1,41 +1,69 @@
 // The behaviour of the fake application forms (tests/ats_forms_stub.py): written from what the
 // public forms of Ashby and Greenhouse do, not copied from their scripts. It never calls a real
-// host, and its "invisible check" is only the signals it sends to the stub: the milliseconds
-// between the last input and the submit, and navigator.webdriver.
+// host. The stub observes input event receipt times for each page session and computes its
+// invisible-check dwell on the server, independently of the browser clock.
 (() => {
-  const loadedAt = Date.now();
-  let lastInput = null;
-  const touch = () => {
-    lastInput = Date.now();
-  };
-  document.addEventListener("input", touch, true);
-  document.addEventListener("change", touch, true);
-  document.addEventListener("keydown", touch, true);
-  document.addEventListener(
-    "click",
-    (e) => {
-      if (e.target.closest("button[data-option], [role=option], .captcha-tile")) touch();
-    },
-    true,
-  );
-
   const form = document.querySelector("form[data-stub-form]");
   if (!form) return;
+  const pending = new Set();
+  const report = (event) => {
+    const request = fetch(`/_stub/behaviour/${form.dataset.session}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch(() => null);
+    pending.add(request);
+    request.finally(() => pending.delete(request));
+  };
+  const touch = () => {
+    if (form.dataset.ats === "ashby") report({ event: "input" });
+  };
+  if (form.dataset.ats === "ashby") {
+    report({ event: "environment", webdriver: navigator.webdriver === true });
+    document.addEventListener("input", touch, true);
+    document.addEventListener("change", touch, true);
+    document.addEventListener("keydown", touch, true);
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (
+          event.target.closest(
+            "button[data-option], [role=option], .captcha-tile",
+          )
+        )
+          touch();
+      },
+      true,
+    );
+  }
+  form.querySelectorAll("[data-upload-for]").forEach((button) => {
+    button.addEventListener("click", () =>
+      document.getElementById(button.dataset.uploadFor).click(),
+    );
+  });
+  form.querySelector("[data-autofill]")?.addEventListener("click", () => {
+    form.dataset.autofillUsed = "1";
+    const name = form.querySelector('[name="_systemfield_name"]');
+    if (name) {
+      name.value = "Resume autofill candidate";
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
 
   // Ashby yes or no groups: button[data-option=yes|no] in div.ashby-application-form-input-yesno.
-  form.querySelectorAll(".ashby-application-form-input-yesno").forEach((group) => {
-    const hidden = group.querySelector("input[type=hidden]");
-    group.querySelectorAll("button[data-option]").forEach((button) => {
-      button.addEventListener("click", () => {
-        hidden.value = button.dataset.option === "yes" ? "Yes" : "No";
-        group.querySelectorAll("button[data-option]").forEach((other) => {
-          other.setAttribute("aria-pressed", String(other === button));
-          other.classList.toggle("_active", other === button);
+  form
+    .querySelectorAll(".ashby-application-form-input-yesno")
+    .forEach((group) => {
+      group.querySelectorAll("button[data-option]").forEach((button) => {
+        button.addEventListener("click", () => {
+          group.querySelectorAll("button[data-option]").forEach((other) => {
+            other.setAttribute("aria-pressed", String(other === button));
+            other.classList.toggle("_active", other === button);
+          });
+          group.dispatchEvent(new Event("input", { bubbles: true }));
         });
-        hidden.dispatchEvent(new Event("input", { bubbles: true }));
       });
     });
-  });
 
   // The location typeahead: the options come from the stub, a free text is not a choice.
   form.querySelectorAll("input[data-typeahead]").forEach((input) => {
@@ -48,7 +76,9 @@
         list.hidden = true;
         return;
       }
-      const r = await fetch(`${input.dataset.typeahead}?q=${encodeURIComponent(input.value)}`);
+      const r = await fetch(
+        `${input.dataset.typeahead}?q=${encodeURIComponent(input.value)}`,
+      );
       const options = await r.json();
       list.replaceChildren(
         ...options.map((text) => {
@@ -99,7 +129,9 @@
     };
     const open = () => {
       const typed = input.value.trim().toLowerCase();
-      const shown = options.filter((text) => text.toLowerCase().includes(typed));
+      const shown = options.filter((text) =>
+        text.toLowerCase().includes(typed),
+      );
       close();
       menu = document.createElement("div");
       menu.className = "select__menu";
@@ -125,7 +157,11 @@
     });
     input.addEventListener("input", open);
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && menu && menu.firstElementChild?.className === "select__option") {
+      if (
+        e.key === "Enter" &&
+        menu &&
+        menu.firstElementChild?.className === "select__option"
+      ) {
         e.preventDefault();
         choose(menu.firstElementChild.textContent);
       }
@@ -138,7 +174,8 @@
   form.querySelectorAll("input[type=file]").forEach((input) => {
     input.addEventListener("change", () => {
       const out = input.parentElement.querySelector(".file-name");
-      if (out) out.textContent = Array.from(input.files, (f) => f.name).join(", ");
+      if (out)
+        out.textContent = Array.from(input.files, (f) => f.name).join(", ");
     });
   });
 
@@ -154,14 +191,22 @@
     grid.querySelectorAll(".captcha-tile").forEach((tile) =>
       tile.addEventListener("click", () => {
         tile.classList.toggle("_picked");
-        tile.setAttribute("aria-pressed", String(tile.classList.contains("_picked")));
+        tile.setAttribute(
+          "aria-pressed",
+          String(tile.classList.contains("_picked")),
+        );
       }),
     );
     grid.querySelector(".captcha-verify").addEventListener("click", () => {
-      const picked = Array.from(grid.querySelectorAll("._picked"), (t) => t.dataset.n).join(",");
+      const picked = Array.from(
+        grid.querySelectorAll("._picked"),
+        (t) => t.dataset.n,
+      ).join(",");
       const solved = picked === "2,5,7";
       token.value = solved ? "solved" : "";
-      captcha.querySelector(".captcha-state").textContent = solved ? "Verified" : "Try again";
+      captcha.querySelector(".captcha-state").textContent = solved
+        ? "Verified"
+        : "Try again";
     });
   }
 
@@ -192,13 +237,48 @@
       e.hidden = true;
       e.textContent = "";
     });
-    form.querySelectorAll("[aria-invalid]").forEach((e) => e.removeAttribute("aria-invalid"));
+    form
+      .querySelectorAll("[aria-invalid]")
+      .forEach((e) => e.removeAttribute("aria-invalid"));
   };
   const send = async (data) => {
     clear();
-    data.set("_signal_dwell_ms", String(Date.now() - (lastInput ?? loadedAt)));
-    data.set("_signal_webdriver", navigator.webdriver ? "1" : "0");
-    const r = await fetch(form.dataset.action, { method: "POST", body: data });
+    const fields = {};
+    const files = [];
+    for (const [name, value] of data) {
+      if (value instanceof File) {
+        if (!value.name && !value.size) continue;
+        const encoded = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(value);
+        });
+        files.push({
+          field: name,
+          filename: value.name,
+          content_type: value.type,
+          data: encoded,
+        });
+      } else {
+        fields[name] = value;
+      }
+    }
+    form
+      .querySelectorAll(".ashby-application-form-input-yesno")
+      .forEach((group) => {
+        const chosen = group.querySelector('button[aria-pressed="true"]');
+        if (chosen)
+          fields[group.dataset.name] =
+            chosen.dataset.option === "yes" ? "Yes" : "No";
+      });
+    if (form.dataset.session) fields._session = form.dataset.session;
+    await Promise.all([...pending]);
+    const r = await fetch(form.dataset.action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields, files }),
+    });
     const answer = await r.json();
     if (answer.ok) {
       location.assign(answer.redirect);
@@ -221,7 +301,9 @@
     banner.textContent = answer.message || "Fix the highlighted fields.";
     banner.hidden = false;
   };
-  form.querySelector("[data-submit]").addEventListener("click", () => send(new FormData(form)));
+  form
+    .querySelector("[data-submit]")
+    .addEventListener("click", () => send(new FormData(form)));
   const codeButton = document.querySelector("[data-submit-code]");
   if (codeButton) {
     codeButton.addEventListener("click", () => {
