@@ -180,6 +180,9 @@ test("A finds jobs: the sites are read in the browser, and the postings listed",
     "0 postings",
   );
   await pageA.getByRole("button", { name: "Find jobs" }).click();
+  const setup = pageA.getByRole("dialog", { name: "Find jobs setup" });
+  await expect(setup).toBeVisible();
+  await setup.getByRole("button", { name: "Save and Start" }).click();
   const progress = pageA.getByRole("region", { name: "Sweep in progress" });
   await expect(progress).toContainText("Reading job sites in your browser", {
     timeout: 60_000,

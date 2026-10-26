@@ -137,6 +137,8 @@ FULL: dict[str, dict[str, Any]] = {
                 "text_version": None,
             }
         ],
+        "interactive_sites": [],
+        "interactive_instructions": None,
         "sweep_schedule": {
             "enabled": False,
             "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],

@@ -1428,6 +1428,8 @@ class JourneysTest(unittest.TestCase):
         "web/src/features/mail/Badge.tsx": "",
         "web/src/features/mail/Mail.test.tsx": 'import { Badge } from "./Badge";\n',
         "web/src/features/account/Account.tsx": 'import { Badge } from "@/features/mail/Badge";\n',
+        # The shared pages the api reader reads (ci_plan.WEB_SHARED_PAGES), calling nothing.
+        **dict.fromkeys(ci_plan.WEB_SHARED_PAGES, ""),
     }
 
     def plan(
@@ -1442,7 +1444,7 @@ class JourneysTest(unittest.TestCase):
     def ran(self, paths: list[str], files: dict[str, str] | None = None) -> list[str]:
         return [g for g, v in self.plan(paths, files).items() if v.startswith("run")]
 
-    def test_every_api_application_path_runs_every_group_without_a_python_reader(
+    def test_api_shared_files_assets_and_undecided_modules_run_every_group(
         self,
     ) -> None:
         paths = [
@@ -1451,10 +1453,9 @@ class JourneysTest(unittest.TestCase):
             "api/app/main.py",
             "api/app/worker.py",
             "api/app/models.py",
-            "api/app/mail/sync.py",
             "api/app/mail/__init__.py",
-            "api/app/mail/nested/__init__.py",
-            "api/app/mail/nested/consumer.py",
+            "api/app/mail/models.py",
+            "api/app/mail/sync_models.py",
             "api/app/mail/template.html",
             "api/app/mail/README.md",
             "api/app/mail/assets/nested/value.json",
@@ -1463,9 +1464,6 @@ class JourneysTest(unittest.TestCase):
             "api/app/documents/freeze.py",
             "api/app/documents/freeze/nested.py",
         ]
-        self.assertFalse(hasattr(ci_plan.Imports, "api"))
-        self.assertFalse(hasattr(ci_plan, "python_loader_calls"))
-        self.assertFalse(hasattr(ci_plan, "python_dynamic_targets"))
         for path in paths:
             for exists in (True, False):
                 files = {
@@ -1474,34 +1472,20 @@ class JourneysTest(unittest.TestCase):
                 if exists:
                     files[path] = ""
                 root = self.tree(files)
-                with (
-                    self.subTest(path=path, exists=exists),
-                    mock.patch.object(
-                        ci_plan.Imports,
-                        "api",
-                        create=True,
-                        side_effect=AssertionError("retired API graph was consulted"),
-                    ),
-                    mock.patch.multiple(
-                        ci_plan,
-                        python_loader_calls=mock.Mock(side_effect=AssertionError),
-                        python_dynamic_targets=mock.Mock(side_effect=AssertionError),
-                        source_files=mock.Mock(side_effect=AssertionError),
-                        create=True,
-                    ),
-                ):
-                    groups, why = ci_plan.journey_groups_for(
-                        path, {}, {}, ci_plan.Imports(root)
-                    )
-                    self.assertEqual(groups, ci_plan.EVERY)
-                    self.assertEqual(why, "API application changes run every group")
+                with self.subTest(path=path, exists=exists):
                     self.assertEqual(
-                        ci_plan.journey_plan(root, [path], self.GROUPS),
                         [
-                            ("run", group, f"every group, {path}: {why}")
-                            for group, _ in self.GROUPS
+                            v
+                            for v, _, _ in ci_plan.journey_plan(
+                                root, [path], self.GROUPS
+                            )
                         ],
+                        ["run"] * len(self.GROUPS),
                     )
+        # A file of a decided module that is gone: its consumers may be in the base only.
+        self.assertEqual(
+            self.ran(["api/app/mail/gone.py"]), [g for g, _ in self.GROUPS]
+        )
 
     def test_documentation_and_operations_run_no_group(self) -> None:
         paths = [
@@ -1537,13 +1521,12 @@ class JourneysTest(unittest.TestCase):
     def test_a_file_imported_by_another_module_runs_that_module_s_groups_too(
         self,
     ) -> None:
-        # API imports and wiring cannot narrow the full-journey policy.
+        # rules.py runs mail's groups and those of documents, whose store imports it; main.py
+        # imports both and is wiring, as routes.tsx is for the web.
         self.assertEqual(
-            self.ran(["api/app/mail/rules.py"]), [g for g, _ in self.GROUPS]
+            self.ran(["api/app/mail/rules.py"]), ["mail", "documents", "apply"]
         )
-        self.assertEqual(
-            self.ran(["api/app/mail/router.py"]), [g for g, _ in self.GROUPS]
-        )
+        self.assertEqual(self.ran(["api/app/mail/router.py"]), ["mail"])
         # Badge is imported by the account feature, which every journey goes through; a Vitest
         # file that imports it does not count.
         plan = self.plan(["web/src/features/mail/Badge.tsx"])
@@ -1576,9 +1559,14 @@ class JourneysTest(unittest.TestCase):
                     "api/app/documents/store.py": source,
                     "api/app/opportunities/use.py": "from app.documents.store import value",
                 }
+                # A static import (absolute or relative) carries the consumer's groups; a
+                # dynamic one could load anything and runs every group.
+                dynamic = "import_module" in source or "__import__" in source
                 self.assertEqual(
                     self.ran(["api/app/mail/rules.py"], files),
-                    [g for g, _ in self.GROUPS],
+                    [g for g, _ in self.GROUPS]
+                    if dynamic
+                    else ["mail", "documents", "apply"],
                 )
 
     def test_unknown_python_import_targets_force_every_group(self) -> None:
@@ -1865,11 +1853,10 @@ class JourneysTest(unittest.TestCase):
                         self.ran(["api/app/mail/rules.py"], files),
                         [g for g, _ in self.GROUPS],
                     )
+        # The worker imports <module>.freeze, not a neighbour whose name starts the same.
         for path in ("api/app/documents/freeze_extra.py", "api/app/documents/store.py"):
             with self.subTest(path=path):
-                self.assertEqual(
-                    self.ran([path], {path: ""}), [g for g, _ in self.GROUPS]
-                )
+                self.assertEqual(self.ran([path], {path: ""}), ["documents", "apply"])
 
     def test_worker_registration_registry_and_status_callbacks_have_full_scope(
         self,
@@ -1913,7 +1900,7 @@ class JourneysTest(unittest.TestCase):
             ):
                 callbacks.append(path.relative_to(ROOT).as_posix())
         self.assertIn("api/app/documents/freeze.py", callbacks)
-        for path in providers | set(callbacks):
+        for path in (providers | set(callbacks)) - set(ci_plan.SCOPED_REGISTRATIONS):
             # The policy covers registry and callback providers without dependency inference.
             with mock.patch.object(
                 ci_plan.Imports,
@@ -2073,9 +2060,7 @@ class JourneysTest(unittest.TestCase):
                     rows = [row.split("\t") for row in done.stdout.splitlines()]
                     self.assertEqual(int(rows[0][1]), 2 if operation == "rename" else 1)
                     expected = (
-                        ["mail"]
-                        if operation == "add" and path.startswith("web/")
-                        else [g for g, _ in self.GROUPS]
+                        ["mail"] if operation == "add" else [g for g, _ in self.GROUPS]
                     )
                     self.assertEqual(
                         [row[1] for row in rows[1:] if row[0] == "run"], expected
@@ -2194,13 +2179,8 @@ class JourneysTest(unittest.TestCase):
             self.assertEqual(
                 lines[1:],
                 [
-                    f"run\t{g}\tevery group, {path}: API application changes run every group"
-                    for g, _ in self.GROUPS
-                ]
-                if path.startswith("api/")
-                else [
                     "skip\tapps\tno changed file touches it",
-                    f"run\tmail\t{path}: the module mail",
+                    f"run\tmail\t{path}: the {'api ' if path.startswith('api/') else ''}module mail",
                     "skip\tdocuments\tno changed file touches it",
                     "skip\tapply\tno changed file touches it",
                     "skip\tsweep\tno changed file touches it",
@@ -2242,7 +2222,7 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(
             sorted(named - groups), [], "a rule names a group that does not exist"
         )
-        # The local check's own groups, as it would pass them: API files run every group.
+        # The local check's own groups, as it would pass them.
         plan = ci_plan.journey_plan(
             ROOT,
             ["api/app/mail/parse.py"],
@@ -2251,13 +2231,339 @@ class JourneysTest(unittest.TestCase):
                 for g in sorted(groups - {"apps", "sweep"})
             ],
         )
-        # The policy is independent of the application's current loader spellings.
+        self.assertEqual([g for v, g, _ in plan if v == "run"], ["mail"])
+        for _, decided, _ in ci_plan.API_AREAS:
+            if decided != ci_plan.EVERY:
+                self.assertEqual(sorted(decided - groups), [], decided)
+        modules = {
+            p.name
+            for p in (ROOT / "api/app").iterdir()
+            if (p / "__init__.py").is_file()
+        }
+        decided = {pattern.split("/")[2] for pattern, _, _ in ci_plan.API_AREAS}
+        self.assertEqual(sorted(modules - decided), [], "an api module with no groups")
+
+    API_PINS: ClassVar[dict[str, frozenset[str] | str]] = {
+        # Narrowed: an apply submit, the browser registry, a sandbox handler, a mail parser,
+        # the deck, an apply agent's fake answers. (A browser source follows its finder, see
+        # test_a_browser_source_runs_what_its_finder_runs.)
+        "api/app/apply/submit.py": frozenset({"apply", "browser", "opportunities"}),
+        "api/app/browser/registry.py": frozenset({"apply", "browser"}),
+        "api/app/opportunities/deck.py": frozenset({"opportunities"}),
+        "api/app/ingestion/sandbox/pdf_text.py": frozenset(
+            {"documents", "ingestion", "opportunities"}
+        ),
+        "api/app/mail/parse.py": frozenset({"mail"}),
+        "api/app/agents/fake_streams/apply_form.json": frozenset(
+            {"apply", "browser", "opportunities"}
+        ),
+        # Imported by ingestion/routers.py, whose middleware main.py runs on every request,
+        # but not by the middleware's own code: the module's groups.
+        "api/app/ingestion/prompt_router.py": frozenset(
+            {"documents", "ingestion", "opportunities"}
+        ),
+        # The routes a shared web page calls (WEB_SHARED_PAGES): the /account cards, the queue
+        # count of the shell, the job page's apply and documents sections, the profile's
+        # Search tab, and what imports them (the apply agents through approval_router.py).
+        "api/app/browser/router.py": ci_plan.EVERY,
+        "api/app/browser/live_router.py": ci_plan.EVERY,
+        "api/app/mail/account_router.py": ci_plan.EVERY,
+        "api/app/apply/queue_router.py": ci_plan.EVERY,
+        "api/app/apply/router.py": ci_plan.EVERY,
+        "api/app/apply/agent.py": ci_plan.EVERY,
+        "api/app/apply/agents.py": ci_plan.EVERY,
+        "api/app/apply/failures.py": ci_plan.EVERY,
+        "api/app/documents/router.py": ci_plan.EVERY,
+        "api/app/opportunities/feeds_router.py": ci_plan.EVERY,
+        "api/app/opportunities/starter_router.py": ci_plan.EVERY,
+        # main.py runs their middleware and the 500 handler uses them; the start builds the
+        # mail client (accounts.py), which reaches google.py.
+        "api/app/mail/routers.py": ci_plan.EVERY,
+        "api/app/ingestion/routers.py": ci_plan.EVERY,
+        "api/app/mail/accounts.py": ci_plan.EVERY,
+        "api/app/mail/google.py": ci_plan.EVERY,
+        # Shared core and what every journey passes through.
+        "api/app/main.py": ci_plan.EVERY,
+        "api/app/worker.py": ci_plan.EVERY,
+        "api/app/config.py": ci_plan.EVERY,
+        "api/app/apply/models.py": ci_plan.EVERY,
+        "api/app/opportunities/onboarding.py": ci_plan.EVERY,
+        "api/app/opportunities/pay.py": ci_plan.EVERY,  # jobs' ATS reader imports it
+        "api/app/jobs/sweep.py": ci_plan.EVERY,
+        "api/app/documents/writers.py": ci_plan.EVERY,
+        "api/app/documents/freeze.py": ci_plan.EVERY,
+        "api/app/agents/fake_streams/echo.json": ci_plan.EVERY,
+    }
+
+    def test_api_files_of_this_repository_run_the_groups_that_reach_them(self) -> None:
+        imports = ci_plan.Imports(ROOT)
+        self.assertGreater(sum(len(v) for v in imports.api().values()), 1000)
+        for path, expected in self.API_PINS.items():
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file())
+                groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
+                self.assertEqual(groups, expected, why)
+
+    def test_a_browser_source_runs_what_its_finder_runs(self) -> None:
+        # Every sweep runs the sources, so a source plans at least the sweep's groups, and it
+        # plans every group as soon as a file every journey uses imports the finder (a lazy
+        # import of profile/schemas.py, imported by agents/tools.py, does).
+        imports = ci_plan.Imports(ROOT)
+        finder, _ = ci_plan.journey_groups_for(
+            "api/app/browser/finder.py", {}, {}, imports
+        )
+        sources = sorted((ROOT / "api/app/browser/sources").glob("*.py"))
+        self.assertGreater(len(sources), 2)
+        for source in sources:
+            path = str(source.relative_to(ROOT))
+            with self.subTest(path=path):
+                groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
+                self.assertEqual(groups, finder, why)
+                if groups != ci_plan.EVERY:
+                    self.assertLessEqual(
+                        {"apply", "browser", "opportunities", "sweep"}, groups
+                    )
+
+    def test_what_the_model_backend_imports_runs_every_group(self) -> None:
+        # api/app/agents/backend.py sets the model credential of every journey: no file it
+        # reaches, directly or not, may be narrowed.
+        imports = ci_plan.Imports(ROOT)
+        graph = imports.api()
+        backend = "api/app/agents/backend.py"
+        reached = [
+            path
+            for path in sorted(graph)
+            if backend
+            in ci_plan.importers(path, graph, lambda name: name in ci_plan.API_WIRING)
+        ]
+        self.assertIn("api/app/agents/tools.py", reached)
+        for path in reached:
+            with self.subTest(path=path):
+                groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
+                self.assertEqual(groups, ci_plan.EVERY, why)
+
+    def test_images_run_the_groups_whose_stacks_start_them(self) -> None:
+        # Only the stacks that set COMPOSE_PROFILES=browser start the browser service.
+        gate = (ROOT / "ops/local-check.sh").read_text()
+        profiled = set()
+        for case in re.finditer(r"\n  ([a-z]+)\)\n(.*?)\n    ;;", gate, re.DOTALL):
+            if "export COMPOSE_PROFILES=browser" in case.group(2):
+                profiled.add(case.group(1))
+        self.assertEqual(profiled, {"apply", "browser"})
+        compose = (ROOT / "compose.yml").read_text()
+        self.assertRegex(
+            compose, r"\n  browser:\n(?:    .*\n)*?    profiles: \[browser\]"
+        )
+        for path, expected in {
+            "browser/Dockerfile": frozenset(profiled),
+            "renderer/Dockerfile": frozenset({"documents", "apply"}),
+            "api/Dockerfile": ci_plan.EVERY,
+            "web/Dockerfile": ci_plan.EVERY,
+        }.items():
+            with self.subTest(path=path):
+                groups, _ = ci_plan.journey_groups_for(
+                    path, {}, {}, ci_plan.Imports(ROOT)
+                )
+                self.assertEqual(groups, expected)
+
+    def test_the_reviewed_loaders_and_registrations_hold(self) -> None:
+        for path, constant in ci_plan.API_LOADERS.items():
+            with self.subTest(path=path):
+                self.assertIn(constant, (ROOT / path).read_text())
+        # The scoped registration registers internal agents only (GET /api/agents lists none):
+        # each register call of its files builds a definition that says internal=True.
+        for path in ci_plan.SCOPED_REGISTRATIONS:
+            for name in ("agents.py", "form_agent.py", "model_check.py"):
+                text = (ROOT / path).with_name(name).read_text()
+                tree = ast.parse(text)
+                calls = [
+                    n
+                    for n in ast.walk(tree)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "register"
+                    and getattr(n.func.value, "id", "") == "definitions"
+                ]
+                self.assertEqual(len(calls), 1, name)
+                for call in calls:
+                    self.assertTrue(ci_plan.registers_internal(call, tree), name)
+        hook = "from app.documents import hooks\nhooks.register_check(print)\n"
+        cases = {
+            # A hook makes its module a consumer of the file that registers the callback.
+            "api/app/documents/hooks.py": (
+                "def register_check(f):\n    pass\n",
+                ["mail", "documents", "apply"],
+            ),
+            "api/app/documents/registry.py": (
+                "import importlib\nNAMES = ('rules',)\nimportlib.import_module('app.mail.rules')\n",
+                [g for g, _ in self.GROUPS],
+            ),
+        }
+        for path, (text, expected) in cases.items():
+            with self.subTest(path=path):
+                files = {
+                    path: text,
+                    "api/app/mail/rules.py": hook if "hooks" in path else "",
+                }
+                self.assertEqual(self.ran(["api/app/mail/rules.py"], files), expected)
+        everything = [g for g, _ in self.GROUPS]
+        for source in [
+            "thing.register_check(print)",  # an object the reader cannot name
+            "register_check(print)",  # a function nobody imported
+            "from app.agents import definitions\ndefinitions.register(make())",  # a listed agent
+            # A listed agent beside an unrelated internal=True, or one whose builder says False.
+            (
+                "from app.agents import definitions\ndefinitions.register(make())\n"
+                "OTHER = thing(internal=True)\n"
+            ),
+            (
+                "from app.agents import definitions\n"
+                "def _definition():\n    return make(internal=False)\n"
+                "definitions.register(_definition())\n"
+            ),
+            (
+                "from app.agents import definitions\n"
+                "def _definition():\n    return make(internal=True)\n"
+                "definitions.register(_definition(), extra=1)\n"
+            ),
+        ]:
+            with self.subTest(source=source):
+                files = {
+                    "api/app/mail/rules.py": source,
+                    "api/app/agents/__init__.py": "",
+                    "api/app/agents/definitions.py": "",
+                }
+                self.assertEqual(self.ran(["api/app/mail/rules.py"], files), everything)
+        files = {
+            "api/app/mail/rules.py": "from app.agents import definitions\n"
+            "def _definition():\n    return make(internal=True)\n"
+            "ANSWER = definitions.register(_definition())\n"
+            "definitions.register(make(internal=True))\n",
+            "api/app/agents/__init__.py": "",
+            "api/app/agents/definitions.py": "",
+        }
         self.assertEqual(
-            [g for v, g, _ in plan if v == "run"], sorted(groups - {"apps", "sweep"})
+            self.ran(["api/app/mail/rules.py"], files), ["mail", "documents", "apply"]
         )
-        self.assertTrue(
-            all("API application changes run every group" in why for _, _, why in plan)
+        # A reviewed loader that names another package, or names computed at run time.
+        with mock.patch.dict(
+            ci_plan.API_LOADERS, {"api/app/documents/store.py": "NAMES"}
+        ):
+            for source in (
+                "NAMES = ('x',)\nPACKAGE = 'app.mail'\n",
+                "NAMES = tuple(sorted(['x']))\n",
+                "",
+            ):
+                with self.subTest(loader=source):
+                    self.assertEqual(
+                        self.ran(
+                            ["api/app/mail/sync.py"],
+                            {"api/app/documents/store.py": source},
+                        ),
+                        everything,
+                    )
+
+    def test_routes_of_a_shared_page_and_main_middleware_run_every_group(self) -> None:
+        everything = [g for g, _ in self.GROUPS]
+        shell = "web/src/features/shell/app-shell.tsx"
+        router = (
+            "from fastapi import APIRouter\n"
+            'router = APIRouter(prefix="/api/mail")\n'
+            '@router.get("/thing/{thing_id}/state")\n'
+            "def state():\n    pass\n"
         )
+        base = {"api/app/mail/thing_router.py": router}
+        card = {
+            shell: 'import { Card } from "@/features/mail/card";\n',
+            "web/src/features/mail/card.tsx": 'import { load } from "./mail-api";\n',
+        }
+        cases = {
+            # The api file serving a request of a shared page, through the files it imports.
+            "template": ("request(`/mail/thing/${id}/state`)", everything),
+            "constant": (
+                'const BASE = "/mail/thing";\nrequest(`${BASE}/${id}/state`)',
+                everything,
+            ),
+            "full path": ('fetch("/api/mail/thing/1/state")', everything),
+            "query": ("request(`/mail/thing/${id}/state?full=1`)", everything),
+            # A link or a navigation is a page, and another route is another file.
+            "link": ('<Link to="/mail/thing/1/state" />', ["mail"]),
+            "navigate": ('navigate("/mail/thing/1/state")', ["mail"]),
+            "other route": ('request("/mail/thing/1")', ["mail"]),
+        }
+        for name, (code, expected) in cases.items():
+            with self.subTest(name=name):
+                files = {**base, **card, "web/src/features/mail/mail-api.ts": code}
+                self.assertEqual(
+                    self.ran(["api/app/mail/thing_router.py"], files), expected
+                )
+        # The same call from a page no group shares, or from a test file, narrows.
+        files = {
+            **base,
+            "web/src/features/mail/Mail.tsx": 'request("/mail/thing/1/state")\n',
+            "web/src/features/mail/card.test.tsx": 'request("/mail/thing/1/state")\n',
+            shell: 'import { x } from "@/features/mail/card.test";\n',
+        }
+        self.assertEqual(self.ran(["api/app/mail/thing_router.py"], files), ["mail"])
+        # What the reader cannot place fails closed: a missing shared page, an unresolved
+        # import of one, a route declared on an unknown router or with a computed path.
+        for files in (
+            {**base, shell: 'import { x } from "./gone";\n'},
+            {**base, "api/app/mail/odd.py": '@other.get("/x")\ndef f():\n    pass\n'},
+            {
+                **base,
+                "api/app/mail/odd.py": "from fastapi import APIRouter\n"
+                "router = APIRouter()\n@router.get(PATH)\ndef f():\n    pass\n",
+            },
+        ):
+            with self.subTest(files=sorted(files)):
+                self.assertEqual(
+                    self.ran(["api/app/mail/thing_router.py"], files), everything
+                )
+        root = self.tree({p: t for p, t in self.BASE.items() if p != shell})
+        self.assertEqual(
+            [
+                g
+                for v, g, _ in ci_plan.journey_plan(
+                    root, ["api/app/mail/rules.py"], self.GROUPS
+                )
+                if v == "run"
+            ],
+            everything,
+        )
+        # main.py: a middleware or a handler of a module runs every group, and what its code
+        # reaches; the routers its module lists for app.include_router stay the module's.
+        main = (
+            "from app.mail import web as mail_web\n"
+            "from app.mail import hub\n"
+            "app.middleware('http')(mail_web.no_store)\n"
+            "for r in mail_web.load():\n    app.include_router(r)\n"
+            "hub.include(app)\n"
+        )
+        routers = (
+            "from app.mail import headers, thing_router\n"
+            "ROUTERS = (thing_router.router,)\n"
+            "def load():\n    return ROUTERS\n"
+            "async def no_store(request, call_next):\n"
+            "    return headers.extra(await call_next(request))\n"
+        )
+        files = {
+            **base,
+            "api/app/main.py": main,
+            "api/app/mail/web.py": routers,
+            "api/app/mail/headers.py": "from app.mail import parse\n",
+            "api/app/mail/parse.py": "",
+            "api/app/mail/hub.py": "",
+        }
+        for path, expected in {
+            "api/app/mail/web.py": everything,
+            "api/app/mail/headers.py": everything,
+            "api/app/mail/parse.py": everything,  # headers.py imports it
+            "api/app/mail/thing_router.py": ["mail"],
+            "api/app/mail/hub.py": ["mail"],
+        }.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.ran([path], files), expected)
 
 
 if __name__ == "__main__":
