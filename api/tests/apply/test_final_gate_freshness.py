@@ -7,8 +7,9 @@ from datetime import timedelta
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.orm import Session
 
-from app.apply import caps, service, submit
+from app.apply import caps, profile_gate, profile_sources, service, site_profile, submit
 from app.apply.caps_models import ApplySettings, LikeMode
 from app.apply.models import (
     Application,
@@ -17,6 +18,7 @@ from app.apply.models import (
     Authorisation,
     AuthorisationKind,
     Mode,
+    SiteProfileRun,
     State,
 )
 from app.jobs.models import Job
@@ -24,11 +26,13 @@ from app.mail import gate as mail_gate
 from app.mail.draft_models import MailDraft
 from tests.apply import a11_support as a11
 from tests.apply.a6_support import submit_ashby
+from tests.apply.a18_support import Portal, services
 from tests.apply.conftest import AT
 from tests.apply.test_a6_gate import approve, frozen, ready, run_submit, submit_services
 from tests.apply.test_a13_full_auto import held, turn_on
 from tests.apply.test_a14_email import connect, no_google, provider
 from tests.apply.test_a14_pacing import ON, approved
+from tests.apply.test_a18_profiles import make, section
 from tests.mail.fake_gmail import FakeGoogle
 
 __all__ = ["no_google"]
@@ -458,6 +462,77 @@ def test_linkedin_post_arm_daily_count_excludes_only_its_own_admitted_click(
     assert caps.linkedin_daily(db, app, AT) == (other_count + prior_own_click >= 15)
 
 
+@pytest.mark.parametrize("boundary", ["consume_run", "consume_auth", "final_run", "final_auth"])
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+@pytest.mark.parametrize("pause", [False, True])
+def test_profile_save_refreshes_after_run_and_authorisation_locks(
+    db, factory, person_a, monkeypatch, boundary, offset, pause
+):
+    portal = Portal()
+    run_id = make(db, person_a.user_id)
+    env = services(factory, portal)
+    asyncio.run(site_profile.fill(env, run_id))
+    _run, part, rows = section(db, person_a.user_id, run_id)
+    auth = profile_gate.authorise_section(
+        db, person_a.user_id, run_id, part.section, profile_sources.value_hash(part, rows), AT
+    )
+    auth_id, key, deadline = auth.id, part.section, auth.expires_at
+    db.commit()
+    current, paused, calls = [deadline - timedelta(minutes=1)], [False], [0]
+    env.clock = lambda: current[0]
+
+    async def switches():
+        return True, paused[0]
+
+    env.profile_switches = switches
+
+    def changed(owner):
+        current[0] = deadline + timedelta(seconds=offset)
+        paused[0] = pause
+
+    model = SiteProfileRun if boundary.endswith("run") else Authorisation
+    row_id = run_id if model is SiteProfileRun else auth_id
+    statement = sa.select(model).where(model.id == row_id).with_for_update()
+    with LockWait(factory, statement, changed) as waiter:
+        if model is SiteProfileRun:
+            original_lock = site_profile.lock
+
+            def lock(session, *args):
+                calls[0] += 1
+                if calls[0] == (1 if boundary.startswith("consume") else 2):
+                    waiter.start(session)
+                return original_lock(session, *args)
+
+            monkeypatch.setattr(site_profile, "lock", lock)
+        else:
+            original_scalar = Session.scalar
+
+            def scalar(session, query, *args, **kwargs):
+                descriptions = getattr(query, "column_descriptions", ())
+                if (
+                    descriptions
+                    and descriptions[0].get("entity") is Authorisation
+                    and query._for_update_arg is not None
+                ):
+                    calls[0] += 1
+                    if calls[0] == (1 if boundary.startswith("consume") else 2):
+                        waiter.start(session)
+                return original_scalar(session, query, *args, **kwargs)
+
+            monkeypatch.setattr(Session, "scalar", scalar)
+        monkeypatch.setattr(profile_gate, "gate_click", portal.save)
+        asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    expected = pause or offset >= 0
+    assert portal.clicks == (0 if expected else 1)
+    db.expire_all()
+    auth = db.get(Authorisation, auth_id)
+    assert (auth.used_at is not None) == (boundary.startswith("final") or offset < 0)
+    if not expected:
+        assert auth.used_at == (
+            deadline - timedelta(minutes=1) if boundary.startswith("final") else current[0]
+        )
+
+
 @pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
 @pytest.mark.parametrize("boundary", ["owner", "host", "after_commit"])
 @pytest.mark.parametrize("pause", [False, True, "error"])
@@ -564,3 +639,60 @@ def test_mail_final_lock_pause_is_a_known_atomic_non_send(
         .select_from(ApplicationEvent)
         .where(ApplicationEvent.application_id == app_id, ApplicationEvent.kind == "click")
     ) == (1 if boundary == "after_commit" else 0)
+
+
+@pytest.mark.parametrize("fault", ["valid", "expiry", "paused", "pause_error"])
+def test_autosave_checks_after_the_last_site_read_before_writing(
+    db, factory, person_a, monkeypatch, fault
+):
+    portal = Portal()
+    run_id = make(db, person_a.user_id)
+    env = services(factory, portal)
+    asyncio.run(site_profile.fill(env, run_id))
+    run, part, rows = section(db, person_a.user_id, run_id)
+    run.autosave, run.autosave_confirmed = True, True
+    auth = profile_gate.authorise_section(
+        db,
+        person_a.user_id,
+        run_id,
+        part.section,
+        profile_sources.value_hash(part, rows),
+        AT,
+        autosave=True,
+    )
+    auth_id, key, deadline = auth.id, part.section, auth.expires_at
+    db.commit()
+    portal.autosave, portal.typed = True, []
+    current, consumed, paused = [deadline - timedelta(minutes=1)], [False], [False]
+    env.clock = lambda: current[0]
+    consume, snapshot = profile_gate.consume, portal.snapshot
+
+    def decision(*args, **kwargs):
+        answer = consume(*args, **kwargs)
+        consumed[0] = answer[1].state == "saving"
+        return answer
+
+    async def read():
+        result = await snapshot()
+        if consumed[0]:
+            if fault == "expiry":
+                current[0] = deadline
+            paused[0] = fault in {"paused", "pause_error"}
+        return result
+
+    async def switches():
+        if paused[0] and fault == "pause_error":
+            raise ConnectionError("synthetic unavailable pause store")
+        return True, paused[0]
+
+    env.profile_switches = switches
+    monkeypatch.setattr(profile_gate, "consume", decision)
+    monkeypatch.setattr(portal, "snapshot", read)
+    asyncio.run(profile_gate.save_section(env, run_id, key, auth_id))
+    assert consumed[0]
+    assert bool(portal.typed) == (fault == "valid")
+    assert bool(portal.saved["Full name"]) == (fault == "valid")
+    assert portal.saved["Phone"] == "+33 1 00 00 00 00"
+    assert portal.saved["Email"] == "e2e-site@example.org"
+    db.expire_all()
+    assert db.get(Authorisation, auth_id).used_at is not None

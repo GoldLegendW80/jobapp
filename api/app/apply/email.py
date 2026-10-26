@@ -9,15 +9,27 @@ Which addresses of a posting's text an application by email may use, failing clo
    ("send your CV to", "apply by email to", "envoyez votre candidature à", "postulez par mail
    à"), and no negation or prohibition word appears in its block: the paragraph that holds it,
    the lead line of the list it belongs to (or the open line just above, one that ends without
-   . ! ?), and the nearest heading above it. "Do not hesitate" and "n'hésitez pas" invite,
-   they do not negate.
-3. Anything else is unsure, never usable: an instructed address in a block with a negation is
+   . ! ?), and the headings above it (every Markdown level still open, and the run of plain
+   headings just above). "Do not hesitate" and "n'hésitez pas" invite, they do not negate.
+   Pasted HTML is read as text first: block tags become line breaks, `<li>` a list item.
+3. The global rule: if any sentence anywhere in the text holds both a negation or prohibition
+   word and an e-mail word ("email", "e-mail", "mail", "courriel", "adresse électronique"),
+   every instructed address of the text is unsure ("UPDATE: we no longer accept applications
+   by email" on top of an old "Send your CV to ..."). A sentence ends at . ! ? or a blank line.
+4. Anything else is unsure, never usable: an instructed address in a block with a negation is
    shown to the person to decide (Review first) and handed over in Full auto
    (`email_unsure`); an address outside any instruction (a signature, a footer, a contact line)
-   is nothing. An address that appears in any negated block is unsure everywhere.
+   is nothing. An address that appears in any negated block is unsure everywhere; addresses
+   are compared casefolded.
+
+Declared open points: negations outside English, French, German and Dutch, and wording with
+no negation word ("This address is obsolete", "Only applications via the form are read") are
+not read; an instruction quoted as a scam example stays usable (Full auto still needs the
+company's own domain).
 """
 
 import hashlib
+import html
 import re
 import unicodedata
 import uuid
@@ -75,7 +87,8 @@ _NEGATION = re.compile(
     r"|unless|except\w*|avoid\w*|refrain\w*|dont|wont|cant|forbid\w*|prohibit\w*|ban|banned"
     r"|disallow\w*|ignor\w*|discard\w*|reject\w*|disregard\w*|refus\w*|delet\w*"
     r"|ne|pas|jamais|aucun\w*|sans|non|nul|nulle|ni|plutot|inutile|evit\w*|sauf|lieu"
-    r"|interdi\w*|proscri\w*|defendu\w*|rejet\w*|supprim\w*)\b"
+    r"|interdi\w*|proscri\w*|defendu\w*|rejet\w*|supprim\w*"
+    r"|nicht|kein\w*|niet|geen)\b"
     r"|\b(?:don|can|won|isn|aren|doesn|didn|shouldn|mustn|wouldn|couldn|haven|hasn|wasn"
     r"|weren)\s?'?\s?t\b"
     r"|n't\b|\bn\s?'"
@@ -85,6 +98,34 @@ _INVITATION = re.compile(
     r"\b(?:do\s+not|don\s?'?\s?t|dont)\s+(?:ever\s+)?hesitate\b"
     r"|\bn\s?'?\s?hesit(?:ez|e|er)\s+(?:surtout\s+)?pas\b"
     r"|\bne\s+(?:pas\s+)?hesit(?:ez|er|e)\s+(?:pas\s+)?(?=a\b)"
+)
+# Read on folded text, addresses removed: the words that name applying by e-mail.
+_EMAIL_WORD = re.compile(
+    r"\b(?:e\s?)?mail\w*|\bcourriel\w*|\badresses?\b|\baddress(?:es)?\b|\binbox\w*|\bmailbox\w*"
+    r"|\bboites?\b|\bmel\b|\bmessagerie\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END = re.compile(r"[.!?]")
+# Tags of pasted HTML: block tags end a line, a list item starts one, the rest are dropped.
+_HTML_TAG = re.compile(
+    r"<(/?)(p|div|br|li|ul|ol|h[1-6]|tr|td|th|table|thead|tbody|section|article|header"
+    r"|footer|blockquote|hr|span|strong|b|i|u|em|a|font|small)(?=[\s/>])[^<>]*>",
+    re.IGNORECASE,
+)
+_HTML_BLOCK = frozenset(
+    {
+        "p",
+        "div",
+        "br",
+        "ul",
+        "ol",
+        "tr",
+        "table",
+        "thead",
+        "tbody",
+        "hr",
+        *(f"h{n}" for n in range(1, 7)),
+    }
 )
 _LIST_ITEM = re.compile(
     r"[ \t]*(?:[-*+>\u2022\u2023\u2043\u25aa\u25cf\u25e6\u2013\u2014]"
@@ -108,6 +149,22 @@ def _clean(text: str) -> str:
     return "".join(c for c in plain if c in "\t\n\r" or unicodedata.category(c) not in _HIDDEN)
 
 
+def _plain(text: str) -> str:
+    """Pasted HTML read as text: block tags become line breaks, `<li>` a `- ` item."""
+    if _HTML_TAG.search(text) is None:
+        return html.unescape(text)
+
+    def tag(match: re.Match[str]) -> str:
+        closing, name = match.group(1), match.group(2).lower()
+        if name == "li":
+            return "\n" if closing else "\n- "
+        if name in _HTML_BLOCK:
+            return "\n"
+        return " " if name in {"td", "th", "section", "article", "header", "footer"} else ""
+
+    return html.unescape(_HTML_TAG.sub(tag, text))
+
+
 def _folded(text: str) -> str:
     return fold(_ADDRESS.sub(" ", text).translate(_QUOTES))
 
@@ -118,9 +175,20 @@ def negated(text: str) -> bool:
     return _NEGATION.search(_INVITATION.sub(" ", _folded(text))) is not None
 
 
+def _forbids_email(paragraphs: list[list[str]]) -> bool:
+    """The global rule: whether any sentence of the text holds both a negation and an e-mail
+    word. Addresses are removed first, so "jobs@mail.example.org" names nothing."""
+    for lines in paragraphs:
+        for sentence in _SENTENCE_END.split(_ADDRESS.sub(" ", " ".join(lines))):
+            if _EMAIL_WORD.search(_folded(sentence)) and negated(sentence):
+                return True
+    return False
+
+
 def _instructed(paragraph: str) -> list[str]:
     """The addresses listed right after an instruction to apply by email."""
     found: list[str] = []
+    seen: set[str] = set()
     for instruction in _INSTRUCTION.finditer(paragraph):
         offset = _RECIPIENT_PREFIX.match(paragraph, instruction.end()).end()
         while match := _ADDRESS.match(paragraph, offset):
@@ -128,7 +196,8 @@ def _instructed(paragraph: str) -> list[str]:
                 value = drafts.address(match.group().rstrip("."))
             except ValueError:
                 break
-            if value not in found:
+            if value.casefold() not in seen:
+                seen.add(value.casefold())
                 found.append(value)
             join = _RECIPIENT_JOIN.match(paragraph, match.end())
             if join is None:
@@ -141,7 +210,7 @@ def _mentioned(paragraph: str) -> set[str]:
     found = set()
     for match in _ADDRESS.finditer(paragraph):
         try:
-            found.add(drafts.address(match.group().rstrip(".")))
+            found.add(drafts.address(match.group().rstrip(".")).casefold())
         except ValueError:
             continue
     return found
@@ -157,6 +226,12 @@ def _paragraphs(text: str) -> list[list[str]]:
     return [p for p in paragraphs if p]
 
 
+def _heading_level(line: str) -> int:
+    """A Markdown heading's level (1 to 6); a plain heading line is 7, the lowest."""
+    hashes = len(line) - len(line.lstrip("#"))
+    return hashes if 1 <= hashes <= 6 else 7
+
+
 def _is_heading(lines: list[str]) -> bool:
     line = lines[0]
     return (
@@ -169,12 +244,17 @@ def _is_heading(lines: list[str]) -> bool:
 def read(text: str) -> Reading:
     """The usable and the unsure addresses of a posting's text (module docstring). Linear in
     the size of the text."""
+    paragraphs = _paragraphs(_clean(_plain(text[:TEXT_LIMIT])))
+    forbidden = _forbids_email(paragraphs)
     instructed: list[tuple[str, bool]] = []
     tainted: set[str] = set()
-    open_line = lead = heading = ""
-    for lines in _paragraphs(_clean(text[:TEXT_LIMIT])):
+    open_line = lead = ""
+    # The headings still open above: each Markdown level, and the run of plain headings.
+    headings: list[tuple[int, str]] = []
+    after_heading = False
+    for lines in paragraphs:
         listed = _LIST_ITEM.match(lines[0]) is not None
-        block = [*lines, heading, lead if listed else open_line]
+        block = [*lines, *(h for _, h in headings), lead if listed else open_line]
         negative = negated("\n".join(block))
         paragraph = " ".join(lines)[:PARAGRAPH_LIMIT]
         if negative:
@@ -185,15 +265,21 @@ def read(text: str) -> Reading:
         open_line = "" if listed or lines[-1][-1] in ".!?" else lines[-1]
         if not listed:
             lead = lines[-1]
-        if _is_heading(lines):
-            heading = lines[0]
-    usable: list[str] = []
-    unsure: list[str] = []
+        heading = _is_heading(lines)
+        if heading:
+            level = _heading_level(lines[0])
+            if not (after_heading and level == 7):
+                headings = [h for h in headings if h[0] < level]
+            headings = [*headings, (level, lines[0])][-12:]
+        after_heading = heading
+    usable: dict[str, str] = {}
+    unsure: dict[str, str] = {}
     for value, negative in instructed:
-        target = unsure if negative or value in tainted else usable
-        if value not in target:
-            target.append(value)
-    return Reading(tuple(v for v in usable if v not in unsure)[:20], tuple(unsure)[:20])
+        key = value.casefold()
+        target = unsure if forbidden or negative or key in tainted else usable
+        target.setdefault(key, value)
+    usable = {k: v for k, v in usable.items() if k not in unsure}
+    return Reading(tuple(usable.values())[:20], tuple(unsure.values())[:20])
 
 
 def recipients(text: str) -> list[str]:

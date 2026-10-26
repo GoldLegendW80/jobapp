@@ -190,3 +190,23 @@ def test_the_loop_stays_responsive_while_a_send_holds_the_lock(db, factory, pers
     assert len(fake.sent) == 1
     db.expire_all()
     assert db.get(Application, application.id).state is State.submitted
+
+
+def test_the_dispatch_loop_opens_nothing_before_its_first_interval(monkeypatch):
+    """Starting the api starts the loop, and the loop's first tick waits one interval, so the
+    app's startup opens no database connection (tests/test_app.py)."""
+    ticks = []
+
+    async def once(app):
+        ticks.append(app)
+        return 0
+
+    monkeypatch.setattr(dispatch, "once", once)
+
+    async def scenario():
+        async with dispatch.lifespan(object()):
+            for _ in range(20):
+                await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert ticks == []

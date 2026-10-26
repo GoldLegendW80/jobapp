@@ -486,14 +486,16 @@ class FeedRunner:
                     "items_skipped": 0,
                     "error": None,
                 }
-                stats.sources.append(entry)
+                entry = sweeps.bind_source(stats, "feed", (feed.kind,), entry)
                 if self.monotonic() > deadline - TIME_BUDGET_S:
                     entry["error"] = "time_budget"
+                    sweeps.finish_source(entry)
                     continue
                 client.deadline = deadline - client.timeout_s - STORE_MARGIN_S
                 stats.current_board = NAMES.get(feed.kind, feed.kind)
                 await progress()
                 entry["error"] = await self._one(client, plan, stats, feed, entry, store)
+                sweeps.finish_source(entry)
                 await progress()
 
     async def _one(

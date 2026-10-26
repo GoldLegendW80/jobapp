@@ -20,9 +20,9 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * has its CV and letter written on the fake backend, clicks Apply (Review first), and the fill
  * runs on the worker. The fake Ashby form asks an open question ("Why Example Robotics?"): the
  * `apply_answer` agent answers it in a run of the agents runtime (the recorded stream
- * `apply_answer`), the judge keeps it, and the approval screen shows it as the assistant's
- * answer, which the person can still edit. Nothing is submitted: the fake server receives no
- * submission.
+ * `apply_answer`), the judge keeps it because the person's motivation says it, and the approval
+ * screen shows it as the assistant's answer, which the person can still edit. Nothing is
+ * submitted: the fake server receives no submission.
  *
  * Locally, as apply-all.config.ts says (the fake forms compose file, AGENTS_FAKE_BACKEND=1 on
  * the worker, the stack's browser up), then:
@@ -50,7 +50,8 @@ let job: string;
 
 test.beforeAll(async ({ browser }) => {
   person = invented("a5");
-  // The recorded stream's factual statements have explicit source motivation.
+  // The judge keeps only a sentence the person's own words support (an unsourced reply is
+  // refused): the motivation holds the recorded stream's statements, so both are kept.
   const profile = person.profile as {
     sections: { answers: { motivation: string } };
   };
