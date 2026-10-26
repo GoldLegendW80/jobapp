@@ -137,9 +137,17 @@ def test_a_changed_layout_stores_nothing_and_the_sweep_is_done(
     )
     row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(FakeTools(broken)))
     assert row.status is SweepStatus.done
-    assert row.stats["sources"][0]["error"] == "layout_changed"
-    assert row.stats["sources"][0]["found"] == 0  # nothing of a changed page is kept
-    assert sweep_router.sweep_out(row).sources[0].error == "layout_changed"
+    entry = next(source for source in row.stats["sources"] if source["mode"] == "fixed_reader")
+    assert entry["error"] == "layout_changed"
+    assert entry["found"] == 0  # nothing of a changed page is kept
+    assert (
+        next(
+            source
+            for source in sweep_router.sweep_out(row).sources
+            if source.mode == "fixed_reader"
+        ).error
+        == "layout_changed"
+    )
     assert all(job.source != "google_careers:ai" for job in jobs_of(factory, alice))
     assert row.stats["boards_ok"] == 1  # the boards' postings are kept
 
@@ -209,7 +217,10 @@ def test_a_source_failure_is_reported_and_the_sweep_is_done(
         "store_gone": "browser_unavailable",
         "store_failed": "store_failed",
     }[failure]
-    assert row.stats["sources"][0]["error"] == expected
+    assert (
+        next(source for source in row.stats["sources"] if source["mode"] == "fixed_reader")["error"]
+        == expected
+    )
     assert row.stats["boards_ok"] == 1
     jobs = jobs_of(factory, alice)
     assert jobs  # the boards' rows are kept
