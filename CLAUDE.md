@@ -20,7 +20,7 @@ below.
 | `web/src/features/<feature>/` | React + Tailwind + shadcn + TanStack Query, Vitest next to the code |
 | `web/e2e/` | Playwright journeys; a group per `<group>-all.config.ts` |
 | `browser/`, `renderer/`, `caddy/`, `tailscale/` | the browser service (Chromium, browserd), the PDF renderer, the proxy, the public URL |
-| `compose.yml`, `compose.mac.yml`, `compose.dev.yml` | the stack; add `compose.mac.yml` on an Apple silicon Mac (README, Apple silicon) |
+| `compose.yml`, `compose.mac.yml`, `compose.dev.yml` | the stack; add `compose.mac.yml` on an Apple silicon Mac (docs/runbooks/development-on-the-mac.md, Apple silicon) |
 | `ops/` | the gate, ship, deploy and helper scripts (below) |
 | `deploy.sh`, `.github/workflows/deploy.yml`, `ops.yml` | deploy to and operate the Jetson (`ops/deploy-checked.sh` and `ops/remote.sh` dispatch the workflows) |
 | `tests/*.sh` | shell tests of the scripts, each run by a step of `.github/workflows/ci.yml` |
@@ -76,7 +76,7 @@ ops/board-sync.py                                   # every column from GitHub f
 ```
 
 `uv` needs `--native-tls` on a network that intercepts TLS. Deploy from any machine, no ssh
-(README, "Deploy from any machine"): the gate runs on the laptop that ships and writes its PASS
+(docs/runbooks/deploy-from-any-machine.md): the gate runs on the laptop that ships and writes its PASS
 record in that checkout; `ops/ship.sh` (or `ops/deploy-checked.sh`) dispatches
 `.github/workflows/deploy.yml` on the Jetson's runner for a tree that gate passed and reads the
 run's `JOBAPP-VERIFY` figures; `ops/remote.sh <action>` dispatches `.github/workflows/ops.yml`
@@ -98,7 +98,7 @@ approved batch, merges and deploys.
 - [docs/agents/review-checklist.md](docs/agents/review-checklist.md): the self review list,
   mined from 130 reviews.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the merge rule, the gate, migrations.
-- [README.md](README.md): setup ("Develop on a new machine"), operations, every runbook.
+- [README.md](README.md): what the app is and the Contents table of the runbooks in `docs/runbooks/` (setup in develop-new-machine.md, operations, every runbook).
 
 Subagents: `.claude/agents/implementer.md` and `.claude/agents/reviewer.md`. Slash commands:
 `/build-task`, `/review-pr`, `/fix-pr`, `/ship`, `/status` (`.claude/commands/`).

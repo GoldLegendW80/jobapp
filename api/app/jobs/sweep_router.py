@@ -108,6 +108,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             found=count(item, "found"),
             new=count(item, "postings"),
             skipped_by_rule=count(item, "skipped_by_rule"),
+            items_skipped=max(0, count(item, "items_skipped")),
             error=item["error"] if isinstance(item.get("error"), str) else None,
             **{
                 name: item.get(name) if isinstance(item.get(name), str) else None
