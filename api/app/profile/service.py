@@ -433,12 +433,11 @@ def delete_photo(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
 
 def export_sections(profile: Profile) -> dict[str, dict[str, Any]]:
     """Every section in its canonical stored form (a section never saved is its empty form),
-    keys in model order: Postgres JSONB does not keep the order they were written in."""
+    keys in model order: Postgres JSONB does not keep the order they were written in. A search
+    saved without the interactive keys exports without them, as GET /api/profile shows it, so an
+    export imported back reads as unchanged."""
     stored = profile.sections or {}
-    return {
-        name: SECTION_MODELS[name].model_validate(stored.get(name, {})).model_dump(mode="json")
-        for name in SECTIONS
-    }
+    return {name: validate_section(name, stored.get(name, {})) for name in SECTIONS}
 
 
 @dataclass(frozen=True)

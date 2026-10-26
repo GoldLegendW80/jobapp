@@ -1465,6 +1465,8 @@ class ExportDocument(BaseModel):
     def to_json(self) -> str:
         """The file as written: indented UTF-8 JSON, the photo key omitted when there is none."""
         body = self.model_dump(mode="json", exclude={"base_revision"})
+        # Each section as stored: a search without the interactive keys keeps them out of the file.
+        body["sections"] = self.stored_sections()
         if body["photo"] is None:
             del body["photo"]
         # The stored form (_stored_section): no permission map until a dedicated writer records

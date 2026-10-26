@@ -288,6 +288,22 @@ describe("search schema", () => {
 });
 
 describe("browser sources (browser B8)", () => {
+  it.each([
+    { enabled: false, location: null },
+    { enabled: true, location: "Nantes" },
+  ])("validates and round trips Free-Work settings: %j", (settings) => {
+    const source = {
+      kind: "freework" as const,
+      query: "Robotics Engineer",
+      ...settings,
+    };
+    const search = { ...haraldLike().search, browser_sources: [source] };
+    const parsed = searchSchema.safeParse(toSearchForm(search));
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+    expect(fromSearchForm(parsed.data).browser_sources).toEqual([source]);
+  });
+
   const withSources = () => {
     const profile = haraldLike();
     return {

@@ -16,13 +16,31 @@ import type { SweepSource } from "./sweeps-api";
 
 export function SweepSources({ sources }: { sources: SweepSource[] }) {
   const feeds = sources.filter((source) => isFeedKind(source.kind));
-  const sites = sources.filter((source) => !isFeedKind(source.kind));
+  const sites = sources.filter(
+    (source) => !isFeedKind(source.kind) && source.mode !== "api",
+  );
   return (
     <>
       <BrowserSites sources={sites} />
       <SweepFeeds feeds={feeds} />
     </>
   );
+}
+
+function sourceStatus(source: SweepSource): string {
+  if (
+    source.mode === "llm_browser" &&
+    (source.phase === "pending" ||
+      source.outcome === "not_attempted" ||
+      source.reason === "interactive_executor_pending")
+  ) {
+    return "not searched this time.";
+  }
+  if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
+  const counts = `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
+  return source.error
+    ? `${counts} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
+    : counts;
 }
 
 function BrowserSites({ sources }: { sources: SweepSource[] }) {
@@ -41,12 +59,7 @@ function BrowserSites({ sources }: { sources: SweepSource[] }) {
           <li key={`${source.kind}:${source.query}:${index}`}>
             <span className="font-medium">{sourceName(source)}</span>
             <span className="text-muted-foreground">
-              {source.error === "not_started"
-                ? `: ${SOURCE_PROBLEMS.not_started}`
-                : `: ${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`}
-              {source.error && source.error !== "not_started"
-                ? ` ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
-                : ""}
+              : {sourceStatus(source)}
             </span>
           </li>
         ))}

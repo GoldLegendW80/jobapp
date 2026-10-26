@@ -83,6 +83,7 @@ def test_the_summary_answer_names_the_counter() -> None:
         "skipped_by_rule",
         "items_skipped",
         "error",
+        # Jobs J9: the frozen source identity and progress.
         "source_id",
         "mode",
         "host",
@@ -157,6 +158,14 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "skipped_by_rule": 1,
         "items_skipped": 2,
         "error": "store_failed",
+        # Jobs J9: the frozen source identity and progress, absent from an older stats row.
+        "source_id": None,
+        "mode": None,
+        "host": None,
+        "phase": None,
+        "action": None,
+        "outcome": None,
+        "reason": None,
     }
 
 
