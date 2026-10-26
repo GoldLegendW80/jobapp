@@ -7,6 +7,9 @@ import {
   fitLabel,
   isOpen,
   money,
+  pollInterval,
+  POLL_MS,
+  WAITING_POLL_MS,
   ORIGIN_LABELS,
   SOURCE_LABELS,
   templateLabel,
@@ -95,4 +98,28 @@ describe("labels", () => {
     expect(money("EUR", 3)).toBe("EUR 3.00");
     expect(money("USD", "n/a")).toBe("USD n/a");
   });
+});
+
+describe("independent capture polling", () => {
+  const generation = (
+    status: "waiting" | "queued" | "running" | "done" | "failed" | "cancelled",
+  ) => ({ id: "capture", status, wait_reason: null, error: null });
+  it.each([
+    ["idle", null, null, false],
+    ["idle", generation("done"), generation("queued"), POLL_MS],
+    ["idle", generation("done"), generation("running"), POLL_MS],
+    ["idle", generation("done"), generation("waiting"), WAITING_POLL_MS],
+    ["idle", generation("waiting"), generation("queued"), POLL_MS],
+    ["idle", generation("running"), generation("waiting"), POLL_MS],
+    ["rendering", generation("waiting"), generation("waiting"), POLL_MS],
+    ["queued", null, generation("failed"), POLL_MS],
+    ["idle", generation("done"), generation("done"), false],
+    ["idle", generation("failed"), generation("failed"), false],
+    ["idle", generation("cancelled"), generation("cancelled"), false],
+  ] as const)(
+    "takes the minimum for %s content %j capture %j",
+    (render, content, capture, expected) => {
+      expect(pollInterval(render, content, capture)).toBe(expected);
+    },
+  );
 });
