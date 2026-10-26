@@ -15,7 +15,7 @@
 # 'apt-get update -qq && apt-cache policy chromium'
 FROM debian:bookworm-slim
 
-ARG CHROMIUM_VERSION=155.0.8059.79-1~deb12u1
+ARG CHROMIUM_VERSION=156.0.8078.47-1~deb12u1
 ARG PLAYWRIGHT_VERSION=1.55.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
