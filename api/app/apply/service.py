@@ -131,16 +131,20 @@ def start(
     if code is not None:
         _refuse(code, mode, warnings)
 
-    from app.apply.email import addresses
+    from app.apply.email import addresses, unsure
 
     form_url = (posting.url or "").strip()
     read_as = guardrails.unstub(form_url, stub_base)
     # An application by email only when the posting's address shows no form of its own
-    # (email.addresses): a negated instruction or an ATS page never becomes one.
+    # (email.addresses): an ATS page never becomes one. An address the text may say not to use
+    # (email.unsure) is never one in Apply myself, which keeps its form; in Review first and
+    # Full auto it is left for the person to choose or not, and Full auto hands it over.
     recipients = addresses(posting, read_as)
-    email_application = bool(recipients)
-    if email_application and mode is Mode.manual:
+    if recipients and mode is Mode.manual:
         raise RefusedError(guardrails.Refusal("email_manual"))
+    if not recipients and mode is not Mode.manual:
+        recipients = unsure(posting, read_as)
+    email_application = bool(recipients)
     key = f"email:{posting.id}" if email_application else guardrails.canonical_key(read_as)
     if key is None:
         raise RefusedError(guardrails.Refusal("no_address"))

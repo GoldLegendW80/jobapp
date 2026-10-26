@@ -87,6 +87,10 @@ SENTENCES = {
     "email_company_domain": (
         "The recipient is not on a confirmed company domain. Review this application."
     ),
+    "email_unsure": (
+        "The posting may say not to apply to its email address, so nothing was sent. Read the "
+        "posting and choose how to apply."
+    ),
     "not_connected": "Connect Gmail in Account to send this application.",
     "no_send_scope": "Reconnect Gmail in Account to allow sending.",
     "needs_reconnect": "Reconnect Gmail in Account to continue.",

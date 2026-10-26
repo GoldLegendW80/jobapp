@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import sqlalchemy as sa
+from publicsuffixlist import PublicSuffixList
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, states
@@ -17,6 +18,11 @@ from app.mail import domains, hosts
 
 # The reason a Full auto item followed off LinkedIn becomes a review item.
 NOT_OWN_COMPANY = "company_site_unverified"
+
+# The ICANN section of the bundled public suffix list (`domains` reads both sections). A host whose
+# registrable domain differs between the two sits under a private suffix (`gitlab.io`,
+# `azurewebsites.net`, `workers.dev`): anyone may take a name there, so it is nobody's own site.
+_ICANN = PublicSuffixList(only_icann=True)
 
 
 def pause(db: Session, user_id: Any, now: datetime) -> None:
@@ -77,9 +83,10 @@ def own_company(company: str, url: str) -> bool:
     company's own site (the check Full auto e-mail makes with `email.own_company`), has the key
     of the posting's company (`caps.company_key`: case, accents, spacing and trailing legal forms
     do not count). Only the whole name matches, never a leading part of it ("Example" is not
-    "Example Robotics"). A shared host, a job board, a host without a registrable domain, an
-    empty company or an organisation the ATS address does not name are not: fail closed, the
-    person reviews it."""
+    "Example Robotics"). A shared host (under a private suffix of the public suffix list, such
+    as `github.io` or `azurewebsites.net`), a job board, a host without a registrable domain,
+    an empty company or an organisation the ATS address does not name are not: fail closed,
+    the person reviews it."""
     real = guardrails.unstub(url, caps._setting("apply_stub_base_url"))
     posting = caps.company_names(company or "", "other", "")
     if not posting.keys:
@@ -95,6 +102,7 @@ def own_company(company: str, url: str) -> bool:
         ats != "other"
         or parts.scheme not in ("http", "https")
         or domain is None
+        or _ICANN.privatesuffix(domains.normalise(host) or "") != domain
         or not hosts.is_company_own(host)
     ):
         return False

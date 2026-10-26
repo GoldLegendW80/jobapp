@@ -12,7 +12,8 @@ in plain Python, from those facts alone:
   with an application noun: "Valider ma candidature"). A lease of purpose `profile_edit` adds
   Save, Update, Enregistrer and Mettre à jour (PROFILE_STEMS). A submit element is clicked only by
   a call that carries the lease's gate capability (browserd/tools).
-- **danger**: delete, remove, withdraw, pay, buy and their French forms, and every field of a
+- **danger**: delete, remove, withdraw, pay, buy and their French forms, a contact verb with a
+  recruiter noun ("Contacter le recruteur", "Contact the hiring manager"), and every field of a
   payment card (autocomplete `cc-*`, or a name, id or label that says card number, CVC, CVV,
   expiry) or a control in a form that has one. Refused whatever the call carries.
 - **credential**: a typing into a credential input (CREDENTIAL_FN: a password box, an autocomplete
@@ -58,6 +59,8 @@ SUBMIT_STEMS = (
     "envoi",
     "apply",
     "postul",
+    "candidater",  # "Candidater", "Candidatez", never "Candidat" or "Candidature" alone
+    "candidatez",
 )
 # A confirm verb and an application noun in the same name: "Valider ma candidature".
 CONFIRM_VERBS = (
@@ -86,6 +89,10 @@ DANGER_WORDS = frozenset(
 )  # fmt: skip
 # "Annuler ma candidature", "Cancel application": cancel only with the application noun.
 CANCEL_VERBS = ("annul", "cancel")
+# "Contacter le recruteur", "Message the hiring manager": writing to a person is never a click of
+# the app, so a contact verb with a recruiter noun is danger. "Contact us" alone is not.
+CONTACT_VERBS = ("contact", "messag", "ecrire", "ecrivez")
+RECRUITER_NOUNS = ("recrut", "recruit", "employeur", "employer", "hiring")
 
 # Controls a name can turn into a submit: buttons and links. A text field, a select, a checkbox
 # or a radio never submits by a click, whatever its label says ("I confirm what I submit...").
@@ -201,6 +208,15 @@ FACTS_JS = r"""
       n.getAttribute("aria-label"), n.getAttribute("placeholder"),
       ...Array.from(n.labels || []).map(l => l.textContent)].filter(Boolean).join(" ").toLowerCase();
     const fields = form && form.elements ? Array.from(form.elements).slice(0, 300) : [];
+    // Conservative supported shapes only. The separate discovery context disables page
+    // JavaScript before loading; this DOM inspection is not proof that handlers cannot run.
+    const all = [], walker = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT);
+    while (all.length <= 3000 && walker.nextNode()) all.push(walker.currentNode);
+    const native = all.length <= 3000 && !all.some(n =>
+      ["IFRAME", "FRAME", "OBJECT", "EMBED", "BASE"].includes(n.tagName) || n.shadowRoot ||
+      n.tagName.includes("-") ||
+      (n.tagName === "SCRIPT" && !["application/json", "application/ld+json"].includes(n.type)) ||
+      Array.from(n.attributes).some(a => a.name.toLowerCase().startsWith("on")));
     return {
       tag: control.tagName.toLowerCase(),
       type: kindOf(control),
@@ -214,6 +230,16 @@ FACTS_JS = r"""
       editable: !!(control.isContentEditable || el.isContentEditable),
       field: fieldText(control),
       form_fields: fields.map(fieldText),
+      discovery: {
+        native, method: control.hasAttribute("formmethod") ? control.formMethod : form ? form.method : "",
+        action: (control.hasAttribute("formaction") ? control.formAction : form ? form.action : "").slice(0, 2001),
+        target: control.getAttribute("formtarget") || (form && form.target) || control.target || "",
+        name: (control.name || "").slice(0, 501), href: (control.href || "").slice(0, 2001),
+        fields: fields.filter(n => n.name && !n.matches(":disabled") &&
+          !["submit", "button", "reset"].includes(kindOf(n))).map(n =>
+          ({tag: n.tagName.toLowerCase(), type: kindOf(n), name: n.name.slice(0, 501),
+            value: String(n.value || "").slice(0, 2001)})),
+      },
       credential: isCredential(control),
     };
   };
@@ -285,6 +311,8 @@ def says_submit(names: list[str], profile_edit: bool = False) -> bool:
 def says_danger(names: list[str]) -> bool:
     tokens = _glued(names)
     if _starts(tokens, DANGER_STEMS) or any(token in DANGER_WORDS for token in tokens):
+        return True
+    if _starts(tokens, CONTACT_VERBS) and _starts(tokens, RECRUITER_NOUNS):
         return True
     return _starts(tokens, CANCEL_VERBS) and _starts(tokens, APPLICATION_NOUNS)
 

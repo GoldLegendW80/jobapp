@@ -63,12 +63,6 @@ TRUE = [
     (f"N'hésitez pas à envoyer votre CV à {A}", [A]),
     (f"N’hésitez pas à envoyer votre candidature à {A}", [A]),
     (f"Envoyez votre CV à {A} ou {B}", [A, B]),
-    (f"No agencies please. Send your CV to {A}", [A]),
-    (f"Pas d'agences. Envoyez votre CV à {A}", [A]),
-    (f"No remote work.\nSend your CV to {A}", [A]),
-    (f"- No remote work\n- Send your CV to {A}", [A]),
-    (f"Not a fit? Send your CV to {A}", [A]),
-    (f"Do not send your CV to {B}. Send your CV to {A}", [A]),
     (f"Ne pas envoyer de CV à {B}.\n\nEnvoyez votre CV à {A}", [A]),
     ("Send your CV to e2e-notion@example.org", ["e2e-notion@example.org"]),
     ("Send your CV to e2e-no@example.org", ["e2e-no@example.org"]),
@@ -76,6 +70,24 @@ TRUE = [
     (f"Talent team, recruitment: send your CV to {A}", [A]),
     (f"Envoyez votre CV et votre lettre à {A}", [A]),
 ]
+
+# Kept in round 2, unsure since round 3: a negation in the same paragraph (or list) fails
+# closed. The person chooses in Review first, Full auto hands the item over.
+NOW_UNSURE = [
+    f"No agencies please. Send your CV to {A}",
+    f"Pas d'agences. Envoyez votre CV à {A}",
+    f"No remote work.\nSend your CV to {A}",
+    f"- No remote work\n- Send your CV to {A}",
+    f"Not a fit? Send your CV to {A}",
+    f"Do not send your CV to {B}. Send your CV to {A}",
+    f"Do not send your CV to {A}.\n\nSend your CV to {A}",
+]
+
+
+@pytest.mark.parametrize("text", NOW_UNSURE)
+def test_a_negation_in_the_block_makes_the_address_unsure(text):
+    assert email.recipients(text) == []
+    assert A in email.read(text).unsure
 
 
 @pytest.mark.parametrize("text", NEGATED)
@@ -122,35 +134,41 @@ def test_mailto_posting_names_its_own_address_whatever_the_text():
     assert email.addresses(posting) == [B]
 
 
+NEGATED_ON_OWN_PAGE = f"Don't send your application to {A}, use the form"
+
+
 @pytest.mark.parametrize(
-    ("url", "text", "ats"),
+    ("url", "text", "mode", "ats"),
     [
-        # The reviewer's probe: a company's own form and a negated address is a form application.
+        # The reviewer's probe: in Apply myself, a negated address keeps the page's form; in
+        # Review first it is an email application whose recipient the person chooses or not
+        # (test_a14_fail_closed.py), never prefilled.
+        ("https://careers.example.org/jobs/7", NEGATED_ON_OWN_PAGE, Mode.manual, "other"),
+        ("https://careers.example.org/jobs/7", NEGATED_ON_OWN_PAGE, Mode.review, "email"),
+        ("https://careers.example.org/jobs/7", "Questions: " + A, Mode.review, "other"),
         (
-            "https://careers.example.org/jobs/7",
-            f"Don't send your application to {A}, use the form",
-            "other",
+            "https://boards.greenhouse.io/acme/jobs/123",
+            f"Send your CV to {A}",
+            Mode.review,
+            "greenhouse",
         ),
-        ("https://boards.greenhouse.io/acme/jobs/123", f"Send your CV to {A}", "greenhouse"),
-        ("https://careers.example.org/jobs/7", f"Send your CV to {A}", "email"),
+        ("https://careers.example.org/jobs/7", f"Send your CV to {A}", Mode.review, "email"),
     ],
 )
 def test_start_makes_email_only_from_a_positive_instruction_without_a_form(
-    db, person_a, url, text, ats
+    db, person_a, url, text, mode, ats
 ):
     posting = db.get(Job, person_a.posting_id)
     posting.url, posting.posting_text = url, text
     db.commit()
-    application = service.start(
-        db, person_a.user_id, posting.id, Mode.review, False, now=AT
-    ).application
+    application = service.start(db, person_a.user_id, posting.id, mode, False, now=AT).application
     assert application.ats == ats
     assert (application.canonical_key or "").startswith("email:") is (ats == "email")
 
 
 def test_full_auto_like_never_targets_a_negated_address(db, person_a):
-    """In Full auto, the company's own page with a negated address is not an email application,
-    so the Like can never send to it (own_company alone would accept the domain)."""
+    """In Full auto, a negated address on the company's own page is never usable, so the Like
+    can never send to it (own_company alone would accept the domain)."""
     posting = db.get(Job, person_a.posting_id)
     posting.url = "https://careers.example.org/jobs/7"
     posting.posting_text = f"Don't send your application to {A}, use the form"
