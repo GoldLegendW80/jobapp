@@ -39,7 +39,7 @@ from app.ingestion.routers import routers as ingestion_routers
 from app.jobs import service as jobs_service
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, error_name, private_trace
 from app.mail import accounts as mail_accounts
 from app.mail import oauth as mail_oauth
 from app.mail import registry as mail_registry
@@ -177,6 +177,31 @@ def create_app(
     app.middleware("http")(mail_routers.no_store)
     app.middleware("http")(documents_routers.no_store)
 
+    def failed(request: Request, exc: Exception, request_id: str | None) -> JSONResponse:
+        """The one answer and the one log line of an error no route answered (issue #670): a
+        fixed 500, and a line with the request id, the route, the error's class and its private
+        trace (app.logging_config.private_trace), never what the error says. The record holds
+        no exception object either, so no handler of any logger can write its message."""
+        logger.error(
+            "unhandled error",
+            extra={
+                "request_id": request_id,
+                "path": log_path(request),
+                "error": error_name(exc),
+                "exc": private_trace(exc),
+            },
+        )
+        # Built outside every middleware: the no-store of the ingestion routes is set here.
+        path = request.url.path
+        headers = mail_routers.extra_headers(path)
+        if ingestion_private(path):
+            headers["Cache-Control"] = "no-store"
+        if documents_routers.private(path):
+            headers["Cache-Control"] = "private, no-store"
+        return JSONResponse(
+            status_code=500, content={"detail": "internal server error"}, headers=headers or None
+        )
+
     @app.middleware("http")
     async def request_log(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -185,7 +210,12 @@ def create_app(
         start = time.perf_counter()
         status = 500
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                # Answered here, the outermost middleware: an error that left the app would be
+                # re-raised by Starlette after its 500 and logged by uvicorn on its own.
+                response = failed(request, exc, request_id)
             status = response.status_code
         finally:
             logger.info(
@@ -206,20 +236,9 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
-        path = request.url.path
-        if documents_routers.private(path):
-            logger.error("documents.request.failed")
-        else:
-            logger.exception("unhandled error", extra={"path": path})
-        # This response is built outside the prefix middleware.
-        headers = mail_routers.extra_headers(path)
-        if ingestion_private(path):
-            headers["Cache-Control"] = "no-store"
-        if documents_routers.private(path):
-            headers["Cache-Control"] = "private, no-store"
-        return JSONResponse(
-            status_code=500, content={"detail": "internal server error"}, headers=headers or None
-        )
+        # The net under request_log: an error raised once the answer has started (a streamed
+        # body) reaches only this one, and uvicorn then logs it too, through the same handler.
+        return failed(request, exc, None)
 
     async def job_busy(request: Request, exc: Exception) -> JSONResponse:
         """The one mapping from a lock wait that outlasted the lock timeout to 409 BUSY, for every

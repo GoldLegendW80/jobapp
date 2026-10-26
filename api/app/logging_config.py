@@ -21,6 +21,24 @@ object that only shows its text when it is encoded). What stays out of reach is 
 app/agents/runner.py names too: a credential cut somewhere else than at its end, or rewritten.
 Out of reach in particular (issue #155): upper case, whitespace inside the key (what follows it),
 the key without its head, base64 of the key or of `user:key`, hex, another dash.
+
+What an exception says is never written either (issue #670). Its message is where the data it
+was raised about ends up: the text of a CV, a mail, a file name, the parameters of a statement,
+a plaintext in a codec error. So the filter writes the trace of a record's exception as
+`private_trace` renders it, the class and the frames (file, line, function) of the exception and
+of every one it was raised from or during, and nothing they hold: no message, no note, no
+argument, no source line, no local value. An exception passed as an argument of the message or
+as an extra field, at any depth of a list or a mapping, or used as the message itself
+(`logger.error(exc)`), is written as its class name. This holds for every logger that ends in the
+handler: uvicorn's "Exception in ASGI application", arq's "failed" line, the app's own calls.
+asyncio is the one library that writes reprs into the message itself: its exception handler
+puts its fixed sentence on the first line ("Task exception was never retrieved") and the repr of
+the task, the future or the callback after it, and a callback's repr holds its arguments, a
+task's repr its exception. Of an `asyncio` record only the first line is written, cut before the
+first character a repr opens with (`asyncio_message`): "Exception in callback f('...')" becomes
+"Exception in callback f". The exception itself stays on the record, as a private trace. The
+price is a trace without its last words: the class, the file and the line say where to look;
+reproduce with the same input to see the message.
 """
 
 import json
@@ -29,7 +47,7 @@ import re
 import sys
 import threading
 import traceback
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -79,12 +97,15 @@ def clean_text(text: str) -> str:
 
 def clean(value: Any) -> Any:
     """`value` with every text in it cleaned: strings, the items of lists, tuples and sets,
-    the names and the values of mappings. Anything else is kept when its text is clean and
-    replaced by its cleaned text when it is not (an exception, a URL, a request object)."""
+    the names and the values of mappings. An exception becomes its class name, whatever it
+    says. Anything else is kept when its text is clean and replaced by its cleaned text when it
+    is not (a URL, a request object)."""
     if isinstance(value, str):
         return clean_text(value)
     if value is None or isinstance(value, bool | int | float):
         return value
+    if isinstance(value, BaseException):
+        return error_name(value)
     if isinstance(value, dict):
         return {clean(key): clean(item) for key, item in value.items()}
     if isinstance(value, list | tuple | set | frozenset):
@@ -95,6 +116,138 @@ def clean(value: Any) -> Any:
         return "[unprintable]"
     cleaned = clean_text(text)
     return value if cleaned == text else cleaned
+
+
+# A chain or a group longer than this is cut, with a line that says so: a trace stays bounded
+# whatever the exception (a cycle cannot loop, every exception is walked once).
+TRACE_MAX_ERRORS = 64
+TRACE_MAX_FRAMES = 200
+CAUSE = "The above exception was the direct cause of the following exception:"
+CONTEXT = "During handling of the above exception, another exception occurred:"
+CUT = "[trace cut]"
+
+
+def error_name(error: BaseException | type) -> str:
+    """The class of an exception as a traceback names it: `ValueError`, `sqlalchemy.exc.X`."""
+    kind = error if isinstance(error, type) else type(error)
+    module = getattr(kind, "__module__", None)
+    name = getattr(kind, "__qualname__", None) or getattr(kind, "__name__", "?")
+    return name if module in (None, "builtins", "__main__") else f"{module}.{name}"
+
+
+def private_trace(error: BaseException) -> str:
+    """The traceback of `error` without anything it holds (module docstring, issue #670): the
+    layout of the logging module's own traces, each exception's last line its class alone. The
+    errors it was raised from (`__cause__`) or during (`__context__`, unless suppressed) come
+    first, as Python prints them; the members of a group follow it, indented."""
+    lines: list[str] = []
+    seen: set[int] = set()
+    budget = [TRACE_MAX_ERRORS]
+
+    def walk(exc: BaseException, indent: str) -> None:
+        if id(exc) in seen:
+            return
+        if budget[0] <= 0:
+            lines.append(indent + CUT)
+            return
+        budget[0] -= 1
+        seen.add(id(exc))
+        cause, context = exc.__cause__, exc.__context__
+        if cause is not None and id(cause) not in seen:
+            walk(cause, indent)
+            lines.extend(("", indent + CAUSE, ""))
+        elif context is not None and not exc.__suppress_context__ and id(context) not in seen:
+            walk(context, indent)
+            lines.extend(("", indent + CONTEXT, ""))
+        if exc.__traceback__ is not None:
+            lines.append(indent + "Traceback (most recent call last):")
+            frames = traceback.walk_tb(exc.__traceback__)
+            for count, (frame, line) in enumerate(frames):
+                if count == TRACE_MAX_FRAMES:
+                    lines.append(f"{indent}  {CUT}")
+                    break
+                code = frame.f_code
+                lines.append(f'{indent}  File "{code.co_filename}", line {line}, in {code.co_name}')
+        lines.append(indent + error_name(exc))
+        if isinstance(exc, BaseExceptionGroup):
+            members = exc.exceptions
+            for number, member in enumerate(members, 1):
+                if budget[0] <= 0:
+                    lines.append(f"{indent}  {CUT}")
+                    break
+                lines.append(f"{indent}  member {number} of {len(members)}:")
+                walk(member, indent + "    ")
+
+    walk(error, "")
+    return "\n".join(lines)
+
+
+def _trace_of(exc_info: Any) -> str | None:
+    """The private trace of what a record holds as `exc_info`: a triple, or None for none."""
+    error = exc_info[1] if isinstance(exc_info, tuple) and len(exc_info) == 3 else None
+    return private_trace(error) if isinstance(error, BaseException) else None
+
+
+# How deep `_without_errors` looks into lists and mappings; a container deeper than this is
+# written as its type name, whatever it holds (a cycle cannot loop either).
+ERRORS_MAX_DEPTH = 8
+
+
+def _without_errors(value: Any, depth: int = 0) -> Any:
+    """`value` (the message or its arguments) with every exception in it replaced by its class
+    name, inside tuples, lists, sets and mappings too: `logger.exception("%s failed: %s", ref,
+    exc)` and `logger.error(exc)` write what failed, not what it said. A tuple stays a tuple
+    and a mapping a mapping, as %-formatting needs; a set a set; anything else is kept as it is."""
+    if isinstance(value, BaseException):
+        return error_name(value)
+    if not isinstance(value, tuple | list | set | frozenset | Mapping):
+        return value
+    if depth >= ERRORS_MAX_DEPTH:
+        return type(value).__name__
+    if isinstance(value, Mapping):
+        return {
+            _without_errors(key, depth + 1): _without_errors(one, depth + 1)
+            for key, one in value.items()
+        }
+    items = [_without_errors(one, depth + 1) for one in value]
+    if isinstance(value, tuple):
+        return tuple(items)
+    return (
+        frozenset(items)
+        if isinstance(value, frozenset)
+        else set(items)
+        if isinstance(value, set)
+        else items
+    )
+
+
+# Where a repr starts in a line of asyncio: a callback's arguments `f('...')`, an object
+# `<Task ...>`, a field `exception=...`, a quoted value. Not the `<locals>` and `<lambda>` of a
+# function's qualified name (`test.<locals>.callback`), which is code, not data. Nor a marker
+# the cleaner itself writes (`[redacted]`, `[unprintable]`, `[trace cut]`): fixed text, no data.
+_REPR_START = re.compile(
+    r"""[('"{=]|\[(?!redacted\]|unprintable\]|trace cut\])|<(?!locals>|lambda>)"""
+)
+# The one message of asyncio whose sentence starts with a repr ("Task <Task ...> has errored
+# out but its parent task <Task ...> is already completed"): written as a fixed sentence.
+_ASYNCIO_FIXED = (
+    (
+        re.compile(r"Task .* has errored out but its parent task .* is already completed"),
+        "Task has errored out but its parent task is already completed",
+    ),
+)
+
+
+def asyncio_message(message: str) -> str:
+    """What is written of a message of the `asyncio` logger (module docstring): its first line,
+    cut before the first repr, or the fixed sentence of a known message that starts with one."""
+    first = message.split("\n", 1)[0]
+    for pattern, sentence in _ASYNCIO_FIXED:
+        if pattern.fullmatch(first):
+            return sentence
+    cut = _REPR_START.search(first)
+    first = first[: cut.start()] if cut else first
+    return first.rstrip(" :,") or "asyncio error"
 
 
 LOST = "a log record could not be written"
@@ -143,6 +296,8 @@ class SecretFilter(logging.Filter):
 
     @staticmethod
     def _scrub(record: logging.LogRecord) -> None:
+        record.msg = _without_errors(record.msg)
+        record.args = _without_errors(record.args)
         try:
             message = record.getMessage()
         except Exception:
@@ -150,16 +305,22 @@ class SecretFilter(logging.Filter):
             message = f"{record.msg!s} {record.args!r}"
         # The arguments are folded into the message: an argument can be any object, and only
         # its text in the message is what would be written.
-        record.msg, record.args = clean_text(message), None
+        message = clean_text(message)
+        if record.name == "asyncio" or record.name.startswith("asyncio."):
+            # Cut after the cleaning: a cut inside a credential would leave its beginning,
+            # which no longer equals it.
+            message = asyncio_message(message)
+        record.msg, record.args = message, None
         for key, value in list(vars(record).items()):
             if key not in _RESERVED and not key.startswith("_"):
                 setattr(record, key, clean(value))
-        if record.exc_info and not record.exc_text:
+        if record.exc_info:
             # Where the logging module keeps the text of a record's exception once it has
             # been formatted: its own formatters write this text and never format the
-            # exception again, and so does JsonFormatter. The exception object stays on the
-            # record for whoever reads it in code (it cannot be rewritten).
-            record.exc_text = "".join(traceback.format_exception(*record.exc_info)).rstrip()
+            # exception again, and so does JsonFormatter. Always rewritten, even when a
+            # handler before this one cached the whole trace there. The exception object
+            # stays on the record for whoever reads it in code (it cannot be rewritten).
+            record.exc_text = _trace_of(record.exc_info)
         if record.exc_text:
             record.exc_text = clean_text(record.exc_text)
         if record.stack_info:
@@ -180,7 +341,10 @@ class JsonFormatter(logging.Formatter):
         if record.exc_text:
             payload["exc"] = record.exc_text  # formatted already, and cleaned, by SecretFilter
         elif record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+            # Never `formatException`: that is the whole trace, messages included.
+            trace = _trace_of(record.exc_info)
+            if trace:
+                payload["exc"] = trace
         # Once more on the finished line: a credential is made of characters JSON never
         # escapes, so it stands in the line as it stood in the value.
         return clean_text(json.dumps(payload, default=str, ensure_ascii=False))
