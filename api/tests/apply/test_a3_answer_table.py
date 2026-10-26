@@ -3117,8 +3117,16 @@ ROUND7: list[Case] = [
         origin="trap7",
     ),
     G("deg stored in progress", "Highest degree", "select", LEVELS3, "p4_progress", origin="trap7"),
-    G("deg stored with field", "Highest degree", "select", LEVELS3, "p4_field", origin="trap7"),
-    G("deg stored m2", "Highest degree", "select", LEVELS3, "p4_m2", origin="trap7"),
+    G(
+        "deg stored with field",
+        "Highest degree",
+        "select",
+        LEVELS3,
+        "p4_field",
+        "Master's",
+        origin="trap7",
+    ),
+    G("deg stored m2", "Highest degree", "select", LEVELS3, "p4_m2", "Master's", origin="trap7"),
     G(
         "deg option in progress",
         "Highest degree",
@@ -3412,7 +3420,7 @@ ROUND7: list[Case] = [
         origin="trap7",
     ),
     G("consent box", "I consent to a background check", "checkbox", origin="trap7"),
-    # Professional is a word of the fluent band (C1, C2), never of a native or an intermediate level
+    # Professional denotes fluent only in an option; storing the word does not prove fluency.
     G(
         "pro review",
         "Your languages",
@@ -3727,8 +3735,8 @@ def test_round7_has_every_follow_up_and_half_of_our_own_are_traps() -> None:
         ("MSc (MBA)", None),
         ("Licence (Bac+5)", None),
         ("Master's (in progress)", None),
-        ("MSc Computer Science", None),
-        ("Master 2", None),
+        ("MSc Computer Science", ("master", 0, "MSc")),
+        ("Master 2", ("master", 1, "master")),
         ("Baccalaureate", None),
         ("MS", None),
         ("Diplôme d'ingénieur", None),
@@ -3741,7 +3749,8 @@ def test_round7_a_degree_reads_as_its_level_rank_and_name(text: str, expected: o
     assert degree_of(text) == expected
 
 
-def test_round7_no_two_vocabularies_share_an_option() -> None:
+@pytest.mark.parametrize("option", [False, True])
+def test_round7_no_two_vocabularies_share_an_option(option: bool) -> None:
     seen: dict[str, str] = {}
     vocabularies = [("yes", YES_OPTION_TEXTS), ("no", NO_OPTION_TEXTS)]
     vocabularies += list(AUTHORISATION_OPTION_TEXTS.items())
@@ -3750,8 +3759,18 @@ def test_round7_no_two_vocabularies_share_an_option() -> None:
     vocabularies += [(f"degree {name}", texts) for name, (_, texts) in DEGREE_TEXTS.items()]
     vocabularies += list(DEGREE_LEVEL_TEXTS.items())
     vocabularies += [(f"scale {level}", (text,)) for level, text in DEGREE_SCALE_TEXTS.items()]
-    vocabularies += [(f"band {band}", words) for band, words in LEVEL_WORDS.items()]
-    vocabularies += [(f"band {band}", words) for band, words in OPTION_LEVEL_WORDS.items()]
+    # Option wording and the person's wording are separate namespaces: Professional is
+    # its own stored band but denotes fluent only when the site offers it as an option.
+    option_words = {option_key(word) for words in OPTION_LEVEL_WORDS.values() for word in words}
+    vocabularies += [
+        (
+            f"band {band}",
+            tuple(word for word in words if not option or option_key(word) not in option_words),
+        )
+        for band, words in LEVEL_WORDS.items()
+    ]
+    if option:
+        vocabularies += [(f"band {band}", words) for band, words in OPTION_LEVEL_WORDS.items()]
     for name, texts in vocabularies:
         for text in texts:
             key = option_key(text)

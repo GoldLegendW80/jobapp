@@ -45,7 +45,7 @@ from tests.apply.test_a5_answer_agent import Runtime, posting_text, runs_of
 from tests.apply.test_a5_run import WHY, application, events
 from tests.apply.test_a6_gate import _password, api_app, run_submit, stub, submit_services
 from tests.apply.test_a6_recheck import at
-from tests.apply.test_a13_full_auto import HOLD, HOUR, filled, reviewed, run_job, turn_on
+from tests.apply.test_a13_full_auto import HOLD, HOUR, WHY_TEXT, filled, reviewed, run_job, turn_on
 from tests.conftest import make_settings
 from tests.identity.api_helpers import Api
 from tests.jobs.test_worker import flush_redis, redis_url
@@ -921,7 +921,7 @@ def test_b_s_check_never_reads_a_s_profile_or_posting(
         mine, theirs = canary(), canary()
         posting_text(db, person, f"Example Robotics builds warehouse robots. Ref {mine}.")
         revision = profile_service.get_profile(db, person.user_id, AT).revision
-        section = {**full("answers"), "motivation": f"I build agents {theirs}."}
+        section = {**full("answers"), "motivation": f"I build agents {theirs}.\n{WHY_TEXT}"}
         profile_service.save_section(db, person.user_id, "answers", section, revision, AT)
         db.commit()
         planted[name] = (mine, theirs)

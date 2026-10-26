@@ -1,0 +1,61 @@
+- generic [active] [ref=e1]:
+  - heading "Applied AI Engineer" [level=1] [ref=e2]
+  - paragraph [ref=e3]: Example Robotics, Paris, France
+  - paragraph [ref=e4]: Build agents that run real operations. Invented posting.
+  - generic [ref=e5]:
+    - group "Autofill from resume" [ref=e6]:
+      - button "Autofill from resume" [ref=e7]
+    - group "Full name *" [ref=e8]:
+      - generic [ref=e9]:
+        - text: Full name
+        - generic [ref=e10]: "*"
+      - textbox "Full name *" [ref=e11]
+    - group "Email *" [ref=e12]:
+      - generic [ref=e13]:
+        - text: Email
+        - generic [ref=e14]: "*"
+      - textbox "Email *" [ref=e15]
+    - group "Phone" [ref=e16]:
+      - generic [ref=e17]: Phone
+      - textbox "Phone" [ref=e18]
+    - group "Current location *" [ref=e19]:
+      - generic [ref=e20]:
+        - text: Current location
+        - generic [ref=e21]: "*"
+      - combobox "Current location *" [ref=e22]
+    - group "Resume *" [ref=e23]:
+      - generic [ref=e24]:
+        - text: Resume
+        - generic [ref=e25]: "*"
+      - button "Upload File" [ref=e26]
+    - group "Cover letter" [ref=e27]:
+      - generic [ref=e28]: Cover letter
+      - button "Upload File" [ref=e29]
+    - group "Are you legally authorised to work in the European Union? *" [ref=e30]:
+      - generic [ref=e31]:
+        - text: Are you legally authorised to work in the European Union?
+        - generic [ref=e32]: "*"
+      - group "Are you legally authorised to work in the European Union? *" [ref=e33]:
+        - button "Yes" [ref=e34]
+        - button "No" [ref=e35]
+    - group "Will you now or in the future require visa sponsorship? *" [ref=e36]:
+      - generic [ref=e37]:
+        - text: Will you now or in the future require visa sponsorship?
+        - generic [ref=e38]: "*"
+      - group "Will you now or in the future require visa sponsorship? *" [ref=e39]:
+        - button "Yes" [ref=e40]
+        - button "No" [ref=e41]
+    - group "Why Example Robotics? *" [ref=e42]:
+      - generic [ref=e43]:
+        - text: Why Example Robotics?
+        - generic [ref=e44]: "*"
+      - textbox "Why Example Robotics? *" [ref=e45]
+    - group "LinkedIn profile" [ref=e46]:
+      - generic [ref=e47]: LinkedIn profile
+      - textbox "LinkedIn profile" [ref=e48]
+    - group "I agree to the processing of my data for this application. *" [ref=e49]:
+      - checkbox "I agree to the processing of my data for this application. *" [ref=e50]
+      - generic [ref=e51]:
+        - text: I agree to the processing of my data for this application.
+        - generic [ref=e52]: "*"
+    - button "Submit Application" [ref=e53]

@@ -180,6 +180,7 @@ class Plan:
     letter_text: str
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
     mode: Mode = Mode.review
+    person_answers: dict[str, ats_base.PersonAnswer] = field(default_factory=dict, repr=False)
 
 
 @dataclass
@@ -440,6 +441,14 @@ def prepare(
         ),
         _bank(db, user_id),
     )
+    person_rows = list(
+        db.scalars(
+            sa.select(ApplicationAnswer).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == user_id,
+            )
+        )
+    )
     return Plan(
         user_id=user_id,
         application_id=application.id,
@@ -452,6 +461,11 @@ def prepare(
         letter_text=letter_text,
         pdfs=pdfs,
         mode=application.mode,
+        person_answers={
+            r.field_key: ats_base.PersonAnswer(r.label, r.kind, tuple(r.options or ()), r.value)
+            for r in person_rows
+            if r.source is AnswerSource.person
+        },
     )
 
 
@@ -867,6 +881,7 @@ async def _drive_generic(
     outlines the submit it designated, and without both the person is needed."""
     if plan.mode is not Mode.review or services.form_agent is None:
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
+    adapter.person_answers = plan.person_answers
     session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
     report, cost = await forms.fill(services.form_agent, session)
     shot = await shots.take(tools)
@@ -921,6 +936,7 @@ async def _fill_on_page(
     that asks for a card ends here, before anything is typed."""
     if _card_asked(await tools.snapshot()):
         return await _payment_asked(tools)
+    adapter.person_answers = plan.person_answers
     report = await adapter.fill_form(tools, plan.context)
     cost: dict[str, Any] = {"agent": "not_run"}
     if not report.stopped:

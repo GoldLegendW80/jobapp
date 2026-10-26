@@ -53,10 +53,18 @@
 # directory), EGRESS_RESOLV and EGRESS_SYSTEMD_RESOLV (the two resolver files Docker reads).
 set -euo pipefail
 
+# The same reviewed rules protect the mail provider's separate bridge and chains.
+EGRESS_KIND="${JOBAPP_EGRESS_KIND:-browser}"
+[[ "$(basename "$0")" != jobapp-mail-egress ]] || EGRESS_KIND=mail
+case "$EGRESS_KIND" in
+  browser) EGRESS_SERVICE=browser; EGRESS_PROFILE=browser; EGRESS_NETWORK=egress; EGRESS_NAME=browser; EGRESS_CHAIN=EGRESS ;;
+  mail) EGRESS_SERVICE=gmailmcp; EGRESS_PROFILE=mail; EGRESS_NETWORK=gmail_egress; EGRESS_NAME=mail; EGRESS_CHAIN=MAIL-EGRESS ;;
+  *) printf 'unknown egress kind\n' >&2; exit 2 ;;
+esac
 ROOTFS="${EGRESS_ROOT:-}"
-COPY="$ROOTFS/usr/local/sbin/jobapp-browser-egress"
-CONF="$ROOTFS/etc/jobapp-browser-egress.conf"
-UNIT="$ROOTFS/etc/systemd/system/jobapp-browser-egress.service"
+COPY="$ROOTFS/usr/local/sbin/jobapp-$EGRESS_NAME-egress"
+CONF="$ROOTFS/etc/jobapp-$EGRESS_NAME-egress.conf"
+UNIT="$ROOTFS/etc/systemd/system/jobapp-$EGRESS_NAME-egress.service"
 RESOLV="${EGRESS_RESOLV:-/etc/resolv.conf}"
 SYSTEMD_RESOLV="${EGRESS_SYSTEMD_RESOLV:-/run/systemd/resolve/resolv.conf}"
 # The image of the privileged hop into the host's namespaces: it runs as root on the host, so it
@@ -64,8 +72,8 @@ SYSTEMD_RESOLV="${EGRESS_SYSTEMD_RESOLV:-/run/systemd/resolve/resolv.conf}"
 # index (read with `docker buildx imagetools inspect`, 2026-10-14), never an image this project
 # builds (PR #307 review).
 HOP_IMAGE=debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
-CHAIN=JOBAPP-EGRESS
-CHAIN_IN=JOBAPP-EGRESS-IN
+CHAIN=JOBAPP-$EGRESS_CHAIN
+CHAIN_IN=JOBAPP-$EGRESS_CHAIN-IN
 # Every IPv4 range that is not the internet (RFC 6890 and the proxy's own list in
 # browser/browserd/proxy.py): this network, private, CGNAT and the tailnet, loopback, link local
 # and cloud metadata, IETF protocol assignments, the three documentation nets, benchmarking,
@@ -192,6 +200,19 @@ cmd_apply() {
   say "egress rules applied on $bridge (network $network; DNS to ${list[*]:-no resolver})"
 }
 
+first_managed() {
+  local family="$1" parent="$2" wanted="$3" line
+  while IFS= read -r line; do
+    [[ "$line" == "-A "* ]] || continue
+    [[ "$line" != "$wanted" ]] || return 0
+    case "$line" in
+      *" -j JOBAPP-EGRESS"|*" -j JOBAPP-EGRESS-IN"|*" -j JOBAPP-MAIL-EGRESS"|*" -j JOBAPP-MAIL-EGRESS-IN") ;;
+      *) return 1 ;;
+    esac
+  done <<<"$(ipt "$family" -S "$parent" 2>/dev/null)"
+  return 1
+}
+
 cmd_check() {
   need_root check
   local network bridge list=() f want got problems=()
@@ -212,9 +233,9 @@ cmd_check() {
     got="$(our_jumps "$f")"
     want="$(printf -- '-A DOCKER-USER -i %s -j %s\n-A INPUT -i %s -j %s' "$bridge" "$CHAIN" "$bridge" "$CHAIN_IN")"
     [[ "$got" == "$want" ]] || problems+=("IPv$f jumps are not exactly one per chain for $bridge")
-    [[ "$(ipt "$f" -S DOCKER-USER 2>/dev/null | sed -n 2p)" == "-A DOCKER-USER -i $bridge -j $CHAIN" ]] ||
+    first_managed "$f" DOCKER-USER "-A DOCKER-USER -i $bridge -j $CHAIN" ||
       problems+=("IPv$f DOCKER-USER does not start with the jump")
-    [[ "$(ipt "$f" -S INPUT | grep -m 1 '^-A ' || true)" == "-A INPUT -i $bridge -j $CHAIN_IN" ]] ||
+    first_managed "$f" INPUT "-A INPUT -i $bridge -j $CHAIN_IN" ||
       problems+=("IPv$f INPUT does not start with the jump")
     ipt "$f" -C FORWARD -j DOCKER-USER 2>/dev/null || problems+=("IPv$f FORWARD does not jump to DOCKER-USER")
   done
@@ -227,7 +248,7 @@ cmd_check() {
 
 cmd_install() {
   need_root install
-  local network="${1:-jobapp_egress}" self
+  local network="${1:-jobapp_$EGRESS_NETWORK}" self
   [[ "$network" =~ ^[a-z0-9][a-z0-9_.-]*$ ]] || die "bad network name: $network"
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   mkdir -p "$(dirname "$COPY")" "$(dirname "$UNIT")" "$(dirname "$CONF")"
@@ -248,14 +269,14 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/jobapp-browser-egress apply --boot
+ExecStart=/usr/local/sbin/jobapp-$EGRESS_NAME-egress apply --boot
 
 [Install]
 WantedBy=multi-user.target docker.service
 EOF
   if [[ -z "$ROOTFS" ]]; then
     systemctl daemon-reload
-    systemctl enable jobapp-browser-egress.service
+    systemctl enable "jobapp-$EGRESS_NAME-egress.service"
   fi
   say "installed: $COPY, $CONF, $UNIT"
   if bridge_of "$network" >/dev/null; then
@@ -279,7 +300,7 @@ cmd_uninstall() {
       ipt "$f" -X "$chain" 2>/dev/null || true
     done
   done
-  if [[ -z "$ROOTFS" && -f "$UNIT" ]]; then systemctl disable jobapp-browser-egress.service || true; fi
+  if [[ -z "$ROOTFS" && -f "$UNIT" ]]; then systemctl disable "jobapp-$EGRESS_NAME-egress.service" || true; fi
   rm -f "$UNIT" "$CONF" "$COPY"
   [[ -n "$ROOTFS" ]] || systemctl daemon-reload
   say "uninstalled: no egress rule, chain, unit, record or copy left; the browser stays as it is until the next deploy stops it"
@@ -294,7 +315,7 @@ hop() {
     return 1
   fi
   docker run --rm --privileged --pid=host --network=host --entrypoint nsenter "$HOP_IMAGE" \
-    -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress "$1"
+    -t 1 -m -u -i -n -p -- "/usr/local/sbin/jobapp-$EGRESS_NAME-egress" "$1"
 }
 
 cmd_host_check() {
@@ -312,9 +333,9 @@ cmd_host_check() {
 not_started() {
   local project="$1" reason="$2" left
   # shellcheck disable=SC2086 # COMPOSE is a command line
-  if ! $COMPOSE --profile browser rm -s -f browser >/dev/null 2>&1; then
+  if ! $COMPOSE --profile "$EGRESS_PROFILE" rm -s -f "$EGRESS_SERVICE" >/dev/null 2>&1; then
     left="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
-      --filter label=com.docker.compose.service=browser 2>/dev/null)" || left="unknown"
+      --filter "label=com.docker.compose.service=$EGRESS_SERVICE" 2>/dev/null)" || left="unknown"
     # shellcheck disable=SC2086 # container ids, one per line
     if [[ "$left" == unknown ]] || { [[ -n "$left" ]] && ! docker rm -f $left >/dev/null 2>&1; }; then
       printf 'browser: not started, %s; removing the previous browser container failed, it may still run: docker rm -f %s-browser-1\n' \
@@ -356,9 +377,9 @@ cmd_deploy() {
   : "${COMPOSE:?set COMPOSE to the docker compose command of the stack}"
   local project network out
   project="$(compose_project)" || return 1
-  network="${project}_egress"
+  network="${project}_$EGRESS_NETWORK"
   # shellcheck disable=SC2086
-  if ! out="$($COMPOSE --profile browser create browser 2>&1 >/dev/null)"; then
+  if ! out="$($COMPOSE --profile "$EGRESS_PROFILE" create "$EGRESS_SERVICE" 2>&1 >/dev/null)"; then
     not_started "$project" "compose create failed: ${out:-no output}"
     return 1
   fi
@@ -370,6 +391,7 @@ cmd_deploy() {
   fi
   if [[ "$out" == *"No such file"* || "$out" == *"not installed"* ]]; then
     reason="the host firewall is not installed. Once, on the Jetson: sudo bash ~/jobapp/ops/browser-egress.sh install $network"
+    if [[ "$EGRESS_KIND" == mail ]]; then reason="the mail host firewall is not installed. Once: sudo env JOBAPP_EGRESS_KIND=mail bash ~/jobapp/ops/browser-egress.sh install $network"; fi
   fi
   if [[ -n "$reason" ]]; then
     not_started "$project" "$reason"

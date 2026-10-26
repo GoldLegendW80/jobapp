@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Applied AI Engineer at Example Robotics</title>
+<link rel="stylesheet" href="/forms/a1/forms.css"></head>
+<body><main data-kind="mid-fill"></main><script src="/forms/a8/custom.js"></script><script>
+// The initially recognised Greenhouse form replaces a later field during the known fill.
+document.getElementById("first").addEventListener("input", () => {
+  const old = document.getElementById("last");
+  if (!old) return;
+  old.parentElement.innerHTML = '<label for="family">Family name *</label><input id="family" name="family" type="text" required>';
+}, {once: true});
+</script></body>
+</html>

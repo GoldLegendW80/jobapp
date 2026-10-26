@@ -121,6 +121,14 @@
        "input": {
         "ref": "e22"
        }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_form_summary",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e25"
+       }
       }
      ],
      "stop_reason": "tool_use",

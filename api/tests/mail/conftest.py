@@ -31,9 +31,20 @@ from typing import Any
 import pytest
 
 from app.config import Settings
-from app.mail.google import GoogleClient, Grant
+from app.gmailmcp.google import GmailGoogle
+from app.mail.google import Grant
+from app.mail.models import TOKEN_KIND
 from tests.mail import canary
 from tests.mail.fake_gmail import ALL_SCOPES, FakeGoogle
+
+
+class GoogleClient(GmailGoogle):
+    async def connection_profile(self, account: Any, keyring: Any) -> Any:
+        opened = keyring.decrypt(
+            account.refresh_token_encrypted, account.key_version, account.user_id, TOKEN_KIND
+        )
+        return await self.get_profile(Grant(str(account.user_id), opened.plaintext))
+
 
 FAKE_ORIGIN = "http://fake-google.test"
 ALICE = "e2e-alice@example.org"

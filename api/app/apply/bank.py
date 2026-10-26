@@ -1,7 +1,7 @@
-"""The answer bank (SPEC-apply, "Answers to standard questions", source 4): every answer a person
-typed or corrected in a review, kept with its question and reused when the same question comes
-back. This module is the pure part: the normalised question key, the lookup and the update on a
-person's edit. The table that stores it is the apply tables' (A2); a bank belongs to one person
+"""The answer bank (SPEC-apply, "Answers to standard questions", source 4): answers explicitly
+saved in Settings, kept with their questions and reused when the same question comes back.
+Application edits stay local. This module holds the normalised question key and pure lookup.
+The table that stores it is the apply tables' (A2); a bank belongs to one person
 and `Context` refuses a bank of another. The bank never overrides a policy: `answers.resolve`
 applies the EEO policy, the salary stance and its never answered fields (someone else's details,
 age, citizenship, current pay, free text) before it reads the bank.
@@ -14,7 +14,23 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 KEY_MAX = 200
+QUESTION_MAX = 200
 VALUE_MAX = 5000
+
+
+def saved_text(value: str, *, question: bool = False) -> str:
+    """Validate an explicit saved value without changing its Unicode or internal whitespace."""
+    if any(
+        unicodedata.category(char) in {"Cc", "Cf", "Cs"} and (question or char != "\n")
+        for char in value
+    ):
+        raise ValueError("Use plain text without control characters.")
+    text = value.strip()
+    if not text or (question and not question_key(text)):
+        raise ValueError(
+            "Type a question with letters or digits." if question else "Type an answer."
+        )
+    return text
 
 
 def question_key(label: str) -> str:

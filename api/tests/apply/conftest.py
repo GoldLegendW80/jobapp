@@ -75,9 +75,18 @@ def _person(db: Session, email: str, name: str, url: str) -> Person:
     ).scalar_one()
     profile = profile_service.get_profile(db, user, AT)
     for section in ("identity", "experience", "skills", "answers"):
-        profile = profile_service.save_section(
-            db, user, section, full(section), profile.revision, AT
-        )
+        content = full(section)
+        if section == "answers":
+            # The synthetic agent scripts need actual personal sources for their
+            # stock intent and achievement claims. Why questions still call the
+            # model; tests assert those calls and separately refuse unsourced intent.
+            content = {
+                **content,
+                "motivation": content["motivation"]
+                + "\nI want to build agents for warehouse operations."
+                + "\nI want to build agents. I build agents.",
+            }
+        profile = profile_service.save_section(db, user, section, content, profile.revision, AT)
     posting, versions = add_posting(db, user, url)
     db.commit()
     return Person(user, email, posting, versions[Kind.cv], versions[Kind.letter])
