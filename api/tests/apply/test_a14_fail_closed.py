@@ -178,6 +178,19 @@ HEADINGS_AND_HTML = [
     f"Geen bureaus. Send your CV to {A}",
 ]
 
+# Round 5: words that name the address itself, a correction above an old instruction.
+ADDRESS_WORDS = [
+    f"UPDATE: this address is no longer monitored, please use the form.\n\nSend your CV to {A}.",
+    f"This inbox is not monitored any more.\n\nSend your CV to {A}.",
+    f"Les candidatures par mél ne sont plus acceptées.\n\nEnvoyez votre CV à {A}.",
+    f"THIS ADDRESS IS NO LONGER MONITORED.\n\nSend your CV to {A}.",
+    f"## This mailbox is not read any more\n\nSend your CV to {A}.",
+    f"Cette boîte n'est plus lue.\n\nEnvoyez votre CV à {A}.",
+    f"La messagerie ne reçoit plus de candidatures.\n\nEnvoyez votre CV à {A}.",
+    f"The contact address is not read any more.\n\nSend your CV to {A}.",
+    f"We don&rsquo;t accept applications by email.\n\nSend your CV to {A}.",
+]
+
 # Still usable: a negation without an e-mail word elsewhere, an invitation, an address in a
 # word, a heading that does not negate.
 GLOBAL_TRUE = [
@@ -190,11 +203,17 @@ GLOBAL_TRUE = [
     f"<p>How to apply</p>\n<p>Send your CV to <b>{A}</b></p>",
     f"<p>Send your CV to &lt;{A}&gt;</p>",
     f"Send your CV to {A}.\n\nJane, e2e-no@example.org",
+    f"Do not hesitate to write to this address.\n\nSend your CV to {A}",
 ]
 
 
 @pytest.mark.parametrize("text", GLOBAL + HEADINGS_AND_HTML)
 def test_round4_a_negation_anywhere_about_email_makes_every_address_unsure(text):
+    assert email.read(text) == email.Reading((), (A,))
+
+
+@pytest.mark.parametrize("text", ADDRESS_WORDS)
+def test_round5_words_naming_the_address_itself_make_every_address_unsure(text):
     assert email.read(text) == email.Reading((), (A,))
 
 

@@ -101,7 +101,9 @@ _INVITATION = re.compile(
 )
 # Read on folded text, addresses removed: the words that name applying by e-mail.
 _EMAIL_WORD = re.compile(
-    r"\b(?:e\s?)?mail\w*|\bcourriel\w*|\badresses?\s+electroniques?\b", re.IGNORECASE
+    r"\b(?:e\s?)?mail\w*|\bcourriel\w*|\badresses?\b|\baddress(?:es)?\b|\binbox\w*|\bmailbox\w*"
+    r"|\bboites?\b|\bmel\b|\bmessagerie\b",
+    re.IGNORECASE,
 )
 _SENTENCE_END = re.compile(r"[.!?]")
 # Tags of pasted HTML: block tags end a line, a list item starts one, the rest are dropped.
@@ -150,7 +152,7 @@ def _clean(text: str) -> str:
 def _plain(text: str) -> str:
     """Pasted HTML read as text: block tags become line breaks, `<li>` a `- ` item."""
     if _HTML_TAG.search(text) is None:
-        return text
+        return html.unescape(text)
 
     def tag(match: re.Match[str]) -> str:
         closing, name = match.group(1), match.group(2).lower()
