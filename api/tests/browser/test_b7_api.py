@@ -432,8 +432,8 @@ def test_a_forget_that_fails_before_the_row_goes_spends_none(
             assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 503
         else:
             patch.setattr(profile_router.profiles, "remove", remove)
-            with pytest.raises(RuntimeError, match="e2e-452"):
-                api.request("DELETE", "/api/browser/profile", token=a)
+            # The fixed 500 of app.main, answered by its outermost middleware (issue #670).
+            assert api.request("DELETE", "/api/browser/profile", token=a).status_code == 500
     assert row(factory, a_id).profile_id == kept.profile_id
     for _ in range(FORGETS_PER_DAY):
         assert start(api, a).status_code in (200, 201)
