@@ -85,6 +85,12 @@ export function HandoffBanner({ liveOpen = false }: { liveOpen?: boolean }) {
           Cancel
         </Button>
       </div>
+      <a
+        className="text-sm underline"
+        href={`/account?profile_site=${encodeURIComponent(`https://${handoff.host}/`)}`}
+      >
+        Complete my profile on this site
+      </a>
     </section>
   );
 }
