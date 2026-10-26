@@ -32,7 +32,7 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
 // Each apply test holds two human paced browser runs (the fill, about 100 s, and the submit
 // lease, which types the form again, about 120 s, and over 200 s on a loaded stack) after the
 // documents are written: the budget is the sum of the waits below, not one of them.
-test.describe.configure({ mode: "serial", timeout: 900_000 });
+test.describe.configure({ mode: "serial", timeout: 1_200_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
 const TYPED = "Not applicable";
@@ -139,10 +139,12 @@ for (const ats of ["greenhouse", "ashby"] as const) {
     // The worker's tick starts the fill within 30 seconds; the page follows it by itself. The
     // fill ends with the form before the click: waiting for the approval, or, when it left a
     // required question (the fake Greenhouse form asks for the work authorisation, which this
-    // invented person never gave), waiting for that answer first.
+    // invented person never gave), waiting for that answer first. A human paced run of about
+    // 120 s alone took over 180 s on a loaded stack, so the wait is 360 s, ended as soon as the
+    // form is there.
     await expect(
       section.getByRole("img", { name: /before the click/ }),
-    ).toBeVisible({ timeout: 180_000 });
+    ).toBeVisible({ timeout: 360_000 });
     // The first fill, tick included, is this stack's measure of one human paced run of this
     // form under the load of the moment: the submit lease types the same values again.
     const fillMs = Date.now() - fillStarted;
