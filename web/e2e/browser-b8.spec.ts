@@ -169,6 +169,7 @@ test("A adds three job sites in the Search tab, on a phone", async () => {
       enabled: true,
       accepted_at: null,
       text_version: null,
+      interactive_only: false,
     })),
   ]);
 });
