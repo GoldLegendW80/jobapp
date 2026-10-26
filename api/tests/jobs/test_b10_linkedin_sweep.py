@@ -207,7 +207,10 @@ def test_the_same_posting_on_linkedin_and_greenhouse_is_one_row_naming_both(
     )
     set_profile(factory, alice, search(gh, browser_sources=[linkedin()]))
     row = run(factory, new_sweep(factory, alice), fake_ats, browser=checked(factory, tools))
-    assert row.stats["sources"][0]["error"] is None
+    assert (
+        next(source for source in row.stats["sources"] if source["kind"] == "linkedin")["error"]
+        is None
+    )
     jobs = [
         j for j in jobs_of(factory, alice) if j.title == "AI Engineer" and j.company == "Acme AI"
     ]

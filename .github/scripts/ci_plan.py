@@ -569,6 +569,11 @@ API_AREAS: tuple[tuple[str, frozenset[str] | str, str], ...] = (
         frozenset({"documents", "ingestion", "opportunities"}),
         "the api module ingestion",
     ),
+    (
+        "api/app/gmailmcp/*",
+        frozenset({"mail"}),
+        "the Gmail MCP server of the mail group",
+    ),
     ("api/app/mail/*", frozenset({"mail"}), "the api module mail"),
     (
         "api/app/opportunities/*",
