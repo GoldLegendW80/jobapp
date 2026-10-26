@@ -759,19 +759,20 @@ def test_unhandled_error_logs_no_secret(
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A bug inside the check (not an upstream answer) goes through the app's 500 handler,
-    which logs the traceback: it carries no local values, so no secret."""
+    """A bug inside the check (not an upstream answer) goes through the app's 500 answer,
+    which logs the private trace: no local value and no message (issue #670), so no secret."""
     put(api, alice)
 
     class Broken:
         def check(self, kind: CredentialKind, secret: str) -> None:
-            raise RuntimeError("boom")
+            raise RuntimeError(f"boom {secret}")
 
     app.state.model_verifier = Broken()
-    with pytest.raises(RuntimeError):
-        api.post(VERIFY, token=alice)
+    assert api.post(VERIFY, token=alice).status_code == 500
     logged = _all_logged(capsys, caplog)
-    assert "boom" in logged
+    assert '"error": "RuntimeError"' in logged
+    assert ", in check" in logged
+    assert "boom" not in logged
     assert API_KEY not in logged
 
 
