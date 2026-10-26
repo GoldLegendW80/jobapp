@@ -107,7 +107,10 @@ def create_app(
         logger.info(
             "api starting", extra={"env": settings.app_env, "database": settings.safe_database_url}
         )
-        yield
+        from app.mail.dispatch import lifespan as mail_lifespan
+
+        async with mail_lifespan(app):
+            yield
         await app.state.queue.close()
         await checker.close()
         engine.dispose()

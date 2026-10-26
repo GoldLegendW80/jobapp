@@ -73,7 +73,7 @@ from app.apply.models import (
 )
 from app.jobs.models import Job
 
-FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever"})
+FULL_AUTO_SOURCES = frozenset({"ashby", "greenhouse", "lever", "email"})
 LIKE_VALID = timedelta(days=7)
 DESIGNATED = "designated"
 
@@ -203,6 +203,23 @@ def checks(
 ) -> str | None:
     """Full auto's own checks (SPEC-apply, "Guardrails" 6 and 7), the code of the first that
     fails, or None. The documents' rule is the gate's (`gate.documents_need_review`)."""
+    if application.ats == "email":
+        from app.apply.email import addresses, own_company
+
+        selected = next(
+            (
+                r.value
+                for r in db.scalars(
+                    sa.select(ApplicationAnswer).where(
+                        ApplicationAnswer.application_id == application.id,
+                        ApplicationAnswer.field_key == "email_to",
+                    )
+                )
+            ),
+            None,
+        )
+        if selected not in addresses(posting) or not own_company(posting, selected):
+            return "email_company_domain"
     if application.ats not in FULL_AUTO_SOURCES:
         return "unsupported_source"
     if caps.linkedin_daily(db, application, now or application.updated_at):

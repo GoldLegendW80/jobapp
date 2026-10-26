@@ -18,7 +18,7 @@ from arq.constants import job_key_prefix
 from arq.jobs import Job
 
 from app import queue, worker
-from app.apply import service
+from app.apply import gate, service
 from app.apply.models import (
     ApplicationAnswer,
     ApplicationEvent,
@@ -26,6 +26,7 @@ from app.apply.models import (
     Mode,
     State,
 )
+from app.mail import gate as mail_gate
 from app.profile import service as profiles
 from tests.apply.a5_support import FakeAgent, FakeLeases, run_ashby
 from tests.apply.a6_support import GateLeases, submit_ashby
@@ -34,9 +35,11 @@ from tests.apply.test_a5_run import WHY, application, located, services
 from tests.apply.test_a6_gate import approve, submit_services
 from tests.apply.test_a9_manual import FakeChannel, manual_ashby, manual_services, record
 from tests.apply.test_a13_full_auto import HOLD, HOUR, answered, turn_on
+from tests.apply.test_a14_email import connect, prepare, provider
 from tests.conftest import make_settings
 from tests.jobs.test_worker import flush_redis, redis_url
 from tests.mail import canary
+from tests.mail.fake_gmail import FakeGoogle
 
 __all__ = ["redis_url"]
 
@@ -230,6 +233,49 @@ def test_complete_application_modes_keep_private_bytes_out_of_worker_sinks(
         values=list(db.scalars(sa.select(ApplicationEvent.data))),
         client=proof.client,
     )
+
+
+def test_explicit_email_approval_and_fake_provider_capture_no_private_logs(
+    db, factory, person_a, proof
+):
+    fake = FakeGoogle()
+    fake.seed("alice")
+    ring = connect(db, person_a, fake)
+    application = prepare(db, person_a)
+    body = proof.markers[0].translate(str.maketrans("0123456789", "ghijklmnop"))
+    proof.markers.append(body)
+    proof.run({"sessions": factory, "clock": lambda: AT}, "apply_fill", str(application.id))
+    gate.set_answer(db, person_a.user_id, application.id, "email_body", body, AT)
+    approval = gate.authorise_approval(
+        db, person_a.user_id, application.id, gate.current_hash(db, application), AT, 86400
+    )
+    decision = gate.decide(
+        db, person_a.user_id, approval.id, AT, switches=gate.Switches(enabled=True, paused=False)
+    )
+    assert decision.passed
+    db.commit()
+    auth = mail_gate.authorise_application(db, application, AT)
+    db.commit()
+    settings, provider_app, mcp = provider(fake, ring)
+
+    async def send():
+        async with provider_app.router.lifespan_context(provider_app):
+            row = await mail_gate.send(
+                factory,
+                auth,
+                AT,
+                settings=settings,
+                mcp=mcp,
+                switches=gate.Switches(enabled=True, paused=False),
+            )
+            assert row.result == "sent", row.refusal_code
+
+    asyncio.run(send())
+    assert len(fake.sent) == 1
+    proof.markers.append(fake.sent[0]["raw"])
+    assert body.encode() in base64.urlsafe_b64decode(fake.sent[0]["raw"])
+    assert application_state(db, application.id) is State.submitted
+    no_leak(proof.markers, values=list(db.scalars(sa.select(ApplicationEvent.data))))
 
 
 def application_state(db, application_id):
