@@ -401,6 +401,7 @@ def test_b_can_neither_end_as_hand_off_nor_drive_as_lease_with_any_tool(
         tools.navigate(f"https://{SITE_HOST}/"),
         tools.click("e1"),
         tools.type("e1", "x"),
+        tools.type_empty("e1", "x"),
         tools.select_option("e1", ["x"]),
         tools.check("e1"),
         tools.upload("e1", ["cv.pdf"]),
@@ -412,6 +413,7 @@ def test_b_can_neither_end_as_hand_off_nor_drive_as_lease_with_any_tool(
         tools.call("browser_snapshot"),
         tools.put_file("cv.pdf", b"%PDF-1.4"),
         tools.ask_signin("Example Portal", "x"),
+        tools.linkedin_open("4100000001"),
         gate_click(tools, "e1", "x" * 43),
     ]
 
@@ -423,7 +425,8 @@ def test_b_can_neither_end_as_hand_off_nor_drive_as_lease_with_any_tool(
     }
     assert tool_names == {
         "snapshot", "navigate", "click", "type", "select_option", "check", "upload", "press_key",
-        "wait_for", "screenshot", "box", "tabs", "call", "put_file", "ask_signin",
+        "wait_for", "screenshot", "box", "tabs", "call", "put_file", "ask_signin", "type_empty",
+        "linkedin_open",
     }  # fmt: skip
 
     async def each() -> list[str]:

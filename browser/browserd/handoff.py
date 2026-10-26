@@ -198,6 +198,8 @@ def _waiting(svc: Any, lease_id: str) -> tuple[Lease, HandOff]:
     lease = svc.manager.current()
     if lease is None or lease.lease_id != lease_id:
         raise LeaseError(404, "no_such_lease")
+    if lease.state == "waiting_person" and lease.wait_reason != SIGNIN:
+        raise LeaseError(409, "not_waiting")
     handoff = lease.scratch.get(KEY)
     if not isinstance(handoff, HandOff):
         raise LeaseError(409, "not_waiting")
