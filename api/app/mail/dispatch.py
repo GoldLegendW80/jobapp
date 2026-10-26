@@ -180,15 +180,21 @@ async def once(app: Any) -> int:
     return len(due)
 
 
+TICK_S = 15
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: Any) -> AsyncIterator[None]:
+    """The dispatch loop of the api. The first tick waits one interval: starting the app opens
+    no database connection (tests/test_app.py, `test_create_app_opens_no_connection`)."""
+
     async def loop() -> None:
         while True:
+            await asyncio.sleep(TICK_S)
             try:
                 await once(app)
             except Exception:
                 log.event("mail.dispatch.failed", code="internal_error")
-            await asyncio.sleep(15)
 
     task = asyncio.create_task(loop(), name="api-mail-dispatch")
     try:
