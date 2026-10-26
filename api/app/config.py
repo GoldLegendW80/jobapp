@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     )
     # How long a row of the send log lives, in days.
     mail_sends_keep_days: int = Field(default=365, ge=30, le=3650)
+    gmail_mcp_url: str = "http://gmailmcp:9400/mcp"
+    mail_send_key: SecretStr | None = None
+    gmail_mcp_redis_password_file: str | None = None
     # The browser module (SPEC-browser). browserd's control API on the internal `browsing` network,
     # behind a shared secret only the api, the worker and the browser container hold. Empty: no
     # browser (the api answers that it is not available).
@@ -166,8 +169,8 @@ class Settings(BaseSettings):
     # The pace per ATS host across all people (the Jetson's one address), and LinkedIn's own.
     apply_host_min_interval_s: int = Field(default=180, ge=10, le=86_400)
     apply_host_daily_max: int = Field(default=20, ge=1, le=500)
-    apply_linkedin_min_interval_s: int = Field(default=600, ge=60, le=86_400)
-    apply_linkedin_daily_max: int = Field(default=15, ge=1, le=100)
+    apply_linkedin_min_interval_s: int = Field(default=600, ge=600, le=86_400)
+    apply_linkedin_daily_max: int = Field(default=15, ge=1, le=15)
     # Failures before the click: the waits before each retry, in seconds, comma separated (two
     # retries); how long a person is waited for (captcha, sign in) before the lease ends; how many
     # days step and error screenshots are kept.
@@ -188,6 +191,8 @@ class Settings(BaseSettings):
     # Tests only: the floor of Full auto's hold on a stack of the fake forms server, in place of
     # APPLY_HOLD_S. Refused in production and without APPLY_STUB_BASE_URL.
     test_apply_hold_s: int | None = Field(default=None, ge=60, le=899)
+    # Tests only: shorter LinkedIn pacing on an explicitly configured fast fake forms stack.
+    test_apply_linkedin_min_interval_s: int | None = Field(default=None, ge=60, le=599)
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -297,6 +302,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _no_stub_in_production(self) -> "Settings":
+        if self.test_apply_linkedin_min_interval_s is not None and (
+            self.app_env == "production"
+            or not self.test_fast_timers
+            or self.apply_stub_base_url is None
+        ):
+            raise ValueError(
+                "TEST_APPLY_LINKEDIN_MIN_INTERVAL_S needs a nonproduction fake forms stack: "
+                "TEST_FAST_TIMERS and APPLY_STUB_BASE_URL"
+            )
         if self.app_env == "production" and self.ats_base_url is not None:
             raise ValueError(
                 "ATS_BASE_URL points the board check at a test stub and must not be set "
@@ -454,6 +468,16 @@ def load_settings() -> Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return load_settings()
+
+
+def refuse_send_key(settings: Settings) -> None:
+    """The worker runs every agent and every schedule, so it must never hold the key that mints
+    a send key (SPEC-mail "The send: a one time key"). Raises ConfigError when it does."""
+    if settings.mail_send_key is not None:
+        raise ConfigError(
+            "Invalid configuration: MAIL_SEND_KEY is refused in the worker, "
+            "only the api and gmailmcp load .env.mailsend"
+        )
 
 
 def ats_stub_for(settings: Settings, org: str) -> str | None:

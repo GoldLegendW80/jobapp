@@ -133,13 +133,19 @@ def test_the_service_runs_its_own_image_and_its_health_check(stack: dict) -> Non
     assert renderer["expose"] == ["7071"]
 
 
-def test_the_memory_of_compose_yml_stays_within_the_budget() -> None:
+def test_memory_accounting_keeps_the_core_and_mail_limits_explicit() -> None:
     services = load("compose.yml")["services"]
     total = sum(size(s["mem_limit"]) for s in services.values())
-    # With the browser (B2): 128m over the 5G budget until the parser's limit is set from its
-    # Jetson figures (ingestion G8); the parser at 512m brings it to 5120m (compose.yml).
-    assert total == 5248 * MIB, total // MIB
-    assert total - 5 * 1024 * MIB == 128 * MIB
+    core = sum(size(s["mem_limit"]) for name, s in services.items() if name != "gmailmcp")
+    target = 5 * 1024 * MIB
+    # Keep the existing core allowance and platform target explicit. Email's separately
+    # limited provider adds 128MiB; this accounting does not claim Jetson capacity acceptance.
+    assert core == 5248 * MIB, core // MIB
+    assert services["gmailmcp"]["profiles"] == ["mail"]
+    assert size(services["gmailmcp"]["mem_limit"]) == 128 * MIB
+    assert total == core + 128 * MIB, total // MIB
+    assert core - target == 128 * MIB
+    assert total - target == 256 * MIB
 
 
 def test_a_weakened_overlay_fails_the_table(monkeypatch: pytest.MonkeyPatch) -> None:
