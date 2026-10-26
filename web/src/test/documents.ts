@@ -75,6 +75,7 @@ export function fakeCv(overrides: Partial<BaseCv> = {}): BaseCv {
     last_version_at: "2026-10-14T09:00:00Z",
     render_state: "idle",
     generation: { id: "g-1", status: "done", wait_reason: null, error: null },
+    design_generation: null,
     ...overrides,
   };
 }

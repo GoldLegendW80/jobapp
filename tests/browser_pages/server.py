@@ -11,6 +11,12 @@ proxy must refuse it for the address alone), and counts the UDP datagrams that r
 (STUN and TURN): GET /udp answers the count, which the WebRTC test expects to stay 0. GET
 /count/<key> counts the requests of each key, which GET /counts answers: the off list host of the
 allow list tests (a navigation browserd stops never reaches it).
+
+Jobs J15 (j15/, an invented job website, reached as http://jobs.example-robotics.test:8080/j15/
+through the service's alias): GET /j15/search answers results only for the words "engineer" in
+Paris, the relevant posting on their second page alone; every request under /j15/ is logged with
+its method and time, and GET /j15/log answers that log (read from inside the container by the
+journey: what the site saw, a POST included, which it refuses with 405).
 """
 
 import http.server
@@ -27,6 +33,36 @@ ROOT = sys.argv[1]
 SEARCH_WORD = re.compile(r"[a-z0-9]{1,40}")
 DATAGRAMS = {"count": 0}
 COUNTS = {}
+J15_LOG = []
+J15_LOCK = threading.Lock()
+J15_PAGE = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title></head>'
+    "<body><main><h1>{title}</h1>{body}</main></body></html>"
+)
+
+
+def j15_search(query) -> str:
+    """The results of the invented job website: none unless the words and the location are the
+    journey's, the posting on page 2 only."""
+    words = query.get("q", [""])[0]
+    place = query.get("location", [""])[0]
+    page = query.get("page", ["1"])[0]
+    if (words, place) != ("engineer", "Paris"):
+        return J15_PAGE.format(
+            title="Search results", body="<p>No jobs match this search.</p>"
+        )
+    if page == "2":
+        body = (
+            '<ul><li><a href="/j15/jobs/robot-engineer.html">Robot Engineer</a></li></ul>'
+            "<p>Page 2 of 2</p>"
+        )
+    else:
+        body = (
+            "<p>Robotics Intern, Paris: this role is filled.</p>"
+            '<p>Page 1 of 2</p><a href="/j15/search?q=engineer&amp;location=Paris&amp;page=2">'
+            "Next page</a>"
+        )
+    return J15_PAGE.format(title="Search results", body=body)
 
 
 def count_datagrams() -> None:
@@ -52,9 +88,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def j15_note(self, path: str) -> None:
+        if path.startswith("/j15/") and path != "/j15/log":
+            with J15_LOCK:
+                J15_LOG.append(
+                    {"method": self.command, "path": self.path, "at": time.time()}
+                )
+
+    def refuse(self):
+        self.j15_note(urllib.parse.urlsplit(self.path).path)
+        self.send_response(405)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_POST = do_PUT = do_PATCH = do_DELETE = refuse
+
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(url.query)
+        self.j15_note(url.path)
+        if url.path == "/j15/log":
+            with J15_LOCK:
+                return self.send(json.dumps(J15_LOG))
+        if url.path == "/j15/search":
+            return self.send(j15_search(query), "text/html; charset=utf-8")
         if url.path == "/slow":
             time.sleep(min(int(query.get("ms", ["3000"])[0]), 20000) / 1000)
             if query.get("type", ["js"])[0] == "js":

@@ -776,11 +776,14 @@ class BrowserSource(_Section):
     query: Line
     location: OptLine = None
     enabled: bool = False
+    interactive_only: bool = False
     accepted_at: Annotated[str, Field(max_length=40)] | None = None
     text_version: Annotated[StrictInt, Field(ge=1, le=1000)] | None = None
 
     @model_validator(mode="after")
     def _acceptance(self) -> "BrowserSource":
+        if self.interactive_only and self.kind not in ("linkedin", "freework"):
+            raise ValueError("only a protected browser source has interactive-only intent")
         if self.kind not in ("linkedin", "freework") and (self.accepted_at, self.text_version) != (
             None,
             None,

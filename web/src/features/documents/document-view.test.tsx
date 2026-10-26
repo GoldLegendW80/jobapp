@@ -1,8 +1,8 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fakeCv,
@@ -16,7 +16,12 @@ import { server } from "@/test/server";
 import { createQueryClient } from "@/lib/query";
 
 import { DocumentView } from "./document-view";
-import type { Generation } from "./documents-api";
+import {
+  documentKey,
+  templatesKey,
+  versionsKey,
+  type Generation,
+} from "./documents-api";
 import { pollInterval, POLL_MS, WAITING_POLL_MS } from "./labels";
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
@@ -368,4 +373,70 @@ describe("the document view", () => {
       ),
     ).toBeVisible();
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("the independent capture lifecycle", () => {
+  it.each(["done", "failed"] as const)(
+    "leaves the document unread during capture, then reads it once on %s",
+    async (terminal) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const api = fakeDocuments();
+      const cv = fakeCv({ id: "a", source: "uploaded" });
+      api.documents.set("a", fakeDocumentOf(cv));
+      const client = createQueryClient();
+      client.setQueryData(templatesKey, []);
+      client.setQueryData([...versionsKey("a"), 1], [fakeVersion()]);
+      const ui = (capture: Generation) => (
+        <QueryClientProvider client={client}>
+          <DocumentView
+            documentId="a"
+            generation={open("done")}
+            capture={capture}
+          />
+        </QueryClientProvider>
+      );
+      const view = render(ui(open("queued")));
+      await screen.findByRole("link", { name: "Download PDF" });
+      const reads = () =>
+        api.requests.filter(
+          (one) => one.method === "GET" && one.path === "/api/documents/a",
+        ).length;
+      expect(reads()).toBe(1);
+      view.rerender(ui(open("running")));
+      await act(() => vi.advanceTimersByTimeAsync(WAITING_POLL_MS));
+      expect(client.isFetching({ queryKey: documentKey("a") })).toBe(0);
+      expect(reads()).toBe(1);
+      api.documents.set(
+        "a",
+        fakeDocumentOf(cv, {
+          latest: fakeVersion({ number: 2 }),
+          template_slug: "upload-new",
+        }),
+      );
+      api.versions.set("a", [fakeVersion({ number: 2 }), fakeVersion()]);
+      view.rerender(ui(open(terminal)));
+      expect(
+        await screen.findByRole("img", { name: "Page 1 of version 2" }),
+      ).toBeVisible();
+      expect(reads()).toBe(2);
+      if (terminal === "done") {
+        expect(client.getQueryState(templatesKey)?.isInvalidated).toBe(true);
+        expect(
+          api.requests.filter(
+            (one) =>
+              one.method === "GET" && one.path === "/api/documents/a/versions",
+          ).length,
+        ).toBeGreaterThanOrEqual(2);
+      }
+      expect(screen.queryByText("The last attempt failed")).toBeNull();
+      expect(screen.getByRole("tab", { name: "Edit" })).toBeEnabled();
+      expect(screen.getByRole("link", { name: "Download PDF" })).toBeVisible();
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
+      expect(reads()).toBe(2);
+    },
+  );
 });

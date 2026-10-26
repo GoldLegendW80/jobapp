@@ -137,6 +137,10 @@ const KIND_NAMES: Record<string, string> = {
   vie: "Business France VIE",
   site: "Company site",
   linkedin: "LinkedIn",
+  // The job websites searched in the person's browser (jobs J10, mode llm_browser).
+  welcome_to_the_jungle: "Welcome to the Jungle",
+  indeed: "Indeed",
+  freework: "Free-Work",
 };
 
 /** What each `error` of a source means, for the person. */
@@ -165,14 +169,42 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "LinkedIn needs you to sign in. Nothing else was opened on LinkedIn.",
   linkedin_checkpoint:
     "LinkedIn showed a security check, so all LinkedIn work is paused for a week.",
+  // The job websites searched in the person's browser (jobs J10, app/browser/sources/interactive.py).
+  permission_unavailable:
+    "Searching this website needs your permission for it, so it was not opened. Turn it on in the website permissions of Find jobs.",
+  permission_revoked:
+    "Your permission for this website was turned off during the search, so it stopped. What was read is kept.",
+  permission_checkpoint:
+    "This website showed a security check, so it is paused for a week. It was not searched further.",
+  platform_daily:
+    "This website was already searched today. It is searched again tomorrow.",
+  platform_signin:
+    "This website needs you to sign in. Nothing else was opened on it.",
+  finding_persistence_pending:
+    "Postings were read on this website, but saving them comes with a later update.",
+  unsupported_interaction:
+    "The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
+  unsupported_criteria:
+    "Your search uses settings this website search does not take yet, so it was not opened.",
+  no_credential: "Add your model access in Account to search this website.",
+  agent_failed:
+    "The assistant stopped before the end. Nothing was kept from it.",
+  page_budget:
+    "The search read as many pages as it may. What was read is kept.",
 };
 
 export function sourceName(source: {
   kind: string;
   query: string;
   location?: string | null;
+  host?: string | null;
 }): string {
-  const parts = [KIND_NAMES[source.kind] ?? source.kind, source.query];
+  // A website of the person's own (jobs J9, platform custom) is named by its host.
+  const kind =
+    source.kind === "custom" && source.host
+      ? source.host
+      : (KIND_NAMES[source.kind] ?? source.kind);
+  const parts = source.query ? [kind, source.query] : [kind];
   if (source.location) parts.push(source.location);
   return parts.join(", ");
 }

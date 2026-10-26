@@ -75,7 +75,7 @@ describe("freelance and project sources card (O8)", () => {
     ).toBeVisible();
     expect(
       within(card()).getByText(
-        "No freelance source is swept. Turn one on and it is read at the next search.",
+        "No freelance source is read. Turn one on and it is read at the next search.",
       ),
     ).toBeVisible();
     // Terms are folded under Advanced until opened.

@@ -274,13 +274,14 @@ def enabled_boards(search: SearchSection | None) -> list[Board]:
 
 
 def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
-    """The browser sources a sweep runs (browser B8, B9, B10): enabled, of a kind read, once."""
+    """Enabled legacy browser sources, excluding permission-only rows, of a kind read, once."""
     found: dict[tuple[str, str, str], BrowserSource] = {}
     for source in search.browser_sources if search else []:
         # LinkedIn (browser B10) only once its sentence was accepted; its guard decides the rest.
         accepted = source.kind != "linkedin" or source.accepted_at is not None
         if (
             source.enabled
+            and not source.interactive_only
             and accepted
             and source.kind in ("google_careers", "vie", "site", "linkedin")
         ):
@@ -767,14 +768,30 @@ def _stats_json(sweep: Sweep, stats: Stats) -> dict[str, Any]:
         previous = {s.get("source_id"): s for s in stored.get("sources", [])}
         updates = {s.get("source_id"): s for s in data["sources"]}
         data["sources"] = [
-            {
-                **source,
-                **previous.get(source["source_id"], {}),
-                **updates.get(source["source_id"], {}),
-            }
+            _with_authority(
+                {
+                    **source,
+                    **previous.get(source["source_id"], {}),
+                    **updates.get(source["source_id"], {}),
+                },
+                previous.get(source["source_id"], {}),
+            )
             for source in initial_sources(stored["search_scope"])
         ]
     return data
+
+
+# What the platform guard's writers (opportunities/platforms/guard.py, browser B14) record in a
+# source entry under the row lock: the locked row's value wins over a stale progress or final
+# write of the same entry, so a reservation or a checkpoint is never lost.
+GUARD_AUTHORITY = ("opened_at", "checkpoint_at", "platform")
+
+
+def _with_authority(entry: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
+    for name in GUARD_AUTHORITY:
+        if stored.get(name) is not None:
+            entry[name] = stored[name]
+    return entry
 
 
 def fail_sweep(
