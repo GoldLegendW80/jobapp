@@ -50,8 +50,8 @@ docker compose -p jobapp-x -f compose.yml -f compose.mac.yml -f compose.extra-ca
 
 `ops/local-check.sh` adds `compose.extra-ca.yml` to its image builds by itself when the variable
 is set, and refuses a path that is relative or not a readable file. The bundle reaches only the
-build steps that download (uv, pip, pnpm, the Playwright download), as a BuildKit secret: it is in
-no image layer and in no container (a search of every layer of the five images found none of it,
+build steps that download (uv, pip, pnpm, the Playwright download, xcaddy's Go modules), as a
+BuildKit secret: it is in no image layer and in no container (a search of every layer of the five images found none of it,
 2026-10-15, issue #359). `tests/browser_egress_test.sh`, which installs iptables in a throwaway
 Alpine container, does the same: with the variable set, it installs them in a throwaway image
 build that alone gets the bundle as a BuildKit secret, then fails if a line planted in the bundle

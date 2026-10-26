@@ -60,8 +60,24 @@ in the job folder that holds this repository (it is not part of the repository).
    runs only the groups its changed files touch, the files of the merged tree against the main it
    starts from. `python3 .github/scripts/ci_plan.py journeys` decides, from the tree it checks:
    documentation, task notes, Claude Code configuration, operations scripts and shell tests run
-   no group; every change under `api/app/` runs every group, including assets, new modules and
-   deleted paths. Python imports and registration dependencies are not inferred. A web feature
+   no group; a file under `api/app/` runs the groups of its module (`API_AREAS`: apply runs
+   apply, browser and opportunities; browser runs apply and browser, the stacks that start the
+   browser service; documents apply, documents and opportunities; ingestion documents,
+   ingestion and opportunities; mail and opportunities their own; identity, profile,
+   jobs, agents and the onboarding gate every group) and those of every api file that imports
+   it, read from the Python imports (main.py and worker.py are wiring), the reviewed loaders
+   (`API_LOADERS`) and the hooks a file registers a callback with. Every group runs for the
+   shared api files (`app/*.py`, worker.py included), a module's `__init__.py`, the models, a
+   worker registration module and what it imports (save `SCOPED_REGISTRATIONS`), assets other
+   than an agent's fake streams, deleted paths, and any dynamic import the reader cannot follow.
+   Every group also runs for an api file whose routes a page that journeys of many groups open
+   calls (`WEB_SHARED_PAGES`: the shell, the sign in and onboarding, the job list and page, the
+   profile, the account page), read from the request paths of each page and the web files it
+   imports, matched against the routes the api files declare; and for a file main.py runs beyond
+   the wiring (a middleware, the 500 handler, what the start builds) with what that code reaches.
+   The web is read file by file, so a page that imports an api client file counts every route of
+   it: most route files of apply, browser, documents and ingestion run every group today.
+   `browser/Dockerfile` runs apply and browser, `renderer/Dockerfile` documents and apply. A web feature
    (`web/src/features/<feature>/`) runs its groups (`AREA_GROUPS`) and those of every feature
    that imports the file, read from the imports file by file; a spec or a group config runs its
    own group; anything shared or unknown runs every group: identity, auth, jobs, profile, agents
@@ -93,7 +109,7 @@ in the job folder that holds this repository (it is not part of the repository).
    TypeScript parser: template interpolation and ambiguous syntax force full. Runtime test data
    mounted by the gate's compose files or read by journeys has explicit group rules. Worker registration providers and
    their dependencies run every group because callbacks can affect modules that do not import them.
-   API changes deliberately run all journeys. Conservative JSX slash handling also causes full
+   Conservative JSX slash handling also causes full
    fallback for current web source changes. The synthetic web fixtures demonstrate narrower
    supported cases.
    The first real gate of this change must use `LOCAL_CHECK_FULL=1`; fixture results are not a
