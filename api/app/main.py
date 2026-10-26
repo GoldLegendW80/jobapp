@@ -21,6 +21,7 @@ from app.agents.crypto import Keyring
 from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
+from app.apply import privacy as apply_privacy
 from app.apply import registry as apply_registry
 from app.body_limit import BodiesInFlight, LimitRequestBodyMiddleware, SessionGate
 from app.browser import registry as browser_registry
@@ -176,6 +177,7 @@ def create_app(
     app.middleware("http")(ingestion_no_store)
     app.middleware("http")(mail_routers.no_store)
     app.middleware("http")(documents_routers.no_store)
+    app.middleware("http")(apply_privacy.no_store)
 
     def failed(request: Request, exc: Exception, request_id: str | None) -> JSONResponse:
         """The one answer and the one log line of an error no route answered (issue #670): a
@@ -194,7 +196,7 @@ def create_app(
         # Built outside every middleware: the no-store of the ingestion routes is set here.
         path = request.url.path
         headers = mail_routers.extra_headers(path)
-        if ingestion_private(path):
+        if ingestion_private(path) or apply_privacy.private_path(path):
             headers["Cache-Control"] = "no-store"
         if documents_routers.private(path):
             headers["Cache-Control"] = "private, no-store"

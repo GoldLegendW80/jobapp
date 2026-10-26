@@ -59,6 +59,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, service, states
+from app.apply.answer_limits import ANSWER_MAX, LETTER_MAX, letter_issue
 from app.apply.ats import base as ats_base
 from app.apply.models import (
     AnswerSource,
@@ -112,6 +113,10 @@ SENTENCES = {
     ),
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
+    "letter_too_long": "Shorten the letter to at most 10000 characters before saving.",
+    "letter_control_character": (
+        "Remove tabs, carriage returns and other control characters before saving the letter."
+    ),
     "not_an_option": "This form does not offer that choice.",
     # Not a refusal: the error code of a `submitted` application whose posting kept its status.
     "status_not_set": (
@@ -158,6 +163,13 @@ def switch_code(switches: Switches) -> str | None:
     return "paused" if switches.paused else None
 
 
+async def _click(tools: Any, ref: str, capability: str, element: str) -> dict[str, Any]:
+    """The application gate's privileged browser click, wired only into code's submit lease."""
+    from app.browser.tools import gate_click
+
+    return await gate_click(tools, ref, capability, element)
+
+
 @dataclass(frozen=True)
 class Decision:
     passed: bool
@@ -199,14 +211,20 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
             row.field_key,
             row.label,
             row.kind,
+            row.options,
             row.value,
             str(getattr(row.source, "value", row.source)),
             bool(row.required),
+            bool(row.document_letter),
         ]
         for row in rows
     )
     versions = {
-        kind: str(record.get("version_id"))
+        kind: (
+            [str(record.get("version_id")), record["pdf_sha256"]]
+            if "pdf_sha256" in record
+            else str(record.get("version_id"))
+        )
         for kind, record in sorted((document_versions or {}).items())
         if isinstance(record, dict)
     }
@@ -477,7 +495,7 @@ def decide(
     if application.mode is Mode.full_auto:
         if documents_need_review(application.document_versions):
             return refused("documents_review")
-        if code := full_auto.checks(db, application, posting):
+        if code := full_auto.checks(db, application, posting, now):
             return refused(code)
 
     authorisation.used_at = now
@@ -574,6 +592,13 @@ def confirm_submitted(
     """ "It was submitted" on a `submit_unknown`: the versions frozen (already, at the click; a
     frozen version keeps its first reason and time), the posting to `applied`."""
     application, posting = lock(db, user_id, application_id)
+    return _confirm_submitted_locked(db, application, posting, now)
+
+
+def _confirm_submitted_locked(
+    db: Session, application: Application, posting: Job, now: datetime
+) -> Application:
+    """Record the confirmation while the caller holds the application and posting locks."""
     if application.state is not State.submit_unknown:
         raise RefusedError("not_unknown")
     freeze_sent(db, application, now)
@@ -595,7 +620,12 @@ def confirm_submitted(
 # The person's own answer to a field (`set_answer`): before the click only, and never a file (the
 # documents) or a widget the app cannot fill (`skipped:`).
 EDITABLE = frozenset({State.needs_person, State.ready, State.approved})
-ANSWER_MAX = 5000
+
+
+def answer_max(row: ApplicationAnswer) -> int:
+    return LETTER_MAX if row.document_letter and row.kind in {"text", "textarea"} else ANSWER_MAX
+
+
 TEXT_KINDS = frozenset({"text", "textarea", "select", "combobox", "single", "date"})
 CHOICE_KINDS = frozenset({"select", "combobox", "single"})  # the value is one of the options
 ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -672,8 +702,8 @@ def set_answer(
     ).scalar_one_or_none()
     if (
         row is None
-        or row.field_key.startswith("skipped:")
-        or row.kind == "file"
+        or row.field_key.startswith(("skipped:", "designated:"))
+        or row.kind in ("file", "designated")
         or ats_base.typed_secret(row.kind, row.label)
     ):
         raise InvalidAnswerError("unknown_field")
@@ -682,7 +712,9 @@ def set_answer(
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
         raise InvalidAnswerError("wrong_type")
-    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > ANSWER_MAX):
+    if isinstance(value, str) and row.document_letter and (issue := letter_issue(value)):
+        raise InvalidAnswerError(issue)
+    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > answer_max(row)):
         raise InvalidAnswerError("wrong_type")
     if isinstance(value, str) and row.kind == "date" and not _is_date(value):
         raise InvalidAnswerError("wrong_type")
@@ -708,7 +740,14 @@ def set_answer(
         # of them is answered, so the form is complete and waits for the approval like any
         # other. A required file is never answered here and keeps it waiting; a skipped widget
         # is never required (run._answer_rows), so it never held it.
-        states.move(application, State.ready, now)
+        incomplete = db.scalar(
+            sa.select(ApplicationAnswer.field_key).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == user_id,
+                ApplicationAnswer.field_key == "designated:incomplete",
+            )
+        )
+        states.move(application, State.queued if incomplete else State.ready, now)
         application.needs = None
     application.updated_at = now
     _event(db, application, "answer_set", now, field_key=field_key)

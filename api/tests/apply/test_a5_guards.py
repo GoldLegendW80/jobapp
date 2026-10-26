@@ -723,7 +723,7 @@ def test_the_fill_timeout_is_the_leases_ceiling_and_the_queue_resets_at_start() 
     )
     for spec, lease_s, wait_s in ((default, 900, 1800), (longer, 1200, 2400)):
         (filling,) = [f for f in spec.functions if f.name == "apply_fill"]
-        expected = lease_s + wait_s + TAKEOVER_WAIT_S + worker.APPLY_JOB_MARGIN_S
+        expected = lease_s + wait_s + 1800 + TAKEOVER_WAIT_S + worker.APPLY_JOB_MARGIN_S
         assert filling.timeout_s == spec.job_timeout_s == expected
         # A whole lease of work and a wait of 25 minutes fit (the edge case of B12a).
         assert filling.timeout_s > lease_s + 25 * 60

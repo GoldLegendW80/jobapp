@@ -197,6 +197,39 @@ export type Shots = (
   prepare?: () => Promise<void>,
 ) => Promise<void>;
 
+async function screenshotReady(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const images = Array.from(document.images).filter(
+      (image) => image.getClientRects().length > 0,
+    );
+    // Full-page capture does not bring lazy images below the viewport into view.
+    for (const image of images) image.loading = "eager";
+    await Promise.all(images.map((image) => image.decode()));
+  });
+  let previous = "";
+  await expect
+    .poll(
+      async () => {
+        const layout = await page.evaluate(() =>
+          JSON.stringify([
+            document.documentElement.scrollWidth,
+            document.documentElement.scrollHeight,
+            ...Array.from(document.images, (image) => {
+              const { x, y, width, height } = image.getBoundingClientRect();
+              return [x, y, width, height];
+            }),
+          ]),
+        );
+        const stable = layout === previous;
+        previous = layout;
+        return stable;
+      },
+      { message: "Screenshot image layout is stable" },
+    )
+    .toBe(true);
+}
+
 /**
  * One screenshot per viewport and colour scheme into tasks/evidence/<E2E_EVIDENCE or the
  * default>, each checked for horizontal overflow, then back to desktop light. Files are named
@@ -219,6 +252,7 @@ export function makeShots(defaultEvidence: string, spec = ""): Shots {
       });
       for (const scheme of SCHEMES) {
         await page.emulateMedia({ colorScheme: scheme });
+        await screenshotReady(page);
         const overflow = await page.evaluate(
           () =>
             document.documentElement.scrollWidth -

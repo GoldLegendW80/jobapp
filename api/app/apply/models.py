@@ -297,6 +297,9 @@ class ApplicationAnswer(Base):
     # shows.
     options: Mapped[list[str] | None] = mapped_column(pg.JSONB, nullable=True)
     source: Mapped[AnswerSource] = mapped_column(ANSWER_SOURCE_ENUM, nullable=False)
+    # Adapter-owned provenance, retained when the person changes `source` to `person`.
+    document_letter: Mapped[bool] = _flag()
+    left_reason: Mapped[str | None] = mapped_column(sa.Text)
     required: Mapped[bool] = _flag()
     approved: Mapped[bool] = _flag()
 

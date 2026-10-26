@@ -15,9 +15,10 @@
   hash, any approval void (`approved` goes back to `ready`); the submit lease refills and reads it
   back, and a refill by the run keeps it. 200 with the approval view; 422 `{detail, code}` for an
   unknown field (`unknown_field`: none, a file, a skipped widget, a password's box) or a value that
-  does not fit it (`wrong_type`: a text for a text, select or combobox, at most 5000 characters;
-  true or false for a checkbox or a yes or no question); 409 `not_editable` once the app clicked
-  or after an end, `signin_first` while it waits for a sign in.
+  does not fit it (`wrong_type`: a text for a text, select or combobox, at most 5000 characters,
+  or 10000 for an adapter-owned document-letter box; true or false for a checkbox or a yes or no
+  question); 409 `not_editable` once the app clicked or after an end, `signin_first` while it
+  waits for a sign in.
 - POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
   an approval; cancel: anything before the click).
 - POST /api/applications/{id}/submitted: "It was submitted" on `submit_unknown`.
@@ -42,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.apply import admin, gate, model_check, service, shots
-from app.apply.models import AnswerSource, Application
+from app.apply.models import AnswerSource, Application, State
 from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
 from app.db import get_session
 from app.identity import deps
@@ -74,7 +75,7 @@ class ApproveIn(BaseModel):
 class AnswerIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    value: Annotated[str, Field(min_length=1, max_length=gate.ANSWER_MAX)] | StrictBool
+    value: Annotated[str, Field(min_length=1, max_length=gate.LETTER_MAX)] | StrictBool
 
 
 class AnswerOut(BaseModel):
@@ -87,6 +88,8 @@ class AnswerOut(BaseModel):
     required: bool
     approved: bool
     you_answer: bool  # left by the app: the person answers it on the site, or leaves it
+    max_chars: int
+    left_reason: str | None = None
 
 
 class ShotOut(BaseModel):
@@ -158,8 +161,12 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
             required=row.required,
             approved=row.approved,
             you_answer=row.source is AnswerSource.left,
+            max_chars=gate.answer_max(row),
+            left_reason=row.left_reason if row.source is AnswerSource.left else None,
         )
         for row in gate.rows_of(db, application)
+        if not row.field_key.startswith("designated:shape:")
+        and row.field_key not in {"designated:incomplete", "designated:strategy"}
     ]
 
 
@@ -188,6 +195,23 @@ async def _paused(request: Request) -> bool:
     except Exception:  # Redis down: fail closed
         return True
     return await admin.paused(pool)
+
+
+def _enqueue_fill(request: Request, application_id: uuid.UUID) -> None:
+    """A partial wizard resumes from the original job; the tick retries an unavailable queue."""
+
+    async def enqueue() -> bool:
+        return await request.app.state.queue.enqueue(
+            "apply_fill",
+            str(application_id),
+            queue=queues.APPLY,
+            job_id=queues.apply_fill_job_id(application_id),
+        )
+
+    try:
+        anyio.from_thread.run(enqueue)
+    except queues.QueueUnavailableError:
+        logger.warning("apply.fill_enqueue_failed", extra={"application_id": str(application_id)})
 
 
 def _enqueue_submit(request: Request, application_id: uuid.UUID) -> None:
@@ -312,8 +336,12 @@ def set_answer(
     """The person's own answer to one field; any approval of the form before it is void."""
     wanted = _uuid_or_404(application_id)
     try:
-        gate.set_answer(db, user.id, wanted, field_key, body.value, deps.clock(request))
+        application = gate.set_answer(
+            db, user.id, wanted, field_key, body.value, deps.clock(request)
+        )
         db.commit()
+        if application.state is State.queued:
+            _enqueue_fill(request, wanted)
     except gate.NotFoundError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION) from None

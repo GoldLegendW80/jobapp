@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -77,18 +78,6 @@ const titles = Object.fromEntries(KEYS.map((key) => [key, ""])) as Record<
   string
 >;
 
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(job: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${job}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
-
 async function postingOn(key: Key): Promise<string> {
   const title = person.posting.title + FORMS[key].suffix;
   titles[key] = title;
@@ -111,7 +100,7 @@ async function postingOn(key: Key): Promise<string> {
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
   return job;
 }
 

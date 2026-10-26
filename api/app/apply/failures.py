@@ -15,8 +15,9 @@ A10a). Pure rules and the few writes `run.py` asks for; no browser call here.
 - **The person.** `needs_person` keeps its reason in `needs`: `captcha`, `required_left`,
   `email_code`, `payment_requested`, `signin` (a wall the hand off of `signin.py` did not get
   past: the review queue's "Needs you: sign in to <host>", then a later hand off), and the run's
-  own (`form_changed`, `no_adapter`, ...). In Review first, for a step on the
-  page (`WAIT_ON_PAGE`) the run keeps the lease and waits for the person at most
+  own (`form_changed`, `no_adapter`, ...), and `forbidden` (the form answered 403; a 429 is
+  retried as `http_429`). In Review first, for a step on the page (`WAIT_ON_PAGE`: a captcha,
+  an e-mail code, a 403 page) the run keeps the lease and waits for the person at most
   APPLY_NEEDS_PERSON_WAIT_S, then the lease ends and the application keeps waiting. Full auto never
   waits: its item goes to the review queue (`full_auto.hand_over`).
 - **A payment page** (`payment_page`): a field for a card number or a card's security code, or a
@@ -45,19 +46,21 @@ from app.apply.models import Application, Mode, State
 
 RETRY = "retry"
 HTTP_5XX = "http_5xx"
+HTTP_429 = "http_429"
 PAYMENT = "payment_requested"
 RETRYABLE = frozenset(
     {
         "navigation_timeout",
         "navigation_failed",
         HTTP_5XX,
+        HTTP_429,
         "unavailable",
         "ended",
         "interrupted",
     }
 )
 # The steps the person takes on the page itself, for which a Review first run keeps the lease.
-WAIT_ON_PAGE = frozenset({"captcha", "email_code"})
+WAIT_ON_PAGE = frozenset({"captcha", "email_code", "forbidden"})
 WAIT_POLL_S = 5.0
 
 

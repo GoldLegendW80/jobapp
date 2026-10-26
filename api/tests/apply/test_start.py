@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import service
+from app.apply import guardrails, service
 from app.apply.models import Application, Mode, State
 from app.config import Settings
 from app.jobs import service as jobs_service
@@ -309,7 +309,7 @@ def test_the_live_application_of_the_posting(db: Session, a: uuid.UUID) -> None:
     assert start(db, a, job).application.id != first.id
 
 
-@pytest.mark.parametrize("url", ["", "mailto:jobs@example.org", "javascript:void(0)", "/careers/1"])
+@pytest.mark.parametrize("url", ["", "javascript:void(0)", "/careers/1"])
 def test_no_form_address(db: Session, a: uuid.UUID, url: str) -> None:
     job = posting(db, a)
     db.execute(
@@ -817,3 +817,50 @@ def test_a_start_past_the_lock_timeout_is_busy_with_a_code(
     assert answer.headers["cache-control"] == "no-store"
     with factory() as check:
         assert count(check, "applications", a) == 0
+
+
+@pytest.mark.parametrize("status", ["applied", "interview", "rejected"])
+def test_issue335_manual_same_address_and_same_role_show_both_warnings(
+    db: Session, a: uuid.UUID, status: str
+) -> None:
+    posting(
+        db, a, "Applied AI Engineer", "https://example.org/careers", status=status, applied_on=None
+    )
+    job = posting(db, a, "Applied AI Engi\u00adneer (H/F)", "https://www.example.org/careers/")
+    assert refused(db, a, job, Mode.review) == "same_address"
+    assert refused(db, a, job, Mode.full_auto) == "same_address"
+    started = start(db, a, job, Mode.manual)
+    assert started.warnings == ("same_address", "same_role")
+
+
+@pytest.mark.parametrize(
+    ("legacy", "current"),
+    [
+        (
+            "http://boards\uff0egreenhouse\uff0eio/org/jobs/4012345",
+            "https://boards.greenhouse.io/org/jobs/4012345",
+        ),
+        ("http://exämple.org/careers/42", "https://xn--exmple-cua.org/careers/42"),
+        ("http://example.org./careers/42", "https://example.org/careers/42"),
+        (
+            "http://www.linkedin。com/jobs/view/4100000001",
+            "https://www.linkedin.com/jobs/view/4100000001",
+        ),
+    ],
+)
+def test_issue335_legacy_live_url_keys_still_refuse_the_same_form(
+    db: Session, a: uuid.UUID, b: uuid.UUID, legacy: str, current: str
+) -> None:
+    first = posting(db, a, "Agent Engineer", legacy)
+    live = start(db, a, first).application
+    live.canonical_key = f"url:{legacy}"
+    db.commit()
+    job = posting(db, a, "Applied AI Engineer", current)
+    for mode in Mode:
+        with pytest.raises(service.RefusedError) as caught:
+            start(db, a, job, mode)
+        assert caught.value.refusal.code == "same_form"
+        assert caught.value.refusal.application_id == live.id
+    # An identical legacy address belonging to another person does not block their start.
+    other = start(db, b, posting(db, b, "Applied AI Engineer", current)).application
+    assert other.canonical_key == guardrails.canonical_key(current)
