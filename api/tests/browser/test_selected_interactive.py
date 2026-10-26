@@ -4,7 +4,7 @@ import asyncio
 import dataclasses
 import json
 import random
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +15,7 @@ from app.agents.models import AgentEvent, CredentialKind
 from app.browser import finder, sources
 from app.browser.client import BrowserError
 from app.jobs import sweep
+from app.jobs.models import Job, JobEvent, Sweep, SweepTrigger
 from app.profile.schemas import SearchSection
 from tests.agents.conftest import OAUTH
 from tests.browser.b13_runtime import Recording
@@ -73,6 +74,7 @@ async def execute(
     pacer=None,
     sweep_id=None,
     now=None,
+    prepare=None,
 ):
     tools, leases = tools or Tools(), leases or FakeLeases()
     now, stored, progress_log = now if now is not None else [0.0], [], []
@@ -99,6 +101,8 @@ async def execute(
         search_scope=scope,
         sweep_id=sweep_id,
     )
+    if prepare is not None:
+        plan = prepare(plan, stats)  # a real sweep plan with the run's commits (jobs J11)
     runner = sources.Runner(
         leases,
         lambda *_: tools,
@@ -180,6 +184,75 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
         )
     assert CANARY not in json.dumps(events)
     assert "Observed employer and duties" not in json.dumps(events)
+
+
+def test_the_registered_report_tool_stores_its_finding_through_the_run_commits(
+    runtime: Runtime,  # noqa: F811
+    alice,  # noqa: F811
+    monkeypatch,
+):
+    """Jobs J11: the finding the real runtime's report tool verified is a job in the person's
+    list, counted as new, its employer unknown as the page names none."""
+    runtime.give_key(alice)
+    backend = Recording()
+    from tests.browser import b13_runtime as backend_steps
+
+    monkeypatch.setattr(
+        backend_steps,
+        "STEPS",
+        [
+            (name, {**args, "values": ["remote"]} if name == "browser_select_option" else args)
+            for name, args in backend_steps.STEPS
+        ],
+    )
+    context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
+    with runtime.factory() as database:
+        row = Sweep(user_id=alice, trigger=SweepTrigger.manual, stats={})
+        database.add(row)
+        database.commit()
+        sweep_id = row.id
+
+    def prepare(given, stats):
+        with runtime.factory() as database:
+            known = sweep.Known(database, alice)
+        plan = sweep.Plan(
+            sweep_id=sweep_id,
+            user_id=alice,
+            boards=[],
+            filter=sweep.SearchFilter.of(given.search),
+            rules=[],
+            skills=None,
+            known=known,
+            search=given.search,
+            search_scope=given.search_scope,
+        )
+        plan.commits = sweep.Commits(runtime.factory, plan, stats, lambda: datetime.now(UTC))
+        return plan
+
+    entries, stored, _, _, progress = asyncio.run(
+        execute(selected(), alice, finder.RuntimeFinder(lambda: context), prepare=prepare)
+    )
+    [entry] = entries
+    assert (entry["found"], entry["postings"], entry["error"], entry["outcome"]) == (
+        1,
+        1,
+        None,
+        "complete",
+    )
+    assert stored == []  # never the legacy store
+    with runtime.factory() as database:
+        [job] = database.scalars(sa.select(Job).where(Job.user_id == alice)).all()
+        events = database.scalars(sa.select(JobEvent.data).where(JobEvent.job_id == job.id)).all()
+        counted = database.get(Sweep, sweep_id)
+    assert (job.title, job.company, job.source) == (
+        "Robot Engineer",
+        sweep.UNKNOWN_EMPLOYER,
+        "jobs.example.test",
+    )
+    assert job.url == BASE + "b13/jobs/robot"
+    assert counted is not None
+    assert counted.stats["new"] == 1
+    assert CANARY not in json.dumps([*events, progress])
 
 
 @pytest.mark.parametrize(

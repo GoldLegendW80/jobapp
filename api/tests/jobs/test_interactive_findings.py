@@ -1,0 +1,646 @@
+"""Jobs J11 and J11b: what the interactive finder verified on a job website is stored in the
+person's list as it is reported, through the real sweep, runner and selected source (sweep.Commits,
+app/browser/sources/interactive.py), with a scripted finder and fake browser tools: never a model
+or a real website."""
+
+import asyncio
+import json
+import random
+import threading
+import uuid
+from collections.abc import Callable
+from datetime import date, timedelta
+from typing import Any
+
+import pytest
+import sqlalchemy as sa
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.apply.models import Application, Authorisation
+from app.browser import finder
+from app.browser.sources import MemoryPacer, Runner
+from app.jobs import ats, sweep
+from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
+from tests.browser.test_b8_sources import FakeLeases
+from tests.browser.test_b9_site import ScriptedFinder
+from tests.jobs.sweep_helpers import jobs_of, new_sweep, now, read_sweep, search, set_profile
+
+BASE = "https://jobs.example.test/"
+HOST = "jobs.example.test"
+FIRST = '- searchbox "Query" [ref=e1]\n- button "Search" [ref=e3]'
+# A planted marker: the model's own words, which must never reach a job or an event.
+MODEL_WORDS = "e2e-model-words-4f19c2"
+INSTRUCTIONS = "e2e-instructions-8d03aa: prefer robots"
+
+
+def detail(title: str, *lines: str) -> str:
+    # browserd/pages.py's snapshot shape, as tests/browser/test_verified_findings.py writes it.
+    return f'- main [ref=e1]:\n  - heading "{title}" [level=1] [ref=e2]\n' + "\n".join(
+        f"  - paragraph [ref=e{index + 3}]: {line}" for index, line in enumerate(lines)
+    )
+
+
+PAGES = {
+    "jobs/robot": detail(
+        "Robot Engineer",
+        "Employer: Example Robotics",
+        "Location: Paris, France",
+        "Published: 2026-10-20",
+        "Build the planners of robot fleets in Python.",
+    ),
+    "jobs/arm": detail("Arm Engineer", "Tune robot arms in the lab."),
+    "jobs/arm-2": detail("Arm Engineer", "Tune robot arms on site."),
+    "jobs/cyber": detail("Cyber Defence Engineer", "Employer: Example Robotics", "Guard robots."),
+    "jobs/sales": detail("Robot Sales Lead", "Employer: Example Robotics", "Sell robots."),
+}
+
+
+class SiteTools:
+    """The invented job website: a search box, results after Search, and detail pages."""
+
+    def __init__(self) -> None:
+        links = "\n".join(
+            f'- link "{path}" [ref=e{index + 5}]\n  - /url: /{path}'
+            for index, path in enumerate(PAGES)
+        )
+        self.pages = {BASE: FIRST, BASE + "search": links} | {
+            BASE + path: text for path, text in PAGES.items()
+        }
+        self.current = BASE
+        self.actions: list[str] = []
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        assert args.pop("_discovery") == "native_get"
+        args.pop("_discovery_scope")
+        self.actions.append(name)
+        if name == "browser_navigate":
+            if args["url"] not in self.pages:
+                return {"ok": False, "error": "navigation_failed"}
+            self.current = args["url"]
+        elif name == "browser_click":
+            self.current = BASE + "search"
+        return {"ok": True}
+
+    async def snapshot(self) -> dict[str, Any]:
+        return {"ok": True, "url": self.current, "snapshot": self.pages[self.current]}
+
+    async def wait_for(self, **_: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+
+def title_of(path: str) -> str:
+    return PAGES[path].split('heading "', 1)[1].split('"', 1)[0]
+
+
+async def searched(session: finder.FinderSession) -> None:
+    assert not (await session.interact("browser_type", {"ref": "e1", "text": "robot"}))[1]
+    assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
+
+
+async def report(session: finder.FinderSession, *paths: str) -> str:
+    """Open each detail page and report it, one report per page (the session keeps the last
+    detail page read only), as the model does until a tool tells it to stop."""
+    for path in paths:
+        assert not (await session.navigate("/" + path))[1]
+        text, error = await session.report_verified(
+            [{"title": title_of(path), "url": "/" + path, "text": MODEL_WORDS}]
+        )
+        if error:
+            return text
+        assert json.loads(text)["kept"] == 1
+    return ""
+
+
+def reports(*paths: str) -> Callable[[finder.FinderSession], Any]:
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        await report(session, *paths)
+        return finder.Ran()
+
+    return script
+
+
+def profile(factory: sessionmaker[Session], user: uuid.UUID, **changes: Any) -> None:
+    set_profile(
+        factory,
+        user,
+        search(
+            **{
+                "title_include": {"terms": ["robot"], "advanced_regex": False},
+                "location": {"terms": [], "advanced_regex": False},
+                "never_apply": ["No sales roles: sales (test rule)"],
+                "interactive_sites": [
+                    {"platform": "custom", "url": BASE, "enabled": True, "mode": "llm_browser"}
+                ],
+                "interactive_instructions": INSTRUCTIONS,
+                **changes,
+            }
+        ),
+    )
+
+
+class NoBoards:
+    async def fetch_board(self, *_: Any) -> ats.BoardResult:
+        raise AssertionError("no board is selected")
+
+
+def runner(script: Callable[[finder.FinderSession], Any], tools: SiteTools | None = None) -> Runner:
+    clock = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    return Runner(
+        FakeLeases(),  # type: ignore[arg-type]
+        lambda *_: tools or SiteTools(),
+        sleep=sleep,
+        rng=random.Random(3),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
+        finder=ScriptedFinder(script),
+    )
+
+
+def run(factory: sessionmaker[Session], sweep_id: uuid.UUID, hook: Runner) -> Sweep:
+    asyncio.run(sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=hook))  # type: ignore[arg-type]
+    return read_sweep(factory, sweep_id)
+
+
+def events_of(factory: sessionmaker[Session], user: uuid.UUID) -> list[JobEvent]:
+    with factory() as db:
+        return list(db.scalars(sa.select(JobEvent).where(JobEvent.user_id == user)))
+
+
+def entry_of(row: Sweep) -> dict[str, Any]:
+    [entry] = [s for s in row.stats["sources"] if s.get("mode") == "llm_browser"]
+    return entry
+
+
+def assert_counts_agree(factory: sessionmaker[Session], row: Sweep, user: uuid.UUID) -> None:
+    """The row's counters are those of the jobs this sweep stored."""
+    with factory() as db:
+        stored = db.scalars(
+            sa.select(JobEvent.job_id).where(
+                JobEvent.user_id == user,
+                JobEvent.kind == JobEventKind.sweep,
+                JobEvent.data["sweep_id"].astext == str(row.id),
+            )
+        ).all()
+        skipped = db.scalar(
+            sa.select(sa.func.count())
+            .select_from(Job)
+            .where(Job.id.in_(stored), Job.status == JobStatus.skipped)
+        )
+    assert row.stats["new"] == len(stored) == entry_of(row)["postings"]
+    assert row.stats["skipped_by_rule"] == skipped == entry_of(row)["skipped_by_rule"]
+
+
+# --- stored as a board posting is -------------------------------------------------------------
+
+
+def test_verified_findings_become_scored_found_jobs_with_their_observed_facts_only(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    row = run(factory, new_sweep(factory, alice), runner(reports("jobs/robot", "jobs/arm")))
+    assert row.status is SweepStatus.done
+    entry = entry_of(row)
+    assert (entry["found"], entry["postings"], entry["duplicates"]) == (2, 2, 0)
+    assert (entry["outcome"], entry["reason"], entry["error"]) == ("complete", None, None)
+    assert (row.stats["new"], row.stats["duplicates"]) == (2, 0)
+    arm, robot = jobs_of(factory, alice)  # ordered by company: "Employer not stated" first
+    assert robot.company == "Example Robotics"
+    assert robot.location == "Paris, France"
+    assert robot.published_on == date(2026, 10, 20)
+    assert "planners of robot fleets" in (robot.posting_text or "")
+    # Unknown stays unknown: no website name as employer, no date made up from today.
+    assert arm.company == sweep.UNKNOWN_EMPLOYER
+    assert arm.published_on is None
+    assert arm.location == ""
+    for job in (robot, arm):
+        assert job.status is JobStatus.found
+        assert job.source == HOST
+        assert job.fit is not None  # scored against the skills, as a board posting is
+        assert job.legacy == {}
+        assert (job.url or "").startswith(BASE)
+        assert MODEL_WORDS not in (job.posting_text or "") + (job.description or "")
+    discovery = {
+        event.job_id: event.data["discovery"]
+        for event in events_of(factory, alice)
+        if event.kind is JobEventKind.sweep
+    }
+    assert discovery[robot.id]["evidence"] == {
+        "title": "Robot Engineer",
+        "company": "Employer: Example Robotics",
+        "published_on": "Published: 2026-10-20",
+        "location": "Location: Paris, France",
+    }
+    assert discovery[robot.id]["unknown"] == []
+    assert discovery[arm.id]["unknown"] == ["company", "published_on", "location"]
+    assert discovery[arm.id]["source_id"] == entry["source_id"]
+    # The frozen search scope of the row holds the instructions by design (J9); nothing else.
+    every = json.dumps([e.data for e in events_of(factory, alice)] + row.stats["sources"])
+    for private in (MODEL_WORDS, INSTRUCTIONS, "untrusted_page_snapshot", "tune robot arms"):
+        assert private not in every
+    assert_counts_agree(factory, row, alice)
+
+
+def test_nothing_but_found_or_skipped_jobs_is_written(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    run(factory, new_sweep(factory, alice), runner(reports("jobs/robot", "jobs/sales")))
+    with factory() as db:
+        for model in (Application, Authorisation):
+            assert db.scalar(sa.select(sa.func.count()).select_from(model)) == 0
+    kinds = {event.kind for event in events_of(factory, alice)}
+    assert kinds <= {
+        JobEventKind.created,
+        JobEventKind.sweep,
+        JobEventKind.fit,
+        JobEventKind.status,
+        JobEventKind.note,
+    }
+    assert {job.status for job in jobs_of(factory, alice)} == {JobStatus.found, JobStatus.skipped}
+
+
+def test_never_apply_rules_and_the_cybersecurity_rule_skip_with_their_note(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)  # the person's rules name sales only
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        runner(reports("jobs/cyber", "jobs/sales", "jobs/robot")),
+    )
+    by_title = {job.title: job for job in jobs_of(factory, alice)}
+    assert by_title["Cyber Defence Engineer"].status is JobStatus.skipped
+    assert "cyber" in by_title["Cyber Defence Engineer"].notes
+    assert by_title["Robot Sales Lead"].status is JobStatus.skipped
+    assert by_title["Robot Sales Lead"].notes == "No sales roles: sales (test rule)"
+    assert by_title["Robot Engineer"].status is JobStatus.found
+    assert (row.stats["skipped_by_rule"], entry_of(row)["skipped_by_rule"]) == (2, 2)
+    assert row.stats["new"] == 3
+    assert_counts_agree(factory, row, alice)
+
+
+# --- duplicates ---------------------------------------------------------------------------------
+
+
+def add_job(factory: sessionmaker[Session], user: uuid.UUID, **values: Any) -> uuid.UUID:
+    job_id = uuid.uuid4()
+    with factory() as db, db.begin():
+        db.add(
+            Job(
+                id=job_id,
+                user_id=user,
+                slug=values.pop("slug", f"kept-{job_id.hex[:8]}"),
+                status=JobStatus.shortlisted,
+                found_on=date(2026, 10, 1),
+                notes="mine",
+                **values,
+            )
+        )
+    return job_id
+
+
+def test_duplicates_by_address_or_identity_name_the_website_and_keep_the_row(
+    factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    by_url = add_job(
+        factory, alice, company="Example Robotics", title="Old title", location="",
+        url=BASE + "jobs/robot", source="ashby:example",
+    )  # fmt: skip
+    by_identity = add_job(
+        factory, alice, company="Example Robotics", title="Cyber Defence Engineer", location="",
+        url="https://boards.example.org/cyber", source="greenhouse:example",
+    )  # fmt: skip
+    # Bob's row with the same address is his own: Alice's posting is new to her, his untouched.
+    bobs = add_job(factory, bob, company="Bob Co", title="Kept", location="", url=BASE + "jobs/arm")
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        runner(reports("jobs/robot", "jobs/cyber", "jobs/arm")),
+    )
+    entry = entry_of(row)
+    assert (entry["found"], entry["postings"], entry["duplicates"]) == (3, 1, 2)
+    assert (row.stats["new"], row.stats["duplicates"]) == (1, 2)
+    with factory() as db:
+        mine = db.get(Job, by_url)
+        assert mine is not None
+        assert (mine.title, mine.status, mine.notes) == ("Old title", JobStatus.shortlisted, "mine")
+        assert mine.source == f"ashby:example, {HOST}"
+        other = db.get(Job, by_identity)
+        assert other is not None
+        assert other.source == f"greenhouse:example, {HOST}"
+        his = db.get(Job, bobs)
+        assert his is not None
+        assert (his.source, his.company) == (None, "Bob Co")
+    assert len(jobs_of(factory, alice)) == 3
+    assert_counts_agree(factory, row, alice)
+
+
+def test_same_title_with_unknown_employers_is_two_postings_and_a_second_run_finds_duplicates(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    first = run(factory, new_sweep(factory, alice), runner(reports("jobs/arm", "jobs/arm-2")))
+    assert first.stats["new"] == 2
+    assert [job.company for job in jobs_of(factory, alice)] == [sweep.UNKNOWN_EMPLOYER] * 2
+    again = run(factory, new_sweep(factory, alice), runner(reports("jobs/arm", "jobs/arm-2")))
+    assert (again.stats["new"], again.stats["duplicates"]) == (0, 2)
+    assert (entry_of(again)["found"], entry_of(again)["outcome"]) == (2, "complete")
+    assert len(jobs_of(factory, alice)) == 2
+
+
+def test_a_row_stored_meanwhile_by_another_request_is_the_duplicate_it_is(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan's Known is loaded at claim; a row stored after (another request) is met by the
+    insert's conflict, looked up among Alice's rows, and named a duplicate with this source."""
+    profile(factory, alice)
+    original = sweep.commit_verified
+    raced: list[uuid.UUID] = []
+
+    def racing(sessions: Any, plan: Any, *args: Any) -> Any:
+        if not raced:
+            stored = add_job(
+                factory, alice, company="Example Robotics", title="Robot Engineer",
+                location="Paris, France", url=BASE + "jobs/robot", source="site:example",
+            )  # fmt: skip
+            raced.append(stored)
+        return original(sessions, plan, *args)
+
+    monkeypatch.setattr(sweep, "commit_verified", racing)
+    row = run(factory, new_sweep(factory, alice), runner(reports("jobs/robot", "jobs/arm")))
+    assert (row.stats["new"], row.stats["duplicates"]) == (1, 1)
+    with factory() as db:
+        winner = db.get(Job, raced[0])
+        assert winner is not None
+        assert (winner.status, winner.notes) == (JobStatus.shortlisted, "mine")
+        assert winner.source == f"site:example, {HOST}"
+    assert len(jobs_of(factory, alice)) == 2
+    assert_counts_agree(factory, row, alice)
+
+
+# --- failures, cancellation and the end of the row ---------------------------------------------
+
+
+def test_a_failed_batch_stores_nothing_of_itself_and_keeps_the_batches_before(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile(factory, alice)
+    original = sweep._store_finding
+    calls: list[str] = []
+
+    def failing(db: Session, plan: Any, source_id: str, source: str, finding: Any, *rest: Any):
+        calls.append(finding.title)
+        original(db, plan, source_id, source, finding, *rest)
+        if len(calls) == 3:
+            raise RuntimeError("the database went away")  # after the row was inserted
+
+    monkeypatch.setattr(sweep, "_store_finding", failing)
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        runner(reports("jobs/robot", "jobs/arm", "jobs/sales", "jobs/cyber")),
+    )
+    # Two batches stored, the third rolled back whole, and the source stopped there.
+    assert sorted(job.title for job in jobs_of(factory, alice)) == [
+        "Arm Engineer",
+        "Robot Engineer",
+    ]
+    assert calls == ["Robot Engineer", "Arm Engineer", "Robot Sales Lead"]
+    entry = entry_of(row)
+    assert (entry["found"], entry["postings"], entry["error"]) == (2, 2, "store_failed")
+    assert entry["outcome"] == "partial"
+    assert row.status is SweepStatus.done
+    assert_counts_agree(factory, row, alice)
+
+
+def test_an_agent_failure_after_a_batch_keeps_what_was_stored(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        await report(session, "jobs/robot")
+        raise RuntimeError("the model stopped")
+
+    row = run(factory, new_sweep(factory, alice), runner(script))
+    entry = entry_of(row)
+    assert (entry["found"], entry["postings"], entry["outcome"]) == (1, 1, "partial")
+    assert entry["error"] == "agent_failed"
+    assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
+    assert_counts_agree(factory, row, alice)
+
+
+def test_cancelling_the_sweep_mid_source_keeps_the_stored_jobs_and_their_counts(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    reported = asyncio.Event()
+    never = asyncio.Event()
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        await report(session, "jobs/robot")
+        reported.set()
+        await never.wait()  # the model's next turn, when the worker stops
+        raise AssertionError("cancelled before")
+
+    sweep_id = new_sweep(factory, alice)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=runner(script))  # type: ignore[arg-type]
+        )
+        await reported.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    row = read_sweep(factory, sweep_id)
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.INTERRUPTED)
+    assert row.stats["new"] == 1
+    assert (entry_of(row)["found"], entry_of(row)["postings"]) == (1, 1)
+    assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
+    assert_counts_agree(factory, row, alice)
+
+
+class Held:
+    """Holds the commit's thread inside its transaction (after the row lock and the insert,
+    before COMMIT) until released."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.inside, self.release = threading.Event(), threading.Event()
+        original = sweep._counted
+
+        def held(stats: sweep.Stats, *args: Any) -> None:
+            original(stats, *args)
+            if threading.current_thread() is not threading.main_thread():
+                self.inside.set()
+                assert self.release.wait(30), "the test never released the commit"
+
+        monkeypatch.setattr(sweep, "_counted", held)
+
+
+def test_a_commit_whose_tool_call_is_cancelled_finishes_before_the_next_source(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model's tool call is torn down while its batch is inside the database: the commit
+    still ends and is counted, before the next source starts and before the sweep ends."""
+    second = "https://second.example.test/"
+    profile(
+        factory,
+        alice,
+        interactive_sites=[
+            {"platform": "custom", "url": url, "enabled": True, "mode": "llm_browser"}
+            for url in (BASE, second)
+        ],
+    )
+    held = Held(monkeypatch)
+    seen_at_second_start: list[tuple[int, int]] = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        if session.start == second:
+            seen_at_second_start.append((stats_of["run"].new, len(session.reported_urls)))
+            return finder.Ran()
+        await searched(session)
+        assert not (await session.navigate("/jobs/robot"))[1]
+        call = asyncio.create_task(
+            session.report_verified(
+                [{"title": "Robot Engineer", "url": "/jobs/robot", "text": MODEL_WORDS}]
+            )
+        )
+        await asyncio.to_thread(held.inside.wait, 30)
+        call.cancel()  # the SDK tears the tool call down
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        return finder.Ran()
+
+    original_settle = sweep.Commits.settle
+    stats_of: dict[str, sweep.Stats] = {}
+
+    async def settle(self: sweep.Commits, *, close: bool = False) -> bool:
+        stats_of["run"] = self.stats
+        held.release.set()  # the commit's thread may now end
+        return await original_settle(self, close=close)
+
+    monkeypatch.setattr(sweep.Commits, "settle", settle)
+    tools = SiteTools()
+    tools.pages[second] = FIRST
+    row = run(factory, new_sweep(factory, alice), runner(script, tools))
+    assert row.status is SweepStatus.done
+    assert seen_at_second_start == [(1, 0)]  # counted before the second website began
+    first, _ = (s for s in row.stats["sources"] if s.get("mode") == "llm_browser")
+    assert (first["found"], first["postings"]) == (1, 1)
+    assert row.stats["new"] == 1
+    assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
+
+
+def test_a_commit_that_outlives_the_wait_leaves_the_row_to_recovery_with_its_counts(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile(factory, alice)
+    held = Held(monkeypatch)
+    monkeypatch.setattr(sweep, "DRAIN_S", 0.0)
+    published: list[int] = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        assert not (await session.navigate("/jobs/robot"))[1]
+        call = asyncio.create_task(
+            session.report_verified(
+                [{"title": "Robot Engineer", "url": "/jobs/robot", "text": MODEL_WORDS}]
+            )
+        )
+        await asyncio.to_thread(held.inside.wait, 30)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        return finder.Ran()
+
+    sweep_id = new_sweep(factory, alice)
+
+    async def scenario() -> None:
+        hook = runner(script)
+        await sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=hook)  # type: ignore[arg-type]
+        # The run let go of the row without an end. The commit now ends: its jobs and the
+        # row's counters land together, and nothing is published to the finished run.
+        row = read_sweep(factory, sweep_id)
+        assert row.status is SweepStatus.running
+        held.release.set()
+        left = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*left, return_exceptions=True)
+        published.append(len(left))
+
+    asyncio.run(scenario())
+    assert published == [1]  # the commit's own task, nothing else
+    row = read_sweep(factory, sweep_id)
+    assert row.status is SweepStatus.running
+    assert (row.stats["new"], entry_of(row)["postings"]) == (1, 1)
+    assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
+    # The existing recovery ends it, keeping the committed counts.
+    with factory() as db:
+        assert sweep.reap_stale(db, now() + timedelta(minutes=5)) == 1
+        db.commit()
+    row = read_sweep(factory, sweep_id)
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.CRASHED)
+    assert row.stats["new"] == 1
+    assert_counts_agree(factory, row, alice)
+
+
+def test_a_row_ended_by_another_finalizer_first_refuses_the_batch(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    sweep_id = new_sweep(factory, alice)
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        await asyncio.to_thread(sweep.fail_sweep, factory, sweep_id, sweep.CRASHED, now())
+        assert not (await session.navigate("/jobs/robot"))[1]
+        text, error = await session.report_verified(
+            [{"title": "Robot Engineer", "url": "/jobs/robot", "text": MODEL_WORDS}]
+        )
+        assert error
+        assert "store_failed" in text
+        return finder.Ran()
+
+    row = run(factory, sweep_id, runner(script))
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.CRASHED)
+    assert jobs_of(factory, alice) == []
+    assert row.stats.get("new", 0) == 0
+
+
+def test_a_batch_after_its_source_settled_starts_no_commit(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def never(*_: Any) -> None:
+        raise AssertionError("a refused batch reached the database")
+
+    monkeypatch.setattr(sweep, "commit_verified", never)
+    plan: Any = type("P", (), {"known": None})()
+    commits = sweep.Commits(factory, plan, sweep.Stats(), now)
+    found = finder.VerifiedFinding("Robot Engineer", "", BASE + "x", "x", None, None, {}, "")
+    batch = finder.VerifiedBatch((found,))
+
+    async def scenario() -> None:
+        with pytest.raises(sweep.StoreRefusedError):
+            await commits.save("source-a", HOST, batch)  # never admitted
+        commits.admit("source-a")
+        with pytest.raises(sweep.StoreRefusedError):
+            await commits.save("source-b", HOST, batch)  # another source's batch
+        assert await commits.settle()
+        with pytest.raises(sweep.StoreRefusedError):
+            await commits.save("source-a", HOST, batch)  # its source ended
+        assert await commits.settle(close=True)
+        commits.admit("source-a")
+        with pytest.raises(sweep.StoreRefusedError):
+            await commits.save("source-a", HOST, batch)  # the run closed
+
+    asyncio.run(scenario())

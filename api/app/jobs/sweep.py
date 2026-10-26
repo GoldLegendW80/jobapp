@@ -960,12 +960,12 @@ async def run_sweep(
         schedule_slot=plan.schedule_slot,
         sources=initial_sources(plan.search_scope),
     )
-    lock = asyncio.Lock()
     commits = plan.commits = Commits(sessions, plan, stats, clock)
 
     async def progress() -> None:
-        async with lock:
-            await asyncio.to_thread(save_progress, sessions, sweep_id, stats, clock())
+        await commits.progress(
+            lambda: asyncio.to_thread(save_progress, sessions, sweep_id, stats, clock())
+        )
 
     try:
         async with asyncio.timeout(timeout_s):
@@ -1216,10 +1216,11 @@ def _store_found(
 # source is the one running; it then runs as a task of its own, so a cancelled caller (the
 # model's tool call torn down, the source's time limit) does not abandon a commit half way:
 # the commit runs to its end and its counters are published to the run's Stats and Known on the
-# event loop, after it. Commits run one at a time. Before the next source, and before the end
-# of the sweep, `settle` closes admission and waits up to DRAIN_S for what was admitted. A
-# commit still running then leaves the sweep row as it is (running, with the counts committed so
-# far) for `reap_stale`, rather than writing an end that the commit could contradict.
+# event loop, after it. Commits and the run's progress writes run one at a time, so a progress
+# write never carries counts older than a commit it follows. Before the next source, and before
+# the end of the sweep, `settle` closes admission and waits up to DRAIN_S for what was admitted.
+# A commit still running then leaves the sweep row as it is (running, with the counts committed
+# so far) for `reap_stale`: no progress, no end is written that the commit could contradict.
 
 DRAIN_S = 5.0
 VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule")
@@ -1340,10 +1341,10 @@ class Commits:
         plan: Plan,
         stats: Stats,
         clock: Clock,
-        drain_s: float = DRAIN_S,
+        drain_s: float | None = None,
     ) -> None:
         self.sessions, self.plan, self.stats, self.clock = sessions, plan, stats, clock
-        self.drain_s = drain_s
+        self.drain_s = DRAIN_S if drain_s is None else drain_s
         self._lock = asyncio.Lock()
         self._admitted: str | None = None
         self._closed = False
@@ -1378,6 +1379,22 @@ class Commits:
                 return  # the run let go of the row: nothing more is published
             vars(self.plan.known).update(vars(known))
             _counted(self.stats, source_id, delta, len(batch.findings))
+
+    async def progress(self, write: Callable[[], Awaitable[None]]) -> None:
+        """A progress write of the run: never beside a commit (it would write counts without
+        the commit's), held to its end even when its caller is cancelled, and none once the run
+        let go of the row."""
+        if self.unsettled:
+            return
+        async with self._lock:
+            if self.unsettled:
+                return
+            task = asyncio.ensure_future(write())
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await asyncio.wait([task])  # its thread ends before another write starts
+                raise
 
     async def settle(self, *, close: bool = False) -> bool:
         """Stop admitting (for good with `close`) and wait up to drain_s for the commits
