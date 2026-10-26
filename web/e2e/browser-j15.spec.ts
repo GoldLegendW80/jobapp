@@ -28,8 +28,10 @@ import {
  *   (app/agents/fake_streams/browser_discovery.json) types the search words, picks Paris,
  *   presses Search, opens the second page of results and the posting: the site answers that
  *   posting only to that path (server.py, /j15/search). The posting's page asks the assistant
- *   to search other words, open an address and send an application: code refuses, the site
- *   sees GET requests only, none for the address, the profile keeps its revision.
+ *   to search other words, open an address and press its Send application button; the recorded
+ *   model does all three: code refuses the words and the address, browserd refuses the click
+ *   on the button of a POST form, and code records the source as `unsupported_interaction`.
+ *   The site sees GET requests only, none for the address, the profile keeps its revision.
  * - The company careers page of browser B9 (tests/browser_pages/b9/) stays a source of its own
  *   and its posting is saved to the list.
  * - Pacing and caps: the site's requests are at least the pause apart (PAGE_PAUSE_S, 5 s) and
@@ -238,7 +240,7 @@ test("the websites end in words, the company page's posting is saved, nothing is
   await expect(
     sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
   ).toContainText(
-    "1 posting found, 0 new. Postings were read on this website, but saving them comes with a later update.",
+    "1 posting found, 0 new. The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
   );
   await expect(summary).not.toContainText(/[–—]| - /);
   await shots(page, "summary");
@@ -276,14 +278,15 @@ test("the websites end in words, the company page's posting is saved, nothing is
     });
   }
   // Her own website: searched through the finder's tools, the posting read and counted, not
-  // yet saved (J11).
+  // yet saved (J11). The click on the posting's Send application button was refused, and code
+  // records that refusal as the source's outcome.
   const own = sources.find((item) => item.kind === "custom");
   expect(own, detail).toMatchObject({
     mode: "llm_browser",
     host: SITE_HOST,
     found: 1,
     new: 0,
-    error: "finding_persistence_pending",
+    error: "unsupported_interaction",
   });
   expect(own?.result_pages ?? 0).toBeGreaterThanOrEqual(4);
   expect(own?.result_pages ?? 0).toBeLessThanOrEqual(PAGES_MAX);
@@ -292,7 +295,8 @@ test("the websites end in words, the company page's posting is saved, nothing is
   expect(company?.new ?? 0, detail).toBeGreaterThanOrEqual(1);
 
   // What the site saw: the person's words and place only, the posting reached by the second
-  // page of results, GET requests only, never the address the page asked for.
+  // page of results, GET requests only (the refused click sent no POST), never the address the
+  // page asked for.
   const seen = siteLog().slice(before);
   const paths = seen.map((item) => item.path);
   expect(paths).toEqual([
@@ -302,6 +306,7 @@ test("the websites end in words, the company page's posting is saved, nothing is
     "/j15/jobs/robot-engineer.html",
   ]);
   expect(seen.every((item) => item.method === "GET")).toBe(true);
+  expect(seen.some((item) => item.method === "POST")).toBe(false);
   expect(
     paths.some(
       (path) => path.includes("send") || /Send|application/i.test(path),

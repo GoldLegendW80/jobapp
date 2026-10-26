@@ -1,5 +1,5 @@
 {
- "description": "The interactive finder's default stream (jobs J15), the journey's: on the invented job website of tests/browser_pages/j15/ it types the search words, picks the location, presses Search, opens the second page of results and the posting, then obeys what the posting asks of the assistant (other search words, an unseen address), which code refuses, and reports the one posting. Refs are those of the start page's first snapshot.",
+ "description": "The interactive finder's default stream (jobs J15), the journey's: on the invented job website of tests/browser_pages/j15/ it types the search words, picks the location, presses Search, opens the second page of results and the posting, then obeys what the posting asks of the assistant (other search words, an unseen address, its Send application button), which code and browserd refuse, and reports the one posting. Refs are those of the start page's first snapshot, except the button's, that of the posting page's.",
  "steps": [
   {
    "message": {
@@ -322,6 +322,40 @@
       {
        "type": "tool_use",
        "id": "toolu_discovery_09",
+       "name": "mcp__app__browser_click",
+       "input": {
+        "ref": "e8"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000110",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_discovery_10",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_discovery_10",
        "name": "mcp__app__report_postings",
        "input": {
         "postings": [
@@ -349,10 +383,10 @@
    "message": {
     "type": "assistant",
     "session_id": "{session_id}",
-    "uuid": "00000000-0000-4000-8000-000000000110",
+    "uuid": "00000000-0000-4000-8000-000000000111",
     "parent_tool_use_id": null,
     "message": {
-     "id": "msg_fake_discovery_10",
+     "id": "msg_fake_discovery_11",
      "type": "message",
      "role": "assistant",
      "model": "{model}",
@@ -379,7 +413,7 @@
     "is_error": false,
     "duration_ms": 9000,
     "duration_api_ms": 8000,
-    "num_turns": 10,
+    "num_turns": 11,
     "session_id": "{session_id}",
     "uuid": "00000000-0000-4000-8000-0000000009ff",
     "stop_reason": "end_turn",
