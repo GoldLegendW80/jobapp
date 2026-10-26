@@ -59,7 +59,7 @@ for file in api/Dockerfile renderer/Dockerfile web/Dockerfile browser/Dockerfile
       ;;
     *) continue ;;
     esac
-    if [[ "$line" =~ (uv\ sync|pip\ install|pnpm\ install|playwright\ install) ]]; then
+    if [[ "$line" =~ (uv\ sync|pip\ install|pnpm\ install|playwright\ install|xcaddy\ build) ]]; then
       [[ "$line" == *"$MOUNT"* ]] || fail "$file downloads without the optional secret extra_ca: $line"
     fi
     [[ "$line" == *extra_ca* ]] || continue
@@ -71,8 +71,8 @@ for file in api/Dockerfile renderer/Dockerfile web/Dockerfile browser/Dockerfile
     fi
   done < <(instructions "$file")
 done
-[[ "$mounts" == 6 ]] || fail "expected 6 steps with extra_ca (api 3, renderer, web, browser), found $mounts"
-ok "the 6 steps that download (uv, pip, pnpm, Playwright) mount extra_ca as optional, check it was given and remove the joined bundle; no ENV, ARG, COPY or ADD names it"
+[[ "$mounts" == 7 ]] || fail "expected 7 steps with extra_ca (api 3, renderer, web 2, browser), found $mounts"
+ok "the 7 steps that download (uv, pip, pnpm, Playwright, xcaddy) mount extra_ca as optional, check it was given and remove the joined bundle; no ENV, ARG, COPY or ADD names it"
 
 # --- the step images of the gate ---------------------------------------------------------------
 # stack_files and s_images as ops/local-check.sh defines them, in a folder with a fake ci_env.sh.

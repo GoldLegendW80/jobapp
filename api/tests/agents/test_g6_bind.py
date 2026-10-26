@@ -248,7 +248,9 @@ def test_a_hook_that_raises_fails_the_run_as_an_internal_error(
         assert MARKER not in logged
     else:
         assert crashed[0].exc_info is not None  # the traceback, as before this task
-        assert MARKER in logged
+        # Its frames and type only: no message reaches a log line at all (issue #670).
+        assert ", in bind\nLookupError" in logged
+        assert MARKER not in logged
 
 
 def test_what_the_hook_answers_cannot_be_changed_afterwards(

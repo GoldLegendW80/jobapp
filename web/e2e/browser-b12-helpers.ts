@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 
 import { root } from "./stack";
 
-const RUN = `
+export const RUN = `
 import asyncio, json, sys, uuid
 from sqlalchemy import select
 from app.agents import tools as app_tools
@@ -73,7 +73,7 @@ export class AgentRun {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly lines: AsyncIterator<string>;
 
-  constructor(email: string, address: string) {
+  constructor(email: string, address: string, script: string = RUN) {
     const project = process.env.E2E_COMPOSE_PROJECT;
     if (!project)
       throw new Error("E2E_COMPOSE_PROJECT names the journey's own stack");
@@ -92,7 +92,7 @@ export class AgentRun {
         "worker",
         "python",
         "-c",
-        RUN,
+        script,
         email,
         address,
       ],
