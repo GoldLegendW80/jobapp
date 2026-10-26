@@ -35,6 +35,8 @@ export const sweepSourceSchema = z.object({
   new: z.number().int().nonnegative(),
   // Opportunities O8: what the never apply rules set aside; absent from an older api.
   skipped_by_rule: z.number().int().nonnegative().default(0),
+  // Parser exceptions only, absent from an older api.
+  items_skipped: z.number().int().nonnegative().default(0),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;
@@ -96,9 +98,12 @@ export type SweepList = z.infer<typeof sweepListSchema>;
 
 export const sweepsKey = ["jobs", "sweeps"] as const;
 
-export function startSweep(): Promise<Sweep> {
+export function startSweep(profileRevision?: number): Promise<Sweep> {
   return request("/jobs/sweeps", {
     method: "POST",
+    ...(profileRevision === undefined
+      ? {}
+      : { body: { profile_revision: profileRevision } }),
     timeoutMs: 15_000,
     validate: (data) => sweepSchema.parse(data),
   });

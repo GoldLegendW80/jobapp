@@ -223,6 +223,9 @@ async def _set_input(
         raise HTTPException(status.HTTP_409_CONFLICT, OWN_SESSION)
     try:
         holder = await store.client.live_input(lease.lease_id, viewer, giver)
+        # Mirror browserd's paused/resumed active clock, including an ignored foreign tab's
+        # Give back. The native owner remains browserd's decision.
+        await store.current(user_id)
     except BrowserError as exc:
         if exc.code == "refused":  # the lease ended in browserd meanwhile
             raise _forbidden() from None

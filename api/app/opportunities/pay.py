@@ -490,10 +490,14 @@ def pay_of(text: str | None, *, freelance: bool = False) -> Pay | None:
     return (fits or found or [None])[0]
 
 
-def pay_text(low: int, high: int, currency: str, period: str) -> str:
+def pay_text(low: int | Decimal, high: int | Decimal, currency: str, period: str) -> str:
     """The pay as the card says it: "45,000 to 55,000 EUR a year", "600 EUR a day"."""
     per = "an hour" if period == "hour" else f"a {period}"
-    figures = f"{low:,}" if low == high else f"{low:,} to {high:,}"
+
+    def figure(amount: int | Decimal) -> str:
+        return f"{int(amount):,}" if amount == int(amount) else f"{amount:,.2f}"
+
+    figures = figure(low) if low == high else f"{figure(low)} to {figure(high)}"
     return f"{figures} {currency} {per}"
 
 

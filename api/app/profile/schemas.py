@@ -765,13 +765,14 @@ class BrowserSource(_Section):
     """A job source read through the person's browser (browser B8, app/browser/sources): the
     words typed in the site's search box, and its location box when the site has one. B8 runs
     `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
-    finder agent), B10 `linkedin`. Off until the person turns it on.
+    finder agent), B10 `linkedin`. The `freework` entry stores O7b consent; its reader is a
+    separate slice. Off until the person turns it on.
 
-    A `linkedin` source (B10) also records the acceptance of the risk sentence: when
+    A protected source (`linkedin`, `freework`) records the risk sentence's acceptance: when
     (`accepted_at`, ISO 8601 with its offset) and which version (`text_version`), written by
-    PUT /api/browser/linkedin; the other kinds have neither."""
+    its dedicated consent route; the other kinds have neither."""
 
-    kind: Literal["google_careers", "vie", "site", "linkedin"]
+    kind: Literal["google_careers", "vie", "site", "linkedin", "freework"]
     query: Line
     location: OptLine = None
     enabled: bool = False
@@ -780,8 +781,36 @@ class BrowserSource(_Section):
 
     @model_validator(mode="after")
     def _acceptance(self) -> "BrowserSource":
-        if self.kind != "linkedin" and (self.accepted_at, self.text_version) != (None, None):
-            raise ValueError("only a linkedin source records an acceptance")
+        if self.kind not in ("linkedin", "freework") and (self.accepted_at, self.text_version) != (
+            None,
+            None,
+        ):
+            raise ValueError("only a protected browser source records an acceptance")
+        if (self.accepted_at is None) != (self.text_version is None):
+            raise ValueError("accepted_at and text_version go together")
+        if self.accepted_at is not None:
+            try:
+                when = datetime.fromisoformat(self.accepted_at)
+            except ValueError:
+                raise ValueError("accepted_at is not an ISO 8601 date and time") from None
+            if when.tzinfo is None:
+                raise ValueError("accepted_at needs its offset")
+        return self
+
+
+PlatformConsentKind = Literal["indeed", "welcome_to_the_jungle"]
+PLATFORM_CONSENT_KINDS = frozenset({"indeed", "welcome_to_the_jungle"})
+
+
+class PlatformConsent(_Section):
+    """Browser-owned permission, independent of a saved interactive selection."""
+
+    enabled: bool = False
+    accepted_at: Annotated[str, Field(max_length=40)] | None = None
+    text_version: Annotated[StrictInt, Field(ge=1, le=1000)] | None = None
+
+    @model_validator(mode="after")
+    def _acceptance(self) -> "PlatformConsent":
         if (self.accepted_at is None) != (self.text_version is None):
             raise ValueError("accepted_at and text_version go together")
         if self.accepted_at is not None:
@@ -925,6 +954,9 @@ class SearchSection(_Section):
     browser_sources: Annotated[list[BrowserSource], Field(max_length=10)] = Field(
         default_factory=list
     )
+    platform_consents: Annotated[
+        dict[PlatformConsentKind, PlatformConsent], Field(max_length=2)
+    ] = Field(default_factory=dict)
     interactive_sites: Annotated[list[InteractiveSite], Field(max_length=10)] = Field(
         default_factory=list
     )
@@ -985,10 +1017,11 @@ class SearchSection(_Section):
 
     @field_validator("browser_sources")
     @classmethod
-    def _one_linkedin(cls, value: list[BrowserSource]) -> list[BrowserSource]:
-        # The LinkedIn switch is one per person (browser B10): one entry holds it.
-        if sum(source.kind == "linkedin" for source in value) > 1:
-            raise ValueError("at most one linkedin source")
+    def _one_protected_source(cls, value: list[BrowserSource]) -> list[BrowserSource]:
+        # A protected switch is one per person: one entry holds each kind's consent.
+        for kind in ("linkedin", "freework"):
+            if sum(source.kind == kind for source in value) > 1:
+                raise ValueError(f"at most one {kind} source")
         return value
 
     @field_validator("interactive_sites")
@@ -1204,6 +1237,10 @@ def _stored_section(model: BaseModel) -> dict[str, Any]:
         for name in INTERACTIVE_FIELDS:
             if name not in model.model_fields_set:
                 data.pop(name)
+        # Stored only once a dedicated writer records a decision: the release before this one
+        # refuses the key, so an empty map would make every saved Search a rollback hazard.
+        if not data["platform_consents"]:
+            data.pop("platform_consents")
     return data
 
 
@@ -1428,6 +1465,10 @@ class ExportDocument(BaseModel):
     def to_json(self) -> str:
         """The file as written: indented UTF-8 JSON, the photo key omitted when there is none."""
         body = self.model_dump(mode="json", exclude={"base_revision"})
+        # Each section as stored: a search without the interactive keys keeps them out of the
+        # file, and so does one without a permission map (no map until a dedicated writer records
+        # a decision, so an export stays readable by older releases).
+        body["sections"] = self.stored_sections()
         if body["photo"] is None:
             del body["photo"]
         return json.dumps(body, ensure_ascii=False, indent=2) + "\n"
