@@ -40,6 +40,9 @@
 #   the stack to 5120m. The browser's 1024m is B1's measure (a Workday stand in with 3 tabs
 #   peaked at 499 MiB in the cgroup, 807 MiB of PSS), so its memory guard closes a tab at about
 #   920 MiB. (SPEC-platform.md, SPEC-documents.md "Rendering on the Jetson", SPEC-browser.md.)
+#   The optional mail profile adds a separately limited 128m provider: 5376m total, 256m above
+#   the unchanged 5120m target. These declared limits do not prove physical Jetson capacity;
+#   docs/mail-application-setup.md records the fixture measurement and pending acceptance.
 
 name: jobapp
 
@@ -49,7 +52,8 @@ x-restart: &restart
 services:
   caddy:
     <<: *restart
-    # Target `caddy` of web/Dockerfile: the React build baked into a caddy:2.x-alpine image.
+    # Target `caddy` of web/Dockerfile: the React build baked into a caddy:2.x-alpine image whose
+    # caddy is built with the free rate limit module (caddy-ratelimit, issue #152).
     build:
       context: ./web
       target: caddy
@@ -161,6 +165,30 @@ services:
     networks:
       - default
       - browsing
+      - mailmcp
+
+  # Gmail read transport, started only after the deployment checks its host firewall.
+  # No stack env_file, database, OAuth refresh token, or model credential.
+  gmailmcp:
+    profiles: [mail]
+    restart: "no"
+    image: jobapp-api:latest
+    command: ["python", "-m", "app.gmailmcp"]
+    environment:
+      APP_ENV: production
+      GMAIL_MCP_URL: http://gmailmcp:9400/mcp
+    networks: [mailmcp, gmail_egress]
+    mem_limit: 128m
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9400/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   # --- worker (jobs J5, agents A2) -----------------------------------------------------------
   # Queue consumer (app/worker.py): board sweeps and the users' sweep schedules, and Claude agent
@@ -205,6 +233,7 @@ services:
       - parsing
       - rendering
       - browsing
+      - mailmcp
   # --- end of worker --------------------------------------------------------------------------
 
   # --- parser (ingestion G2a; decision of the owner of 2026-10-10) ----------------------------
@@ -419,6 +448,9 @@ services:
       - "6379"
 
 networks:
+  mailmcp:
+    internal: true
+  gmail_egress: {}
   # The worker and the parser, and nothing else. internal: no gateway, so no route to another
   # network or to the internet, and Docker's resolver answers for this network's names only.
   parsing:

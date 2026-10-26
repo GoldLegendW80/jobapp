@@ -81,8 +81,19 @@ def test_the_summary_answer_names_the_counter() -> None:
         "found",
         "new",
         "skipped_by_rule",
+        "items_skipped",
         "error",
+        # Jobs J9: the frozen source identity and progress.
+        "source_id",
+        "mode",
+        "host",
+        "phase",
+        "action",
+        "outcome",
+        "reason",
     }
+    metadata = ("source_id", "mode", "host", "phase", "action", "outcome", "reason")
+    assert {key: body["sources"][0][key] for key in metadata} == dict.fromkeys(metadata)
 
 
 def test_the_web_has_words_for_every_feed_code() -> None:
@@ -121,3 +132,44 @@ def test_every_platform_has_a_one_line_reason_and_a_date() -> None:
         assert platform["reason"].strip()
         assert "\n" not in platform["reason"]
         datetime.strptime(platform["checked_on"], "%Y-%m-%d")
+
+
+@pytest.mark.parametrize("value", [None, "2", True, False, -1.5, [1], -1])
+def test_a_bad_parser_skip_count_reads_zero_without_changing_old_counters(value: Any) -> None:
+    out = sweep_router.sweep_out(
+        row([feed_entry("remoteok", items_skipped=value, found=-2, skipped_by_rule=-3)])
+    )
+    source = out.sources[0]
+    assert source.items_skipped == 0
+    assert (source.found, source.new, source.skipped_by_rule) == (-2, 2, -3)
+
+
+def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None:
+    body = sweep_router.sweep_out(
+        row([feed_entry("remoteok", items_skipped=2, skipped_by_rule=1, error="store_failed")])
+    ).model_dump(mode="json")
+    assert body["sources"][0] == {
+        "kind": "remoteok",
+        "query": "",
+        "location": None,
+        "result_pages": 0,
+        "found": 4,
+        "new": 2,
+        "skipped_by_rule": 1,
+        "items_skipped": 2,
+        "error": "store_failed",
+        # Jobs J9: the frozen source identity and progress, absent from an older stats row.
+        "source_id": None,
+        "mode": None,
+        "host": None,
+        "phase": None,
+        "action": None,
+        "outcome": None,
+        "reason": None,
+    }
+
+
+def test_old_and_browser_sources_default_to_no_parser_skips() -> None:
+    out = sweep_router.sweep_out(row([feed_entry("remoteok"), {"kind": "google_careers"}]))
+    assert [source.items_skipped for source in out.sources] == [0, 0]
+    assert sweep_router.sweep_out(row([])).sources == []

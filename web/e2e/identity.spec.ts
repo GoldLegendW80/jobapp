@@ -41,7 +41,7 @@ const prefix = (process.env.E2E_SHOT_PREFIX ?? "").replace(
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
  *     E2E_SHOT_PREFIX=jetson- pnpm --dir web exec playwright test identity.spec.ts
  * The link then comes from `./deploy.sh admin create <email>`, which prints the public link.
- * Remove the test account afterwards (README, Accounts).
+ * Remove the test account afterwards (docs/runbooks/accounts.md).
  *
  * Run it on its own, not next to caddy.spec.ts, which stops the database while it runs.
  */

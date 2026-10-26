@@ -70,6 +70,7 @@ def test_default_fake_stream_names_real_native_fields_and_submit() -> None:
         "Phone",
         "Resume",
         "How did you hear about us?",
+        "Summary",
     ]
     (designated,) = [
         call["input"]["ref"] for call in calls if call["name"] == "mcp__app__designate_submit"

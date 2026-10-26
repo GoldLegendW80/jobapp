@@ -31,7 +31,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # extra_ca: a bundle pip trusts beside the image's own, given only behind a TLS inspecting proxy
-# (README); the apt step above reads deb.debian.org over http and needs none.
+# (docs/runbooks/develop-new-machine.md); the apt step above reads deb.debian.org over http and needs none.
 RUN --mount=type=secret,id=extra_ca,required=false \
     if [ -s /run/secrets/extra_ca ]; then \
       cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \

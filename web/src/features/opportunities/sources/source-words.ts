@@ -83,11 +83,12 @@ export function setAsideByRules(count: number): string {
     : `${count.toLocaleString("en-GB")} postings were set aside by your roles to never apply for.`;
 }
 
-/** A feed's line in a sweep's summary: found, new, set aside by the rules, and why it stopped. */
+/** A feed's summary: found, new, rule skips, parser failures, and why it stopped. */
 export function feedLine(source: {
   found: number;
   new: number;
   skipped_by_rule: number;
+  items_skipped: number;
   error: string | null;
 }): string {
   const found = source.found.toLocaleString("en-GB");
@@ -95,6 +96,9 @@ export function feedLine(source: {
   return [
     counts,
     setAsideByRules(source.skipped_by_rule),
+    source.items_skipped > 0
+      ? `${source.items_skipped.toLocaleString("en-GB")} feed ${source.items_skipped === 1 ? "item could not be read and was" : "items could not be read and were"} skipped.`
+      : "",
     source.error ? feedProblem(source.error) : "",
   ]
     .filter(Boolean)

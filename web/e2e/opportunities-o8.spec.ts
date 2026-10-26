@@ -205,6 +205,9 @@ test("A adds a mission by hand and finds it in Discover", async () => {
 test("A finds jobs: the feed is listed apart, in plain words, and links back", async () => {
   await pageA.goto("/jobs");
   await pageA.getByRole("button", { name: "Find jobs" }).click();
+  const setup = pageA.getByRole("dialog", { name: "Find jobs setup" });
+  await expect(setup).toBeVisible();
+  await setup.getByRole("button", { name: "Save and Start" }).click();
   const summary = pageA.getByRole("dialog", { name: /new postings? found/ });
   await expect(summary).toBeVisible({ timeout: 90_000 });
   const feeds = summary.getByRole("region", {

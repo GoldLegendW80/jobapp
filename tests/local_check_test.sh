@@ -9,6 +9,16 @@
 # With a Docker daemon it also starts a container, a volume and a bystander container to show
 # what the cleanup removes and what it leaves; without one that part is skipped and says so.
 set -euo pipefail
+# The caller's gate settings must not reach the gates this file starts: a gate run with
+# LOCAL_CHECK_FULL=1 ran these tests with every journey group instead of the scoped plan.
+unset LOCAL_CHECK_FULL LOCAL_CHECK_STUB LOCAL_CHECK_STACKS LOCAL_CHECK_JOURNEY_SHARDS \
+  LOCAL_CHECK_VITEST_WORKERS LOCAL_CHECK_MIN_FREE_GB LOCAL_CHECK_STEP_TIMEOUT \
+  LOCAL_CHECK_INT_GRACE LOCAL_CHECK_NET_BASE
+
+# The enclosing gate's settings are not defaults for these throwaway scenarios.
+# Each scenario can still set its own values after this boundary.
+unset LOCAL_CHECK_FULL LOCAL_CHECK_INT_GRACE LOCAL_CHECK_JOURNEY_SHARDS LOCAL_CHECK_MIN_FREE_GB \
+  LOCAL_CHECK_NET_BASE LOCAL_CHECK_STACKS LOCAL_CHECK_STEP_TIMEOUT LOCAL_CHECK_STUB LOCAL_CHECK_VITEST_WORKERS
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
@@ -649,7 +659,7 @@ grep -qE 'build api worker caddy renderer browser$' "$ROOT/ops/local-check.sh" |
 ok "the docker marked tests use the images the check built (worker, renderer, browser), else their own, on -n 2 by file"
 
 # --- the networks of the journey stacks: subnets of their own (issue #280) -------------------------
-# Twelve stacks claim slots: their 60 networks get distinct /27 subnets of 10.213.0.0/16, outside
+# Twelve stacks claim slots: their 84 networks get distinct /27 subnets of 10.213.0.0/16, outside
 # Docker's predefined pools, and a slot freed by a stack that ended is taken again.
 cat >"$WORK/nets.sh" <<'EOF'
 docker() { return 0; } # no network of the daemon is in use
@@ -667,10 +677,10 @@ stub_plan() {
 EOF
 run 0 env LOCAL_CHECK_STUB="$WORK/nets.sh" "$CHECK" --only checks
 subnets="$(sed -n 's/^ *- subnet: //p' "$STUB_CALLS.nets")"
-[[ "$(wc -l <<<"$subnets" | tr -d ' ')" == 60 ]] || fail "not five subnets per stack: $subnets"
-[[ "$(sort -u <<<"$subnets" | wc -l | tr -d ' ')" == 60 ]] || fail "two networks share a subnet: $(sort <<<"$subnets" | uniq -d)"
+[[ "$(wc -l <<<"$subnets" | tr -d ' ')" == 84 ]] || fail "not seven subnets per stack: $subnets"
+[[ "$(sort -u <<<"$subnets" | wc -l | tr -d ' ')" == 84 ]] || fail "two networks share a subnet: $(sort <<<"$subnets" | uniq -d)"
 if grep -vE '^10\.213\.([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9])\.0/27$' <<<"$subnets"; then fail "a subnet outside 10.213.0.0/16"; fi
-[[ "$(grep -c '^  [a-z]*:$' "$STUB_CALLS.nets")" == 60 ]] || fail "the overrides do not name the five networks of each stack"
+[[ "$(grep -c '^  [a-z_]*:$' "$STUB_CALLS.nets")" == 84 ]] || fail "the overrides do not name the seven networks of each stack"
 [[ "$(cat "$STUB_CALLS.reused")" == 3 ]] || fail "a freed slot was not taken again: $(cat "$STUB_CALLS.reused")"
 ok "each journey stack's networks get /27 subnets of their own out of 10.213.0.0/16, a freed slot is reused"
 
@@ -713,7 +723,7 @@ stub_plan() {
   find "$WORK/nets" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ' >"$STUB_CALLS.nets"
 }
 EOF2
-NET0=10.213.0.0/27 NET1=10.213.5.0/27
+NET0=10.213.0.0/27 NET1=10.213.7.0/27
 subnets_up() { grep '^up ' "$STUB_CALLS" | awk '{print $2}' | tr '\n' ' '; }
 nets_left() { cat "$STUB_CALLS.nets"; }
 
@@ -760,7 +770,7 @@ run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="172.17.0.0/16 $NET0" "
 [[ "$(subnets_up)" == "$NET1 $NET1 " ]] || fail "10.213.0.0/27 in use: subnets $(subnets_up), expected slot 1 twice"
 : >"$STUB_CALLS"
 run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="$NET0 10.213.9.0/27 192.168.0.0/20" "$CHECK" --only journeys
-[[ "$(subnets_up)" == "10.213.10.0/27 10.213.10.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
+[[ "$(subnets_up)" == "10.213.14.0/27 10.213.14.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
 ok "a slot whose subnets a network already holds is skipped, and Pool overlaps moves the stack to another slot, three starts at most"
 
 # A shard and its run again, with the same fake docker: each its own compose project, stack log and
@@ -1290,6 +1300,11 @@ done
 printf 'URL = "x"\n' >"$REPO/api/app/db.py"
 printf 'from app import db\n' >"$REPO/api/app/mail/__init__.py"
 printf 'from app import db\n' >"$REPO/api/app/apply/__init__.py"
+# The shared web pages the api reader reads (ci_plan.py WEB_SHARED_PAGES), calling nothing.
+while IFS= read -r page; do
+  mkdir -p "$(dirname "$REPO/$page")"
+  : >"$REPO/$page"
+done < <(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import ci_plan; print("\n".join(ci_plan.WEB_SHARED_PAGES))' "$ROOT/.github/scripts")
 printf 'notes\n' >"$REPO/.claude/notes.md"
 git -C "$REPO" add -A
 git -C "$REPO" commit -q -m "mapped"
@@ -1378,13 +1393,14 @@ out_lacks "journeys-apply"
 ok "a change in one web feature runs only its groups"
 
 scoped 0 --merge origin/scope-api
-out_has "journeys: full (api/app/mail/sync.py: API application changes run every group), ran apps, apply, mail, sweep"
-[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "API application path narrowed journeys"
+out_has "journeys: scoped, ran mail; skipped apps, apply, sweep"
+out_has "  run   mail             api/app/mail/sync.py: the api module mail"
+[[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply sweep | scoped" ]] || fail "one api module: $(journeys_of "$(tree_of)")"
 changes_match "$(tree_of)"
-ok "an API application change runs every group and records its policy and exact change metadata"
+ok "a change in one api module runs only its groups and records exact change metadata"
 
 scoped 0 --merge origin/scope-shared
-out_has "journeys: full (api/app/db.py: API application changes run every group), ran apps, apply, mail, sweep"
+out_has "journeys: full (api/app/db.py: a shared file of the api), ran apps, apply, mail, sweep"
 scoped 0 --merge origin/scope-unknown
 out_has "journeys: full (somewhere/new.txt: no rule names this path), ran apps, apply, mail, sweep"
 [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "unknown path: $(journeys_of "$(tree_of)")"

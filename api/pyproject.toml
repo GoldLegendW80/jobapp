@@ -15,13 +15,14 @@ dependencies = [
     # build in the images. Since 47.0.0 that OpenSSL dies with SIGILL at import inside Docker on
     # Apple silicon with SME (the M4 Mac; reproduced with 50.0.2 on 2026-10-10), so the api and
     # worker get OPENSSL_armcap=0 there, from compose.dev.yml or compose.mac.yml, and never from
-    # compose.yml: the Jetson (Cortex-A78AE, no SVE or SME) keeps hardware AES (README,
+    # compose.yml: the Jetson (Cortex-A78AE, no SVE or SME) keeps hardware AES (docs/runbooks/development-on-the-mac.md,
     # "Apple silicon"; tests/test_openssl_armcap.py guards it).
     "cryptography==50.0.2",
     "email-validator==2.3.0",
     "fastapi==0.142.4",
     "httpx==0.28.1",
     "jinja2==3.1.6",
+    "mcp==2.3.0",
     "pillow==12.3.0",
     # Also in the api (documents D6): page 1 of a rendered CV as a PNG for phones and cards
     # (render_client.page1_png, GET .../versions/{n}/page1.png), from a PDF the app's own
@@ -73,7 +74,7 @@ ingestion = [
     # Apache-2.0, dependency licenses", no dependency, a py3-none wheel for
     # manylinux_2_17_aarch64 (3,719,672 bytes: the Jetson) and for macosx_13_0_arm64, no
     # advisory on either. The wheel bundles PDFium itself: after a PDFium security release,
-    # take the pypdfium2 release that carries it (README, "Updating pypdfium2").
+    # take the pypdfium2 release that carries it (docs/runbooks/updating-pypdfium2.md).
     "pypdfium2==5.14.0",
     # The HTML of a mail, sanitised against an allow list (mail M3, sandbox/mail_html.py): the
     # Python binding of the Rust library ammonia. Checked on PyPI and on OSV on 2026-10-14:
