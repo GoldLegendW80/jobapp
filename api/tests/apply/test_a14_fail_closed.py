@@ -131,6 +131,116 @@ NOTHING = [
 ]
 
 
+# Round 4 (review on a79718b8): the global rule. A sentence anywhere with a negation and an
+# e-mail word makes every instructed address unsure, above, below or far from the instruction.
+GLOBAL = [
+    "UPDATE: we no longer accept applications by email, please use the Apply button.\n\n"
+    f"Send your CV and cover letter to {A}.",
+    f"UPDATE: WE NO LONGER ACCEPT APPLICATIONS BY EMAIL.\n\nSEND YOUR CV TO {A}",
+    f"We do not accept applications by email.\n\nSend your CV to {A}",
+    f"Applications by email are not accepted.\n\nSend your CV to {A}",
+    f"Applications by e-mail are no longer read.\n\nSend your CV to {A}",
+    f"Les candidatures par mail ne sont plus acceptées.\n\nEnvoyez votre CV à {A}",
+    f"Nous n'acceptons plus les candidatures par e-mail.\n\nEnvoyez votre CV à {A}",
+    f"Candidatures par courriel refusées.\n\nEnvoyez votre CV à {A}",
+    f"Aucune candidature par adresse électronique.\n\nEnvoyez votre CV à {A}",
+    f"Send your CV to {A}\n\nUpdate: applications by email are no longer accepted, use the form.",
+    f"Send your CV to {A}.\n\nAbout us\n\nWe build robots.\n\nBenefits\n\n- Lunch\n- Gym\n\n"
+    "Note: emailed applications will be ignored.",
+    "Requirements\n- Python\n- Please do not email the team\n\n"
+    f"How to apply\n\nSend your CV to {A}",
+    f"Envoyez votre CV à {A}\n\nMise à jour : les mails ne sont plus lus.",
+    f"Send your CV to {A}\n\nBewerbungen per E-Mail werden nicht berücksichtigt.",
+    f"Send your CV to {A}\n\nBitte keine Bewerbungen per Mail.",
+    f"Send your CV to {A}\n\nSollicitaties per e-mail worden niet gelezen.",
+    f"Send your CV to {A}\n\nGeen sollicitaties per mail.",
+]
+
+# Case: the same address with another case is the same address.
+CASES = [
+    "Send your CV to E2E-Jobs@example.org.\n\nPlease do not e-mail e2e-jobs@example.org.",
+    "Send your CV to e2e-jobs@example.org.\n\nPlease do not contact E2E-JOBS@example.org.",
+    "Please do not contact E2E-Jobs@Example.org.\n\nSend your CV to e2e-jobs@example.org",
+]
+
+# Round 4 follow ups: a heading two levels up, pasted HTML, German and Dutch negations.
+HEADINGS_AND_HTML = [
+    f"No email applications\n\nSend your CV to {A}",
+    f"How NOT to apply\n\nBy email\n\nSend your CV to {A}",
+    f"## What we do not accept\n\n### Email\n\nSend your CV to {A}",
+    f"# Do not apply this way\n\n## Contact\n\nWe read everything.\n\nSend your CV to {A}",
+    f"<p>Please do not:</p>\n\n<ul>\n\n<li>send your CV to {A}</li>",
+    f"<p>Please do not:</p><ul><li>call us</li><li>send your CV to {A}</li></ul>",
+    f"<h2>How not to apply</h2>\n\n<p>Send your CV to {A}</p>",
+    f"Bitte nicht:\n- send your CV to {A}",
+    f"Keine Agenturen. Send your CV to {A}",
+    f"Niet doen:\n- send your CV to {A}",
+    f"Geen bureaus. Send your CV to {A}",
+]
+
+# Still usable: a negation without an e-mail word elsewhere, an invitation, an address in a
+# word, a heading that does not negate.
+GLOBAL_TRUE = [
+    f"No agencies please.\n\nSend your CV to {A}",
+    f"We do not sponsor visas.\n\nApply by email to {A}",
+    f"Do not hesitate to email us.\n\nSend your CV to {A}",
+    f"N'hésitez pas à nous envoyer un mail.\n\nEnvoyez votre CV à {A}",
+    f"No remote work.\n\nPostulez par mail à {A}",
+    f"## About us\n\n### How to apply\n\nSend your CV to {A}",
+    f"<p>How to apply</p>\n<p>Send your CV to <b>{A}</b></p>",
+    f"<p>Send your CV to &lt;{A}&gt;</p>",
+    f"Send your CV to {A}.\n\nJane, e2e-no@example.org",
+]
+
+
+@pytest.mark.parametrize("text", GLOBAL + HEADINGS_AND_HTML)
+def test_round4_a_negation_anywhere_about_email_makes_every_address_unsure(text):
+    assert email.read(text) == email.Reading((), (A,))
+
+
+@pytest.mark.parametrize("text", CASES)
+def test_round4_addresses_are_compared_casefolded(text):
+    reading = email.read(text)
+    assert reading.usable == ()
+    assert [v.casefold() for v in reading.unsure] == [A]
+
+
+@pytest.mark.parametrize("text", GLOBAL_TRUE)
+def test_round4_a_negation_without_an_email_word_elsewhere_stays_out_of_scope(text):
+    assert email.read(text).usable == (A,)
+
+
+def test_round4_mutation_without_the_global_rule_the_far_sentences_turn_usable(monkeypatch):
+    """The GLOBAL rows are refused by the global rule alone: switched off, each turns usable."""
+    monkeypatch.setattr(email, "_forbids_email", lambda paragraphs: False)
+    for text in GLOBAL:
+        assert email.read(text).usable == (A,), text
+
+
+def test_round4_an_unsure_posting_keeps_apply_myself_on_the_form(db, person_a):
+    """The global rule leaves nothing usable, so Apply myself is not refused with
+    email_manual: the posting keeps its form."""
+    application = _start(db, person_a, GLOBAL[0], Mode.manual)
+    assert application.ats == "other"
+
+
+def test_round4_full_auto_hands_the_global_rule_over_and_never_emails(db, person_a):
+    turn_on(db, person_a, done=3)
+    application = _start(db, person_a, GLOBAL[0], Mode.full_auto)
+    email.prepare(db, application.id, AT)
+    db.commit()
+    assert application.mode is Mode.review
+    codes = db.scalars(
+        sa.select(ApplicationEvent.data["code"].astext).where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.kind == "sent_to_review",
+        )
+    ).all()
+    assert codes == ["email_unsure"]
+    row = _email_to(db, application)
+    assert (row.value, row.source, row.options) == (None, AnswerSource.left, [A])
+
+
 @pytest.mark.parametrize("text", BLOCKS + PROHIBITIONS + UNICODE)
 def test_a_negated_block_makes_the_address_unsure(text):
     reading = email.read(text)
