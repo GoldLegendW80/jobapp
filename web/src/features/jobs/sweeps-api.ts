@@ -35,6 +35,8 @@ export const sweepSourceSchema = z.object({
   new: z.number().int().nonnegative(),
   // Opportunities O8: what the never apply rules set aside; absent from an older api.
   skipped_by_rule: z.number().int().nonnegative().default(0),
+  // Parser exceptions only, absent from an older api.
+  items_skipped: z.number().int().nonnegative().default(0),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

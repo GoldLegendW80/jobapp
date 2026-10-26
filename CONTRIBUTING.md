@@ -37,8 +37,8 @@ in the job folder that holds this repository (it is not part of the repository).
    guards, the e2e groups apps, ingestion and mail) and `journeys` (eslint, tsc, build, Vitest, the
    e2e groups identity and sweep; every e2e group against its own scratch Compose stack).
    `ci.yml` stays the definition of those steps and starts by hand only
-   (`gh workflow run ci.yml --ref <branch>`, with a runner started: README, CI runners on the
-   Mac). The batch check reads two lists from the `ci.yml` of the tree it checks: the files of
+   (`gh workflow run ci.yml --ref <branch>`, with a runner started: docs/runbooks/ci-runners-mac.md).
+   The batch check reads two lists from the `ci.yml` of the tree it checks: the files of
    the Shellcheck step and the `tests/*_test.sh` steps. So a new `tests/*_test.sh` gets a step
    in `ci.yml`, and a new shell script joins the Shellcheck step. A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
@@ -60,8 +60,24 @@ in the job folder that holds this repository (it is not part of the repository).
    runs only the groups its changed files touch, the files of the merged tree against the main it
    starts from. `python3 .github/scripts/ci_plan.py journeys` decides, from the tree it checks:
    documentation, task notes, Claude Code configuration, operations scripts and shell tests run
-   no group; every change under `api/app/` runs every group, including assets, new modules and
-   deleted paths. Python imports and registration dependencies are not inferred. A web feature
+   no group; a file under `api/app/` runs the groups of its module (`API_AREAS`: apply runs
+   apply, browser and opportunities; browser runs apply and browser, the stacks that start the
+   browser service; documents apply, documents and opportunities; ingestion documents,
+   ingestion and opportunities; mail and opportunities their own; identity, profile,
+   jobs, agents and the onboarding gate every group) and those of every api file that imports
+   it, read from the Python imports (main.py and worker.py are wiring), the reviewed loaders
+   (`API_LOADERS`) and the hooks a file registers a callback with. Every group runs for the
+   shared api files (`app/*.py`, worker.py included), a module's `__init__.py`, the models, a
+   worker registration module and what it imports (save `SCOPED_REGISTRATIONS`), assets other
+   than an agent's fake streams, deleted paths, and any dynamic import the reader cannot follow.
+   Every group also runs for an api file whose routes a page that journeys of many groups open
+   calls (`WEB_SHARED_PAGES`: the shell, the sign in and onboarding, the job list and page, the
+   profile, the account page), read from the request paths of each page and the web files it
+   imports, matched against the routes the api files declare; and for a file main.py runs beyond
+   the wiring (a middleware, the 500 handler, what the start builds) with what that code reaches.
+   The web is read file by file, so a page that imports an api client file counts every route of
+   it: most route files of apply, browser, documents and ingestion run every group today.
+   `browser/Dockerfile` runs apply and browser, `renderer/Dockerfile` documents and apply. A web feature
    (`web/src/features/<feature>/`) runs its groups (`AREA_GROUPS`) and those of every feature
    that imports the file, read from the imports file by file; a spec or a group config runs its
    own group; anything shared or unknown runs every group: identity, auth, jobs, profile, agents
@@ -93,7 +109,7 @@ in the job folder that holds this repository (it is not part of the repository).
    TypeScript parser: template interpolation and ambiguous syntax force full. Runtime test data
    mounted by the gate's compose files or read by journeys has explicit group rules. Worker registration providers and
    their dependencies run every group because callbacks can affect modules that do not import them.
-   API changes deliberately run all journeys. Conservative JSX slash handling also causes full
+   Conservative JSX slash handling also causes full
    fallback for current web source changes. The synthetic web fixtures demonstrate narrower
    supported cases.
    The first real gate of this change must use `LOCAL_CHECK_FULL=1`; fixture results are not a
@@ -215,21 +231,20 @@ in the job folder that holds this repository (it is not part of the repository).
    Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
    `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,
    a stopped or missing one counts, `alembic current` at head, memory, no error line in the last
-   10 minutes, JSON `"level": "error"` lines included, a running browser healthy; README,
-   "Deploy from any machine"). The last line is `SHIP: OK`,
+   10 minutes, JSON `"level": "error"` lines included, a running browser healthy; docs/runbooks/deploy-from-any-machine.md). The last line is `SHIP: OK`,
    `SHIP: PLAN, nothing was done`, `SHIP: NOTHING TO SHIP` or `SHIP: FAIL <reason>` (exit 1);
    the gate and deploy logs of the last 10 runs stay in `.local-check/ship/`.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
    tree has no PASS record, and a commit that is not on `origin/main`. Then it starts
    `.github/workflows/deploy.yml` on the Jetson's own runner for the full sha
    (`gh workflow run deploy.yml -f ref=<sha>`), waits for that run, prints its conclusion and
-   asks the public health URL (README, Continuous delivery). Nothing deploys by itself any
+   asks the public health URL (docs/runbooks/continuous-delivery.md). Nothing deploys by itself any
    more: the deploy workflow has no trigger but the dispatch. `--dry-run` says what it would
    start.
 
 `main` is always deployable: nothing is pushed to it directly, and a `main` whose check fails is fixed first.
 
-The Mac's CI runners (`ops/ci-runners.sh`, README, CI runners on the Mac) are optional and
+The Mac's CI runners (`ops/ci-runners.sh`, docs/runbooks/ci-runners-mac.md) are optional and
 stopped by default since issue #116. They serve a run of `ci.yml` started by hand, and nothing
 else: `ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`, then
 `gh workflow run ci.yml --ref <branch>`. A job that never starts ("Waiting for a runner") means

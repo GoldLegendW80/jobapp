@@ -51,6 +51,14 @@ class ManualForm(RunForm):
         self.chooser = False
         self.sent = False
         self.answered: list[list[str]] = []
+        # browserd's rule (tools/routes.py PERSON_TIME): an upload runs during the app's turn
+        # only; manual_services links it to the fake live input.
+        self.app_turn: Callable[[], bool] = lambda: True
+
+    async def upload(self, ref: str, names: list[str], element: str = "") -> dict[str, Any]:
+        if not self.app_turn():
+            return {"ok": False, "error": "person_input"}
+        return await super().upload(ref, names, element)
 
     async def call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         args = args or {}
@@ -58,11 +66,21 @@ class ManualForm(RunForm):
             self._log("watch", passive=args.get("passive"))
             if self.sent:
                 return {"ok": True, "url": self.url, "snapshot": CONFIRMED}
-            return {"ok": True, "url": self.url, "snapshot": self.render(), "chooser": self.chooser}
+            return {
+                "ok": True,
+                "url": self.url,
+                "snapshot": self.render(),
+                "chooser": self.chooser,
+                "chooser_id": 1 if self.chooser else None,
+            }
         if name == "browser_file_upload" and "ref" not in args:
             self._log("chooser", paths=args["paths"])
+            if not self.app_turn():
+                return {"ok": False, "error": "person_input"}
             if not self.chooser:
                 return {"ok": False, "error": "no_chooser"}
+            if args.get("chooser_id") != 1:
+                return {"ok": False, "error": "chooser_changed"}
             self.chooser = False
             self.answered.append(list(args["paths"]))
             return {"ok": True}
@@ -155,7 +173,9 @@ def manual_services(
         stub_base=stub,
     )
     channel.factory = factory
-    return manual.Services(fill, channel, browser or FakeBrowser())
+    browser = browser or FakeBrowser()
+    form.app_turn = lambda: browser.inputs[-1:] == ["app"]
+    return manual.Services(fill, channel, browser)
 
 
 def start_manual(db: Session, person: Person) -> uuid.UUID:
@@ -202,9 +222,10 @@ def test_the_person_attaches_the_cv_submits_and_records_it(
     channel = FakeChannel(
         ["attach_cv", sent, None, lambda: record(factory, person_a, app_id, True)]
     )
-    assert session(manual_services(factory, form, channel, leases=leases, stub=stub), app_id) == (
-        "submitted"
-    )
+    browser = FakeBrowser()
+    svc = manual_services(factory, form, channel, browser=browser, leases=leases, stub=stub)
+    assert session(svc, app_id) == "submitted"
+    assert browser.inputs == ["app", "person"]  # the attach claimed the app's turn, gave it back
 
     assert leases.acquired[0]["purpose"] == "apply_manual"
     assert leases.acquired[0]["automation"] is True
@@ -579,8 +600,10 @@ def test_a_chooser_the_person_opened_is_answered_with_the_document_named(
         form.chooser = True
 
     channel = FakeChannel([opened, None, "attach_letter"])
-    session(manual_services(factory, form, channel, stub=stub), app_id)
+    browser = FakeBrowser()
+    session(manual_services(factory, form, channel, browser=browser, stub=stub), app_id)
     assert form.answered == [["letter.pdf"]]
+    assert browser.inputs == ["app", "person"]
     assert any(s.get("chooser") for s in channel.statuses)
     assert form.spec("Cover letter").value == ""  # through the chooser, not an input of the form
 

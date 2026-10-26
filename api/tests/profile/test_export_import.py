@@ -30,6 +30,7 @@ from app.profile.schemas import (
     PHOTO_MAX_BYTES,
     SECTION_MODELS,
     SECTIONS,
+    validate_section,
 )
 from tests.identity.api_helpers import Api, Clock, make_user
 from tests.profile import images
@@ -74,10 +75,9 @@ def document(sections: dict[str, Any] | None = None, **extra: Any) -> dict[str, 
 
 
 def empty_sections() -> dict[str, Any]:
-    sections = {name: model().model_dump(mode="json") for name, model in SECTION_MODELS.items()}
-    # No permission map is stored or exported until a dedicated writer records a decision.
-    del sections["search"]["platform_consents"]
-    return sections
+    """Each section in its empty stored form. No permission map is stored or exported until a
+    dedicated writer records a decision (validate_section drops an empty one)."""
+    return {name: validate_section(name, {}) for name in SECTION_MODELS}
 
 
 def export(api: Api, token: str) -> dict[str, Any]:
@@ -162,7 +162,13 @@ def test_export_keys_follow_the_model_order_not_jsonb_order(api: Api, alice: str
     import_ok(api, alice, document())
     sections = export(api, alice)["sections"]
     for name in SECTIONS:
-        assert list(sections[name]) == list(empty_sections()[name])
+        # The map of permissions is stored only once a dedicated writer records a decision.
+        expected = [
+            field
+            for field in SECTION_MODELS[name].model_fields
+            if (name, field) != ("search", "platform_consents")
+        ]
+        assert list(sections[name]) == expected
 
 
 # --- round trip ---------------------------------------------------------------------------------

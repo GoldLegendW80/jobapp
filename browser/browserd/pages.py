@@ -14,6 +14,7 @@
 import contextlib
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
 from browserd.config import NAVIGATION_S
@@ -161,13 +162,23 @@ async def front(page: Any) -> Any:
     return page
 
 
-async def navigate(page: Any, url: str, timeout_s: float = NAVIGATION_S) -> dict[str, Any]:
+async def navigate(
+    page: Any,
+    url: str,
+    timeout_s: float = NAVIGATION_S,
+    *,
+    before_input: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     """Navigates the tab (brought to the front first) and waits for `load`, at most timeout_s.
     Past it, or on a network error, the page is stopped and a failure result is returned."""
     from playwright.async_api import Error
     from playwright.async_api import TimeoutError as PlaywrightTimeout
 
+    if before_input is not None:
+        before_input()
     await front(page)
+    if before_input is not None:
+        before_input()
     try:
         response = await page.goto(url, wait_until="load", timeout=timeout_s * 1000)
     except PlaywrightTimeout:
