@@ -423,3 +423,34 @@ describe("documents-api", () => {
     await expect(api.getConsent()).rejects.toThrow();
   });
 });
+
+describe("the separate capture read contract", () => {
+  it("defaults an older response to idle without changing content generation", () => {
+    const older = { ...fakeCv() };
+    Reflect.deleteProperty(older, "design_generation");
+    const decoded = api.baseCvSchema.parse(older);
+    expect(decoded).toHaveProperty("design_generation", null);
+    expect(decoded.generation).toEqual(older.generation);
+  });
+
+  it.each(api.GENERATION_STATUSES)(
+    "accepts the capture status %s independently",
+    (status) => {
+      const capture = { ...generation, status };
+      expect(
+        api.baseCvSchema.parse({ ...cv, design_generation: capture }),
+      ).toHaveProperty("design_generation", capture);
+    },
+  );
+
+  it.each([
+    {},
+    { ...generation, status: "unknown" },
+    { ...generation, wait_reason: "private" },
+    "queued",
+  ])("refuses a malformed present capture %j", (capture) => {
+    expect(
+      api.baseCvSchema.safeParse({ ...cv, design_generation: capture }).success,
+    ).toBe(false);
+  });
+});

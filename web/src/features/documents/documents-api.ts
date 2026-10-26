@@ -176,6 +176,8 @@ export const baseCvSchema = z.object({
   render_state: renderStateSchema,
   /** The open one, else the last one. */
   generation: generationSchema.nullable(),
+  /** Design capture is independent of content conversion; old responses have none. */
+  design_generation: generationSchema.nullable().default(null),
 });
 export type BaseCv = z.infer<typeof baseCvSchema>;
 
