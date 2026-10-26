@@ -37,7 +37,6 @@ const BROWSER_KIND_LABELS: Record<
   vie: "Business France VIE",
   site: "Company site (coming later)",
   linkedin: "LinkedIn (coming later)",
-  freework: "Free-Work",
 };
 
 const runnable = (kind: string) =>
