@@ -242,14 +242,17 @@ def test_a_held_full_auto_item_on_linkedin_is_stopped_before_the_click(
     written, form = job(factory, stub, app_id, AT + HOLD)
     assert (written, form.gate_clicks) == ("linkedin_paused", [])
     found = application(db, app_id)
-    assert (found.state, found.error_code) == (State.blocked, "linkedin_paused")
+    assert (found.state, found.mode, found.error_code) == (
+        State.ready,
+        Mode.review,
+        "linkedin_paused",
+    )
 
 
-def test_full_auto_never_clicks_on_linkedin_before_a16_even_when_allowed(
+def test_full_auto_on_allowed_linkedin_is_held_before_the_click(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
-    """LinkedIn accepted and on, no pause: the guard lets it through, but Full auto's own
-    sources (Ashby, Greenhouse, Lever) still keep the item from a click until A16."""
+    """LinkedIn accepted and on, no pause: A16 supports the source with the normal hold."""
     from tests.apply.test_a13_full_auto import HOUR, filled, job, turn_on
 
     turn_on(db, person_a)
@@ -258,8 +261,8 @@ def test_full_auto_never_clicks_on_linkedin_before_a16_even_when_allowed(
     switch(factory, person_a)
     written, form = job(factory, stub, app_id, AT + HOUR)
     assert form.gate_clicks == []
-    assert written == "unsupported_source"
-    assert application(db, app_id).state is not State.held
+    assert written == "held"
+    assert application(db, app_id).state is State.held
 
 
 @pytest.mark.parametrize(

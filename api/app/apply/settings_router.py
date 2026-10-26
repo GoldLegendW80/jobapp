@@ -15,7 +15,9 @@
 - GET /api/apply/caps: the person's company caps with what each counts now, and `revision`, the
   hash of the list shown. PUT replaces the whole list if `revision` is still the stored one (else
   409 `stale`); 422 `no_company` or `same_company` for a list that cannot be saved.
-- GET /api/apply/answer-bank: the person's saved answers. PUT `{question_key, answer}` changes one
+- GET /api/apply/answer-bank: the person's saved answers. POST `{question, answer}` creates one
+  with a server-derived key; a duplicate normalised question is 409 and leaves its answer intact.
+  PUT `{question_key, answer}` changes one
   (`answer` null, empty or blank forgets it, as the bank's own rule does); 404 for a key the
   person has not saved.
 
@@ -30,7 +32,8 @@ from typing import Annotated, Any, Literal
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.apply import bank, caps, full_auto
@@ -50,6 +53,7 @@ SENTENCES = {
     "out_of_range": "A cap counts at least 1 application in at least 1 day.",
     "busy": "Your applications are busy with another change. Try again in a moment.",
     "hold_too_short": full_auto.SENTENCES["hold_too_short"],
+    "saved_question_exists": "You already saved this question. Edit its answer in the list.",
 }
 NO_ANSWER = "No such saved answer."
 
@@ -125,6 +129,18 @@ class BankIn(BaseModel):
 
     question_key: Annotated[str, Field(min_length=1, max_length=bank.KEY_MAX)]
     answer: Annotated[str, Field(max_length=bank.VALUE_MAX)] | None
+
+
+class BankCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: Annotated[str, Field(min_length=1, max_length=bank.QUESTION_MAX)]
+    answer: Annotated[str, Field(min_length=1, max_length=bank.VALUE_MAX)]
+
+    @field_validator("question", "answer")
+    @classmethod
+    def plain_text(cls, value: str, info: Any) -> str:
+        return bank.saved_text(value, question=info.field_name == "question")
 
 
 class BankEntryOut(BaseModel):
@@ -270,5 +286,29 @@ def change_bank(body: BankIn, request: Request, user: CurrentUser, db: Db) -> Ba
     else:
         entry.answer = text
         entry.updated_at = deps.clock(request)
+    db.commit()
+    return _bank_out(db, user)
+
+
+@router.post("/api/apply/answer-bank", response_model=BankOut, status_code=201, responses={409: {}})
+def create_bank(
+    body: BankCreateIn, request: Request, user: CurrentUser, db: Db
+) -> BankOut | JSONResponse:
+    """Explicitly save a reusable answer; the owner and normalised key come from the server."""
+    inserted = db.execute(
+        insert(AnswerBankEntry)
+        .values(
+            user_id=user.id,
+            question_key=bank.question_key(body.question),
+            question=body.question,
+            answer=body.answer,
+            updated_at=deps.clock(request),
+        )
+        .on_conflict_do_nothing(index_elements=["user_id", "question_key"])
+        .returning(AnswerBankEntry.question_key)
+    ).scalar_one_or_none()
+    if inserted is None:
+        db.rollback()
+        return _refusal(409, "saved_question_exists")
     db.commit()
     return _bank_out(db, user)

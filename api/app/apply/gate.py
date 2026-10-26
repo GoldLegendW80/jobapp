@@ -59,6 +59,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, service, states
+from app.apply.answer_limits import ANSWER_MAX, LETTER_MAX, letter_issue
 from app.apply.ats import base as ats_base
 from app.apply.models import (
     AnswerSource,
@@ -82,6 +83,18 @@ logger = logging.getLogger(__name__)
 HASH_HEX = 64
 
 SENTENCES = {
+    "unconfirmed_recipient": "Confirm the new email recipient before approving.",
+    "email_company_domain": (
+        "The recipient is not on a confirmed company domain. Review this application."
+    ),
+    "email_unsure": (
+        "The posting may say not to apply to its email address, so nothing was sent. Read the "
+        "posting and choose how to apply."
+    ),
+    "not_connected": "Connect Gmail in Account to send this application.",
+    "no_send_scope": "Reconnect Gmail in Account to allow sending.",
+    "needs_reconnect": "Reconnect Gmail in Account to continue.",
+    "mail_send_unavailable": "Email sending is not configured. Ask the administrator to enable it.",
     "submit_disabled": "Submissions are switched off on this server for now. Nothing was sent.",
     "paused": "Submissions are paused by the administrator for now. Nothing was sent.",
     "not_ready": "This application is not waiting for your approval.",
@@ -112,6 +125,13 @@ SENTENCES = {
     ),
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
+    "email_subject": "Use an email subject of at most 998 characters on one line.",
+    "email_recipient": "Choose an email recipient from the posting.",
+    "email_message": "Review the email message before approving it.",
+    "letter_too_long": "Shorten the letter to at most 10000 characters before saving.",
+    "letter_control_character": (
+        "Remove tabs, carriage returns and other control characters before saving the letter."
+    ),
     "not_an_option": "This form does not offer that choice.",
     # Not a refusal: the error code of a `submitted` application whose posting kept its status.
     "status_not_set": (
@@ -158,6 +178,13 @@ def switch_code(switches: Switches) -> str | None:
     return "paused" if switches.paused else None
 
 
+async def _click(tools: Any, ref: str, capability: str, element: str) -> dict[str, Any]:
+    """The application gate's privileged browser click, wired only into code's submit lease."""
+    from app.browser.tools import gate_click
+
+    return await gate_click(tools, ref, capability, element)
+
+
 @dataclass(frozen=True)
 class Decision:
     passed: bool
@@ -199,14 +226,20 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
             row.field_key,
             row.label,
             row.kind,
+            row.options,
             row.value,
             str(getattr(row.source, "value", row.source)),
             bool(row.required),
+            bool(row.document_letter),
         ]
         for row in rows
     )
     versions = {
-        kind: str(record.get("version_id"))
+        kind: (
+            [str(record.get("version_id")), record["pdf_sha256"]]
+            if "pdf_sha256" in record
+            else str(record.get("version_id"))
+        )
         for kind, record in sorted((document_versions or {}).items())
         if isinstance(record, dict)
     }
@@ -477,7 +510,7 @@ def decide(
     if application.mode is Mode.full_auto:
         if documents_need_review(application.document_versions):
             return refused("documents_review")
-        if code := full_auto.checks(db, application, posting):
+        if code := full_auto.checks(db, application, posting, now):
             return refused(code)
 
     authorisation.used_at = now
@@ -573,7 +606,48 @@ def confirm_submitted(
 ) -> Application:
     """ "It was submitted" on a `submit_unknown`: the versions frozen (already, at the click; a
     frozen version keeps its first reason and time), the posting to `applied`."""
+    if (
+        db.scalar(
+            sa.select(Application.ats).where(
+                Application.id == application_id, Application.user_id == user_id
+            )
+        )
+        == "email"
+    ):
+        from app.mail.locks import lock_send
+
+        lock_send(db, user_id)
     application, posting = lock(db, user_id, application_id)
+    if application.ats == "email":
+        from app.mail import reconciling
+        from app.mail.draft_models import MailDraft, MailSend
+
+        send_id = db.scalar(
+            sa.select(MailSend.id)
+            .join(MailDraft, MailDraft.id == MailSend.draft_id)
+            .where(
+                MailSend.id == application.mail_send_id,
+                MailSend.user_id == user_id,
+                MailSend.posting_id == application.posting_id,
+                MailDraft.user_id == user_id,
+                MailDraft.application_id == application.id,
+                MailDraft.kind == "application",
+            )
+        )
+        if send_id is None or application.state not in (State.submit_unknown, State.submitted):
+            raise RefusedError("not_unknown")
+        try:
+            reconciling.resolve(db, user_id, send_id, "sent", now)
+        except (LookupError, ValueError):
+            raise RefusedError("not_unknown") from None
+        return application
+    return _confirm_submitted_locked(db, application, posting, now)
+
+
+def _confirm_submitted_locked(
+    db: Session, application: Application, posting: Job, now: datetime
+) -> Application:
+    """Record the confirmation while the caller holds the application and posting locks."""
     if application.state is not State.submit_unknown:
         raise RefusedError("not_unknown")
     freeze_sent(db, application, now)
@@ -595,7 +669,14 @@ def confirm_submitted(
 # The person's own answer to a field (`set_answer`): before the click only, and never a file (the
 # documents) or a widget the app cannot fill (`skipped:`).
 EDITABLE = frozenset({State.needs_person, State.ready, State.approved})
-ANSWER_MAX = 5000
+
+
+def answer_max(row: ApplicationAnswer, *, email: bool = False) -> int:
+    if email and row.field_key == "email_subject":
+        return 998
+    return LETTER_MAX if row.document_letter and row.kind in {"text", "textarea"} else ANSWER_MAX
+
+
 TEXT_KINDS = frozenset({"text", "textarea", "select", "combobox", "single", "date"})
 CHOICE_KINDS = frozenset({"select", "combobox", "single"})  # the value is one of the options
 ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -672,17 +753,26 @@ def set_answer(
     ).scalar_one_or_none()
     if (
         row is None
-        or row.field_key.startswith("skipped:")
-        or row.kind == "file"
+        or row.field_key.startswith(("skipped:", "designated:"))
+        or row.kind in ("file", "designated")
         or ats_base.typed_secret(row.kind, row.label)
     ):
         raise InvalidAnswerError("unknown_field")
     if application.state is State.needs_person and application.needs == "signin":
         raise RefusedError("signin_first")
+    if application.ats == "email":
+        from app.apply.email import field_issue
+
+        if issue := field_issue(field_key, value):
+            raise InvalidAnswerError(issue)
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
         raise InvalidAnswerError("wrong_type")
-    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > ANSWER_MAX):
+    if isinstance(value, str) and row.document_letter and (issue := letter_issue(value)):
+        raise InvalidAnswerError(issue)
+    if isinstance(value, str) and (
+        row.kind not in TEXT_KINDS or len(value) > answer_max(row, email=application.ats == "email")
+    ):
         raise InvalidAnswerError("wrong_type")
     if isinstance(value, str) and row.kind == "date" and not _is_date(value):
         raise InvalidAnswerError("wrong_type")
@@ -708,7 +798,14 @@ def set_answer(
         # of them is answered, so the form is complete and waits for the approval like any
         # other. A required file is never answered here and keeps it waiting; a skipped widget
         # is never required (run._answer_rows), so it never held it.
-        states.move(application, State.ready, now)
+        incomplete = db.scalar(
+            sa.select(ApplicationAnswer.field_key).where(
+                ApplicationAnswer.application_id == application.id,
+                ApplicationAnswer.user_id == user_id,
+                ApplicationAnswer.field_key == "designated:incomplete",
+            )
+        )
+        states.move(application, State.queued if incomplete else State.ready, now)
         application.needs = None
     application.updated_at = now
     _event(db, application, "answer_set", now, field_key=field_key)
@@ -720,10 +817,32 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
     approval (a new authorisation through `decide`) leads to a click again. A Full auto item
     becomes a review item in the same transaction: its Like was spent on the first click, so
     only the person's Approve clicks again."""
+    if (
+        db.scalar(
+            sa.select(Application.ats).where(
+                Application.id == application_id, Application.user_id == user_id
+            )
+        )
+        == "email"
+    ):
+        from app.mail.locks import lock_send
+
+        lock_send(db, user_id)
     application, _ = lock(db, user_id, application_id)
     if application.state not in (State.submit_unknown, State.refused_by_site):
         raise RefusedError("not_retryable")
     previous = application.state.value
+    if application.ats == "email" and application.mail_send_id is not None:
+        from app.mail.draft_models import MailDraft, MailSend
+
+        row = db.get(MailSend, application.mail_send_id)
+        if row and row.result == "unknown":
+            row.resolved_by = "user_retry"
+            row.updated_at = now
+        draft = db.scalar(sa.select(MailDraft).where(MailDraft.application_id == application.id))
+        if draft:
+            draft.status, draft.updated_at = "draft", now
+        application.mail_send_id = None
     states.move(application, State.ready, now)
     application.error_code = None
     _event(db, application, "retry", now, previous=previous)

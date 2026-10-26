@@ -271,7 +271,7 @@ def close(
 ) -> ApplicationOut | JSONResponse:
     wanted = _owned(db, user, application_id).id
     try:
-        application = manual.cancel(db, user.id, wanted, deps.clock(request))
+        application = manual.cancel(db, user.id, wanted, deps.clock(request), final_watch=True)
         db.commit()
     except gate.NotFoundError:
         db.rollback()

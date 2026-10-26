@@ -25,7 +25,9 @@ Tightened by apply A6 (issue #296):
 - `submitting` is committed just before the click, so it ends only in the three outcomes of a
   click: `submitted`, `submit_unknown`, `refused_by_site`. It never ends in a state that frees the
   unique indexes (cancelled, blocked, posting_closed, failed) as if nothing was sent; a crash
-  after it is `submit_unknown` (`submit.py`).
+  after it is `submit_unknown` (`submit.py`). The one exception is a refusal proven to come
+  before the click (`move`'s `click_refused`): back to `ready`, or `blocked` or `posting_closed`
+  when the gate's checks again between the arm and the click refuse it as `recheck` would.
 - A rehearsal (`dry_run`) never reaches `submitting`: the gate records `rehearsed` from
   `approved` after the refill and the read back, before the click. `ready` has no move to
   `rehearsed`: a rehearsal always passes the gate first.
@@ -62,7 +64,9 @@ TRANSITIONS: dict[State, frozenset[State]] = {
     S.approved: frozenset({S.ready, S.needs_person, S.submitting, S.rehearsed}) | _STOPS,
     # ready: Full auto's refusal sends the item to the review queue, never to the bin.
     S.held: frozenset({S.ready, S.needs_person, S.submitting, S.rehearsed}) | _STOPS,
-    # The three outcomes of the click, and nothing else: the click may have gone through.
+    # The three uncertain/observed outcomes. Only a refusal proven to come before the click can
+    # leave otherwise (move's click_refused, NO_CLICK_TO): browserd's input refusal, or the
+    # gate's checks again under its locks between the arm and the click.
     S.submitting: frozenset({S.submitted, S.submit_unknown, S.refused_by_site}),
     S.refused_by_site: frozenset({S.ready, S.filling, S.cancelled}),
     S.submit_unknown: frozenset({S.submitted, S.ready}),
@@ -74,6 +78,10 @@ TRANSITIONS: dict[State, frozenset[State]] = {
 
 # Apply myself: the person sent it from the live view, the one way to `submitted` past the gate.
 MANUAL_SENT_FROM = frozenset({S.queued, S.filling, S.needs_person})
+
+# Where a `submitting` with no click goes (`move(..., click_refused=True)`): back to `ready`, or
+# the end `recheck` gives the same refusal before the arm (never apply, a closed posting).
+NO_CLICK_TO = frozenset({S.ready, S.blocked, S.posting_closed})
 
 # The states in which the app has clicked Submit: they hold the posting for good.
 CLICKED = frozenset({S.submitted, S.submit_unknown})
@@ -89,16 +97,27 @@ def allowed(current: State, to: State) -> bool:
     return to in TRANSITIONS[current]
 
 
-def move(application: Application, to: State, now: datetime, *, by_gate: bool = False) -> None:
+def move(
+    application: Application,
+    to: State,
+    now: datetime,
+    *,
+    by_gate: bool = False,
+    click_refused: bool = False,
+) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
     commits. `submitted_at` is set when the move records the click, and kept after it. Only the
     gate's decision passes `by_gate` (into `approved` or `held`); a rehearsal never moves to
-    `submitting`."""
+    `submitting`. Only the submit driver sets `click_refused`, for a refusal proven to come
+    before the click (browserd's native input refusal, the checks again between the arm and the
+    click): `submitting` then moves to one of NO_CLICK_TO, the original approval stays spent, a
+    fresh approval is required, and no version is frozen."""
     current = State(application.state)
     sent_by_person = (
         application.mode is Mode.manual and to is S.submitted and current in MANUAL_SENT_FROM
     )
-    if not sent_by_person and not allowed(current, to):
+    no_click = click_refused and current is S.submitting and to in NO_CLICK_TO
+    if not sent_by_person and not no_click and not allowed(current, to):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")
     if to in DECIDED and not by_gate:
         raise TransitionError(

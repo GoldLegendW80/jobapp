@@ -265,6 +265,7 @@ class Application(Base):
     canonical_key: Mapped[str] = mapped_column(sa.Text, nullable=False)
     document_versions: Mapped[dict[str, Any]] = _object()
     answers_hash: Mapped[bytes | None] = mapped_column(pg.BYTEA)
+    mail_send_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
     attempt: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, default=0, server_default=sa.text("0")
     )
@@ -297,6 +298,9 @@ class ApplicationAnswer(Base):
     # shows.
     options: Mapped[list[str] | None] = mapped_column(pg.JSONB, nullable=True)
     source: Mapped[AnswerSource] = mapped_column(ANSWER_SOURCE_ENUM, nullable=False)
+    # Adapter-owned provenance, retained when the person changes `source` to `person`.
+    document_letter: Mapped[bool] = _flag()
+    left_reason: Mapped[str | None] = mapped_column(sa.Text)
     required: Mapped[bool] = _flag()
     approved: Mapped[bool] = _flag()
 

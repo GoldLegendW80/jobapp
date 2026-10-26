@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import { clickInView, typeInView } from "./apply-a9-helpers";
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import { fieldValue } from "./browser-b4-helpers";
 import {
@@ -125,13 +126,7 @@ test("an invented person has a posting on the fake Ashby form with its CV and le
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect
-    .poll(
-      async () =>
-        (await postingDocuments()).filter((one) => one.latest !== null).length,
-      { timeout: 150_000 },
-    )
-    .toBe(2);
+  await waitForPostingDocuments(page.request, job);
 });
 
 test("the person applies in the live view, submits on the form and records it", async () => {

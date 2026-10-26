@@ -105,3 +105,62 @@ def test_browser_transport_and_submit_job_allow_the_specified_takeover_wait():
         submit.timeout_s
         >= leases.LEASE_MAX_S["apply_submit"] + TAKEOVER_S + worker.APPLY_JOB_MARGIN_S
     )
+
+
+@pytest.mark.parametrize("first_s", [1, 600, 899])
+def test_every_takeover_of_a_lease_together_pauses_its_clock_for_the_bound_at_most(
+    redis_url, first_s
+):
+    """Two takeovers of one lease share TAKEOVER_WAIT_S, so the apply job's timeout, which adds
+    one TAKEOVER_WAIT_S, outlives them all; the second one ends the lease at what is left."""
+    from app.browser.client import TAKEOVER_WAIT_S
+
+    flush(redis_url)
+
+    async def go():
+        world = World(redis_url)
+        try:
+            owner, viewer = str(uuid.uuid4()), str(uuid.uuid4())
+            got = await world.store.acquire(owner, "apply_fill", True)
+            assert got.lease is not None
+            await live_router._set_input(world.store, owner, viewer)
+            assert (await world.store.current(owner)).lease.wait_reason == "takeover"
+            world.clock.advance(first_s)
+            await live_router._set_input(world.store, owner, None, viewer)
+            back = (await world.store.current(owner)).lease
+            assert back is not None
+            assert back.state == "active"
+            assert back.takeover_s == pytest.approx(first_s, abs=1)
+            await live_router._set_input(world.store, owner, viewer)
+            again = (await world.store.current(owner)).lease
+            assert again is not None
+            assert again.wait_reason == "takeover"
+            left = TAKEOVER_WAIT_S - first_s
+            assert again.wait_deadline == pytest.approx(world.clock() + left, abs=1)
+            world.clock.advance(left - 2)
+            assert (await world.store.current(owner)).lease is not None
+            world.clock.advance(2 + MAX_GRACE_S)
+            assert (await world.store.current(owner)).lease is None
+        finally:
+            await world.close()
+
+    asyncio.run(go())
+
+
+def test_a_lease_stored_before_the_takeover_bound_loads_with_nothing_banked():
+    from app.browser.leases import Lease
+
+    lease = Lease(
+        lease_id="l1",
+        user_id="u1",
+        purpose="apply_fill",
+        automation=True,
+        profile_id="",
+        max_s=900,
+        idle_s=300,
+        started_at=0.0,
+    )
+    raw = lease.dumps().replace(',"takeover_s":0.0', "").replace(',"takeover_since":null', "")
+    assert "takeover" not in raw
+    loaded = Lease.loads(raw)
+    assert (loaded.takeover_s, loaded.takeover_since) == (0.0, None)

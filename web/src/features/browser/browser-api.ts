@@ -27,6 +27,20 @@ const leaseSchema = z.object({
 });
 export type Lease = z.infer<typeof leaseSchema>;
 
+/**
+ * The person already holds the input: their own session, or an Apply fill waiting on the page for
+ * them (api failures.WAIT_ON_PAGE, browserd APPLY_WAITS: a captcha, an e-mail code, a 403 page),
+ * where browserd gives the person the keyboard and the mouse for the wait.
+ */
+export function personOwnsInput(lease: Lease): boolean {
+  return (
+    !lease.automation ||
+    (lease.purpose === "apply_fill" &&
+      lease.state === "waiting_person" &&
+      ["captcha", "email_code", "forbidden"].includes(lease.wait_reason ?? ""))
+  );
+}
+
 const queueSchema = z.object({
   purpose: z.string(),
   position: z.number(),

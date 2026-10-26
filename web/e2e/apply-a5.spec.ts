@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+import { waitForPostingDocuments } from "./apply-document-helpers";
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
   CSRF,
@@ -46,18 +47,6 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 let job: string;
-
-type PostingDocument = { kind: string; latest: { number: number } | null };
-
-async function documentsReady(id: string): Promise<boolean> {
-  const response = await page.request.get(`/api/jobs/${id}/documents`);
-  const { documents } = (await response.json()) as {
-    documents: PostingDocument[];
-  };
-  return (
-    documents.length === 2 && documents.every((one) => one.latest !== null)
-  );
-}
 
 test.beforeAll(async ({ browser }) => {
   person = invented("a5");
@@ -117,7 +106,7 @@ test("an invented person has a credential, the consent, a base CV and an Ashby p
     data: { kinds: ["cv", "letter"], script: "journey" },
   });
   expect(written.status()).toBe(202);
-  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+  await waitForPostingDocuments(page.request, job);
 });
 
 test("the open question is answered by the agent, shown as its answer, and editable", async () => {
