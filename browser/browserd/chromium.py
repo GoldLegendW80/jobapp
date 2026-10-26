@@ -716,12 +716,12 @@ async def guard_memory(browser: Any, pct: int, event: Any, reader: Any = memory)
     figures, sample = _observed_memory(reader, "guard")
     if figures is None or not past_guard(figures, pct):
         return False
-    pages = browser.contexts[0].pages if browser.contexts else []
+    pages = [(context, page) for context in browser.contexts for page in context.pages]
     if not pages:
         return False
-    victim = pages[-1]
+    context, victim = pages[-1]
     if len(pages) == 1:
-        await browser.contexts[0].new_page()
+        await context.new_page()
     await victim.close()
     event(event="tab_closed", reason="memory", used_mib=figures[0] >> 20)
     if sample:
