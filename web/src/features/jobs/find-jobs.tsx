@@ -35,7 +35,7 @@ import { FitBadge, StatusBadge } from "./badges";
 import { formatDateTime } from "./format";
 import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
-import { sourceLabel } from "./labels";
+import { sourceLabel, sourceName } from "./labels";
 import { SweepSources } from "./sweep-sources";
 import { SearchSetup } from "./search-setup";
 import { getSweep, listSweeps, sweepsKey, type Sweep } from "./sweeps-api";
@@ -75,6 +75,14 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
   );
 }
 
+/** What the sweep reads now: a website searched in the person's browser by its name (its
+ * `current_board` is the source's id, jobs J10), any other source by its label. */
+function readingName(sweep: Sweep): string {
+  const current = sweep.current_board ?? "";
+  const source = sweep.sources.find((item) => item.source_id === current);
+  return source ? sourceName(source) : sourceLabel(current);
+}
+
 /** The live line under the header while a sweep runs. */
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
@@ -102,7 +110,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
         </span>
         {sweep.current_board ? (
           <span className="min-w-0 truncate text-muted-foreground">
-            Reading {sourceLabel(sweep.current_board)}
+            Reading {readingName(sweep)}
           </span>
         ) : null}
         <span className="tabular-nums text-muted-foreground">
