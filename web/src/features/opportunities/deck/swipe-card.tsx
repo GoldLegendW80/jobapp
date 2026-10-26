@@ -174,7 +174,7 @@ export function SwipeCard({
             >
               {source}
               <ExternalLink aria-hidden="true" className="size-3.5" />
-              <span className="sr-only">(opens in a new tab)</span>
+              <span className="sr-only">{WORDING.opensNewTab}</span>
             </a>
           ) : (
             <span className="text-muted-foreground">{source}</span>
@@ -188,7 +188,7 @@ export function SwipeCard({
           className="min-h-11 sm:min-h-0"
           onClick={onMore}
         >
-          More
+          {WORDING.more}
         </Button>
       </div>
     </article>

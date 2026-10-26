@@ -35,7 +35,7 @@ function ignoredTarget(target: EventTarget | null): boolean {
  * buttons sit under the card, within a thumb's reach.
  */
 export function DeckPage() {
-  useTitle("Discover");
+  useTitle(WORDING.discover);
   const [filters, setFilters] = useState<DeckFilters>(NO_FILTERS);
   const deck = useDeck(filters);
   const motion = !useReducedMotion();
@@ -98,7 +98,9 @@ export function DeckPage() {
   return (
     <div className="mx-auto flex w-full max-w-md flex-col gap-5">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Discover</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {WORDING.discover}
+        </h1>
         <Link
           to="/settings/applications"
           aria-label={`A Like runs in ${MODE_WORDS[deck.mode]}. Change it in the Applications settings`}
@@ -133,12 +135,12 @@ export function DeckPage() {
                 void deck.query.refetch();
               }}
             >
-              Try again
+              {WORDING.tryAgain}
             </Button>
           </AlertDescription>
         </Alert>
       ) : top ? (
-        <section aria-label="Deck" className="flex flex-col gap-4">
+        <section aria-label={WORDING.deck} className="flex flex-col gap-4">
           <p className="text-sm text-muted-foreground" aria-live="polite">
             {deck.left === 1 ? "1 posting left" : `${deck.left} postings left`}
           </p>
@@ -180,7 +182,7 @@ export function DeckPage() {
         </p>
       ) : (
         <section
-          aria-label="Deck"
+          aria-label={WORDING.deck}
           className="flex flex-col gap-3 rounded-2xl border border-dashed p-6"
         >
           <p className="font-medium">{deckEmpty(deck.minFit ?? 70)}</p>

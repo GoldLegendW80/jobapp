@@ -272,6 +272,46 @@ async def test_wait_survival_uses_the_exact_owned_lease():
     assert not await signin.waiting(Leases(), str(uuid.uuid4()), "other")
 
 
+@pytest.mark.parametrize(
+    ("state", "reason", "handoff"),
+    [
+        ("waiting_person", "signin", True),
+        ("waiting_person", "forbidden", False),
+        ("waiting_person", "takeover", False),
+        ("waiting_person", "captcha", False),
+        ("waiting_person", "email_code", False),
+        ("waiting_person", "", False),
+        ("active", "signin", False),
+    ],
+)
+def test_only_a_sign_in_wait_is_a_sign_in_handoff(state, reason, handoff):
+    """#688's review: a lease waiting for the person on a 403 page or a takeover is no sign in
+    hand off (released, never bound); only `waiting_person` on `signin` is."""
+    lease = SimpleNamespace(lease_id="mine", state=state, wait_reason=reason)
+
+    class Leases:
+        async def current(self, user):
+            return SimpleNamespace(lease=lease)
+
+    assert asyncio.run(signin.waiting(Leases(), str(uuid.uuid4()), "mine")) is handoff
+
+
+@run_async
+@pytest.mark.parametrize(
+    ("status", "state", "needs"),
+    [
+        (429, State.failed, None),
+        (403, State.needs_person, "forbidden"),
+        (410, State.posting_closed, None),
+    ],
+)
+async def test_new_http_refusals_override_a_form_that_happens_to_render(status, state, needs):
+    watched = run._Watched(Pages())
+    watched.status = status
+    result = await run._checked(run.Result(State.ready), watched)
+    assert (result.state, result.needs) == (state, needs)
+
+
 def test_a_cancelled_fill_keeps_the_person_signing_in_and_binds_the_later_callback(
     db, factory, person_a, forms_base_url, monkeypatch
 ):

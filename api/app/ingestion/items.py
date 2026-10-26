@@ -337,6 +337,7 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.browser_sources[].enabled": _T.SETTING,
         "search.browser_sources[].accepted_at": _T.SETTING,
         "search.browser_sources[].text_version": _T.SETTING,
+        "search.browser_sources[].interactive_only": _T.SETTING,
         "search.sweep_schedule.enabled": _T.SETTING,
         "search.sweep_schedule.days[]": _T.SETTING,
         "search.sweep_schedule.times[]": _T.SETTING,

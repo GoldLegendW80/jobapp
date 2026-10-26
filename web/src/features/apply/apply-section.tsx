@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
 
@@ -113,6 +114,32 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [unsaved, setUnsaved] = useState(0);
   const [asking, setAsking] = useState<DecisionKind | null>(null);
+  // A posting on LinkedIn starts nothing until the person has turned LinkedIn on and accepted its
+  // current sentence (SPEC-browser decision 2); until then only the external link is offered.
+  let onLinkedIn = false;
+  let linkedinPosting: string | null = null;
+  try {
+    const posting = new URL(job.url ?? "");
+    const host = posting.hostname.toLowerCase().replace(/\.$/, "");
+    onLinkedIn = host === "linkedin.com" || host.endsWith(".linkedin.com");
+    if (
+      posting.protocol === "https:" &&
+      !posting.username &&
+      !posting.password &&
+      ["linkedin.com", "www.linkedin.com"].includes(host) &&
+      /^\/jobs\/view\/\d{1,24}\/?$/.test(posting.pathname) &&
+      !posting.hash
+    )
+      linkedinPosting = posting.href;
+  } catch {
+    /* A posting without an address already has its normal refusal. */
+  }
+  const linkedin = useQuery({
+    queryKey: linkedinKey,
+    queryFn: ({ signal }) => getLinkedIn(signal),
+    enabled: onLinkedIn,
+  });
+  const linkedinBlocked = onLinkedIn && !linkedin.data?.allowed;
 
   const latest = useQuery({
     queryKey: applicationsKey(job.id),
@@ -445,31 +472,62 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             {phase === "idle" ? (
               <>
-                <Button
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("review");
-                  }}
-                >
-                  {start.isPending && start.variables === "review" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply (Review first)
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    start.mutate("manual");
-                  }}
-                >
-                  {start.isPending && start.variables === "manual" ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Apply myself
-                </Button>
+                {linkedinBlocked ? (
+                  <p className="text-sm text-muted-foreground">
+                    Turn on LinkedIn in Account and accept its current sentence
+                    to use Easy Apply. You can also apply yourself.
+                  </p>
+                ) : (
+                  <Button
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("review");
+                    }}
+                  >
+                    {start.isPending && start.variables === "review" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply (Review first)
+                  </Button>
+                )}
+                {linkedinBlocked ? (
+                  linkedinPosting ? (
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-fit"
+                      asChild
+                    >
+                      <a
+                        href={linkedinPosting}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open LinkedIn and apply myself
+                      </a>
+                    </Button>
+                  ) : null
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      start.mutate("manual");
+                    }}
+                  >
+                    {start.isPending && start.variables === "manual" ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    Apply myself
+                  </Button>
+                )}
               </>
             ) : null}
             {phase === "review" && approval ? (

@@ -68,6 +68,113 @@ const filled = () => [
 ];
 
 describe("starting", () => {
+  function linkedinState(allowed: boolean) {
+    server.use(
+      http.get("/api/browser/linkedin", () =>
+        HttpResponse.json({
+          enabled: allowed,
+          accepted: allowed,
+          allowed,
+          text: "Fixture consent",
+          text_version: 1,
+          accepted_at: allowed ? "2026-10-20T08:00:00Z" : null,
+          accepted_version: allowed ? 1 : null,
+          query: null,
+          location: null,
+          paused_until: null,
+          last_sweep_at: null,
+          needs_signin: false,
+        }),
+      ),
+    );
+  }
+
+  it("offers an external LinkedIn link without starting an application without consent", async () => {
+    const api = fakeApply({ application: null });
+    fakeJobDetail(
+      makeDetail({
+        id: JOB_ID,
+        url: "https://www.linkedin.com/jobs/view/4100000001/",
+      }),
+    );
+    linkedinState(false);
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByText(/Turn on LinkedIn in Account/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).queryByRole("button", { name: "Apply (Review first)" }),
+    ).toBeNull();
+    expect(
+      within(section).queryByRole("button", { name: "Apply myself" }),
+    ).toBeNull();
+    const link = within(section).getByRole("link", {
+      name: "Open LinkedIn and apply myself",
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "https://www.linkedin.com/jobs/view/4100000001/",
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(
+      within(section).getByText(/Turn on LinkedIn in Account/).textContent,
+    ).not.toMatch(SEPARATOR);
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+    });
+    link.focus();
+    await user.keyboard("{Enter}");
+    await user.click(link);
+    expect(api.started).toBe(0);
+  });
+
+  it("offers no external link for a LinkedIn address that is not a job posting", async () => {
+    fakeApply({ application: null });
+    fakeJobDetail(
+      makeDetail({
+        id: JOB_ID,
+        url: "https://www.linkedin.com/feed/?next=https://boards.example.org",
+      }),
+    );
+    linkedinState(false);
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(/Turn on LinkedIn in Account/),
+    ).toBeInTheDocument();
+    expect(within(section).queryByRole("link")).toBeNull();
+    expect(
+      within(section).queryByRole("button", { name: "Apply (Review first)" }),
+    ).toBeNull();
+  });
+
+  it("offers Apply (Review first) on LinkedIn once the person has accepted", async () => {
+    const api = fakeApply({ application: null });
+    fakeJobDetail(
+      makeDetail({
+        id: JOB_ID,
+        url: "https://www.linkedin.com/jobs/view/4100000001/",
+      }),
+    );
+    linkedinState(true);
+    const { user, section } = await openSection();
+    const review = await within(section).findByRole("button", {
+      name: "Apply (Review first)",
+    });
+    expect(
+      within(section).queryByText(/Turn on LinkedIn in Account/),
+    ).toBeNull();
+    expect(
+      within(section).queryByRole("link", {
+        name: "Open LinkedIn and apply myself",
+      }),
+    ).toBeNull();
+    await user.click(review);
+    await waitFor(() => {
+      expect(api.started).toBe(1);
+    });
+  });
+
   it("offers Apply (Review first) and Apply myself, and starts a Review first application", async () => {
     const api = fakeApply({ application: null });
     const { user, section } = await openSection();

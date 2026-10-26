@@ -89,10 +89,11 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, full_auto, gate, guardrails, model_check, run, shots, states
+from app.apply import caps, fallback, full_auto, gate, guardrails, model_check, run, shots, states
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
+from app.apply.ats.linkedin import LinkedIn
 from app.apply.models import Application, Authorisation, Mode, ShotKind, State
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
@@ -107,6 +108,8 @@ DWELL_S = 4.0
 POLL_S = 2.0
 CONFIRM_WAIT_S = 60
 MAX_POLLS = 40
+# The live pause read before the click (Redis, a few ms): longer and it reads as a pause.
+PAUSED_READ_S = 5.0
 # Tool codes that say the lease or the page is gone, kept as the stop's code; any other
 # difference on the refill is `form_changed`.
 LEASE_GONE = frozenset({"ended", "host_not_allowed", "unreadable"})
@@ -131,7 +134,6 @@ def from_fill(base: run.Services, settings: Any, redis: Any) -> Services:
     """The worker's submit services: the fill's (sessions, clock, leases, tools), browser B5's
     `gate_click`, the administrator's pause on this worker's Redis and the setting."""
     from app.apply import admin
-    from app.browser.tools import gate_click
 
     async def paused() -> bool:
         return await admin.paused(redis)
@@ -141,7 +143,7 @@ def from_fill(base: run.Services, settings: Any, redis: Any) -> Services:
         clock=base.clock,
         leases=base.leases,
         tools_for=base.tools_for,
-        click=gate_click,  # type: ignore[arg-type]
+        click=gate._click,
         paused=paused,
         enabled=settings.apply_submit_enabled,
         stub_base=base.stub_base,
@@ -172,6 +174,7 @@ class Plan:
     authorisation_id: uuid.UUID | None
     answers_hash: bytes = field(repr=False)
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
+    authorisation_deadline: datetime | None = None
 
 
 @dataclass
@@ -195,9 +198,18 @@ class Read:
 # --- the database steps ------------------------------------------------------------------------
 
 
-def _stop(db: Session, application: Application, stop: Stop, now: datetime) -> None:
-    states.move(application, stop.state, now)
-    application.error_code = stop.code if stop.state is not State.needs_person else None
+def _stop(
+    db: Session,
+    application: Application,
+    stop: Stop,
+    now: datetime,
+    *,
+    click_refused: bool = False,
+) -> None:
+    states.move(application, stop.state, now, click_refused=click_refused)
+    # LinkedIn's checkpoint pause keeps its code: the person sees why the item waits (A16).
+    keep = stop.state is not State.needs_person or stop.code == "linkedin_paused"
+    application.error_code = stop.code if keep else None
     application.needs = stop.needs
     gate._event(db, application, "submit_stopped", now, state=stop.state.value, code=stop.code)
     if stop.state in (State.ready, State.needs_person):
@@ -236,13 +248,19 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
     """The gate's checks that can change after its decision, again (the caller holds the gate's
     locks): the approval still valid (`full_auto.expired`, else `ready`,
     `authorisation_expired`), never apply, LinkedIn's guard on a form on LinkedIn (a pause that
-    started since), duplicates (this application excluded), the caps, and in Full auto
-    `full_auto.recheck`. A refusal ends as `decide`'s does, `blocked` with its code
+    started since), duplicates (this application excluded), the caps, the current document
+    versions in both modes, and in Full auto `full_auto.recheck`. A refusal ends as `decide`'s
+    does, `blocked` with its code
     (`posting_closed` for a closed posting), except that a code `decide` keeps at `ready` goes
     back to `ready`: an approved application never waits on it."""
     spent = _spent(db, application)
     if spent is None or full_auto.expired(application, spent, now):
         return Stop(State.ready, "authorisation_expired")
+    return _checks(db, application, posting, now)
+
+
+def _checks(db: Session, application: Application, posting: Job, now: datetime) -> Stop | None:
+    """Mutable non-authority guards, also checked after the admitted authority was consumed."""
     code = guardrails.never_apply(
         posting,
         gate._rules(db, application.user_id),
@@ -254,11 +272,16 @@ def recheck(db: Session, application: Application, posting: Job, now: datetime) 
             db, application.user_id, posting, application.canonical_key, now, exclude=application.id
         )
         code = duplicate.code if duplicate is not None else caps.check(db, application, now)
+    if code is None:
+        code = gate.documents_code(db, application)
     if code is None and application.mode is Mode.full_auto:
         code = full_auto.recheck(db, application, posting, now)
     if code is None:
         return None
-    if code in gate.KEEP:
+    if code in gate.KEEP or (
+        application.mode is Mode.full_auto
+        and code in ("linkedin_off", "linkedin_paused", "linkedin_daily")
+    ):
         return Stop(State.ready, code)
     return Stop(State.posting_closed if code == "posting_closed" else State.blocked, code)
 
@@ -346,7 +369,16 @@ def wait(db: Session, application_id: uuid.UUID, needs: str, now: datetime, **da
         run._wait(db, found[0], needs, now, **data)
 
 
-def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: Read) -> str:
+def arm(
+    db: Session,
+    plan: Plan,
+    now: datetime,
+    switches: gate.Switches,
+    read: Read,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    switches_for: Callable[[], gate.Switches] | None = None,
+) -> str:
     """Step 5, before the click, under the gate's locks: still the decision `plan` was read from
     (`_bound`, else `superseded`: nothing written, no click, the next job refills with what was
     approved), the screenshot, the kill switches, the gate's checks again (`recheck`), then
@@ -356,11 +388,14 @@ def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: R
     if found is None:
         return "superseded"
     application, posting = found
+    now = clock() if clock else now
     if read.shot is not None:
         shot = shots.store(db, application, ShotKind.before, read.shot, now)
         gate._event(db, application, "screenshot", now, kind="before", id=str(shot.id))
     else:
         gate._event(db, application, "screenshot_failed", now)
+    switches = switches_for() if switches_for else switches
+    now = clock() if clock else now
     if (code := gate.switch_code(switches)) and application.mode is Mode.full_auto:
         _stop(db, application, Stop(State.ready, code), now)
         return State.ready.value
@@ -376,9 +411,24 @@ def arm(db: Session, plan: Plan, now: datetime, switches: gate.Switches, read: R
         states.move(application, State.rehearsed, now)
         gate._event(db, application, "rehearsed", now)
         return "rehearsed"
-    if (until := caps.reserve(db, application, now)) is not None:
+    until = caps.reserve(db, application, now, clock=clock)
+    switches = switches_for() if switches_for else switches
+    now = clock() if clock else now
+    if code := gate.switch_code(switches):
+        target = State.ready if application.mode is Mode.full_auto else State.cancelled
+        _stop(db, application, Stop(target, code), now)
+        return target.value
+    if refused := recheck(db, application, posting, now):
+        _stop(db, application, refused, now)
+        return refused.state.value
+    if until is not None:
         run._wait(db, application, "host_pace", now, until=until.isoformat())
         return "paced"
+    spent = _spent(db, application)
+    if spent is None:
+        _stop(db, application, Stop(State.ready, "authorisation_expired"), now)
+        return State.ready.value
+    plan.authorisation_deadline = full_auto.deadline(application, spent)
     states.move(application, State.submitting, now)
     application.needs = None
     gate._event(db, application, "click", now, attempt=application.attempt)
@@ -556,11 +606,13 @@ def difference(found: ats_base.Discovery, rows: list[Row]) -> str:
 
 
 def _stop_of(code: str, step: str = "") -> Stop:
+    if code == "linkedin_paused" or (code == "needs_person" and step == "linkedin_paused"):
+        return Stop(State.needs_person, "linkedin_paused", "linkedin_paused")
     if code == "needs_person":
         return Stop(State.needs_person, "needs_person", step or "needs_person")
     if code == ats_base.CREDENTIAL:  # browserd refused to type into a credential input: a wall
         return Stop(State.needs_person, "needs_person", "signin")
-    if code in ats_base.PENDING_STEPS:
+    if code in (*ats_base.PENDING_STEPS, run.failures.PAYMENT, "profile_incomplete"):
         return Stop(State.needs_person, "needs_person", code)
     if code == "posting_closed":
         return Stop(State.posting_closed, code)
@@ -570,7 +622,50 @@ def _stop_of(code: str, step: str = "") -> Stop:
 
 
 async def _open(services: Services, plan: Plan, tools: run.RunTools) -> ats_base.Adapter | Stop:
-    adapter = adapter_for(plan.form_url, stub_base=services.stub_base)
+    has_strategy = any(row.key == fallback.KEY for row in plan.rows)
+    address = fallback.canonical_url(plan.form_url) if has_strategy else plan.form_url
+    if address is None:
+        return Stop(State.ready, "form_changed")
+    adapter = adapter_for(address, stub_base=services.stub_base)
+    if has_strategy:
+        # A company page's framed adapter is recovered from the code-owned vendor, never
+        # chosen by a model during replay. Framed bindings confer no Full auto exception.
+        if adapter is None:
+            candidates = [
+                fallback.binding(plan.rows, plan.form_url, vendor, allow_frame=True)
+                for vendor in fallback.KNOWN
+            ]
+            framed = next((value for value in candidates if value and "frame" in value), None)
+            if framed:
+                from app.apply.ats import ADAPTERS
+
+                adapter = next(
+                    (
+                        kind(services.stub_base, framed=True)
+                        for kind in ADAPTERS
+                        if kind.name == framed["vendor"]
+                    ),
+                    None,
+                )
+        bound = fallback.binding(
+            plan.rows, plan.form_url, adapter.name if adapter else "", allow_frame=True
+        )
+        if bound and adapter and "frame" in bound:
+            adapter.framed = True
+        if bound is None or fallback.target(adapter, plan.form_url, bound["target"]) is None:
+            return Stop(State.ready, "form_changed")
+        if ("frame" in bound) != bool(adapter and adapter.framed):
+            return Stop(State.ready, "form_changed")
+        prepared = fallback.Generic(services.stub_base, known=adapter, frame=bound.get("frame"))
+        code = await prepared.visit(tools, bound["target"])
+        if code:
+            return _stop_of(code)
+        shot = await tools.snapshot()
+        if fallback.canonical_url(str(shot.get("url") or "")) != fallback.canonical_url(
+            bound["target"]
+        ):
+            return Stop(State.ready, "form_changed")
+        return prepared
     if adapter is None:
         opened = await tools.navigate(plan.form_url)
         if not opened.get("ok"):
@@ -594,14 +689,21 @@ async def refill(
         return _stop_of(code, found.pending if found is not None else "")
     done: set[str] = set()
     for _ in range(2):
-        for item in [f for f in found.fields if f.key not in done]:
+        pending = [f for f in found.fields if f.key not in done]
+        if isinstance(adapter, generic.Deterministic):
+            pending.sort(key=lambda field: field.kind != "file")
+        for item in pending:
             done.add(item.key)
             row = approved.get(item.key)
             if row is None:
                 return Stop(State.ready, "form_changed")  # a question nobody approved
             if row.value is None:
                 continue  # left: the read back checks it shows nothing
-            if row.kind == "checkbox" and row.value is not True:
+            if (
+                row.kind == "checkbox"
+                and row.value is not True
+                and not (isinstance(adapter, LinkedIn) and adapter.optional_follow(item))
+            ):
                 # A box approved unticked (the person's No): the adapter never ticks it, so
                 # there is nothing to type; the read back checks the page shows it unticked.
                 continue
@@ -647,8 +749,9 @@ async def ready_to_click(services: Services, plan: Plan, tools: run.RunTools) ->
         step = await _refilled(adapter, tools, rows)
         if isinstance(step, Stop):
             return step
-        if await generic.advance(adapter, tools, step):  # type: ignore[arg-type]
-            return Stop(State.ready, "form_changed")
+        code = await generic.advance(adapter, tools, step)  # type: ignore[arg-type]
+        if code:
+            return _stop_of(code)
     rows = stages[-1]
     checked = await _refilled(adapter, tools, rows)
     if isinstance(checked, Stop):
@@ -718,19 +821,104 @@ async def _record_click(
         )
 
 
+def _paused_from(services: Services, loop: asyncio.AbstractEventLoop) -> bool:
+    """The live pause switch read from the database thread while it holds the gate's locks:
+    PAUSED_READ_S at most, and a read that fails or does not answer in time is a pause, so a
+    hung Redis never keeps the locks until the job's timeout and never lets a click through."""
+    future = asyncio.run_coroutine_threadsafe(services.paused(), loop)
+    try:
+        return bool(future.result(timeout=PAUSED_READ_S))
+    except Exception:  # concurrent.futures.TimeoutError too
+        future.cancel()
+        return True
+
+
 async def _after_arm(
     services: Services,
-    application_id: uuid.UUID,
+    plan: Plan,
     read: Read,
     tools: run.RunTools,
     capability: str,
 ) -> str:
     """The click and its outcome; the application is `submitting` (committed)."""
+    application_id = plan.application_id
+    loop = asyncio.get_running_loop()
+
+    def before_click(db: Session) -> str | datetime:
+        found = _locked(db, application_id)
+        if found is None or found[0].state is not State.submitting:
+            return "superseded"
+        application, posting = found
+        spent = _spent(db, application)
+        paused = _paused_from(services, loop)
+        now = services.clock()
+        code = gate.switch_code(gate.Switches(enabled=services.enabled, paused=paused))
+        if code is None and (
+            spent is None
+            or spent.id != plan.authorisation_id
+            or spent.kind is not full_auto.gate_kind(application.mode)
+            or plan.authorisation_deadline is None
+            or now >= plan.authorisation_deadline
+        ):
+            code = "authorisation_expired"
+        if code is None and (
+            bytes(application.answers_hash or b"") != plan.answers_hash
+            or application.dry_run != plan.dry_run
+            or gate.current_hash(db, application) != plan.answers_hash
+        ):
+            code = "stale"
+        stop = Stop(State.ready, code) if code else _checks(db, application, posting, now)
+        if stop is not None:
+            # A refusal of the checks ends as `recheck`'s would before the arm: never apply or a
+            # duplicate `blocked`, a closed posting `posting_closed`, a kept code `ready`.
+            _stop(db, application, stop, now, click_refused=True)
+            return stop.state.value
+        return plan.authorisation_deadline
+
+    admitted = await asyncio.to_thread(_in_db, services.sessions, before_click)
+    if isinstance(admitted, str):
+        return admitted
+    # The commit above can itself wait. No database work separates this live pause read,
+    # fresh clock and external click; the deadline belongs to the exact admitted authority.
+    try:
+        paused = await asyncio.wait_for(services.paused(), PAUSED_READ_S)
+    except Exception:  # TimeoutError too: a pause nobody could read is a pause
+        paused = True
     clicked = services.clock()
+    code = gate.switch_code(gate.Switches(enabled=services.enabled, paused=paused))
+    if code is None and clicked >= admitted:
+        code = "authorisation_expired"
+    if code:
+
+        def refuse(db: Session) -> str:
+            found = _locked(db, application_id)
+            if found is None or found[0].state is not State.submitting:
+                return "superseded"
+            _stop(db, found[0], Stop(State.ready, code), clicked, click_refused=True)
+            return State.ready.value
+
+        return await asyncio.to_thread(_in_db, services.sessions, refuse)
     code: str | None = None
     after: bytes | None = None
     try:
         result = await services.click(tools, read.submit_ref, capability, "Submit")
+        if not result.get("ok") and result.get("error") in ("person_input", "person_used"):
+            # browserd refused before its external act. The person may have edited the page,
+            # so return to a fresh approval, with no sent-version freeze or uncertain outcome.
+            def taken(db: Session) -> str:
+                found = run._locked(db, application_id)
+                if found is None or found[0].state is not State.submitting:
+                    return "superseded"
+                _stop(
+                    db,
+                    found[0],
+                    Stop(State.ready, "form_changed"),
+                    services.clock(),
+                    click_refused=True,
+                )
+                return State.ready.value
+
+            return await asyncio.to_thread(_in_db, services.sessions, taken)
         if not result.get("ok"):
             code = f"click_{result.get('error') or 'failed'}"
         state, errors = await outcome(services, read.adapter, tools, clicked)
@@ -766,15 +954,28 @@ async def _drive(
             lambda db: stopped(db, plan, stop, services.clock()),
         )
     switches = gate.Switches(enabled=services.enabled, paused=await services.paused())
+    loop = asyncio.get_running_loop()
+
+    def fresh_switches() -> gate.Switches:
+        return gate.Switches(enabled=services.enabled, paused=_paused_from(services, loop))
+
     written = await asyncio.to_thread(
         _in_db,
         services.sessions,
-        lambda db: arm(db, plan, services.clock(), switches, read),
+        lambda db: arm(
+            db,
+            plan,
+            services.clock(),
+            switches,
+            read,
+            clock=services.clock,
+            switches_for=fresh_switches,
+        ),
     )
     if written != "submitting" or capability is None:
         return written
     armed.append(True)
-    return await _after_arm(services, plan.application_id, read, tools, capability)
+    return await _after_arm(services, plan, read, tools, capability)
 
 
 async def _decide(services: Services, application_id: uuid.UUID) -> str:
@@ -858,6 +1059,9 @@ async def submit(services: Services, application_id: uuid.UUID) -> str:
     written = "interrupted"
     try:
         tools = services.tools_for(user, lease_id, acquired.token)
+        from app.apply.linkedin import watched
+
+        tools = watched(services, plan, tools)
         try:
             written = await _drive(services, plan, tools, capability, armed)
         except asyncio.CancelledError:

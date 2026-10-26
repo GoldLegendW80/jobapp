@@ -281,6 +281,16 @@ def test_the_hand_kept_lists_name_routes_that_exist(app: FastAPI) -> None:
 @pytest.mark.parametrize(
     ("path", "body", "field", "too_long"),
     [
+        (
+            "/api/applications/{ref}/approve",
+            {
+                "answers_hash": "a" * 64,
+                "confirmed_email_recipient": "\U0001f4bc" * 254,
+                "acknowledged_email_issues": ["\U0001f4bc" * 64] * 1000,
+            },
+            "acknowledged_email_issues",
+            ["x" * 65],
+        ),
         *[
             (
                 "/api/browser/handoff/later" + suffix,
@@ -290,6 +300,16 @@ def test_the_hand_kept_lists_name_routes_that_exist(app: FastAPI) -> None:
             )
             for suffix in ("", "/done", "/cancel")
         ],
+        (
+            "/api/mail/drafts/{ref}/send",
+            {
+                "content_hash": "a" * 64,
+                "confirmed_new_recipients": ["\U0001f4bc" * 254] * 20,
+                "acknowledged_issues": ["\U0001f4bc" * 64] * 1000,
+            },
+            "acknowledged_issues",
+            ["x" * 65],
+        ),
     ],
 )
 def test_bounded_decision_bodies_fit_the_class_and_validate_before_any_decision(

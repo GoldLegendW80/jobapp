@@ -17,7 +17,10 @@ any wait, so a path that would deadlock fails in its first test.
 Waits are bounded: `bounded(db)` sets `lock_timeout` to 5 s for the transaction, well under the
 15 s `statement_timeout` of app/db.py. A wait that runs out is SQLSTATE 55P03, which app.main
 answers as 409 in a route (`jobs.service.is_lock_timeout`); a job ends its batch. No lock is
-held across a call to Gmail, to the parser or to a model.
+held across a call to the parser or to a model. One lock is held across a call to Gmail, on
+purpose: `lock_send` across the send gate's one `send_message` call (`mail.gate._call_send`),
+so Disconnect waits for its result. Every async path takes its locks in a thread
+(`mail.gate._blocking`), so that wait never blocks the API's event loop.
 """
 
 import uuid

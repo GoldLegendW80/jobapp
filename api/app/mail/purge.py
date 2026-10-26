@@ -61,7 +61,12 @@ class Purged:
 
 
 def purge_user(db: Session, user_id: uuid.UUID) -> Purged:
-    rows = 0
+    from app.mail.draft_models import MailDraft, MailSend
+
+    rows = _count(db.execute(sa.delete(MailDraft).where(MailDraft.user_id == user_id)))
+    db.execute(
+        sa.update(MailSend).where(MailSend.user_id == user_id).values(message_id_header=None)
+    )
     for table in TABLES[:-1]:
         rows += _count(db.execute(sa.delete(table).where(table.user_id == user_id)))  # type: ignore[attr-defined]
     events = _count(db.execute(_STRIP_EVENTS, {"user_id": user_id}))

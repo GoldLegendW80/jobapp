@@ -1,52 +1,24 @@
-import {
-  COMPANY_TYPES,
-  DOCUMENTS_LANGUAGES,
-  DOCUMENTS_TONES,
-  SENIORITIES,
-  type Search,
-} from "@/features/profile/api";
+import { type Search } from "@/features/profile/api";
 import { type ApplySettings } from "@/features/apply/settings-api";
-import { contractWord, WORDING } from "@/lib/wording";
+import {
+  COMPANY_WORDS,
+  LANGUAGE_WORDS,
+  REMOTE_WORDS,
+  SENIORITY_WORDS,
+  TONE_WORDS,
+  contractWord,
+  WORDING,
+} from "@/lib/wording";
+
+export {
+  COMPANY_WORDS,
+  LANGUAGE_WORDS,
+  REMOTE_WORDS,
+  SENIORITY_WORDS,
+  TONE_WORDS,
+} from "@/lib/wording";
 
 import { splitTerms, type Draft, type PayDraft, type StepId } from "./steps";
-
-/** The answers of the wizard in plain words: the choices' labels and the summary's rows. */
-export const SENIORITY_WORDS: Record<(typeof SENIORITIES)[number], string> = {
-  intern: "Intern",
-  junior: "Junior",
-  mid: "Mid-level",
-  senior: "Senior",
-  lead: "Lead",
-  principal: "Principal or staff",
-};
-export const COMPANY_WORDS: Record<(typeof COMPANY_TYPES)[number], string> = {
-  startup: "Startup",
-  scaleup: "Scale-up",
-  large_company: "Large company",
-  public_sector: "Public sector",
-  nonprofit: "Nonprofit",
-  agency: "Agency",
-  consulting: "Consulting firm",
-};
-export const REMOTE_WORDS = {
-  remote: "Remote",
-  hybrid: "Hybrid",
-  office: "On site",
-  any: "Any of these",
-} as const;
-export const LANGUAGE_WORDS: Record<
-  (typeof DOCUMENTS_LANGUAGES)[number],
-  string
-> = {
-  auto: "Automatic, from the posting",
-  en: "English",
-  fr: "French",
-};
-export const TONE_WORDS: Record<(typeof DOCUMENTS_TONES)[number], string> = {
-  plain: "Plain",
-  formal: "Formal",
-  warm: "Warm",
-};
 
 const listOr = (items: string[], none: string) =>
   items.length ? items.join(", ") : none;

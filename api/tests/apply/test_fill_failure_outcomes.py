@@ -11,6 +11,7 @@ from app.apply.models import Application, State
 from app.browser.client import BrowserError
 from tests.apply.a5_support import FakeAgent, FakeLeases, run_ashby
 from tests.apply.test_a5_run import application, fields, services, started, why_answer
+from tests.apply.test_a10a_failures import with_status
 
 
 @pytest.mark.parametrize("reported", ["file_rejected", ""])
@@ -77,6 +78,50 @@ def test_lost_release_does_not_erase_a_completed_fill(db, factory, person_a, for
     assert app.state is State.ready
     assert app.error_code is None
     assert fields(db, app_id)["Why Example Robotics?"].value
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_http_refusal_has_the_correct_person_or_retry_outcome(
+    db, factory, person_a, forms_base_url, status
+):
+    form = run_ashby()
+    with_status(form, status)
+    if status == 403:
+
+        async def still_forbidden():
+            return {
+                "ok": True,
+                "url": form.url,
+                "snapshot": '- heading "Access denied" [ref=e1]',
+                "cut": False,
+            }
+
+        form._person_snapshot = still_forbidden
+    app_id = started(db, person_a)
+    leases = FakeLeases()
+    env = services(
+        factory,
+        form,
+        leases,
+        FakeAgent(why_answer),
+        stub_base=forms_base_url,
+        retry_delays_s=(600, 3600),
+    )
+    result = asyncio.run(run.fill(env, app_id))
+    app = application(db, app_id)
+    if status == 403:
+        assert result == "needs_person"
+        assert (app.state, app.needs, app.error_code) == (State.needs_person, "forbidden", None)
+    else:
+        assert result == "queued"
+        assert (app.state, app.needs, app.error_code) == (
+            State.queued,
+            failures.RETRY,
+            failures.HTTP_429,
+        )
+        assert app_id not in run.due(db, app.updated_at + timedelta(seconds=599), (600, 3600))
+        assert app_id in run.due(db, app.updated_at + timedelta(seconds=600), (600, 3600))
+    assert len(leases.released) == 1
 
 
 @pytest.mark.parametrize("opens", [False, True])
