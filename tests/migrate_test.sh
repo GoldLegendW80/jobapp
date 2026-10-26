@@ -19,7 +19,7 @@
 # 5. The same migration, its container killed before the limit (what the kernel does when the
 #    container runs out of memory): exit 137 is reported as killed, not as a timeout, and its
 #    session is ended in Postgres too.
-# 6. The README's recovery statement, cut out of README.md and run as written: it ends a leftover
+# 6. The recovery statement of docs/runbooks/continuous-delivery.md, run as written: it ends a leftover
 #    session on the migration's lock in this database, not the one of another database.
 # 7. A release that adds a nullable column (expand): applied by the new image's one off container
 #    while the old api container, untouched, keeps answering and keeps reading the altered table.
@@ -52,7 +52,7 @@ fail() {
 }
 
 FILES=(-f compose.yml -f migrate-test.yml)
-# Apple silicon: compose.mac.yml, or the api dies with SIGILL at import (README, Apple silicon).
+# Apple silicon: compose.mac.yml, or the api dies with SIGILL at import (docs/runbooks/development-on-the-mac.md, Apple silicon).
 if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then FILES+=(-f compose.mac.yml); fi
 dc() { (cd "$TREE" && docker compose -p "$PROJECT" "${FILES[@]}" "$@"); }
 
@@ -276,15 +276,15 @@ gone "pg_sleep(120)" || fail "the killed migration is still running in Postgres"
 check_api "after a killed migration"
 ok "exit 137 after ${took}s of a 120s limit: reported as killed, possibly out of memory, its session ended in Postgres, schema and revision unchanged, the old api answers"
 
-step "6. the README's recovery statement, run as written against this stack"
-# The command and the SQL are cut out of README.md. `bash -c` stands for the shell ssh runs the
+step "6. the recovery statement of the runbook, run as written against this stack"
+# The command and the SQL are cut out of docs/runbooks/continuous-delivery.md. `bash -c` stands for the shell ssh runs the
 # command in on the Jetson; only the directory and the Compose project are replaced.
-readme_cmd="$(sed -n "s/^ssh jetson '\(cd ~\/jobapp && docker compose .* exec -T db sh -c .*\)' <<'SQL'\$/\1/p" README.md)"
-readme_sql="$(sed -n "/^ssh jetson .* <<'SQL'\$/,/^SQL\$/p" README.md | sed '1d;$d')"
-[[ -n "$readme_cmd" && "$readme_sql" == *"pg_terminate_backend"* ]] || fail "the recovery statement was not found in README.md"
+readme_cmd="$(sed -n "s/^ssh jetson '\(cd ~\/jobapp && docker compose .* exec -T db sh -c .*\)' <<'SQL'\$/\1/p" docs/runbooks/continuous-delivery.md)"
+readme_sql="$(sed -n "/^ssh jetson .* <<'SQL'\$/,/^SQL\$/p" docs/runbooks/continuous-delivery.md | sed '1d;$d')"
+[[ -n "$readme_cmd" && "$readme_sql" == *"pg_terminate_backend"* ]] || fail "the recovery statement was not found in docs/runbooks/continuous-delivery.md"
 on_jetson='cd ~/jobapp && docker compose -f compose.yml --profile tunnel'
 here="cd $(printf '%q' "$TREE") && docker compose -p $PROJECT ${FILES[*]}"
-[[ "$readme_cmd" == "$on_jetson "* ]] || fail "the README command does not start as expected: $readme_cmd"
+[[ "$readme_cmd" == "$on_jetson "* ]] || fail "the runbook command does not start as expected: $readme_cmd"
 local_cmd="$here${readme_cmd#"$on_jetson"}"
 PG_DB="$(sed -n 's/^POSTGRES_DB=//p' "$TREE/.env")"
 # A leftover: a session of this database holding the migration's lock, as a migration whose
@@ -292,15 +292,15 @@ PG_DB="$(sed -n 's/^POSTGRES_DB=//p' "$TREE/.env")"
 hold_lock "$PG_DB" 592
 answer="$(bash -c "$local_cmd" <<<"$readme_sql" 2>&1 | tr -d '\r' || true)"
 while IFS= read -r line; do printf '   | %s\n' "$line"; done <<<"$answer"
-[[ "$(grep -c ' | t$' <<<"$answer")" == 1 && "$answer" == *"(1 row)"* ]] || fail "the README statement did not end exactly one session"
-gone "pg_sleep(592)" || fail "the leftover session is still there after the README statement"
-[[ "$(sessions "pg_sleep(591)")" == 1 ]] || fail "the README statement ended the session of another database"
+[[ "$(grep -c ' | t$' <<<"$answer")" == 1 && "$answer" == *"(1 row)"* ]] || fail "the runbook statement did not end exactly one session"
+gone "pg_sleep(592)" || fail "the leftover session is still there after the runbook statement"
+[[ "$(sessions "pg_sleep(591)")" == 1 ]] || fail "the runbook statement ended the session of another database"
 answer="$(bash -c "$local_cmd" <<<"$readme_sql" 2>&1 | tr -d '\r' || true)"
-[[ "$answer" == *"(0 rows)"* ]] || fail "a second run of the README statement found something: $answer"
+[[ "$answer" == *"(0 rows)"* ]] || fail "a second run of the runbook statement found something: $answer"
 end_session "pg_sleep(591)"
 gone "pg_sleep(591)" || fail "the test's own session in database postgres could not be ended"
-check_api "after the README statement"
-ok "the statement of the README ends the leftover session of this database (1 row, then 0 rows), leaves the same key in database postgres alone, and the old api answers"
+check_api "after the runbook statement"
+ok "the statement of the runbook ends the leftover session of this database (1 row, then 0 rows), leaves the same key in database postgres alone, and the old api answers"
 
 step "7. an expanding migration: applied by the new image while the old api serves"
 write_revision 9999 "$HEAD_REV" '    op.add_column("users", sa.Column("migrate_test_note", sa.Text(), nullable=True))'

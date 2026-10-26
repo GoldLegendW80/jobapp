@@ -11,7 +11,9 @@ own here, consumed after the interactive one, so a batch never delays a run some
 Messages are JSON, never pickle (arq's default): a job is a function name and string arguments,
 so nothing read from Redis can execute code. Job ids make enqueueing idempotent: arq refuses a
 second job with the id of one still queued, running or kept as a result, so a sweep id or a
-scheduled (user, slot) pair is enqueued at most once.
+scheduled (user, slot) pair is enqueued at most once. A failed job's result is the exception
+it raised, kept for an hour (`keep_result` is part of that idempotence): it is written as its
+class name alone, never as what it says (issue #670, the rule of app/logging_config.py).
 
 The api holds one lazily made connection pool (`Queue`); when Redis is down, `enqueue` raises
 QueueUnavailableError after at most CONNECT_TIMEOUT_S instead of retrying for seconds.
@@ -25,6 +27,8 @@ from typing import Any
 
 from arq.connections import ArqRedis, RedisSettings, create_pool
 
+from app.logging_config import error_name
+
 SWEEPS = "jobapp:sweeps"
 AGENTS = "jobapp:agents"
 INGESTION = "jobapp:ingestion"
@@ -37,8 +41,13 @@ class QueueUnavailableError(Exception):
     """Redis could not be reached or refused the job."""
 
 
+def _text(value: Any) -> str:
+    """What JSON cannot hold, as text; an exception as its class name (module docstring)."""
+    return error_name(value) if isinstance(value, BaseException) else str(value)
+
+
 def serialize(job: dict[str, Any]) -> bytes:
-    return json.dumps(job, separators=(",", ":"), default=str).encode()
+    return json.dumps(job, separators=(",", ":"), default=_text).encode()
 
 
 def deserialize(raw: bytes) -> dict[str, Any]:

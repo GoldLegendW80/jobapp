@@ -413,7 +413,9 @@ def test_a_hook_that_raises_changes_nothing_of_the_run(
         assert MARKER not in text_logged
     else:
         assert failed[0].exc_info is not None
-        assert MARKER in text_logged
+        # Its frames and type only: no message reaches a log line at all (issue #670).
+        assert ", in raising\nLookupError" in text_logged
+        assert MARKER not in text_logged
 
 
 def test_a_hook_that_never_returns_is_given_up(
