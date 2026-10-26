@@ -103,13 +103,14 @@
 	# (a 502 from Caddy, a 500) and then travels as the Referer of the tab icon: the same mask is
 	# on the Referer line, and the api's own `Referrer-Policy: no-referrer` on the callback is kept
 	# (see security_headers). The live view's one use ticket travels in the query of
-	# /vnc/websockify (browser B4): the whole query of that path is masked on the same two lines.
+	# /vnc/websockify (browser B4): the whole query of that path is masked on the same two lines,
+	# and so is that of /api/browser/live/auth, which a visitor may probe with a ticket (a 404).
 	log {
 		output stdout
 		format filter {
 			wrap json
-			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback|/vnc/websockify)\\?.*" "${1}${2}[redacted]"
-			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback|/vnc/websockify)\\?.*" "${1}${2}[redacted]"
+			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback|/vnc/websockify|/api/browser/live/auth)\\?.*" "${1}${2}[redacted]"
+			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback|/vnc/websockify|/api/browser/live/auth)\\?.*" "${1}${2}[redacted]"
 			request>headers>X-Filename delete
 			resp_headers>Location regexp "([?&]state=)[^&#]+" "${1}[redacted]"
 		}
