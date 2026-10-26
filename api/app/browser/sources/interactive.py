@@ -230,6 +230,7 @@ async def _one(
         await runner._give_back(str(plan.user_id), None if got.lease is None else "")
         return "browser_busy"
     lease_id = got.lease.lease_id
+    paced = platform_policy.platform_for(context)
     try:
         pages = Pages(
             GuardedTools(
@@ -241,10 +242,11 @@ async def _one(
             sleep=runner.sleep,
             rng=runner.rng,
             monotonic=runner.monotonic,
-            host=host,
+            # One pace per platform, shared by all its addresses (B14), else per host.
+            host=platform_policy.pace_key(paced, host, runner.base_url),
             pacer=runner.pacer,
             lease_until=asked + min(got.lease.max_s, 900),
-            pause=platform_policy.pause_for(platform_policy.platform_for(context)),
+            pause=platform_policy.pause_for(paced),
         )
         return await _search(runner.finder, pages, scope, str(plan.user_id), entry)
     finally:

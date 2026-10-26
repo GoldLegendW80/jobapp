@@ -2,10 +2,11 @@
 careers page saved at a protected platform's address (app/browser/platform_policy.py)."""
 
 import asyncio
+import itertools
 
 import pytest
 
-from app.browser import platform_policy, sources
+from app.browser import finder, platform_policy, sources
 from app.browser.platform_policy import CUSTOM, platform_of, wall
 from app.browser.sources import ERRORS, PAGE_PAUSE_S, linkedin
 from app.browser.sources.interactive import SourceContext
@@ -247,6 +248,86 @@ def test_a_huge_snapshot_is_read_in_linear_time():
 def test_every_refusal_becomes_a_source_code(platform, refused, reserved, code):
     assert platform_policy.source_code(platform, refused, reserved) == code
     assert code in ERRORS
+
+
+class Allow:
+    """A policy that grants every check: the pace alone is under test."""
+
+    async def check(self, context):
+        return None
+
+    async def reserve(self, context):
+        return None
+
+    async def observe(self, context, url, snapshot):
+        return None
+
+
+class Paged:
+    """Browser tools that answer every address with a page linking to its next page, and note
+    the time of each browser call (the runner's fake clock)."""
+
+    def __init__(self, now):
+        self.now, self.current, self.calls = now, "", []
+
+    async def call(self, name, args):
+        self.calls.append((self.now[0], name, args.get("url", "")))
+        if name == "browser_navigate":
+            self.current = args["url"]
+        return {"ok": True, "url": self.current}
+
+    async def snapshot(self):
+        page = '- heading "Jobs" [level=1]\n- link "Next" [ref=e1]\n  - /url: ?page=2'
+        return {"ok": True, "url": self.current, "snapshot": page}
+
+    async def wait_for(self, **_args):
+        return {"ok": True}
+
+
+async def two_pages(session):
+    await session.navigate("?page=2")
+    return finder.Ran()
+
+
+@pytest.mark.parametrize(
+    "second", ["https://fr.linkedin.com/jobs/", "https://linkedin.com/jobs/search/"]
+)
+def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
+    """The preset LinkedIn address and a custom one of another spelling are paced as one
+    platform: no page of the sweep follows another LinkedIn page sooner than LinkedIn's
+    shortest pause, across the two sources too."""
+    from tests.browser.test_b9_site import ScriptedFinder
+
+    now = [0.0]  # the runner's clock: its sleep, its pacer and the tools read the same time
+    tools = Paged(now)
+    sites = [("linkedin", "https://www.linkedin.com/jobs/"), ("custom", second)]
+    search = selected(
+        interactive_sites=[
+            {"platform": label, "url": url, "enabled": True, "mode": "llm_browser"}
+            for label, url in sites
+        ]
+    )
+    entries, _, leases, _, _ = asyncio.run(
+        execute(
+            search,
+            "e2e-person",
+            ScriptedFinder(two_pages),
+            tools=tools,
+            policy=Allow(),
+            sweep_id="b14-sweep",
+            now=now,
+            deadline=10_000,
+        )
+    )
+    assert len(leases.acquired) == 2, entries
+    opened = [at for at, name, _ in tools.calls if name == "browser_navigate"]
+    assert len(opened) == 4, tools.calls  # two pages per source
+    low = linkedin.PAUSE_S[0]
+    gaps = [b - a for a, b in itertools.pairwise(opened)]
+    assert all(gap >= low for gap in gaps), gaps
+    assert platform_policy.pace_key("linkedin", "fr.linkedin.com") == (
+        platform_policy.pace_key("linkedin", "www.linkedin.com")
+    )
 
 
 def test_linkedin_keeps_its_slower_pace_and_smaller_page_cap():

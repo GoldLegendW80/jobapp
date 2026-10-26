@@ -229,10 +229,19 @@ def lock_platform(db: Session, user_id: uuid.UUID, kind: str) -> None:
 
 
 def _locked_entries(
-    db: Session, user_id: uuid.UUID, sweep_id: uuid.UUID, source_id: str
+    db: Session,
+    user_id: uuid.UUID,
+    sweep_id: uuid.UUID,
+    source_id: str,
+    *,
+    running: bool = True,
 ) -> tuple[Sweep, list[dict[str, Any]]] | None:
+    """The person's sweep row, locked, and its entries of the source; None when the row is not
+    the person's, has no such entry, or (with `running`) has stopped running."""
     row = db.get(Sweep, sweep_id, with_for_update=True)
-    if row is None or row.user_id != user_id or row.status is not SweepStatus.running:
+    if row is None or row.user_id != user_id:
+        return None
+    if running and row.status is not SweepStatus.running:
         return None
     stats = copy.deepcopy(row.stats or {})
     entries = [
@@ -283,8 +292,10 @@ def record_wall(
     now: datetime,
 ) -> None:
     """Record a checkpoint (`checkpoint_at`, the pause starts) or a sign in page met by the
-    source, in every entry of the source; the caller commits before anything else."""
-    locked = _locked_entries(db, user_id, sweep_id, source_id)
+    source, in every entry of the source; the caller commits before anything else. Whatever the
+    row's status: a sweep reaped or cancelled while the source still reads keeps the wall, so
+    the 7 day pause holds (the history reads every sweep of the person)."""
+    locked = _locked_entries(db, user_id, sweep_id, source_id, running=False)
     if locked is None:
         return
     for item in locked[1]:

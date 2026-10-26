@@ -145,6 +145,18 @@ def pause_for(platform: str) -> tuple[float, float]:
     return PAUSES.get(platform, PAGE_PAUSE_S)
 
 
+def pace_key(platform: str, host: str, base_url: str | None = None) -> str:
+    """The pacer's key of a source's pages. Every address of a protected platform shares one,
+    whatever its host (`www.linkedin.com`, `fr.linkedin.com`), so two addresses of the platform
+    in one sweep keep its pause between them; LinkedIn's is the legacy reader's own
+    (sources/linkedin.py), so both readers share LinkedIn's slot. Any other website: its host."""
+    if platform == "linkedin":
+        return linkedin.READER.host(base_url)
+    if platform in PLATFORMS:
+        return f"platform:{platform}"
+    return host
+
+
 def test_start(base_url: str | None, platform: str, url: str) -> str:
     """BROWSER_SOURCES_BASE_URL (tests only, refused in production): a protected platform's
     search opens the fixture server's `<base>/<platform>/` instead of the real host, so no

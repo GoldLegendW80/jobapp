@@ -283,6 +283,31 @@ def test_checkpoint_is_committed_before_the_page_returns_and_survives_stale_writ
     )
 
 
+@pytest.mark.parametrize("platform", ["freework", "indeed", "welcome_to_the_jungle"])
+def test_a_checkpoint_met_after_the_sweep_stopped_running_still_pauses_the_platform(
+    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any, platform: str
+) -> None:
+    """The reaper (or a cancel) ends the sweep row while the source still reads: the wall
+    page it then meets is recorded all the same, so the 7 day pause holds."""
+    accept(api, person_a, platform)
+    policy = PlatformPolicy(factory, clock)
+    sweep_id = running(factory, person_a, clock(), [URLS[platform]])
+    ctx = context(person_a, sweep_id, URLS[platform], platform)
+    assert run(policy.reserve(ctx)) is None
+    with factory() as db, db.begin():
+        row = db.get(Sweep, sweep_id)
+        assert row is not None
+        row.status, row.finished_at = SweepStatus.failed, clock()
+    assert run(policy.observe(ctx, URLS[platform], CHECKPOINT)) == "permission_checkpoint"
+    stored = entries(factory, sweep_id)[0]
+    assert stored["checkpoint_at"] == clock().isoformat()
+    assert stored["platform"] == platform
+    with factory() as db:
+        assert guard.state(db, person_a.user_id, platform, clock()).paused_until == (
+            clock() + guard.PAUSE
+        )
+
+
 def test_seven_day_pause_ends_exactly_at_seven_days(
     api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
 ) -> None:
