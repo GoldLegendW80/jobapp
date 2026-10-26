@@ -25,7 +25,7 @@ export interface SweepRunner {
   /** The sweep being followed, with its latest progress. */
   running: Sweep | null;
   starting: boolean;
-  start: () => void;
+  start: (profileRevision?: number) => Promise<void>;
   summary: SweepDetail | null;
   showSummary: (sweep: SweepDetail | null) => void;
 }
@@ -68,45 +68,50 @@ export function useSweepRunner(): SweepRunner {
     });
   }, [target, client]);
 
-  const start = useCallback(() => {
-    setStarting(true);
-    startSweep().then(
-      (sweep) => {
-        setStarting(false);
-        setProgress(sweep);
-        setStarted(sweep.id);
-        void client.invalidateQueries({ queryKey: sweepsKey });
-      },
-      (error: unknown) => {
-        setStarting(false);
-        const already = runningSweepOf(error);
-        if (already) {
-          toast.info("A sweep is already running: following it.");
-          setEnded((old) => {
-            const next = new Set(old);
-            next.delete(already);
-            return next;
-          });
-          setStarted(already);
-          return;
-        }
-        if (isApiError(error) && error.status === 422) {
-          // No enabled board, or a stored search section to save again: both are fixed in
-          // the Search tab of the profile.
-          toast.error(errorDetail(error) ?? "No board to sweep.", {
-            action: {
-              label: "Open the profile",
-              onClick: () => {
-                void navigate("/profile?tab=search");
+  const start = useCallback(
+    async (profileRevision?: number) => {
+      setStarting(true);
+      return startSweep(profileRevision).then(
+        (sweep) => {
+          setStarting(false);
+          setProgress(sweep);
+          setStarted(sweep.id);
+          void client.invalidateQueries({ queryKey: sweepsKey });
+        },
+        (error: unknown) => {
+          setStarting(false);
+          const already = runningSweepOf(error);
+          if (already) {
+            toast.info("A sweep is already running: following it.");
+            setEnded((old) => {
+              const next = new Set(old);
+              next.delete(already);
+              return next;
+            });
+            setStarted(already);
+            return;
+          }
+          // Setup owns its editable error state and must not disappear after a refusal.
+          if (profileRevision !== undefined) throw error;
+          if (isApiError(error) && error.status === 422) {
+            // No enabled board, or a stored search section to save again: both are fixed in
+            // the Search tab of the profile.
+            toast.error(errorDetail(error) ?? "No board to sweep.", {
+              action: {
+                label: "Open the profile",
+                onClick: () => {
+                  void navigate("/profile?tab=search");
+                },
               },
-            },
-          });
-          return;
-        }
-        toast.error(`The sweep did not start. ${describeError(error)}`);
-      },
-    );
-  }, [client, navigate]);
+            });
+            return;
+          }
+          toast.error(`The sweep did not start. ${describeError(error)}`);
+        },
+      );
+    },
+    [client, navigate],
+  );
 
   let running: Sweep | null = null;
   if (target) {

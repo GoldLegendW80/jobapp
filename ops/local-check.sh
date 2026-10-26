@@ -872,7 +872,9 @@ journey_parts() { # journey_parts <group ...>: each group, or its shards <group>
 # The journey groups a batch runs (issue #552, owner's decision of 2026-10-21: scope the gate).
 # Only the groups its changed files touch: the files of the merged head against the base, mapped
 # to groups by `ci_plan.py journeys` of the tree (the path rules of CI's plan, then the imports of
-# the api modules and the web features; its header says how). Documentation or operations only
+# the api modules and the web features; its header says how: an api file runs its module's
+# groups and those of the api files that import it, browser/Dockerfile only the stacks of the
+# browser profile, apply and browser, below). Documentation or operations only
 # runs no group; a shared file, the gate itself or a path no rule names runs every group. Every
 # group runs, whatever changed, when
 # - LOCAL_CHECK_FULL=1 is set;
