@@ -125,9 +125,12 @@ class InteractiveScope:
     filters: tuple[tuple[str, str], ...] = ()
     criteria: str = "{}"
     instructions: str = ""
+    # B17: the person signed in to this website: browserd reads it in their persisted context.
+    signed_in: bool = False
 
     def tool_scope(self) -> dict[str, Any]:
-        return {"start": self.start, "query": self.query, "filters": dict(self.filters)}
+        scope = {"start": self.start, "query": self.query, "filters": dict(self.filters)}
+        return {**scope, "signed_in": True} if self.signed_in else scope
 
     def __post_init__(self) -> None:
         if not canonical(self.start) or len(self.query) > 2000 or not self.query.strip():

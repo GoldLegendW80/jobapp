@@ -1,4 +1,10 @@
-"""Conservative native GET discovery. Labels alone never grant a search submission."""
+"""Conservative native GET discovery. Labels alone never grant a search submission.
+
+A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
+the site's JavaScript on, for a website the person signed in to: the same controls are refused
+and every request the page makes is held to `signed_request`, GET or HEAD only, never an apply,
+submit, delete or payment address, the documents within the frozen search scope.
+"""
 
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlsplit
@@ -59,14 +65,17 @@ class Scope:
     start: str
     query: str
     filters: tuple[tuple[str, str], ...]
+    signed_in: bool = False
 
     @classmethod
     def parse(cls, raw: object) -> "Scope | None":
-        if not isinstance(raw, dict) or set(raw) != {"start", "query", "filters"}:
+        if not isinstance(raw, dict) or set(raw) - {"signed_in"} != {"start", "query", "filters"}:
             return None
         start, query, filters = raw["start"], raw["query"], raw["filters"]
+        signed_in = raw.get("signed_in", False)
         if (
-            not isinstance(start, str)
+            type(signed_in) is not bool
+            or not isinstance(start, str)
             or not read_url(start, start)
             or not isinstance(query, str)
             or not query.strip()
@@ -80,7 +89,7 @@ class Scope:
             )
         ):
             return None
-        return cls(start, query, tuple(sorted(filters.items())))
+        return cls(start, query, tuple(sorted(filters.items())), signed_in)
 
     def criteria(self, pairs: list[tuple[str, str]], *, complete: bool) -> bool:
         keys = [k for k, _ in pairs]
@@ -141,6 +150,49 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
         return False
 
 
+def destructive(url: str) -> bool:
+    """An address that applies, submits, deletes or pays, by its path words (read_url's rule
+    without the account words: a signed in page reads the person's own account data)."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return True
+    if parts.scheme not in {"http", "https"} or parts.username or parts.password:
+        return True
+    segments = parts.path.strip("/").split("/")
+    tokens = [word for segment in segments for word in detect.words(segment)]
+    return (
+        detect.says_submit(segments, profile_edit=True)
+        or detect.says_danger(segments)
+        or any(part in t for t in tokens for part in APPLY_PARTS)
+    )
+
+
+SIGNIN_PATHS = ("login", "signin", "logon", "connexion", "seconnecter", "auth", "sso")
+
+
+def signin_url(url: str) -> bool:
+    """A sign in page's address by its path (B17): a signed in discovery sent there has lost the
+    person's login, which the api tells as `platform_signin`."""
+    try:
+        segments = urlsplit(url).path.lower().split("/")
+    except (ValueError, AttributeError):
+        return False
+    folded = ["".join(ch for ch in segment if ch.isalnum()) for segment in segments]
+    return any(f.startswith(SIGNIN_PATHS) for f in folded if f)
+
+
+def signed_request(url: str, method: str, document: bool, scope: Scope) -> bool:
+    """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, never a
+    destructive address on any host, and a document (a frame's navigation) only within the
+    frozen scope, as read_url holds the anonymous discovery."""
+    if method not in {"GET", "HEAD"} or not isinstance(url, str) or len(url) > 8000:
+        return False
+    if document:
+        return read_url(url, scope.start, scope=scope)
+    return not destructive(url)
+
+
 def verdict(
     facts: object, tool: str, current: str, *, scope: Scope | None = None, args: dict | None = None
 ) -> str | None:
@@ -159,7 +211,10 @@ def verdict(
     if detect.says_submit(facts.get("names", []), profile_edit=True):
         return "submit"
     d = facts.get("discovery")
-    if not isinstance(d, dict) or d.get("native") is not True:
+    # A signed in page runs its scripts by design (B17): its requests are held instead
+    # (signed_request), so the script free proof is the anonymous discovery's alone.
+    signed_in = scope is not None and scope.signed_in
+    if not isinstance(d, dict) or (d.get("native") is not True and not signed_in):
         return UNSUPPORTED
     if facts.get("selector_hit") or facts.get("selector_error") or facts.get("custom_submit"):
         return "submit"

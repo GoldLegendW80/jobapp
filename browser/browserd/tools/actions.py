@@ -17,7 +17,11 @@ page is never read nor acted on.
 
 Discovery instead uses an anonymous context with JavaScript disabled before any navigation.
 CDP Fetch holds requests before sending and responses before receiving their bodies. Redirect
-responses are refused before Chromium follows them. Authenticated discovery is not supported.
+responses are refused before Chromium follows them. A signed in discovery (B17: a website the
+person signed in to, `Scope.signed_in`) runs in the person's own persisted context instead, with
+the site's JavaScript on: a route on that context lets only GET and HEAD requests leave, never to
+an apply, submit, delete or payment address, and a frame's navigation only within the frozen
+scope (discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`).
 
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
@@ -71,6 +75,7 @@ MESSAGES = {
     "refused_scheme": "Refused: only http and https pages are opened.",
     "bad_url": "Refused: this address cannot be opened.",
     "not_editable": "Refused: only a text field is typed into.",
+    "signin_required": "The website asks to sign in again: the person signs in themselves.",
 }
 
 
@@ -112,6 +117,8 @@ class State:
     native_context: Any = None
     native_cdp: Any = None
     native_failed: bool = False
+    signed_in: bool = False  # B17: discovery in the person's own persisted context
+    signin_seen: bool = False  # B17: that discovery was sent to the site's sign in page
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     chooser_id: int = 0
@@ -174,6 +181,9 @@ class Tab:
         ):
             raise UnsupportedDiscovery
         self.state.discovery = True
+        if scope.signed_in:
+            await self._begin_signed_in(scope)
+            return
         try:
             async with asyncio.timeout(ACTION_S):
                 context = await browser.new_context(
@@ -199,8 +209,54 @@ class Tab:
             await self.close_discovery()
             raise UnsupportedDiscovery from exc
 
+    async def _begin_signed_in(self, scope: "discovery.Scope") -> None:
+        """B17: the person's own persisted context (their logins), its JavaScript on; one tab,
+        every request it makes held by `_signed_route` from the first navigation on."""
+        self.state.signed_in = True
+        try:
+            async with asyncio.timeout(ACTION_S):
+                context = self.browser.browser.contexts[0]
+                await context.route("**/*", self._signed_route)
+                context.on("request", self._hop)
+                page = context.pages[0] if context.pages else await context.new_page()
+                for other in context.pages:
+                    if other is not page:
+                        await other.close()
+                self.state.native_context = self.state.guarded = context
+                self.state.scope, self.state.page = scope, page
+                context.on("page", self.extra_page)
+        except Exception as exc:
+            await self.close_discovery()
+            raise UnsupportedDiscovery from exc
+
+    async def _signed_route(self, route: Any, request: Any) -> None:
+        scope, method = self.state.scope, request.method
+        try:
+            frame = request.frame if request.is_navigation_request() else None
+            main = frame is not None and frame.parent_frame is None
+        except Exception:  # a service worker's request has no frame: not a document
+            frame, main = None, False
+        allowed = (
+            not self.state.native_failed
+            and scope is not None
+            and discovery.signed_request(request.url, method, frame is not None, scope)
+            and (not main or self.allowed(request.url))
+        )
+        if allowed:
+            await route.fallback()
+            return
+        if main:  # the tab was sent off the scope: settle() takes it back and says so
+            self.state.blocked.append(request.url[:200])
+            self.state.signin_seen = self.state.signin_seen or discovery.signin_url(request.url)
+        await route.abort("blockedbyclient")
+
     async def close_discovery(self) -> None:
         self.state.native_failed = True
+        if self.state.signed_in:  # never the person's own context: the discovery tab only
+            if self.state.page is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.state.page.close(), ACTION_S)
+            return
         if self.state.native_context is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.state.native_context.close(), ACTION_S)
@@ -286,6 +342,8 @@ class Tab:
         except Exception:
             return
         self.state.blocked.append(request.url[:200])
+        if self.state.signed_in and discovery.signin_url(request.url):
+            self.state.signin_seen = True
         asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
 
     async def guard(self) -> Any:
@@ -352,6 +410,9 @@ class Tab:
                         await page.goto(ABOUT_BLANK)
                 self.state.blocked.clear()
                 log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
+                if self.state.signin_seen:  # B17: the site asks the person to sign in again
+                    self.state.signin_seen = False
+                    return failure("signin_required", MESSAGES["signin_required"])
                 return {**refused("host_not_allowed"), "url": page.url if page else None}
             except Exception as exc:
                 raise RefusalRecoveryError(exc) from exc

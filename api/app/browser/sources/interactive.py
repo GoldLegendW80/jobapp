@@ -3,11 +3,17 @@
 Until then, verified detail findings are counted as partial, never sent to the legacy
 company/date store. Protected platforms need the person's current permission, checked by the
 runner's InteractivePolicy (app/browser/platform_policy.py, browser B14).
+
+A website the person signed in to (B17, app/browser/site_logins.py) is read signed in: the
+scope says so and browserd runs it in the person's own persisted context, the lease being that
+person's as every lease is. A sign in page met then ends the source `platform_signin` and marks
+the login expired, so the card asks the person to sign in again.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -25,6 +31,7 @@ if TYPE_CHECKING:
 
     from app.browser.sources import Runner
 
+SIGNIN_CODE = "platform_signin"  # guard.SIGNIN, the sources' code of a sign in page
 CRITERIA = frozenset(
     {
         "title_include",
@@ -73,8 +80,15 @@ def _refuse(code: str | None) -> None:
 class GuardedTools:
     """Only code creates this binding. Check after page pacing, before each browser call."""
 
-    def __init__(self, tools: Any, policy: InteractivePolicy | None, context: SourceContext):
+    def __init__(
+        self,
+        tools: Any,
+        policy: InteractivePolicy | None,
+        context: SourceContext,
+        logins: Any = None,
+    ):
         self.tools, self.policy, self.context = tools, policy, context
+        self.logins = logins  # B17: set only when the website is read signed in
         self.reserved = False
 
     async def _before(self, name: str) -> None:
@@ -88,7 +102,10 @@ class GuardedTools:
 
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._before(name)
-        return await self.tools.call(name, args)
+        result = await self.tools.call(name, args)
+        if self.logins is not None and result.get("error") == "signin_required":
+            await self._signed_out(SIGNIN_CODE, "", "")
+        return result
 
     async def snapshot(self) -> dict[str, Any]:
         await self._before("browser_snapshot")
@@ -103,9 +120,23 @@ class GuardedTools:
                 or finder.origin(finder.canonical(url)) != finder.origin(self.context.url)
             ):
                 raise SourceError("page_failed")
-            if self.policy:
-                _refuse(await self.policy.observe(self.context, url, text))
+            code = await self.policy.observe(self.context, url, text) if self.policy else None
+            if self.logins is not None:
+                await self._signed_out(code, url, text)
+            _refuse(code)
         return shot
+
+    async def _signed_out(self, code: str | None, url: str, text: str) -> None:
+        """B17: a sign in page on a website read signed in (any platform, custom ones too): the
+        login is gone, so it is marked expired and the source ends `platform_signin`."""
+        from app.browser import platform_policy
+
+        if code is None and url:
+            code = platform_policy.wall("", url, text)
+        if code in {platform_policy.SIGNIN, "linkedin_signin"}:
+            host = urlsplit(self.context.url).hostname or ""
+            await self.logins.expire(self.context.user_id, host)
+            raise SourceError(code)
 
     async def wait_for(self, **args: Any) -> dict[str, Any]:
         await self._before("browser_wait_for")
@@ -225,6 +256,11 @@ async def _one(
     if asked + PAGE_BUDGET_S >= deadline:
         return "time_budget"
     host = urlsplit(scope.start).hostname or ""
+    logins = getattr(runner, "site_logins", None)
+    if logins is not None and await logins.signed_in(str(plan.user_id), host):
+        scope = dataclasses.replace(scope, signed_in=True)
+    else:
+        logins = None
     got = await runner.leases.acquire(str(plan.user_id), "sweep", automation=True, hosts=[host])
     if got.lease is None or got.token is None:
         await runner._give_back(str(plan.user_id), None if got.lease is None else "")
@@ -237,6 +273,7 @@ async def _one(
                 runner.tools_for(str(plan.user_id), lease_id, got.token),
                 runner.interactive_policy,
                 context,
+                logins,
             ),
             deadline,
             sleep=runner.sleep,
