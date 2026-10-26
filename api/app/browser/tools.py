@@ -52,6 +52,35 @@ class LeaseTools:
         api's copy of the lease waiting and polls, which a bare tool call would not."""
         return await self._call(SIGNIN_TOOL, {"site": site, "reason": reason})
 
+    async def linkedin_open(self, job_id: str) -> dict[str, Any]:
+        """The LinkedIn adapter's private opener, absent from `call` and the model tools."""
+        await self._held()
+        return await self.client.linkedin_open(self.lease_id, self._token, job_id)
+
+    async def _apply_wait(self, action: str, reason: str | None = None) -> dict[str, Any]:
+        await self._owned_apply()
+        answer = await self.client.apply_wait(self.lease_id, self._token, action, reason)
+        lease = answer.get("lease")
+        if not isinstance(lease, dict):
+            raise BrowserError("unavailable")
+        if await self.leases.apply_wait(self.user_id, self.lease_id, lease) is None:
+            raise BrowserError("ended")
+        return lease
+
+    async def _person_snapshot(self) -> dict[str, Any]:
+        await self._owned_apply()
+        return await self.client.tool(
+            self.lease_id, self._token, "browser_snapshot", {"passive": True}
+        )
+
+    async def _owned_apply(self) -> None:
+        # current() restores a lost Redis mirror from browserd before checking ownership.
+        lease = (await self.leases.current(self.user_id)).lease
+        if lease is None or lease.lease_id != self.lease_id:
+            raise BrowserError("ended")
+        if lease.purpose != "apply_fill":
+            raise BrowserError("refused")
+
     async def _call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._held()
         return await self.client.tool(self.lease_id, self._token, name, args)
@@ -75,6 +104,12 @@ class LeaseTools:
     ) -> dict[str, Any]:
         args = {"ref": ref, "element": element, "text": text, "submit": submit}
         return await self.call("browser_type", args)
+
+    async def type_empty(self, ref: str, text: str, element: str = "") -> dict[str, Any]:
+        """A paced native text write whose empty check and mutation are atomic in browserd."""
+        return await self.call(
+            "browser_type", {"ref": ref, "element": element, "text": text, "empty_only": True}
+        )
 
     async def select_option(self, ref: str, values: list[str], element: str = "") -> dict[str, Any]:
         return await self.call(

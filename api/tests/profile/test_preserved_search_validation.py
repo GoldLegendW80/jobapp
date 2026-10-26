@@ -232,9 +232,9 @@ def test_valid_preserved_timestamp_keeps_authority_and_saves_ordinary_edits(
         assert {field: row[field] for field in FIELDS} == {
             field: previous[row["kind"]][field] for field in FIELDS
         }
-        assert row["query"] == (
-            "Example robotics" if not present and row["kind"] == kind else "Edited robotics"
-        )
+        # A stored Free-Work entry keeps its words on a generic write (#653, #656).
+        kept = row["kind"] == "freework" or (not present and row["kind"] == kind)
+        assert row["query"] == ("Example robotics" if kept else "Edited robotics")
     assert exported(api, who).json()["sections"]["search"] == search
     after = snapshot(factory, who)
     assert after[3:5] == before[3:5]

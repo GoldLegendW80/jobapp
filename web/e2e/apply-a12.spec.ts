@@ -192,7 +192,7 @@ test("Like the three postings on the jobs list: all three appear in the queue", 
     .getByRole("link", { name: /^Applications/ })
     .click();
   await expect(
-    page.getByRole("heading", { level: 1, name: "Applications" }),
+    page.getByRole("heading", { level: 1, name: "Application queue" }),
   ).toBeVisible();
   for (const key of KEYS) await expect(cardOf(key)).toBeVisible();
 });
@@ -305,7 +305,7 @@ test("the Ashby item: rejected on a phone by keyboard, the posting skipped, noth
   await expect(dialog).toBeHidden();
   await expect(card).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { level: 1, name: "Applications" }),
+    page.getByRole("heading", { level: 1, name: "Application queue" }),
   ).toBeFocused();
   await expect(page.getByText(/Your queue is empty/)).toBeVisible();
   await expect(

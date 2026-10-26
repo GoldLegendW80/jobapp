@@ -35,11 +35,11 @@
 # GitHub starts queued jobs in no particular order, so eleven jobs on three runners paid that
 # cost eleven times and let short jobs start before long ones (run 38072303967: 22.8 minutes of
 # runner time, 13.3 of wall time on two runners). Three jobs start together and end together.
-# The numbers behind the split are in README, Continuous delivery.
+# The numbers behind the split are in docs/runbooks/continuous-delivery.md.
 #
 # Plan: the first step of each job (.github/scripts/ci_plan.py) decides from the files a pull
 # request against main changes which units run: api, web, shell, e2e. Documentation alone runs
-# pre-commit and nothing else (the README also the shell unit, which checks it); web/ alone
+# pre-commit and nothing else (the runbooks and the README also the shell unit, which checks them); web/ alone
 # skips the api unit; any other path runs everything, and so do every push to main, every manual
 # run and every pull request against another branch than main (GITHUB_BASE_REF). Each job ends with
 # `ci_plan.py verify`, which fails it when a step the plan needed did not run or one it left out
@@ -298,7 +298,7 @@ jobs:
   # apps (the longest group) against a scratch Compose stack; the worker runs with TEST_FAST_TIMERS
   # (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts is in one group or in the exclusion
   # list of .github/scripts/e2e_groups.py, which fails the shell unit and pre-commit otherwise.
-  # Which job holds which unit follows the measured lengths (README, What a CI run does; run
+  # Which job holds which unit follows the measured lengths (docs/runbooks/ci-run.md; run
   # 38078877905: api 255 s, this job 320 s with the web checks, journeys 262 s without them):
   # the api tests fill their job, so the shell unit sits here, and the web checks went to
   # journeys.
@@ -435,7 +435,8 @@ jobs:
         id: secret_scan_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/secret_scan_test.sh
-      # tailscale (Funnel): compose config and caddy's :8080 trust rules. No key, no tailnet; the
+      # tailscale (Funnel): compose config, caddy's :8080 trust rules and its password rate limit
+      # (issue #152, the caddy-base image built here). No key, no tailnet; the
       # live no-key start is skipped here (CI is set, and the image is pinned to arm64).
       - name: tests/tailscale_test.sh
         id: tailscale_test

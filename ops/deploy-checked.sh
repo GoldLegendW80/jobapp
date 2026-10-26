@@ -20,7 +20,7 @@
 # Then: gh workflow run deploy.yml -f ref=<full sha> (a hot fix: -f ref=hotfix/<name> -f
 # allow_branch=true); the run is found by the time of the dispatch
 # and the commit of main the workflow runs from; gh run watch until it ends; its conclusion; on
-# success, the public health URL (README.md, Tailscale: https://jobapp.taild83d16.ts.net, or
+# success, the public health URL (docs/runbooks/public-url.md, Tailscale: https://jobapp.taild83d16.ts.net, or
 # DEPLOY_HEALTH_URL) must answer.
 # The figures of the stack come from the run too, not from ssh: its last step
 # (ops/jetson-verify.sh) prints one line JOBAPP-VERIFY services=... result=ok|fail, which this

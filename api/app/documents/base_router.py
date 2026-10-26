@@ -136,6 +136,7 @@ class BaseCvOut(BaseModel):
     last_version_at: datetime | None
     render_state: RenderState
     generation: GenerationOut | None  # of the content (CONTENT_MODES): the open one, else the last
+    design_generation: GenerationOut | None  # latest capture, separate from the content
 
 
 class BaseCvsOut(BaseModel):
@@ -221,13 +222,15 @@ CONTENT_MODES = tuple(
 )
 
 
-def _generation(db: Session, document: Document) -> GenerationOut | None:
+def _generation(
+    db: Session, document: Document, modes: tuple[GenerationMode, ...] = CONTENT_MODES
+) -> GenerationOut | None:
     found = db.execute(
         sa.select(DocumentGeneration)
         .where(
             DocumentGeneration.user_id == document.user_id,
             DocumentGeneration.document_id == document.id,
-            DocumentGeneration.mode.in_(CONTENT_MODES),
+            DocumentGeneration.mode.in_(modes),
         )
         .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
         .limit(1)
@@ -258,6 +261,7 @@ def _out(db: Session, document: Document) -> BaseCvOut:
         last_version_at=last,
         render_state=document.render_state,
         generation=_generation(db, document),
+        design_generation=_generation(db, document, (GenerationMode.template_capture,)),
     )
 
 

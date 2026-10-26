@@ -29,14 +29,18 @@ their stored values
 records the person's accept). The words and the location of the entry are saved as sent, and an
 entry left out removes it, which turns LinkedIn off, unless it is a permission-only row.
 Permission-only LinkedIn rows are retained so an ordinary save cannot clear their reader intent.
-Free-Work consent follows the same dedicated-route rule, but an omitted Free-Work entry is
-retained: generic Search saves and imports cannot remove its protected settings. Restoring it
-must still satisfy the Search rules, including the ten-source limit, before anything is written.
+Free-Work consent follows the same dedicated-route rule, and goes further: once stored, its words
+and location also keep their stored values on every other save and import (a generic save that
+creates the entry keeps them as sent, off and unaccepted), and an omitted Free-Work entry is
+retained, so generic Search saves and imports cannot remove or rewrite its protected settings.
+Restoring it must still satisfy the Search rules, including the ten-source limit, before anything
+is written.
 The separate `platform_consents` map belongs to the browser: generic saves and imports keep it,
 and a dedicated platform writer can update only its own entry under the same revision lock.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -58,6 +62,7 @@ from app.profile.schemas import (
 )
 
 REVISIONS_PAGE_MAX = 100
+logger = logging.getLogger(__name__)
 
 
 ONBOARDING_FIELDS = ("completed_at", "dismissed_at")
@@ -142,6 +147,9 @@ def _keep_consent(
         **data,
         "platform_consents": consents,
     }
+    if not consents:
+        # No dedicated decision yet: store no map at all (schemas._stored_section).
+        del data["platform_consents"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data
@@ -169,6 +177,10 @@ def _keep_consent(
         browser["interactive_only"] = browser["interactive_only"] is True
         if (browser["accepted_at"] is None) != (browser["text_version"] is None):
             browser.update(enabled=False, accepted_at=None, text_version=None)
+        if source["kind"] == "freework" and source["kind"] in previous:
+            # A stored Free-Work entry's words change through its own route only: a stale draft
+            # (a 409 then Keep editing, an old export) must not undo a newer dedicated save.
+            browser |= {key: before.get(key) for key in ("query", "location")}
         kept.append({**source, **browser})
     result = {**data, "browser_sources": kept}
     try:
@@ -195,7 +207,8 @@ def save_section(
     is not the stored revision, and ReservedFieldError when a `preferences` save changes the
     onboarding dates. `onboarding_sent` names the onboarding keys the client sent (None: all of
     them): a key left out keeps its stored value, and so do the steps passed. The LinkedIn
-    consent of a `search` section is kept as stored unless `linkedin_consent` (the module
+    consent of a `search` section is kept as stored unless `linkedin_consent`, and the Free-Work
+    entry (consent, words and location) unless `platform_consent="freework"` (the module
     docstring).
     """
     if section not in SECTIONS:
@@ -210,11 +223,21 @@ def save_section(
     if section == "search":
         trusted = LINKEDIN if linkedin_consent else platform_consent
         data = _keep_consent((profile.sections or {}).get("search"), data, trusted)
+    ignored_steps = False
     if section == "preferences":
+        submitted = data.get("onboarding") or {}
         data = _keep_onboarding(profile, data, onboarding_sent)
+        ignored_steps = (
+            "steps_passed" in submitted
+            and (onboarding_sent is None or "steps_passed" in onboarding_sent)
+            and submitted["steps_passed"] != data["onboarding"]["steps_passed"]
+        )
         if data.get("onboarding") != _onboarding(profile):
             raise ReservedFieldError("onboarding")
-    return _write(db, profile, section, data, now)
+    saved = _write(db, profile, section, data, now)
+    if ignored_steps:
+        logger.info("profile_onboarding_steps_ignored")
+    return saved
 
 
 def _onboarding(profile: Profile) -> dict[str, Any]:
@@ -416,12 +439,11 @@ def delete_photo(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
 
 def export_sections(profile: Profile) -> dict[str, dict[str, Any]]:
     """Every section in its canonical stored form (a section never saved is its empty form),
-    keys in model order: Postgres JSONB does not keep the order they were written in."""
+    keys in model order: Postgres JSONB does not keep the order they were written in. A search
+    saved without the interactive keys exports without them, as GET /api/profile shows it, so an
+    export imported back reads as unchanged."""
     stored = profile.sections or {}
-    return {
-        name: SECTION_MODELS[name].model_validate(stored.get(name, {})).model_dump(mode="json")
-        for name in SECTIONS
-    }
+    return {name: validate_section(name, stored.get(name, {})) for name in SECTIONS}
 
 
 @dataclass(frozen=True)

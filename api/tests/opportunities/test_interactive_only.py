@@ -303,7 +303,9 @@ def test_generic_writes_preserve_the_stored_intent_and_acceptance(
     response = write(api, person_a, method, search, current["revision"])
     assert response.status_code == 200, response.text
     after = source(api, person_a, kind)
-    assert after == {**before, "query": "Updated robotics", "location": "Lyon"}
+    # LinkedIn words are saved as sent; a stored Free-Work entry keeps its words (#653, #656).
+    words = {} if kind == "freework" else {"query": "Updated robotics", "location": "Lyon"}
+    assert after == {**before, **words}
     assert profile(api, person_a)["sections"]["search"]["min_fit"] == 42
 
 

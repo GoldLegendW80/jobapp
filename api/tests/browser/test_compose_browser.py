@@ -66,7 +66,10 @@ def browser_test_stack() -> dict[str, Any]:
     assert own["extends"] == {"file": "compose.yml", "service": "browser"}  # --project-directory .
     extra = {k: v for k, v in own.items() if k != "extends"}
     assert set(extra) == {"image", "environment"}, extra
-    assert extra["environment"] == {"BROWSER_PROXY_ALLOW_PRIVATE": "pages,elsewhere"}
+    assert extra["environment"] == {
+        "BROWSER_PROXY_ALLOW_PRIVATE": "pages,elsewhere",
+        "BROWSER_LINKEDIN_STUB_BASE_URL": "http://pages:8080/linkedin",
+    }
     base = load("compose.yml")
     service = merge(base["services"]["browser"], extra)
     return {
@@ -131,7 +134,10 @@ def test_no_app_secret_nor_env_file(stack: dict) -> None:
     browser = stack["services"]["browser"]
     for forbidden in ("env_file", "secrets", "configs"):
         assert forbidden not in browser, forbidden
-    assert set(browser["environment"]) - {"BROWSER_PROXY_ALLOW_PRIVATE"} == ENV
+    fixture_only = {"BROWSER_PROXY_ALLOW_PRIVATE"}
+    if "pages" in stack["services"]:
+        fixture_only.add("BROWSER_LINKEDIN_STUB_BASE_URL")
+    assert set(browser["environment"]) - fixture_only == ENV
     assert (
         "BROWSER_PROXY_ALLOW_PRIVATE"
         not in load("compose.yml")["services"]["browser"]["environment"]

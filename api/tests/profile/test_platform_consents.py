@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.profile.schemas import SearchSection
+from app.profile.schemas import SearchSection, validate_section
 
 KINDS = ("indeed", "welcome_to_the_jungle")
 ACCEPTED = {
@@ -21,6 +21,10 @@ def test_consent_map_has_no_legacy_source_or_interactive_selection(kind: str) ->
     assert empty["platform_consents"] == {}
     saved = SearchSection.model_validate({"platform_consents": {kind: ACCEPTED}})
     assert saved.model_dump(mode="json")["platform_consents"] == {kind: ACCEPTED}
+    # Stored only once it holds a decision: the release before refuses the key (Risks).
+    assert "platform_consents" not in validate_section("search", {})
+    stored = validate_section("search", {"platform_consents": {kind: ACCEPTED}})
+    assert stored["platform_consents"] == {kind: ACCEPTED}
     assert saved.browser_sources == []
     assert saved.interactive_sites == []
 

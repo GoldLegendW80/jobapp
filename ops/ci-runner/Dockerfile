@@ -7,7 +7,7 @@
 # 127.0.0.1, fixed container names, Compose project names and ports cannot collide between
 # parallel jobs, and nothing a job creates or prunes can touch the Mac's own Docker daemon, the
 # owner's containers or other agents' scratch stacks. The price is --privileged on the container
-# (README, Continuous delivery, Security).
+# (docs/runbooks/continuous-delivery.md, Security).
 #
 # Same platform as the Jetson (linux/arm64) and the same Docker Engine and Compose versions.
 # Never used on the Jetson: its runner is ops/runner/.
@@ -93,7 +93,7 @@ COPY daemon.json /etc/docker/daemon.json
 COPY --chmod=755 entrypoint.sh /usr/local/bin/ci-runner-entrypoint
 # The hooks live in the image, outside the runner directory and outside any checkout, so a
 # commit cannot switch them off by accident. A job has sudo here, so one that means to can:
-# guard rails, not a boundary (README, Security). The runner only takes hook paths ending in .sh.
+# guard rails, not a boundary (docs/runbooks/ci-runners-mac.md, Security). The runner only takes hook paths ending in .sh.
 COPY --chmod=755 job-started.sh /usr/local/bin/ci-job-started.sh
 COPY --chmod=755 job-completed.sh /usr/local/bin/ci-job-completed.sh
 COPY --chmod=755 ci-clean.sh /usr/local/bin/ci-clean.sh

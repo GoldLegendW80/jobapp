@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { LoaderCircle } from "lucide-react";
 
 import {
@@ -27,6 +28,7 @@ export function ApproveDialog({
   approval,
   pending,
   onConfirm,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -35,12 +37,15 @@ export function ApproveDialog({
   approval: Approval;
   pending: boolean;
   onConfirm: () => void;
+  onCloseAutoFocus?: NonNullable<
+    ComponentProps<typeof AlertDialogContent>["onCloseAutoFocus"]
+  >;
 }) {
   const documents = Object.entries(approval.documents);
   const left = leftFields(approval.answers);
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
         <AlertDialogHeader>
           <AlertDialogTitle>
             Submit this application to {company} for {role}?
