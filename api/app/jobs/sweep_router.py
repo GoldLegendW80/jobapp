@@ -5,6 +5,9 @@
   for sweep.STALE_AFTER, is failed first and does not block). 422 when the profile's search
   section has no enabled board. 503 when the queue (Redis) is down: the sweep is then failed at
   once, so it never blocks the next try.
+  An optional `{profile_revision}` body refuses a stale reviewed revision with 409. No-body
+  callers remain supported. Scope is frozen before enqueue; its public projection omits
+  instructions and source addresses.
 - GET /api/jobs/sweeps?limit=N: the caller's newest sweeps (default 20, at most 100) and their
   automatic schedule (`search.sweep_schedule`, off by default) with its next run. The schedule
   itself is changed through PUT /api/profile/search.
@@ -36,12 +39,14 @@ from app.jobs.models import Sweep, SweepStatus
 from app.jobs.schemas import (
     BoardFailureOut,
     ScheduleOut,
+    SearchScopeOut,
     SourceOut,
     SweepConflictOut,
     SweepDetail,
     SweepJobOut,
     SweepList,
     SweepOut,
+    SweepStartIn,
 )
 
 NOT_FOUND = "Sweep not found."
@@ -105,12 +110,44 @@ def sweep_out(row: Sweep) -> SweepOut:
             skipped_by_rule=count(item, "skipped_by_rule"),
             items_skipped=max(0, count(item, "items_skipped")),
             error=item["error"] if isinstance(item.get("error"), str) else None,
+            **{
+                name: item.get(name) if isinstance(item.get(name), str) else None
+                for name in ("source_id", "mode", "host", "phase", "action", "outcome", "reason")
+            },
         )
         for item in stats.get("sources") or []
         if isinstance(item, dict)
     ]
     duration = stats.get("duration")
     current = stats.get("current_board")
+    scope = stats.get("search_scope")
+    summary = None
+    if isinstance(scope, dict) and scope.get("version") == 1:
+        criteria = scope.get("search") or {}
+        summary = SearchScopeOut(
+            version=1,
+            profile_revision=scope["profile_revision"],
+            created_at=scope["created_at"],
+            trigger=scope["trigger"],
+            source_count=len(scope["sources"]),
+            criteria={
+                name: criteria[name]
+                for name in (
+                    "title_include",
+                    "title_exclude",
+                    "location",
+                    "remote_stance",
+                    "contract_types",
+                    "seniority",
+                    "days",
+                    "compensation",
+                    "min_fit",
+                    "industries",
+                    "company_types",
+                )
+                if name in criteria
+            },
+        )
     return SweepOut(
         id=row.id,
         trigger=row.trigger.value,
@@ -132,6 +169,7 @@ def sweep_out(row: Sweep) -> SweepOut:
         skipped_by_rule=number("skipped_by_rule"),
         duration=float(duration) if isinstance(duration, int | float) else None,
         sources=sources,
+        search_scope=summary,
     )
 
 
@@ -169,7 +207,10 @@ def _sweep_id(value: str) -> uuid.UUID:
     response_model=SweepOut,
     responses={
         **_401,
-        409: {"model": SweepConflictOut, "description": "A sweep is already running"},
+        409: {
+            "model": SweepConflictOut | ErrorOut,
+            "description": "Running sweep or stale profile revision",
+        },
         422: {
             "model": ErrorOut,
             "description": "No enabled board, or a search section to save again",
@@ -178,11 +219,16 @@ def _sweep_id(value: str) -> uuid.UUID:
     },
     dependencies=[Depends(_no_store)],
 )
-async def start_sweep(user: CurrentUser, request: Request) -> Any:
+async def start_sweep(user: CurrentUser, request: Request, body: SweepStartIn | None = None) -> Any:
     """Sweep the caller's enabled boards now. The work happens in the worker: follow it with
     GET /api/jobs/sweeps/{id} or its /events stream."""
     begun = await sweep.begin(
-        sessions_of(request), queue_of(request), user.id, deps.clock(request), sweep_out
+        sessions_of(request),
+        queue_of(request),
+        user.id,
+        deps.clock(request),
+        sweep_out,
+        profile_revision=body.profile_revision if body else None,
     )
     if begun.outcome == "running" and begun.sweep_id is not None:
         body = SweepConflictOut(detail=RUNNING, sweep_id=begun.sweep_id).model_dump(mode="json")
@@ -190,6 +236,10 @@ async def start_sweep(user: CurrentUser, request: Request) -> Any:
     if begun.outcome == "queue_down":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=sweep.QUEUE_DOWN
+        )
+    if begun.outcome == "revision_conflict":
+        raise HTTPException(
+            status_code=409, detail="Your profile changed. Review the search and start again."
         )
     if begun.outcome == "search_invalid":
         raise HTTPException(status_code=422, detail=sweep.SEARCH_INVALID)
@@ -208,11 +258,7 @@ def _list(
         rows = sweep.sweeps_of(db, user_id, limit)
         search = sweep.user_search(db, user_id)
         plan = sweep.schedule_of(search)
-        active = plan.enabled and bool(
-            sweep.enabled_boards(search)
-            or sweep.enabled_sources(search)
-            or sweep.enabled_feeds(search)
-        )
+        active = plan.enabled and sweep.has_sources(search)
         return SweepList(
             items=[sweep_out(row) for row in rows],
             schedule=ScheduleOut(
