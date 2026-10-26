@@ -27,6 +27,8 @@ reads already in flight finish).
    time linear in the text whatever its markup), the published date, and `contract_type`
    Freelance when the source says it is a contract or a freelance mission. More than ITEMS_MAX
    items is `too_many`, counted before any item is parsed: nothing of that feed is kept.
+   Hacker News instead reads only its first FEEDS_HN_MAX_COMMENTS valid comment ids;
+   comments beyond that cap stay unread and do not count as parser skips.
 3. Keep. The feed's own `terms`, when set, must match the title too.
 4. Store. The sweep's own store (sweep.store_postings, in one transaction per feed), the same
    rules as a board: the search's include, exclude, location and contract terms, the days
@@ -46,6 +48,7 @@ What a feed reports in the sweep's `stats.sources` (one entry each, `kind` the f
 `store_failed`, `time_budget` (the sweep's time limit is near: not read, or not read to the
 end) and `stub_missing`. A failed feed never stops the sweep or the next feed. An item whose
 parsing fails is left out and counted in the entry's `items_skipped`; the feed still ends ok.
+A positive count emits one `feed_items_skipped` warning with only kind, count and sweep id.
 
 FEEDS_STUB_BASE_URL (tests only, refused in production) sends every feed to the fake feeds
 server (tests/feeds_stub.py) at {base}/{source}/{the source's own path}. With APP_ENV test and no
@@ -483,14 +486,16 @@ class FeedRunner:
                     "items_skipped": 0,
                     "error": None,
                 }
-                stats.sources.append(entry)
+                entry = sweeps.bind_source(stats, "feed", (feed.kind,), entry)
                 if self.monotonic() > deadline - TIME_BUDGET_S:
                     entry["error"] = "time_budget"
+                    sweeps.finish_source(entry)
                     continue
                 client.deadline = deadline - client.timeout_s - STORE_MARGIN_S
                 stats.current_board = NAMES.get(feed.kind, feed.kind)
                 await progress()
                 entry["error"] = await self._one(client, plan, stats, feed, entry, store)
+                sweeps.finish_source(entry)
                 await progress()
 
     async def _one(
@@ -517,6 +522,15 @@ class FeedRunner:
             logger.warning("feed not read: kind=%s error=too_many", feed.kind)
             return "too_many"
         entry["items_skipped"] = getattr(found, "skipped", 0)
+        if entry["items_skipped"] > 0:
+            logger.warning(
+                "feed_items_skipped",
+                extra={
+                    "kind": feed.kind,
+                    "items_skipped": entry["items_skipped"],
+                    "sweep_id": str(plan.sweep_id),
+                },
+            )
         kept = keep(feed, found)
         entry["found"] = len(kept)
         before, ruled = stats.new, stats.skipped_by_rule

@@ -2,7 +2,8 @@
 
 - GET /api/browser answers `{available, profile, lease, holder, queue}`: whether browserd answers,
   the person's profile (size and last use; never a file of it), their own current lease (with,
-  during a sign in hand off, `waiting_person`, the site and the minutes left: B12a), who
+  during a sign in hand off, `waiting_person`, the site and the minutes left: B12a; on apply's
+  submit lease, the id of the application it sends), who
   holds the browser as seen by this person (`you`, `other`, or null: never who, nor why), and
   their places in the queue with the estimated wait.
 - POST /api/browser/sessions `{purpose: "look" | "signin", address?}` starts a session of the
@@ -118,6 +119,8 @@ class LeaseOut(BaseModel):
     started_at: datetime
     active_s: int
     max_s: int
+    # The application a submit lease sends: its job page shows that application's lease only.
+    application_id: str | None
 
 
 class QueueOut(BaseModel):
@@ -172,6 +175,7 @@ def _lease_out(lease: Lease, now: float) -> LeaseOut:
         started_at=datetime.fromtimestamp(lease.started_at, UTC),
         active_s=int(lease.active_s(now)),
         max_s=lease.max_s,
+        application_id=lease.application_id,
     )
 
 

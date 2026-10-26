@@ -14,7 +14,8 @@ dead, a reply (its parent is not the thread), without text, or that could not be
 skipped; when every comment of a thread with comments failed, the feed reports the first error.
 A comment answered 429 (not retried), the sweep's time running out or a test stack without the
 fake server stops the feed at once with that code, nothing of it kept. Each item is read up to
-HN_ITEM_MAX_BODY (256 KB).
+HN_ITEM_MAX_BODY (256 KB). Only the first FEEDS_HN_MAX_COMMENTS valid comment ids are read;
+excess comments stay unread, without failing the feed or counting as parser skips.
 
 A comment is one posting, read from its first line (the text before the first paragraph break),
 whose parts are separated by "|":
@@ -54,7 +55,6 @@ from app.opportunities.sources import (
     line,
     parse_json,
     plain_text,
-    too_many,
 )
 
 API = "https://hacker-news.firebaseio.com/v0"
@@ -135,7 +135,6 @@ async def read(client: FeedClient, thread: str, max_comments: int = HN_MAX_COMME
         return []
     kids = [k for k in story.get("kids") or [] if isinstance(k, int) and not isinstance(k, bool)]
     kids = kids[:max_comments]
-    too_many(len(kids))  # before a single comment is read
     gate = asyncio.Semaphore(HN_CONCURRENCY)
     errors: list[FeedError] = []
     stopped: list[FeedError] = []

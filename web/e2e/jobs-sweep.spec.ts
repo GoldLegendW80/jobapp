@@ -263,6 +263,7 @@ test("Find jobs: live progress, summary, history, list refreshed", async () => {
     /\/api\/jobs\/sweeps\/[0-9a-f-]{36}\/events$/,
   );
   await page.getByRole("button", { name: "Find jobs" }).click();
+  await page.getByRole("button", { name: "Save and Start" }).click();
   expect((await stream).headers()["content-type"]).toContain(
     "text/event-stream",
   );
@@ -533,6 +534,7 @@ test("a real sweep of two real boards", async () => {
   await page.goto("/jobs");
   const before = await latestSweep(page.request);
   await page.getByRole("button", { name: "Find jobs" }).click();
+  await page.getByRole("button", { name: "Save and Start" }).click();
   await expect(
     page.getByRole("region", { name: "Sweep in progress" }),
   ).toBeVisible();

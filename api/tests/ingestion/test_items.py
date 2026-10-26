@@ -138,6 +138,9 @@ def test_settings_are_typed_setting() -> None:
         *[path for path in types if path.startswith("search.feeds")],
         "search.feeds[].kind",
         "search.feeds[].terms.terms[]",
+        *[path for path in types if path.startswith("search.interactive_")],
+        "search.interactive_sites[].url",
+        "search.interactive_instructions",
         "experience.employers[].key",
     ]
     assert all(types[path] is FieldType.SETTING for path in settings)

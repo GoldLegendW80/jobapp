@@ -17,7 +17,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { jobsKey } from "@/features/jobs/api";
-import { describeError } from "@/lib/api";
+import { describeError, errorDetail } from "@/lib/api";
+import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
 import { cn } from "@/lib/utils";
 
 import {
@@ -36,6 +37,7 @@ import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { HeldCountdown } from "./held-countdown";
+import { FillHandoff } from "./live-view-slot";
 import { queueKey, rejectQueued, type QueueItem } from "./queue-api";
 import {
   canCancel,
@@ -79,6 +81,7 @@ export function QueueCard({
   const queryClient = useQueryClient();
   const titleId = useId();
   const panelId = useId();
+  const article = useRef<HTMLElement>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Until the person toggles it, the answers are open once a required one was seen left, and
   // stay open after it is answered: the person may still be on the optional ones.
@@ -92,16 +95,21 @@ export function QueueCard({
   const [cancelling, setCancelling] = useState(false);
   const reviewable = isReviewable(item);
   const rehearsal = item.rehearsal === true;
+  // Behind a sign in wall the answers wait for the fill after the sign in, which replaces them.
+  const signingIn = item.state === "needs_person" && item.needs === "signin";
+  const withAnswers = (reviewable || rehearsal) && !signingIn;
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(item.id),
     queryFn: ({ signal }) => getApproval(item.id, signal),
-    enabled: reviewable || rehearsal,
+    enabled: withAnswers,
   });
   const approval = approvalQuery.data;
 
   // Set by a Reject or a Cancel that succeeded: the page takes the focus once the card is gone.
   const leaving = useRef(false);
+  const focusAfterApproval = useRef(false);
+  const approvalNextFocus = useRef<HTMLElement | null>(null);
   useEffect(
     () => () => {
       if (leaving.current) onLeave();
@@ -125,7 +133,8 @@ export function QueueCard({
     void queryClient.invalidateQueries({ queryKey: approvalKey(item.id) });
   };
   const failed = (error: unknown) => {
-    setNotice(refusalOf(error)?.detail ?? describeError(error));
+    // The api's `detail` (a 409, or a 422 for an answer) is a sentence for the person, shown as is.
+    setNotice(errorDetail(error) ?? describeError(error));
     refresh();
   };
 
@@ -154,8 +163,18 @@ export function QueueCard({
       setNotice(null);
     },
     onSuccess: () => {
+      const cards = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-queue-card-title]"),
+      );
+      const currentTitle = article.current?.querySelector<HTMLElement>(
+        "[data-queue-card-title]",
+      );
+      approvalNextFocus.current = currentTitle
+        ? (cards[cards.indexOf(currentTitle) + 1] ?? null)
+        : null;
       setConfirming(false);
       refresh();
+      focusAfterApproval.current = true;
     },
     onError: (error) => {
       setConfirming(false);
@@ -232,11 +251,17 @@ export function QueueCard({
 
   return (
     <article
+      ref={article}
       aria-labelledby={titleId}
       className="flex flex-col gap-3 rounded-lg border bg-card p-4 text-card-foreground"
     >
       <header className="flex flex-col gap-0.5">
-        <h3 id={titleId} className="leading-snug font-semibold">
+        <h3
+          id={titleId}
+          tabIndex={-1}
+          data-queue-card-title
+          className="leading-snug font-semibold outline-none"
+        >
           <Link
             to={`/jobs/${item.posting_id}`}
             className="rounded-sm underline-offset-4 hover:underline"
@@ -248,6 +273,16 @@ export function QueueCard({
       </header>
 
       <p className="text-sm">{statusLine(item)}</p>
+      {item.state === "filling" && item.mode !== "manual" ? (
+        <FillHandoff />
+      ) : null}
+      {signingIn ? (
+        <LaterHandoffBanner
+          module="application"
+          refId={item.id}
+          address={item.form_url}
+        />
+      ) : null}
       {reason ? (
         <Alert>
           <TriangleAlert aria-hidden="true" />
@@ -266,6 +301,11 @@ export function QueueCard({
 
       <section aria-label="Documents" className="flex flex-col gap-1">
         <h4 className="text-sm font-semibold">Documents</h4>
+        {item.documents_review ? (
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+            Review these documents before approval.
+          </p>
+        ) : null}
         {documents.length > 0 ? (
           <ul className="flex flex-col gap-0.5 text-sm">
             {documents.map(([kind, check]) => (
@@ -291,7 +331,9 @@ export function QueueCard({
         )}
       </section>
 
-      {left ? <p className="text-sm font-medium">{left}</p> : null}
+      {left && !signingIn ? (
+        <p className="text-sm font-medium">{left}</p>
+      ) : null}
 
       {isHeld(item) && item.hold_until ? (
         <HeldCountdown
@@ -319,7 +361,7 @@ export function QueueCard({
         </div>
       ) : null}
 
-      {reviewable || rehearsal ? (
+      {withAnswers ? (
         <div className="flex flex-col gap-3">
           <Button
             variant="outline"
@@ -446,6 +488,15 @@ export function QueueCard({
           role={item.title}
           approval={approval}
           pending={approve.isPending}
+          onCloseAutoFocus={(event) => {
+            if (!focusAfterApproval.current) return;
+            focusAfterApproval.current = false;
+            event.preventDefault();
+            const next = approvalNextFocus.current;
+            approvalNextFocus.current = null;
+            if (next?.isConnected) next.focus();
+            else onLeave();
+          }}
           onConfirm={() => {
             approve.mutate(approval);
           }}

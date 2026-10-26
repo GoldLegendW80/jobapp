@@ -1,0 +1,36 @@
+{
+  "image": "jobapp-b646-browser:before",
+  "policy_file_has_key": false,
+  "person_session_switches": [
+    "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
+  ],
+  "agent_navigate_ok": true,
+  "agent_lease_switches": [
+    "--remote-debugging-address=127.0.0.1",
+    "--disable-blink-features=AutomationControlled",
+    "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
+  ],
+  "cdp": {
+    "first_tab": {
+      "outerWidth": 1439,
+      "outerHeight": 899,
+      "innerWidth": 1439,
+      "innerHeight": 756,
+      "url": "http://pages:8080/form.html"
+    },
+    "rows": [
+      "CommandLineFlagSecurityWarningsEnabled Not set.",
+      "CommandLineFlagSecurityWarningsEnabled Not set. Value Applies to Level Status Not set. Error Warning Info"
+    ]
+  },
+  "probe_policy": {
+    "WebRtcIPHandling": 1,
+    "disable_non_proxied_udp": 2,
+    "QuicAllowed": 1,
+    "URLBlocklist": 1,
+    "URLAllowlist": 1,
+    "PolicyTestPageEnabled": 1,
+    "ExtensionInstallBlocklist": 1,
+    "PasswordManagerEnabled": 1
+  }
+}

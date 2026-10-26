@@ -46,6 +46,11 @@ class KeyFormatError(ValueError):
     """The configured key is not 32 bytes of base64."""
 
 
+class EncryptError(ValueError):
+    """The plaintext cannot be sealed: it is not text that UTF-8 can encode (a lone surrogate).
+    Says nothing of the plaintext: the codec's own error carries all of it (issue #670)."""
+
+
 class DecryptError(Exception):
     """The ciphertext cannot be decrypted: unknown key version, or it fails authentication
     (tampered, truncated, or bound to another user or kind)."""
@@ -126,7 +131,15 @@ class Keyring:
         return fingerprint(self.current)
 
     def encrypt(self, plaintext: str, user_id: uuid.UUID, kind: str) -> Sealed:
-        return self.encrypt_bytes(plaintext.encode("utf-8"), user_id, kind)
+        try:
+            data = plaintext.encode("utf-8")
+        except UnicodeEncodeError:
+            # Raised outside the handler: UnicodeEncodeError holds the whole plaintext, and
+            # would ride along as the context of anything raised inside it.
+            pass
+        else:
+            return self.encrypt_bytes(data, user_id, kind)
+        raise EncryptError("not UTF-8 text")
 
     def encrypt_bytes(self, plaintext: bytes | bytearray, user_id: uuid.UUID, kind: str) -> Sealed:
         """Seal bytes with the existing layout and owner/kind binding.

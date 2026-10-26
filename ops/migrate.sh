@@ -185,7 +185,7 @@ if ((rc == 124 || rc == 137)); then
   # The client is gone, the session may not be: Postgres notices a vanished client only when its
   # statement ends. End the sessions of THIS database that hold or wait for the migration's
   # advisory lock (pg_locks is cluster wide, hence the database clause), so their locks go and
-  # nothing can commit. README, Continuous delivery, gives the same statement for a human.
+  # nothing can commit. docs/runbooks/continuous-delivery.md gives the same statement for a human.
   # shellcheck disable=SC2016 # $POSTGRES_* and $1 expand in the db container
   ended="$(dc exec -T db sh -c 'psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$1"' sh \
     "select count(*) from (select pg_terminate_backend(pid) from pg_locks where locktype = 'advisory' and objsubid = 1 and ((classid::bigint << 32) | objid::bigint) = $MIGRATION_LOCK_ID and database = (select oid from pg_database where datname = current_database()) and pid <> pg_backend_pid()) ended" \
