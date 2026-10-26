@@ -162,7 +162,13 @@ def test_export_keys_follow_the_model_order_not_jsonb_order(api: Api, alice: str
     import_ok(api, alice, document())
     sections = export(api, alice)["sections"]
     for name in SECTIONS:
-        assert list(sections[name]) == list(empty_sections()[name])
+        # The map of permissions is stored only once a dedicated writer records a decision.
+        expected = [
+            field
+            for field in SECTION_MODELS[name].model_fields
+            if (name, field) != ("search", "platform_consents")
+        ]
+        assert list(sections[name]) == expected
 
 
 # --- round trip ---------------------------------------------------------------------------------
