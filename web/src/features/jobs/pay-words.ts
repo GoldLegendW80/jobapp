@@ -16,15 +16,20 @@ export interface PayFields {
 }
 
 const FIGURE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const CENTS = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const figure = (amount: number) =>
+  (Number.isInteger(amount) ? FIGURE : CENTS).format(amount);
 
 export function payWords(job: PayFields): string | null {
   const { pay_min: low, pay_max: high, pay_currency: currency } = job;
   const period = job.pay_period ? PAY_PERIOD_WORDS[job.pay_period] : undefined;
   if (low == null || high == null || !currency || !period) return null;
   const figures =
-    low === high
-      ? FIGURE.format(low)
-      : `${FIGURE.format(low)} to ${FIGURE.format(high)}`;
+    low === high ? figure(low) : `${figure(low)} to ${figure(high)}`;
   return `${figures} ${currency} ${period}`;
 }
 

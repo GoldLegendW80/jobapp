@@ -295,6 +295,6 @@ export function nextPage(value: string | null): string | null {
   }
   if (url.origin !== SAME_ORIGIN) return null;
   if (UNSAFE.test(path) || path.startsWith("//")) return null;
-  if (path.startsWith("/welcome")) return null;
+  if (path.toLowerCase().startsWith("/welcome")) return null;
   return `${url.pathname}${url.search}${url.hash}`;
 }
