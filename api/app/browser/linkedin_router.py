@@ -58,6 +58,8 @@ class LinkedInIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     enabled: bool
+    interactive_only: bool = False
+    base_revision: Annotated[int, Field(ge=0)] | None = None
     accept_version: Annotated[int, Field(ge=1, le=1000)] | None = None
     query: Annotated[str, Field(max_length=200)] | None = None
     location: Annotated[str, Field(max_length=200)] | None = None
@@ -103,6 +105,10 @@ def get_linkedin(request: Request, user: CurrentUser, db: Db) -> LinkedInOut:
 def put_linkedin(body: LinkedInIn, request: Request, user: CurrentUser, db: Db) -> LinkedInOut:
     now = deps.clock(request)
     profile = service.get_profile(db, user.id, now)
+    revision = profile.revision if body.base_revision is None else body.base_revision
+    if revision != profile.revision:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, BUSY)
     search: dict[str, Any] = dict((profile.sections or {}).get("search") or {})
     sources = [dict(s) for s in search.get("browser_sources") or []]
     index = next((i for i, s in enumerate(sources) if s.get("kind") == guard.KIND), None)
@@ -122,8 +128,17 @@ def put_linkedin(body: LinkedInIn, request: Request, user: CurrentUser, db: Db) 
         if not entry.get("query"):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, NO_QUERY)
     elif index is None and body.accept_version is None and not entry.get("query"):
+        if body.base_revision is not None:
+            current = service.get_profile(db, user.id, now, lock=True)
+            if current.revision != revision:
+                db.rollback()
+                raise HTTPException(status.HTTP_409_CONFLICT, BUSY)
         db.rollback()
         return _out(guard.state(db, user.id, now))  # off, and nothing to keep
+    if body.enabled and (
+        "interactive_only" in body.model_fields_set or entry.get("enabled") is not True
+    ):
+        entry["interactive_only"] = body.interactive_only
     entry["enabled"] = body.enabled
     if not entry.get("query"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, NO_QUERY)
@@ -137,9 +152,7 @@ def put_linkedin(body: LinkedInIn, request: Request, user: CurrentUser, db: Db) 
     except ValidationError:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, INVALID) from None
     try:
-        service.save_section(
-            db, user.id, "search", data, profile.revision, now, linkedin_consent=True
-        )
+        service.save_section(db, user.id, "search", data, revision, now, linkedin_consent=True)
     except service.StaleRevisionError:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from None

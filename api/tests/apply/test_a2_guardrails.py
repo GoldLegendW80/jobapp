@@ -233,7 +233,7 @@ def test_an_unrecognised_ats_address_is_compared_as_an_address(url: str) -> None
         ("https://greenhouse.io.example.org/a/jobs/1", "other"),
         ("https://notlever.co/a", "other"),
         ("mailto:jobs@example.org", "other"),
-        ("https://www.linkedin.com/jobs/view/1?gh_jid=1", "other"),
+        ("https://www.linkedin.com/jobs/view/1?gh_jid=1", "linkedin"),
         (f"https://fr.linkedin.com/jobs/view/1?ashby_jid={ASHBY}", "other"),
         ("https://www.linkedin.com/in/person?gh_jid=1", "other"),
         ("http://www.linkedin.com/jobs/view/1?gh_jid=1", "other"),
@@ -847,6 +847,13 @@ def test_issue335_idna_host_writings_have_one_canonical_key(
     assert canonical_key(url) == key
     assert guardrails.current_key(f"url:{url}") == key
     assert guardrails.current_key(key) == key
+
+
+@pytest.mark.parametrize("writing", range(len(_HOST_WRITINGS)))
+def test_issue335_linkedin_aliases_join_keys_but_do_not_grant_consent(writing: int) -> None:
+    url = f"https://{_HOST_WRITINGS[writing]('www.linkedin.com')}/jobs/view/4100000001"
+    assert canonical_key(url) == "linkedin:4100000001"
+    assert guardrails.ats_of(url) == "other"
 
 
 @pytest.mark.parametrize(

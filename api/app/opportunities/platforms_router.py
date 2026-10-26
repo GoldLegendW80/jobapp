@@ -43,6 +43,8 @@ class PlatformIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     enabled: bool
+    interactive_only: bool = False
+    base_revision: Annotated[int, Field(ge=0)] | None = None
     accept_version: Annotated[int, Field(ge=1, le=1000)] | None = None
     query: Annotated[str, Field(max_length=200)] | None = None
     location: Annotated[str, Field(max_length=200)] | None = None
@@ -84,7 +86,13 @@ def _put_additional(
 ) -> PlatformOut:
     if body.query is not None or body.location is not None:
         raise HTTPException(422, "This platform consent does not accept query or location.")
+    if "interactive_only" in body.model_fields_set:
+        raise HTTPException(422, "This platform consent does not accept reader intent.")
     profile = service.get_profile(db, user_id, now)
+    revision = profile.revision if body.base_revision is None else body.base_revision
+    if revision != profile.revision:
+        db.rollback()
+        raise HTTPException(409, "Your profile changed in another tab. Try again.")
     search = dict((profile.sections or {}).get("search") or {})
     consents = dict(search.get("platform_consents") or {})
     entry = dict(consents.get(kind) or {})
@@ -96,6 +104,11 @@ def _put_additional(
     if body.enabled and (entry.get("text_version") != version or not entry.get("accepted_at")):
         raise HTTPException(409, "Accept the risk sentence to turn it on.")
     if not body.enabled and not entry:
+        if body.base_revision is not None:
+            current = service.get_profile(db, user_id, now, lock=True)
+            if current.revision != revision:
+                db.rollback()
+                raise HTTPException(409, "Your profile changed in another tab. Try again.")
         db.rollback()
         return _out(db, user_id, kind, now)
     consents[kind] = {**entry, "enabled": body.enabled}
@@ -107,9 +120,7 @@ def _put_additional(
             422, "Your search settings do not validate. Fix them in your profile first."
         ) from None
     try:
-        service.save_section(
-            db, user_id, "search", data, profile.revision, now, platform_consent=kind
-        )
+        service.save_section(db, user_id, "search", data, revision, now, platform_consent=kind)
     except service.StaleRevisionError:
         db.rollback()
         raise HTTPException(409, "Your profile changed in another tab. Try again.") from None
@@ -127,6 +138,10 @@ def put_platform(
     if kind in PLATFORM_CONSENT_KINDS:
         return _put_additional(db, user.id, kind, body, now)
     profile = service.get_profile(db, user.id, now)
+    revision = profile.revision if body.base_revision is None else body.base_revision
+    if revision != profile.revision:
+        db.rollback()
+        raise HTTPException(409, "Your profile changed in another tab. Try again.")
     search: dict[str, Any] = dict((profile.sections or {}).get("search") or {})
     sources = [dict(s) for s in search.get("browser_sources") or []]
     index = next((i for i, source in enumerate(sources) if source.get("kind") == kind), None)
@@ -149,10 +164,19 @@ def put_platform(
         and body.accept_version is None
         and not entry.get("query")
     ):
+        if body.base_revision is not None:
+            current = service.get_profile(db, user.id, now, lock=True)
+            if current.revision != revision:
+                db.rollback()
+                raise HTTPException(409, "Your profile changed in another tab. Try again.")
         db.rollback()
         return _out(db, user.id, kind, now)
     if not entry.get("query"):
         raise HTTPException(422, "Type the words to search on Free-Work.")
+    if body.enabled and (
+        "interactive_only" in body.model_fields_set or entry.get("enabled") is not True
+    ):
+        entry["interactive_only"] = body.interactive_only
     entry["enabled"] = body.enabled
     if index is None:
         sources.append(entry)
@@ -166,9 +190,7 @@ def put_platform(
             422, "Your search settings do not validate. Fix them in your profile first."
         ) from None
     try:
-        service.save_section(
-            db, user.id, "search", data, profile.revision, now, platform_consent=kind
-        )
+        service.save_section(db, user.id, "search", data, revision, now, platform_consent=kind)
     except service.StaleRevisionError:
         db.rollback()
         raise HTTPException(409, "Your profile changed in another tab. Try again.") from None

@@ -122,7 +122,7 @@ FILLED = frozenset({"filled", "unverified"})
 INTERRUPTED = "interrupted"
 DUE_LIMIT = 200
 # A step the person takes on the page: what the page shows wins over its HTTP status.
-_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT})
+_ON_PAGE = frozenset({*ats_base.PENDING_STEPS, failures.PAYMENT, "linkedin_paused"})
 
 
 class RunTools(ats_base.Tools, Protocol):
@@ -196,6 +196,7 @@ class Result:
     report: ats_base.Report = field(default_factory=ats_base.Report)
     shot: bytes | None = field(default=None, repr=False)
     cost: dict[str, Any] = field(default_factory=dict)
+    company_url: str | None = None
     strategy: dict[str, Any] | None = None
     review_reason: str | None = None
 
@@ -774,6 +775,10 @@ def finish(
     if application.state is not State.filling:
         _event(db, application, "fill_superseded", now, state=application.state.value)
         return "superseded"
+    if result.company_url:
+        from app.apply.linkedin import follow_company
+
+        return follow_company(db, application, posting, result.company_url, now)
     # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
     # replaces them, for a field the form still has.
     mine = (
@@ -948,7 +953,13 @@ def _stopped(code: str, step: str = "") -> tuple[State, str | None, str | None]:
     if code == "posting_closed":
         return State.posting_closed, None, code
     if code == "needs_person":
-        return State.needs_person, step or code, None
+        return (
+            State.needs_person,
+            step or code,
+            "linkedin_paused" if step == "linkedin_paused" else None,
+        )
+    if code == "linkedin_paused":
+        return State.needs_person, code, code
     if code in ("form_changed", "no_adapter", "snapshot_cut", *ats_base.PENDING_STEPS):
         return State.needs_person, code, None
     return State.failed, None, code or "failed"
@@ -1355,6 +1366,8 @@ async def _drive(
             return await _drive_generic(services, plan, adapter, tools)
     else:
         code = await adapter.open(tools, plan.form_url)
+        if code == "company_site" and isinstance(adapter, generic.Deterministic):
+            return Result(State.queued, company_url=getattr(adapter, "company_url", None))
         if code == "form_changed":
             return await _known_fallback(services, plan, adapter, tools)
         if code:
@@ -1604,8 +1617,14 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         lease_tools: RunTools = services.tools_for(user, lease_id, acquired.token)
         if services.before_tool is not None:
             lease_tools = _Turned(lease_tools, services.before_tool)  # type: ignore[assignment]
-        tools = _Watched(signin.Tools(lease_tools, plan.form_url, adapter=adapter))
+        from app.apply.linkedin import watched
+
+        tools = _Watched(
+            watched(services, plan, signin.Tools(lease_tools, plan.form_url, adapter=adapter))
+        )
         result = await _guarded(_drive(services, plan, tools, adapter), tools)
+        if result.company_url:
+            await services.leases.release(user, lease_id, "company_site")
         try:
             written = await asyncio.to_thread(
                 _in_db,
