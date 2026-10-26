@@ -4,7 +4,8 @@
  * per source: the site, the words typed in its search box, an optional location, on or off, at
  * most BROWSER_SOURCES_MAX. Google Careers and Business France VIE run today; company sites (B9)
  * and LinkedIn (B10) are listed as coming later and cannot be picked, but a row of theirs saved
- * by another client is shown and kept as it is.
+ * by another client is shown and kept as it is. Free-Work's protected settings are carried
+ * through the form but have no generic editor row or chooser entry.
  */
 import { Plus } from "lucide-react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
@@ -27,7 +28,11 @@ import {
 } from "./editor-forms";
 import { Group, ItemControls, TextField } from "./section-ui";
 
-const BROWSER_KIND_LABELS: Record<BrowserSource["kind"], string> = {
+const GENERIC_KINDS = BROWSER_KINDS.filter((kind) => kind !== "freework");
+const BROWSER_KIND_LABELS: Record<
+  Exclude<BrowserSource["kind"], "freework">,
+  string
+> = {
   google_careers: "Google Careers",
   vie: "Business France VIE",
   site: "Company site (coming later)",
@@ -48,6 +53,9 @@ export function BrowserSourcesCard({
     name: "browser_sources",
   });
   const full = sources.fields.length >= BROWSER_SOURCES_MAX;
+  const visible = sources.fields
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.kind !== "freework");
   return (
     <Group
       title="Job sites in your browser"
@@ -75,21 +83,28 @@ export function BrowserSourcesCard({
         </Button>
       }
     >
-      {sources.fields.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="text-sm text-muted-foreground">No site yet.</p>
       ) : (
         <ol
           aria-label="Job sites in your browser"
           className="flex flex-col gap-4"
         >
-          {sources.fields.map((item, index) => (
+          {visible.map(({ item, index }, position) => (
             <SourceRow
               key={item.id}
               form={form}
               index={index}
-              count={sources.fields.length}
-              onMove={sources.move}
-              onRemove={sources.remove}
+              position={position}
+              count={visible.length}
+              onMove={(from, to) => {
+                const source = visible[from];
+                const target = visible[to];
+                if (source && target) sources.move(source.index, target.index);
+              }}
+              onRemove={() => {
+                sources.remove(index);
+              }}
             />
           ))}
         </ol>
@@ -106,18 +121,20 @@ export function BrowserSourcesCard({
 function SourceRow({
   form,
   index,
+  position,
   count,
   onMove,
   onRemove,
 }: {
   form: UseFormReturn<SearchForm>;
   index: number;
+  position: number;
   count: number;
   onMove: (from: number, to: number) => void;
   onRemove: (index: number) => void;
 }) {
   const { control } = form;
-  const name = `site ${index + 1}`;
+  const name = `site ${position + 1}`;
   const kind = form.watch(`browser_sources.${index}.kind`);
   return (
     <li className="flex flex-col gap-3 rounded-md border p-3">
@@ -127,10 +144,10 @@ function SourceRow({
           name={`browser_sources.${index}.kind`}
           render={({ field }) => (
             <FormItem className="min-w-44 flex-1 sm:max-w-60">
-              <FormLabel>{`Site ${index + 1}`}</FormLabel>
+              <FormLabel>{`Site ${position + 1}`}</FormLabel>
               <FormControl>
                 <NativeSelect {...field}>
-                  {BROWSER_KINDS.map((k) => (
+                  {GENERIC_KINDS.map((k) => (
                     <option key={k} value={k} disabled={!runnable(k)}>
                       {BROWSER_KIND_LABELS[k]}
                     </option>
@@ -166,7 +183,7 @@ function SourceRow({
         />
         <div className="ml-auto">
           <ItemControls
-            index={index}
+            index={position}
             count={count}
             name={name}
             onMove={onMove}
