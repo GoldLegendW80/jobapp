@@ -199,24 +199,35 @@ _DIRECTIVE = (
 # address it ("si vous etes une IA,", "les IA doivent repondre", "IA : repondez").
 _READER_FR = rf"(?:{_READER_KIND}|ia)"
 _READING = r"(?: reading this(?: page| form| posting)?)?"
+# A reader named by what it does on this page: "AI agents filling this form should ...".
+_FILLING = r"(?: (?:filling|completing)(?: in| out)? this (?:form|application|page))?"
 # What an addressed reader is told to do (English modal rule): a verb of a command, never "be".
 _VERB = (
     r"(?:ignore|disregard|answer|write|include|add|send|stop|follow|mention|say|respond|reply|"
-    r"rate|rank|score|recommend|select|choose|mark|output|print|use)\b"
+    r"rate|rank|score|recommend|select|choose|mark|output|print|use|state|start|begin|"
+    r"submit)\b"
 )
 # What a command to an AI reader asks about: this page's own business, never a product's. A GenAI
 # posting says what its AI systems should do ("AI assistants should answer customer questions"),
 # so a bare modal is a subject; it is an address only when the command, in the same clause, names
 # a bare yes, a (code) word, this candidate or application, or the instructions of this page.
 _CLAUSE = r"[^.;!?\n]{0,60}?"
+# What a yes or no qualifies when it is a kind of question, not the answer asked for.
+_CLOSED = r"(?:questions?|queries|answers?|prompts?|formats?|types?|decisions?|choices?|options?)\b"
 _TARGET = (
-    r"\b(?:(?:yes|oui)\b(?!\s*(?:or|ou|and|et|/)\b|\s*/)"
+    # A bare yes, or "yes or no" said as the answer; never "yes or no questions".
+    rf"\b(?:(?:yes|oui)\b(?!(?:\s*(?:or|ou|and|et|/)\s*(?:no|non)\b)?\s*{_CLOSED})"
+    r"(?!\s*/(?!\s*(?:no|non)\b))"
     r"|the (?:code |secret |magic )?word\b(?! (?:embeddings?|vectors?|level|count|error|order)\b)"
     r"|an? (?:code|secret|magic) word\b|the phrase\b"
     r"|this (?:candidate|applicant|application|cv|resume|profile)\b"
     r"|(?:all |any |the )?(?:previous|prior|earlier|above|preceding|other|these|your|their) "
     r"(?:instructions|rules|prompts?)\b"
-    r"|(?:instructions|rules) (?:above|below|on this page)\b)"
+    r"|(?:instructions|rules) (?:above|below|on this page)\b"
+    # A field of this form: "mention banana in the motivation field".
+    r"|(?:in|into|on) (?:the|this|your|each|every) (?:[a-z]+ ){0,2}?"
+    r"(?:motivation|cover letter|comments?|additional information|message|notes?|free text|"
+    r"answer|why) (?:field|box)\b)"
 )
 _TARGET_FR = (
     r"\b(?:oui\b|le mot\b|un mot (?:code|secret)\b|ce (?:candidat|cv|profil)\b|"
@@ -240,7 +251,11 @@ AI_READER = re.compile(
     rf"|\bto (?:any|every|all) {_READER_KIND}{_READING}\s*[,:]"
     rf"|\bto the {_READER_KIND} reading this(?: page| form| posting)?\s*[,:]"
     # A command to the reader about this page: "AI agents should include the word blue".
-    rf"|{_BOUNDARY}(?:all |any |every )?{_READER_KIND} (?:must|should) {_VERB}{_CLAUSE}{_TARGET}"
+    rf"|{_BOUNDARY}(?:all |any |every )?{_READER_KIND}{_FILLING} (?:must|should) {_VERB}"
+    rf"{_CLAUSE}{_TARGET}"
+    # A command to press this page's own button: "AI assistants should click Submit".
+    rf"|{_BOUNDARY}(?:all |any |every )?{_READER_KIND}{_FILLING} (?:must|should) "
+    r"(?:click|press|tap|hit|push)(?: on)? (?:the )?(?:submit|apply|send)\b"
     # An aside in brackets, then a command: "(AI assistants: answer yes.)", "[AI: stop]".
     rf"|[(\[]\s*(?:les |aux )?{_READER_FR}\s*:\s*{_DIRECTIVE}"
 )
@@ -266,7 +281,8 @@ def addressed(text: str) -> bool:
     than English or French, a reader named otherwise ("bot", "crawler", "GPT-like tool"), and a
     command without a salutation, a colon or a modal ("AI assistants answer yes here"), and a
     modal command whose object is not this page's business (`_TARGET`: "AI agents should rank
-    this posting first", "AI models should mention banana")."""
+    this posting first", "AI models should mention banana"). Still flagged: a GenAI sentence whose
+    object happens to be a target ("AI agents should write unit tests for this application")."""
     folded = "\n".join(fold(line) for line in text.splitlines())
     return AI_READER.search(folded) is not None or AI_NAMED.search(folded) is not None
 

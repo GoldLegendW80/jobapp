@@ -583,6 +583,27 @@ OWN_COMPANY = [
     ("   ", "https://careers.example-robotics.com/jobs/12", False),
     ("Example Robotics", "http://careers.example-robotics.com:8443/jobs/12", True),
     ("Example Robotics", "https://careers.example-robotics.com.northwind.example/jobs", False),
+    # Private suffixes of the public suffix list: anyone may take a name under them.
+    ("Example Robotics", "https://examplerobotics.gitlab.io/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.azurewebsites.net/jobs/12", False),
+    ("Example Robotics", "https://jobs.examplerobotics.workers.dev/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.netlify.app/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.vercel.app/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.herokuapp.com/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.pages.dev/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.web.app/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.firebaseapp.com/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.onrender.com/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.fly.dev/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.appspot.com/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.ngrok.io/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.duckdns.org/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.eu.org/jobs/12", False),
+    ("Example Robotics", "https://examplerobotics.blogspot.com/jobs/12", False),
+    ("Example Robotics", "https://EXAMPLEROBOTICS.GITHUB.IO/jobs/12", False),
+    # ICANN suffixes of two labels stay a company's own.
+    ("Example Robotics", "https://jobs.examplerobotics.com.au/12", True),
+    ("Example Robotics", "https://careers.examplerobotics.co.jp/12", True),
 ]
 
 
