@@ -59,12 +59,30 @@ const answerSchema = z.object({
   required: z.boolean(),
   approved: z.boolean(),
   you_answer: z.boolean(),
+  max_chars: z
+    .union([z.literal(998), z.literal(5000), z.literal(10000)])
+    .optional(),
+  left_reason: z.string().nullable().optional(),
   // The choices of a select field, when the api lists them.
   options: z.array(z.string()).nullable().optional(),
 });
 export type Answer = z.infer<typeof answerSchema>;
 
 const approvalSchema = z.object({
+  email: z
+    .object({
+      written_by: z.string(),
+      issues: z.array(
+        z.object({
+          id: z.string(),
+          code: z.string(),
+          start: z.number(),
+          end: z.number(),
+        }),
+      ),
+    })
+    .nullable()
+    .optional(),
   state: z.string(),
   dry_run: z.boolean(),
   answers_hash: z.string(),
@@ -166,7 +184,18 @@ const decide = (applicationId: string, action: string, body?: unknown) =>
 export const approveApplication = (
   applicationId: string,
   answersHash: string,
-) => decide(applicationId, "approve", { answers_hash: answersHash });
+  confirmedEmailRecipient?: string,
+  acknowledgedEmailIssues: string[] = [],
+) =>
+  decide(applicationId, "approve", {
+    answers_hash: answersHash,
+    ...(confirmedEmailRecipient
+      ? {
+          confirmed_email_recipient: confirmedEmailRecipient,
+          acknowledged_email_issues: acknowledgedEmailIssues,
+        }
+      : {}),
+  });
 export const rejectApplication = (applicationId: string) =>
   decide(applicationId, "reject");
 export const cancelApplication = (applicationId: string) =>
@@ -179,7 +208,7 @@ export const retryApplication = (applicationId: string) =>
   decide(applicationId, "retry");
 
 /**
- * Type or correct one answer before the approval (saved to the person's answer bank). The answer
+ * Type or correct one answer before approval, local to this application. The answer
  * changes the form's hash; the api answers with the approval view as it is now, new hash and
  * answers, which the page shows at once.
  */

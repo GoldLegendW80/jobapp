@@ -476,6 +476,76 @@ describe("the review", () => {
   });
 });
 
+describe("email alongside the full Apply section", () => {
+  it("retains the exact email and Check Sent reconciliation for an unknown send", async () => {
+    const api = fakeApply({
+      application: fakeApplication("submit_unknown", { ats: "email" }),
+    });
+    let reads = 0;
+    let checked = 0;
+    server.use(
+      http.get("*/api/applications/:id/email", () => {
+        reads += 1;
+        return HttpResponse.json({
+          id: "draft",
+          status: "send_unknown",
+          to: ["e2e-jobs@example.org"],
+          subject: "Robotics Engineer",
+          body: "Please find my application attached.",
+          send_id: "send",
+          message: null,
+          issues: [],
+        });
+      }),
+      http.post("*/api/mail/sends/send/reconcile", () => {
+        checked += 1;
+        return HttpResponse.json({ resolved: 0 });
+      }),
+    );
+    const { user, section } = await openSection();
+    const email = await within(section).findByRole("region", {
+      name: "Application email",
+    });
+    expect(
+      within(email).getByText("To: e2e-jobs@example.org"),
+    ).toBeInTheDocument();
+    expect(
+      within(email).getByText("Subject: Robotics Engineer"),
+    ).toBeInTheDocument();
+    expect(
+      within(email).getByText("Please find my application attached."),
+    ).toBeInTheDocument();
+    expect(reads).toBe(1);
+    await user.click(within(email).getByRole("button", { name: "Check Sent" }));
+    await waitFor(() => {
+      expect(checked).toBe(1);
+    });
+    expect(api.approves).toEqual([]);
+    expect(api.decisions).toEqual([]);
+  });
+
+  it("does not fetch an email for a form application", async () => {
+    fakeApply({ application: fakeApplication("ready") });
+    let reads = 0;
+    server.use(
+      http.get("*/api/applications/:id/email", () => {
+        reads += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    const { section } = await openSection();
+    expect(
+      await within(section).findByRole("button", {
+        name: "Approve and submit",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(section).queryByRole("region", { name: "Application email" }),
+    ).toBeNull();
+    expect(reads).toBe(0);
+  });
+});
+
 describe("the destructive buttons", () => {
   it("waits for sign in before showing a login wall as a filled form", async () => {
     fakeApply({

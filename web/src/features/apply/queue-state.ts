@@ -22,7 +22,9 @@ const WAITING = new Set([
 
 /** The item waits for the person (a Full auto rehearsal waits for its answer); the api lists these first. */
 export const isWaiting = (item: QueueItem) =>
-  (WAITING.has(item.state) && !isDeciding(item)) || item.rehearsal === true;
+  (WAITING.has(item.state) && !isDeciding(item)) ||
+  item.rehearsal === true ||
+  (item.mode === "manual" && item.needs === "session_ended");
 
 /** A Full auto item filled and `ready` for the app's own decision: under way, not the person's. */
 export const isDeciding = (item: QueueItem) =>
@@ -70,12 +72,14 @@ export const canReject = isReviewable;
 
 /** Cancel stops an item under way before any click (a held one has the countdown's Cancel). */
 export const canCancel = (item: QueueItem) =>
+  item.mode !== "manual" &&
   (["queued", "filling", "approved", "held"].includes(item.state) ||
     isDeciding(item)) &&
   !isHeld(item);
 
 /** What only the posting's page can do: the live view, "It was submitted", "Try again". */
 export const needsPostingPage = (item: QueueItem) =>
+  item.mode === "manual" ||
   ["needs_person", "refused_by_site", "submit_unknown"].includes(item.state);
 
 const FITS: Record<string, string> = {
@@ -121,6 +125,8 @@ export function leftLine(item: QueueItem): string | null {
  * item sent to the person without a code.
  */
 const REASONS: Record<string, string> = {
+  session_ended:
+    "Your browser session ended. Reopen it, record your application or close it.",
   captcha: "The site asked for a captcha, so it waits for you.",
   signin: "The site asked you to sign in, so it waits for you.",
   email_code:
