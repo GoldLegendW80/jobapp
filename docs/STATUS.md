@@ -83,7 +83,7 @@ part 3a answers #684, part 3b ATS adapters #685, part 4a Apply core #686, part 4
 by e-mail #687, part 5 Apply myself recovery #688, part 6a LinkedIn Easy Apply #691, part 6b
 Workday, Google Careers and VIE #692, part 6c site profile API #690, part 6d site profile pages
 #689, part 7a saved answers and review screens #710, part 7b the review journeys #711, part 8
-the ledger and the evidence #PART8. Journey screenshots named in the evidence notes are not
+the ledger and the evidence #712. Journey screenshots named in the evidence notes are not
 committed (the gate writes them again on every run); a few of the A18 and saved answers screens
 are kept.
 
