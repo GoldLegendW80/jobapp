@@ -249,6 +249,7 @@ describe("Find jobs", () => {
       found,
       new: fresh,
       skipped_by_rule: 0,
+      items_skipped: 0,
       error,
     });
     fakeSweeps({
@@ -404,66 +405,84 @@ describe("Find jobs", () => {
     expect(progress).not.toHaveTextContent("job sites in your browser");
   });
 
-  it("names the freelance feeds apart, in plain words (O8)", async () => {
-    const feed = (
-      kind: string,
-      found: number,
-      fresh: number,
-      ruled: number,
-      error: string | null,
-    ) => ({
-      kind,
-      query: "",
-      location: null,
-      result_pages: 0,
-      found,
-      new: fresh,
-      skipped_by_rule: ruled,
-      error,
-    });
-    fakeSweeps({
-      states: [
-        finished({
-          sources: [
-            {
-              ...feed("google_careers", 1, 1, 0, null),
-              query: "ai engineer",
-              result_pages: 1,
-            },
-            feed("remoteok", 4, 2, 1, null),
-            feed("weworkremotely", 0, 0, 0, "rate_limited"),
-            feed("hackernews_freelance", 3, 0, 2, "time_budget"),
-            feed("hackernews_hiring", 0, 0, 0, "stub_missing"),
-          ],
-        }),
-      ],
-    });
-    await openJobs();
-    const user = userEvent.setup();
-    await startSearch(user);
-    const dialog = await screen.findByRole("dialog", {
-      name: "2 new postings found",
-    });
-    const sites = within(dialog).getByRole("region", {
-      name: "Job sites in your browser",
-    });
-    expect(within(sites).getAllByRole("listitem")).toHaveLength(1);
-    expect(sites).not.toHaveTextContent("Remote OK");
-    const feeds = within(dialog).getByRole("region", {
-      name: "Freelance and project sources",
-    });
-    const lines = within(feeds)
-      .getAllByRole("listitem")
-      .map((li) => li.textContent);
-    expect(lines).toEqual([
-      "Remote OK: 4 postings found, 2 new. 1 posting was set aside by your roles to never apply for.",
-      "We Work Remotely: 0 postings found, 0 new. The site asked the app to slow down, so it is read again at the next search.",
-      "Hacker News, freelance thread: 3 postings found, 0 new. 2 postings were set aside by your roles to never apply for. The search ran out of time before this feed was read to the end. What was read is kept.",
-      "Hacker News, hiring thread: 0 postings found, 0 new. This server is a test server that reads no real feed, so it was not read.",
-    ]);
-    for (const line of lines) expect(line).not.toMatch(/[‒–—―]|\s-\s/);
-    expect(feeds).not.toHaveTextContent("It stopped early.");
-  });
+  it.each([0, 1, 2])(
+    "names freelance feeds and %s parser skips apart, in plain words (O8)",
+    async (skipped) => {
+      const skipSentence =
+        skipped === 0
+          ? ""
+          : skipped === 1
+            ? " 1 feed item could not be read and was skipped."
+            : " 2 feed items could not be read and were skipped.";
+      const feed = (
+        kind: string,
+        found: number,
+        fresh: number,
+        ruled: number,
+        error: string | null,
+      ) => ({
+        kind,
+        query: "",
+        location: null,
+        result_pages: 0,
+        found,
+        new: fresh,
+        skipped_by_rule: ruled,
+        items_skipped: skipped,
+        error,
+      });
+      fakeSweeps({
+        states: [
+          finished({
+            sources: [
+              {
+                ...feed("google_careers", 1, 1, 0, null),
+                query: "ai engineer",
+                result_pages: 1,
+              },
+              feed("remoteok", 4, 2, 1, null),
+              feed("weworkremotely", 0, 0, 0, "rate_limited"),
+              feed("hackernews_freelance", 3, 0, 2, "time_budget"),
+              feed("hackernews_hiring", 0, 0, 0, "stub_missing"),
+            ],
+          }),
+        ],
+      });
+      await openJobs();
+      const user = userEvent.setup();
+      await startSearch(user);
+      const dialog = await screen.findByRole("dialog", {
+        name: "2 new postings found",
+      });
+      const sites = within(dialog).getByRole("region", {
+        name: "Job sites in your browser",
+      });
+      expect(within(sites).getAllByRole("listitem")).toHaveLength(1);
+      expect(sites).not.toHaveTextContent("Remote OK");
+      expect(sites).not.toHaveTextContent("feed item");
+      const feeds = within(dialog).getByRole("region", {
+        name: "Freelance and project sources",
+      });
+      const lines = within(feeds)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent);
+      expect(lines).toEqual([
+        "Remote OK: 4 postings found, 2 new. 1 posting was set aside by your roles to never apply for." +
+          skipSentence,
+        "We Work Remotely: 0 postings found, 0 new." +
+          skipSentence +
+          " The site asked the app to slow down, so it is read again at the next search.",
+        "Hacker News, freelance thread: 3 postings found, 0 new. 2 postings were set aside by your roles to never apply for." +
+          skipSentence +
+          " The search ran out of time before this feed was read to the end. What was read is kept.",
+        "Hacker News, hiring thread: 0 postings found, 0 new." +
+          skipSentence +
+          " This server is a test server that reads no real feed, so it was not read.",
+      ]);
+      for (const line of lines) expect(line).not.toMatch(/[‒–—―]|\s-\s/);
+      expect(feeds).not.toHaveTextContent("It stopped early.");
+    },
+  );
 
   it("follows the sweep already running on a second start (409)", async () => {
     fakeSweeps({

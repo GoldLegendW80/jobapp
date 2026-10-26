@@ -2,13 +2,13 @@
  * The words of /privacy, /terms and the public home page, in one module. Every sentence of the
  * privacy page is a named constant here, copied from tasks/mail/todo.md (M2) and tested against
  * the code by M21: a sentence changes with the code it describes, in the task that changes the
- * code, and `VERSION` changes with it. M4 records `VERSION` with the consent of the user.
+ * code, and `VERSION` changes with it. M4 records its own integer `CONSENT_VERSION`, not this date.
  *
  * Every figure is a constant of its own, interpolated once, so no number is typed twice.
  */
 
 /** The version of the texts below. Bump it whenever a sentence of /privacy or /terms changes. */
-export const VERSION = "2026-10-14";
+export const VERSION = "2026-10-25";
 
 /** The first sync searches this many days back (MAIL first sync, `newer_than:180d`). */
 export const FIRST_SYNC_DAYS = 180;
@@ -93,6 +93,26 @@ export const LIMITED_USE =
 
 export const GOOGLE_POLICY_URL =
   "https://developers.google.com/terms/api-services-user-data-policy";
+
+/**
+ * The app's browser (browser B11, SPEC-browser.md "Profiles and logins"): what it keeps, where,
+ * the backups, how to forget, and the disk, said plainly.
+ */
+export const BROWSER_KEPT =
+  "When you use the app's browser, it keeps a browser profile of your own, as a desktop browser does: the cookies, logins and site data of the sites you open in it, their history and their cache. " +
+  "That is how you stay signed in from one session to the next. " +
+  "The app also records the size of that profile and when it was last used.";
+
+export const BROWSER_WHERE =
+  "The profile is a folder on the owner's server, in a storage volume that only the browser service mounts. " +
+  "That volume is not in the server's backups: losing it costs you your logins and nothing else.";
+
+export const BROWSER_FORGET =
+  "To forget, open Account, find the Your browser card and choose Forget all logins: the folder is deleted and the sites ask you to sign in again. " +
+  "Deleting your account deletes the folder too.";
+
+export const BROWSER_DISK =
+  "The server's disk is not encrypted: your profile is protected by a system user of its own with access for that user only (mode 0700), no other service mounts it, no backup holds it and it is deleted with your account, but the administrator of the server can read it.";
 
 /** /terms: a short plain statement. */
 export const TERMS_PRIVATE =

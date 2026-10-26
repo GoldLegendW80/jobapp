@@ -18,10 +18,10 @@
 # installed in this clone; Claude
 # Code (`claude`), as a warning. Only with --jetson: the ssh alias `jetson`
 # (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password prompt; nothing needs it
-# any more (owner decision of 2026-10-15: deploys and operations go through GitHub, README
-# "Deploy from any machine"), only the owner's own steps on the Jetson (sudo, a restore).
-# --skip-jetson, the default now, is still accepted. The new machine guide is the section
-# "Develop on a new machine" of the README, and CLAUDE.md is where Claude Code starts.
+# any more (owner decision of 2026-10-15: deploys and operations go through GitHub,
+# docs/runbooks/deploy-from-any-machine.md), only the owner's own steps on the Jetson (sudo, a restore).
+# --skip-jetson, the default now, is still accepted. The new machine guide is
+# docs/runbooks/develop-new-machine.md, and CLAUDE.md is where Claude Code starts.
 #
 # The last line is `DEV SETUP: OK` (exit 0) or `DEV SETUP: <n> missing` (exit 1). Wrong
 # arguments: exit 64.

@@ -28,7 +28,7 @@ const shots = makeShots("identity-i6", "account");
  *     pnpm --dir web exec playwright test account.spec.ts
  *   docker compose -p jobapp-i6 -f compose.yml down -v
  *
- * On the Jetson, through the public URL, with the throwaway admin removed afterwards (README):
+ * On the Jetson, through the public URL, with the throwaway admin removed afterwards (docs/runbooks/accounts.md):
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
  *     E2E_SHOT_PREFIX=jetson- pnpm --dir web exec playwright test account.spec.ts
  */

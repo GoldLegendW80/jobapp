@@ -183,11 +183,9 @@ def test_a_traceback_that_quotes_the_credential_is_written_clean_through_the_run
     ]
     (failure,) = [line for line in lines(written) if line["msg"] == "agent run end not recorded"]
     assert "Traceback" in failure["exc"]
-    assert (
-        failure["exc"]
-        .rstrip()
-        .endswith(f"RuntimeError: store refused ANTHROPIC_API_KEY={runner.REDACTED}")
-    )
+    # The class and the frames, never what the error says (issue #670).
+    assert failure["exc"].endswith(", in failing_finish\nRuntimeError")
+    assert "store refused" not in failure["exc"]
 
 
 # --- point 2: a credential too short to be scrubbed ---------------------------------------------
