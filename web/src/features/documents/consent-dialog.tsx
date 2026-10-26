@@ -36,6 +36,9 @@ export function ConsentDialog({
   error,
   onAgree,
   onClose,
+  title = "What is sent to build your CV",
+  agreeLabel = "Agree and build my CV",
+  onCloseAutoFocus,
 }: {
   consent: Consent;
   open: boolean;
@@ -44,6 +47,9 @@ export function ConsentDialog({
   /** Called with the version of the text on screen. */
   onAgree: (version: number) => void;
   onClose: () => void;
+  title?: string;
+  agreeLabel?: string;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   const boxId = useId();
   // The version the box was ticked for: a text that changed under the dialog needs a new tick.
@@ -56,9 +62,12 @@ export function ConsentDialog({
         if (!next && !busy) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto break-words sm:max-w-lg"
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
         <DialogHeader>
-          <DialogTitle>What is sent to build your CV</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             Read this once. Nothing is sent to a model before you agree.
           </DialogDescription>
@@ -67,6 +76,7 @@ export function ConsentDialog({
         <section className="flex flex-col gap-2 text-sm">
           <h4 className="font-semibold">What is sent, and to whom</h4>
           <p data-testid="consent-text">{consent.text}</p>
+          <p className="text-muted-foreground">Version {consent.version}</p>
           <p className="text-muted-foreground" data-testid="consent-model">
             {consent.model === null
               ? "No model credential is saved yet: the CV waits until you add one in your account."
@@ -117,6 +127,7 @@ export function ConsentDialog({
             Not now
           </Button>
           <Button
+            className="whitespace-normal"
             disabled={!ticked || busy}
             onClick={() => {
               onAgree(consent.version);
@@ -125,7 +136,7 @@ export function ConsentDialog({
             {busy ? (
               <LoaderCircle aria-hidden="true" className="animate-spin" />
             ) : null}
-            Agree and build my CV
+            {agreeLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,7 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { fakeSession, member } from "@/test/auth";
@@ -20,6 +20,7 @@ import { POLL_MS } from "./labels";
 
 afterEach(() => {
   toast.dismiss();
+  vi.useRealTimers();
 });
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
@@ -652,5 +653,77 @@ describe("one CV", () => {
       expect(location()).toBe("/profile/cv");
     });
     expect(await screen.findByRole("link", { name: "Main CV" })).toBeVisible();
+  });
+});
+
+describe("capture list polling", () => {
+  it.each([
+    ["done", "/profile/cv"],
+    ["failed", "/profile/cv"],
+    ["done", "/profile/cv/cv-1"],
+    ["failed", "/profile/cv/cv-1"],
+  ] as const)(
+    "polls capture to %s at %s with idle render and done content",
+    async (terminal, path) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      setup({ cvs: [fakeCv({ source: "uploaded" })] });
+      let reads = 0;
+      const states = ["queued", "running", terminal] as const;
+      server.use(
+        http.get("*/api/documents/base-cvs", () => {
+          const status = states[Math.min(reads++, 2)]!;
+          return HttpResponse.json({
+            max: 10,
+            base_cvs: [
+              fakeCv({
+                source: "uploaded",
+                design_generation: {
+                  id: "capture",
+                  status,
+                  wait_reason: null,
+                  error: null,
+                },
+              }),
+            ],
+          });
+        }),
+      );
+      await openCvs(path);
+      await screen.findByText("Uploaded");
+      expect(reads).toBe(1);
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+      await waitFor(() => {
+        expect(reads).toBe(2);
+      });
+      expect(
+        await screen.findByText("Copying your CV's design."),
+      ).toBeVisible();
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+      expect(
+        await screen.findByText(
+          terminal === "done"
+            ? "Your CV's design has been copied."
+            : "Only the design copy failed. Your current template and content are still available.",
+        ),
+      ).toBeVisible();
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
+      expect(reads).toBe(3);
+    },
+  );
+
+  it("does not repeatedly poll a legacy uploaded CV without a capture", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const api = setup({
+      cvs: [fakeCv({ source: "uploaded", design_generation: null })],
+    });
+    await openCvs();
+    await screen.findByText("Uploaded");
+    const reads = () =>
+      api.requests.filter(
+        (one) => one.method === "GET" && one.path === "/api/documents/base-cvs",
+      ).length;
+    expect(reads()).toBe(1);
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
+    expect(reads()).toBe(1);
   });
 });
