@@ -11,21 +11,8 @@ export type FeedKind = Feed["kind"];
 export const isFeedKind = (kind: string): kind is FeedKind =>
   (FEED_KINDS as readonly string[]).includes(kind);
 
-/** The feeds by kind, as the catalogue names them; used when the catalogue cannot be read. */
-export const FEED_NAMES: Record<FeedKind, string> = {
-  remoteok: "Remote OK",
-  weworkremotely: "We Work Remotely",
-  hackernews_freelance: "Hacker News: Freelancer? Seeking freelancer?",
-  hackernews_hiring: "Hacker News: Who is hiring?",
-};
-
-/** The short name of a feed, in a sentence or a list ("Hacker News, freelance thread"). */
-export const FEED_SHORT_NAMES: Record<FeedKind, string> = {
-  remoteok: "Remote OK",
-  weworkremotely: "We Work Remotely",
-  hackernews_freelance: "Hacker News, freelance thread",
-  hackernews_hiring: "Hacker News, hiring thread",
-};
+import { FEED_SHORT_NAMES } from "@/lib/wording";
+export { FEED_NAMES, FEED_SHORT_NAMES } from "@/lib/wording";
 
 /** The `source` of a feed's postings (api sources.SOURCES), named as a person reads it. */
 const SOURCE_NAMES: Record<string, string> = {
