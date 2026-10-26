@@ -185,12 +185,18 @@ def test_confirmation_rolls_all_records_back_on_transition_failure(
     first = snapshot(db, app_id, send_id, draft_id)
     db.commit()
 
+    raised = []
+
     def fail(*args, **kwargs):
+        raised.append(True)
         raise RuntimeError("synthetic status failure")
 
     monkeypatch.setattr(jobs_service, "set_status", fail)
-    with pytest.raises(RuntimeError, match="synthetic status failure"):
-        confirm(api, api.login_token(person_a.email), app_id, send_id, entry)
+    # Main's request_log answers an error no route answered with its fixed 500 (#670).
+    answer = confirm(api, api.login_token(person_a.email), app_id, send_id, entry)
+    assert answer.status_code == 500, answer.text
+    assert answer.json() == {"detail": "internal server error"}
+    assert raised == [True]
     assert snapshot(db, app_id, send_id, draft_id) == first
     assert len(fake.sent) == 1
 
