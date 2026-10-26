@@ -8,6 +8,7 @@ import { fakeCv, fakeDocuments } from "@/test/documents";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { TEMPLATES } from "@/test/templates";
 import type { BaseCv, Generation } from "./documents-api";
 
 const RETRY = "Try the design again for My CV";
@@ -35,6 +36,11 @@ async function show(
   const api = fakeDocuments({
     cvs: [fakeCv({ source: "uploaded", design_generation: design, ...extra })],
   });
+  server.use(
+    http.get("*/api/document-templates", () =>
+      HttpResponse.json({ templates: TEMPLATES }),
+    ),
+  );
   const user = userEvent.setup();
   const app = renderApp(path);
   await screen.findByText(
@@ -104,12 +110,22 @@ describe("uploaded CV capture controls", () => {
   ] as const)(
     "offers the existing %s destination",
     async (reason, label, href) => {
-      await show(capture("waiting", { wait_reason: reason }));
+      const { user } = await show(capture("waiting", { wait_reason: reason }));
       expect(screen.getByText(/To copy your CV's design/)).toBeVisible();
-      expect(screen.getByRole("link", { name: label })).toHaveAttribute(
-        "href",
-        href,
-      );
+      if (reason === "consent") {
+        await user.click(screen.getByRole("button", { name: label }));
+        expect(
+          await screen.findByRole("dialog", {
+            name: "What is sent to resume your documents",
+          }),
+        ).toBeVisible();
+        await user.click(screen.getByRole("button", { name: "Not now" }));
+      } else {
+        expect(screen.getByRole("link", { name: label })).toHaveAttribute(
+          "href",
+          href,
+        );
+      }
       expect(screen.getByRole("button", { name: RETRY })).toHaveAttribute(
         "aria-disabled",
         "true",
