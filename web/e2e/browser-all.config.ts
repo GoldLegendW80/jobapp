@@ -16,6 +16,9 @@ import { defineConfig, devices } from "@playwright/test";
  *   browser-b10  LinkedIn search: the switch and its sentence, a sweep on the fixture LinkedIn of
  *                tests/browser_pages/b10/, the security check's pause, the sign in page, a
  *                posting also on Greenhouse as one row, another person's switch off (B10)
+ *   browser-b11  privacy and isolation: A's whole path (an assistant's run, its hand off, the live
+ *                view, a sign in), B tries each of A's identifiers, and none of A's secrets in
+ *                the stack's logs or Redis (task B11)
  *   browser-b12  the sign in hand off: the banner, the live view at the person's keyboard,
  *                I'm signed in, Cancel, and nobody watching (task B12b)
  *

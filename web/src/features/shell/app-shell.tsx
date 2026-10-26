@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet } from "react-router";
 
+import { NeedsYouDot } from "@/features/apply/needs-person";
 import { QueueCount } from "@/features/apply/queue-count";
 import { useMe } from "@/features/auth/auth-context";
 import { HealthDot } from "@/features/health/health-dot";
@@ -35,9 +36,11 @@ export function AppShell() {
           >
             {APP_NAME}
           </Link>
+          {/* relative: the links' sr-only words (absolute) stay inside the scrolling nav; else
+              they sit past its edge and widen the page on a phone. */}
           <nav
             aria-label="Main"
-            className="flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
+            className="relative flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
           >
             <NavLink to="/jobs" className={navLink}>
               Jobs
@@ -51,6 +54,7 @@ export function AppShell() {
             <NavLink to="/applications" className={navLink}>
               Applications
               <QueueCount />
+              <NeedsYouDot />
             </NavLink>
             <NavLink to="/runs" className={navLink}>
               Runs

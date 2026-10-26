@@ -48,6 +48,16 @@ describe("phaseOf and what each phase reads", () => {
     expect(phaseOf(null)).toBe("idle");
     expect(statusLine(null)).toMatch(/Nothing is sent without your approval/);
   });
+
+  it("says a queued fill waits for the person's own sign in, not for a free browser", () => {
+    const line = statusLine(
+      fakeApplication("queued", { needs: "browser_signin" }),
+    );
+    expect(line).toBe(
+      "Waiting for you to finish signing in to a site in your browser. The form is filled after that.",
+    );
+    expect(line).not.toMatch(SEPARATOR);
+  });
 });
 
 describe("the fields", () => {

@@ -201,8 +201,8 @@ class Lever(base.Adapter):
             answer = answers.Answer(letter, "documents.letter_text")
             filled = await self.fill(tools, item, answer)
             report.outcomes[index] = base.Outcome(item, answer, filled)
-            if filled.status == "failed" and filled.code in base.PENDING_STEPS:
-                report.stopped, report.needs_person = "needs_person", filled.code
+            if step := base.step_of(filled):
+                report.stopped, report.needs_person = "needs_person", step
             elif filled.status == "failed" and filled.code in base.STOPPING:
                 report.stopped = filled.code
             break

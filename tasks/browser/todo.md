@@ -67,6 +67,7 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 **Playwright journey:** `browser-b3.spec.ts`: sign in as `e2e-browser-a@example.org`, call `GET /api/browser` from the page's session, start a session, see `holder: you`; a second person sees a queue position.
 **Scope:** M. **Depends on:** B2. **Migration:** 0016. **Owns:** `api/app/browser/` (`client.py`, `leases.py`, `models.py`, `router.py`, `registry.py`), `api/alembic/versions/0016_browser.py`, one line each of `api/app/models.py` and `api/app/main.py`.
 **As built (PR of B3):** `profiles.py` holds the profile row's functions. The uid comes from the sequence `browser_profile_uid_seq` (20000 to 59999, no cycle), so a uid is never given twice, even after a row is deleted; the removal of a deleted profile's directory is queued in `browser_profile_removals` by a trigger on `browser_profiles`, whatever path deletes the row. The page's purposes are `look` (browserd's `takeover`) and `signin`, both tier 0; then the apply purposes and `profile_edit`, then `full_auto`, then `sweep`. A waiter keeps its place by asking again (the POST is idempotent) within 60 s. A uid is consumed only when a profile row is made: `profiles.ensure` reads the row first and inserts with `INSERT ... SELECT ... WHERE NOT EXISTS`, so later leases draw no number (k first leases of one person racing draw at most k). While browserd answers and still holds the lease, browserd alone decides idle and maximum (it sees every tool call and, after B4, every input), so neither B4 nor B5 has to call `leases.touch`; the api's own idle timer ends the turn only when browserd cannot be asked, after BROWSER_IDLE_S without an answer from browserd (counted from the latest of the last `touch`, the last answer that browserd still held the lease, and the first unanswered call), so one failed or slow call never ends a busy lease; an end browserd could not be told waits in `jobapp:browser:ending` and is told on every later call until browserd confirms it, and such a lease is never taken back from browserd. Whatever browserd answers, the api ends a lease 60 s past its maximum of active time or past the deadline of its wait for the person. Two calls of one person for one purpose at once (two tabs) answer the same lease, and the loser leaves no place in the queue. The estimated wait is rounded up to whole minutes. POST while another person holds the browser and browserd is down answers 202 with the place (GET says `available: false`), not 503. The journey `web/e2e/browser-b3.spec.ts` is written; no group of `ops/local-check.sh` runs a stack with the `browser` profile yet (B2 left that line), so it was not run.
+**As built (#291 item 7, browserd's own half, PR #621):** browserd's `Manager` owns a start, and a hand off's swap, whose caller is cancelled: a start or swap revoked meanwhile never installs its Chromium, and until that Chromium is closed a new lease is refused 409 `busy` and the profile is not removed (`api/tests/browser/test_start_fence.py`, `docs/browser-start-fence.md`). An end whose stop or kill raises or is interrupted is over when it returns, as in B7: Chromium's end reaps the profile's uid even then and every start reaps again first, so it never leaves browserd busy (`test_the_manager_ends_a_lease_whose_browser_failed_to_stop`, `test_a_stop_that_fails_in_the_swap_ends_the_lease_and_starts_nothing`, `test_a_swap_cancelled_while_the_old_browser_closes_frees_admission_after_its_end`). Open: a start the api abandons can still leave a lease in browserd, since browserd's control server does not cancel a handler when the api goes away.
 
 ## B4: The live view
 **Issue:** to create.
@@ -124,11 +125,13 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 **Scope:** S. **Depends on:** B8, B7. **Migration:** none. **Owns:** `api/app/browser/sources/linkedin.py`, `api/app/browser/linkedin_router.py`, `linkedin_guard.py`, `web/src/features/browser/linkedin-card.tsx`, `tests/browser_pages/b10/`.
 
 ## B11: Privacy and isolation over the module
-**Issue:** to create.
+**Issue:** #235.
 **Acceptance:** one test suite over every route and tool of the module with two people (404 and 403 everywhere), the canary over logs, Redis, Caddy's log and the api's answers after a full journey (no cookie, ticket, lease token, typed value or page text), the module's text for `/privacy` (what the browser keeps, where, that the volume is outside the backups, how to forget, and in one sentence that the Jetson's disk is not encrypted: the profile is protected by its own uid, mode 0700, no other mount, no backup and deletion with the account, and is readable by the administrator of the Jetson; a test asserts the sentence is shown and that the volume is absent from the backup script and from every other service's mounts), and the Jetson run of `ops/browser-measure.sh` under the full stack with the apply slice running, written under "Measurements".
 **Edge cases to test:** every route signed out (401); a deleted person's directory gone; a lease token in an error answer (never); the memory of the stack during a Workday fixture plus an agent run in the worker (within 5G).
 **Playwright journey:** `browser-b11.spec.ts`: the full path of B4, B5, B7, B12a and B12b for A, then B attempts each of A's identifiers.
 **Scope:** S. **Depends on:** B4 to B10, B12a and B12b. **Migration:** none. **Owns:** `api/tests/browser/test_isolation.py`, the privacy sentences of the module.
+
+**As built (first slice, the Jetson run left to the owner):** `api/tests/browser/test_isolation.py` holds the table of every route the module mounts (a new route without a row fails it; no path names an id), every route signed out or with a made up cookie (401, nothing of A's), B on every route and every `LeaseTools` method (A's own token included) while A holds a session, a later sign in, a hand off and a LinkedIn switch (403 or 404, or B's own empty state on a read; B's tool calls refused before browserd), the canary of a full path of A over the logs, Redis, every table and every answer, a deleted person's directory removed and only theirs, the profile volume mounted by the browser alone in every Compose file, and the nightly backup a `pg_dump` that names no volume. `/privacy` has the section "The app's browser" (web/src/features/public/texts.ts, `BROWSER_*`, VERSION 2026-10-25). `browser-b11.spec.ts` runs A's path of B5, B12a, B4, B12b and B7 through Caddy, then B tries A's lease id, a fresh ticket on the websocket, the hand off, the later sign in, the input and Caddy's check, and the canary reads the logs of the api, the worker, Caddy and the browser and every key of Redis. Left: the Jetson run of `ops/browser-measure.sh` under the full stack with the apply slice, and the stack's memory during a Workday fixture plus an agent run (within 5G), both under "Measurements".
 
 ## B12: The sign in hand off in the live view
 **Issue:** to create. Two slices (issue #405): **B12a** the hand off in browserd, the api and the worker; **B12b** the hand off for the person in the page, and the later hand off of an item nobody watched.
@@ -264,3 +267,26 @@ Nothing yet.
 
 ### Checkpoint B
 Nothing yet.
+
+
+## Interactive job search (#626, owner approved 2026-10-24)
+
+Contract and dependency order: [interactive search plan](../jobs/interactive-search-626.md). Tasks are tracked in GitHub; existing module tasks remain intact.
+
+### B13: execute guarded interactive job search through the LLM runtime
+
+Task [#628](https://github.com/GoldLegendW80/jobapp/issues/628). Acceptance, owned files and verification are in that issue and the linked plan. Status: [draft #640](https://github.com/GoldLegendW80/jobapp/pull/640), not merged or deployed. No production wiring claimed.
+
+### B14: enforce platform consent and durable search checkpoints
+
+Task [#631](https://github.com/GoldLegendW80/jobapp/issues/631). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+Prerequisites are published as drafts: API-only Free-Work extraction [#653](https://github.com/GoldLegendW80/jobapp/pull/653), optional generic Search client compatibility [#657](https://github.com/GoldLegendW80/jobapp/pull/657), and Indeed/WTTJ consent [#656](https://github.com/GoldLegendW80/jobapp/pull/656). Permission and legacy reader intent remain [#648](https://github.com/GoldLegendW80/jobapp/issues/648). The extracted consent portion overlaps draft #619 but excludes its unrelated unmerged ancestry; that existing draft stays untouched. A future gate must select or reconcile the foundation lineage.
+
+### B15: watched sign-in and takeover during manual search
+
+Task [#634](https://github.com/GoldLegendW80/jobapp/issues/634). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.
+
+### B16: follow observed posting destinations within source scope
+
+Task [#635](https://github.com/GoldLegendW80/jobapp/issues/635). Acceptance, owned files and verification are in that issue and the linked plan. Status: open, implementation pending.

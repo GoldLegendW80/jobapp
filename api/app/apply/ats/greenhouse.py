@@ -69,7 +69,12 @@ class Greenhouse(base.Adapter):
 
     def pending_at(self, root: base.Node) -> str:
         """Also, after the submit: a code sent by e-mail is asked for (a text field labelled as
-        a security or verification code, shown with a button to send it)."""
+        a security or verification code, shown with a button to send it). The person types it
+        on the page (apply A10a): when its boxes are the page's only credential boxes, it is
+        that step and not a sign in wall."""
+        boxes = base.credentials(root)
+        if boxes and all(base.fold(base.entry_label(b)) in _CODE_LABELS for b in boxes):
+            return "email_code"
         if step := super().pending_at(root):
             return step
         found = base.discover_fields(root, self.submit_names)

@@ -32,6 +32,7 @@ def facts(
     form_fields: tuple[str, ...] = (),
     selector_hit: bool = False,
     selector_error: bool = False,
+    credential: bool = False,
     **more: Any,
 ) -> dict[str, Any]:
     """What FACTS_JS answers for an element (`more`: holds_submit, custom_submit, editable)."""
@@ -45,6 +46,7 @@ def facts(
         "selector_error": selector_error,
         "field": field,
         "form_fields": list(form_fields),
+        "credential": credential,
         **more,
     }
 
@@ -60,6 +62,10 @@ SUBMIT_NAMES = [
     "Valider ma candidature", "Confirmer ma candidature", "Confirm application",
     "Finish application", "Finaliser ma candidature", "Terminer ma candidature",
     "Complete application", "  submit  ", "Submit!", "→ Submit", "Submitted? Submit",
+    # PR #640 round 3: the French infinitive and imperative, glued, cased and spaced.
+    "Candidater", "CANDIDATER", "candidater", "Candidatez", "Candidater maintenant",
+    "CandidaterMaintenant", "candidater_maintenant", "Candidatez dès maintenant",
+    "→ Candidater", "Ｃａｎｄｉｄａｔｅｒ", "Candi​dater",
 ]  # fmt: skip
 
 
@@ -94,6 +100,12 @@ TRUE_BUTTONS = [
     "Locate me", "Enter manually", "Show more", "Review", "Cancel", "Annuler", "Close",
     "Fermer", "Select country", "Paste", "Order of preference", "LinkedIn profile",
     "Voir l'offre", "Accept cookies", "Tout accepter", "Edit", "Modifier",
+    # Neighbours of Candidater and Contacter le recruteur that stay ordinary.
+    "Candidat", "Espace candidat", "Candidate portal", "Candidates", "Candidature",
+    "Mes candidatures", "Candidature spontanée", "Candidate login", "Contact", "Contact us",
+    "Contactez-nous", "Nous contacter", "Contacts", "Recruteur", "Our recruiters",
+    "Recruiting process", "Recrutement", "Messages", "Hiring process", "Employer branding",
+    "Employeur", "Écrire", "Contact details",
 ]  # fmt: skip
 
 
@@ -138,6 +150,13 @@ DANGER_NAMES = [
     "Payer", "Paiement", "Payment", "Buy", "Acheter", "Purchase", "Checkout",
     "Cancel application", "Annuler ma candidature", "Unsubscribe", "Se désinscrire",
     "Deactivate account", "Désactiver le compte", "Commander", "Pay with PayPal",
+    # PR #640 round 3: writing to a recruiter, in French and English, glued and cased.
+    "Contacter le recruteur", "CONTACTER LE RECRUTEUR", "Contactez le recruteur",
+    "Contacter la recruteuse", "Contacter l'employeur", "Contacter le recruteur ✉",
+    "ContacterLeRecruteur", "contacter_le_recruteur", "Contact recruiter", "Contact the recruiter",
+    "Contact the hiring manager", "Contact employer", "Message the recruiter", "Message recruiter",
+    "Envoyer un message au recruteur", "Écrire au recruteur", "Écrivez au recruteur",
+    "Contacter le recrutement",
 ]  # fmt: skip
 
 

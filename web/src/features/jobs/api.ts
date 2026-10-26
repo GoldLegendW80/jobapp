@@ -13,6 +13,13 @@ import { STATUSES } from "./labels";
 /** Rows per request: Harald's 433 rows come in five pages. */
 export const PAGE_SIZE = 100;
 
+// Posting amounts are major currency units, with at most two decimal places.
+const postingPaySchema = z
+  .number()
+  .min(1)
+  .max(10_000_000)
+  .refine((value) => /^\d+(?:\.\d{1,2})?$/.test(String(value)));
+
 export const jobListItemSchema = z.object({
   id: z.string().min(1),
   slug: z.string(),
@@ -30,8 +37,8 @@ export const jobListItemSchema = z.object({
   description: z.string().nullable(),
   published_on: z.string().nullable(),
   // The pay and work mode the posting states (opportunities O3): all four pay fields or none.
-  pay_min: z.number().int().nullable().optional(),
-  pay_max: z.number().int().nullable().optional(),
+  pay_min: postingPaySchema.nullable().optional(),
+  pay_max: postingPaySchema.nullable().optional(),
   pay_currency: z.string().nullable().optional(),
   pay_period: z.string().nullable().optional(),
   work_mode: z.string().nullable().optional(),

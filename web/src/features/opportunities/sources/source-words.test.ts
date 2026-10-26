@@ -9,6 +9,7 @@ import {
   FEED_PROBLEM_UNKNOWN,
   FEED_PROBLEMS,
   FEED_SHORT_NAMES,
+  feedLine,
   feedProblem,
   feedSourceName,
   isFeedKind,
@@ -106,6 +107,38 @@ describe("source words (O8)", () => {
     );
     expect(sourceLabel("google_careers:ai engineer, data/Paris")).toBe(
       "Google Careers, ai engineer, data, Paris",
+    );
+  });
+});
+
+describe("feed parser skip summary", () => {
+  const source = {
+    found: 4,
+    new: 2,
+    skipped_by_rule: 1,
+    items_skipped: 0,
+    error: null,
+  };
+
+  it.each([
+    [0, ""],
+    [1, " 1 feed item could not be read and was skipped."],
+    [2, " 2 feed items could not be read and were skipped."],
+    [1200, " 1,200 feed items could not be read and were skipped."],
+  ])("reports %s parser failures separately from rules", (count, sentence) => {
+    const line = feedLine({ ...source, items_skipped: count });
+    expect(line).toBe(
+      "4 postings found, 2 new. 1 posting was set aside by your roles to never apply for." +
+        sentence,
+    );
+    expect(line).not.toMatch(DASHES);
+  });
+
+  it("keeps the parser count when saving the feed later failed", () => {
+    expect(
+      feedLine({ ...source, items_skipped: 2, error: "store_failed" }),
+    ).toBe(
+      "4 postings found, 2 new. 1 posting was set aside by your roles to never apply for. 2 feed items could not be read and were skipped. What this feed found could not be saved, so nothing was kept from it.",
     );
   });
 });

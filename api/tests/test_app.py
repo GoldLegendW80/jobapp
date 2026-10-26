@@ -140,7 +140,11 @@ def test_json_formatter_handles_unicode_and_exceptions() -> None:
     payload = json.loads(JsonFormatter().format(record))
     assert payload["msg"] == "café ✓ ok"
     assert payload["custom"] == {"a": 1}
-    assert "ValueError: bad" in payload["exc"]
+    # The class and the frames, never what the error says (issue #670).
+    assert payload["exc"].endswith(
+        ", in test_json_formatter_handles_unicode_and_exceptions\nValueError"
+    )
+    assert "bad" not in payload["exc"]
     assert payload["level"] == "error"
 
 
