@@ -311,6 +311,9 @@ test("an unknown required early field resumes all remaining steps before approva
     .poll(async () => (await app(job))?.state, { timeout: 240_000 })
     .toBe("ready");
   expect((await stub.submissions()).length).toBe(before);
+  // The answer went through the api, not the page, so the page has not seen the refill start
+  // (it polls only while a fill or a submit runs): read it again.
+  await page.reload();
   await approveAndSubmit(job);
   const submitted = await stub.submissions();
   expect(submitted.length).toBe(before + 1);
