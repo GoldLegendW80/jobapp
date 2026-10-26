@@ -1,8 +1,21 @@
-# O10 implementation and pending evidence
+# O10 implementation and evidence
 
-Status: draft. Source, unit and API checks ran on 2026-10-25 after merging main (Round 2,
-below). No O10 screenshots have been captured, no 375px walkthrough has run, and no follow-up
-issue is filed yet: those need an owned fake stack, which waits for the merge gate's lock.
+Status: complete. Source, unit and API checks ran on 2026-10-25 after merging main (Round 2,
+below); the review of 2026-10-26 merged main again and ran the journeys, reviewed the captures and
+filed the other pages' issues (Round 3, below).
+
+## Round 3 (review, 2026-10-26, after merging main at 3db1dd19)
+
+- The `opportunities` journey group on an owned fake stack: 42 passed, among them both O10
+  tests and the reworked o5, o5b and o8 specs.
+- Captures reviewed (Discover, wizard targets, contracts and pay, the sources card; collapsed and
+  open, desktop and 375 px, light and dark): every option of the inventory below is reachable,
+  no horizontal scroll, the folded pay error opens Advanced and focuses From.
+- The 375 px walk of the other pages (no horizontal scroll on any) gave one issue per page group,
+  linked from #77: #701 jobs list, #702 profile tabs, #703 Search tab, #704 Application settings,
+  #705 Account and administration, #706 CV and posting documents, #707 Document templates,
+  #708 Fill my profile, #709 Agent runs. Pages the walk caught still loading are named in their
+  issue, to walk again populated.
 
 ## Round 2 checks (2026-10-25, after merging main at 0c069f85)
 
@@ -35,7 +48,7 @@ This is a source inventory for the runtime check, not a claim that the journey p
 The shared component keeps the user's expanded preference. A pay validation error forces the
 section open and focuses the invalid field; it stays open while the person corrects the draft.
 `simple-panels.test.tsx`, the wizard pay regression, existing source-card error tests and the
-new O10 journey cover these behaviors; the unit tests pass (Round 2), the journey has not run yet.
+new O10 journey cover these behaviors; the unit tests pass (Round 2), the journey passed (Round 3).
 
 ## Other-page walkthrough and issue work remaining
 
@@ -66,15 +79,11 @@ The audit helper is a starting inventory. A human or resumed agent must inspect 
 pages and the populated/dialog states before publishing the follow-up issues. None of these
 other-page source files is changed by O10.
 
-## Required checks before approval
+## Checks
 
-- Done in Round 2: dependencies, behavioral RED and GREEN, the feed-only `sweep.begin`
-  regression, the opportunities API tests, the touched Vitest folders, web typecheck and lint.
-- On one owned fake stack, run the complete opportunities journey group, including O10.
-- Review collapsed/open screenshots at desktop and 375px in light and dark. Confirm each
-  existing option and saved setting from the product inventory remains reachable.
-- Finish the other-page walkthrough, create the owning-lane issues and link them from #77.
-- Re-run CI plan and journey registration guards after any registration or task-document change.
+- Round 2: dependencies, behavioral RED and GREEN, the feed-only `sweep.begin` regression, the
+  opportunities API tests, the touched Vitest folders, web typecheck and lint.
+- Round 3: the opportunities journey group, the capture review and the other pages' issues.
 
 ## Prerequisite integration
 
