@@ -118,6 +118,8 @@ class InteractiveScope:
     start: str
     query: str
     filters: tuple[tuple[str, str], ...] = ()
+    criteria: str = "{}"
+    instructions: str = ""
 
     def tool_scope(self) -> dict[str, Any]:
         return {"start": self.start, "query": self.query, "filters": dict(self.filters)}
@@ -138,6 +140,8 @@ class InteractiveScope:
             raise ValueError("invalid discovery filters")
         if len({k for k, _ in self.filters}) != len(self.filters):
             raise ValueError("invalid discovery filters")
+        if len(self.instructions) > 2000 or len(self.criteria) > 100_000:
+            raise ValueError("invalid discovery context")
 
 
 class FinderInput(BaseModel):
@@ -268,6 +272,7 @@ class FinderSession:
     stopped: str = ""  # a sources.ERRORS code that ended the pages
     seen: set[str] = field(default_factory=set)  # canonical addresses linked from a page read
     opened: dict[str, str] = field(default_factory=dict)  # canonical address: its page's text
+    interactions: Counter[str] = field(default_factory=Counter)
     current: str = ""
     interactive: InteractiveScope | None = None
 
@@ -385,22 +390,28 @@ class FinderSession:
             await self.pages._act(act)
         except SourceError as exc:
             if exc.code == "page_failed":
+                self.refused["unsupported_interaction"] += 1
                 return json.dumps({"error": result.get("error", "page_failed")}), True
             return self._stop(exc.code)
         url = canonical(self.pages.last_url)
         if not self.on_site(url):
             return "Refused: the page went to another site.", True
         self.current = url
+        self.interactions[name] += 1
         self._read(url, self.pages.last_text)
         return self._view(url, self.pages.last_text), False
 
     async def snapshot(self) -> tuple[str, bool]:
+        from app.browser.sources import SourceError
+
         if self.stopped:
             return self._stop(self.stopped)
         try:
             shot = await self.pages.tools.snapshot()
         except BrowserError as exc:
             return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
+        except SourceError as exc:
+            return self._stop(exc.code)
         text = shot.get("snapshot")
         if not shot.get("ok") or not isinstance(text, str):
             return "The page could not be read.", True
@@ -415,6 +426,8 @@ class FinderSession:
         return self._view(url, text), False
 
     async def wait_for(self, text: str | None, seconds: float | None) -> tuple[str, bool]:
+        from app.browser.sources import SourceError
+
         if self.stopped:
             return self._stop(self.stopped)
         try:
@@ -426,6 +439,8 @@ class FinderSession:
                 )
         except BrowserError as exc:
             return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
+        except SourceError as exc:
+            return self._stop(exc.code)
         if not done.get("ok"):
             return "The text did not appear.", True
         return "Done. Read the page again with browser_snapshot.", False
@@ -536,6 +551,8 @@ class FinderDefinition(definitions.AgentDefinition):
                         "start": scope.start,
                         "query": scope.query,
                         "filters": scope.filters,
+                        "criteria": json.loads(scope.criteria),
+                        "untrusted_person_instructions": scope.instructions,
                     }
                 }
             )
