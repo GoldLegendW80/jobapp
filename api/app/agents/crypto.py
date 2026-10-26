@@ -46,6 +46,11 @@ class KeyFormatError(ValueError):
     """The configured key is not 32 bytes of base64."""
 
 
+class EncryptError(ValueError):
+    """The plaintext cannot be sealed: it is not text that UTF-8 can encode (a lone surrogate).
+    Says nothing of the plaintext: the codec's own error carries all of it (issue #670)."""
+
+
 class DecryptError(Exception):
     """The ciphertext cannot be decrypted: unknown key version, or it fails authentication
     (tampered, truncated, or bound to another user or kind)."""
@@ -119,11 +124,17 @@ class Keyring:
         return fingerprint(self.current)
 
     def encrypt(self, plaintext: str, user_id: uuid.UUID, kind: str) -> Sealed:
-        nonce = os.urandom(NONCE_BYTES)
-        body = AESGCM(self.current).encrypt(
-            nonce, plaintext.encode("utf-8"), associated_data(user_id, kind)
-        )
-        return Sealed(nonce + body, self.version)
+        try:
+            data = plaintext.encode("utf-8")
+        except UnicodeEncodeError:
+            # Raised outside the handler: UnicodeEncodeError holds the whole plaintext, and
+            # would ride along as the context of anything raised inside it.
+            pass
+        else:
+            nonce = os.urandom(NONCE_BYTES)
+            body = AESGCM(self.current).encrypt(nonce, data, associated_data(user_id, kind))
+            return Sealed(nonce + body, self.version)
+        raise EncryptError("not UTF-8 text")
 
     def decrypt(self, ciphertext: bytes, key_version: int, user_id: uuid.UUID, kind: str) -> Opened:
         key = self._by_version.get(key_version)
@@ -136,4 +147,11 @@ class Keyring:
             plain = AESGCM(key).decrypt(nonce, body, associated_data(user_id, kind))
         except InvalidTag:
             raise DecryptError("fails authentication") from None
-        return Opened(plain.decode("utf-8"), stale=key_version != self.version)
+        try:
+            text = plain.decode("utf-8")
+        except UnicodeDecodeError:
+            # Raised outside the handler: UnicodeDecodeError holds the whole plaintext.
+            pass
+        else:
+            return Opened(text, stale=key_version != self.version)
+        raise DecryptError("not UTF-8 text")

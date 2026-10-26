@@ -6,14 +6,17 @@ import secrets
 import uuid
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.agents.crypto import (
     KEY_BYTES,
     NONCE_BYTES,
     TAG_BYTES,
     DecryptError,
+    EncryptError,
     KeyFormatError,
     Keyring,
+    associated_data,
     fingerprint,
     parse_key,
 )
@@ -192,3 +195,48 @@ def test_from_text() -> None:
     assert keys.current == b"c" * KEY_BYTES
     assert keys.previous == b"p" * KEY_BYTES
     assert Keyring.from_text(current).previous is None
+
+
+# --- errors carry no plaintext (issue #670) ---------------------------------------------------
+
+
+def _everything_of(error: BaseException) -> str:
+    """All an exception could show: its text, its repr, its arguments, its attributes, and the
+    same for the errors it was raised from or during."""
+    parts: list[str] = []
+    while error is not None:
+        parts += [str(error), repr(error), repr(error.args), repr(vars(error))]
+        parts += [repr(getattr(error, name, None)) for name in ("object", "reason")]
+        error = error.__cause__ or error.__context__  # type: ignore[assignment]
+    return " ".join(parts)
+
+
+@pytest.mark.parametrize("where", ["start", "middle", "end"])
+def test_a_plaintext_that_cannot_be_encoded_is_refused_without_its_value(where: str) -> None:
+    secret = secrets.token_hex(24)
+    text = {
+        "start": "\ud800" + secret,
+        "middle": secret + "\udfff" + secret,
+        "end": secret + "\ud83d",
+    }
+    with pytest.raises(EncryptError) as caught:
+        ring().encrypt(text[where], ALICE, API)
+    assert isinstance(caught.value, ValueError)  # what the codec raised before, for callers
+    assert str(caught.value) == "not UTF-8 text"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert secret not in _everything_of(caught.value)
+
+
+def test_a_plaintext_that_cannot_be_decoded_is_refused_without_its_value() -> None:
+    keys = ring()
+    secret = secrets.token_hex(24)
+    nonce = secrets.token_bytes(NONCE_BYTES)
+    data = b"\xff" + secret.encode()
+    body = AESGCM(keys.current).encrypt(nonce, data, associated_data(ALICE, API))
+    with pytest.raises(DecryptError) as caught:
+        keys.decrypt(nonce + body, keys.version, ALICE, API)
+    assert str(caught.value) == "not UTF-8 text"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert secret not in _everything_of(caught.value)

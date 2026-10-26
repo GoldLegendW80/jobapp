@@ -42,6 +42,17 @@ describe("the sentences of /privacy", () => {
     expect(texts.HOW_LONG).toContain("within 7 days");
   });
 
+  // Browser B11 (tasks/browser/todo.md): the disk in one sentence, said plainly.
+  it("say that the disk is not encrypted and who can read the browser profile", () => {
+    expect(texts.BROWSER_DISK).toBe(
+      "The server's disk is not encrypted: your profile is protected by a system user of its own with access for that user only (mode 0700), no other service mounts it, no backup holds it and it is deleted with your account, but the administrator of the server can read it.",
+    );
+    expect(texts.BROWSER_WHERE).toContain(
+      "That volume is not in the server's backups",
+    );
+    expect(texts.BROWSER_FORGET).toContain("choose Forget all logins");
+  });
+
   it("use no dash as a separator", () => {
     for (const [name, value] of Object.entries(texts)) {
       if (typeof value === "string" && name !== "GOOGLE_POLICY_URL")
@@ -87,8 +98,15 @@ describe.each([
       texts.DISCONNECT,
       texts.DELETE_ACCOUNT,
       texts.LIMITED_USE,
+      texts.BROWSER_KEPT,
+      texts.BROWSER_WHERE,
+      texts.BROWSER_FORGET,
+      texts.BROWSER_DISK,
     ])
       expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "The app's browser" }),
+    ).toBeInTheDocument();
     const list = screen.getByRole("list", { name: "Search terms" });
     for (const term of [...texts.SEARCH_KEYWORDS, ...texts.SEARCH_SYSTEMS])
       expect(list).toHaveTextContent(term);
