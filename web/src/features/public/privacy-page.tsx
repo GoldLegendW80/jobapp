@@ -1,6 +1,10 @@
 import {
   AFTER_DISCONNECT,
   ASSISTANT,
+  BROWSER_DISK,
+  BROWSER_FORGET,
+  BROWSER_KEPT,
+  BROWSER_WHERE,
   contactEmail,
   DELETE_ACCOUNT,
   DISABLED_ACCOUNT,
@@ -18,7 +22,8 @@ import {
 } from "./texts";
 import { PublicLayout, Section } from "./public-layout";
 
-/** What the app does with a connected Gmail, in the words of ./texts. Public: no session. */
+/** What the app does with a connected Gmail and with its browser, in the words of ./texts.
+ * Public: no session. */
 export function PrivacyPage() {
   const contact = contactEmail();
   return (
@@ -59,6 +64,12 @@ export function PrivacyPage() {
       </Section>
       <Section id="disconnect" title="How to disconnect">
         <p>{DISCONNECT}</p>
+      </Section>
+      <Section id="browser" title="The app's browser">
+        <p>{BROWSER_KEPT}</p>
+        <p>{BROWSER_WHERE}</p>
+        <p>{BROWSER_FORGET}</p>
+        <p>{BROWSER_DISK}</p>
       </Section>
       <Section id="delete" title="Deleting the account">
         <p>{DELETE_ACCOUNT}</p>
