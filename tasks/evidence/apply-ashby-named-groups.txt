@@ -1,0 +1,58 @@
+Apply A4/A5, accessible named groups, issue #563, PR #604
+
+Observed runtime failure
+  The real A5 journey displayed only the skipped Autofill from resume row and
+  stopped needs_person/form_changed before the answer agent ran. The actual ATS
+  screenshot showed all application fields, empty and visible. The worker logged
+  ashby: form_changed (anchor_missing).
+
+Root cause and change
+  Pinned Playwright's AI snapshot exposes both group "Resume *" and descendant
+  visible text Resume plus *. The old extraction concatenated these into
+  Resume * Resume, failing the exact Resume anchor. Cover letter and yes/no
+  labels were duplicated as well. A named accessible group now supplies its
+  own field label. Unnamed groups retain their preceding-text extraction;
+  required marks and the selected file name remain separate. No control,
+  autofill action, browser budget, approval guard, or model answer rule changed.
+
+Regression proof
+  tests/ats_forms/a4/snapshots/ashby-named-groups.txt records pinned Playwright
+  1.55's actual AI snapshot of the invented static Ashby fixture. This isolated
+  snapshot capture is parser evidence, not a sandbox or egress test. The real
+  protected browser runtime is tested separately below.
+  RED: 47 failed and 3 passed before the extraction fix, including the exact
+  observed anchor failure.
+  GREEN: 571 passed across all A4 adapter, A1 fixture, and the initial 50 named-group tests.
+  The table covers multilingual labels, required/optional marks, file values,
+  nested named and unnamed groups, neighbouring fields, and autofill refusal.
+
+Runtime proof
+  Real Caddy/API/worker/renderer/browser stack, invented e2e account, fake model
+  streams and local fake ATS only. A5's three original positive tests passed:
+  documents and posting setup, Assistant answer shown and editable, and no page
+  errors. The complete recorded answer was asserted before the person's edit;
+  zero submissions and the staged posting were asserted after the edit.
+  Inspected screenshot shows exact question, person-edited value and You badge:
+  /tmp/ash604-results/apply-a5-the-open-question-406db--as-its-answer-and-editable/test-finished-1.png
+  A7 Greenhouse and Ashby both passed fill, person answers, approval, exactly
+  one accepted fake submission, and the post-click screenshot/report.
+  A5 and A7: all 7 original tests passed in 8.0 minutes.
+  Thirty additional refusal cases keep unknown buttons unsupported within
+  named groups. The whole Apply suite covers these final 80 regression cases.
+  Whole Apply: 7,070 passed in 374.08 seconds, including all final 80 cases.
+  Command: caffeinate -i bash ops/agent-test.sh --name ash604-apply
+  tests/apply -m 'not docker' -n 2. Log: /tmp/ash604-apply.log.
+
+Static checks
+  API Ruff check and format: passed, 750 files.
+  CI plan tests: 81 passed. Journey registry: passed.
+
+Scope
+  Source: api/app/apply/ats/base.py, nearest named group label extraction only.
+  No frontend source or journey assertion changed. No real ATS, Gmail, account,
+  production environment, credential, or approved PR branch was used or changed.
+  All ash604 runtime containers, networks, volumes and owned image tags were
+  removed by the foreground supervisor. The borrowed renderer and browser
+  image tags were not modified. The final Postgres/Redis test helpers were
+  removed on exit. Final container, network, volume and image-tag queries
+  for ash604 returned no owned resources. The worktree is clean.

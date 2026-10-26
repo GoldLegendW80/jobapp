@@ -1,0 +1,51 @@
+Apply email lifecycle review fixes, issue #563
+2026-10-22
+
+B1: Send-audit retention
+The existing API mail dispatch cycle prunes at most 100 audits per invocation,
+including when no account, send key or provider is available. The injected clock
+and MAIL_SENDS_KEEP_DAYS define the cutoff; only strictly older audits expire.
+An audit survives disconnect and posting deletion until that cutoff. Account
+deletion retains its existing cascade. A pending attempt is settled as unknown
+before pruning; the application keeps its uncertain state and spent authority.
+
+B2: Local non-send versus provider outcome
+The pending audit commits before the provider call. The application remains
+approved or held while the final live checks run, then submitting commits before
+capability minting. Proven local refusals commit the failed audit and Apply
+stop or handover together. Full auto becomes review, the approval stays spent,
+and no capability or provider call occurs. Actual provider 400 and unknown
+outcomes keep their irreversible outcome paths. A crash before or after the
+boundary recovers conservatively as submit_unknown without resending.
+
+Disconnect can remove the private draft before a pending attempt is settled.
+That recovery locks and rechecks the exact owner, posting, email ATS and active
+mail_send_id. Wrong owner, posting and send ID neighbours cannot change the
+application. The source does not reconstruct private mail content.
+
+B3: Email subject contract
+Email subjects reject CR or LF and more than 998 codepoints before answer
+mutation. Legacy invalid subjects return a typed 422 on approval and remain
+editable. Draft synchronisation validates before changing the draft. Approval
+views expose max_chars=998, and the frontend parser accepts that exact limit.
+The existing editor uses its native UTF16 count and displays the server error.
+The ordinary 5000 and document-letter 10000 limits remain in place.
+
+Verification
+Initial regression RED: 22 failed, 2 passed against unchanged source.
+Local-stop atomicity RED: 2 failed with the persisted audit still pending.
+Deleted-content recovery RED: 2 failed with the application still approved.
+Frontend parser RED: 1 failed, 19 passed; 998 was rejected by its old union.
+
+Whole Apply and mail folders: 7191 passed in 417.99 seconds, before the final
+atomicity and missing-content recovery additions.
+Whole mail plus A14 suites: 1324 passed in 77.30 seconds after atomicity.
+Final A14 email, confirmation and lifecycle suites: 132 passed in 57.37 seconds,
+including missing-content recovery and wrong-owner/posting/send neighbours.
+Whole Apply frontend: 379 passed. Final typed-422 queue tests: 13 passed.
+API Ruff and format: clean, 737 files. Frontend typecheck and lint: clean.
+CI plan: 81 passed. Journey registry: 29 CI, 4 excluded, 46 local-only.
+
+Fixtures use invented e2e accounts and fake Google/MCP transports. No production
+mail, credentials, account or job site was used. No image was built. The root
+orchestrator still runs the composed gate and fresh independent review.

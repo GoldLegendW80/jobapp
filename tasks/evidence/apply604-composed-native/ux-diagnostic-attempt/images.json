@@ -1,0 +1,33 @@
+{
+  "source_head": "9358e4eb7f1f55d8e716a8ed81746193cd9d2ffe",
+  "source_tree": "2b5e8ed0995a025c3ab20e669aea11e5146d88a6",
+  "result": "FAILED",
+  "playwright": {
+    "passed": 1,
+    "failed": 1,
+    "not_run": 3,
+    "retries": 0,
+    "duration_s": 187.238393
+  },
+  "required_layouts_emitted": 0,
+  "images": [
+    {
+      "file": "preparation.png",
+      "sha256": "3878570f4a62a0d65f57cf1754e0269e56ec797f4e36e26b44c172eb6e800401",
+      "original": "/tmp/codex-605-diagnostic-native-evidence/ux/playwright-artifacts/apply-review-ux-an-invented-candidate-prepares-documents/test-finished-1.png",
+      "root_inspected": true
+    },
+    {
+      "file": "failure.png",
+      "sha256": "2a9db4189a1349f91e18581d44164fec06cb34d707e1e1012ece5328b7524297",
+      "original": "/tmp/codex-605-diagnostic-native-evidence/ux/playwright-artifacts/apply-review-ux-the-truste-ba531-after-repeated-person-edits/test-failed-1.png",
+      "root_inspected": true
+    }
+  ],
+  "inspection_at": "2026-10-23T09:37:05.791131+00:00",
+  "inspection": "failure shows last attempt failed and nothing sent; preparation screenshot is blank because preparation case uses API only; neither proves a required review layout",
+  "wrapper": {
+    "exit": 1,
+    "duration_s": 189.434
+  }
+}
