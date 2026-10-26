@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from pydantic import ValidationError
 
 from app.browser import linkedin_guard
 from app.browser.models import LinkedInCheckpoint
@@ -155,9 +154,10 @@ def exported(api: Api, who: Person) -> Any:
 
 
 def export_error(api: Api, who: Person) -> Any:
-    with pytest.raises(ValidationError) as raised:
-        api.get("/api/profile/export", token=who.token)
-    return raised.value.errors(include_input=False, include_url=False, include_context=False)
+    # The fixed 500 of app.main, answered by its outermost middleware (issue #670).
+    response = api.get("/api/profile/export", token=who.token)
+    assert response.status_code == 500, response.text
+    return response.json()
 
 
 def write(
