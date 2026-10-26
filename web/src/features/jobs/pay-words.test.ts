@@ -9,6 +9,11 @@ describe("payWords", () => {
     [60, 75, "USD", "hour", "60 to 75 USD an hour"],
     [4000, 4000, "GBP", "month", "4,000 GBP a month"],
     [10000000, 10000000, "CHF", "year", "10,000,000 CHF a year"],
+    [4.35, 5.1, "EUR", "hour", "4.35 to 5.10 EUR an hour"],
+    [16.5, 16.5, "USD", "hour", "16.50 USD an hour"],
+    [600.5, 600.5, "CHF", "day", "600.50 CHF a day"],
+    [1200.5, 1200.5, "GBP", "month", "1,200.50 GBP a month"],
+    [120000.75, 120000.75, "CAD", "year", "120,000.75 CAD a year"],
   ])("%d to %d %s per %s", (low, high, currency, period, text) => {
     expect(
       payWords({

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ListChecks } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { Link, matchRoutes, useLocation, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/features/auth/auth-context";
@@ -13,6 +13,10 @@ export const WELCOME = "/welcome";
 /** The home page: no need to come back to it after the wizard, it is where the wizard ends. */
 const HOME = "/jobs";
 const checkedKey = (userId: string) => `welcome:checked:${userId}`;
+
+function isWelcome(pathname: string): boolean {
+  return matchRoutes([{ path: WELCOME }], { pathname }) !== null;
+}
 
 function wasChecked(userId: string): boolean {
   try {
@@ -49,6 +53,7 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   const me = useMe();
   const userId = me.data?.id;
   const location = useLocation();
+  const atWelcome = isWelcome(location.pathname);
   const navigate = useNavigate();
   const [checked] = useState(() => (userId ? wasChecked(userId) : true));
   const handled = useRef(checked);
@@ -72,7 +77,7 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     if (handled.current || !userId || !decided) return;
     handled.current = true;
     markChecked(userId);
-    const send = open && location.pathname !== WELCOME;
+    const send = open && !atWelcome;
     marker(send ? "welcome" : "stay");
     const asked = `${location.pathname}${location.search}${location.hash}`;
     const keep = location.pathname !== HOME && location.pathname !== "/";
@@ -88,13 +93,11 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     void Promise.resolve(moving).then(() => {
       setReleased(true);
     });
-  }, [decided, open, userId, location, navigate]);
+  }, [decided, open, userId, location, navigate, atWelcome]);
   // Until the first answer of this session, and while the move to /welcome is on its way, the
   // page asked for is not shown.
   const waiting =
-    !released &&
-    userId !== undefined &&
-    (!decided || (open && location.pathname !== WELCOME));
+    !released && userId !== undefined && (!decided || (open && !atWelcome));
   if (waiting) return <PageLoading />;
   return children;
 }
