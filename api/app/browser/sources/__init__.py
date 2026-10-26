@@ -4,7 +4,8 @@ API, read by the legacy extractors/finder or explicitly selected native interact
 Selected `search.interactive_sites` run separately after legacy readers. A selected interactive
 protected platform suppresses its matching legacy reader, including a row enabled by consent:
 that row reports `interactive_selected`, rather than consuming the allowance or becoming a
-fallback. The interactive runtime's findings await J11's truthful incremental persistence.
+fallback. The interactive runtime stores its verified findings through the run's commits
+(sweep.Commits, jobs J11), never through the store below.
 
 After the boards, `run_sources` (the hook of app/jobs/sweep.py's `run_sweep`) takes each enabled
 source of the person's `search.browser_sources` in turn:

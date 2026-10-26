@@ -8,7 +8,8 @@ One sweep, `run_sweep(sweep_id)`:
    message. New runs use the search and skills frozen under the profile row lock at creation;
    pre-v1 rows without `stats.search_scope` explicitly retain claim-time profile reads.
    Without an enabled source the sweep fails with a clear message. Selected interactive sites
-   run through the bounded interactive finder. Verified persistence is supplied by J11.
+   run through the bounded interactive finder; each batch of findings it verified is stored
+   as it is reported (`Commits`, jobs J11 and J11b, below).
 2. Fetch. Boards are read through ats.AtsClient, CONCURRENCY at a time, each failure recorded
    with its code; the others go on.
 3. Keep. For each posting, in the engine's order: the title matches `title_include` (an empty
@@ -448,12 +449,19 @@ def finish_source(entry: dict[str, Any]) -> None:
 # location, so neither the company, title and location rule nor the loose rule (company and
 # title) matches on it: only its address makes one a duplicate.
 UNNAMED_CLIENT = "Client on Hacker News"
-_UNNAMED_KEY = slugs.PostingKey.of(UNNAMED_CLIENT, "", "", None).identity[0]
+# The company of a posting a job website showed without naming its employer (jobs J11): stated
+# as unknown, never the website's name, and like an unnamed client only its address makes it a
+# duplicate (two such postings with the same title are two employers).
+UNKNOWN_EMPLOYER = "Employer not stated"
+_UNNAMED_KEYS = frozenset(
+    slugs.PostingKey.of(name, "", "", None).identity[0]
+    for name in (UNNAMED_CLIENT, UNKNOWN_EMPLOYER)
+)
 
 
 def _identity(key: slugs.PostingKey) -> tuple[str, str, str] | None:
-    """The company, title and location rule's key, None for an unnamed client."""
-    return None if key.identity[0] == _UNNAMED_KEY else key.identity
+    """The company, title and location rule's key, None for an unnamed client or employer."""
+    return None if key.identity[0] in _UNNAMED_KEYS else key.identity
 
 
 def _pair(key: slugs.PostingKey) -> tuple[str, str] | None:
@@ -508,6 +516,14 @@ class Known:
             if identity is not None:
                 self.jobs.setdefault(identity, job_id)
             self.sources[job_id] = source or ""
+
+    def copy(self) -> "Known":
+        """An independent copy: a commit stages its keys there and publishes them after it."""
+        other = Known.__new__(Known)
+        other.urls, other.identities = set(self.urls), set(self.identities)
+        other.slugs, other.jobs = set(self.slugs), dict(self.jobs)
+        other.sources, other.pairs = dict(self.sources), dict(self.pairs)
+        return other
 
     def job_of(self, key: slugs.PostingKey, loose: bool = False) -> uuid.UUID | None:
         """The job a duplicate is: by URL first, else by identity, else (`loose`) by company and
@@ -570,6 +586,8 @@ class Plan:
     search: SearchSection | None = None  # for the score's bonus (scoring.bonus)
     feeds: list[Feed] = field(default_factory=list)  # opportunities O7
     search_scope: dict[str, Any] | None = None
+    # The run's commits of verified findings (jobs J11b), set by run_sweep.
+    commits: "Commits | None" = None
 
 
 INSERT_CHUNK = 500
@@ -943,6 +961,7 @@ async def run_sweep(
         sources=initial_sources(plan.search_scope),
     )
     lock = asyncio.Lock()
+    commits = plan.commits = Commits(sessions, plan, stats, clock)
 
     async def progress() -> None:
         async with lock:
@@ -1056,24 +1075,41 @@ async def run_sweep(
                 for task in tasks:
                     task.cancel()
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.to_thread(finish_done, sessions, sweep_id, stats, clock())
-        logger.info(
-            "sweep done",
-            extra={"sweep_id": str(sweep_id), **_summary(stats)},
-        )
+        if await _settled(commits, sweep_id):
+            await asyncio.to_thread(finish_done, sessions, sweep_id, stats, clock())
+            logger.info(
+                "sweep done",
+                extra={"sweep_id": str(sweep_id), **_summary(stats)},
+            )
     except TimeoutError:
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.to_thread(fail_sweep, sessions, sweep_id, TIMED_OUT, clock(), stats)
+        if await _settled(commits, sweep_id):
+            await asyncio.to_thread(fail_sweep, sessions, sweep_id, TIMED_OUT, clock(), stats)
     except asyncio.CancelledError:
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.shield(
-            asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERRUPTED, clock(), stats)
-        )
+        # A second cancellation ends the waits below: the row is then left to reap_stale.
+        if await asyncio.shield(_settled(commits, sweep_id)):
+            await asyncio.shield(
+                asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERRUPTED, clock(), stats)
+            )
         raise
     except Exception:
         logger.exception("sweep failed", extra={"sweep_id": str(sweep_id)})
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERNAL, clock(), stats)
+        if await _settled(commits, sweep_id):
+            await asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERNAL, clock(), stats)
+
+
+async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
+    """Close the run's commits; False (logged) when one outlived the wait: the sweep row then
+    keeps its committed counts, running, until reap_stale ends it."""
+    if await commits.settle(close=True):
+        return True
+    logger.warning(
+        "sweep left to recovery: a commit of verified findings did not settle",
+        extra={"sweep_id": str(sweep_id)},
+    )
+    return False
 
 
 def _summary(stats: Stats) -> dict[str, Any]:
@@ -1153,6 +1189,210 @@ def _store_found(
         plan.known.urls, plan.known.identities, plan.known.slugs = known
         plan.known.jobs, plan.known.sources, plan.known.pairs = noted
         raise
+
+
+# --- verified findings of the job websites (jobs J11 and J11b) ----------------------------------
+#
+# The interactive finder (app/browser/finder.py) reports postings it verified on their detail
+# page in batches (finder.VerifiedBatch). Each batch is stored before the finder is told it was
+# kept, in ONE transaction that also writes its counters into the locked sweep row, so the
+# row's counts are those of the jobs stored, whatever happens to the worker next:
+# - the job: the same row as a board's (`_new_job`: scored, status `found`, or `skipped` with the
+#   rule as its note when a never apply rule of the person or the app's own rule against
+#   cybersecurity matches), the website's host as its source, the text code read on the detail
+#   page, the employer and the published date only when the page states them (UNKNOWN_EMPLOYER
+#   and no date otherwise, never the website's name or today), `legacy` empty;
+# - what was observed: in the `sweep` event's `discovery` (the source, when the detail page was
+#   read, the lines of the page that state the title, employer, date and location, and which of
+#   those were unknown); never a page snapshot, the model's words, criteria or instructions;
+# - duplicates: same address, or same employer, title and location (never the loose rule of the
+#   feeds), against the person's list and this sweep's earlier postings. A row another request
+#   stored meanwhile (the insert's conflict) is looked up, the person's own rows only, and is
+#   the duplicate this posting is;
+# - the search's include, exclude, location and days filters are not applied again: the
+#   criteria guided the browsing, and an unknown date or location is not a mismatch.
+#
+# `Commits` is the run's one path to that transaction. A batch is admitted only while its
+# source is the one running; it then runs as a task of its own, so a cancelled caller (the
+# model's tool call torn down, the source's time limit) does not abandon a commit half way:
+# the commit runs to its end and its counters are published to the run's Stats and Known on the
+# event loop, after it. Commits run one at a time. Before the next source, and before the end
+# of the sweep, `settle` closes admission and waits up to DRAIN_S for what was admitted. A
+# commit still running then leaves the sweep row as it is (running, with the counts committed so
+# far) for `reap_stale`, rather than writing an end that the commit could contradict.
+
+DRAIN_S = 5.0
+VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule")
+
+
+class StoreRefusedError(Exception):
+    """The batch was not stored: its source no longer admits batches, or the sweep row is no
+    longer this run's (ended, reaped, gone)."""
+
+
+def _counted(stats: Stats, source_id: str, delta: Stats, found: int) -> None:
+    for name in VERIFIED_COUNTERS:
+        setattr(stats, name, getattr(stats, name) + getattr(delta, name))
+    for entry in stats.sources:
+        if entry.get("source_id") == source_id:
+            entry["found"] = entry.get("found", 0) + found
+            entry["postings"] = entry.get("postings", 0) + delta.new
+            entry["duplicates"] = entry.get("duplicates", 0) + delta.duplicates
+            entry["skipped_by_rule"] = entry.get("skipped_by_rule", 0) + delta.skipped_by_rule
+
+
+def commit_verified(
+    sessions: sessionmaker[Session],
+    plan: Plan,
+    known: Known,
+    snapshot: Stats,
+    source_id: str,
+    source: str,
+    findings: Sequence[Any],
+    now: datetime,
+) -> Stats | None:
+    """Store one verified batch (above) with `known`, a copy of the plan's, and `snapshot`, a
+    copy of the run's stats, both updated in place. Returns the counters the batch added, or
+    None when the row is not this run's any more: then nothing is written."""
+    from app.opportunities.starter import CYBER_RULE
+
+    staged = replace(plan, known=known, rules=[*plan.rules, CYBER_RULE])
+    delta = Stats()
+    with sessions() as db:
+        row = db.get(Sweep, plan.sweep_id, with_for_update=True, populate_existing=True)
+        if row is None or row.user_id != plan.user_id or row.status is not SweepStatus.running:
+            return None
+        for finding in findings:
+            _store_finding(db, staged, source_id, source, finding, delta, now)
+        _counted(snapshot, source_id, delta, len(findings))
+        snapshot.heartbeat_at = now.isoformat()
+        row.stats = _stats_json(row, snapshot)
+        db.commit()
+    return delta
+
+
+def _store_finding(
+    db: Session, plan: Plan, source_id: str, source: str, finding: Any, delta: Stats,
+    now: datetime,
+) -> None:  # fmt: skip
+    company = finding.company or UNKNOWN_EMPLOYER
+    posting = ats.Posting(
+        finding.title, finding.location, finding.url, finding.published_on or "", finding.text,
+        False,
+    )  # fmt: skip
+    delta.seen += 1
+    delta.matched += 1
+    key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
+    for _ in range(2):
+        if plan.known.has(key):
+            break
+        new = _new_job(plan, company, posting, source, now)
+        new.events[1]["data"]["discovery"] = {
+            "source_id": source_id,
+            "detail_read_at": finding.detail_read_at,
+            "evidence": dict(finding.evidence),
+            "unknown": [
+                name
+                for name, value in (
+                    ("company", finding.company),
+                    ("published_on", finding.published_on),
+                    ("location", finding.location),
+                )
+                if not value
+            ],
+        }
+        inserted = db.execute(
+            pg_insert(Job).values(new.row).on_conflict_do_nothing().returning(Job.id)
+        ).scalar_one_or_none()
+        if inserted is not None:
+            db.execute(sa.insert(JobEvent), new.events)
+            plan.known.add(key, new.row["slug"], new.row["id"], source)
+            delta.new += 1
+            delta.skipped_by_rule += new.rule is not None
+            return
+        # Another request stored this address or took this slug meanwhile: learn the person's
+        # rows in the way, then decide again (a duplicate, or a free slug).
+        rows = db.execute(
+            sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source)
+            .where(Job.user_id == plan.user_id)
+            .where(sa.or_(Job.url == new.row["url"], Job.slug == new.row["slug"]))
+        )
+        for company_, title, location, url, slug, job_id, noted in rows:
+            plan.known.add(slugs.PostingKey.of(company_, title, location, url), slug, job_id, noted)
+    delta.duplicates += 1
+    job_id = plan.known.job_of(key)
+    joined = plan.known.note(job_id, source) if job_id is not None else None
+    if joined is not None:
+        db.execute(
+            sa.update(Job)
+            .where(Job.id == job_id, Job.user_id == plan.user_id)
+            .values(source=joined, updated_at=Job.updated_at)
+        )
+
+
+class Commits:
+    """The run's commits of verified batches (above): admitted per source, one at a time, each
+    finished and published even when its caller is cancelled."""
+
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        plan: Plan,
+        stats: Stats,
+        clock: Clock,
+        drain_s: float = DRAIN_S,
+    ) -> None:
+        self.sessions, self.plan, self.stats, self.clock = sessions, plan, stats, clock
+        self.drain_s = drain_s
+        self._lock = asyncio.Lock()
+        self._admitted: str | None = None
+        self._closed = False
+        self._running: set[asyncio.Task[None]] = set()
+        self.unsettled = False  # a commit outlived `settle`: the row is left to reap_stale
+
+    def admit(self, source_id: str) -> None:
+        if not self._closed:
+            self._admitted = source_id
+
+    async def save(self, source_id: str, source: str, batch: Any) -> None:
+        """Store `batch` for the running source `source_id`; StoreRefusedError when it is not
+        admitted or the row refused it. A cancelled caller leaves the commit running."""
+        if self._closed or source_id != self._admitted:
+            raise StoreRefusedError
+        task = asyncio.get_running_loop().create_task(self._commit(source_id, source, batch))
+        self._running.add(task)
+        task.add_done_callback(self._running.discard)
+        await asyncio.shield(task)
+
+    async def _commit(self, source_id: str, source: str, batch: Any) -> None:
+        async with self._lock:
+            snapshot = Stats(**copy.deepcopy(self.stats.as_json()))
+            known = self.plan.known.copy()
+            delta = await asyncio.to_thread(
+                commit_verified, self.sessions, self.plan, known, snapshot, source_id, source,
+                batch.findings, self.clock(),
+            )  # fmt: skip
+            if delta is None:
+                raise StoreRefusedError
+            if self.unsettled:
+                return  # the run let go of the row: nothing more is published
+            vars(self.plan.known).update(vars(known))
+            _counted(self.stats, source_id, delta, len(batch.findings))
+
+    async def settle(self, *, close: bool = False) -> bool:
+        """Stop admitting (for good with `close`) and wait up to drain_s for the commits
+        admitted. False when one is still running: the run must not write the row's end."""
+        self._admitted = None
+        self._closed = self._closed or close
+        pending = set(self._running)
+        if pending:
+            done, left = await asyncio.wait(pending, timeout=self.drain_s)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()  # retrieved: a refused or failed commit was told its caller
+            if left:
+                self._closed = self.unsettled = True
+        return not self.unsettled
 
 
 # --- maintenance --------------------------------------------------------------------------------

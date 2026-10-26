@@ -1,13 +1,18 @@
-"""Selected native search sites. J11 supplies truthful incremental finding persistence.
+"""Selected native search sites. Protected platforms need the person's current permission,
+checked by the runner's InteractivePolicy (app/browser/platform_policy.py, browser B14).
 
-Until then, verified detail findings are counted as partial, never sent to the legacy
-company/date store. Protected platforms need the person's current permission, checked by the
-runner's InteractivePolicy (app/browser/platform_policy.py, browser B14).
+The findings the finder verified on their detail pages are stored as they are reported, through
+the run's commits (sweep.Commits, jobs J11 and J11b), never through the legacy company/date
+store: a source admits batches only while it runs, and its admitted commits settle before the
+next source starts. A source's `found` counts the findings stored or found duplicate, `postings`
+the new jobs. Without the run's commits (a caller that is not a sweep) findings are only
+counted, as `finding_persistence_pending`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -177,6 +182,9 @@ async def run_selected(
             # Safe stable identity only. Instructions and search text do not become labels.
             stats.current_board = entry.get("source_id")
             await progress()
+            commits = getattr(plan, "commits", None)
+            if commits is not None:
+                commits.admit(entry["source_id"])
             try:
                 entry["error"] = await _one(runner, plan, source, search, entry, deadline)
             except (BrowserError, StoreUnavailableError):
@@ -185,6 +193,10 @@ async def run_selected(
                 entry["error"] = "agent_failed"
             if entry["error"] in STOPS_SWEEP:
                 stop = entry["error"]
+            if commits is not None and not await commits.settle():
+                # A commit outlived the wait: no later source runs, the row is left as it is.
+                entry["error"] = entry["error"] or "store_failed"
+                stop = stop or "store_failed"
         sweep.finish_source(entry)
         await progress()
 
@@ -248,7 +260,7 @@ async def _one(
             lease_until=asked + min(got.lease.max_s, 900),
             pause=platform_policy.pause_for(paced),
         )
-        return await _search(runner.finder, pages, scope, str(plan.user_id), entry)
+        return await _search(runner.finder, pages, scope, plan, entry)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
 
@@ -257,7 +269,7 @@ async def _search(
     agent: finder.FinderAgent,
     pages: Pages,
     scope: finder.InteractiveScope,
-    user: str,
+    plan: Any,
     entry: dict[str, Any],
 ) -> str | None:
     """Bound the complete source, including the first navigation, by all outer deadlines."""
@@ -292,12 +304,16 @@ async def _search(
                 return exc.code
             if finder.canonical(pages.last_url) != scope.start:
                 return "unsupported_interaction"
+            commits = getattr(plan, "commits", None)
             session = finder.FinderSession(
                 pages,
                 scope.start,
                 pages.last_text,
-                user_id=user,
+                user_id=str(plan.user_id),
                 interactive=scope,
+                on_verified=None
+                if commits is None
+                else functools.partial(commits.save, entry["source_id"], entry.get("host") or ""),
             )
             ran = await agent(session)
             entry["tokens"] = {"input": ran.input_tokens, "output": ran.output_tokens}
@@ -321,5 +337,6 @@ async def _search(
     finally:
         entry["result_pages"] = pages.count
         if session:
-            entry["found"] = len(session.found)
+            if session.on_verified is None:
+                entry["found"] = len(session.found)  # else the commits counted them
             entry["refused"] = dict(session.refused)
