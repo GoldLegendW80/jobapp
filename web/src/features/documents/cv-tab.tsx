@@ -5,7 +5,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { ArrowLeft, LoaderCircle, Plus, RotateCw } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -33,6 +33,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { getProfile, profileKey } from "@/features/profile/api";
 import { describeError } from "@/lib/api";
 
+import { CaptureStatus } from "./capture-status";
 import { ConsentDialog } from "./consent-dialog";
 import { DocumentView } from "./document-view";
 import { UploadPanel } from "./upload-panel";
@@ -47,9 +48,12 @@ import {
   getConsent,
   listBaseCvs,
   patchBaseCv,
+  templatesKey,
+  versionsKey,
   type BaseCv,
   type BaseCvRequest,
   type BaseCvs,
+  type Generation,
 } from "./documents-api";
 import {
   failedSentence,
@@ -83,11 +87,41 @@ export function CvTab() {
     queryFn: ({ signal }) => listBaseCvs(signal),
     refetchInterval: (current) => {
       const waits = (current.state.data?.base_cvs ?? [])
-        .map((one) => pollInterval(one.render_state, one.generation))
+        .map((one) =>
+          pollInterval(one.render_state, one.generation, one.design_generation),
+        )
         .filter((wait) => wait !== false);
       return waits.length > 0 ? Math.min(...waits) : false;
     },
   });
+  // The opened view may be absent when capture ends. A fresh tab also reconciles terminal
+  // captures, since its document cache can predate the current list even after a remount.
+  const captures = useRef(new Map<string, Generation | null>());
+  useEffect(() => {
+    if (list.data === undefined) return;
+    const previous = captures.current;
+    captures.current = new Map(
+      list.data.base_cvs.map((cv) => [cv.id, cv.design_generation]),
+    );
+    for (const cv of list.data.base_cvs) {
+      const capture = cv.design_generation;
+      const before = previous.get(cv.id);
+      const ended =
+        !isOpen(capture) &&
+        (isOpen(before) ||
+          (capture !== null &&
+            (capture.id !== before?.id || capture.status !== before.status)));
+      if (!ended) continue;
+      void client.invalidateQueries(
+        { queryKey: documentKey(cv.id), exact: true },
+        { cancelRefetch: false },
+      );
+      if (capture?.status === "done") {
+        void client.invalidateQueries({ queryKey: versionsKey(cv.id) });
+        void client.invalidateQueries({ queryKey: templatesKey });
+      }
+    }
+  }, [client, list.data]);
   const consent = useQuery({
     queryKey: consentKey,
     queryFn: ({ signal }) => getConsent(signal),
@@ -339,6 +373,9 @@ function Overview({
               className="flex flex-col gap-3 rounded-lg border p-3"
             >
               <Row cv={one} only={cvs.length === 1} />
+              {one.source === "uploaded" ? (
+                <CaptureStatus key={one.id} cv={one} />
+              ) : null}
               <Actions cv={one} cvs={cvs} />
             </li>
           ))}
@@ -441,7 +478,12 @@ function Opened({ cv, cvs }: { cv: BaseCv; cvs: BaseCv[] }) {
         </p>
         <Actions cv={cv} cvs={cvs} backToList />
       </div>
-      <DocumentView documentId={cv.id} generation={cv.generation} />
+      {cv.source === "uploaded" ? <CaptureStatus key={cv.id} cv={cv} /> : null}
+      <DocumentView
+        documentId={cv.id}
+        generation={cv.generation}
+        capture={cv.design_generation}
+      />
     </div>
   );
 }
