@@ -272,6 +272,22 @@ async def test_wait_survival_uses_the_exact_owned_lease():
     assert not await signin.waiting(Leases(), str(uuid.uuid4()), "other")
 
 
+@run_async
+@pytest.mark.parametrize(
+    ("status", "state", "needs"),
+    [
+        (429, State.failed, None),
+        (403, State.needs_person, "forbidden"),
+        (410, State.posting_closed, None),
+    ],
+)
+async def test_new_http_refusals_override_a_form_that_happens_to_render(status, state, needs):
+    watched = run._Watched(Pages())
+    watched.status = status
+    result = await run._checked(run.Result(State.ready), watched)
+    assert (result.state, result.needs) == (state, needs)
+
+
 def test_a_cancelled_fill_keeps_the_person_signing_in_and_binds_the_later_callback(
     db, factory, person_a, forms_base_url, monkeypatch
 ):

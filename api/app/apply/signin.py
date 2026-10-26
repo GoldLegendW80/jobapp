@@ -110,7 +110,12 @@ async def waiting(leases: Any, user: str, lease_id: str) -> bool:
         # A control-plane outage cannot be proof that the person's handoff ended.
         return True
     lease = view.lease
-    return lease is not None and lease.lease_id == lease_id and lease.state == "waiting_person"
+    return (
+        lease is not None
+        and lease.lease_id == lease_id
+        and lease.state == "waiting_person"
+        and getattr(lease, "wait_reason", "signin") == "signin"
+    )
 
 
 def address(db: Session, user_id: uuid.UUID, ref: uuid.UUID) -> str | None:

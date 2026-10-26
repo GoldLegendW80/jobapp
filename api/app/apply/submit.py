@@ -107,6 +107,8 @@ DWELL_S = 4.0
 POLL_S = 2.0
 CONFIRM_WAIT_S = 60
 MAX_POLLS = 40
+# The live pause read before the click (Redis, a few ms): longer and it reads as a pause.
+PAUSED_READ_S = 5.0
 # Tool codes that say the lease or the page is gone, kept as the stop's code; any other
 # difference on the refill is `form_changed`.
 LEASE_GONE = frozenset({"ended", "host_not_allowed", "unreadable"})
@@ -807,6 +809,18 @@ async def _record_click(
         )
 
 
+def _paused_from(services: Services, loop: asyncio.AbstractEventLoop) -> bool:
+    """The live pause switch read from the database thread while it holds the gate's locks:
+    PAUSED_READ_S at most, and a read that fails or does not answer in time is a pause, so a
+    hung Redis never keeps the locks until the job's timeout and never lets a click through."""
+    future = asyncio.run_coroutine_threadsafe(services.paused(), loop)
+    try:
+        return bool(future.result(timeout=PAUSED_READ_S))
+    except Exception:  # concurrent.futures.TimeoutError too
+        future.cancel()
+        return True
+
+
 async def _after_arm(
     services: Services,
     plan: Plan,
@@ -824,10 +838,7 @@ async def _after_arm(
             return "superseded"
         application, posting = found
         spent = _spent(db, application)
-        try:
-            paused = asyncio.run_coroutine_threadsafe(services.paused(), loop).result()
-        except Exception:
-            paused = True
+        paused = _paused_from(services, loop)
         now = services.clock()
         code = gate.switch_code(gate.Switches(enabled=services.enabled, paused=paused))
         if code is None and (
@@ -844,11 +855,12 @@ async def _after_arm(
             or gate.current_hash(db, application) != plan.answers_hash
         ):
             code = "stale"
-        if code is None and (refused := _checks(db, application, posting, now)):
-            code = refused.code
-        if code:
-            _stop(db, application, Stop(State.ready, code), now, click_refused=True)
-            return State.ready.value
+        stop = Stop(State.ready, code) if code else _checks(db, application, posting, now)
+        if stop is not None:
+            # A refusal of the checks ends as `recheck`'s would before the arm: never apply or a
+            # duplicate `blocked`, a closed posting `posting_closed`, a kept code `ready`.
+            _stop(db, application, stop, now, click_refused=True)
+            return stop.state.value
         return plan.authorisation_deadline
 
     admitted = await asyncio.to_thread(_in_db, services.sessions, before_click)
@@ -857,8 +869,8 @@ async def _after_arm(
     # The commit above can itself wait. No database work separates this live pause read,
     # fresh clock and external click; the deadline belongs to the exact admitted authority.
     try:
-        paused = await services.paused()
-    except Exception:
+        paused = await asyncio.wait_for(services.paused(), PAUSED_READ_S)
+    except Exception:  # TimeoutError too: a pause nobody could read is a pause
         paused = True
     clicked = services.clock()
     code = gate.switch_code(gate.Switches(enabled=services.enabled, paused=paused))
@@ -933,8 +945,7 @@ async def _drive(
     loop = asyncio.get_running_loop()
 
     def fresh_switches() -> gate.Switches:
-        paused = asyncio.run_coroutine_threadsafe(services.paused(), loop).result()
-        return gate.Switches(enabled=services.enabled, paused=paused)
+        return gate.Switches(enabled=services.enabled, paused=_paused_from(services, loop))
 
     written = await asyncio.to_thread(
         _in_db,

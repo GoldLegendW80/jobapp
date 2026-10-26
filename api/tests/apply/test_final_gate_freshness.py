@@ -217,6 +217,8 @@ def test_browser_final_locks_refresh_clock_and_live_pause(
         "paused",
         "pause_error",
         "rules",
+        "closed",
+        "applied",
         "documents",
         "settings",
         "full_auto_off",
@@ -261,6 +263,11 @@ def test_browser_post_commit_stop_keeps_audit_without_click_or_freeze(
                 pause[0] = "error" if fault == "pause_error" else True
             elif fault == "rules":
                 monkeypatch.setattr(submit.guardrails, "never_apply", lambda *a, **k: "never_apply")
+            elif fault in {"closed", "applied"}:
+                from app.jobs.models import JobStatus
+
+                posting = session.get(Job, person_a.posting_id)
+                posting.status = JobStatus.closed if fault == "closed" else JobStatus.applied
             elif fault == "documents":
                 monkeypatch.setattr(submit.gate, "documents_code", lambda *a: "stale")
             elif fault == "settings":
@@ -299,6 +306,8 @@ def test_browser_post_commit_stop_keeps_audit_without_click_or_freeze(
         "paused": "paused",
         "pause_error": "paused",
         "rules": "never_apply",
+        "closed": "posting_closed",
+        "applied": "already_applied",
         "documents": "stale",
         "settings": "paused_by_you",
         "full_auto_off": "full_auto_off" if mode is Mode.full_auto else None,
@@ -318,10 +327,84 @@ def test_browser_post_commit_stop_keeps_audit_without_click_or_freeze(
         == 1
     )
     if expected:
-        assert (app.state, app.error_code, result) == (State.ready, expected, "ready")
-        assert frozen(db, person_a.cv_version_id) == [None]
+        # A refusal between the arm and the click ends as `recheck`'s before the arm: never
+        # apply and a duplicate `blocked`, a closed posting `posting_closed`, the rest `ready`.
+        state = {
+            "never_apply": State.blocked,
+            "already_applied": State.blocked,
+            "posting_closed": State.posting_closed,
+        }.get(expected, State.ready)
+        assert (app.state, app.error_code, result) == (state, expected, state.value)
+        assert app.submitted_at is None
+        if fault != "applied":
+            assert frozen(db, person_a.cv_version_id) == [None]
+        else:  # an applied status freezes by its own reason (documents D14), never by apply
+            assert frozen(db, person_a.cv_version_id) != ["apply"]
     else:
         assert (app.state, result) == (State.submitted, "submitted")
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+@pytest.mark.parametrize("where", ["arm", "before_click"])
+def test_a_pause_read_that_never_answers_under_the_gates_locks_reads_as_paused(
+    db, factory, person_a, forms_base_url, monkeypatch, mode, where
+):
+    """The live pause read made while the gate's row locks are held (the arm's fresh switches,
+    the checks again before the click) gives up after PAUSED_READ_S and reads as a pause: a hung
+    Redis never keeps the locks until the job's timeout, and never lets the click through."""
+    if mode is Mode.full_auto:
+        turn_on(db, person_a)
+        app_id = held(db, factory, person_a, forms_base_url)
+    else:
+        app_id = ready(db, factory, person_a, forms_base_url)
+        assert approve(factory, person_a, app_id).passed
+    db.commit()
+    form = submit_ashby()
+    env = submit_services(factory, form, forms_base_url)
+    env.clock = lambda: AT + timedelta(minutes=15)
+    hung, reads = [False], {"hung": 0, "cancelled": 0}
+
+    async def paused():
+        if not hung[0]:
+            return False
+        reads["hung"] += 1
+        try:
+            await asyncio.Event().wait()  # Redis never answers
+        except asyncio.CancelledError:
+            reads["cancelled"] += 1
+            raise
+        return False
+
+    env.paused = paused
+    monkeypatch.setattr(submit, "PAUSED_READ_S", 0.05)
+    if where == "arm":
+        original_arm = submit.arm
+
+        def arm(*args, **kwargs):
+            hung[0] = True
+            return original_arm(*args, **kwargs)
+
+        monkeypatch.setattr(submit, "arm", arm)
+    else:
+        original_after = submit._after_arm
+
+        async def after(*args):
+            hung[0] = True
+            return await original_after(*args)
+
+        monkeypatch.setattr(submit, "_after_arm", after)
+    result = run_submit(env, app_id)
+    db.expire_all()
+    app = db.get(Application, app_id)
+    assert form.gate_clicks == []
+    # One read only: the one under the locks gave up and refused, nothing read the pause again.
+    assert reads == {"hung": 1, "cancelled": 1}
+    # The arm's kill switch cancels a Review first item and hands a Full auto one to review;
+    # between the arm and the click the item goes back to `ready`, its approval spent.
+    state = State.cancelled if where == "arm" and mode is Mode.review else State.ready
+    assert (app.state, app.error_code, result) == (state, "paused", state.value)
+    assert app.submitted_at is None
+    assert frozen(db, person_a.cv_version_id) == [None]
 
 
 @pytest.mark.parametrize("pending", [State.held, State.approved, State.submitting, State.submitted])

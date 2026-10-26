@@ -287,7 +287,13 @@ def _sent(db: Session, application: Application, posting: Any, now: datetime, by
 
 
 def close(
-    db: Session, application_id: uuid.UUID, code: str, now: datetime, *, seen: bool = False
+    db: Session,
+    application_id: uuid.UUID,
+    code: str,
+    now: datetime,
+    *,
+    seen: bool = False,
+    ended_only: bool = False,
 ) -> str:
     """The session's end (module docstring, step 5): an application still `filling` is
     `submitted` when a confirmation was seen (`seen`, or its event), else `queued` with `needs`
@@ -300,12 +306,19 @@ def close(
     application, posting = gate.lock(db, user_id, application_id)
     if application.state is not State.filling:
         return application.state.value
+    if ended_only and application.needs != ENDED:
+        return application.state.value
     run._event(db, application, "ended", now, code=code)
     if seen or _confirmed(db, application):
         _sent(db, application, posting, now, "confirmation")
         return State.submitted.value
+    if close_requested(db, application_id):
+        states.move(application, State.cancelled, now)
+        application.needs, application.error_code = None, "closed"
+        return State.cancelled.value
     states.move(application, State.queued, now)
     application.needs = ENDED
+    application.error_code = None
     return State.queued.value
 
 
@@ -321,10 +334,79 @@ def reset_interrupted(db: Session, now: datetime) -> int:
         .scalars()
         .all()
     )
-    return sum(
-        close(db, application_id, "interrupted", now) != State.filling.value
-        for application_id in ids
+    count = 0
+    for application_id in ids:
+        try:
+            with db.begin_nested():
+                count += close(db, application_id, "interrupted", now) != State.filling.value
+        except jobs_service.JobBusyError:
+            mark_ended(db, application_id, "interrupted", now)
+    return count
+
+
+def mark_ended(
+    db: Session, application_id: uuid.UUID, code: str, now: datetime, *, seen: bool = False
+) -> None:
+    """Durable worker recovery without the posting lock. Only the ended session writes this;
+    a tick must check browserd before recovering it. The posting remains held throughout."""
+    application = db.get(Application, application_id)
+    if (
+        application is None
+        or application.mode is not Mode.manual
+        or application.state is not State.filling
+    ):
+        return
+    application.needs, application.error_code = ENDED, code
+    application.updated_at = now
+    if seen and not _confirmed(db, application):
+        saw(db, application_id, now)
+
+
+def ended_ids(db: Session) -> list[uuid.UUID]:
+    return list(
+        db.scalars(
+            sa.select(Application.id).where(
+                Application.mode == Mode.manual,
+                Application.state == State.filling,
+                Application.needs == ENDED,
+            )
+        )
     )
+
+
+async def recover_ended(fill: run.Services, ids: list[uuid.UUID]) -> int:
+    """Retry one transaction per ended manual session, never a currently live one."""
+    if not ids:
+        return 0
+    # A manual job owns the whole apply queue. A remaining manual lease may still belong to
+    # that job on another worker; fail closed until browserd confirms it is gone.
+    try:
+        current = (await fill.leases.client.current()).get("lease") or {}
+    except BrowserError:
+        return 0  # browserd did not answer: nothing proves the session is gone, the next tick asks
+    if current.get("purpose") == PURPOSE:
+        return 0
+    count = 0
+    for application_id in ids:
+
+        def step(db: Session, wanted: uuid.UUID = application_id) -> bool:
+            application = db.get(Application, wanted)
+            if (
+                application is None
+                or application.needs != ENDED
+                or application.state is not State.filling
+            ):
+                return False
+            return (
+                close(db, wanted, application.error_code or "ended", fill.clock(), ended_only=True)
+                != "filling"
+            )
+
+        try:
+            count += await asyncio.to_thread(run._in_db, fill.sessions, step)
+        except jobs_service.JobBusyError:
+            continue
+    return count
 
 
 def record(
@@ -345,7 +427,12 @@ def record(
 
 
 def cancel(
-    db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    application_id: uuid.UUID,
+    now: datetime,
+    *,
+    final_watch: bool = False,
 ) -> Application:
     """The person closes the session without recording it: `cancelled` (the session sees it
     and ends its lease), or `submitted` by `confirmation` once the page showed the site's
@@ -353,6 +440,11 @@ def cancel(
     application, posting = gate.lock(db, user_id, application_id)
     if application.mode is not Mode.manual:
         raise gate.RefusedError("not_manual")
+    if final_watch and application.state is State.filling and application.needs != ENDED:
+        # The worker owns the page and must read it once more before this decision. The
+        # request is durable, so a Redis restart cannot lose a person's Close.
+        run._event(db, application, "manual_close_requested", now, attempt=application.attempt)
+        return application
     if application.state in OPEN and _confirmed(db, application):
         _sent(db, application, posting, now, "confirmation")
     elif application.state in OPEN:
@@ -361,6 +453,24 @@ def cancel(
         application.needs = None
         run._event(db, application, "ended", now, code="closed")
     return application
+
+
+def close_requested(db: Session, application_id: uuid.UUID) -> bool:
+    application = db.get(Application, application_id)
+    return (
+        application is not None
+        and db.execute(
+            sa.select(ApplicationEvent.id)
+            .where(
+                ApplicationEvent.application_id == application_id,
+                ApplicationEvent.user_id == application.user_id,
+                ApplicationEvent.kind == "manual_close_requested",
+                ApplicationEvent.data["attempt"].as_integer() == application.attempt,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 # --- the browser steps ---------------------------------------------------------------------------
@@ -422,8 +532,8 @@ async def _fill_details(
     plan: run.Plan,
     s: Live,
 ) -> str:
-    await services.browser.live_input(s.lease_id, None)
     try:
+        await services.browser.live_input(s.lease_id, None)
         found, code = await reader.read(tools)
         if found is None:
             return code or "unreadable"
@@ -511,6 +621,19 @@ async def _loop(
         )
         if not still:
             return ""
+        requested = await asyncio.to_thread(
+            run._in_db, fill.sessions, lambda db: close_requested(db, plan.application_id)
+        )
+        if requested:
+            # A submit followed immediately by Close can land between two periodic watches.
+            # A disappeared browser proves no success; only the explicit Close is applied.
+            with contextlib.suppress(BrowserError):
+                await _watch(services, tools, reader, s)
+            return await asyncio.to_thread(
+                run._in_db,
+                fill.sessions,
+                lambda db: cancel(db, plan.user_id, plan.application_id, fill.clock()).state.value,
+            )
         if monotonic() - watched >= WATCH_S:
             watched = monotonic()
             await _watch(services, tools, reader, s)
@@ -519,15 +642,20 @@ async def _loop(
 
 
 async def _close(fill: run.Services, application_id: uuid.UUID, code: str, seen: bool) -> str:
-    """`close`, asked again past a busy posting (a worker restart ends what is left)."""
+    """Bounded immediate retries; the apply tick retries the durable marker thereafter."""
+    await asyncio.to_thread(
+        run._in_db,
+        fill.sessions,
+        lambda db: mark_ended(db, application_id, code, fill.clock(), seen=seen),
+    )
 
     def step(db: Session) -> str:
         return close(db, application_id, code, fill.clock(), seen=seen)
 
-    for _ in range(CLOSE_TRIES - 1):
+    for _ in range(CLOSE_TRIES):
         with contextlib.suppress(jobs_service.JobBusyError):
             return await asyncio.to_thread(run._in_db, fill.sessions, step)
-    return await asyncio.to_thread(run._in_db, fill.sessions, step)
+    return "recovery_pending"
 
 
 async def session(
@@ -613,13 +741,7 @@ async def session(
             logger.error("apply.manual_crashed", extra={"error": type(exc).__name__})
             code = "internal_error"
     except asyncio.CancelledError:
-        await asyncio.shield(
-            asyncio.to_thread(
-                run._in_db,
-                fill.sessions,
-                lambda db: close(db, application_id, "interrupted", fill.clock(), seen=s.seen),
-            )
-        )
+        await asyncio.shield(_close(fill, application_id, "interrupted", s.seen))
         raise
     finally:
         try:
