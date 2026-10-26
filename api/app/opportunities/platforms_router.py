@@ -1,4 +1,4 @@
-"""The person's dedicated Free-Work consent route (opportunities O7b)."""
+"""The person's dedicated platform consent routes."""
 
 from datetime import datetime
 from typing import Annotated, Any
@@ -11,9 +11,8 @@ from app.browser.router import CurrentUser, no_store
 from app.db import get_session
 from app.identity import deps
 from app.opportunities.platforms import guard
-from app.opportunities.sources.catalogue import NOT_SUPPORTED
 from app.profile import service
-from app.profile.schemas import validate_section
+from app.profile.schemas import PLATFORM_CONSENT_KINDS, BrowserSource, validate_section
 
 router = APIRouter(
     prefix="/api/opportunities/platforms", tags=["opportunities"], dependencies=[Depends(no_store)]
@@ -36,8 +35,8 @@ class PlatformOut(BaseModel):
     paused_until: datetime | None
     last_sweep_at: datetime | None
     needs_signin: bool
-    terms_url: str
-    checked_on: str
+    terms_url: str | None
+    checked_on: str | None
 
 
 class PlatformIn(BaseModel):
@@ -52,7 +51,7 @@ class PlatformIn(BaseModel):
 def _out(db: Session, user_id: Any, kind: str, now: datetime) -> PlatformOut:
     if kind not in guard.KINDS:
         raise HTTPException(404, "Platform not available.")
-    item = next(item for item in NOT_SUPPORTED if item.kind == kind)
+    item = guard.metadata(kind)
     state = guard.state(db, user_id, kind, now)
     source = state.source
     return PlatformOut(
@@ -61,12 +60,12 @@ def _out(db: Session, user_id: Any, kind: str, now: datetime) -> PlatformOut:
         enabled=state.enabled,
         accepted=state.accepted,
         allowed=state.allowed,
-        text=guard.TEXT,
-        text_version=guard.TEXT_VERSION,
+        text=item.text,
+        text_version=item.text_version,
         accepted_at=source.accepted_at if source else None,
         accepted_version=source.text_version if source else None,
-        query=source.query if source else None,
-        location=source.location if source else None,
+        query=source.query if isinstance(source, BrowserSource) else None,
+        location=source.location if isinstance(source, BrowserSource) else None,
         paused_until=state.paused_until,
         last_sweep_at=state.last_sweep_at,
         needs_signin=state.needs_signin,
@@ -80,6 +79,44 @@ def get_platform(kind: str, request: Request, user: CurrentUser, db: Db) -> Plat
     return _out(db, user.id, kind, deps.clock(request))
 
 
+def _put_additional(
+    db: Session, user_id: Any, kind: str, body: PlatformIn, now: datetime
+) -> PlatformOut:
+    if body.query is not None or body.location is not None:
+        raise HTTPException(422, "This platform consent does not accept query or location.")
+    profile = service.get_profile(db, user_id, now)
+    search = dict((profile.sections or {}).get("search") or {})
+    consents = dict(search.get("platform_consents") or {})
+    entry = dict(consents.get(kind) or {})
+    version = guard.metadata(kind).text_version
+    if body.accept_version is not None:
+        if body.accept_version != version:
+            raise HTTPException(409, "The risk sentence changed: read it again.")
+        entry.update(accepted_at=now.isoformat(), text_version=version)
+    if body.enabled and (entry.get("text_version") != version or not entry.get("accepted_at")):
+        raise HTTPException(409, "Accept the risk sentence to turn it on.")
+    if not body.enabled and not entry:
+        db.rollback()
+        return _out(db, user_id, kind, now)
+    consents[kind] = {**entry, "enabled": body.enabled}
+    search["platform_consents"] = consents
+    try:
+        data = validate_section("search", search)
+    except ValidationError:
+        raise HTTPException(
+            422, "Your search settings do not validate. Fix them in your profile first."
+        ) from None
+    try:
+        service.save_section(
+            db, user_id, "search", data, profile.revision, now, platform_consent=kind
+        )
+    except service.StaleRevisionError:
+        db.rollback()
+        raise HTTPException(409, "Your profile changed in another tab. Try again.") from None
+    db.commit()
+    return _out(db, user_id, kind, now)
+
+
 @router.put("/{kind}", response_model=PlatformOut)
 def put_platform(
     kind: str, body: PlatformIn, request: Request, user: CurrentUser, db: Db
@@ -87,6 +124,8 @@ def put_platform(
     if kind not in guard.KINDS:
         raise HTTPException(404, "Platform not available.")
     now = deps.clock(request)
+    if kind in PLATFORM_CONSENT_KINDS:
+        return _put_additional(db, user.id, kind, body, now)
     profile = service.get_profile(db, user.id, now)
     search: dict[str, Any] = dict((profile.sections or {}).get("search") or {})
     sources = [dict(s) for s in search.get("browser_sources") or []]

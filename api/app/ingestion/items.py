@@ -366,6 +366,8 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.interactive_sites[].enabled": _T.SETTING,
         "search.interactive_sites[].mode": _T.SETTING,
         "search.interactive_instructions": _T.SETTING,
+        # The permission map is written only by its dedicated route, never read from a document.
+        "search.platform_consents": _T.SETTING,
         "preferences.onboarding.completed_at": _T.SETTING,
         "preferences.onboarding.dismissed_at": _T.SETTING,
         "preferences.onboarding.steps_passed[]": _T.SETTING,

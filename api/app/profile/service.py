@@ -33,6 +33,8 @@ creates the entry keeps them as sent, off and unaccepted), and an omitted Free-W
 retained, so generic Search saves and imports cannot remove or rewrite its protected settings.
 Restoring it must still satisfy the Search rules, including the ten-source limit, before anything
 is written.
+The separate `platform_consents` map belongs to the browser: generic saves and imports keep it,
+and a dedicated platform writer can update only its own entry under the same revision lock.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -49,7 +51,13 @@ from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
 from app.profile.photo import Photo
-from app.profile.schemas import SECTION_MODELS, SECTIONS, WIZARD_STEPS, validate_section
+from app.profile.schemas import (
+    PLATFORM_CONSENT_KINDS,
+    SECTION_MODELS,
+    SECTIONS,
+    WIZARD_STEPS,
+    validate_section,
+)
 
 REVISIONS_PAGE_MAX = 100
 logger = logging.getLogger(__name__)
@@ -122,6 +130,9 @@ def _keep_consent(
     stored: dict[str, Any] | None, data: dict[str, Any], trusted: str | None = None
 ) -> dict[str, Any]:
     """Keep each protected source's own consent; only its dedicated route may change it."""
+    consents = dict((stored or {}).get("platform_consents") or {})
+    if trusted in PLATFORM_CONSENT_KINDS and trusted in data.get("platform_consents", {}):
+        consents[trusted] = data["platform_consents"][trusted]
     # Old editors and imports cannot accidentally erase the new saved search fields.
     data = {
         **{
@@ -130,7 +141,11 @@ def _keep_consent(
             if name not in data and name in (stored or {})
         },
         **data,
+        "platform_consents": consents,
     }
+    if not consents:
+        # No dedicated decision yet: store no map at all (schemas._stored_section).
+        del data["platform_consents"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data
@@ -195,7 +210,7 @@ def save_section(
     profile = _locked(db, user_id, now)
     if profile.revision != base_revision:
         raise StaleRevisionError(profile)
-    if platform_consent not in (None, "freework"):
+    if platform_consent not in {None, "freework", *PLATFORM_CONSENT_KINDS}:
         raise ValueError("unknown platform consent")
     if linkedin_consent and platform_consent is not None:
         raise ValueError("one dedicated consent route per save")
