@@ -20,8 +20,13 @@ export const boardFailureSchema = z.object({
 });
 export type BoardFailure = z.infer<typeof boardFailureSchema>;
 
-/** One browser source of the sweep (browser B8, api/app/jobs/schemas.py SourceOut). */
+/** One source of the sweep (api/app/jobs/schemas.py SourceOut). */
 export const sweepSourceSchema = z.object({
+  source_id: z.string().nullable().optional(),
+  mode: z.string().nullable().optional(),
+  phase: z.string().nullable().optional(),
+  outcome: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
   kind: z.string(),
   query: z.string(),
   location: z.string().nullable(),
@@ -30,6 +35,8 @@ export const sweepSourceSchema = z.object({
   new: z.number().int().nonnegative(),
   // Opportunities O8: what the never apply rules set aside; absent from an older api.
   skipped_by_rule: z.number().int().nonnegative().default(0),
+  // Parser exceptions only, absent from an older api.
+  items_skipped: z.number().int().nonnegative().default(0),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;
@@ -91,9 +98,12 @@ export type SweepList = z.infer<typeof sweepListSchema>;
 
 export const sweepsKey = ["jobs", "sweeps"] as const;
 
-export function startSweep(): Promise<Sweep> {
+export function startSweep(profileRevision?: number): Promise<Sweep> {
   return request("/jobs/sweeps", {
     method: "POST",
+    ...(profileRevision === undefined
+      ? {}
+      : { body: { profile_revision: profileRevision } }),
     timeoutMs: 15_000,
     validate: (data) => sweepSchema.parse(data),
   });

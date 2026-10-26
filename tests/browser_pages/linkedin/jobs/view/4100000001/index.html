@@ -1,0 +1,29 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Easy Apply guard fixture</title>
+<style>button{margin:60px;padding:20px}#overlay{position:fixed;inset:0;background:#999}</style>
+<main><h1>Applied AI Engineer at Example Robotics</h1>
+<button type="button" id="opener">Easy Apply</button>
+<p role="status" id="count">Opened 0, submitted 0</p>
+<dialog aria-label="Apply to Example Robotics" id="modal">
+<button type="button" id="final">Submit application</button></dialog></main>
+<script>
+(() => {
+  const button=document.getElementById('opener'), dialog=document.getElementById('modal');
+  const count=document.getElementById('count');
+  button.onclick=()=>{button.hidden=true;dialog.showModal();count.textContent='Opened 1, submitted 0';};
+  document.getElementById('final').onclick=()=>{dialog.close();count.textContent='Opened 1, submitted 1';};
+  const variant=new URLSearchParams(location.search).get('variant');
+  if(variant==='form'){const form=document.createElement('form');button.replaceWith(form);form.append(button);}
+  if(variant==='associated'){const form=document.createElement('form');form.id='outside';
+    document.body.append(form);button.setAttribute('form','outside');}
+  if(variant==='submit')button.type='submit';
+  if(variant==='nested'){const input=document.createElement('input');button.append(input);}
+  if(variant==='final')button.textContent='Submit application';
+  if(variant==='duplicate'){const another=button.cloneNode(true);another.id='second';document.body.append(another);}
+  if(variant==='iframe'){const frame=document.createElement('iframe');document.body.append(frame);
+    frame.contentDocument.body.append(button);}
+  if(variant==='overlay'){const overlay=document.createElement('div');overlay.id='overlay';document.body.append(overlay);}
+  if(variant==='job-change')button.onmouseenter=()=>history.replaceState(null,'','/linkedin/jobs/view/2/');
+  if(variant==='replacement')button.onmouseenter=()=>{const replacement=button.cloneNode(true);
+    replacement.type='submit';const form=document.createElement('form');button.replaceWith(form);form.append(replacement);};
+})();
+</script></html>

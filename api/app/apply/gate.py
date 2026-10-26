@@ -59,6 +59,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, service, states
+from app.apply.ats import base as ats_base
 from app.apply.models import (
     AnswerSource,
     Application,
@@ -105,6 +106,10 @@ SENTENCES = {
     "not_retryable": "Only an unconfirmed or refused application can be tried again.",
     "busy": "This posting is busy with another change. Try again in a moment.",
     "not_editable": "The answers of this application can no longer be changed.",
+    "signin_first": (
+        "Sign in to the site first. The form is filled again after that, and its answers can "
+        "then be changed."
+    ),
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
     "not_an_option": "This form does not offer that choice.",
@@ -215,16 +220,22 @@ def answers_hash(rows: list[ApplicationAnswer], document_versions: dict[str, Any
 
 
 def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
-    return list(
-        db.execute(
-            sa.select(ApplicationAnswer)
-            .where(
-                ApplicationAnswer.application_id == application.id,
-                ApplicationAnswer.user_id == application.user_id,
-            )
-            .order_by(ApplicationAnswer.field_key)
-        ).scalars()
-    )
+    """The form's fields, as shown, hashed, checked and refilled; never a credential's box (a
+    row of an older fill of a field that takes typed text, labelled as one: a fill records none).
+    A check box, a choice, a file field or a skipped widget so labelled is a row as any other."""
+    rows = db.execute(
+        sa.select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.application_id == application.id,
+            ApplicationAnswer.user_id == application.user_id,
+        )
+        .order_by(ApplicationAnswer.field_key)
+    ).scalars()
+    return [
+        row
+        for row in rows
+        if row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label)
+    ]
 
 
 def current_hash(db: Session, application: Application) -> bytes:
@@ -643,8 +654,10 @@ def set_answer(
     matches; an `approved` application goes back to `ready` (its approval spent, a new one
     needed); a `needs_person` one that waited only for required fields goes to `ready` once the
     last of them is answered. The submit lease refills and reads back this value as any other;
-    a refill by the run keeps it (`run.finish`). Raises NotFoundError, RefusedError
-    (`not_editable`) or InvalidAnswerError. The caller commits. No value goes into the event."""
+    a refill by the run keeps it (`run.finish`). A credential's box is no field (`unknown_field`),
+    and an application waiting for a sign in takes no answer until the fill after it
+    (`signin_first`). Raises NotFoundError, RefusedError (`not_editable`, `signin_first`) or
+    InvalidAnswerError. The caller commits. No value goes into the event."""
     application, _ = lock(db, user_id, application_id)
     if application.state not in EDITABLE:
         raise RefusedError("not_editable")
@@ -657,8 +670,15 @@ def set_answer(
         )
         .with_for_update()
     ).scalar_one_or_none()
-    if row is None or row.field_key.startswith("skipped:") or row.kind == "file":
+    if (
+        row is None
+        or row.field_key.startswith("skipped:")
+        or row.kind == "file"
+        or ats_base.typed_secret(row.kind, row.label)
+    ):
         raise InvalidAnswerError("unknown_field")
+    if application.state is State.needs_person and application.needs == "signin":
+        raise RefusedError("signin_first")
     wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
     if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
         raise InvalidAnswerError("wrong_type")

@@ -14,7 +14,7 @@ import {
   Search,
   TriangleAlert,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -37,21 +37,41 @@ import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel } from "./labels";
 import { SweepSources } from "./sweep-sources";
+import { SearchSetup } from "./search-setup";
 import { getSweep, listSweeps, sweepsKey, type Sweep } from "./sweeps-api";
 import { scheduleLine } from "./use-schedule";
 import type { SweepRunner } from "./use-sweep-runner";
 
 export function FindJobsButton({ runner }: { runner: SweepRunner }) {
+  const [setup, setSetup] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   const busy = runner.starting || runner.running !== null;
   return (
-    <Button onClick={runner.start} disabled={busy}>
-      {busy ? (
-        <LoaderCircle aria-hidden="true" className="animate-spin" />
-      ) : (
-        <Search aria-hidden="true" />
-      )}
-      {busy ? "Finding jobs" : "Find jobs"}
-    </Button>
+    <>
+      <Button
+        ref={trigger}
+        onClick={() => {
+          setSetup(true);
+        }}
+        disabled={busy}
+      >
+        {busy ? (
+          <LoaderCircle aria-hidden="true" className="animate-spin" />
+        ) : (
+          <Search aria-hidden="true" />
+        )}
+        {busy ? "Finding jobs" : "Find jobs"}
+      </Button>
+      {setup ? (
+        <SearchSetup
+          runner={runner}
+          onClose={() => {
+            setSetup(false);
+          }}
+          onReturnFocus={() => trigger.current?.focus()}
+        />
+      ) : null}
+    </>
   );
 }
 

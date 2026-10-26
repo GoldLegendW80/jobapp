@@ -1,0 +1,137 @@
+{
+  "issue": 609,
+  "base": "1244322c2c2d6a84c4678a3d97ea25e5fbf02531",
+  "original_failure_source": "55107dfb4787a9fcaec4f80eb66e93505074a09e",
+  "source_relationships": {
+    "tests/feeds_stub.py": {
+      "main_sha256": "61c7dc81c461d96b8b39d2e7dc8397f5898bed9da2369b3c50750e0bd6096a1e",
+      "547_sha256": "61c7dc81c461d96b8b39d2e7dc8397f5898bed9da2369b3c50750e0bd6096a1e",
+      "working_sha256": "61c7dc81c461d96b8b39d2e7dc8397f5898bed9da2369b3c50750e0bd6096a1e",
+      "main_equals_547": true
+    },
+    "api/app/opportunities/deck.py": {
+      "main_sha256": "2cdd5041b5e0a8a5f1a76b35faf2c26939188b61f8b67d8a712c2e9ea67efe2f",
+      "547_sha256": "2cdd5041b5e0a8a5f1a76b35faf2c26939188b61f8b67d8a712c2e9ea67efe2f",
+      "working_sha256": "2cdd5041b5e0a8a5f1a76b35faf2c26939188b61f8b67d8a712c2e9ea67efe2f",
+      "main_equals_547": true
+    },
+    "web/e2e/opportunities-o7.spec.ts": {
+      "main_sha256": "f0072ae799a1379000b3853a633f0d70ca1817090d2ce3b4419a74cf3b36617f",
+      "547_sha256": "f0072ae799a1379000b3853a633f0d70ca1817090d2ce3b4419a74cf3b36617f",
+      "working_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5",
+      "main_equals_547": true
+    }
+  },
+  "all_original_assertions_and_timeouts_preserved": true,
+  "native_full_group": {
+    "stats": {
+      "startTime": "2026-10-23T10:00:30.458Z",
+      "duration": 51357.011999999995,
+      "expected": 35,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "wrapper_exit": 0,
+    "migration_current": "0023 (head)",
+    "migration_heads": "0023 (head)",
+    "running_services": 11,
+    "all_restarts_zero": true,
+    "all_healthchecks_healthy": true,
+    "command_receipt_sha256": "d8edba47e5ed8d49a8fc4b3d5dc4b79f0c97a53625a6cfb2938d82219c0f7c73",
+    "test_source": "actual web/e2e directory, no private instrumentation or response control",
+    "console_scope": "unchanged original watchErrors assertions"
+  },
+  "controlled_probes": {
+    "ui_results": {
+      "old-longform": "failed",
+      "nimble-first": "passed",
+      "longform-first": "passed",
+      "wrong-nimble-link": "failed",
+      "wrong-longform-link": "failed",
+      "wrong-source": "failed",
+      "missing-nimble": "failed",
+      "unknown-card": "failed"
+    },
+    "stats": {
+      "startTime": "2026-10-23T09:57:37.422Z",
+      "duration": 133744.802,
+      "expected": 12,
+      "skipped": 6,
+      "unexpected": 6,
+      "flaky": 0
+    },
+    "actual_playwright_wrapper_exit": 1,
+    "independent_expectation_audit_exit": 0,
+    "strict_browser_errors": 0,
+    "cookie_contexts": 16,
+    "cookie_values_recorded": false,
+    "probe_source_bindings_sha256": "936ed435031fbf9a35fa002b4132cbcd141922b9398c1a5bab860af7265e31db"
+  },
+  "cleanup": {
+    "own_tags_removed": [
+      "codex-609-o7-deck-order-api:review",
+      "codex-609-o7-deck-order-worker:review",
+      "codex-609-o7-deck-order-caddy:review"
+    ],
+    "borrowed_renderer_mutated": false,
+    "fake_settings_removed": true,
+    "project_containers_networks_volumes_empty": true
+  },
+  "captures": [
+    {
+      "file": "original-longform-first-failure.png",
+      "sha256": "11a9fe52d1488e64db833c18f8ff45ba8117d33c7a2f11ce52ecfaa3bccad69b",
+      "run": "original-547-native-failure",
+      "spec_sha256": "f0072ae799a1379000b3853a633f0d70ca1817090d2ce3b4419a74cf3b36617f"
+    },
+    {
+      "file": "deck-hacker-news-desktop-dark.png",
+      "sha256": "01aceb71caff8c5a4f4ea9e69d2d5a91e88b9416b8d57fee67b9a4665304cfd3",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-hacker-news-desktop-light.png",
+      "sha256": "9595bcb6464e2fc4abc054ac801a5f4879266036cf63d162c2c6730718d9d113",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-hacker-news-mobile-dark.png",
+      "sha256": "841a07ec08f7255bd4057edc9bbd6bcea3f04f48227a267bd1d6337673466939",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-hacker-news-mobile-light.png",
+      "sha256": "009fb99934e483c1a5f544b4033fb1d8a80b5341cf251d31427615d74d36ff0c",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-remote-ok-desktop-dark.png",
+      "sha256": "a902121c6a170c00da892326965fb142d3ad8ee339fdc622f88ac28c52d030a9",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-remote-ok-desktop-light.png",
+      "sha256": "e26a484f4e80c45dfa41577d8976dd2a81aa0660f9d830f7212058eeaed98b36",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-remote-ok-mobile-dark.png",
+      "sha256": "13509dd5b67b636fa2722cf88bdfb075aa0761bd91d0e2e4223e331f2bf36bdf",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    },
+    {
+      "file": "deck-remote-ok-mobile-light.png",
+      "sha256": "004228d859f4191cd4757c0bb0d1e56a4908f9206bef25f49428f63a20c6e264",
+      "run": "609-native-full35",
+      "spec_sha256": "eaa5222569a49d5206e630d857a6e5943a722888d589694fa272b2e260250fc5"
+    }
+  ]
+}

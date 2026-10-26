@@ -113,7 +113,7 @@ def test_a_session_without_cdp_has_no_debugging_switch_and_the_address_comes_las
     assert argv[:2] == ["chromium", "--"]  # Debian's wrapper passes the rest verbatim
     assert argv[-2:] == ["--", "https://example.org/login?next=/a"]
     assert argv.count("--") == 2
-    assert not any("AutomationControlled" in a for a in argv)  # no infobar for the person
+    assert not any("AutomationControlled" in a for a in argv)  # nothing automates the person
     with_cdp = chromium.switches(request("apply_fill"), "/leases/x", 9333)
     assert "--remote-debugging-port=9333" in with_cdp
     assert "--disable-blink-features=AutomationControlled" in with_cdp

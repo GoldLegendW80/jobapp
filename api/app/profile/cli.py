@@ -154,6 +154,12 @@ def run_import(email: str, file: str) -> int:
             )
             revision = profile.revision
             score = completeness(dict(profile.sections))
+    except service.PreservedSearchError as exc:
+        _error(
+            f"Invalid profile, sections.search.{describe_validation_error(exc.error)}. "
+            "Nothing was imported."
+        )
+        return 2
     except SQLAlchemyError as exc:
         _error(f"Database error, nothing was imported: {type(exc).__name__}")
         return 1
