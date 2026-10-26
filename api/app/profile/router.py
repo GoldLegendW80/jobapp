@@ -261,6 +261,9 @@ def import_profile(
             document.base_revision,
             deps.clock(request),
         )
+    except service.PreservedSearchError as exc:
+        db.rollback()
+        raise _invalid(exc.error, ("sections", "search")) from None
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)
     db.commit()
@@ -409,6 +412,9 @@ def save_section(
             deps.clock(request),
             onboarding_sent=_onboarding_keys(body.data) if section == "preferences" else None,
         )
+    except service.PreservedSearchError as exc:
+        db.rollback()
+        raise _invalid(exc.error) from None
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)
     except service.ReservedFieldError:

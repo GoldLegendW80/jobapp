@@ -1,5 +1,10 @@
 """Browser sources of the sweep (browser B8, SPEC-browser "The second use"): job sites without an
-API, read in the person's own browser by deterministic extractors, no model.
+API, read by the legacy extractors/finder or explicitly selected native interactive discovery.
+
+Selected `search.interactive_sites` run separately after legacy readers. A selected interactive
+protected platform suppresses its matching legacy reader, including a row enabled by consent:
+that row reports `interactive_selected`, rather than consuming the allowance or becoming a
+fallback. The interactive runtime's findings await J11's truthful incremental persistence.
 
 After the boards, `run_sources` (the hook of app/jobs/sweep.py's `run_sweep`) takes each enabled
 source of the person's `search.browser_sources` in turn:
@@ -60,17 +65,20 @@ import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import SplitResult, urlsplit
 
 from redis.exceptions import RedisError
 
 from app.browser.client import BrowserError
 from app.browser.leases import Leases, StoreUnavailableError
-from app.jobs import ats
+from app.jobs import ats, sweep
 from app.profile.schemas import BrowserSource
 
 logger = logging.getLogger("app.browser.sources")
+
+if TYPE_CHECKING:
+    from app.browser.sources.interactive import InteractivePolicy
 
 RESULT_PAGES_MAX = 10  # result pages per source per sweep (tasks/browser/todo.md, B8)
 # Posting pages per source per sweep. The sweep lease's 900 s of active time binds first: a page
@@ -99,6 +107,9 @@ ERRORS = (
     "ats_board",
     "token_budget",
     "agent_failed",
+    "permission_unavailable",
+    "permission_checkpoint",
+    "permission_revoked",
     # LinkedIn (browser B10, linkedin.py and app/browser/linkedin_guard.py)
     "linkedin_off",
     "linkedin_paused",
@@ -522,12 +533,14 @@ class Runner:
         walls: dict[str, Wall] | None = None,
         finder: Any = None,
         add_board: AddBoard | None = None,
+        interactive_policy: "InteractivePolicy | None" = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         self.checks = checks or {}
         self.walls = walls or {}
         self.finder = finder  # B9: the finder agent of `site` sources (finder.FinderAgent)
         self.add_board = add_board  # B9: adds a board found to the person's (site.add_board)
+        self.interactive_policy = interactive_policy
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
@@ -541,6 +554,12 @@ class Runner:
         deadline: float,
     ) -> None:
         stop: str | None = None
+        search = getattr(plan, "search", None)
+        interactive_platforms = (
+            {site.effective_platform for site in search.interactive_sites if site.enabled}
+            if search
+            else set()
+        )
         for source in plan.sources:
             entry: dict[str, Any] = {
                 "kind": source.kind,
@@ -551,8 +570,20 @@ class Runner:
                 "postings": 0,
                 "error": None if stop is None else NOT_STARTED,
             }
-            stats.sources.append(entry)
+            entry = sweep.bind_source(
+                stats, "legacy_browser", (source.kind, source.query, source.location or ""), entry
+            )
+            if source.kind in interactive_platforms:
+                entry.update(
+                    error=NOT_STARTED,
+                    phase="done",
+                    outcome="not_attempted",
+                    reason="interactive_selected",
+                )
+                await progress()
+                continue
             if stop is not None:
+                sweep.finish_source(entry)
                 continue
             stats.current_board = source_name(source)
             await progress()
@@ -561,7 +592,12 @@ class Runner:
             )
             if ended in STOPS_SWEEP:
                 stop = ended
+            sweep.finish_source(entry)
             await progress()
+
+        from app.browser.sources.interactive import run_selected
+
+        await run_selected(self, plan, stats, progress, deadline, stop)
 
     async def _one(
         self,
