@@ -98,9 +98,12 @@ export type SweepList = z.infer<typeof sweepListSchema>;
 
 export const sweepsKey = ["jobs", "sweeps"] as const;
 
-export function startSweep(): Promise<Sweep> {
+export function startSweep(profileRevision?: number): Promise<Sweep> {
   return request("/jobs/sweeps", {
     method: "POST",
+    ...(profileRevision === undefined
+      ? {}
+      : { body: { profile_revision: profileRevision } }),
     timeoutMs: 15_000,
     validate: (data) => sweepSchema.parse(data),
   });
