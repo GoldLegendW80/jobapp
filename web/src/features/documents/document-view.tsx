@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 
@@ -11,6 +11,8 @@ import { describeError } from "@/lib/api";
 import {
   documentKey,
   getDocument,
+  templatesKey,
+  versionsKey,
   type DocumentOut,
   type Generation,
   type GenerationBrief,
@@ -74,10 +76,13 @@ const VIEWS: View[] = [
 export function DocumentView({
   documentId,
   generation = null,
+  capture = null,
 }: {
   documentId: string;
   generation?: Generation | GenerationBrief | null;
+  capture?: Generation | null;
 }) {
+  const client = useQueryClient();
   const [view, setView] = useState<View["id"]>("see");
   const query = useQuery({
     queryKey: documentKey(documentId),
@@ -95,6 +100,20 @@ export function DocumentView({
     if (wasOpen.current && !open) void refetch();
     wasOpen.current = open;
   }, [open, refetch]);
+
+  // Capture can end long after content did, so it needs its own final read.
+  const captureWasOpen = useRef(isOpen(capture));
+  const captureOpen = isOpen(capture);
+  useEffect(() => {
+    if (captureWasOpen.current && !captureOpen) {
+      void refetch();
+      if (capture?.status === "done") {
+        void client.invalidateQueries({ queryKey: versionsKey(documentId) });
+        void client.invalidateQueries({ queryKey: templatesKey });
+      }
+    }
+    captureWasOpen.current = captureOpen;
+  }, [captureOpen, capture?.status, client, documentId, refetch]);
 
   if (query.isPending) {
     return (

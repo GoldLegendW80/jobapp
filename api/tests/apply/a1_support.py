@@ -4,8 +4,10 @@ reaches a real job site."""
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
+import re
 import sys
 import threading
 import urllib.error
@@ -82,17 +84,57 @@ class Forms:
     def get(self, path: str) -> Reply:
         return self._call(urllib.request.Request(self.url(path)))  # noqa: S310
 
+    def json(self, path: str, payload: Any) -> Reply:
+        return self._call(
+            urllib.request.Request(  # noqa: S310
+                self.url(path),
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+        )
+
+    def session(self, path: str) -> str:
+        found = re.search(r'data-session="([^"]+)"', self.get(path).text)
+        return found.group(1) if found else ""
+
+    def observe(self, token: str, report: dict[str, Any]) -> Reply:
+        return self.json(f"/_stub/behaviour/{token}", report)
+
     def post(
         self,
         path: str,
         fields: dict[str, Any] | None = None,
         files: dict[str, tuple[str, bytes]] | None = None,
+        *,
+        dwell_ms: int = 5000,
+        webdriver: bool = False,
+        behaviour: bool = True,
     ) -> Reply:
-        body, kind = multipart(fields or {}, files)
-        return self._call(
-            urllib.request.Request(  # noqa: S310
-                self.url(path), data=body, headers={"Content-Type": kind}
-            )
+        fields = dict(fields or {})
+        if path.startswith("/ashby/") and behaviour:
+            assert isinstance(self.stub.clock, Clock), "paced test posts need an injected clock"
+            token = self.session(path)
+            if token:
+                assert self.observe(token, {"event": "environment", "webdriver": webdriver}).json()[
+                    "ok"
+                ]
+                assert self.observe(token, {"event": "input"}).json()["ok"]
+                self.stub.clock.advance(dwell_ms / 1000)
+                fields["_session"] = token
+        return self.json(
+            path,
+            {
+                "fields": fields,
+                "files": [
+                    {
+                        "field": name,
+                        "filename": filename,
+                        "content_type": "application/pdf",
+                        "data": base64.b64encode(data).decode(),
+                    }
+                    for name, (filename, data) in (files or {}).items()
+                ],
+            },
         )
 
     def _call(self, request: urllib.request.Request) -> Reply:
@@ -113,6 +155,19 @@ class Forms:
             if row["ats"] == ats and row["variant"] == variant:
                 return row["path"]
         raise KeyError((ats, variant))
+
+
+class Clock:
+    """An injected monotonic test clock; the HTTP client never claims the elapsed duration."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 @contextmanager
@@ -140,18 +195,14 @@ ASHBY_GOOD: dict[str, Any] = {
     "q_sponsor": "No",
     "q_why": "I build agents that run operations.",
     "consent": "on",
-    "_signal_dwell_ms": "5000",
-    "_signal_webdriver": "0",
 }
 ASHBY_FILES = {"_systemfield_resume": ("cv.pdf", PDF)}
 GH_GOOD: dict[str, Any] = {
     "first_name": "Alex",
     "last_name": "Example",
     "email": "e2e-alex@example.org",
-    "q_authorised": "Yes",
-    "q_country": "France",
+    "question_1001": "Yes",
+    "question_1002": "France",
     "privacy": "on",
-    "_signal_dwell_ms": "100",
-    "_signal_webdriver": "0",
 }
 GH_FILES = {"resume": ("cv.pdf", PDF)}

@@ -135,6 +135,7 @@ def test_settings_are_typed_setting() -> None:
         *[path for path in types if path.startswith("search.browser_sources")],
         "search.browser_sources[].accepted_at",
         "search.browser_sources[].text_version",
+        "search.browser_sources[].interactive_only",
         *[path for path in types if path.startswith("search.feeds")],
         "search.feeds[].kind",
         "search.feeds[].terms.terms[]",

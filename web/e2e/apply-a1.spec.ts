@@ -70,14 +70,52 @@ test("Ashby: the invisible check fails an instant fill and a webdriver browser, 
   await page.clock.install();
   await page.goto(await stub.posting("ashby"));
   await ashby.fillAll(page);
+  await expect(
+    page.locator(".ashby-application-form-input-yesno input"),
+  ).toHaveCount(0);
+  const chooser = page.waitForEvent("filechooser");
+  await ashby
+    .field(page, "Resume")
+    .getByRole("button", { name: "Upload File" })
+    .click();
+  await (
+    await chooser
+  ).setFiles({ name: "cv.pdf", mimeType: "application/pdf", buffer: PDF });
   await shoot(page, "ashby-filled");
-  // No dwell since the last input: flagged. After the clock moved on: accepted.
+  // Advancing the browser clock cannot manufacture server-observed dwell.
+  await page.clock.fastForward(4_000);
   await page.getByRole("button", { name: "Submit Application" }).click();
   await expect(page.locator(".form-error")).toContainText(
     "flagged as possible spam",
   );
-  await page.clock.fastForward(4_000);
+  const token = await page.locator("form").getAttribute("data-session");
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(
+        `${atsFormsUrl}/_stub/behaviour/${token}`,
+      );
+      const signals = (await response.json()) as { dwell_ms: number | null };
+      return signals.dwell_ms;
+    })
+    .toBeGreaterThanOrEqual(3_000);
+  expect(
+    await page.locator("form").getAttribute("data-autofill-used"),
+  ).toBeNull();
+  const submitted = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && request.url().endsWith("/application"),
+  );
   await page.getByRole("button", { name: "Submit Application" }).click();
+  const payload = await submitted;
+  expect(payload.headers()["content-type"]).toBe("application/json");
+  const application = payload.postDataJSON() as {
+    fields: Record<string, string>;
+  };
+  expect(application.fields).toMatchObject({
+    _systemfield_name: "Alex Example",
+    q_eu_work: "Yes",
+    q_sponsor: "No",
+  });
   await expect(page.locator("#confirmation")).toContainText(
     "successfully submitted",
   );
@@ -133,15 +171,26 @@ test("Greenhouse hosted: react-select comboboxes, the EEO block and the boxes", 
   await greenhouse.choose(page, "Gender", "Decline To Self Identify");
   await greenhouse.check(page, "I agree to resolve");
   await shoot(page, "greenhouse-filled");
+  const sentRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      request.url().includes("/greenhouse/northwind-labs/jobs/"),
+  );
   await page.getByRole("button", { name: "Submit application" }).click();
+  const boardRequest = await sentRequest;
+  expect(boardRequest.headers()["content-type"]).toBe("application/json");
+  const board = boardRequest.postDataJSON() as {
+    fields: Record<string, string>;
+  };
+  expect(board.fields.question_1001).toBe("Yes");
   await expect(page.locator("#confirmation")).toContainText(
     "Thank you for applying.",
   );
   const [sent] = await stub.submissions();
   expect(sent?.accepted).toBe(true);
   expect(sent?.fields).toMatchObject({
-    q_authorised: "Yes",
-    q_country: "France",
+    question_1001: "Yes",
+    question_1002: "France",
     gender: "Decline To Self Identify",
     arbitration: "on",
     privacy: "on",

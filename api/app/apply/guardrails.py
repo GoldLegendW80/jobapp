@@ -22,7 +22,8 @@ so it refuses as a match would (`rules_unreadable`).
 - `same_form`: another posting of the person has a live application, or an applied status, on the
   same canonical form address (`canonical_key`; a second partial unique index holds the first);
 - `same_address`: as `same_form`, for an applied posting whose address is an ordinary one (a `url:`
-  key, often one careers page for many roles), so Apply myself can show it as a warning;
+  key, often one careers page for many roles), so Apply myself can show it as a warning alongside
+  `same_role` when both hold;
 - `same_role`: another posting of the person, at the same company and with the same normalised
   title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
   way), or has an applied status with its `applied_on` in the last 180 days, counted from `now`:
@@ -40,7 +41,8 @@ jobs(.eu).lever.co/<org>/<id>. A path is read only on the ATS's own domain or a 
 ("notashbyhq.com" is an ordinary address).
 Any other address is `url:` and the jobs module's normalised address (`slug.url_key`: http and
 https alike, host lowercase without www, no fragment, no trailing slash, no tracking parameter).
-An address that is not http or https has no form (`None`).
+Hosts are read through IDNA, including full width dots, and legacy stored `url:` keys are read
+through the current canonical rules. An address that is not http or https has no form (`None`).
 
 Declared open points (what these rules still miss, each toward applying):
 - a never apply term in another language than the rule's ("sécurité" for "security") or a
@@ -58,8 +60,7 @@ Declared open points (what these rules still miss, each toward applying):
   title that adds a city in parentheses: only accents, case, punctuation and gender markers
   ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
 - a form shown under an address the three ATS patterns do not cover (a company page that embeds
-  Ashby without `ashby_jid`): it is compared as an address. A live application started on a boards
-  API address before these were keyed keeps its `url:` key.
+  Ashby without `ashby_jid`): it is compared as an address.
 """
 
 import re
@@ -68,7 +69,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -92,6 +93,10 @@ RULES_UNREADABLE = (
     "tab of your profile and save it again."
 )
 SENTENCES = {
+    "email_manual": (
+        "This posting accepts email applications. Send it from your mail app, "
+        "or choose Review first to prepare and review the email here."
+    ),
     "never_apply_role": NEVER_APPLY_REFUSED,
     "rules_unreadable": RULES_UNREADABLE,
     "no_address": "This posting has no address to apply on. Add its link first.",
@@ -122,6 +127,7 @@ WARNINGS = {
 class Refusal:
     code: str
     application_id: uuid.UUID | None = None
+    also: tuple[str, ...] = ()
 
     @property
     def sentence(self) -> str:
@@ -179,14 +185,48 @@ def _number(text: str) -> str | None:
     return str(int(text)) if text.isascii() and text.isdigit() and len(text) <= 20 else None
 
 
-def _host(url: str) -> tuple[str, list[str], dict[str, str]] | None:
-    parts = urlsplit(url.strip())
-    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+def browser_host(hostname: str) -> str:
+    """IDNA 2003 host spelling, including its dot variants and percent escapes."""
+    decoded = unquote(hostname)
+    try:
+        return decoded.encode("idna").decode("ascii").lower().rstrip(".")
+    except UnicodeError:
+        return decoded.lower().rstrip(".")
+
+
+@dataclass(frozen=True)
+class _Address:
+    host: str
+    segments: list[str]
+    query: dict[str, str]
+    url: str
+
+
+def _host(url: str) -> _Address | None:
+    try:
+        parts = urlsplit(url.strip())
+        hostname = parts.hostname
+    except ValueError:
         return None
-    host = parts.hostname.lower().rstrip(".").removeprefix("www.")
+    if parts.scheme.lower() not in ("http", "https") or not hostname:
+        return None
+    host = browser_host(hostname)
+    if any(c in host for c in r"/\?#@%[]") or (":" in host and ":" not in hostname):
+        return None
+    # Preserve credentials and ports: canonicalising a host must not make an unsupported
+    # address pass an adapter's strict address check.
+    before, at, authority = parts.netloc.rpartition("@")
+    authority = authority if at else parts.netloc
+    if authority.startswith("["):
+        suffix = authority[authority.index("]") + 1 :]
+    else:
+        _, colon, port = authority.partition(":")
+        suffix = colon + port
+    netloc = (before + "@" if at else "") + (f"[{host}]" if ":" in host else host) + suffix
+    normalized = urlunsplit(parts._replace(netloc=netloc))
     segments = [segment for segment in parts.path.split("/") if segment]
     query = {name.lower(): value for name, value in parse_qsl(parts.query)}
-    return host, segments, query
+    return _Address(host.removeprefix("www."), segments, query, normalized)
 
 
 def unstub(url: str, stub_base: str | None) -> str:
@@ -225,7 +265,7 @@ def ats_of(url: str) -> str:
     found = _host(url)
     if found is None:
         return "other"
-    host, _, query = found
+    host, query = found.host, found.query
     if _on(host, "linkedin.com"):
         return "other"  # the host decides first: a LinkedIn address with ?gh_jid= is not Greenhouse
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
@@ -247,7 +287,7 @@ def canonical_key(url: str | None) -> str | None:
     found = _host(url)
     if found is None:
         return None
-    host, segments, query = found
+    host, segments, query = found.host, found.segments, found.query
     ats = ats_of(url)
     if ats == "ashby":
         job = _uuid(segments[1]) if _on(host, "ashbyhq.com") and len(segments) >= 2 else None
@@ -263,7 +303,12 @@ def canonical_key(url: str | None) -> str | None:
         job = _uuid(segments[1])
         if job:
             return f"lever:{job}"
-    return f"url:{slug.url_key(url)}"
+    return f"url:{slug.url_key(found.url)}"
+
+
+def current_key(key: str) -> str:
+    """Read a legacy stored URL key through today's canonical address rules."""
+    return (canonical_key(key[4:]) or key) if key.startswith("url:") else key
 
 
 # --- the same role -------------------------------------------------------------------------------
@@ -284,7 +329,8 @@ _LEGAL_FORMS = frozenset(
 def title_key(title: str) -> str:
     """The title compared for the same role: folded, gender markers dropped, words of a-z and
     0-9 separated by one space."""
-    return slug.text_key(_GENDER.sub(" ", slug.fold(unicodedata.normalize("NFKC", title))))
+    marked = unicodedata.normalize("NFKC", title).casefold()
+    return slug.text_key(fold(_GENDER.sub(" ", marked)))
 
 
 def company_key(company: str) -> str:
@@ -331,16 +377,20 @@ def duplicates(
     if status is JobStatus.closed:
         return Refusal("posting_closed")
 
-    other = db.execute(
-        sa.select(Application.id)
-        .where(
+    key = current_key(key)
+    stored = db.execute(
+        sa.select(Application.id, Application.canonical_key).where(
             Application.user_id == user_id,
             Application.posting_id != posting.id,
-            Application.canonical_key == key,
             Application.state.not_in(ENDED),
+            # Legacy URL keys can name today's ATS or IDNA-normalised address key.
+            sa.or_(Application.canonical_key == key, Application.canonical_key.startswith("url:")),
         )
-        .limit(1)
-    ).scalar_one_or_none()
+    ).yield_per(100)
+    try:
+        other = next((found for found, old_key in stored if current_key(old_key) == key), None)
+    finally:
+        stored.close()
     if other is not None:
         return Refusal("same_form", other)
 
@@ -352,9 +402,9 @@ def duplicates(
             Job.status.in_(APPLIED_STATUSES),
         )
     ).all()
-    for _, _, url, _ in applied:
-        if url is not None and canonical_key(url) == key:
-            return Refusal("same_address" if key.startswith("url:") else "same_form")
+    same_address = any(url is not None and canonical_key(url) == key for _, _, url, _ in applied)
+    if same_address and not key.startswith("url:"):
+        return Refusal("same_form")
     clicked = db.execute(
         sa.select(Job.company, Job.title)
         .join(Application, Application.posting_id == Job.id)
@@ -372,7 +422,10 @@ def duplicates(
         if applied_on is None or applied_on >= since.date()
     ]
     role = (company_key(posting.company), title_key(posting.title))
-    if any((company_key(c), title_key(t)) == role for c, t in recent):
+    same_role = any((company_key(c), title_key(t)) == role for c, t in recent)
+    if same_address:
+        return Refusal("same_address", also=("same_role",) if same_role else ())
+    if same_role:
         return Refusal("same_role")
     if status is JobStatus.skipped:
         return Refusal("passed")
