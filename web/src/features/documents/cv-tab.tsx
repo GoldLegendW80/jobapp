@@ -5,7 +5,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { ArrowLeft, LoaderCircle, Plus, RotateCw } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -48,9 +48,12 @@ import {
   getConsent,
   listBaseCvs,
   patchBaseCv,
+  templatesKey,
+  versionsKey,
   type BaseCv,
   type BaseCvRequest,
   type BaseCvs,
+  type Generation,
 } from "./documents-api";
 import {
   failedSentence,
@@ -91,6 +94,34 @@ export function CvTab() {
       return waits.length > 0 ? Math.min(...waits) : false;
     },
   });
+  // The opened view may be absent when capture ends. A fresh tab also reconciles terminal
+  // captures, since its document cache can predate the current list even after a remount.
+  const captures = useRef(new Map<string, Generation | null>());
+  useEffect(() => {
+    if (list.data === undefined) return;
+    const previous = captures.current;
+    captures.current = new Map(
+      list.data.base_cvs.map((cv) => [cv.id, cv.design_generation]),
+    );
+    for (const cv of list.data.base_cvs) {
+      const capture = cv.design_generation;
+      const before = previous.get(cv.id);
+      const ended =
+        !isOpen(capture) &&
+        (isOpen(before) ||
+          (capture !== null &&
+            (capture.id !== before?.id || capture.status !== before.status)));
+      if (!ended) continue;
+      void client.invalidateQueries(
+        { queryKey: documentKey(cv.id), exact: true },
+        { cancelRefetch: false },
+      );
+      if (capture?.status === "done") {
+        void client.invalidateQueries({ queryKey: versionsKey(cv.id) });
+        void client.invalidateQueries({ queryKey: templatesKey });
+      }
+    }
+  }, [client, list.data]);
   const consent = useQuery({
     queryKey: consentKey,
     queryFn: ({ signal }) => getConsent(signal),

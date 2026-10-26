@@ -1,15 +1,33 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
-import { fakeCv, fakeDocuments } from "@/test/documents";
+import {
+  fakeCv,
+  fakeDocuments,
+  fakeDocumentOf,
+  fakeVersion,
+} from "@/test/documents";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 import { TEMPLATES } from "@/test/templates";
-import type { BaseCv, Generation } from "./documents-api";
+import {
+  baseCvsKey,
+  documentKey,
+  templatesKey,
+  versionsKey,
+  versionPdfUrl,
+  type BaseCv,
+  type Generation,
+} from "./documents-api";
+import { POLL_MS } from "./labels";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const RETRY = "Try the design again for My CV";
 // The api's own sentences, from api/app/documents/design_router.py.
@@ -357,4 +375,185 @@ describe("uploaded CV capture controls", () => {
       expect(screen.queryByText("The last attempt failed")).toBeNull();
     },
   );
+});
+
+describe("capture completion across CV navigation", () => {
+  it.each([
+    ["done", false],
+    ["failed", false],
+    ["cancelled", false],
+    [null, false],
+    ["done", true],
+  ] as const)(
+    "refreshes final content after %s, remount %s",
+    async (terminal, remount) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const { api, user, client, router } = await show(
+        capture("running"),
+        {},
+        "/profile/cv/cv-1",
+      );
+      const reads = () =>
+        api.requests.filter(
+          (one) => one.method === "GET" && one.path === "/api/documents/cv-1",
+        ).length;
+      expect(
+        await screen.findByRole("img", { name: "Page 1 of version 1" }),
+      ).toBeVisible();
+      expect(reads()).toBe(1);
+      const other = fakeDocumentOf(fakeCv({ id: "other" }));
+      client.setQueryData(documentKey("other"), other);
+      client.setQueryData(templatesKey, TEMPLATES);
+      const versions = [...versionsKey("cv-1"), 1];
+      client.setQueryData(versions, [fakeVersion()]);
+      await user.click(screen.getByRole("link", { name: "All my CVs" }));
+      await screen.findByRole("link", { name: "My CV" });
+      expect(screen.queryByTestId("document-view")).toBeNull();
+      if (remount) await act(() => router.navigate("/profile"));
+      const cv = {
+        ...api.cvs[0]!,
+        template_slug: terminal === "done" ? "upload-new" : "classic",
+        design_generation: terminal === null ? null : capture(terminal),
+      };
+      api.cvs[0] = cv;
+      const final = fakeDocumentOf(cv, {
+        latest: fakeVersion({ number: 2 }),
+        draft_revision: 2,
+        draft: { final: "Kept content" },
+      });
+      api.documents.set("cv-1", final);
+      api.versions.set("cv-1", [fakeVersion({ number: 2 }), fakeVersion()]);
+      if (remount) {
+        act(() => {
+          client.setQueryData(baseCvsKey, { max: 10, base_cvs: [cv] });
+        });
+        await act(() => router.navigate("/profile/cv"));
+      } else {
+        await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+      }
+      await waitFor(() => {
+        expect(client.getQueryData(baseCvsKey)).toMatchObject({
+          base_cvs: [{ design_generation: cv.design_generation }],
+        });
+      });
+      const versionsInvalidated = client.getQueryState(versions)?.isInvalidated;
+      const templatesInvalidated =
+        client.getQueryState(templatesKey)?.isInvalidated;
+      expect(client.getQueryData(documentKey("other"))).toEqual(other);
+      expect(client.getQueryState(documentKey("other"))?.isInvalidated).toBe(
+        false,
+      );
+      await user.click(screen.getByRole("link", { name: "My CV" }));
+      await waitFor(() => {
+        expect(reads()).toBe(2);
+      });
+      expect(
+        await screen.findByRole("img", { name: "Page 1 of version 2" }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("link", { name: "Download PDF" }),
+      ).toHaveAttribute("href", versionPdfUrl("cv-1", 2));
+      expect(client.getQueryData(documentKey("cv-1"))).toEqual(final);
+      if (terminal === "done") {
+        expect(versionsInvalidated).toBe(true);
+        expect(templatesInvalidated).toBe(true);
+      } else {
+        expect(versionsInvalidated).toBe(false);
+        expect(templatesInvalidated).toBe(false);
+      }
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
+      expect(reads()).toBe(2);
+    },
+  );
+
+  it("shares a pending final document read when the mounted capture completes", async () => {
+    const { api, client } = await show(
+      capture("running"),
+      {},
+      "/profile/cv/cv-1",
+    );
+    expect(
+      await screen.findByRole("img", { name: "Page 1 of version 1" }),
+    ).toBeVisible();
+    const cv = {
+      ...api.cvs[0]!,
+      template_slug: "upload-new",
+      design_generation: capture("done"),
+    };
+    api.cvs[0] = cv;
+    const final = fakeDocumentOf(cv, { latest: fakeVersion({ number: 2 }) });
+    const signals: AbortSignal[] = [];
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/documents/cv-1", async ({ request }) => {
+        signals.push(request.signal);
+        await held;
+        return HttpResponse.json(final);
+      }),
+    );
+    try {
+      await act(async () => {
+        await client.invalidateQueries({ queryKey: baseCvsKey });
+      });
+      await waitFor(() => {
+        expect(signals).toHaveLength(1);
+      });
+      expect(signals[0]!.aborted).toBe(false);
+      act(() => {
+        release!();
+      });
+      expect(
+        await screen.findByRole("img", { name: "Page 1 of version 2" }),
+      ).toBeVisible();
+      expect(client.getQueryData(documentKey("cv-1"))).toEqual(final);
+      expect(signals).toHaveLength(1);
+      expect(signals[0]!.aborted).toBe(false);
+    } finally {
+      release?.();
+    }
+  });
+
+  it("keeps polling after returning to a still active capture, then shows its final document", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { api, user, client } = await show(
+      capture("running"),
+      {},
+      "/profile/cv/cv-1",
+    );
+    expect(
+      await screen.findByRole("img", { name: "Page 1 of version 1" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "All my CVs" }));
+    await user.click(await screen.findByRole("link", { name: "My CV" }));
+    expect(await screen.findByText("Copying your CV's design.")).toBeVisible();
+    const gets = (path: string) =>
+      api.requests.filter((one) => one.method === "GET" && one.path === path)
+        .length;
+    const polls = gets("/api/documents/base-cvs");
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    // The list polls the capture; the opened document is read again only once it ends.
+    await waitFor(() => {
+      expect(gets("/api/documents/base-cvs")).toBe(polls + 1);
+    });
+    expect(gets("/api/documents/cv-1")).toBe(1);
+    const cv = {
+      ...api.cvs[0]!,
+      template_slug: "upload-new",
+      design_generation: capture("done"),
+    };
+    api.cvs[0] = cv;
+    const final = fakeDocumentOf(cv, { latest: fakeVersion({ number: 2 }) });
+    api.documents.set("cv-1", final);
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    expect(
+      await screen.findByRole("img", { name: "Page 1 of version 2" }),
+    ).toBeVisible();
+    expect(client.getQueryData(documentKey("cv-1"))).toEqual(final);
+    const reads = api.requests.length;
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
+    expect(api.requests).toHaveLength(reads);
+  });
 });
