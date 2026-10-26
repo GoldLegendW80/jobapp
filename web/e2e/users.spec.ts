@@ -28,7 +28,7 @@ const shots = makeShots("identity-i5", "users");
  *     pnpm --dir web exec playwright test users.spec.ts
  *   docker compose -p jobapp-i5 -f compose.yml down -v
  *
- * On the Jetson, through the public URL, with throwaway accounts removed afterwards (README).
+ * On the Jetson, through the public URL, with throwaway accounts removed afterwards (docs/runbooks/accounts.md).
  * Other accounts may exist there: the spec only ever acts on the rows of its two emails, and
  * checks the last admin rule only when its admin is the only active one.
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \

@@ -558,6 +558,7 @@ def test_save_page_as_is_off_in_a_persons_session(stack: Stack) -> None:
     """Ctrl+S in a person's session: with no file dialog (AllowFileSelectionDialogs) Chromium
     turns "Save page as" off, so no dialog opens to write into a folder the person picks, the
     profile among them, and nothing is saved. The control: the next keys reach the window."""
+    # Ending a lease keeps its profile's UID binding, so this fresh profile needs its own UID.
     profile, uid = str(uuid.uuid4()), 20027
     lease = session(stack, "signin", profile, uid, SITE)["lease_id"]
     try:

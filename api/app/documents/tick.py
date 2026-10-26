@@ -104,11 +104,15 @@ logger = logging.getLogger("app.documents.tick")
 
 LOCK_PREFIX = "documents.tick:"
 NOT_STARTED = (GenerationStatus.waiting, GenerationStatus.queued)
-# The modes the tick starts and counts. A run of theirs that ended without its final hook is
-# settled once it finished this long ago: over runner.FINAL_HOOK_TIMEOUT_S (30 s), so a hook that
-# is merely late still settles its own result.
+# The modes the tick starts and counts.
 COUNTED_MODES = (GenerationMode.posting, GenerationMode.base_profile)
+# The modes `recover` settles: the counted ones, and an upload's conversion and capture.
+RECOVERY_MODES = (*COUNTED_MODES, GenerationMode.base_upload, GenerationMode.template_capture)
+# A run that ended without its final hook is settled once it finished this long ago: over
+# runner.FINAL_HOOK_TIMEOUT_S (30 s), so a hook that is merely late still settles its own result.
 HOOK_GRACE_S = 120
+# The code `generate.settle` gives a failed run, by the run's error; any other is `run_failed`.
+RUN_ERRORS = {failures.TOKEN_LIMIT: "token_limit", failures.BINDING_GONE: "binding_gone"}
 
 
 def setting_of(search: SearchSection | None) -> eligibility.Setting:
@@ -281,8 +285,9 @@ class Outcome:
 def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
     """Step 0 of the module docstring: each running generation whose run is final and finished
     over HOOK_GRACE_S ago gets the run's outcome, as `generate.settle` would have given it:
-    `failed` with `token_limit` or `run_failed` (the bounded retry then applies), `cancelled`
-    for a run cancelled while queued (a stop, never retried). Returns how many."""
+    `failed` with a code of RUN_ERRORS or `run_failed`, `cancelled` for a run cancelled while
+    queued. Capture and upload recovery does not add them to daily accounting or automatic
+    retry. Returns how many."""
     ended = sa.func.coalesce(AgentRun.finished_at, AgentRun.created_at)
     rows = db.execute(
         sa.select(DocumentGeneration.id, DocumentGeneration.document_id)
@@ -296,7 +301,7 @@ def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
         .where(
             DocumentGeneration.user_id == user_id,
             DocumentGeneration.status == GenerationStatus.running,
-            DocumentGeneration.mode.in_(COUNTED_MODES),
+            DocumentGeneration.mode.in_(RECOVERY_MODES),
             AgentRun.status.in_(FINAL_STATUSES),
             ended < at - timedelta(seconds=HOOK_GRACE_S),
         )
@@ -325,7 +330,7 @@ def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
             generation.status = GenerationStatus.cancelled
         else:
             generation.status = GenerationStatus.failed
-            generation.error = "token_limit" if run.error == failures.TOKEN_LIMIT else "run_failed"
+            generation.error = RUN_ERRORS.get(run.error or "", "run_failed")
         generation.finished_at = run.finished_at or run.created_at
         settled += 1
         logger.info(

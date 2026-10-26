@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
+import { fakeProfile } from "@/test/profile";
 import { emptySweeps, server } from "@/test/server";
 
 import type {
@@ -126,6 +127,7 @@ function fakeSweeps(options: {
 
 beforeEach(() => {
   fakeSession(admin);
+  fakeProfile();
   sweepTiming.pollMs = 20;
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
@@ -138,6 +140,14 @@ async function openJobs() {
   const app = renderApp("/jobs");
   await screen.findByRole("table", { name: "Postings" });
   return { jobs, app };
+}
+
+async function startSearch(user = userEvent.setup()) {
+  await user.click(screen.getByRole("button", { name: "Find jobs" }));
+  const setup = await screen.findByRole("dialog", { name: "Find jobs setup" });
+  await user.click(
+    within(setup).getByRole("button", { name: "Save and Start" }),
+  );
 }
 
 describe("Find jobs", () => {
@@ -154,7 +164,7 @@ describe("Find jobs", () => {
     const { jobs } = await openJobs();
     const before = jobs.requests.length;
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
 
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
@@ -215,7 +225,7 @@ describe("Find jobs", () => {
     );
     const { app } = await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
@@ -239,6 +249,7 @@ describe("Find jobs", () => {
       found,
       new: fresh,
       skipped_by_rule: 0,
+      items_skipped: 0,
       error,
     });
     fakeSweeps({
@@ -264,7 +275,7 @@ describe("Find jobs", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
     });
@@ -299,6 +310,7 @@ describe("Find jobs", () => {
       found: 0,
       new: 0,
       skipped_by_rule: 0,
+      items_skipped: 0,
       error: null,
       ...overrides,
     });
@@ -343,9 +355,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
@@ -383,7 +393,7 @@ describe("Find jobs", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
     });
@@ -396,66 +406,84 @@ describe("Find jobs", () => {
     expect(progress).not.toHaveTextContent("job sites in your browser");
   });
 
-  it("names the freelance feeds apart, in plain words (O8)", async () => {
-    const feed = (
-      kind: string,
-      found: number,
-      fresh: number,
-      ruled: number,
-      error: string | null,
-    ) => ({
-      kind,
-      query: "",
-      location: null,
-      result_pages: 0,
-      found,
-      new: fresh,
-      skipped_by_rule: ruled,
-      error,
-    });
-    fakeSweeps({
-      states: [
-        finished({
-          sources: [
-            {
-              ...feed("google_careers", 1, 1, 0, null),
-              query: "ai engineer",
-              result_pages: 1,
-            },
-            feed("remoteok", 4, 2, 1, null),
-            feed("weworkremotely", 0, 0, 0, "rate_limited"),
-            feed("hackernews_freelance", 3, 0, 2, "time_budget"),
-            feed("hackernews_hiring", 0, 0, 0, "stub_missing"),
-          ],
-        }),
-      ],
-    });
-    await openJobs();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "2 new postings found",
-    });
-    const sites = within(dialog).getByRole("region", {
-      name: "Job sites in your browser",
-    });
-    expect(within(sites).getAllByRole("listitem")).toHaveLength(1);
-    expect(sites).not.toHaveTextContent("Remote OK");
-    const feeds = within(dialog).getByRole("region", {
-      name: "Freelance and project sources",
-    });
-    const lines = within(feeds)
-      .getAllByRole("listitem")
-      .map((li) => li.textContent);
-    expect(lines).toEqual([
-      "Remote OK: 4 postings found, 2 new. 1 posting was set aside by your roles to never apply for.",
-      "We Work Remotely: 0 postings found, 0 new. The site asked the app to slow down, so it is read again at the next search.",
-      "Hacker News, freelance thread: 3 postings found, 0 new. 2 postings were set aside by your roles to never apply for. The search ran out of time before this feed was read to the end. What was read is kept.",
-      "Hacker News, hiring thread: 0 postings found, 0 new. This server is a test server that reads no real feed, so it was not read.",
-    ]);
-    for (const line of lines) expect(line).not.toMatch(/[‒–—―]|\s-\s/);
-    expect(feeds).not.toHaveTextContent("It stopped early.");
-  });
+  it.each([0, 1, 2])(
+    "names freelance feeds and %s parser skips apart, in plain words (O8)",
+    async (skipped) => {
+      const skipSentence =
+        skipped === 0
+          ? ""
+          : skipped === 1
+            ? " 1 feed item could not be read and was skipped."
+            : " 2 feed items could not be read and were skipped.";
+      const feed = (
+        kind: string,
+        found: number,
+        fresh: number,
+        ruled: number,
+        error: string | null,
+      ) => ({
+        kind,
+        query: "",
+        location: null,
+        result_pages: 0,
+        found,
+        new: fresh,
+        skipped_by_rule: ruled,
+        items_skipped: skipped,
+        error,
+      });
+      fakeSweeps({
+        states: [
+          finished({
+            sources: [
+              {
+                ...feed("google_careers", 1, 1, 0, null),
+                query: "ai engineer",
+                result_pages: 1,
+              },
+              feed("remoteok", 4, 2, 1, null),
+              feed("weworkremotely", 0, 0, 0, "rate_limited"),
+              feed("hackernews_freelance", 3, 0, 2, "time_budget"),
+              feed("hackernews_hiring", 0, 0, 0, "stub_missing"),
+            ],
+          }),
+        ],
+      });
+      await openJobs();
+      const user = userEvent.setup();
+      await startSearch(user);
+      const dialog = await screen.findByRole("dialog", {
+        name: "2 new postings found",
+      });
+      const sites = within(dialog).getByRole("region", {
+        name: "Job sites in your browser",
+      });
+      expect(within(sites).getAllByRole("listitem")).toHaveLength(1);
+      expect(sites).not.toHaveTextContent("Remote OK");
+      expect(sites).not.toHaveTextContent("feed item");
+      const feeds = within(dialog).getByRole("region", {
+        name: "Freelance and project sources",
+      });
+      const lines = within(feeds)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent);
+      expect(lines).toEqual([
+        "Remote OK: 4 postings found, 2 new. 1 posting was set aside by your roles to never apply for." +
+          skipSentence,
+        "We Work Remotely: 0 postings found, 0 new." +
+          skipSentence +
+          " The site asked the app to slow down, so it is read again at the next search.",
+        "Hacker News, freelance thread: 3 postings found, 0 new. 2 postings were set aside by your roles to never apply for." +
+          skipSentence +
+          " The search ran out of time before this feed was read to the end. What was read is kept.",
+        "Hacker News, hiring thread: 0 postings found, 0 new." +
+          skipSentence +
+          " This server is a test server that reads no real feed, so it was not read.",
+      ]);
+      for (const line of lines) expect(line).not.toMatch(/[‒–—―]|\s-\s/);
+      expect(feeds).not.toHaveTextContent("It stopped early.");
+    },
+  );
 
   it("follows the sweep already running on a second start (409)", async () => {
     fakeSweeps({
@@ -470,9 +498,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     expect(
       await screen.findByText("A sweep is already running: following it."),
     ).toBeInTheDocument();
@@ -492,21 +518,22 @@ describe("Find jobs", () => {
           { status: 422 },
         ),
     });
-    server.use(
-      http.get("*/api/profile", () =>
-        HttpResponse.json({ detail: "x" }, { status: 500 }),
-      ),
-    );
     const { app } = await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch(user);
     expect(
       await screen.findByText(
-        "No board is enabled in the search section of your profile.",
+        /No board is enabled in the search section of your profile/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Open the profile" }));
+    expect(
+      screen.getByRole("button", { name: "Save and Start" }),
+    ).toBeEnabled();
+    await user.click(
+      screen.getByRole("link", {
+        name: "Manage API boards, feeds and search options",
+      }),
+    );
     expect(app.location()).toBe("/profile?tab=search");
   });
 
@@ -518,14 +545,17 @@ describe("Find jobs", () => {
     });
     const { app } = await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Find jobs" }));
-    const message = await screen.findByText(detail);
-    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
-    // The toast of this 422 (toasts of earlier tests may still be on screen).
-    const toastOf = message.closest("li");
-    if (!toastOf) throw new Error("the message is not in a toast");
+    await startSearch(user);
+    await screen.findByText(
+      new RegExp("The search section of your profile no longer passes"),
+    );
+    expect(
+      screen.getByRole("button", { name: "Save and Start" }),
+    ).toBeEnabled();
     await user.click(
-      within(toastOf).getByRole("button", { name: "Open the profile" }),
+      screen.getByRole("link", {
+        name: "Manage API boards, feeds and search options",
+      }),
     );
     expect(app.location()).toBe("/profile?tab=search");
   });
@@ -539,13 +569,15 @@ describe("Find jobs", () => {
         ),
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     expect(
-      await screen.findByText(/The sweep did not start\. The API answered 503/),
+      await screen.findByText(
+        /The search did not start\. The API answered 503/,
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Save and Start" }),
+    ).toBeEnabled();
   });
 
   it("follows a sweep already running when the page opens", async () => {
@@ -581,9 +613,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     const dialog = await screen.findByRole("dialog", {
       name: "The sweep stopped",
     });
@@ -602,9 +632,7 @@ describe("Find jobs", () => {
       ],
     });
     await openJobs();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await startSearch();
     await waitFor(() => {
       expect(
         screen.queryByRole("region", { name: "Sweep in progress" }),
