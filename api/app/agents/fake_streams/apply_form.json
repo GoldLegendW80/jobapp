@@ -1,5 +1,5 @@
 {
- "description": "The form agent's default stream (apply A8), the journey's: as apply_a8b_workable. Its refs are those of the modelled Workable like form; check them against browserd's first snapshot of tests/ats_forms/a8/custom/example-robotics/workable.html when the journey first runs.",
+ "description": "The form agent's default stream (apply A8), verified against the pinned browser's initial snapshot of the invented Workable form, tests/ats_forms/a8/snapshots/workable-initial.txt. Only element refs are recorded here; values are resolved by code from the person's stored profile and prepared documents.",
  "steps": [
   {
    "message": {
@@ -79,7 +79,7 @@
        "id": "toolu_form_02",
        "name": "mcp__app__fill_field",
        "input": {
-        "ref": "e6"
+        "ref": "e7"
        }
       },
       {
@@ -95,7 +95,7 @@
        "id": "toolu_form_04",
        "name": "mcp__app__fill_field",
        "input": {
-        "ref": "e14"
+        "ref": "e13"
        }
       },
       {
@@ -103,7 +103,7 @@
        "id": "toolu_form_05",
        "name": "mcp__app__fill_field",
        "input": {
-        "ref": "e17"
+        "ref": "e16"
        }
       },
       {
@@ -111,7 +111,7 @@
        "id": "toolu_form_06",
        "name": "mcp__app__fill_field",
        "input": {
-        "ref": "e21"
+        "ref": "e19"
        }
       },
       {
@@ -119,7 +119,7 @@
        "id": "toolu_form_07",
        "name": "mcp__app__fill_field",
        "input": {
-        "ref": "e24"
+        "ref": "e22"
        }
       }
      ],
@@ -185,7 +185,7 @@
        "id": "toolu_form_09",
        "name": "mcp__app__designate_submit",
        "input": {
-        "ref": "e28"
+        "ref": "e26"
        }
       }
      ],

@@ -8,6 +8,7 @@ capabilities are dropped in the child by the uid change. Xvfb runs as the image'
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import signal
 import socket
 import stat
 import sys
+import time
 import uuid
 from typing import Any
 
@@ -38,10 +40,9 @@ def switches(
     fingerprint that lies is never set. WebGL stays off under Xvfb (no SwiftShader): the
     owner's question in B2's pull request. `port` None: no debugging port at all (a person's
     own session, browserd/signin.py), and no --disable-blink-features=AutomationControlled
-    either: nothing automates that session, and Chromium would show the person an infobar about
-    an unsupported switch. The address comes last, after `--`, so Chromium never reads it as a
-    switch; the first `--` stops the option loop of Debian's wrapper script (/usr/bin/chromium),
-    which would otherwise drop the second one."""
+    either: nothing automates that session. The address comes last, after `--`, so Chromium
+    never reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
+    (/usr/bin/chromium), which would otherwise drop the second one."""
     debugging = (
         []
         if port is None
@@ -367,6 +368,7 @@ class Chromium:
         self.on_end: Any = None  # set by the service: ends the lease with the reason given
         self.on_event: Any = None
         self._tasks: list[asyncio.Task[Any]] = []
+        self._first_navigation = False
 
     @property
     def lease_dir(self) -> str:
@@ -400,6 +402,7 @@ class Chromium:
         return self.proc
 
     async def start(self) -> "Chromium":
+        self._memory_boundary("startup")
         await self.prepare()
         self.port = free_port()
         await self.spawn(self.port)
@@ -410,8 +413,12 @@ class Chromium:
                 f"http://127.0.0.1:{self.port}", timeout=c.START_S * 1000
             )
             self.cdp = await self.browser.new_browser_cdp_session()
+            self._memory_boundary("cdp_ready")
             context = self.browser.contexts[0]
             context.on("page", self._on_page)
+            with contextlib.suppress(Exception):
+                for page in context.pages:
+                    self._memory_page(page)
             self._write_state()
         except BaseException:
             await self.kill()
@@ -443,6 +450,24 @@ class Chromium:
         if len(page.context.pages) > c.TABS_MAX:
             self._event(event="tab_closed", reason="tabs_max")
             self._tasks.append(asyncio.ensure_future(page.close()))
+        self._memory_page(page)
+
+    def _memory_page(self, page: Any) -> None:
+        with contextlib.suppress(Exception):
+            if log.isEnabledFor(logging.DEBUG):
+                page.on("framenavigated", self._on_navigation)
+
+    def _on_navigation(self, frame: Any) -> None:
+        with contextlib.suppress(Exception):
+            if not self._first_navigation and frame.parent_frame is None:
+                self._first_navigation = True
+                self._memory_boundary("first_navigation")
+
+    def _memory_boundary(self, phase: str) -> None:
+        # Optional lifecycle reads are distinct from the watcher's deciding sample.
+        with contextlib.suppress(Exception):
+            if log.isEnabledFor(logging.DEBUG):
+                _observed_memory(memory, phase)
 
     async def _watch_exit(self) -> None:
         """An exit nobody asked for ends the lease: `browser_closed` when Chromium quit by itself
@@ -506,6 +531,7 @@ class Chromium:
         go, every process of a profile uid killed (nothing of this lease stays on the display),
         the lease's directory removed. A step that fails is logged and the next one still runs;
         a process that survives is reaped again before the next start (clear_display)."""
+        self._memory_boundary("end")
         for task in self._tasks:
             if task is not asyncio.current_task():
                 task.cancel()
@@ -535,6 +561,93 @@ CGROUP_FILES = (
         "total_inactive_file",
     ),
 )
+_MEMORY_OBSERVATION: contextvars.ContextVar[tuple[str, dict] | None] = contextvars.ContextVar(
+    "memory_observation", default=None
+)
+# Kernel memory.stat names only. v1's total_* counters describe the hierarchical charge.
+_MEMORY_COUNTERS = frozenset(
+    (
+        "inactive_file",
+        "active_file",
+        "anon",
+        "file",
+        "shmem",
+        "kernel",
+        "slab",
+        "file_mapped",
+        "rss",
+        "cache",
+        "mapped_file",
+        "total_inactive_file",
+        "total_active_file",
+        "total_rss",
+        "total_cache",
+        "total_shmem",
+        "total_mapped_file",
+    )
+)
+
+
+def _memory_counters(listed: str) -> dict[str, int]:
+    counters: dict[str, int] = {}
+    for line in listed[:16384].splitlines():
+        name, _, value = line.partition(" ")
+        value = value.strip()
+        if (
+            name in _MEMORY_COUNTERS
+            and name not in counters
+            and value.isdecimal()
+            and len(value) <= 20
+        ):
+            counters[name] = int(value)
+    return counters
+
+
+def _memory_log(sample: dict, level: int = logging.DEBUG) -> bool:
+    try:
+        if log.isEnabledFor(level):
+            log.log(
+                level,
+                "%s",
+                json.dumps({"event": "browser_memory", **sample}, separators=(",", ":")),
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _observe_memory(sample: dict, current: str, ceiling: str, listed: str, key: str) -> None:
+    observation = _MEMORY_OBSERVATION.get()
+    sample.update(event="browser_memory", phase=observation[0] if observation else "sample")
+    sample["observer_failed"] = 0
+    try:
+        # Only bounded numbers leave this function, never raw read bodies or exception text.
+        sample["current_bytes"] = (
+            int(current) if current.isdecimal() and len(current) <= 20 else None
+        )
+        sample["limit_bytes"] = int(ceiling) if ceiling.isdecimal() and len(ceiling) <= 20 else None
+        sample["counters"] = _memory_counters(listed)
+        sample["stat_truncated"] = int(len(listed) > 16384)
+        if sample["stat_status"] == "read":
+            present = any(line.partition(" ")[0] == key for line in listed[:16384].splitlines())
+            sample["stat_status"] = (
+                "ok" if key in sample["counters"] else "invalid" if present else "missing"
+            )
+    except Exception:
+        sample["observer_failed"] = 1
+    if not _memory_log(sample):
+        sample["observer_failed"] = 1
+    if observation is not None:
+        observation[1].update(sample)
+
+
+def _observed_memory(reader: Any, phase: str) -> tuple[Any, dict]:
+    sample: dict = {}
+    token = _MEMORY_OBSERVATION.set((phase, sample))
+    try:
+        return reader(), sample
+    finally:
+        _MEMORY_OBSERVATION.reset(token)
 
 
 def working_set(usage: int, stat: str, key: str) -> int:
@@ -551,21 +664,45 @@ def memory(root: str = CGROUP) -> tuple[int, int] | None:
     """(working set, limit) of the container's cgroup, v2 else v1, or None without a limit. The
     inactive page cache is left out: the kernel reclaims it before it kills a process, and on a
     Mac it held about 770 MiB of the browser's 1024m at rest."""
-    for usage, limit, stats, key in CGROUP_FILES:
-        try:
-            with open(f"{root}/{usage}") as cur, open(f"{root}/{limit}") as top:
-                current, ceiling = cur.read().strip(), top.read().strip()
-        except OSError:
-            continue
-        if not (current.isdecimal() and ceiling.isdecimal()):
-            return None
-        try:
-            with open(f"{root}/{stats}") as figures:
-                listed = figures.read()
-        except OSError:
-            listed = ""
-        return working_set(int(current), listed, key), int(ceiling)
-    return None
+    started = time.monotonic_ns()
+    sample = {
+        "sample_id": started,
+        "read_started_ns": started,
+        "cgroup_version": 0,
+        "accounting_status": "unavailable",
+        "stat_status": "not_read",
+        "read_failures": 0,
+        "working_set_bytes": None,
+    }
+    current = ceiling = listed = key = ""
+    try:
+        for index, (usage, limit, stats, key) in enumerate(CGROUP_FILES):
+            try:
+                with open(f"{root}/{usage}") as cur, open(f"{root}/{limit}") as top:
+                    current, ceiling = cur.read().strip(), top.read().strip()
+            except OSError:
+                sample["read_failures"] += 1
+                continue
+            sample["cgroup_version"] = 2 - index
+            if not (current.isdecimal() and ceiling.isdecimal()):
+                sample["accounting_status"] = "unlimited" if ceiling == "max" else "invalid"
+                return None
+            try:
+                with open(f"{root}/{stats}") as figures:
+                    listed = figures.read()
+                sample["stat_status"] = "read"
+            except OSError:
+                listed = ""
+                sample["stat_status"] = "unreadable"
+            result = working_set(int(current), listed, key), int(ceiling)
+            sample["accounting_status"] = "ok"
+            sample["working_set_bytes"] = result[0] if result[0] < 10**20 else None
+            return result
+        return None
+    finally:
+        with contextlib.suppress(Exception):
+            sample["read_finished_ns"] = time.monotonic_ns()
+            _observe_memory(sample, current, ceiling, listed, key)
 
 
 def past_guard(figures: tuple[int, int], pct: int) -> bool:
@@ -576,17 +713,19 @@ def past_guard(figures: tuple[int, int], pct: int) -> bool:
 async def guard_memory(browser: Any, pct: int, event: Any, reader: Any = memory) -> bool:
     """Closes the newest tab when the container is past `pct` % of its limit (a blank tab is
     opened first when it was the only one). True when a tab was closed."""
-    figures = reader()
+    figures, sample = _observed_memory(reader, "guard")
     if figures is None or not past_guard(figures, pct):
         return False
-    pages = browser.contexts[0].pages if browser.contexts else []
+    pages = [(context, page) for context in browser.contexts for page in context.pages]
     if not pages:
         return False
-    victim = pages[-1]
+    context, victim = pages[-1]
     if len(pages) == 1:
-        await browser.contexts[0].new_page()
+        await context.new_page()
     await victim.close()
     event(event="tab_closed", reason="memory", used_mib=figures[0] >> 20)
+    if sample:
+        _memory_log({**sample, "phase": "guard_close", "pct": pct}, logging.WARNING)
     return True
 
 

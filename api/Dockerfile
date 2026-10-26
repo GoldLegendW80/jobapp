@@ -24,7 +24,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
 # The project's default groups are dev, agents and ingestion (pyproject.toml); the api needs none.
-# extra_ca: a bundle uv trusts beside the image's own, given only behind a TLS inspecting proxy (README).
+# extra_ca: a bundle uv trusts beside the image's own, given only behind a TLS inspecting proxy (docs/runbooks/develop-new-machine.md).
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=secret,id=extra_ca,required=false \
     if [ -s /run/secrets/extra_ca ]; then \

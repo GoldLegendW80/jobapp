@@ -132,6 +132,9 @@ async function turnOn(page: Page, query: string) {
 async function findJobs(page: Page) {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
+  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  await expect(setup).toBeVisible();
+  await setup.getByRole("button", { name: "Save and Start" }).click();
   const dialog = page.getByRole("dialog", {
     name: /new postings? found|No new posting|The sweep stopped/,
   });

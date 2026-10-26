@@ -606,7 +606,7 @@ def test_a_field_reported_twice_is_asked_once() -> None:
 # --- never left `filling` ----------------------------------------------------------------------
 
 
-def test_a_fill_cancelled_mid_fill_ends_interrupted_and_releases_the_lease_once(
+def test_a_fill_cancelled_mid_fill_is_queued_for_its_retry_and_releases_the_lease_once(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
     app_id = started(db, person_a)
@@ -620,13 +620,14 @@ def test_a_fill_cancelled_mid_fill_ends_interrupted_and_releases_the_lease_once(
     with pytest.raises(asyncio.CancelledError):
         fill(services(factory, form, leases, stub_base=stub), app_id)
     found = application(db, app_id)
-    assert (found.state, found.error_code) == (State.failed, "interrupted")
-    assert [e.data for e in events(db, app_id) if e.kind == "ended"] == [{"code": "interrupted"}]
+    # A10a: an interrupted fill is retried while a retry is left.
+    assert (found.state, found.needs, found.error_code) == (State.queued, "retry", "interrupted")
+    assert [e.data["code"] for e in events(db, app_id) if e.kind == "retry"] == ["interrupted"]
     assert len(leases.released) == 1
     assert status(db, person_a) is JobStatus.found
 
 
-def test_a_fill_whose_end_cannot_be_written_ends_failed(
+def test_a_fill_whose_end_cannot_be_written_never_stays_filling(
     db: Session,
     factory: sessionmaker[Session],
     person_a: Person,
@@ -640,10 +641,14 @@ def test_a_fill_whose_end_cannot_be_written_ends_failed(
         raise jobs_service.JobBusyError  # the person holds the posting's row
 
     monkeypatch.setattr(run, "finish", busy)
-    assert fill(services(factory, run_ashby(), leases, stub_base=stub), app_id) == "failed"
+    assert fill(services(factory, run_ashby(), leases, stub_base=stub), app_id) == "queued"
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.queued, "interrupted")  # A10a: retried
+    assert len(leases.released) == 1
+    svc = services(factory, run_ashby(), leases, stub_base=stub, retry_delays_s=())
+    assert fill(svc, app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "interrupted")
-    assert len(leases.released) == 1
 
 
 def test_an_application_no_longer_filling_is_not_interrupted(
@@ -698,13 +703,15 @@ def test_the_queue_start_ends_fills_left_by_a_dead_worker_and_nothing_else(
     ctx = {"sessions": factory, "clock": Clock()}
     assert asyncio.run(worker.reset_fills_at_start(ctx)) == 1
     found = application(db, left)
-    assert (found.state, found.error_code) == (State.failed, "interrupted")
+    assert (found.state, found.error_code) == (State.queued, "interrupted")  # A10a: retried
     assert application(db, ready).state is State.ready
     assert application(db, b_id).state is State.queued
     assert asyncio.run(worker.reset_fills_at_start(ctx)) == 0
 
 
 def test_the_fill_timeout_is_the_leases_ceiling_and_the_queue_resets_at_start() -> None:
+    from app.browser.client import TAKEOVER_WAIT_S
+
     # Browser B12a: plus the wait of a sign in hand off, which stops the lease's clock.
     default = worker.apply_queue()
     longer = worker.apply_queue(
@@ -712,7 +719,7 @@ def test_the_fill_timeout_is_the_leases_ceiling_and_the_queue_resets_at_start() 
     )
     for spec, lease_s, wait_s in ((default, 900, 1800), (longer, 1200, 2400)):
         (filling,) = [f for f in spec.functions if f.name == "apply_fill"]
-        expected = lease_s + wait_s + worker.APPLY_JOB_MARGIN_S
+        expected = lease_s + wait_s + TAKEOVER_WAIT_S + worker.APPLY_JOB_MARGIN_S
         assert filling.timeout_s == spec.job_timeout_s == expected
         # A whole lease of work and a wait of 25 minutes fit (the edge case of B12a).
         assert filling.timeout_s > lease_s + 25 * 60
