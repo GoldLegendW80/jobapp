@@ -7,6 +7,7 @@ import {
   getSweep,
   listSweeps,
   startSweep,
+  sweepSchema,
   sweepSourceSchema,
   watchSweep,
   type Sweep,
@@ -41,6 +42,40 @@ const done = {
   current_board: null,
   new_jobs: [],
 };
+
+it.each([
+  {},
+  { source_id: null, mode: null, phase: null, outcome: null, reason: null },
+  {
+    source_id: "board:example",
+    mode: "api",
+    phase: "done",
+    outcome: "complete",
+    reason: null,
+  },
+  {
+    source_id: "site:example",
+    mode: "llm_browser",
+    phase: "pending",
+    outcome: "not_attempted",
+    reason: "interactive_executor_pending",
+  },
+  { mode: "feed", phase: "done", outcome: "no_matches" },
+])("preserves optional source status metadata: %j", (metadata) => {
+  const source = {
+    kind: "google_careers",
+    query: "ai",
+    location: null,
+    result_pages: 0,
+    found: 0,
+    new: 0,
+    error: null,
+    ...metadata,
+  };
+  expect(sweepSchema.parse({ ...running, sources: [source] }).sources).toEqual([
+    { ...source, skipped_by_rule: 0, items_skipped: 0 },
+  ]);
+});
 
 /** A stand-in for the browser's EventSource that the test drives. */
 class FakeEventSource {
