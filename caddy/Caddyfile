@@ -10,7 +10,8 @@
 #          header is trusted: Cf-Connecting-Ip, X-Real-Ip and the like pass through Funnel
 #          untouched, so a visitor could forge them.
 # Built into the caddy image by the `caddy` target of web/Dockerfile, which runs caddy validate
-# and caddy fmt on it.
+# and caddy fmt on it. That caddy is built with one module beyond the standard ones,
+# github.com/mholt/caddy-ratelimit (free, Apache 2.0), for the `rate_limit` of :8080 below.
 {
 	# No admin API: the config is baked into the image, so there is nothing to reload live.
 	admin off
@@ -250,10 +251,80 @@
 	# Errors raised by Caddy itself (missing file, api unreachable, body too large): a short plain
 	# text body, the same security headers, and never cached, so a missing /assets file is not
 	# remembered for a year.
+	# A 429 of the password door's rate limit (:8080, below) answers in the api's own shape, so
+	# every page shows its sentence as it shows the api's (web/src/lib/api.ts reads `detail`).
 	handle_errors {
 		import security_headers
 		header Cache-Control no-store
+		@address_limited expression `{err.status_code} == 429 && {http.rate_limit.exceeded.name} == "password_address"`
+		@door_limited expression `{err.status_code} == 429 && {http.rate_limit.exceeded.name} == "password_door"`
+		header @address_limited Content-Type application/json
+		header @door_limited Content-Type application/json
+		respond @address_limited `{"detail":"Too many password attempts from this connection. Try again in a minute or two."}` 429
+		respond @door_limited `{"detail":"The server is busy. Try again in a moment."}` 429
 		respond "{err.status_code} {err.status_text}"
+	}
+}
+
+# --- the password door's rate limit (issue #152, owner decision 2026-10-21) --------------------
+# The three routes that check a password with no session to vouch for the caller: sign in, the
+# password change and the acceptance of an invite or reset link (POST only, the decoded path
+# compared as the api routes it, as the upload class above). Every one takes one of the api's 2
+# argon2 slots (SPEC-identity.md, "Password checks at once"); nothing else is limited here.
+# Two zones, the address's first, then the door's: a request refused by the first never counts
+# in the second, so one address cannot spend the budget of everyone. Each zone is a handler of
+# its own, in that order as written: the zones of one handler are sorted by the module, most
+# permissive first, which would let one address fill the door (tests/tailscale_test.sh).
+#   password_address  2 per 90 seconds per address ({client_ip}: Funnel's X-Forwarded-For on
+#                     :8080), an IPv6 address counted by its /64 and an IPv4 mapped address as its
+#                     IPv4, as the api counts them. 2 per 90s is the api's own 20 per 15 minutes
+#                     per address, but counted for every request, the refused and the served,
+#                     where the api counts only the passwords it tested. A person who mistypes
+#                     once retries at once; a third try waits out the 90 seconds.
+#   password_door     15 per 3 seconds for all addresses together: what the 2 slots empty in
+#                     the 3 second wait the api allows, at the 375 ms a check is assumed to take
+#                     with two running (2 x 3000 / 375 = 16, kept under the 16 waiting places).
+#                     So a flood never fills the api's queue: the api keeps its threads, its
+#                     database connections and its memory for people already signed in, and
+#                     the excess is refused here, before the api, at no cost to it. On the
+#                     Jetson, with T the measured milliseconds of one check with two running,
+#                     the figure is floor(2 x 3000 / T), at most 16 (issue #152, the owner's
+#                     measurement).
+# What it does not do, stated plainly: tell a distributed flood from people. While one lasts,
+# sign in, the password change and link acceptance through Funnel answer 429 instead of 503;
+# holding the door shut takes about as many addresses as before (the door's rate over one
+# address's, 5 per second over 2 per 90 seconds, about 225 at once), and costs the api nothing.
+# Both answers carry Retry-After (the module's) and the api's error shape, {"detail": ...}, from
+# handle_errors in the `app` snippet. Only on :8080, the listener Funnel reaches: :80 is
+# published on the host loopback alone (HTTP_BIND), where every caller is one address, the
+# Jetson itself or the gate's journeys, which sign in far more often than 2 per 90 seconds.
+# Memory: one key per address seen in the last 90 seconds (plus up to the 15 seconds between two
+# sweeps, `sweep_interval`), dropped once its events are older than the window. `disable_metrics`
+# is not optional: the module's metrics carry the key as a label, a counter and a histogram per
+# address that no sweep ever drops, and with them a flood of 150,000 fresh IPv6 /64s killed a
+# caddy held to its 128m (compose.yml) for lack of memory. Without them, the same flood (about
+# 800 a second for three minutes) left it running near its limit, every request answered
+# (measured on the development Mac, issue #152; the Jetson's figure is the owner's to take).
+(password_door_limit) {
+	@password_check expression `{http.request.method} == "POST" && ({http.request.uri.path} == "/api/auth/login" || {http.request.uri.path} == "/api/auth/password" || {http.request.uri.path}.matches("^/api/auth/invites/[^/]+/accept$"))`
+	rate_limit @password_check {
+		zone password_address {
+			key {client_ip}
+			ipv4_prefix 32
+			ipv6_prefix 64
+			events 2
+			window 90s
+		}
+		sweep_interval 15s
+		disable_metrics
+	}
+	rate_limit @password_check {
+		zone password_door {
+			key password_door
+			events 15
+			window 3s
+		}
+		disable_metrics
 	}
 }
 
@@ -262,5 +333,6 @@
 }
 
 :8080 {
+	import password_door_limit
 	import app
 }
