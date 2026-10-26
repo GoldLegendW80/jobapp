@@ -300,6 +300,7 @@ describe("Find jobs", () => {
       found: 0,
       new: 0,
       skipped_by_rule: 0,
+      items_skipped: 0,
       error: null,
       ...overrides,
     });
