@@ -142,7 +142,7 @@ test("an invented candidate prepares documents", async () => {
   await waitForRender(page.request, base_cv.id, 1);
 });
 
-test("later Workday captcha: the person takes over, solves it, gives back; earlier answers kept, submitted once after a fresh approval", async () => {
+test("later Workday captcha: the person solves it in the live view; earlier answers kept, submitted once after a fresh approval", async () => {
   const reason = "captcha";
   const before = (await stub.submissions()).length;
   const job = await posting(reason);
@@ -173,13 +173,14 @@ test("later Workday captcha: the person takes over, solves it, gives back; earli
     page.getByText("A captcha needs you", { exact: true }),
   ).toBeVisible();
   expect((await stub.submissions()).length).toBe(before);
-  // Main's live view (SPEC-browser, "View only while an agent works"): the person watches the
-  // assistant's lease and takes over to solve the captcha; no keyboard before that.
-  const takeOver = page.getByRole("button", { name: "Take over", exact: true });
-  await expect(takeOver).toBeVisible();
+  // The wait is the person's: browserd gave them the input (no agent acts during it), so the
+  // live view offers the keyboard and no Take over, which browserd would refuse.
+  await expect(
+    page.getByRole("button", { name: "Take over", exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Keyboard", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect
     .poll(
       async () =>
@@ -206,13 +207,8 @@ test("later Workday captcha: the person takes over, solves it, gives back; earli
   expect(stillWaiting?.id).toBe(waiting?.id);
   expect(stillWaiting?.wait_deadline).toBe(waiting?.wait_deadline);
   expect(stillWaiting?.active_s).toBe(waiting?.active_s);
-  await takeOver.click();
-  await expect(
-    page.getByRole("button", { name: "Keyboard", exact: true }),
-  ).toBeVisible();
   await clickInView(page, "#person-challenge");
   await clickInView(page, "#person-continue");
-  await page.getByRole("button", { name: "Give back", exact: true }).click();
   await expect
     .poll(async () => (await application(job))?.state, { timeout: 240_000 })
     .toBe("ready");
