@@ -781,6 +781,9 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
                 _queue_name=queue.APPLY,
             )
         queued += job is not None
+    from app.apply import site_profile
+
+    queued += await site_profile.tick(ctx)
     return queued
 
 
@@ -826,6 +829,7 @@ async def prune_apply_screenshots(ctx: dict[str, Any]) -> int:
 
 
 def apply_queue(settings: Settings | None = None) -> QueueSpec:
+    from app.apply import site_profile
     from app.browser.client import TAKEOVER_WAIT_S
     from app.browser.leases import APPLY_WAIT_S, LEASE_MAX_S, lease_max_table
 
@@ -848,6 +852,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     return QueueSpec(
         name=queue.APPLY,
         functions=[
+            *site_profile.queue_functions(fill_timeout_s),
             # keep_result=0: nothing of a fill is left in Redis, and the tick can queue the same
             # application again under its id once the job ended.
             func(apply_fill, name="apply_fill", timeout=fill_timeout_s, max_tries=1, keep_result=0),

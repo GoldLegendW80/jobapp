@@ -40,6 +40,7 @@ import {
 } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
+import { EmailApplication } from "./email-application";
 import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
@@ -283,8 +284,20 @@ export function ApplySection({ job }: { job: JobDetail }) {
     onError: failed,
   });
   const approve = useMutation({
-    mutationFn: (current: Approval) =>
-      approveApplication(id as string, current.answers_hash),
+    mutationFn: ({
+      current,
+      acknowledged,
+    }: {
+      current: Approval;
+      acknowledged: string[];
+    }) =>
+      approveApplication(
+        id as string,
+        current.answers_hash,
+        current.answers.find((answer) => answer.field_key === "email_to")
+          ?.value as string | undefined,
+        acknowledged,
+      ),
     onMutate: () => {
       setNotice(null);
     },
@@ -383,6 +396,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             </Alert>
           ) : null}
 
+          {application?.ats === "email" && id ? (
+            <EmailApplication applicationId={id} />
+          ) : null}
           {!manual ? (
             <NeedsPerson
               application={application}
@@ -618,8 +634,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
               role={job.title}
               approval={approval}
               pending={approve.isPending}
-              onConfirm={() => {
-                approve.mutate(approval);
+              onConfirm={(acknowledged = []) => {
+                approve.mutate({ current: approval, acknowledged });
               }}
             />
           ) : null}

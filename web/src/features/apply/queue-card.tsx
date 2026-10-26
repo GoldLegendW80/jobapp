@@ -133,8 +133,9 @@ export function QueueCard({
     void queryClient.invalidateQueries({ queryKey: approvalKey(item.id) });
   };
   const failed = (error: unknown) => {
-    // The api's `detail` (a 409, or a 422 for an answer) is a sentence for the person, shown as is.
-    setNotice(errorDetail(error) ?? describeError(error));
+    setNotice(
+      refusalOf(error)?.detail ?? errorDetail(error) ?? describeError(error),
+    );
     refresh();
   };
 
@@ -157,8 +158,20 @@ export function QueueCard({
     onError: failed,
   });
   const approve = useMutation({
-    mutationFn: (current: Approval) =>
-      approveApplication(item.id, current.answers_hash),
+    mutationFn: ({
+      current,
+      acknowledged,
+    }: {
+      current: Approval;
+      acknowledged: string[];
+    }) =>
+      approveApplication(
+        item.id,
+        current.answers_hash,
+        current.answers.find((answer) => answer.field_key === "email_to")
+          ?.value as string | undefined,
+        acknowledged,
+      ),
     onMutate: () => {
       setNotice(null);
     },
@@ -275,6 +288,12 @@ export function QueueCard({
       <p className="text-sm">{statusLine(item)}</p>
       {item.state === "filling" && item.mode !== "manual" ? (
         <FillHandoff />
+      ) : null}
+      {item.mode === "manual" ? (
+        <p className="text-sm">
+          Open the posting to reopen your browser, record that you submitted it
+          or close this application.
+        </p>
       ) : null}
       {signingIn ? (
         <LaterHandoffBanner
@@ -497,8 +516,8 @@ export function QueueCard({
             if (next?.isConnected) next.focus();
             else onLeave();
           }}
-          onConfirm={() => {
-            approve.mutate(approval);
+          onConfirm={(acknowledged = []) => {
+            approve.mutate({ current: approval, acknowledged });
           }}
         />
       ) : null}

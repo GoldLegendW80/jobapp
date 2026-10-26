@@ -16,6 +16,7 @@ export const DAYS_MAX = 3650;
 export const CAPS_MAX = 100;
 /** The longest saved answer (api/app/apply/bank.py, VALUE_MAX). */
 export const ANSWER_MAX = 5000;
+export const QUESTION_MAX = 200;
 
 const settingsSchema = z.object({
   mode_after_like: z.string(),
@@ -118,6 +119,18 @@ export const saveCaps = (items: CapDraft[], revision: string): Promise<Caps> =>
 export const getAnswerBank = (signal?: AbortSignal): Promise<Bank> =>
   request("/apply/answer-bank", {
     signal,
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => bankSchema.parse(body),
+  });
+
+/** Explicitly save a reusable answer; the server derives its question key. */
+export const addBankAnswer = (
+  question: string,
+  answer: string,
+): Promise<Bank> =>
+  request("/apply/answer-bank", {
+    method: "POST",
+    body: { question, answer },
     timeoutMs: TIMEOUT_MS,
     validate: (body) => bankSchema.parse(body),
   });

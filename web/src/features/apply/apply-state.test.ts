@@ -58,6 +58,18 @@ describe("phaseOf and what each phase reads", () => {
     );
     expect(line).not.toMatch(SEPARATOR);
   });
+
+  it.each([
+    ["submit_not_designated", "could not identify the form's Submit button"],
+    [
+      "submit_not_highlighted",
+      "could not show the Submit button for your review",
+    ],
+  ])("explains %s without internal metadata", (needs, sentence) => {
+    expect(statusLine({ ...fakeApplication("needs_person"), needs })).toContain(
+      sentence,
+    );
+  });
 });
 
 describe("the fields", () => {
@@ -84,6 +96,9 @@ describe("the fields", () => {
     ["ok", "yes_no", true],
     ["resume", "file", false],
     ["tags", "multi", false],
+    ["designated:submit", "designated", false],
+    ["designated:strategy", "text", false],
+    ["designation", "designated", false],
     ["skipped:0:upload", "text", false],
     ["skipped:", "text", false],
     ["notskipped", "text", true],

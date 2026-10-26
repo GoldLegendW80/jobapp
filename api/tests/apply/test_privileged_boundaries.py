@@ -104,6 +104,7 @@ def test_all_application_privileged_calls_stay_inside_their_gates():
     assert not [call for call in calls if not permitted(call)]
     assert {call.module for call in calls if call.kind == "click"} == {
         "app.apply.gate",
+        "app.apply.profile_gate",
         "app.browser.tools",
     }
     assert {call.module for call in calls if call.kind == "mail"} == {"app.mail.gate"}
