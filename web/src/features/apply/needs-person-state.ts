@@ -11,7 +11,7 @@ import type { Application, ApplicationEvent } from "./apply-api";
 import { queueKey } from "./queue-api";
 
 /** The steps the person takes in the live view while the assistant waits (api failures.WAIT_ON_PAGE). */
-export const ON_PAGE = new Set(["captcha", "email_code"]);
+export const ON_PAGE = new Set(["captcha", "email_code", "forbidden"]);
 
 export const PAYMENT_SENTENCE =
   "This site asked for a payment. Applications are free; this may not be a genuine posting.";
@@ -37,12 +37,17 @@ export function needOf(application: Application): Need {
     case "captcha":
       return {
         title: "A captcha needs you",
-        what: "Take over in the live view, solve the captcha, then give back. The assistant goes on by itself. If you do not come in time, the application waits here.",
+        what: "Solve the captcha in the live view. The assistant goes on by itself. If you do not come in time, the application waits here.",
       };
     case "email_code":
       return {
         title: "An e-mail code needs you",
-        what: "The site sent you a code by e-mail. Take over in the live view, type it, then give back.",
+        what: "The site sent you a code by e-mail. Type it in the live view. The assistant goes on by itself.",
+      };
+    case "forbidden":
+      return {
+        title: "The site blocked this page",
+        what: "The site refused the page. Open it in the live view to see what it needs from you.",
       };
     case "required_left":
       return {
