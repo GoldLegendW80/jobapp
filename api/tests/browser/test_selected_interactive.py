@@ -71,9 +71,11 @@ async def execute(
     advance=None,
     policy=None,
     pacer=None,
+    sweep_id=None,
+    now=None,
 ):
     tools, leases = tools or Tools(), leases or FakeLeases()
-    now, stored, progress_log = [0.0], [], []
+    now, stored, progress_log = now if now is not None else [0.0], [], []
 
     async def sleep(seconds):
         now[0] += seconds
@@ -91,7 +93,11 @@ async def execute(
     )
     stats = sweep.Stats(sources=sweep.initial_sources(scope))
     plan = SimpleNamespace(
-        sources=sweep.enabled_sources(search), search=search, user_id=user, search_scope=scope
+        sources=sweep.enabled_sources(search),
+        search=search,
+        user_id=user,
+        search_scope=scope,
+        sweep_id=sweep_id,
     )
     runner = sources.Runner(
         leases,

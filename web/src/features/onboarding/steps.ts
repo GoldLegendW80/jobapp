@@ -1,3 +1,4 @@
+import { WIZARD_STEP_WORDS } from "@/lib/wording";
 import {
   CURRENCIES,
   PAY_MAX,
@@ -29,15 +30,7 @@ export const STEP_IDS = [
 ] as const;
 export type StepId = (typeof STEP_IDS)[number];
 
-export const STEP_NAMES: Record<StepId, string> = {
-  profile: "Your profile",
-  looking: "What you are looking for",
-  where: "Where",
-  work: "How you want to work",
-  pay: "Pay",
-  apply: "How the app applies",
-  summary: "Summary",
-};
+export const STEP_NAMES: Record<StepId, string> = WIZARD_STEP_WORDS;
 
 /** Steps that cannot be skipped: the roles, and the summary that ends the wizard. */
 export const ESSENTIAL: ReadonlySet<StepId> = new Set(["looking", "summary"]);

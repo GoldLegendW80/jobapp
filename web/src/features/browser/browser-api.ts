@@ -27,7 +27,11 @@ const leaseSchema = z.object({
 });
 export type Lease = z.infer<typeof leaseSchema>;
 
-/** Input already belongs to the person in their own session or a private Apply page wait. */
+/**
+ * The person already holds the input: their own session, or an Apply fill waiting on the page for
+ * them (api failures.WAIT_ON_PAGE, browserd APPLY_WAITS: a captcha, an e-mail code, a 403 page),
+ * where browserd gives the person the keyboard and the mouse for the wait.
+ */
 export function personOwnsInput(lease: Lease): boolean {
   return (
     !lease.automation ||

@@ -1,11 +1,20 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import {
   EMPTY,
+  getProfile,
   interactiveSettingsSchema,
+  profileKey,
+  type Profile,
   type Search,
 } from "@/features/profile/api";
 import {
@@ -14,10 +23,12 @@ import {
   toSearchForm,
 } from "@/features/profile/editor-forms";
 import { admin, fakeSession } from "@/test/auth";
+import { waitForOnFakeClock } from "@/test/clock";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
-import { fakeProfile } from "@/test/profile";
+import { fakeProfile, profileBody, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { DEFAULT_TIMEOUT_MS } from "@/lib/api";
 
 beforeEach(() => {
   fakeSession(admin);
@@ -37,12 +48,19 @@ async function open(search: Search = structuredClone(EMPTY.search)) {
       );
     }),
   );
-  renderApp("/jobs");
+  const view = renderApp("/jobs");
   await screen.findByRole("table", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
   const dialog = await screen.findByRole("dialog", { name: "Find jobs setup" });
-  return { profile, starts, user, dialog };
+  return {
+    profile,
+    starts,
+    user,
+    dialog,
+    client: view.client,
+    router: view.router,
+  };
 }
 
 it("opens setup before any save or start and closes without saving", async () => {
@@ -384,5 +402,1014 @@ it.each(["linkedin", "freework"] as const)(
     expect(profile.saves[0]!.body.data).toMatchObject({
       browser_sources: [source],
     });
+  },
+);
+
+const PERMISSIONS = [
+  ["linkedin", "LinkedIn"],
+  ["freework", "Free-Work"],
+  ["indeed", "Indeed"],
+  ["welcome_to_the_jungle", "Welcome to the Jungle"],
+] as const;
+type PermissionKind = (typeof PERMISSIONS)[number][0];
+const permissionPath = (kind: PermissionKind) =>
+  kind === "linkedin"
+    ? "*/api/browser/linkedin"
+    : `*/api/opportunities/platforms/${kind}`;
+
+function permissionApi(profile: FakeProfile, initiallyEnabled = false) {
+  const writes: { kind: PermissionKind; body: Record<string, unknown> }[] = [];
+  for (const [kind] of PERMISSIONS) {
+    let enabled = initiallyEnabled;
+    let accepted = initiallyEnabled;
+    const response = () => ({
+      enabled,
+      accepted,
+      allowed: enabled && accepted,
+      text: `Current ${kind} risk sentence.`,
+      text_version: 4,
+      query: "junior engineer",
+      location: null,
+      paused_until: null,
+      needs_signin: false,
+    });
+    server.use(
+      http.get(permissionPath(kind), () => HttpResponse.json(response())),
+      http.put(permissionPath(kind), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        writes.push({ kind, body });
+        if (body.base_revision !== profile.revision)
+          return HttpResponse.json(
+            { detail: "Your profile changed in another tab. Review it." },
+            { status: 409 },
+          );
+        if (typeof body.enabled !== "boolean")
+          return HttpResponse.json(
+            { detail: "Enabled is required." },
+            { status: 422 },
+          );
+        if (
+          (body.accept_version !== undefined && body.accept_version !== 4) ||
+          (body.enabled && !accepted && body.accept_version !== 4)
+        )
+          return HttpResponse.json(
+            { detail: "Review the current risk sentence." },
+            { status: 409 },
+          );
+        const search = profile.sections.search as Search;
+        if (kind === "linkedin" || kind === "freework") {
+          const rows = search.browser_sources ?? [];
+          const existing = rows.find((row) => row.kind === kind);
+          if (body.enabled && !existing && rows.length === 10)
+            return HttpResponse.json(
+              { detail: "Keep at most 10 browser sources." },
+              { status: 422 },
+            );
+          if (body.enabled) {
+            const row = {
+              ...existing,
+              kind,
+              query: String(body.query),
+              location: existing?.location ?? null,
+              enabled: true,
+              interactive_only: body.interactive_only === true,
+            };
+            search.browser_sources = [
+              ...rows.filter((item) => item.kind !== kind),
+              row,
+            ];
+          } else if (existing) existing.enabled = false;
+        } else if (
+          ["query", "location", "interactive_only"].some((key) => key in body)
+        )
+          return HttpResponse.json(
+            { detail: "This platform consent does not accept reader fields." },
+            { status: 422 },
+          );
+        enabled = body.enabled;
+        if (body.accept_version === 4) accepted = true;
+        profile.revision += 1;
+        return HttpResponse.json(response());
+      }),
+    );
+  }
+  return writes;
+}
+
+async function reviewPermission(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  label: string,
+) {
+  await user.click(
+    within(dialog).getByRole("button", { name: "Review website permissions" }),
+  );
+  const card = await within(dialog).findByRole("region", {
+    name: `${label} browser permission`,
+  });
+  await within(card).findByText(new RegExp(`Current .* risk sentence`));
+  return card;
+}
+
+const MAP_PERMISSIONS: (typeof PERMISSIONS)[number][] = PERMISSIONS.filter(
+  ([kind]) => kind === "indeed" || kind === "welcome_to_the_jungle",
+);
+it.each(MAP_PERMISSIONS)(
+  "binds explicit %s Enable and Disable to reviewed revisions",
+  async (kind, label) => {
+    const { profile, starts, user, dialog } = await open();
+    const writes = permissionApi(profile);
+    const card = await reviewPermission(user, dialog, label);
+    expect(writes).toEqual([]);
+    const enable = within(card).getByRole("button", {
+      name: `Enable ${label} browsing`,
+    });
+    expect(enable).toBeDisabled();
+    if (kind === "linkedin" || kind === "freework")
+      await user.type(
+        within(card).getByRole("textbox", { name: `${label} search words` }),
+        "junior engineer",
+      );
+    await user.click(
+      within(card).getByRole("checkbox", {
+        name: `I accept the ${label} risk above`,
+      }),
+    );
+    await user.click(enable);
+    await within(card).findByText("Browsing allowed");
+    expect(writes).toEqual([
+      {
+        kind,
+        body: {
+          enabled: true,
+          base_revision: 6,
+          accept_version: 4,
+          ...(kind === "linkedin" || kind === "freework"
+            ? { query: "junior engineer", interactive_only: true }
+            : {}),
+        },
+      },
+    ]);
+    await user.click(
+      within(card).getByRole("button", { name: `Disable ${label} browsing` }),
+    );
+    await waitFor(() => {
+      expect(writes).toHaveLength(2);
+    });
+    expect(writes[1]).toEqual({
+      kind,
+      body: { enabled: false, base_revision: 7 },
+    });
+    await waitFor(() => {
+      expect(
+        within(dialog).getByRole("button", { name: "Save and Start" }),
+      ).toBeEnabled();
+    });
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save and Start" }),
+    );
+    await waitFor(() => {
+      expect(starts).toEqual([{ profile_revision: 9 }]);
+    });
+    expect(profile.saves[0]!.body.base_revision).toBe(8);
+  },
+);
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((ready) => {
+    resolve = ready;
+  });
+  return { promise, resolve };
+}
+
+async function acceptPermission(
+  user: ReturnType<typeof userEvent.setup>,
+  card: HTMLElement,
+  label: string,
+) {
+  const words = within(card).queryByRole("textbox", {
+    name: `${label} search words`,
+  });
+  if (words) {
+    await user.clear(words);
+    await user.type(words, "junior engineer");
+  }
+  await user.click(
+    within(card).getByRole("checkbox", {
+      name: `I accept the ${label} risk above`,
+    }),
+  );
+  await user.click(
+    within(card).getByRole("button", { name: `Enable ${label} browsing` }),
+  );
+}
+
+function reviewedSearch(): Search {
+  const search = structuredClone(EMPTY.search);
+  search.boards = [
+    {
+      company: "Example Robotics",
+      ats: "lever",
+      org: "example",
+      enabled: true,
+      extra_exclude: { advanced_regex: false, terms: [] },
+    },
+  ];
+  search.feeds = [
+    {
+      kind: "remoteok",
+      enabled: true,
+      terms: { advanced_regex: false, terms: ["engineering"] },
+    },
+  ];
+  search.browser_sources = [
+    {
+      kind: "linkedin",
+      query: "reviewed LinkedIn words",
+      location: "Paris",
+      enabled: false,
+    },
+    {
+      kind: "freework",
+      query: "reviewed Free-Work words",
+      location: "Lyon",
+      enabled: false,
+    },
+    {
+      kind: "site",
+      query: "https://careers.example.org/",
+      location: null,
+      enabled: true,
+    },
+  ];
+  search.interactive_sites = [
+    {
+      platform: "custom",
+      url: "https://careers.example.org/",
+      enabled: true,
+      mode: "llm_browser",
+    },
+  ];
+  search.interactive_instructions = "Reviewed instructions.";
+  return search;
+}
+
+const ORDINARY_EDITS: [string, (search: Search) => void][] = [
+  [
+    "recency",
+    (search) => {
+      search.days = 7;
+    },
+  ],
+  [
+    "schedule",
+    (search) => {
+      search.sweep_schedule.enabled = true;
+    },
+  ],
+  [
+    "board state",
+    (search) => {
+      search.boards[0]!.enabled = false;
+    },
+  ],
+  [
+    "feed terms",
+    (search) => {
+      search.feeds![0]!.terms.terms = ["newer feed terms"];
+    },
+  ],
+  [
+    "interactive instructions",
+    (search) => {
+      search.interactive_instructions = "Newer tab instructions.";
+    },
+  ],
+  [
+    "interactive website",
+    (search) => {
+      search.interactive_sites![0]!.url = "https://newer.example.org/";
+    },
+  ],
+  [
+    "legacy LinkedIn query",
+    (search) => {
+      search.browser_sources![0]!.query = "newer tab words";
+    },
+  ],
+  [
+    "legacy Free-Work location",
+    (search) => {
+      search.browser_sources![1]!.location = "Nantes";
+    },
+  ],
+  [
+    "compensation",
+    (search) => {
+      search.compensation.salary = { min: 40000, max: 50000, currency: "EUR" };
+    },
+  ],
+];
+
+it.each(ORDINARY_EDITS)(
+  "retains the draft when %s changes after consent commits",
+  async (_name, edit) => {
+    const { profile, starts, user, dialog } = await open(reviewedSearch());
+    permissionApi(profile);
+    const card = await reviewPermission(user, dialog, "Indeed");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+    const instructions = within(dialog).getByRole("textbox", {
+      name: "Instructions for this search",
+    });
+    await user.clear(instructions);
+    await user.type(instructions, "Keep my unsaved draft.");
+    const entered = deferred();
+    const release = deferred();
+    server.use(
+      http.get("*/api/profile", async () => {
+        entered.resolve();
+        await release.promise;
+        return HttpResponse.json(profileBody(profile));
+      }),
+    );
+    await acceptPermission(user, card, "Indeed");
+    await entered.promise;
+    expect(profile.revision).toBe(7);
+    edit(profile.sections.search as Search);
+    profile.revision += 1;
+    release.resolve();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "changed",
+    );
+    expect(instructions).toHaveValue("Keep my unsaved draft.");
+    expect(
+      within(dialog).getByRole("spinbutton", {
+        name: "Posted within the last days",
+      }),
+    ).toHaveValue(30);
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Indeed" }),
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("button", { name: "Save and Start" }),
+    ).toBeDisabled();
+    expect(profile.saves).toEqual([]);
+    expect(starts).toEqual([]);
+  },
+);
+
+const confirmedPermission = {
+  enabled: true,
+  accepted: true,
+  allowed: true,
+  text: "Current indeed risk sentence.",
+  text_version: 4,
+};
+
+it.each(["network", "aborted body", "malformed JSON", "malformed shape"])(
+  "blocks Save and Start after an ambiguous %s permission result",
+  async (fault) => {
+    const { profile, starts, user, dialog } = await open();
+    permissionApi(profile);
+    const card = await reviewPermission(user, dialog, "Indeed");
+    await user.type(
+      within(dialog).getByRole("textbox", {
+        name: "Instructions for this search",
+      }),
+      "Retain this draft.",
+    );
+    const writes: unknown[] = [];
+    server.use(
+      http.put(permissionPath("indeed"), async ({ request }) => {
+        writes.push(await request.json());
+        profile.revision = 7; // The request committed before its response was lost or unusable.
+        if (fault === "network") return HttpResponse.error();
+        if (fault === "aborted body")
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(
+                  new DOMException("response body aborted", "AbortError"),
+                );
+              },
+            }),
+          );
+        if (fault === "malformed JSON")
+          return new HttpResponse("{unfinished", {
+            headers: { "Content-Type": "application/json" },
+          });
+        return HttpResponse.json({ enabled: true });
+      }),
+    );
+    await acceptPermission(user, card, "Indeed");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "not confirmed",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Save and Start" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("textbox", {
+        name: "Instructions for this search",
+      }),
+    ).toHaveValue("Retain this draft.");
+    expect(writes).toHaveLength(1);
+    expect(profile.saves).toEqual([]);
+    expect(starts).toEqual([]);
+  },
+);
+
+it("blocks Save and Start after a committed permission request times out", async () => {
+  const { profile, starts, user, dialog } = await open();
+  permissionApi(profile);
+  const card = await reviewPermission(user, dialog, "Indeed");
+  await user.click(
+    within(card).getByRole("checkbox", {
+      name: "I accept the Indeed risk above",
+    }),
+  );
+  const release = deferred();
+  let entered = false;
+  server.use(
+    http.put(permissionPath("indeed"), async () => {
+      profile.revision = 7;
+      entered = true;
+      await release.promise;
+      return HttpResponse.json(confirmedPermission);
+    }),
+  );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Enable Indeed browsing" }),
+    );
+    await waitForOnFakeClock(
+      () => {
+        expect(entered).toBe(true);
+      },
+      1,
+      100,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+    });
+    await waitForOnFakeClock(() => {
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
+        "not confirmed",
+      );
+    });
+    expect(
+      within(dialog).getByRole("button", { name: "Save and Start" }),
+    ).toBeDisabled();
+    expect(profile.saves).toEqual([]);
+    expect(starts).toEqual([]);
+  } finally {
+    release.resolve();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    vi.useRealTimers();
+  }
+});
+
+it("requires reconciliation when PUT succeeds but the final profile GET fails", async () => {
+  const { profile, starts, user, dialog } = await open();
+  permissionApi(profile);
+  const card = await reviewPermission(user, dialog, "Indeed");
+  server.use(
+    http.get("*/api/profile", () =>
+      HttpResponse.json(
+        { detail: "Verification unavailable." },
+        { status: 503 },
+      ),
+    ),
+  );
+  await acceptPermission(user, card, "Indeed");
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "not confirmed",
+  );
+  expect(profile.revision).toBe(7);
+  expect(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  ).toBeDisabled();
+  expect(profile.saves).toEqual([]);
+  expect(starts).toEqual([]);
+});
+
+it.each(["PUT", "final GET"])(
+  "admits one permission action and no Save while %s is held",
+  async (held) => {
+    const { profile, starts, user, dialog } = await open();
+    const writes = permissionApi(profile);
+    const indeed = await reviewPermission(user, dialog, "Indeed");
+    const jungle = within(dialog).getByRole("region", {
+      name: "Welcome to the Jungle browser permission",
+    });
+    await within(jungle).findByText(
+      "Current welcome_to_the_jungle risk sentence.",
+    );
+    for (const [card, label] of [
+      [indeed, "Indeed"],
+      [jungle, "Welcome to the Jungle"],
+    ] as const)
+      await user.click(
+        within(card).getByRole("checkbox", {
+          name: `I accept the ${label} risk above`,
+        }),
+      );
+    const entered = deferred();
+    const release = deferred();
+    if (held === "PUT")
+      server.use(
+        http.put(permissionPath("indeed"), async ({ request }) => {
+          writes.push({
+            kind: "indeed",
+            body: (await request.json()) as Record<string, unknown>,
+          });
+          entered.resolve();
+          await release.promise;
+          profile.revision += 1;
+          return HttpResponse.json(confirmedPermission);
+        }),
+      );
+    else
+      server.use(
+        http.get("*/api/profile", async () => {
+          entered.resolve();
+          await release.promise;
+          return HttpResponse.json(profileBody(profile));
+        }),
+      );
+    const save = within(dialog).getByRole("button", { name: "Save and Start" });
+    try {
+      act(() => {
+        within(indeed)
+          .getByRole("button", { name: "Enable Indeed browsing" })
+          .click();
+        within(jungle)
+          .getByRole("button", {
+            name: "Enable Welcome to the Jungle browsing",
+          })
+          .click();
+        save.click();
+      });
+      await entered.promise;
+      expect(save).toHaveTextContent("Save and Start");
+      expect(writes).toHaveLength(1);
+      expect(profile.saves).toEqual([]);
+      expect(starts).toEqual([]);
+      expect(save).toBeDisabled();
+    } finally {
+      release.resolve();
+    }
+  },
+);
+
+const OFF_PLATFORMS: PermissionKind[] = ["indeed"];
+it.each(OFF_PLATFORMS)(
+  "keeps a newer %s Off decision over an older Enable response",
+  async (kind) => {
+    const { profile, starts, user, dialog } = await open();
+    permissionApi(profile);
+    const label = kind === "linkedin" ? "LinkedIn" : "Indeed";
+    const card = await reviewPermission(user, dialog, label);
+    const entered = deferred();
+    const release = deferred();
+    server.use(
+      http.put(permissionPath(kind), async () => {
+        if (kind === "linkedin")
+          (profile.sections.search as Search).browser_sources = [
+            {
+              kind,
+              query: "junior engineer",
+              location: null,
+              enabled: true,
+              interactive_only: true,
+            },
+          ];
+        else
+          Object.assign(profile.sections.search!, {
+            platform_consents: {
+              indeed: {
+                enabled: true,
+                accepted_at: "2026-10-24T10:00:00Z",
+                text_version: 4,
+              },
+            },
+          });
+        profile.revision = 7;
+        entered.resolve();
+        await release.promise;
+        return HttpResponse.json({
+          ...confirmedPermission,
+          text: `Current ${kind} risk sentence.`,
+        });
+      }),
+    );
+    await acceptPermission(user, card, label);
+    await entered.promise;
+    if (kind === "linkedin")
+      (profile.sections.search as Search).browser_sources![0]!.enabled = false;
+    else
+      Object.assign(profile.sections.search!, {
+        platform_consents: {
+          indeed: {
+            enabled: false,
+            accepted_at: "2026-10-24T10:00:00Z",
+            text_version: 4,
+          },
+        },
+      });
+    profile.revision = 8;
+    server.use(
+      http.get(permissionPath(kind), () =>
+        HttpResponse.json({
+          ...confirmedPermission,
+          enabled: false,
+          accepted: true,
+          allowed: false,
+          text: `Current ${kind} risk sentence.`,
+        }),
+      ),
+    );
+    release.resolve();
+    await waitFor(() => {
+      expect(
+        within(dialog).getByRole("button", { name: "Save and Start" }),
+      ).toBeEnabled();
+    });
+    expect(
+      within(card).queryByText("Browsing allowed"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).queryByRole("button", { name: `Disable ${label} browsing` }),
+    ).not.toBeInTheDocument();
+    expect(profile.revision).toBe(8);
+    expect(profile.saves).toEqual([]);
+    expect(starts).toEqual([]);
+  },
+);
+
+it.each([false, true])(
+  "does not replace a newer profile with an old verification response, reopen=%s",
+  async (reopen) => {
+    const { profile, starts, user, dialog, client, router } = await open();
+    permissionApi(profile);
+    const card = await reviewPermission(user, dialog, "Indeed");
+    if (!reopen)
+      await user.type(
+        within(dialog).getByRole("textbox", {
+          name: "Instructions for this search",
+        }),
+        "Newer mounted draft.",
+      );
+    const entered = deferred();
+    const release = deferred();
+    server.use(
+      http.get(
+        "*/api/profile",
+        async () => {
+          const old = structuredClone(profileBody(profile));
+          entered.resolve();
+          await release.promise;
+          return HttpResponse.json(old);
+        },
+        { once: true },
+      ),
+    );
+    await acceptPermission(user, card, "Indeed");
+    await entered.promise;
+    (profile.sections.search as Search).days = 7;
+    profile.revision = 8;
+    if (reopen) {
+      await act(async () => {
+        await router.navigate("/privacy");
+      });
+      await act(async () => {
+        await router.navigate("/jobs");
+      });
+      await screen.findByRole("table", { name: "Postings" });
+      await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    }
+    const fresh = await getProfile();
+    act(() => {
+      client.setQueryData(profileKey, fresh);
+    });
+    const active = screen.getByRole("dialog", { name: "Find jobs setup" });
+    if (reopen)
+      await user.type(
+        within(active).getByRole("textbox", {
+          name: "Instructions for this search",
+        }),
+        "Newer mounted draft.",
+      );
+    release.resolve();
+    await waitFor(() => {
+      expect(
+        within(active).getByRole("textbox", {
+          name: "Instructions for this search",
+        }),
+      ).toBeEnabled();
+    });
+    expect(client.getQueryData<Profile>(profileKey)!.revision).toBe(8);
+    expect(
+      within(active).getByRole("textbox", {
+        name: "Instructions for this search",
+      }),
+    ).toHaveValue("Newer mounted draft.");
+    expect(profile.saves).toEqual([]);
+    expect(starts).toEqual([]);
+  },
+);
+
+it("requires a new explicit checkbox action when the current disclosure changes", async () => {
+  const { profile, user, dialog, client } = await open();
+  const writes = permissionApi(profile);
+  const card = await reviewPermission(user, dialog, "Indeed");
+  const acceptance = within(card).getByRole("checkbox", {
+    name: "I accept the Indeed risk above",
+  });
+  await user.click(acceptance);
+  expect(acceptance).toBeChecked();
+  server.use(
+    http.get(permissionPath("indeed"), () =>
+      HttpResponse.json({
+        ...confirmedPermission,
+        enabled: false,
+        accepted: false,
+        allowed: false,
+        text: "New current risk sentence.",
+        text_version: 5,
+      }),
+    ),
+  );
+  await act(async () => {
+    await client.invalidateQueries({
+      queryKey: ["search-permission", "indeed"],
+    });
+  });
+  expect(
+    await within(card).findByText("New current risk sentence."),
+  ).toBeVisible();
+  expect(acceptance).not.toBeChecked();
+  expect(
+    within(card).getByRole("button", { name: "Enable Indeed browsing" }),
+  ).toBeDisabled();
+  expect(writes).toEqual([]);
+});
+
+const FINAL_PERMISSION_UPDATES = [
+  "newer Off and profile",
+  "permission-only Off",
+  "equal Off on a frozen clock",
+  "unrelated profile edit",
+  "newer Enabled after Disable",
+  "recreated permission cache",
+  "recreated profile cache",
+  "unmount",
+  "unchanged",
+] as const;
+
+it.each(
+  MAP_PERMISSIONS.flatMap(([kind, label]) =>
+    FINAL_PERMISSION_UPDATES.map((update) => ({ kind, label, update })),
+  ),
+)(
+  "guards final $kind permission GET after $update",
+  async ({ kind, label, update }) => {
+    const { profile, starts, user, dialog, client, router } = await open();
+    const disabling = update === "newer Enabled after Disable";
+    const writes = permissionApi(profile, disabling);
+    const card = await reviewPermission(user, dialog, label);
+    const key = ["search-permission", kind];
+    const initial = client.getQueryData<typeof confirmedPermission>(key)!;
+    const instructions = within(dialog).getByRole("textbox", {
+      name: "Instructions for this search",
+    });
+    await user.type(instructions, "Keep this final GET draft.");
+    await user.click(within(dialog).getByRole("checkbox", { name: label }));
+    const entered = deferred();
+    const release = deferred();
+    const consumed = deferred();
+    const snapshot = {
+      ...confirmedPermission,
+      enabled: !disabling,
+      allowed: !disabling,
+      text: `Current ${kind} risk sentence.`,
+    };
+    server.use(
+      http.get(
+        permissionPath(kind),
+        async () => {
+          entered.resolve();
+          await release.promise;
+          return HttpResponse.json(snapshot);
+        },
+        { once: true },
+      ),
+    );
+    const fetch = globalThis.fetch;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (...args) => {
+        const response = await fetch(...args);
+        if (
+          typeof args[0] === "string" &&
+          args[0].endsWith(`/opportunities/platforms/${kind}`) &&
+          args[1]?.method === "GET"
+        ) {
+          const text = response.text.bind(response);
+          response.text = async () => {
+            try {
+              return await text();
+            } finally {
+              consumed.resolve();
+            }
+          };
+        }
+        return response;
+      });
+    let frozen: { mockRestore: () => void } | undefined;
+    let active = dialog;
+    let expected = initial;
+    try {
+      if (disabling)
+        await user.click(
+          within(card).getByRole("button", {
+            name: `Disable ${label} browsing`,
+          }),
+        );
+      else await acceptPermission(user, card, label);
+      await entered.promise;
+      expect(profile.revision).toBe(7);
+      expect(
+        within(dialog).getByRole("button", { name: "Save and Start" }),
+      ).toBeDisabled();
+      expect(instructions).toBeDisabled();
+      expect(writes).toEqual([
+        {
+          kind,
+          body: disabling
+            ? { enabled: false, base_revision: 6 }
+            : { enabled: true, base_revision: 6, accept_version: 4 },
+        },
+      ]);
+      if (
+        ["newer Off and profile", "permission-only Off", "unmount"].includes(
+          update,
+        )
+      ) {
+        expected = {
+          ...initial,
+          enabled: false,
+          accepted: true,
+          allowed: false,
+        };
+        act(() => {
+          client.setQueryData(key, expected);
+        });
+      }
+      if (
+        ["newer Off and profile", "unrelated profile edit", "unmount"].includes(
+          update,
+        )
+      ) {
+        profile.revision = 8;
+        if (update === "unrelated profile edit")
+          profile.sections.identity = {
+            ...EMPTY.identity,
+            headline: "Newer profile headline",
+          };
+        const newer = await getProfile();
+        act(() => {
+          client.setQueryData(profileKey, newer);
+        });
+      }
+      if (update === "equal Off on a frozen clock") {
+        const before = client.getQueryState(key)!;
+        frozen = vi.spyOn(Date, "now").mockReturnValue(before.dataUpdatedAt);
+        act(() => {
+          client.setQueryData(key, structuredClone(initial));
+        });
+        expect(client.getQueryData(key)).toBe(before.data);
+        expect(client.getQueryState(key)!.dataUpdatedAt).toBe(
+          before.dataUpdatedAt,
+        );
+        expect(client.getQueryState(key)!.dataUpdateCount).toBe(
+          before.dataUpdateCount + 1,
+        );
+      }
+      if (disabling)
+        act(() => {
+          client.setQueryData(key, structuredClone(initial));
+        });
+      if (
+        update === "recreated permission cache" ||
+        update === "recreated profile cache"
+      ) {
+        const changedKey =
+          update === "recreated profile cache" ? profileKey : key;
+        const before = client.getQueryState(changedKey)!;
+        act(() => {
+          client.removeQueries({ queryKey: changedKey, exact: true });
+          for (let count = 0; count < before.dataUpdateCount; count += 1)
+            client.setQueryData(changedKey, before.data, {
+              updatedAt: before.dataUpdatedAt,
+            });
+        });
+        expect(client.getQueryState(changedKey)!.dataUpdateCount).toBe(
+          before.dataUpdateCount,
+        );
+        expect(client.getQueryState(changedKey)!.dataUpdatedAt).toBe(
+          before.dataUpdatedAt,
+        );
+        expect(client.getQueryData(changedKey)).toBe(before.data);
+      }
+      if (update === "unmount") {
+        await act(async () => {
+          await router.navigate("/privacy");
+        });
+        await act(async () => {
+          await router.navigate("/jobs");
+        });
+        await screen.findByRole("table", { name: "Postings" });
+        await user.click(screen.getByRole("button", { name: "Find jobs" }));
+        active = await screen.findByRole("dialog", { name: "Find jobs setup" });
+        await user.type(
+          within(active).getByRole("textbox", {
+            name: "Instructions for this search",
+          }),
+          "New mounted draft.",
+        );
+      }
+      const currentProfile = client.getQueryData<Profile>(profileKey)!;
+      await act(async () => {
+        release.resolve();
+        await consumed.promise;
+      });
+      expect(client.getQueryData<Profile>(profileKey)).toBe(currentProfile);
+      expect(client.getQueryData(key)).toEqual(
+        update === "unchanged" ? snapshot : expected,
+      );
+      expect(writes).toHaveLength(1);
+      expect(profile.saves).toEqual([]);
+      expect(starts).toEqual([]);
+      const draft = within(active).getByRole("textbox", {
+        name: "Instructions for this search",
+      });
+      expect(draft).toHaveValue(
+        update === "unmount"
+          ? "New mounted draft."
+          : "Keep this final GET draft.",
+      );
+      expect(draft).toBeEnabled();
+      if (update !== "unmount")
+        expect(
+          within(dialog).getByRole("checkbox", { name: label }),
+        ).toBeChecked();
+      if (update === "unchanged") {
+        expect(within(card).getByText("Browsing allowed")).toBeVisible();
+        await user.click(
+          within(dialog).getByRole("button", { name: "Save and Start" }),
+        );
+        await waitFor(() => {
+          expect(starts).toEqual([{ profile_revision: 8 }]);
+        });
+        expect(profile.saves[0]!.body.base_revision).toBe(7);
+        expect(writes).toHaveLength(1);
+      } else if (update !== "unmount") {
+        expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+          "browser permission changed",
+        );
+        expect(
+          within(dialog).getByRole("button", { name: "Save and Start" }),
+        ).toBeDisabled();
+        expect(
+          within(dialog).getByRole("button", { name: "Load current settings" }),
+        ).toBeEnabled();
+        if (update === "unrelated profile edit")
+          expect(
+            client.getQueryData<Profile>(profileKey)!.sections.identity
+              .headline,
+          ).toBe("Newer profile headline");
+        if (disabling)
+          expect(within(card).getByText("Browsing allowed")).toBeVisible();
+        else
+          expect(
+            within(card).queryByText("Browsing allowed"),
+          ).not.toBeInTheDocument();
+      } else {
+        expect(
+          within(active).getByRole("button", { name: "Save and Start" }),
+        ).toBeEnabled();
+        expect(within(active).queryByRole("alert")).not.toBeInTheDocument();
+        expect(client.getQueryData<Profile>(profileKey)!.revision).toBe(8);
+      }
+    } finally {
+      release.resolve();
+      fetchSpy.mockRestore();
+      frozen?.mockRestore();
+    }
   },
 );

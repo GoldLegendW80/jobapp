@@ -1,7 +1,8 @@
 """Selected native search sites. J11 supplies truthful incremental finding persistence.
 
 Until then, verified detail findings are counted as partial, never sent to the legacy
-company/date store. Protected platforms require the separate current-permission foundation.
+company/date store. Protected platforms need the person's current permission, checked by the
+runner's InteractivePolicy (app/browser/platform_policy.py, browser B14).
 """
 
 from __future__ import annotations
@@ -196,19 +197,26 @@ async def _one(
     entry: dict[str, Any],
     deadline: float,
 ) -> str | None:
+    from app.browser import platform_policy
+
+    platform = source.effective_platform
+    if platform == "custom":
+        platform = platform_policy.platform_of(source.url)  # indeed.fr saved as custom
+    # Tests only: a protected platform opens the fixture server, never the real host (B14).
+    start = platform_policy.test_start(runner.base_url, platform, source.url)
     context = SourceContext(
         str(plan.user_id),
         str(plan.sweep_id) if getattr(plan, "sweep_id", None) else None,
         sweep._source_id("llm_browser", source.url),
-        source.effective_platform,
-        source.url,
+        platform,
+        start,
     )
     try:
         await _permit(runner.interactive_policy, context)
     except SourceError as exc:
         return exc.code
     try:
-        scope = scope_for(search, source.url)
+        scope = scope_for(search, start)
     except ValueError:
         return "unsupported_criteria"
     if runner.finder is None or not await runner.finder.available(str(plan.user_id)):
@@ -222,6 +230,7 @@ async def _one(
         await runner._give_back(str(plan.user_id), None if got.lease is None else "")
         return "browser_busy"
     lease_id = got.lease.lease_id
+    paced = platform_policy.platform_for(context)
     try:
         pages = Pages(
             GuardedTools(
@@ -233,9 +242,11 @@ async def _one(
             sleep=runner.sleep,
             rng=runner.rng,
             monotonic=runner.monotonic,
-            host=host,
+            # One pace per platform, shared by all its addresses (B14), else per host.
+            host=platform_policy.pace_key(paced, host, runner.base_url),
             pacer=runner.pacer,
             lease_until=asked + min(got.lease.max_s, 900),
+            pause=platform_policy.pause_for(paced),
         )
         return await _search(runner.finder, pages, scope, str(plan.user_id), entry)
     finally:

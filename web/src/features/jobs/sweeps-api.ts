@@ -30,6 +30,8 @@ export const sweepSourceSchema = z.object({
   kind: z.string(),
   query: z.string(),
   location: z.string().nullable(),
+  // The website's host, for a website searched in the person's browser (jobs J10).
+  host: z.string().nullable().optional(),
   result_pages: z.number().int().nonnegative(),
   found: z.number().int().nonnegative(),
   new: z.number().int().nonnegative(),

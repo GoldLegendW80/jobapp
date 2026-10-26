@@ -54,6 +54,26 @@ class Tools:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._tools, name)
 
+    async def recover_signin(self) -> str:
+        """A known site's form navigation met a redirect outside the automated host list (A15
+        wizards). Hands off only on the restored original host: browserd keeps its allow list,
+        the person follows the single sign on in their own session and code reopens the exact
+        job afterwards. '' once signed in, else `signin` (the caller's pending step)."""
+        shot = await self._tools.snapshot()
+        if not shot.get("ok") or urlsplit(str(shot.get("url") or "")).hostname != self.host:
+            return "signin"
+        if self.attempts >= 3:
+            return "signin"
+        self.attempts += 1
+        if self.request is None and not hasattr(self._tools, "ask_signin"):
+            self.outcome = Outcome("nobody_watching")
+        else:
+            self.outcome = await (self.request or request_signin)(
+                self._tools, self.host, "This application needs you to sign in."
+            )
+        self.blocked = None
+        return "" if self.outcome.code == "signed_in" else "signin"
+
     async def snapshot(self) -> dict[str, Any]:
         if self.blocked is not None:
             return await self._again(self.blocked)

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Example Robotics jobs</title></head>
+<body>
+<!-- Jobs J15: the start page of an invented job website (web/e2e/browser-j15.spec.ts), reached as
+http://jobs.example-robotics.test:8080/j15/ through the pages service's alias. It lists nothing:
+a posting appears only after the search words (engineer) are typed, the location chosen, Search pressed and
+the second page of results opened (server.py, /j15/search). -->
+<main>
+  <h1>Jobs at Example Robotics</h1>
+  <form method="get" action="/j15/search">
+    <input type="search" name="q" aria-label="Keywords">
+    <select name="location" aria-label="Location">
+      <option value="">Anywhere</option>
+      <option value="Paris">Paris</option>
+      <option value="Lyon">Lyon</option>
+    </select>
+    <button type="submit">Search</button>
+  </form>
+</main>
+</body>
+</html>

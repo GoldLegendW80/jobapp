@@ -272,6 +272,30 @@ async def test_wait_survival_uses_the_exact_owned_lease():
     assert not await signin.waiting(Leases(), str(uuid.uuid4()), "other")
 
 
+@pytest.mark.parametrize(
+    ("state", "reason", "handoff"),
+    [
+        ("waiting_person", "signin", True),
+        ("waiting_person", "forbidden", False),
+        ("waiting_person", "takeover", False),
+        ("waiting_person", "captcha", False),
+        ("waiting_person", "email_code", False),
+        ("waiting_person", "", False),
+        ("active", "signin", False),
+    ],
+)
+def test_only_a_sign_in_wait_is_a_sign_in_handoff(state, reason, handoff):
+    """#688's review: a lease waiting for the person on a 403 page or a takeover is no sign in
+    hand off (released, never bound); only `waiting_person` on `signin` is."""
+    lease = SimpleNamespace(lease_id="mine", state=state, wait_reason=reason)
+
+    class Leases:
+        async def current(self, user):
+            return SimpleNamespace(lease=lease)
+
+    assert asyncio.run(signin.waiting(Leases(), str(uuid.uuid4()), "mine")) is handoff
+
+
 @run_async
 @pytest.mark.parametrize(
     ("status", "state", "needs"),

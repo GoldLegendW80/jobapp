@@ -122,7 +122,7 @@ test.afterAll(async () => {
 test("A switches on We Work Remotely, saves, and it is still on after a reload", async () => {
   const card = await sourcesCard(pageA);
   await expect(
-    card.getByText("No freelance source is swept.", { exact: false }),
+    card.getByText("No freelance source is read.", { exact: false }),
   ).toBeVisible();
   const wwr = card.getByRole("switch", { name: "Read We Work Remotely" });
   await expect(wwr).not.toBeChecked();
