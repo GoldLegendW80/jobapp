@@ -126,6 +126,14 @@ function FieldRow({
   const [editing, setEditing] = useState(false);
   const text = valueText(answer.value);
   const typing = editable && typed && (open || editing);
+  const reason = open
+    ? {
+        letter_too_long:
+          "The letter has more than 10000 characters, so the assistant left this box empty. Shorten it here or answer on the site.",
+        letter_control_character:
+          "The letter contains a tab, carriage return or another control character the browser cannot type, so the assistant left this box empty. Correct it here or answer on the site.",
+      }[answer.left_reason ?? ""]
+    : undefined;
   return (
     <li
       data-left={open ? "true" : undefined}
@@ -141,6 +149,11 @@ function FieldRow({
           <span className="text-muted-foreground"> (required)</span>
         ) : null}
       </span>
+      {reason ? (
+        <p className="text-amber-950 dark:text-amber-100 sm:col-span-3">
+          {reason}
+        </p>
+      ) : null}
       {typing ? (
         <AnswerEditor
           key={`${answer.source}:${text}`}

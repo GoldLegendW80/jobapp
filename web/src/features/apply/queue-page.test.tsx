@@ -176,6 +176,12 @@ describe("the review queue page", () => {
       "The answers of this application can no longer be changed.",
     ],
     [422, "wrong_type", "This answer does not fit the question."],
+    [409, "stale", "This answer changed on another page."],
+    [
+      422,
+      "email_subject",
+      "Use an email subject of at most 998 characters on one line.",
+    ],
   ] as const)(
     "keeps an unsaved answer and explains a %s refusal",
     async (status, code, detail) => {

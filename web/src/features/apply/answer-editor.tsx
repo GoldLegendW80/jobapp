@@ -1,5 +1,5 @@
 import { LoaderCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,9 @@ export function AnswerEditor({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const kind = editorKind(answer);
+  const maxChars = answer.max_chars ?? MAX_CHARS;
+  const documentLetter = maxChars === 10000;
+  const helpId = useId();
   const saved = valueText(answer.value);
   const [draft, setDraft] = useState(saved);
   const dirty = kind !== "yes_no" && kind !== "select" && draft !== saved;
@@ -79,25 +82,60 @@ export function AnswerEditor({
       </NativeSelect>
     );
   }
-  const Box = kind === "long" ? Textarea : Input;
+  const Box = kind === "long" || documentLetter ? Textarea : Input;
+  const hasControl =
+    documentLetter && /\p{Cc}/u.test(draft.replaceAll("\n", ""));
+  const tooLong = draft.length > maxChars;
   return (
     <div className="flex flex-col gap-2">
       <Box
         aria-label={name}
+        aria-describedby={helpId}
+        aria-invalid={hasControl || tooLong}
         value={draft}
-        maxLength={MAX_CHARS}
+        maxLength={maxChars}
         disabled={saving}
         onChange={(event) => {
           setDraft(event.target.value);
         }}
+        onPaste={(event) => {
+          if (!documentLetter) return;
+          event.preventDefault();
+          const box = event.currentTarget;
+          // Keep the whole paste so an oversized letter gets a visible error, not a cut value.
+          setDraft(
+            draft.slice(0, box.selectionStart ?? 0) +
+              event.clipboardData.getData("text") +
+              draft.slice(box.selectionEnd ?? 0),
+          );
+        }}
       />
+      <p id={helpId} className="text-xs text-muted-foreground">
+        {draft.length} / {maxChars} characters
+        {documentLetter
+          ? ". Letter text keeps its spacing and line breaks. Some symbols count as two characters."
+          : null}
+      </p>
+      {hasControl ? (
+        <p role="alert">
+          Remove tabs, carriage returns and other control characters before
+          saving the letter.
+        </p>
+      ) : null}
+      {tooLong ? (
+        <p role="alert">
+          Shorten this answer to {maxChars} characters before saving.
+        </p>
+      ) : null}
       <Button
         type="button"
         size="sm"
         className="w-full sm:w-fit"
-        disabled={saving || !dirty || draft.trim() === ""}
+        disabled={
+          saving || !dirty || draft.trim() === "" || hasControl || tooLong
+        }
         onClick={() => {
-          void onSave(draft.trim());
+          void onSave(documentLetter ? draft : draft.trim());
         }}
       >
         {saving ? (
