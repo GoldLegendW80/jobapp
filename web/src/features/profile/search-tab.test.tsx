@@ -771,6 +771,257 @@ describe("search tab: add company with the board check", () => {
 });
 
 describe("search tab: job sites in your browser (browser B8)", () => {
+  const protectedSource = {
+    kind: "freework" as const,
+    query: "Robotics Engineer",
+    location: "Nantes",
+    enabled: false,
+  };
+  const ordinarySource = {
+    kind: "vie" as const,
+    query: "first",
+    location: null,
+    enabled: true,
+  };
+  const browserRows = () =>
+    within(
+      screen.getByRole("list", { name: "Job sites in your browser" }),
+    ).getAllByRole("listitem");
+
+  it("saves an unrelated field with only a hidden Free-Work row and no consent write", async () => {
+    const initial = haraldLike();
+    const { user, state } = await openSearch({
+      ...initial,
+      search: { ...initial.search, browser_sources: [protectedSource] },
+    });
+    expect(
+      screen.queryByRole("list", { name: "Job sites in your browser" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("No site yet.")).toBeVisible();
+    const writes: { method: string; path: string }[] = [];
+    const recordWrite = ({ request }: { request: Request }) => {
+      if (!["GET", "HEAD"].includes(request.method))
+        writes.push({
+          method: request.method,
+          path: new URL(request.url).pathname,
+        });
+    };
+    server.events.on("request:start", recordWrite);
+    try {
+      await user.clear(screen.getByLabelText("Posting age window (days)"));
+      await user.type(screen.getByLabelText("Posting age window (days)"), "14");
+      await user.click(save());
+      await screen.findByText("Search saved.");
+      expect(saved(state).browser_sources).toEqual([protectedSource]);
+      expect(saved(state).days).toBe(14);
+      expect(writes).toEqual([{ method: "PUT", path: "/api/profile/search" }]);
+    } finally {
+      server.events.removeListener("request:start", recordWrite);
+    }
+  });
+
+  it.each([0, 1, 2])(
+    "edits and removes visible rows using stored indexes with a hidden row at %i",
+    async (hiddenIndex) => {
+      const initial = haraldLike();
+      const last = { ...ordinarySource, query: "last" };
+      const sources: NonNullable<Search["browser_sources"]> = [
+        ordinarySource,
+        last,
+      ];
+      sources.splice(hiddenIndex, 0, protectedSource);
+      const { user, state } = await openSearch({
+        ...initial,
+        search: { ...initial.search, browser_sources: sources },
+      });
+      expect(browserRows()).toHaveLength(2);
+      expect(screen.queryByDisplayValue(protectedSource.query)).toBeNull();
+      for (const row of browserRows()) {
+        const kind = within(row).getByRole("combobox");
+        expect(
+          within(kind)
+            .getAllByRole("option")
+            .map((option) => option.getAttribute("value")),
+        ).toEqual(["google_careers", "vie", "site", "linkedin"]);
+      }
+      await user.clear(screen.getByLabelText("Search words of site 2"));
+      await user.type(
+        screen.getByLabelText("Search words of site 2"),
+        "edited",
+      );
+      await user.type(
+        screen.getByLabelText("Location (optional) of site 2"),
+        "Paris",
+      );
+      await user.click(screen.getByRole("switch", { name: "Read site 2" }));
+      await user.click(screen.getByRole("button", { name: "Remove site 1" }));
+      await user.click(save());
+      await screen.findByText("Search saved.");
+      const expected = [...sources];
+      expected[sources.indexOf(last)] = {
+        ...last,
+        query: "edited",
+        location: "Paris",
+        enabled: false,
+      };
+      expected.splice(sources.indexOf(ordinarySource), 1);
+      expect(saved(state).browser_sources).toEqual(expected);
+    },
+  );
+
+  it("moves visible rows across a hidden row, then replaces the visible rows", async () => {
+    const initial = haraldLike();
+    const last = { ...ordinarySource, query: "last" };
+    const { user, state } = await openSearch({
+      ...initial,
+      search: {
+        ...initial.search,
+        browser_sources: [ordinarySource, protectedSource, last],
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Move site 2 up" }));
+    expect(screen.getByLabelText("Search words of site 1")).toHaveValue("last");
+    await user.click(screen.getByRole("button", { name: "Move site 1 down" }));
+    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
+      "first",
+    );
+    await user.click(screen.getByRole("button", { name: "Move site 2 up" }));
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).browser_sources).toEqual([
+      last,
+      ordinarySource,
+      protectedSource,
+    ]);
+    await user.click(screen.getByRole("button", { name: "Remove site 2" }));
+    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
+    expect(screen.getByText("No site yet.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add site" }));
+    await user.type(
+      screen.getByLabelText("Search words of site 1"),
+      "replacement",
+    );
+    await user.click(save());
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(2);
+    });
+    expect(saved(state, 1).browser_sources).toEqual([
+      protectedSource,
+      {
+        kind: "google_careers",
+        query: "replacement",
+        location: null,
+        enabled: true,
+      },
+    ]);
+  });
+
+  it("counts hidden rows at ten, releases one slot on removal, and caps replacement", async () => {
+    const initial = haraldLike();
+    const visible = Array.from({ length: 9 }, (_, n) => ({
+      ...ordinarySource,
+      query: `words ${n}`,
+    }));
+    const { user, state } = await openSearch({
+      ...initial,
+      search: {
+        ...initial.search,
+        browser_sources: [protectedSource, ...visible],
+      },
+    });
+    expect(browserRows()).toHaveLength(9);
+    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
+    expect(screen.getByText("At most 10 sites.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
+    expect(screen.getByRole("button", { name: "Add site" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Add site" }));
+    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
+    await user.type(
+      screen.getByLabelText("Search words of site 9"),
+      "replacement",
+    );
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).browser_sources).toEqual([
+      protectedSource,
+      ...visible.slice(1),
+      {
+        kind: "google_careers",
+        query: "replacement",
+        location: null,
+        enabled: true,
+      },
+    ]);
+  });
+
+  it("reloads a newer hidden Off decision before replacing visible rows and preserves it after remount", async () => {
+    const initial = haraldLike();
+    const { user, state, unmount } = await openSearch({
+      ...initial,
+      search: {
+        ...initial.search,
+        browser_sources: [
+          { ...protectedSource, enabled: true },
+          ordinarySource,
+        ],
+      },
+    });
+    await user.type(screen.getByLabelText("Search words of site 1"), " draft");
+    const newerOff = {
+      ...protectedSource,
+      query: "new query",
+      location: "Lyon",
+    };
+    state.sections.search = {
+      ...initial.search,
+      browser_sources: [newerOff, ordinarySource],
+    };
+    state.revision = 12;
+    await user.click(save());
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "This section changed elsewhere",
+    });
+    await user.click(
+      within(dialog).getByRole("button", { name: "Reload (discard mine)" }),
+    );
+    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
+      "first",
+    );
+    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
+    await user.click(screen.getByRole("button", { name: "Add site" }));
+    await user.type(
+      screen.getByLabelText("Search words of site 1"),
+      "replacement",
+    );
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    const expected = [
+      newerOff,
+      {
+        kind: "google_careers",
+        query: "replacement",
+        location: null,
+        enabled: true,
+      },
+    ];
+    expect(saved(state, 1).browser_sources).toEqual(expected);
+    expect(state.saves.map((s) => s.body.base_revision)).toEqual([6, 12]);
+    unmount();
+    renderApp("/profile?tab=search");
+    await screen.findByRole("form", { name: "Search" });
+    expect(browserRows()).toHaveLength(1);
+    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
+      "replacement",
+    );
+    await user.clear(screen.getByLabelText("Posting age window (days)"));
+    await user.type(screen.getByLabelText("Posting age window (days)"), "14");
+    await user.click(save());
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(3);
+    });
+    expect(saved(state, 2).browser_sources).toEqual(expected);
+  });
+
   it("adds, edits, turns off and removes a site, and saves them", async () => {
     const { user, state } = await openSearch();
     const card = () =>

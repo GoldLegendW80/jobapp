@@ -66,7 +66,7 @@ def rows(factory: sessionmaker[Session], person: Person) -> dict[str, Job]:
 
 
 def entries(done: Any) -> dict[str, dict[str, Any]]:
-    return {entry["kind"]: entry for entry in done.stats["sources"]}
+    return {entry["kind"]: entry for entry in done.stats["sources"] if entry.get("mode") != "api"}
 
 
 # --- the parsers -------------------------------------------------------------------------------
@@ -778,7 +778,8 @@ def test_b_feeds_are_never_swept_for_a(
     set_profile(factory, person_a.user_id, feeds_search(boards=[board("fake-ok")]))
     set_profile(factory, person_b.user_id, feeds_search(feed("remoteok")))
     done = sweep_feeds(factory, person_a, fake_ats, runner(feeds_stub))
-    assert done.stats["sources"] == []
+    assert entries(done) == {}
+    assert [entry["mode"] for entry in done.stats["sources"]] == ["api"]
     assert requests_to(feeds_stub, "remoteok") == 0
     sweep_feeds(factory, person_b, fake_ats, runner(feeds_stub))
     assert {job.source for job in jobs_of(factory, person_a.user_id)} == {"ashby:fake-ok"}
