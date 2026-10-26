@@ -189,9 +189,10 @@ def test_confirmation_rolls_all_records_back_on_transition_failure(
         raise RuntimeError("synthetic status failure")
 
     monkeypatch.setattr(jobs_service, "set_status", fail)
-    # The fixed 500 of app.main, answered by its outermost middleware (issue #670).
+    # The app's one answer to an error no route answered (#679): a 500 without the trace.
     response = confirm(api, api.login_token(person_a.email), app_id, send_id, entry)
     assert response.status_code == 500
+    assert "synthetic status failure" not in response.text
     assert snapshot(db, app_id, send_id, draft_id) == first
     assert len(fake.sent) == 1
 

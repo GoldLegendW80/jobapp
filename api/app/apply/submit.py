@@ -93,6 +93,7 @@ from app.apply import caps, fallback, full_auto, gate, guardrails, model_check, 
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
+from app.apply.ats.linkedin import LinkedIn
 from app.apply.models import Application, Authorisation, Mode, ShotKind, State
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
@@ -206,7 +207,9 @@ def _stop(
     click_refused: bool = False,
 ) -> None:
     states.move(application, stop.state, now, click_refused=click_refused)
-    application.error_code = stop.code if stop.state is not State.needs_person else None
+    # LinkedIn's checkpoint pause keeps its code: the person sees why the item waits (A16).
+    keep = stop.state is not State.needs_person or stop.code == "linkedin_paused"
+    application.error_code = stop.code if keep else None
     application.needs = stop.needs
     gate._event(db, application, "submit_stopped", now, state=stop.state.value, code=stop.code)
     if stop.state in (State.ready, State.needs_person):
@@ -275,7 +278,10 @@ def _checks(db: Session, application: Application, posting: Job, now: datetime) 
         code = full_auto.recheck(db, application, posting, now)
     if code is None:
         return None
-    if code in gate.KEEP:
+    if code in gate.KEEP or (
+        application.mode is Mode.full_auto
+        and code in ("linkedin_off", "linkedin_paused", "linkedin_daily")
+    ):
         return Stop(State.ready, code)
     return Stop(State.posting_closed if code == "posting_closed" else State.blocked, code)
 
@@ -600,6 +606,8 @@ def difference(found: ats_base.Discovery, rows: list[Row]) -> str:
 
 
 def _stop_of(code: str, step: str = "") -> Stop:
+    if code == "linkedin_paused" or (code == "needs_person" and step == "linkedin_paused"):
+        return Stop(State.needs_person, "linkedin_paused", "linkedin_paused")
     if code == "needs_person":
         return Stop(State.needs_person, "needs_person", step or "needs_person")
     if code == ats_base.CREDENTIAL:  # browserd refused to type into a credential input: a wall
@@ -691,7 +699,11 @@ async def refill(
                 return Stop(State.ready, "form_changed")  # a question nobody approved
             if row.value is None:
                 continue  # left: the read back checks it shows nothing
-            if row.kind == "checkbox" and row.value is not True:
+            if (
+                row.kind == "checkbox"
+                and row.value is not True
+                and not (isinstance(adapter, LinkedIn) and adapter.optional_follow(item))
+            ):
                 # A box approved unticked (the person's No): the adapter never ticks it, so
                 # there is nothing to type; the read back checks the page shows it unticked.
                 continue
@@ -1047,6 +1059,9 @@ async def submit(services: Services, application_id: uuid.UUID) -> str:
     written = "interrupted"
     try:
         tools = services.tools_for(user, lease_id, acquired.token)
+        from app.apply.linkedin import watched
+
+        tools = watched(services, plan, tools)
         try:
             written = await _drive(services, plan, tools, capability, armed)
         except asyncio.CancelledError:
