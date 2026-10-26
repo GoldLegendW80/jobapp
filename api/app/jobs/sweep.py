@@ -768,14 +768,30 @@ def _stats_json(sweep: Sweep, stats: Stats) -> dict[str, Any]:
         previous = {s.get("source_id"): s for s in stored.get("sources", [])}
         updates = {s.get("source_id"): s for s in data["sources"]}
         data["sources"] = [
-            {
-                **source,
-                **previous.get(source["source_id"], {}),
-                **updates.get(source["source_id"], {}),
-            }
+            _with_authority(
+                {
+                    **source,
+                    **previous.get(source["source_id"], {}),
+                    **updates.get(source["source_id"], {}),
+                },
+                previous.get(source["source_id"], {}),
+            )
             for source in initial_sources(stored["search_scope"])
         ]
     return data
+
+
+# What the platform guard's writers (opportunities/platforms/guard.py, browser B14) record in a
+# source entry under the row lock: the locked row's value wins over a stale progress or final
+# write of the same entry, so a reservation or a checkpoint is never lost.
+GUARD_AUTHORITY = ("opened_at", "checkpoint_at", "platform")
+
+
+def _with_authority(entry: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
+    for name in GUARD_AUTHORITY:
+        if stored.get(name) is not None:
+            entry[name] = stored[name]
+    return entry
 
 
 def fail_sweep(
