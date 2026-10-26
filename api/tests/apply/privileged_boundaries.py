@@ -168,7 +168,7 @@ def scan_package(sources: dict[str, str]) -> list[Call]:
 
 def permitted(call: Call) -> bool:
     if call.kind == "click":
-        return call.module == "app.apply.gate" or (
+        return call.module in {"app.apply.gate", "app.apply.profile_gate"} or (
             call.module == "app.browser.tools" and call.scope == "gate_click"
         )
     if call.kind == "mail":
