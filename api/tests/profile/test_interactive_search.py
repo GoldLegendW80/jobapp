@@ -248,3 +248,35 @@ def test_profile_save_import_isolation_and_consent_checkpoint_preservation(
         )
     assert save({"interactive_sites": [], "interactive_instructions": None}).status_code == 200
     assert profile(alice)["sections"]["search"]["interactive_sites"] == []
+
+
+def test_a_search_saved_without_interactive_keys_exports_as_it_reads(
+    api: Api,
+    factory: sessionmaker[Session],
+) -> None:
+    """An older editor saves the search without the interactive keys: the export holds the
+    section exactly as GET /api/profile shows it, so the import dialog reads it as unchanged and
+    importing it back keeps sites saved since."""
+    carol = sign_in(factory, api, "e2e-j629-export-carol@example.org")
+
+    def read() -> Any:
+        return api.get("/api/profile", token=carol.token).json()
+
+    def save(data: Any) -> Any:
+        body = {"data": data, "base_revision": read()["revision"]}
+        return api.request("PUT", "/api/profile/search", token=carol.token, json=body)
+
+    assert save({"days": 3}).status_code == 200
+    stored = read()["sections"]["search"]
+    assert not set(schemas.INTERACTIVE_FIELDS) & set(stored)
+    exported = api.get("/api/profile/export", token=carol.token).json()
+    assert exported["sections"]["search"] == stored
+
+    chosen = [site()]
+    assert save({**stored, "interactive_sites": chosen}).status_code == 200
+    imported = api.request("POST", "/api/profile/import", token=carol.token, json=exported)
+    assert imported.status_code == 200, imported.text
+    assert read()["sections"]["search"]["interactive_sites"] == chosen
+    again = api.get("/api/profile/export", token=carol.token).json()["sections"]["search"]
+    assert again["interactive_sites"] == chosen
+    assert "interactive_instructions" not in again  # never saved, so absent as in GET

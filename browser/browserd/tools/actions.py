@@ -83,6 +83,18 @@ class OffList(Exception):  # noqa: N818  a control-flow signal, not an error
     answers host_not_allowed, whatever the tool had done or read."""
 
 
+class PersonInput(Exception):  # noqa: N818  a control-flow signal
+    """The person took back input during a paced action."""
+
+
+class RefusalRecoveryError(Exception):
+    """Keep a policy repair failure outside ordinary navigation normalization."""
+
+    def __init__(self, original: Exception):
+        super().__init__()
+        self.original = original
+
+
 class UnsupportedDiscovery(Exception):  # noqa: N818
     """A discovery execution boundary could not be established or was lost."""
 
@@ -102,8 +114,7 @@ class State:
     native_failed: bool = False
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
-    # The app's own click on an Attach button is waiting for its chooser: that one is not kept.
-    opening: bool = False
+    chooser_id: int = 0
 
     def end(self) -> None:
         """The lease ended: its documents and its tab are dropped at once, not when the old
@@ -126,6 +137,11 @@ class Tab:
     gate: bool = False
     lease_tag: str = ""
     discovery: bool = False
+    input_allowed: Callable[[], bool] | None = None
+
+    def require_input(self) -> None:
+        if self.input_allowed is not None and not self.input_allowed():
+            raise PersonInput
 
     @property
     def hosts(self) -> tuple[str, ...]:
@@ -297,8 +313,8 @@ class Tab:
         return context
 
     def _chosen(self, chooser: Any) -> None:
-        if not self.state.opening:
-            self.state.chooser = chooser
+        self.state.chooser = chooser
+        self.state.chooser_id += 1
 
     async def page(self) -> Any:
         context = await self.guard()
@@ -318,21 +334,27 @@ class Tab:
             return failure(discovery.UNSUPPORTED, "Refused: native discovery is unavailable.")
         context = self.state.native_context or self.browser.browser.contexts[0]
         for other in list(context.pages):
-            off = policy.url_verdict(other.url, self.hosts) is not None
+            off = not self.allowed(other.url)
             if other is not self.state.page and off:
                 log.warning("lease %s: a tab outside the allow list closed", self.lease_tag)
-                await other.close()
+                try:
+                    await other.close()
+                except Exception as exc:
+                    raise RefusalRecoveryError(exc) from exc
         page = self.state.page
         left = page is not None and not page.is_closed() and not self.on_list(page)
-        if left:
-            with contextlib.suppress(Exception):  # no history, a timeout: the blank page then
-                await page.go_back(timeout=ACTION_S * 1000)
-            if not self.on_list(page):
-                await page.goto(ABOUT_BLANK)
         if left or self.state.blocked:
-            self.state.blocked.clear()
-            log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
-            return {**refused("host_not_allowed"), "url": page.url if page else None}
+            try:
+                if left:
+                    with contextlib.suppress(Exception):  # no history, a timeout: the blank then
+                        await page.go_back(timeout=ACTION_S * 1000)
+                    if not self.on_list(page):
+                        await page.goto(ABOUT_BLANK)
+                self.state.blocked.clear()
+                log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
+                return {**refused("host_not_allowed"), "url": page.url if page else None}
+            except Exception as exc:
+                raise RefusalRecoveryError(exc) from exc
         return result
 
     async def element(self, args: dict[str, Any]) -> tuple[Any, Any]:
@@ -383,9 +405,12 @@ class Tab:
     async def approach(self, locator: Any) -> None:
         """The paced way to an element: dwell, scroll into view, hover, a short pause."""
         await self.pacer.dwell()
+        self.require_input()
         await locator.scroll_into_view_if_needed(timeout=ACTION_S * 1000)
+        self.require_input()
         await locator.hover(timeout=ACTION_S * 1000)
         await self.pacer.hover()
+        self.require_input()
 
 
 async def stop_loading(frame: Any) -> None:
@@ -421,27 +446,46 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("submit"):
             return refused("submit")
     try:
-        if marker is not None:
-            scope = discovery.Scope.parse(args.get("_discovery_scope"))
-            if scope is None:
-                raise UnsupportedDiscovery
-            await tab.begin_discovery(scope, name, args)
-            tab.discovery = True
-        result = await TOOLS[name](tab, args)
-    except UnsupportedDiscovery:
-        return failure(discovery.UNSUPPORTED, "Refused: this native discovery flow is unsupported.")
-    except OffList:
-        log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
-        return await tab.settle(refused("host_not_allowed"))
-    return await tab.settle(result) if result.get("ok") else result
+        try:
+            if marker is not None:
+                scope = discovery.Scope.parse(args.get("_discovery_scope"))
+                if scope is None:
+                    raise UnsupportedDiscovery
+                await tab.begin_discovery(scope, name, args)
+                tab.discovery = True
+            result = await TOOLS[name](tab, args)
+        except UnsupportedDiscovery:
+            return failure(
+                discovery.UNSUPPORTED, "Refused: this native discovery flow is unsupported."
+            )
+        except OffList:
+            log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
+            return await tab.settle(refused("host_not_allowed"))
+        except PersonInput:
+            return failure("person_input", "Refused: the person holds the input.")
+        return await tab.settle(result) if result.get("ok") else result
+    except RefusalRecoveryError as exc:
+        raise exc.original from None
+    except Exception as exc:
+        if name != "browser_navigate":
+            raise
+        from playwright.async_api import Error
+
+        if not isinstance(exc, Error):
+            raise
+        return failure("navigation_failed", "The page did not let this navigation finish.")
 
 
 async def close_off_list(tab: Any, hosts: tuple[str, ...], lease_tag: str) -> None:
-    """A tab the page opens (window.open, a target=_blank link) is closed unless it shows a page
-    of the list once it has loaded (its navigation off the list was aborted by the guard)."""
+    """A new tab stays only on the list or at the exact internal blank used by the memory
+    guard. Navigation off the list is still aborted by the navigation guard."""
     with contextlib.suppress(Exception):
         await tab.wait_for_load_state("domcontentloaded", timeout=10_000)
-    if not tab.is_closed() and policy.url_verdict(tab.url, hosts) is not None:
+    if (
+        not tab.is_closed()
+        and tab.url != ABOUT_BLANK
+        and policy.url_verdict(tab.url, hosts) is not None
+    ):
         log.warning("lease %s: a tab outside the allow list closed", lease_tag)
         with contextlib.suppress(Exception):
             await tab.close()
@@ -456,7 +500,11 @@ async def title(page: Any) -> str:
 
 
 def _chooser(tab: Tab) -> dict[str, Any]:
-    return {"chooser": True} if tab.state.chooser is not None else {}
+    return (
+        {"chooser": True, "chooser_id": tab.state.chooser_id}
+        if tab.state.chooser is not None
+        else {}
+    )
 
 
 async def _here(tab: Tab) -> dict[str, Any]:
@@ -488,7 +536,10 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         return refused(code)
     page = await tab.page()
     await tab.pacer.dwell()
-    result = await pages.navigate(page, args["url"])
+    # Apply myself may open its form during PERSON_TIME. Automated navigation must still own
+    # input after both pacing and the helper's awaited focus, immediately before goto.
+    before_input = tab.require_input if tab.request.purpose != "apply_manual" else None
+    result = await pages.navigate(page, args["url"], before_input=before_input)
     if result.get("ok"):
         await tab.pacer.read()
     return await tab.settle(result)
@@ -507,12 +558,28 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     no = tab.judge(await tab.facts(locator, point=True), "click", "browser_click")
     if no:
         return no
+    tab.require_input()
     await locator.click(
         button=button,
         click_count=2 if args.get("doubleClick") else 1,
         timeout=ACTION_S * 1000,
     )
     return await tab.settle(await _here(tab))
+
+
+EMPTY_ONLY_JS = """(element, text) => {
+  const input = element instanceof HTMLInputElement;
+  const textarea = element instanceof HTMLTextAreaElement;
+  if ((!input && !textarea) || element.disabled || element.readOnly ||
+      (input && !['text', 'search', 'tel', 'url', 'email', 'number'].includes(element.type)))
+    return {ok: false, error: 'unsupported_empty_write'};
+  if (element.value !== '') return {ok: false, error: 'not_empty'};
+  const prototype = textarea ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, text);
+  element.dispatchEvent(new Event('input', {bubbles: true}));
+  element.dispatchEvent(new Event('change', {bubbles: true}));
+  return {ok: true};
+}"""
 
 
 async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -543,14 +610,30 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             "bad_args",
             "A newline goes into a multi line field only, never a one line one.",
         )
+    if "empty_only" in args and type(args["empty_only"]) is not bool:
+        return failure("bad_args", "empty_only must be a boolean.")
+    if args.get("empty_only"):
+        if tab.request.purpose != "profile_edit" or args.get("submit"):
+            return failure("bad_args", "An empty-only profile write cannot submit.")
+        await tab.pacer.dwell()
+        tab.require_input()
+        # Check and setter share one synchronous browser task, with no CDP/await gap.
+        result = await locator.evaluate(EMPTY_ONLY_JS, text)
+        if not result.get("ok"):
+            return refused(str(result.get("error") or "not_empty"))
+        return await tab.settle(await _here(tab))
+    tab.require_input()
     await locator.click(timeout=ACTION_S * 1000)
+    tab.require_input()
     await locator.fill("", timeout=ACTION_S * 1000)
     page = await tab.page()
     if len(text) >= pacing.PASTE_FROM:
         await tab.pacer.dwell()
+        tab.require_input()
         await page.keyboard.insert_text(text)
     else:
         for char, delay in zip(text, tab.pacer.key_delays_s(len(text)), strict=True):
+            tab.require_input()
             if char in ("\n", " "):
                 # Inserted, no key pressed: a newline is no Enter, and a space no Space on a
                 # button the page moved the focus to.
@@ -559,6 +642,7 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
                 await page.keyboard.type(char)
             await tab.pacer.sleep(delay)
     if args.get("submit"):
+        tab.require_input()
         await page.keyboard.press("Enter")
     return await tab.settle(await _here(tab))
 
@@ -576,6 +660,7 @@ async def select_option(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if no:
         return no
     await tab.approach(locator)
+    tab.require_input()
     chosen = await locator.select_option(values, timeout=ACTION_S * 1000)
     return await tab.settle({**await _here(tab), "selected": chosen})
 
@@ -591,6 +676,7 @@ async def check(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     no = tab.judge(await tab.facts(locator, point=True), "check", "browser_check")
     if no:
         return no
+    tab.require_input()
     await locator.set_checked(checked, timeout=ACTION_S * 1000)
     return await tab.settle(await _here(tab))
 
@@ -608,11 +694,22 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     ]
     if not args.get("ref") and tab.request.purpose == "apply_manual":
         # A9: no element names the answer to the file chooser the person opened.
-        chooser, tab.state.chooser = tab.state.chooser, None
+        chooser = tab.state.chooser
         if chooser is None:
             return failure("no_chooser", "No file chooser is open.")
+        if type(args.get("chooser_id")) is not int or args["chooser_id"] != tab.state.chooser_id:
+            return failure(
+                "chooser_changed", "The file chooser changed. Choose the document again."
+            )
         await tab.pacer.dwell()
+        tab.require_input()
+        if tab.state.chooser is not chooser:
+            return failure(
+                "chooser_changed", "The file chooser changed. Choose the document again."
+            )
         await chooser.set_files(payloads, timeout=ACTION_S * 1000)
+        if tab.state.chooser is chooser:
+            tab.state.chooser = None
         return await tab.settle({**await _here(tab), "uploaded": names})
     locator, gone = await tab.element(args)
     if gone:
@@ -620,6 +717,7 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     facts = await tab.facts(locator)
     if isinstance(facts, dict) and facts.get("tag") == "input" and facts.get("type") == "file":
         await tab.pacer.dwell()
+        tab.require_input()
         await locator.set_input_files(payloads, timeout=ACTION_S * 1000)
         return await tab.settle({**await _here(tab), "uploaded": names})
     # A button that opens the file chooser (an Attach button): clicked as any click is.
@@ -628,16 +726,21 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if no:
         return no
     page = await tab.page()
-    tab.state.opening = True
-    try:
-        async with page.expect_file_chooser(timeout=ACTION_S * 1000) as chooser:
-            await locator.click(timeout=ACTION_S * 1000)
-        opened = await chooser.value
-    finally:
-        tab.state.opening = False
+    tab.require_input()
+    if tab.state.chooser is not None:
+        return failure(
+            "chooser_changed", "A file chooser is already open. Choose its document first."
+        )
+    async with page.expect_file_chooser(timeout=ACTION_S * 1000) as chooser:
+        tab.require_input()
+        await locator.click(timeout=ACTION_S * 1000)
+    opened = await chooser.value
+    tab.require_input()
+    if tab.request.purpose == "apply_manual" and tab.state.chooser is not opened:
+        return failure("chooser_changed", "The file chooser changed. Choose the document again.")
+    await opened.set_files(payloads, timeout=ACTION_S * 1000)
     if tab.state.chooser is opened:
         tab.state.chooser = None
-    await opened.set_files(payloads, timeout=ACTION_S * 1000)
     return await tab.settle({**await _here(tab), "uploaded": names})
 
 
@@ -658,6 +761,7 @@ async def press_key(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             if no:
                 return no
     await tab.pacer.dwell()
+    tab.require_input()
     await page.keyboard.press(" " if key == "Space" else key)
     return await tab.settle(await _here(tab))
 
@@ -761,8 +865,11 @@ async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         index = args.get("index")
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(found):
             return failure("bad_args", "index must be the index of an open tab.")
+        tab.require_input()
         if action == "select":
-            tab.state.page = await pages.front(found[index])
+            selected = await pages.front(found[index])
+            tab.require_input()
+            tab.state.page = selected
         elif len(found) > 1:
             await found[index].close()
         found = list(context.pages)

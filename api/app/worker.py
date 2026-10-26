@@ -778,6 +778,7 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
 
 
 def apply_queue(settings: Settings | None = None) -> QueueSpec:
+    from app.browser.client import TAKEOVER_WAIT_S
     from app.browser.leases import LEASE_MAX_S, lease_max_table
 
     # The lease's own ceiling, BROWSER_LEASE_MAX_S included, and a margin to write the end.
@@ -787,9 +788,11 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         if settings is not None
         else Settings.model_fields["browser_session_max_s"].default
     )
-    # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock.
-    fill_timeout_s = table["apply_fill"] + session_max_s + APPLY_JOB_MARGIN_S
-    submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
+    # Browser B12a: a fill outlives a sign in hand off, whose wait stops the lease's clock. A tool
+    # call may also hold a person's live takeover (TAKEOVER_WAIT_S), so a fill and a submit
+    # outlive that pause too.
+    fill_timeout_s = table["apply_fill"] + session_max_s + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
+    submit_timeout_s = table["apply_submit"] + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
     manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,

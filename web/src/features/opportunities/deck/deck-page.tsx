@@ -198,7 +198,7 @@ export function DeckPage() {
         </section>
       )}
 
-      <div className="sticky bottom-4 flex items-center justify-center gap-4">
+      <div className="flex items-center justify-center gap-4">
         <Button
           size="lg"
           variant="outline"
