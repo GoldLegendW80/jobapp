@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { SiteSignIn } from "@/features/browser/site-signin";
 import {
   CONTRACT_TYPES,
   REMOTE_STANCES,
@@ -458,7 +459,7 @@ function SetupForm({
                 {sites.map((site, index) => (
                   <li
                     key={`${site.platform}:${index}`}
-                    className="flex min-w-0 items-center gap-2 p-2 text-sm"
+                    className="flex min-w-0 flex-wrap items-center gap-2 p-2 text-sm"
                   >
                     <span className="min-w-0 flex-1 break-all">
                       {site.url}
@@ -475,6 +476,8 @@ function SetupForm({
                     >
                       Remove
                     </Button>
+                    {/* B17: sign in to this website once, then searches read it signed in. */}
+                    <SiteSignIn url={site.url} />
                   </li>
                 ))}
               </ul>

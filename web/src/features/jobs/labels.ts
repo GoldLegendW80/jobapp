@@ -179,7 +179,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   platform_daily:
     "This website was already searched today. It is searched again tomorrow.",
   platform_signin:
-    "This website needs you to sign in. Nothing else was opened on it.",
+    "This website needs you to sign in. Use Sign in beside it in Find jobs, then search again. Nothing else was opened on it.",
   finding_persistence_pending:
     "Postings were read on this website, but saving them comes with a later update.",
   unsupported_interaction:
