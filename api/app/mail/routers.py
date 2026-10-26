@@ -45,7 +45,11 @@ def load(
 
 def private(path: str) -> bool:
     """True for a path of this module: no answer under it is ever stored."""
-    return path == PREFIX or path.startswith(f"{PREFIX}/")
+    return (
+        path == PREFIX
+        or path.startswith(f"{PREFIX}/")
+        or (path.startswith("/api/applications/") and path.rstrip("/").endswith("/email"))
+    )
 
 
 def extra_headers(path: str) -> dict[str, str]:

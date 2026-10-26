@@ -113,7 +113,7 @@ state: a merge, the gate, a deploy, `ssh jetson`, and the full `ops/dev-setup.sh
 it calls `ssh jetson true`; only `--skip-jetson` is allowed). **Deny** wins over allow: force pushes, hook
 bypasses, `gh api` with a write method or body (`-X`, `--method`, `-f`, `-F`, `--field`,
 `--input`), and every way to read or change the secret files `.env`, `.env.jetson`, `.env.local`,
-`.env.*.local`, `.env.production` and `.env.prod` (the Read, Edit and Write tools, and Bash `cat`,
+`.env.*.local`, `.env.production`, `.env.prod`, `.env.mailsend`, `.env.redis` and `.secrets/` (the Read, Edit and Write tools, and Bash `cat`,
 `grep`, `head`, `sed`, `awk`, `cp` and similar). The names are listed one by one on purpose: a
 `.env.*` pattern would also block `.env.example`, the tracked template that an agent edits when it
 adds a setting. A new secret file name is added to the deny list in the same pull request that

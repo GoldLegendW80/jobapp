@@ -663,9 +663,15 @@ def build_options(
     stderr: Callable[[str], None] | None = None,
     partial_messages: bool = False,
     model: str | None = None,
+    turn_budget: int | None = None,
 ) -> ClaudeAgentOptions:
     """`model` is the one chosen for the run's credential (AgentDefinition.model_for); the
     definition's own when none is given."""
+    if turn_budget is not None and (type(turn_budget) is not int or turn_budget < 1):
+        raise ValueError("turn_budget must be a positive integer")
+    turns = definition.max_turns
+    if turn_budget is not None:
+        turns = min(turns, turn_budget) if turns is not None else turn_budget
     return ClaudeAgentOptions(
         system_prompt=definition.system_prompt,
         tools=[],
@@ -676,7 +682,7 @@ def build_options(
         strict_mcp_config=True,
         setting_sources=[],
         model=model or definition.model,
-        max_turns=definition.max_turns,
+        max_turns=turns,
         effort=definition.effort,  # type: ignore[arg-type]
         thinking={"type": "adaptive"},
         cwd=str(workdir),
@@ -1483,6 +1489,7 @@ async def _execute(
             stderr=stderr_lines.append,
             partial_messages=live_store is not None,
             model=model,
+            turn_budget=data.get("turn_budget") if definition.name == "apply_form" else None,
         )
         if live_store is not None:
             state.live_text = live.LiveText(

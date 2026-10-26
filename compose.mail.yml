@@ -1,0 +1,30 @@
+# Sending is enabled only with operator-created credentials. deploy.sh adopts this overlay
+# when .env.mailsend exists. None of these credentials belong in the general .env.
+services:
+  api:
+    env_file:
+      - path: .env.redis
+        required: true
+      - path: .env.mailsend
+        required: true
+  worker:
+    env_file:
+      - path: .env.redis
+        required: true
+  gmailmcp:
+    env_file:
+      - path: .env.mailsend
+        required: true
+    environment:
+      GMAIL_MCP_REDIS_PASSWORD_FILE: /run/secrets/gmailmcp-redis-password
+    volumes:
+      - ./.secrets/gmailmcp-redis-password:/run/secrets/gmailmcp-redis-password:ro
+  redis:
+    command: [redis-server, /usr/local/etc/redis/mail.conf]
+    volumes:
+      - ./ops/redis-mail.conf:/usr/local/etc/redis/mail.conf:ro
+      - ./.secrets/redis.acl:/run/secrets/redis.acl:ro
+      - ./.secrets/redis-default-password:/run/secrets/redis-default-password:ro
+    networks: [default, mailmcp]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH=$$(cat /run/secrets/redis-default-password) redis-cli ping | grep -q PONG']
