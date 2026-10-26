@@ -98,7 +98,7 @@ export function FreelanceSourcesCard({
             to="/discover"
             className="text-primary underline-offset-4 hover:underline"
           >
-            Find it in Discover
+            {WORDING.findInDiscover}
           </Link>
         </p>
       ) : null}
@@ -130,13 +130,16 @@ export function FreelanceSourcesCard({
               className="mt-2 w-fit"
               onClick={() => void catalogue.refetch()}
             >
-              Try again
+              {WORDING.tryAgain}
             </Button>
           </AlertDescription>
         </Alert>
       ) : null}
       {rows.length > 0 ? (
-        <ul aria-label="Freelance sources" className="flex flex-col gap-3">
+        <ul
+          aria-label={WORDING.freelanceSourceList}
+          className="flex flex-col gap-3"
+        >
           {rows.map((row) => (
             <FeedRow
               key={row.kind}
@@ -162,7 +165,7 @@ export function FreelanceSourcesCard({
                 key={row.kind}
                 form={form}
                 name={`feeds.${indexOf(row.kind)}.terms`}
-                label={`Words for ${row.name}`}
+                label={`${WORDING.wordsFor} ${row.name}`}
                 compact
               />
             ))}
@@ -216,7 +219,7 @@ function FeedRow({
               type="checkbox"
               role="switch"
               aria-checked={field.value}
-              aria-label={`Read ${row.name}`}
+              aria-label={`${WORDING.read} ${row.name}`}
               className="size-4 shrink-0 accent-primary"
               name={field.name}
               ref={field.ref}
@@ -228,7 +231,7 @@ function FeedRow({
             />
             <span className="font-medium break-words">{row.name}</span>
             <span aria-hidden="true" className="ml-auto text-muted-foreground">
-              {field.value ? "On" : "Off"}
+              {field.value ? WORDING.on : WORDING.off}
             </span>
           </label>
         )}
@@ -277,9 +280,9 @@ function OptInPlatforms({ platforms }: { platforms: RestrictedPlatform[] }) {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 underline underline-offset-4"
               >
-                {`Terms of ${platform.name}`}
+                {`${WORDING.termsOf} ${platform.name}`}
                 <ExternalLink aria-hidden="true" className="size-3" />
-                <span className="sr-only">(opens in a new tab)</span>
+                <span className="sr-only">{WORDING.opensNewTab}</span>
               </a>
             </p>
           </li>

@@ -137,7 +137,11 @@ async function summary(page: Page) {
   await expect(
     page.getByRole("heading", { level: 2, name: /^Step 7 of 7/ }),
   ).toBeVisible();
-  return starterList(page);
+  const list = starterList(page);
+  const advanced = list.getByRole("button", { name: "Advanced" });
+  if ((await advanced.getAttribute("aria-expanded")) === "false")
+    await advanced.click();
+  return list;
 }
 
 async function boardsOf(page: Page) {
