@@ -39,6 +39,12 @@ class RunForm(FakeForm):
         self.files = (*self.files, name)
         return {"ok": True}
 
+    async def _apply_wait(self, action: str, reason: str | None = None) -> dict[str, Any]:
+        return {"wait_left_s": 1800, "wait_reason": reason}
+
+    async def _person_snapshot(self) -> dict[str, Any]:
+        return await self.snapshot()
+
     async def screenshot(self, *, full_page: bool = False, kind: str = "png") -> dict[str, Any]:
         self._log("screenshot", full_page=full_page, kind=kind)
         if self.shot is None:

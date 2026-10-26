@@ -364,6 +364,14 @@ def test_a_fill_answers_the_open_question_through_an_apply_answer_run(
     mine, theirs = "zqa" + secrets.token_hex(8), "zqb" + secrets.token_hex(8)
     posting_text(db, person_a, f"Example Robotics builds warehouse robots. Ref {mine}.")
     posting_text(db, person_b, f"Example Robotics builds warehouse robots. Ref {theirs}.")
+    # The recorded answer's assertions are actual source motivation, not inferred
+    # from the posting's company name or technical vocabulary.
+    profile = profile_service.get_profile(db, person_a.user_id, AT)
+    section = AnswersSection.model_validate(
+        {**full("answers"), "motivation": STREAM_WHY}
+    ).model_dump(mode="json")
+    profile_service.save_section(db, person_a.user_id, "answers", section, profile.revision, AT)
+    db.commit()
     runtime.give_key(person_a)
     runtime.give_key(person_b)
     app_id, state = fill_with(db, factory, person_a, stub, runtime.agent())
@@ -401,6 +409,21 @@ def test_a_fill_answers_the_open_question_through_an_apply_answer_run(
     )
     assert mine not in stored
     assert "robots this team builds" not in stored
+
+
+def test_a_fill_leaves_the_recorded_factual_answer_without_matching_profile_facts(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    runtime: Runtime,
+) -> None:
+    runtime.give_key(person_a)
+    app_id, state = fill_with(db, factory, person_a, stub, runtime.agent())
+    assert state == "needs_person"
+    row = fields(db, app_id)[WHY]
+    assert row.value is None
+    assert application(db, app_id).cost["verdicts"]["unsupported_claim"] == 1
 
 
 def test_a_whole_fill_sends_the_model_only_the_allowlisted_answers(
@@ -587,12 +610,41 @@ def test_what_the_judge_drops_stays_left_for_the_person(
     assert "accepted" not in found.cost["verdicts"]
 
 
+@pytest.mark.parametrize(
+    ("motivation", "accepted"),
+    [
+        ("I want to build agents, and test them, with this team.", True),
+        ("I built agents and tested them.", False),
+        ("I would never like to build agents.", False),
+        ("I wouldn’t ever like to build agents.", False),
+        ("I no longer want to build agents.", False),
+    ],
+)
 def test_a_dash_the_model_writes_is_never_typed(
-    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, runtime: Runtime
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    runtime: Runtime,
+    motivation: str,
+    accepted: bool,
 ) -> None:
+    # Keep the recorded output unchanged. The person's own source decides whether
+    # that positive intent is grounded, including through the real runtime sink.
+    profile = profile_service.get_profile(db, person_a.user_id, AT)
+    section = AnswersSection.model_validate(
+        {**full("answers"), "motivation": motivation}
+    ).model_dump(mode="json")
+    profile_service.save_section(db, person_a.user_id, "answers", section, profile.revision, AT)
+    db.commit()
     runtime.give_key(person_a)
     app_id, _ = fill_with(db, factory, person_a, stub, runtime.agent("apply_answer_dash"))
     value = fields(db, app_id)[WHY].value
+    if not accepted:
+        assert value in (None, "")
+        assert fields(db, app_id)[WHY].source.value == "left"
+        assert application(db, app_id).cost["verdicts"].get("unsupported_claim") == 1
+        return
     assert value == "I want to build agents, and test them, with this team."
     assert "—" not in value
     assert "–" not in value
