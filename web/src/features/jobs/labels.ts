@@ -183,7 +183,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   finding_persistence_pending:
     "Postings were read on this website, but saving them comes with a later update.",
   unsupported_interaction:
-    "The website asked for something the app does not do, so nothing was kept from it.",
+    "The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
   unsupported_criteria:
     "Your search uses settings this website search does not take yet, so it was not opened.",
   no_credential: "Add your model access in Account to search this website.",
