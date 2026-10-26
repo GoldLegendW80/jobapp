@@ -33,6 +33,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { getProfile, profileKey } from "@/features/profile/api";
 import { describeError } from "@/lib/api";
 
+import { CaptureStatus } from "./capture-status";
 import { ConsentDialog } from "./consent-dialog";
 import { DocumentView } from "./document-view";
 import { UploadPanel } from "./upload-panel";
@@ -83,7 +84,9 @@ export function CvTab() {
     queryFn: ({ signal }) => listBaseCvs(signal),
     refetchInterval: (current) => {
       const waits = (current.state.data?.base_cvs ?? [])
-        .map((one) => pollInterval(one.render_state, one.generation))
+        .map((one) =>
+          pollInterval(one.render_state, one.generation, one.design_generation),
+        )
         .filter((wait) => wait !== false);
       return waits.length > 0 ? Math.min(...waits) : false;
     },
@@ -339,6 +342,9 @@ function Overview({
               className="flex flex-col gap-3 rounded-lg border p-3"
             >
               <Row cv={one} only={cvs.length === 1} />
+              {one.source === "uploaded" ? (
+                <CaptureStatus key={one.id} cv={one} />
+              ) : null}
               <Actions cv={one} cvs={cvs} />
             </li>
           ))}
@@ -441,7 +447,12 @@ function Opened({ cv, cvs }: { cv: BaseCv; cvs: BaseCv[] }) {
         </p>
         <Actions cv={cv} cvs={cvs} backToList />
       </div>
-      <DocumentView documentId={cv.id} generation={cv.generation} />
+      {cv.source === "uploaded" ? <CaptureStatus key={cv.id} cv={cv} /> : null}
+      <DocumentView
+        documentId={cv.id}
+        generation={cv.generation}
+        capture={cv.design_generation}
+      />
     </div>
   );
 }
