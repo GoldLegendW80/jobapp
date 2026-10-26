@@ -21,6 +21,8 @@ POSTING = {
         "location": {"type": "string", "maxLength": finder.LOCATION_MAX},
         "url": {"type": "string", "maxLength": 2000},
         "text": {"type": "string", "maxLength": finder.TEXT_MAX},
+        "company": {"type": "string", "maxLength": 300},
+        "published_on": {"type": "string", "maxLength": 10},
     },
     "required": ["title", "url", "text"],
     "additionalProperties": False,
@@ -108,7 +110,7 @@ def _factory(name: str) -> app_tools.Factory:
                 safe = {k: args[k] for k in SCHEMAS[name]["properties"] if k in args}
                 text, error = await session.interact(name, safe)
             else:
-                text, error = session.report(args.get("postings"))
+                text, error = await session.report_verified(args.get("postings"))
             return app_tools.text_result(text, error=error)
 
         return handler
