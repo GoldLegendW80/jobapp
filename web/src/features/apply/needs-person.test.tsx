@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useQuery } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
@@ -30,6 +30,7 @@ const REASONS = [
   "signin",
   "form_changed",
   "no_adapter",
+  "forbidden",
   "linkedin_paused",
   null,
 ];
@@ -46,7 +47,11 @@ const WAITING: ApplicationEvent = {
 };
 
 /** The person's browser held by an automation lease of `purpose`, started at `startedAt`. */
-function leaseOf(purpose: string, startedAt = LEASE_START, signingIn = false) {
+function leaseOf(
+  purpose: string,
+  startedAt = LEASE_START,
+  signingIn: boolean | string = false,
+) {
   server.use(
     http.get("*/api/browser", () =>
       HttpResponse.json({
@@ -57,7 +62,12 @@ function leaseOf(purpose: string, startedAt = LEASE_START, signingIn = false) {
           purpose,
           automation: true,
           state: signingIn ? "waiting_person" : "active",
-          wait_reason: signingIn ? "signin" : null,
+          wait_reason:
+            typeof signingIn === "string"
+              ? signingIn
+              : signingIn
+                ? "signin"
+                : null,
           wait_host: signingIn ? "jobs.example.org" : null,
           wait_minutes_left: signingIn ? 30 : null,
           wait_deadline: null,
@@ -175,6 +185,75 @@ describe("the job page", () => {
     expect(banner).toContainElement(
       screen.getByRole("button", { name: "Open the live view to sign in" }),
     );
+  });
+
+  it.each(["captcha", "email_code", "forbidden"])(
+    "gives the person live input directly during the %s wait on the page",
+    async (reason) => {
+      const opened = fakeScreens();
+      leaseOf("apply_fill", LEASE_START, reason);
+      renderWithQuery(<LiveViewSlot idle="Waiting" leaseOf="any" />);
+      await waitFor(() => {
+        expect(opened).toHaveLength(1);
+      });
+      expect(opened[0]?.screen.viewOnly).toBe(false);
+      expect(
+        screen.getByRole("button", { name: "Keyboard" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "I'm signed in" }),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["required_left", "payment_requested", "unrecognized"])(
+    "keeps the %s wait view only, with Take over",
+    async (reason) => {
+      const opened = fakeScreens();
+      leaseOf("apply_fill", LEASE_START, reason);
+      renderWithQuery(<LiveViewSlot idle="Waiting" leaseOf="any" />);
+      await waitFor(() => {
+        expect(opened).toHaveLength(1);
+      });
+      expect(opened[0]?.screen.viewOnly).toBe(true);
+      expect(screen.queryByRole("button", { name: "Keyboard" })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Take over" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("gives the input back to the assistant's view when the same lease ends its wait", async () => {
+    const opened = fakeScreens();
+    leaseOf("apply_fill");
+    const { client } = renderWithQuery(
+      <LiveViewSlot idle="Waiting" leaseOf="any" />,
+    );
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(opened[0]?.screen.viewOnly).toBe(true);
+    leaseOf("apply_fill", LEASE_START, "captcha");
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["browser"] });
+    });
+    await waitFor(() => {
+      expect(opened).toHaveLength(2);
+    });
+    expect(opened[0]?.screen.disconnected).toBe(true);
+    expect(opened[1]?.screen.viewOnly).toBe(false);
+    leaseOf("apply_fill");
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["browser"] });
+    });
+    await waitFor(() => {
+      expect(opened).toHaveLength(3);
+    });
+    expect(opened[1]?.screen.disconnected).toBe(true);
+    expect(opened[2]?.screen.viewOnly).toBe(true);
+    expect(screen.queryByRole("button", { name: "Keyboard" })).toBeNull();
   });
 
   it("says a captcha needs the person and opens the live view of the assistant's lease", async () => {

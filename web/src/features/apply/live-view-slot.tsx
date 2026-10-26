@@ -4,6 +4,7 @@ import { LoaderCircle } from "lucide-react";
 import {
   browserQueryKey,
   getBrowser,
+  personOwnsInput,
   type Browser,
 } from "@/features/browser/browser-api";
 import { LiveBrowser } from "@/features/browser/live-browser";
@@ -95,9 +96,20 @@ export function LiveViewSlot({
     if (signingIn(lease)) {
       return <HandoffBanner liveOpen />;
     }
+    // A wait on the page (a captcha, an e-mail code, a 403 page): browserd gave the person the
+    // input for it, so the view is theirs, without Take over; it is the assistant's again after.
+    const person = personOwnsInput(lease);
     return (
       <div data-testid="live-view-slot">
-        <LiveBrowser key={lease.id} status={status} />
+        <LiveBrowser
+          key={`${lease.id}:${person}`}
+          person={person}
+          status={
+            person
+              ? "You have the keyboard and the mouse. Complete this step in the live view."
+              : status
+          }
+        />
       </div>
     );
   }
