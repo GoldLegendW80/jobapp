@@ -237,6 +237,15 @@ def unstub(url: str, stub_base: str | None) -> str:
     jobs.lever.co/...). The setting is refused in production."""
     if not stub_base or not url.startswith(stub_base.rstrip("/") + "/"):
         return url
+    from app.apply.ats.wizard import fixture_job, fixture_url
+
+    for name, original in (
+        ("workday", "https://example.wd1.myworkdayjobs.com/en-US/Jobs/job/Paris/Engineer_R"),
+        ("google_careers", "https://www.google.com/about/careers/applications/jobs/results/"),
+        ("vie", "https://mon-vie-via.businessfrance.fr/en/offres/"),
+    ):
+        if fixture_url(url, stub_base, name) and (job := fixture_job(url)):
+            return original + job + ("-engineer" if name == "google_careers" else "")
     rest = url[len(stub_base.rstrip("/")) + 1 :]
     first, _, tail = rest.partition("/")
     hosts = {"ashby": "jobs.ashbyhq.com", "greenhouse": "boards.greenhouse.io"}
@@ -263,8 +272,23 @@ def _greenhouse_job(segments: list[str], query: dict[str, str]) -> str | None:
     return None
 
 
+def review_adapter(url: str):
+    """Only known canonical job addresses, independent of the page's claims."""
+    from app.apply.ats.google_careers import GoogleCareers
+    from app.apply.ats.vie import Vie
+    from app.apply.ats.workday import Workday
+
+    return next(
+        (a for kind in (Workday, GoogleCareers, Vie) if (a := kind()).form_url(url) is not None),
+        None,
+    )
+
+
 def ats_of(url: str) -> str:
-    """`ashby`, `greenhouse`, `lever` by the form's host, else `other`."""
+    """`ashby`, `greenhouse`, `lever`, `linkedin` by the form's host, the Review first only
+    `workday`, `google_careers`, `vie` by their exact job address, else `other`."""
+    if known := review_adapter(url):
+        return known.name
     found = _host(url)
     if found is None:
         return "other"
@@ -290,6 +314,8 @@ def canonical_key(url: str | None) -> str | None:
     """The key of the form an address shows (module docstring), None when it shows none."""
     if url is None:
         return None
+    if known := review_adapter(url):
+        return f"{known.name}:{known.job_of(url)}"
     found = _host(url)
     if found is None:
         return None

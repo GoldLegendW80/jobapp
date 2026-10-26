@@ -1,4 +1,4 @@
-"""Saved review answers and AI-reader reports reach the actual generic tools."""
+"""Saved review answers and AI-reader reports reach the actual generic and VIE tools."""
 
 import asyncio
 import json
@@ -10,10 +10,12 @@ import sqlalchemy as sa
 
 from app.apply import answers, form_agent, run
 from app.apply.ats import base, generic
+from app.apply.ats.vie import Vie
 from app.apply.models import AnswerSource, Application, ApplicationAnswer, Mode, State
 from app.jobs.models import Job
 from tests.apply.a4_support import Spec
 from tests.apply.a8b_support import WORKABLE_PATH, CustomForm, ScriptedFormAgent
+from tests.apply.a15_support import BASE, WizardForm, url
 from tests.apply.conftest import AT, add_posting
 from tests.apply.test_a5_run import fill, services, started
 from tests.apply.test_a8_ai_address import ADDRESSES, SUBJECTS
@@ -28,6 +30,49 @@ def context():
             "answers": {"motivation": "I build robots."},
         },
     )
+
+
+@pytest.mark.parametrize("label", ["Message", "Motivation message", "Message de motivation"])
+@pytest.mark.parametrize("changed", [None, "label", "kind", "options"])
+def test_vie_types_the_exact_saved_message_only_for_the_same_field_shape(label, changed):
+    async def go():
+        form = WizardForm(kind="vie")
+        form.spec("Motivation message").label = label
+        adapter = Vie(BASE)
+        assert await adapter.open(form, url("vie")) == ""
+        found, code = await adapter.discover(form)
+        assert not code
+        item = next(f for f in found.fields if f.label == label)
+        own = base.PersonAnswer(label, item.kind, item.options, "My revised message.")
+        if changed:
+            own = replace(
+                own,
+                **{
+                    changed: {
+                        "label": "Other question",
+                        "kind": "select",
+                        "options": ("Other choice",),
+                    }[changed]
+                },
+            )
+        adapter.person_answers[item.key] = own
+        saved = dict(adapter.person_answers)
+        result = adapter.resolve(item, context())
+        filled = await adapter.fill(form, item, result)
+        assert adapter.person_answers == saved
+        if changed:
+            assert isinstance(result, answers.Left)
+            assert result.reason == "person_answer_changed"
+            assert filled.status == "left"
+            assert form.spec(label).value == ""
+        else:
+            assert result == answers.Answer("My revised message.", "person")
+            assert filled.status == "filled"
+            assert form.spec(label).value == "My revised message."
+        assert not form.gate_clicks
+        assert not form.submit_clicks
+
+    asyncio.run(go())
 
 
 @pytest.mark.parametrize("changed", [None, "label", "kind", "options"])

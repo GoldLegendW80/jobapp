@@ -612,7 +612,7 @@ def _stop_of(code: str, step: str = "") -> Stop:
         return Stop(State.needs_person, "needs_person", step or "needs_person")
     if code == ats_base.CREDENTIAL:  # browserd refused to type into a credential input: a wall
         return Stop(State.needs_person, "needs_person", "signin")
-    if code in (*ats_base.PENDING_STEPS, run.failures.PAYMENT):
+    if code in (*ats_base.PENDING_STEPS, run.failures.PAYMENT, "profile_incomplete"):
         return Stop(State.needs_person, "needs_person", code)
     if code == "posting_closed":
         return Stop(State.posting_closed, code)
