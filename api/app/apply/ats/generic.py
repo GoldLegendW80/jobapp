@@ -39,15 +39,17 @@ field of the page, so a field after the submit (a newsletter box in the footer) 
 named form, the page behind a modal form) as `another_part`: the person submits. A part the
 snapshot does not name (a plain block, a named `region`) is read as the form's own, so a box
 there after a form whose submit has another name may be designated; the "before" screenshot
-shows it to the person. `addressed` reads a page that names an AI reader with the words of
-`AI_READER`, and a model's own name only where the page speaks to it (`AI_NAMED`): a sentence
-that opens on a person named Claude and a comma is reported, and a greeting ("Hey Claude,") or a
-name right after a heading, whose words the read joins with no stop, is not.
+shows it to the person. `addressed` recognises direct reader addresses (`AI_READER`,
+`AI_NAMED`), rather than mentions of AI as a posting's subject. An opening name and comma can
+also address a person named Claude. Greetings and indirect or unfamiliar address wording can
+be missed; this report flag grants no permission to follow page instructions.
 """
 
 import io
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
@@ -63,6 +65,7 @@ from app.apply.ats.base import (
     label_of,
     parse_snapshot,
 )
+from app.apply.ats.base import PersonAnswer as PersonAnswer
 from app.browser.client import BrowserError
 
 SUBMIT_NAMES = frozenset(
@@ -180,10 +183,27 @@ async def marked(tools: Tools, ref: str, name: str = "") -> bool:
     return not result.get("ok") and result.get("error") == "submit"
 
 
+_READER = (
+    r"(?:ai(?: (?:assistants?|agents?|models?|tools?|systems?))?|artificial intelligence|"
+    r"(?:large )?language models?|automated assistants?|"
+    r"assistants? ia|agents? ia|intelligence artificielle)"
+)
+_READER_KIND = rf"(?:{_READER}|llms?)"
+# Newlines remain boundaries, so whitespace after one must not consume further boundaries.
+_BOUNDARY = r"(?:^|[.!?\n][ \t]*)"
+_DIRECTIVE = (
+    r"(?:please )?(?:ignore|disregard|answer|write|include|add|send|stop|follow|read|"
+    r"you (?:must|should)|ignorez|repondez|ecrivez|incluez|envoyez|suivez)\b"
+)
 AI_READER = re.compile(
-    r"\b(?:ai (?:assistants?|agents?|models?|tools?|systems?)|artificial intelligence|"
-    r"(?:large )?language models?|llms?|automated assistants?|if you are an ai|"
-    r"assistants? ia|agents? ia|intelligence artificielle)\b"
+    rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:an? |un |une )?{_READER_KIND}\s*[,.:;!?]"
+    rf"|{_BOUNDARY}(?:les |aux )?{_READER}\s*[,:]"
+    rf"|\b(?:note|message|instructions?|consignes?) (?:to|for|pour|a) "
+    rf"(?:les |aux )?{_READER_KIND}\s*[,:]"
+    rf"|{_BOUNDARY}llms?\s*[,:]\s*{_DIRECTIVE}"
+    rf"|\b{_READER_KIND} reading this (?:page|form) (?:must|should)\b"
+    rf"|{_BOUNDARY}(?:les )?{_READER_KIND} doivent "
+    r"(?:ignorer|repondre|inclure|ecrire|envoyer|suivre)\b"
 )
 # A model's own name is also a person's (a recruiter named Claude): only an address counts.
 _VERSION = r"\d+(?:\.\d+)?"
@@ -193,7 +213,7 @@ _MODEL = (
 )
 AI_NAMED = re.compile(
     rf"\b(?:if you are|if you're|si vous etes|si tu es) (?:{_MODEL})\b"
-    rf"|(?:^|[.!?] |\b(?:note|message|instructions?|consignes?) (?:to|for|pour) )"
+    rf"|(?:{_BOUNDARY}|\b(?:note|message|instructions?|consignes?) (?:to|for|pour) )"
     rf"(?:{_MODEL}) ?[,:]"
 )
 
@@ -201,7 +221,7 @@ AI_NAMED = re.compile(
 def addressed(text: str) -> bool:
     """The page names an AI reader (SPEC-apply: a form that addresses AI assistants is reported).
     Reported only: nothing the page asks is done."""
-    folded = fold(text)
+    folded = "\n".join(fold(line) for line in text.splitlines())
     return AI_READER.search(folded) is not None or AI_NAMED.search(folded) is not None
 
 
@@ -236,6 +256,12 @@ class Generic(Adapter):
     def form_url(self, posting_url: str) -> str | None:
         return None
 
+    def check_designation(self, root: Node, ref: str) -> str:
+        return check_designation(root, ref)
+
+    def approved(self, rows: Sequence["Row"]) -> None:
+        """A known wizard may retain approved summary values for its final readback."""
+
     def recognises(self, snapshot: str) -> bool:
         """Any page that shows a field: the last adapter of `ADAPTERS`."""
         return bool(discover_fields(parse_snapshot(snapshot), self.submit_names).fields)
@@ -257,6 +283,72 @@ class Generic(Adapter):
                 replace(s, label=f"Step {self.step + 1}: {s.label}") for s in found.skipped
             ]
         return found, code
+
+
+class DeterministicReport:
+    """Designation metadata produced by code for a known site."""
+
+
+class Deterministic(Generic):
+    """Known site with ordered steps, filled without the form or answer model."""
+
+    def pending_at(self, root: Node) -> str:
+        from app.apply.ats.greenhouse import email_code
+
+        return super().pending_at(root) or (
+            "email_code" if email_code(root, self.submit_names) else ""
+        )
+
+    def _fill_report(self, factory):
+        report = getattr(self, "_waiting_report", None)
+        self._waiting_report = None
+        if report is None:
+            return factory()
+        # Refill only this page; earlier pages remain the exact approval/replay record.
+        prefix = f"s{self.step + 1}/"
+        report.outcomes = [
+            o
+            for o in report.outcomes
+            if (
+                not o.field.key.startswith(prefix)
+                if self.step
+                else re.match(r"s[0-9]+/", o.field.key)
+            )
+        ]
+        report.stopped = report.needs_person = ""
+        report.designated = report.designated_ref = ""
+        return report
+
+    def _completed_report(self, report):
+        if report.stopped == "needs_person" and report.needs_person in {
+            "captcha",
+            "email_code",
+            "forbidden",
+        }:
+            self._waiting_report = report
+        return report
+
+    async def discover(self, tools: Tools, known: frozenset[str] = frozenset()):
+        found, code = await super().discover(tools, known)
+        if found is not None and not code:
+            shape = json.dumps(
+                [[f.key, f.label, f.kind, list(f.options), f.required] for f in found.fields],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            self.seen_shapes = {**getattr(self, "seen_shapes", {}), str(self.step): shape}
+            expected = getattr(self, "person_shapes", {}).get(str(self.step))
+            if expected is not None and expected != shape:
+                return found, "form_changed"
+        return found, code
+
+    def approved(self, rows: Sequence["Row"]) -> None:
+        self.seen_shapes = {}
+        self.person_shapes = {
+            r.key.removeprefix("designated:shape:"): r.value
+            for r in rows
+            if r.key.startswith("designated:shape:")
+        }
 
 
 def _rekey(item: Any, key: str) -> Any:
@@ -296,7 +388,10 @@ def configured(adapter: Adapter, rows: Sequence[Row]) -> Adapter | None:
     submit, steps = designation_of(rows)
     if not submit:
         return None
-    return Generic(adapter.stub_base, submit=submit, steps=steps)
+    prepared = copy(adapter)
+    prepared.submit, prepared.steps, prepared.step = submit, steps, 0
+    prepared.approved(rows)
+    return prepared
 
 
 def _step_of(row: Row) -> int:
@@ -329,7 +424,12 @@ async def advance(adapter: Generic, tools: Tools, found: Discovery) -> str:
         return "form_changed"
     result = await tools.click(found.submit_refs[0], adapter.steps[adapter.step])
     if not result.get("ok"):
-        return str(result.get("error") or "failed")
+        code = str(result.get("error") or "failed")
+        return (
+            "signin"
+            if code == "host_not_allowed" and getattr(adapter, "review_only", False)
+            else code
+        )
     adapter.step += 1
     return ""
 
@@ -342,7 +442,7 @@ async def recheck(adapter: Adapter, tools: Tools, found: Discovery) -> str:
     if len(found.submit_refs) != 1 or found.root is None:
         return "submit_missing"
     ref = found.submit_refs[0]
-    if code := check_designation(found.root, ref):
+    if code := adapter.check_designation(found.root, ref):
         return code
     return "" if await marked(tools, ref, adapter.submit) else "not_marked"
 
