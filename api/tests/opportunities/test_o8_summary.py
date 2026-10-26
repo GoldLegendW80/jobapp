@@ -82,6 +82,10 @@ def test_the_summary_answer_names_the_counter() -> None:
         "new",
         "skipped_by_rule",
         "items_skipped",
+        # A website searched in the browser: one search per title and place combination.
+        "searches",
+        "searches_planned",
+        "searches_total",
         "error",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
@@ -157,6 +161,9 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "new": 2,
         "skipped_by_rule": 1,
         "items_skipped": 2,
+        "searches": 0,
+        "searches_planned": 0,
+        "searches_total": 0,
         "error": "store_failed",
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,

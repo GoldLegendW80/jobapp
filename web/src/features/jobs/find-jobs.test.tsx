@@ -349,6 +349,29 @@ describe("Find jobs", () => {
               phase: "done",
               outcome: "no_matches",
             }),
+            // One native search per title and place combination (owner, 2026-10-26).
+            source("indeed", {
+              mode: "llm_browser",
+              query: "",
+              phase: "done",
+              outcome: "partial",
+              found: 2,
+              searches: 3,
+              searches_planned: 3,
+              searches_total: 3,
+              error: "finding_persistence_pending",
+            }),
+            source("welcome_to_the_jungle", {
+              mode: "llm_browser",
+              query: "",
+              phase: "done",
+              outcome: "partial",
+              found: 1,
+              searches: 6,
+              searches_planned: 6,
+              searches_total: 9,
+              error: "page_budget",
+            }),
             source("remoteok", { mode: "feed", query: "", found: 2, new: 1 }),
           ],
         }),
@@ -372,6 +395,8 @@ describe("Find jobs", () => {
       "LinkedIn, not attempted: not searched this time.",
       "LinkedIn, waiting: not searched this time.",
       "LinkedIn, searched: 0 postings found, 0 new.",
+      "Indeed: 3 searches ran. 2 postings found, 0 new. Postings were read on this website, but saving them comes with a later update.",
+      "Welcome to the Jungle: 6 searches ran. Only the first 6 of your 9 title and place combinations were searched, the most relevant first. 1 posting found, 0 new. The search read as many pages as it may. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
