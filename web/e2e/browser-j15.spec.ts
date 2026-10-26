@@ -31,6 +31,8 @@ import {
  *   to search other words, open an address and press its Send application button; the recorded
  *   model does all three: code refuses the words and the address, browserd refuses the click
  *   on the button of a POST form, and code records the source as `unsupported_interaction`.
+ *   The posting, verified on its page (title, employer and location read there), is saved to
+ *   her list as it is reported (jobs J11): found 1, new 1, and it is in the postings list.
  *   The site sees GET requests only, none for the address, the profile keeps its revision.
  * - The company careers page of browser B9 (tests/browser_pages/b9/) stays a source of its own
  *   and its posting is saved to the list.
@@ -40,9 +42,7 @@ import {
  *
  * What the stack does not do yet, so this journey asserts the current truth: the job websites
  * with a permission open the pages service instead of their real host and no fake of their
- * search exists yet (browser B14, #631, wires the permission check), and a posting read on a
- * website is counted but not saved (J11, #632 and #655).
- * When those land, the matching assertions flip (the PR of J15 lists them).
+ * search exists yet (browser B14, #631, wires the permission check).
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
  */
@@ -244,7 +244,7 @@ test("the websites end in words, the company page's posting is saved, nothing is
   await expect(
     sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
   ).toContainText(
-    "1 posting found, 0 new. The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
+    "1 posting found, 1 new. The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
   );
   await expect(summary).not.toContainText(/[–—]| - /);
   await shots(page, "summary");
@@ -284,15 +284,15 @@ test("the websites end in words, the company page's posting is saved, nothing is
     expect(source?.error ?? "", detail).not.toMatch(/^permission_/);
     expect(source?.result_pages ?? 0, detail).toBeGreaterThanOrEqual(1);
   }
-  // Her own website: searched through the finder's tools, the posting read and counted, not
-  // yet saved (J11). The click on the posting's Send application button was refused, and code
-  // records that refusal as the source's outcome.
+  // Her own website: searched through the finder's tools, the posting verified and saved
+  // (J11). The click on the posting's Send application button was refused, and code records
+  // that refusal as the source's outcome; the posting saved stays.
   const own = sources.find((item) => item.kind === "custom");
   expect(own, detail).toMatchObject({
     mode: "llm_browser",
     host: SITE_HOST,
     found: 1,
-    new: 0,
+    new: 1,
     error: "unsupported_interaction",
   });
   expect(own?.result_pages ?? 0).toBeGreaterThanOrEqual(4);
@@ -330,11 +330,31 @@ test("the websites end in words, the company page's posting is saved, nothing is
   };
   expect(after.revision).toBe(revision);
 
-  // The postings list, after the summary: the company page's posting, not the one read only.
+  // The postings list, after the summary: the company page's posting and the job website's,
+  // found, with the employer its page names and the website as its source.
   await page.goto("/jobs");
   const main = page.getByRole("main");
   await expect(main).toContainText("AI Engineer");
-  await expect(main).not.toContainText("Robot Engineer");
+  await expect(main).toContainText("Robot Engineer");
+  const listed = await page.request.get("/api/jobs?limit=200");
+  expect(listed.ok()).toBe(true);
+  const robot = (
+    (await listed.json()) as {
+      items: {
+        title: string;
+        company: string;
+        source: string | null;
+        status: string;
+        url: string | null;
+      }[];
+    }
+  ).items.find((item) => item.title === "Robot Engineer");
+  expect(robot).toMatchObject({
+    company: "Example Robotics",
+    source: SITE_HOST,
+    status: "found",
+    url: `${SITE}jobs/robot-engineer.html`,
+  });
   await expect(page.locator("body")).not.toContainText(/[–—]| - /);
   expect(errors).toEqual([]);
 });

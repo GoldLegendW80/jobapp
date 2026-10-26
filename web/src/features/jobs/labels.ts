@@ -180,10 +180,11 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "This website was already searched today. It is searched again tomorrow.",
   platform_signin:
     "This website needs you to sign in. Nothing else was opened on it.",
+  // Sweeps before jobs J11 (#632) counted the postings of a website without saving them.
   finding_persistence_pending:
-    "Postings were read on this website, but saving them comes with a later update.",
+    "Postings were read on this website, but saving them came with a later update.",
   unsupported_interaction:
-    "The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
+    "The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
   unsupported_criteria:
     "Your search uses settings this website search does not take yet, so it was not opened.",
   no_credential: "Add your model access in Account to search this website.",
