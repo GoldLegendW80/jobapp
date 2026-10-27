@@ -150,9 +150,27 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
         return False
 
 
+# Read inside every glued path segment, query key and query value of a signed in page's request:
+# a request that ends the person's own login there (/logout, /api/sign-out, ?action=logoff,
+# /se-deconnecter) is refused, so a search never signs the person out.
+SESSION_ENDS = ("logout", "logoff", "signout", "deconnex", "deconnect", "disconnect", "abmeld")
+
+
+def ends_session(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return True
+    texts = [*parts.path.split("/"), *(text for pair in pairs for text in pair)]
+    glued = ["".join(detect.words(text)) for text in texts]
+    return any(end in text for text in glued for end in SESSION_ENDS)
+
+
 def destructive(url: str) -> bool:
-    """An address that applies, submits, deletes or pays, by its path words (read_url's rule
-    without the account words: a signed in page reads the person's own account data)."""
+    """An address that applies, submits, deletes, pays or signs the person out, by its path
+    words (read_url's rule without the account words: a signed in page reads the person's own
+    account data) and, for signing out, its query too."""
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -165,6 +183,7 @@ def destructive(url: str) -> bool:
         detect.says_submit(segments, profile_edit=True)
         or detect.says_danger(segments)
         or any(part in t for t in tokens for part in APPLY_PARTS)
+        or ends_session(url)
     )
 
 

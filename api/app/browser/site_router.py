@@ -6,9 +6,9 @@
   person's own sign in session (B7, `POST /api/browser/sessions {purpose: "signin", address}`
   started it), then asks browserd whether the profile now holds that website's cookies and
   records the login only when it does: 200 `{host, state}`, `state` `signed_in` or
-  `not_signed_in`. 422 `bad_address` for an address the sign in rule refuses; 409 `busy` while
-  another lease of the person's profile runs (Done again later); 503 when browserd or Redis
-  cannot be reached.
+  `not_signed_in` (also for a person without any browser profile: none is made). 422
+  `bad_address` for an address the sign in rule refuses; 409 `busy` while another lease of the
+  person's profile runs (Done again later); 503 when browserd or Redis cannot be reached.
 
 Forgetting a login is B7's "Forget all logins" (DELETE /api/browser/profile): the rows go with
 the profile row. The user comes from the session (CSRF on the write); no id is in any path.
@@ -22,7 +22,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.browser import profiles, site_logins
+from app.browser import site_logins
 from app.browser.address import ADDRESS_MAX
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
@@ -87,8 +87,10 @@ async def done(
         # The person's own sign in session ends first: Chromium writes the profile and closes.
         await store.release(str(user.id), purposes=("signin",))
         await store.cancel(str(user.id), purposes=("signin",))
-        profile = await run_in_threadpool(profiles.ensure, sessions, user.id)
-        present = await store.client.site_session(profile.profile_id, profile.uid, host)
+        profile = await run_in_threadpool(site_logins.profile_of, sessions, user.id)
+        present = (
+            False if profile is None else await store.client.site_session(*profile, host)
+        )
     except (BrowserError, StoreUnavailableError):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from None
     if present is None:

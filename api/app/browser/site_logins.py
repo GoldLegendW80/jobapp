@@ -53,6 +53,18 @@ def _profile(user_id: uuid.UUID) -> Any:
     return sa.select(BrowserProfile.profile_id).where(BrowserProfile.user_id == user_id)
 
 
+def profile_of(sessions: sessionmaker[Session], user_id: uuid.UUID) -> tuple[str, int] | None:
+    """The person's profile (its id and uid) when they have one; never makes one, so a Done
+    without any browser profile records nothing and leaves no row behind."""
+    with sessions() as db:
+        found = db.execute(
+            sa.select(BrowserProfile.profile_id, BrowserProfile.uid).where(
+                BrowserProfile.user_id == user_id
+            )
+        ).one_or_none()
+    return None if found is None else (str(found.profile_id), found.uid)
+
+
 def record(sessions: sessionmaker[Session], user_id: uuid.UUID, host: str, at: datetime) -> bool:
     """The website's login saved now in the person's profile; False when they have none."""
     with sessions() as db:

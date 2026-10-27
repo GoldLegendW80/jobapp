@@ -59,6 +59,24 @@ DEEP_FOCUS_JS = """() => {
 FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.documentElement) ? 'BODY' : e.tagName"  # noqa: E501  one JS expression run in the page
 
 
+# B17: run before any script of every document of a signed in discovery (its JavaScript is on):
+# no worker, socket or service worker registration, whose traffic the route would not see.
+SIGNED_IN_JS = """(() => {
+  const refuse = function () { throw new DOMException("Blocked during a search", "SecurityError"); };
+  for (const name of ["Worker", "SharedWorker", "WebSocket", "WebTransport"]) {
+    try { Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false }); } catch (e) {}
+  }
+  try {
+    if (globalThis.ServiceWorkerContainer) {
+      Object.defineProperty(globalThis.ServiceWorkerContainer.prototype, "register", {
+        value: () => Promise.reject(new DOMException("Blocked during a search", "SecurityError")),
+        writable: false, configurable: false,
+      });
+    }
+  } catch (e) {}
+})();"""  # noqa: E501  one script run in the page
+
+
 def failure(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": code, "message": message}
 
@@ -211,19 +229,32 @@ class Tab:
 
     async def _begin_signed_in(self, scope: "discovery.Scope") -> None:
         """B17: the person's own persisted context (their logins), its JavaScript on; one tab,
-        every request it makes held by `_signed_route` from the first navigation on."""
+        every request it makes held by `_signed_route` from the first navigation on.
+
+        Playwright's route never sees a request a service worker answers, nor a WebSocket, nor
+        (not proved) a worker's, so before the first navigation the tab bypasses every service
+        worker of the profile (each request then reaches the route), blocks ws:// and wss://,
+        and its pages get no Worker, SharedWorker, WebSocket, WebTransport nor service worker
+        registration (SIGNED_IN_JS). A step that fails ends the discovery: nothing is read."""
         self.state.signed_in = True
         try:
             async with asyncio.timeout(ACTION_S):
                 context = self.browser.browser.contexts[0]
+                await context.add_init_script(SIGNED_IN_JS)
                 await context.route("**/*", self._signed_route)
                 context.on("request", self._hop)
                 page = context.pages[0] if context.pages else await context.new_page()
+                self.state.page = page  # closed by close_discovery if a step below fails
                 for other in context.pages:
                     if other is not page:
                         await other.close()
+                client = await context.new_cdp_session(page)
+                await client.send("Network.enable")
+                await client.send("Network.setBypassServiceWorker", {"bypass": True})
+                await client.send("Network.setBlockedURLs", {"urls": ["ws://*", "wss://*"]})
+                self.state.native_cdp = client
                 self.state.native_context = self.state.guarded = context
-                self.state.scope, self.state.page = scope, page
+                self.state.scope = scope
                 context.on("page", self.extra_page)
         except Exception as exc:
             await self.close_discovery()
