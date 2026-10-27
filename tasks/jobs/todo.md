@@ -131,7 +131,7 @@ Task [#641](https://github.com/GoldLegendW80/jobapp/issues/641). Small client co
 
 ### J17: a ticked website is its permission, and Websites only
 
-Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing #651's separate permission cards. Find jobs shows each job website's risk sentence beside its box; Save records the consent of every ticked website through the platform's consent route on the reviewed revision and takes back the one of a website unticked; "Websites only" searches the ticked websites alone (`POST /api/jobs/sweeps {websites_only}`). The search's permission checks, pause, caps and pacing are unchanged. Status: built on the combined branch, journeys run by the orchestrator.
+Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing #651's separate permission cards. Find jobs shows each job website's risk sentence beside its box; Save records the consent of every ticked website through the platform's consent route on the reviewed revision and takes back the one of a website unticked; "Websites only" searches the ticked websites alone (`POST /api/jobs/sweeps {websites_only}`). The search's permission checks, pause, caps and pacing are unchanged. Status: built on the combined branch, journeys run by the orchestrator. The "Websites only" part is replaced on 2026-10-28: every search runs the websites alone, the setup shows no board, feed, reader or regular expression switch (branch `jobs/websites-only-setup`).
 
 ### J18: one agent per job website, with all the saved criteria
 

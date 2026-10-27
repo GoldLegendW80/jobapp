@@ -35,8 +35,9 @@ import {
  *   The posting, verified on its page (title, employer and location read there), is saved to
  *   her list as it is reported (jobs J11): found 1, new 1, and it is in the postings list.
  *   The site sees GET requests only, none for the address, the profile keeps its revision.
- * - The company careers page of browser B9 (tests/browser_pages/b9/) stays a source of its own
- *   and its posting is saved to the list.
+ * - The company careers page of browser B9 (tests/browser_pages/b9/), saved in her profile,
+ *   is neither shown in the setup nor searched: every search runs the ticked websites alone
+ *   (owner, 2026-10-28). The setup has no regular expression switch.
  * - Pacing: the site's requests are at least the pause apart (PAGE_PAUSE_S, 5 s). The agent of a
  *   website has no page cap of its own (owner, 2026-10-27, jobs J18): its one run reads the
  *   pages its searches need. The summary names the search it ran, from its own tool calls.
@@ -219,9 +220,18 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
     setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
   await setup.getByLabel("Instructions for this search").fill(INSTRUCTIONS);
+  // Owner, 2026-10-28: the setup is the websites and the words. Her saved company careers page
+  // (a legacy finder) is neither shown nor searched, and no switch asks for regular expressions.
   await expect(
     setup.getByRole("region", { name: "Other search sources" }),
-  ).toContainText(`${COMPANY} (legacy finder)`);
+  ).toHaveCount(0);
+  await expect(setup.getByText(COMPANY)).toHaveCount(0);
+  await expect(
+    setup.getByRole("checkbox", { name: "Websites only" }),
+  ).toHaveCount(0);
+  await expect(
+    setup.getByRole("switch", { name: /regular expressions/i }),
+  ).toHaveCount(0);
   await shots(page, "setup");
   await setup.getByRole("button", { name: "Save and Start" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
@@ -313,9 +323,18 @@ test("the websites end in words, the company page's posting is saved, nothing is
     searched: [{ title: "engineer", place: "Paris" }],
   });
   expect(own?.result_pages ?? 0).toBeGreaterThanOrEqual(4);
-  // The company careers page (browser B9): its Paris posting is saved.
-  const company = sources.find((item) => item.kind === "site");
-  expect(company?.new ?? 0, detail).toBeGreaterThanOrEqual(1);
+  // The company careers page (browser B9) stays saved and is no longer searched: every search
+  // runs the ticked websites alone (owner, 2026-10-28).
+  expect(
+    sources.find((item) => item.kind === "site"),
+    detail,
+  ).toBeUndefined();
+  const saved = (await (await page.request.get("/api/profile")).json()) as {
+    sections: { search: { browser_sources: Array<{ query: string }> } };
+  };
+  expect(
+    saved.sections.search.browser_sources.map((row) => row.query),
+  ).toContain(COMPANY);
 
   // What the site saw: the person's words and place only, the posting reached by the second
   // page of results, GET requests only (the refused click sent no POST), never the address the

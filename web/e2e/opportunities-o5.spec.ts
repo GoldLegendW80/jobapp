@@ -40,12 +40,13 @@ import {
  * reads for every org) and skills its postings match. A reload, a fresh visit of /welcome and a
  * second device (a new browser context signed in as N) open the step left, since the steps
  * passed are kept in the profile. The pay is "Rather not say", Full auto shows as "Available
- * soon" and cannot be chosen, and "Start" on the summary says the first search has started; the
- * sweep runs in the worker to its end and Discover shows its card. The profile holds the answers
- * and apply's mode is still Review first. Signing in again lands on the home page with no card.
- * Person B, beside N, still gets the wizard, puts it off with "Skip for now", and after signing
- * in again is not sent to it but sees the card; B has no board, so B's Start ends the wizard
- * with the sentence that asks for boards and starts no sweep. No screen shows a dash.
+ * soon" and cannot be chosen, and "Start" on the summary opens Discover with the sentence that
+ * asks to tick job websites in Find jobs, and starts no sweep: every search runs the ticked
+ * websites alone (owner, 2026-10-28), and N has a board and no website. The profile holds the
+ * answers and apply's mode is still Review first. Signing in again lands on the home page with
+ * no card. Person B, beside N, still gets the wizard, puts it off with "Skip for now", and after
+ * signing in again is not sent to it but sees the card; B has no board and no website, so B's
+ * Start ends the wizard the same way. No screen shows a dash.
  *
  * Locally, as opportunities-all.config.ts says (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=... E2E_ATS_FORMS_URL=... E2E_COMPOSE_PROJECT=... \
@@ -99,10 +100,10 @@ const BOARD = {
   enabled: true,
   extra_exclude: { terms: [], advanced_regex: false },
 };
-const STARTED =
-  "Your first search has started. New postings appear as it finds them.";
-const NO_BOARDS =
-  "Add the company boards to search in Search options, then find new postings.";
+// Every search runs the ticked job websites alone (owner, 2026-10-28): a board chosen in the
+// wizard is saved and not searched, so Start ends the wizard without a sweep and says why.
+const NO_WEBSITES =
+  "Tick the job websites to search in Find jobs, then find new postings.";
 
 let admin: Person;
 let adminContext: BrowserContext;
@@ -423,30 +424,13 @@ test("pay, how the app applies, the summary, and Start opens Discover", async ()
   await noDash(pageN);
   await shots(pageN, "summary");
   await press(pageN.getByRole("button", { name: "Start" }), "Enter");
-  await expect(pageN.getByText(STARTED)).toBeVisible();
+  await expect(pageN.getByText(NO_WEBSITES)).toBeVisible();
   await expect(pageN).toHaveURL(/\/discover$/);
   await expect(
     pageN.getByRole("heading", { level: 1, name: "Discover" }),
   ).toBeVisible();
-
-  // The first sweep runs in the worker against the fake board, to its end.
-  await expect
-    .poll(
-      async () => {
-        const read = await pageN.request.get("/api/jobs/sweeps?limit=1");
-        const body = (await read.json()) as {
-          items: Array<{ status: string; new: number }>;
-        };
-        return body.items[0]?.status ?? "none";
-      },
-      { timeout: 90_000, intervals: [1_000] },
-    )
-    .toBe("done");
-  await pageN.reload();
-  await expect(pageN.getByTestId("deck-card").first()).toBeVisible();
-  await expect(
-    pageN.getByTestId("deck-card").getByRole("heading", { level: 2 }),
-  ).toHaveText("AI Engineer");
+  const sweeps = await pageN.request.get("/api/jobs/sweeps?limit=1");
+  expect(((await sweeps.json()) as { items: unknown[] }).items).toEqual([]);
 
   const profile = (await (await pageN.request.get("/api/profile")).json()) as {
     sections: {
@@ -524,7 +508,7 @@ test("B, with roles and no board, ends the wizard without a sweep", async () => 
   await step(pageB, 7);
   await expect(pageB.getByText(/covers 0 boards from/)).toBeVisible();
   await press(pageB.getByRole("button", { name: "Start" }), "Enter");
-  await expect(pageB.getByText(NO_BOARDS)).toBeVisible();
+  await expect(pageB.getByText(NO_WEBSITES)).toBeVisible();
   await expect(pageB).toHaveURL(/\/discover$/);
   expect((await stateOf(pageB)).completed_at).not.toBeNull();
   const sweeps = await pageB.request.get("/api/jobs/sweeps?limit=1");
