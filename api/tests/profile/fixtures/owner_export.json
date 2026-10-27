@@ -844,6 +844,10 @@
           "\\beu\\b"
         ]
       },
+      "location_exclude": {
+        "advanced_regex": false,
+        "terms": []
+      },
       "contract_types": [
         "CDI",
         "CDD",
