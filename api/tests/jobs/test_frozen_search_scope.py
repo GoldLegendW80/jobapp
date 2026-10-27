@@ -205,8 +205,8 @@ def test_interactive_only_run_explains_unsupported_criteria_without_legacy_fallb
     fake_queue: FakeQueue,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # Several titles and places are one search each now (owner, 2026-10-26); a regular
-    # expression that is not a plain word still cannot be typed into a website's search.
+    # Several titles and places are one agent's to search now (owner, 2026-10-27, jobs J18); a
+    # regular expression that is not a plain word still cannot be typed into a website's search.
     title = {"terms": ["(ai|ml) engineer"], "advanced_regex": True}
     set_profile(
         factory,

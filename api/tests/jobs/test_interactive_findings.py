@@ -111,6 +111,18 @@ async def report(session: finder.FinderSession, *paths: str) -> str:
     return ""
 
 
+async def again(session: finder.FinderSession, path: str, title: str = "") -> str:
+    """Open a detail page the run reported before and report it again: the refusal's reason."""
+    assert not (await session.navigate("/" + path))[1]
+    text, error = await session.report_verified(
+        [{"title": title or title_of(path), "url": "/" + path, "text": MODEL_WORDS}]
+    )
+    assert not error, text
+    answer = json.loads(text)
+    assert answer["kept"] == 0, text
+    return answer["refused"][0]["reason"]
+
+
 def reports(*paths: str) -> Callable[[finder.FinderSession], Any]:
     async def script(session: finder.FinderSession) -> finder.Ran:
         await searched(session)
@@ -851,9 +863,10 @@ def test_a_progress_write_and_a_commit_never_overlap(
 def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_them(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    """One search per title (pull request 715): each search's verified batches reach the store
-    as they come, a posting both searches give is stored once, an unwanted title is dropped
-    before the store, and the refusal in the second search keeps what both saved."""
+    """One agent per website (jobs J18), a search per title in one run: the verified batches
+    reach the store as they come, a posting both searches give is stored once (its second
+    report is merged as a duplicate), an unwanted title is dropped before the store, and the
+    refusal in the second search keeps what both saved."""
     profile(
         factory,
         alice,
@@ -864,14 +877,15 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         assert session.interactive is not None
-        query = session.interactive.query
-        queries.append(query)
-        assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
-        assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
-        if query == "robot":
-            assert await report(session, "jobs/robot", "jobs/arm") == ""
-        else:
-            assert await report(session, "jobs/arm", "jobs/arm-2", "jobs/sales") == ""
+        for query in session.interactive.titles:
+            queries.append(query)
+            assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
+            assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
+            if query == "robot":
+                assert await report(session, "jobs/robot", "jobs/arm") == ""
+                continue
+            assert await again(session, "jobs/arm") == "duplicate"
+            assert await report(session, "jobs/arm-2", "jobs/sales") == ""
             # The posting's Send application button: browserd refuses the click (a POST form).
             assert (await session.interact("browser_click", {"ref": "e99"}))[1]
         return finder.Ran()
@@ -886,6 +900,7 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
     assert queries == ["robot", "arm"]
     entry = entry_of(row)
     assert (entry["searches"], entry["found"], entry["postings"]) == (2, 3, 3)
+    assert entry["searched"] == [{"title": "robot", "place": None}, {"title": "arm", "place": None}]
     assert (entry["unwanted"], entry.get("duplicates", 0)) == (1, 0)
     assert (entry["error"], entry["outcome"]) == ("unsupported_interaction", "partial")
     assert (row.stats["new"], row.stats["duplicates"]) == (3, 0)
@@ -945,22 +960,25 @@ def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reac
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         assert session.interactive is not None
-        query = session.interactive.query
-        assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
-        assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
-        if query == "robot":
-            await verified(session, "jobs/robot", "Robot Engineer")
-            await verified(session, "jobs/lyon", "Robot Engineer")
-            await verified(session, "jobs/cdd", "Robot Engineer CDD")
-            await verified(session, "jobs/flip", "Arm Sales Lead")
-        else:
-            await verified(session, "jobs/flip", "Arm Engineer")
-            await verified(session, "jobs/robot", "Robot Engineer")
+        for query in session.interactive.titles:
+            assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
+            assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
+            if query == "robot":
+                await verified(session, "jobs/robot", "Robot Engineer")
+                await verified(session, "jobs/lyon", "Robot Engineer")
+                await verified(session, "jobs/cdd", "Robot Engineer CDD")
+                await verified(session, "jobs/flip", "Arm Sales Lead")
+            else:
+                # Read again by the second search, an address is merged, whatever it now says:
+                # the unwanted reading of flip stays, the stored robot stays stored once.
+                assert await again(session, "jobs/flip", "Arm Engineer") == "duplicate"
+                assert await again(session, "jobs/robot") == "duplicate"
         return finder.Ran()
 
     row = run(factory, new_sweep(factory, alice), runner(script, TwoWays()))
     entry = entry_of(row)
-    assert read == ["flip", "flip"]
+    # Its detail page, the same page snapshotted after the next search's typing, then again.
+    assert read == ["flip", "flip", "flip"]
     assert (entry["searches"], entry["error"], entry["outcome"]) == (2, None, "complete")
     assert (entry["found"], entry["postings"], row.stats["new"]) == (1, 1, 1)
     assert (entry["unwanted"], entry["other_contract"]) == (2, 1)

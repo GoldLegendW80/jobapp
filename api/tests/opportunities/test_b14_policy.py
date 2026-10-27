@@ -447,13 +447,12 @@ def test_a_failed_write_stops_the_source(
     assert run(policy.observe(ctx, URLS["indeed"], CHECKPOINT)) == "permission_unavailable"
 
 
-def test_one_linkedin_sweep_a_day_holds_across_the_searches_of_the_website(
+def test_one_linkedin_sweep_a_day_holds_for_the_agent_of_the_website(
     api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
 ) -> None:
-    """Review of pull request 715, follow up 5: each native search of the website reserves
-    LinkedIn for its sweep through the real guard; the second passes because the sweep that
-    opened LinkedIn today is its own, and another sweep the same day is refused before any
-    lease."""
+    """Jobs J18: the agent of the website reserves LinkedIn for its sweep once, through the real
+    guard, and runs both its searches there; another sweep the same day is refused before any
+    lease (LinkedIn's account safety cap, whatever the agent's own lack of a cap)."""
     from tests.browser.test_b9_site import ScriptedFinder
     from tests.browser.test_multi_search import LINKEDIN, SearchSite, searching
     from tests.browser.test_selected_interactive import execute, selected
@@ -480,13 +479,13 @@ def test_one_linkedin_sweep_a_day_holds_across_the_searches_of_the_website(
 
     first = running(factory, person_a, clock(), [LINKEDIN])
     entry, leases = sweep_of(first)
-    # Both searches opened LinkedIn (no commits here: found is counted, not saved).
+    # One lease, both searches on LinkedIn (no commits here: found is counted, not saved).
     assert (entry["searches"], entry["error"], entry["found"]) == (
         2,
         "finding_persistence_pending",
         1,
     )
-    assert len(leases.acquired) == 2
+    assert len(leases.acquired) == 1
     assert entries(factory, first)[0]["opened_at"] == clock().isoformat()
     with factory() as db, db.begin():
         row = db.get(Sweep, first)
