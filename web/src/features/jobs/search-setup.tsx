@@ -47,8 +47,8 @@ import {
   toSearchForm,
   type SearchForm,
 } from "@/features/profile/editor-forms";
+import { SearchLists } from "@/features/profile/search-lists";
 import { TargetFields } from "@/features/profile/target-fields";
-import { TermChips } from "@/features/profile/term-chips";
 import { describeError, isApiError, request } from "@/lib/api";
 import type { SweepRunner } from "./use-sweep-runner";
 
@@ -528,17 +528,7 @@ function SetupForm({
           </section>
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
-            <TermChips
-              form={form}
-              name="title_include"
-              label="Titles to include"
-            />
-            <TermChips
-              form={form}
-              name="title_exclude"
-              label="Titles to exclude"
-            />
-            <TermChips form={form} name="location" label="Locations" />
+            <SearchLists form={form} descriptions={false} />
             <CriteriaFields form={form} />
             <TargetFields form={form} />
           </section>

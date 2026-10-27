@@ -363,6 +363,7 @@ export const searchSchema = z
     title_include: termListSchema,
     title_exclude: termListSchema,
     location: termListSchema,
+    location_exclude: termListSchema,
     contract_types: z.array(z.enum(CONTRACT_TYPES)),
     remote_stance: z.enum(["", ...REMOTE_STANCES]),
     min_fit: z.number().int().min(0).max(100),
@@ -451,6 +452,9 @@ export const toSearchForm = (search: Search): SearchForm => ({
   title_include: toTermList(search.title_include),
   title_exclude: toTermList(search.title_exclude),
   location: toTermList(search.location),
+  location_exclude: toTermList(
+    search.location_exclude ?? { advanced_regex: false, terms: [] },
+  ),
   contract_types: CONTRACT_TYPES.filter((c) =>
     search.contract_types.includes(c),
   ),
@@ -527,6 +531,7 @@ export const fromSearchForm = (values: SearchForm): Search => ({
   title_include: fromTermList(values.title_include),
   title_exclude: fromTermList(values.title_exclude),
   location: fromTermList(values.location),
+  location_exclude: fromTermList(values.location_exclude),
   contract_types: CONTRACT_TYPES.filter((c) =>
     values.contract_types.includes(c),
   ),

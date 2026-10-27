@@ -296,6 +296,8 @@ export interface Search {
   title_include: TermList;
   title_exclude: TermList;
   location: TermList;
+  /** the unwanted places; absent from a search saved before them, read as an empty list */
+  location_exclude?: TermList;
   contract_types: string[];
   remote_stance: (typeof REMOTE_STANCES)[number] | null;
   min_fit: number;
@@ -430,6 +432,7 @@ export const EMPTY: SectionData = {
     title_include: { advanced_regex: false, terms: [] },
     title_exclude: { advanced_regex: false, terms: [] },
     location: { advanced_regex: false, terms: [] },
+    location_exclude: { advanced_regex: false, terms: [] },
     contract_types: [],
     remote_stance: null,
     min_fit: 70,

@@ -188,6 +188,16 @@ export const WORDING = {
     "No freelance source is read. Turn one on and it is read at the next search.",
   payInvalid:
     "The pay needs whole numbers from 1 to 10,000,000, the lowest first, a currency and a period. Leave both figures empty for none.",
+  // The four plain lists of the search (owner, 2026-10-27); "places" above is the third.
+  jobTitles: "Job titles",
+  unwantedTitles: "Unwanted titles",
+  unwantedPlaces: "Unwanted places",
+  regularExpressions: "Regular expressions",
+  regularExpressionsFor: "Regular expressions for",
+  regularExpressionsNote:
+    "Write a list as regular expressions instead of plain words. Most people leave these off.",
+  listUsesRegularExpressions:
+    "This list holds regular expressions. Switch it back to plain words under Advanced.",
 } as const;
 
 /** The empty deck line; it names the fit threshold in force so the number is never a mystery. */

@@ -709,6 +709,34 @@ def test_the_days_window_applies_to_a_feed(
     assert found["AI Engineer Undated"].published_on == today
 
 
+def test_the_unwanted_places_apply_to_a_feed(
+    factory: sessionmaker[Session], person_a: Person, fake_ats: FakeAts, feeds_stub: Any
+) -> None:
+    unwanted = {"terms": ["United States", "Canada"], "advanced_regex": False}
+    set_profile(
+        factory, person_a.user_id, feeds_search(feed("remoteok"), location_exclude=unwanted)
+    )
+    today = datetime.now(sweep.SWEEP_TZ).date().isoformat()
+
+    def placed(title: str, location: str) -> tuple[str, ats.Posting]:
+        url = f"https://remoteok.com/remote-jobs/{title.replace(' ', '-').lower()}"
+        return "Example Places", ats.Posting(title, location, url, today, "Python.", True)
+
+    async def read(client: FeedClient, feed_: Feed) -> Any:
+        return [
+            placed("AI Engineer Europe", "Remote, Europe"),
+            placed("AI Engineer US", "Remote, United States"),  # wanted Remote, unwanted place
+            placed("AI Engineer Canada", "Remote (Canada)"),
+            placed("AI Engineer Anywhere", "Remote"),
+        ]
+
+    hook = runner(feeds_stub)
+    hook.read["remoteok"] = read
+    done = sweep_feeds(factory, person_a, fake_ats, hook)
+    assert set(rows(factory, person_a)) == {"AI Engineer Europe", "AI Engineer Anywhere"}
+    assert entries(done)["remoteok"]["postings"] == 2
+
+
 def test_the_thread_reads_at_most_the_comments_allowed(
     factory: sessionmaker[Session],
     person_a: Person,

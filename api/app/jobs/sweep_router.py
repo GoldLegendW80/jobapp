@@ -139,6 +139,7 @@ def sweep_out(row: Sweep) -> SweepOut:
                     "title_include",
                     "title_exclude",
                     "location",
+                    "location_exclude",
                     "remote_stance",
                     "contract_types",
                     "seniority",

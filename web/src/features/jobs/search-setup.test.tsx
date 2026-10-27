@@ -141,6 +141,43 @@ it("saves the reviewed sites and criteria before starting with the returned revi
   ).toBeEnabled();
 });
 
+it("shows the four plain lists and saves the unwanted places before starting", async () => {
+  const { profile, starts, user, dialog } = await open();
+  for (const label of [
+    "Job titles",
+    "Unwanted titles",
+    "Places",
+    "Unwanted places",
+  ])
+    expect(
+      within(dialog).getByRole("textbox", { name: `New term for ${label}` }),
+    ).toBeVisible();
+  // The regular expression switches are folded under the lists' Advanced, off.
+  expect(
+    within(dialog).queryByRole("switch", { name: /^Regular expressions for/ }),
+  ).toBeNull();
+  expect(
+    within(dialog).queryByRole("switch", { name: /regular expressions\) for/ }),
+  ).toBeNull();
+  await user.type(
+    within(dialog).getByRole("textbox", {
+      name: "New term for Unwanted places",
+    }),
+    "Canada{enter}",
+  );
+  await user.click(within(dialog).getByRole("checkbox", { name: "Free-Work" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  );
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    location_exclude: { advanced_regex: false, terms: ["Canada"] },
+    title_include: { advanced_regex: false, terms: [] },
+  });
+});
+
 it("keeps a conflicting draft editable and requires reviewing the current profile", async () => {
   const { profile, starts, user, dialog } = await open();
   profile.revision += 1;
