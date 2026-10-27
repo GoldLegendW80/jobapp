@@ -132,3 +132,7 @@ Task [#641](https://github.com/GoldLegendW80/jobapp/issues/641). Small client co
 ### J17: a ticked website is its permission, and Websites only
 
 Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing #651's separate permission cards. Find jobs shows each job website's risk sentence beside its box; Save records the consent of every ticked website through the platform's consent route on the reviewed revision and takes back the one of a website unticked; "Websites only" searches the ticked websites alone (`POST /api/jobs/sweeps {websites_only}`). The search's permission checks, pause, caps and pacing are unchanged. Status: built on the combined branch, journeys run by the orchestrator.
+
+### J18: one agent per job website, with all the saved criteria
+
+Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing the 2026-10-26 "one search per combination". One lease and one finder run a website a sweep, given every saved criterion as context; browserd's frozen scope lets it type only one saved title in a search box or one saved place in the place box (or nothing), and set a native filter only to its saved value. No cap of its own on turns, pages, tokens or verified postings: it gets the sweep's time left divided by the websites left, and LinkedIn's 5 pages a sweep and one sweep a day, pacing and the 7 day pause stay. The summary names the searches it ran. Plan: [interactive-search-626.md](interactive-search-626.md). Status: built on the combined branch, journeys run by the orchestrator.
