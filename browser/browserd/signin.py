@@ -25,6 +25,8 @@ The control route of the profiles: `DELETE /profiles/{profile_id}` `{uid}` remov
 directory ("Forget all logins", an account deleted; the api's removal queue): 204 once it is gone
 (also when there was none), 409 `profile_in_use` while a lease of that profile runs, starts or
 ends, 409 `profile_uid_mismatch` when the directory is not that uid's (nothing removed).
+`POST /profiles/{profile_id}/site-session` `{uid, host}` answers `{present}`: whether the profile
+holds an unexpired cookie of that website (B17, site_session), with the same 409s.
 """
 
 import asyncio
@@ -172,6 +174,47 @@ async def remove_profile(svc: Any, req: Any, match: re.Match[str]) -> tuple[int,
     return 204, None
 
 
+def check_host(raw: Any) -> str | None:
+    """A host name as check_address reads one (lower case labels), or None."""
+    if not isinstance(raw, str) or not raw or len(raw) > 253:
+        return None
+    host = raw.lower()
+    return host if all(LABEL.fullmatch(label) for label in host.split(".")) else None
+
+
+async def site_session(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """B17: whether the profile now holds a login of that website, its cookie store read by the
+    profile's uid (prep `sitecookies`: hosts and expiry only, never a cookie's name nor value).
+    Asked after a sign in session ended, so 409 `profile_in_use` while a lease of it runs."""
+    profile_id = match["profile_id"]
+    body = req.json()
+    uid = body.get("uid") if isinstance(body, dict) else None
+    if not isinstance(uid, int) or isinstance(uid, bool) or not c.UID_MIN <= uid <= c.UID_MAX:
+        raise LeaseError(400, "bad_uid")
+    host = check_host(body.get("host"))
+    if host is None:
+        raise LeaseError(400, "bad_host")
+    if svc.manager.uses(profile_id) or profile_id in svc.manager.removing:
+        raise LeaseError(409, "profile_in_use")
+    path = f"{c.PROFILES}/{profile_id}"
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return 200, {"present": False}
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+        raise LeaseError(409, "profile_uid_mismatch")
+    code, out = await chromium.uid_output(
+        uid, sys.executable, "-m", "browserd.prep", "sitecookies", path, host,
+        timeout=chromium.MEASURE_S,
+    )  # fmt: skip
+    if code != 0 or out.strip() not in {"0", "1"}:
+        raise LeaseError(503, "not_read")
+    return 200, {"present": out.strip() == "1"}
+
+
 PROFILE_ID = r"(?P<profile_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
 # (method, pattern, handler, body_max): browserd/app.py makes its Route of each.
-ROUTES = [("DELETE", re.compile(rf"/profiles/{PROFILE_ID}"), remove_profile, 1024)]
+ROUTES = [
+    ("DELETE", re.compile(rf"/profiles/{PROFILE_ID}"), remove_profile, 1024),
+    ("POST", re.compile(rf"/profiles/{PROFILE_ID}/site-session"), site_session, 1024),
+]

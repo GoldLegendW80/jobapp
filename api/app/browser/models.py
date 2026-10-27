@@ -19,8 +19,14 @@ met for a person: the 7 day pause of every LinkedIn path is read from it
 (app/browser/linkedin_guard.py). Only `linkedin_guard.record_checkpoint` writes it; no route
 writes or deletes a row, so no request of the person lifts a pause.
 
-Migrations: alembic/versions/0016_browser.py and 0020_linkedin_checkpoints.py, which must stay in
-step with this file (`alembic check` in the tests compares them).
+`browser_site_logins` (browser B17) holds each job website a person signed in to through its
+Sign in action, on that profile: the host, when the login was saved (browserd found the site's
+cookies in the profile, never reading a value) and when a search met its sign in page again
+(`expired_at`). It belongs to the profile row, so "Forget all logins" removes it with it.
+
+Migrations: alembic/versions/0016_browser.py, 0020_linkedin_checkpoints.py and
+0028_browser_site_logins.py, which must stay in step with this file (`alembic check` in the tests
+compares them).
 """
 
 import uuid
@@ -98,3 +104,19 @@ class LinkedInCheckpoint(Base):
     )
     at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
     origin: Mapped[str] = mapped_column(sa.Text, nullable=False)
+
+
+class BrowserSiteLogin(Base):
+    """A job website's login saved in a person's profile (B17), keyed by profile and host."""
+
+    __tablename__ = "browser_site_logins"
+    __table_args__ = (sa.CheckConstraint("length(host) BETWEEN 1 AND 253", name="host_length"),)
+
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True),
+        sa.ForeignKey("browser_profiles.profile_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    host: Mapped[str] = mapped_column(sa.Text, primary_key=True)
+    signed_in_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    expired_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

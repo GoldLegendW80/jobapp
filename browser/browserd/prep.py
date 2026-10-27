@@ -12,7 +12,11 @@ exits.
   seconds, and SIGINT writes them, a cookie without an expiry date included);
 - `measure`: the profile's size in bytes (regular files, links never followed), printed; over
   the trim size its caches (CACHES) are removed first, never its cookies, storage or session;
-- `rmprofile`: the profile directory removed whole ("Forget all logins", an account deleted).
+- `rmprofile`: the profile directory removed whole ("Forget all logins", an account deleted);
+- `sitecookies <profile dir> <host>`: `1` when the profile's cookie store holds a cookie of that
+  host or one of its parent domains that has not expired (B17, a website's login saved), `0`
+  otherwise. Only the host and expiry columns are read, never a name nor a value; the store is
+  opened read only and immutable, so nothing of the profile changes.
 
 - the profile directory, created with mode 0700 by its uid (/profiles is 1733: anyone may create
   an entry, nobody may list it, only the owner may remove theirs);
@@ -193,6 +197,43 @@ def measure(profile: str, trim_bytes: int) -> int:
     return size
 
 
+# Chromium's cookie times: microseconds since 1601-01-01 UTC.
+CHROME_EPOCH_S = 11644473600
+COOKIE_STORES = ("data/Default/Network/Cookies", "data/Default/Cookies")
+
+
+def site_domains(host: str) -> list[str]:
+    """The host_key values a cookie sent to `host` may have: the host, and the host and each
+    parent domain of two labels or more with a leading dot."""
+    labels = host.lower().strip(".").split(".")
+    parents = [".".join(labels[i:]) for i in range(len(labels) - 1)] or [host.lower()]
+    return [host.lower(), *(f".{d}" for d in parents)]
+
+
+def site_cookies(profile: str, host: str, now_s: float) -> bool:
+    import sqlite3
+
+    domains = site_domains(host)
+    now = int((now_s + CHROME_EPOCH_S) * 1_000_000)
+    marks = ",".join("?" * len(domains))
+    for store in COOKIE_STORES:
+        path = os.path.join(profile, store)
+        if not os.path.isfile(path) or os.path.islink(path):
+            continue
+        db = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+        try:
+            row = db.execute(
+                f"SELECT 1 FROM cookies WHERE host_key IN ({marks})"  # noqa: S608  marks only
+                " AND (has_expires = 0 OR expires_utc > ?) LIMIT 1",
+                (*domains, now),
+            ).fetchone()
+        finally:
+            db.close()
+        if row is not None:
+            return True
+    return False
+
+
 if __name__ == "__main__":
     if os.getuid() == 0:
         sys.exit("prep runs as the profile's uid, never as root")
@@ -219,5 +260,9 @@ if __name__ == "__main__":
     elif command == "rmprofile" and PROFILE.fullmatch(args[0]):
         if os.path.lexists(args[0]):
             shutil.rmtree(args[0])
+    elif command == "sitecookies" and PROFILE.fullmatch(args[0]):
+        import time
+
+        print(1 if site_cookies(args[0], args[1], time.time()) else 0)
     else:
         sys.exit(f"unknown command {command}")
