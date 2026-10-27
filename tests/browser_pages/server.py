@@ -118,7 +118,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         signed = self.member()
         with J15_LOCK:
             B17_LOG.append(
-                {"method": self.command, "path": self.path, "at": time.time(), "member": signed}
+                {
+                    "method": self.command,
+                    "path": self.path,
+                    "at": time.time(),
+                    "member": signed,
+                }
             )
         query = urllib.parse.parse_qs(url.query)
         back = query.get("next", ["/j15/"])[0]
@@ -153,7 +158,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.members():
             if path.startswith("/j15/"):
                 with J15_LOCK:
-                    B17_LOG.append({"method": self.command, "path": self.path, "at": time.time()})
+                    B17_LOG.append(
+                        {"method": self.command, "path": self.path, "at": time.time()}
+                    )
             return
         if path.startswith("/j15/") and path != "/j15/log":
             with J15_LOCK:

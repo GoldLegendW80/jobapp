@@ -144,7 +144,11 @@ test.beforeAll(async ({ browser }) => {
   page = await context.newPage();
   errors = watchErrors(page, []);
   await page.goto(cliLink(A));
-  await setPassword(page, `browser b17 journey ${run} passphrase`, "Alex Example");
+  await setPassword(
+    page,
+    `browser b17 journey ${run} passphrase`,
+    "Alex Example",
+  );
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
     data: { kind: "anthropic_api_key", secret: KEY },
@@ -243,9 +247,10 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
       "/j15/jobs/robot-engineer.html",
     ]),
   );
-  expect(read.every((item) => item.member === true), JSON.stringify(seen)).toBe(
-    true,
-  );
+  expect(
+    read.every((item) => item.member === true),
+    JSON.stringify(seen),
+  ).toBe(true);
   expect(seen.every((item) => item.method === "GET")).toBe(true);
   expect(seen.some((item) => item.path.includes("send"))).toBe(false);
   expect(await sites(page)).toMatchObject([{ host: HOST, state: "signed_in" }]);
@@ -290,14 +295,21 @@ test("B has no login of the website, and B's Done reads only B's browser", async
   const other = await newContext(browser);
   const pageB = await other.newPage();
   await pageB.goto(cliLink(B));
-  await setPassword(pageB, `browser b17 journey ${run} b passphrase`, "Bo Example");
+  await setPassword(
+    pageB,
+    `browser b17 journey ${run} b passphrase`,
+    "Bo Example",
+  );
   expect(await sites(pageB)).toEqual([]);
   const done = await pageB.request.post("/api/browser/sites/done", {
     headers: CSRF,
     data: { address: SITE },
   });
   expect(done.status()).toBe(200);
-  expect(await done.json()).toMatchObject({ host: HOST, state: "not_signed_in" });
+  expect(await done.json()).toMatchObject({
+    host: HOST,
+    state: "not_signed_in",
+  });
   const mine = (await (await pageB.request.get("/api/browser")).json()) as {
     profile: { exists: boolean };
   };
