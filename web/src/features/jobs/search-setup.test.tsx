@@ -614,13 +614,18 @@ it.each(["linkedin", "freework"] as const)(
 // Jobs J17 (owner, 2026-10-27): ticking a job website and saving is the permission to search
 // it, written by the platform's own consent route after the reviewed profile save.
 
+const EASY_APPLY =
+  "Ticking LinkedIn also allows Easy Apply with your LinkedIn account. Each application still needs your approval before it is sent.";
+
 it("shows each job website's current risk sentence beside its box and no separate permission step", async () => {
   const { dialog } = await open();
   for (const kind of PROTECTED) {
     const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
     await waitFor(() => {
       expect(box).toHaveAccessibleDescription(
-        `Current ${kind} risk sentence, version 4.`,
+        kind === "linkedin"
+          ? `Current ${kind} risk sentence, version 4. ${EASY_APPLY}`
+          : `Current ${kind} risk sentence, version 4.`,
       );
     });
   }
@@ -635,6 +640,42 @@ it("shows each job website's current risk sentence beside its box and no separat
   expect(
     within(dialog).queryByRole("checkbox", { name: /I accept/ }),
   ).not.toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent(/[–—]| - /);
+});
+
+it("says beside LinkedIn's box, and only there, that ticking it also allows Easy Apply", async () => {
+  const { dialog } = await open({
+    ...EMPTY.search,
+    interactive_sites: [
+      site("custom", "https://fr.linkedin.com/jobs/"),
+      site("custom", "https://fr.indeed.com/emplois"),
+      site("custom", "https://careers.example.org/"),
+    ],
+  });
+  const linkedin = within(dialog).getByRole("checkbox", { name: "LinkedIn" });
+  // The line is there while the server's sentence loads, and once it is shown.
+  expect(linkedin).toHaveAccessibleDescription(new RegExp(EASY_APPLY));
+  await within(dialog).findAllByText(
+    "Current linkedin risk sentence, version 4.",
+  );
+  for (const name of ["LinkedIn", "https://fr.linkedin.com/jobs/"])
+    expect(
+      within(dialog).getByRole("checkbox", { name }),
+    ).toHaveAccessibleDescription(
+      new RegExp(
+        `^Current linkedin risk sentence, version 4\\. .*${EASY_APPLY}`,
+      ),
+    );
+  for (const name of [
+    "Welcome to the Jungle",
+    "Indeed",
+    "Free-Work",
+    "https://fr.indeed.com/emplois",
+    "https://careers.example.org/",
+  ])
+    expect(
+      within(dialog).getByRole("checkbox", { name }),
+    ).not.toHaveAccessibleDescription(/Easy Apply/);
   expect(dialog).not.toHaveTextContent(/[–—]| - /);
 });
 
@@ -696,6 +737,63 @@ it.each(PROTECTED)(
     ]);
   },
 );
+
+it("takes a permission back before it gives one, so a failed write leaves fewer on", async () => {
+  const { starts, writes, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      interactive_sites: [site("indeed", PRESET_URLS.indeed)],
+    },
+    { indeed: { enabled: true, accepted: true } },
+  );
+  await within(dialog).findByText("Permission given.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 9 }]);
+  });
+  expect(writes).toEqual([
+    { kind: "indeed", body: { enabled: false, base_revision: 7 } },
+    {
+      kind: "linkedin",
+      body: {
+        enabled: true,
+        accept_version: 4,
+        interactive_only: true,
+        base_revision: 8,
+      },
+    },
+  ]);
+});
+
+it("keeps a take back done when the grant after it fails", async () => {
+  const { starts, writes, states, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      interactive_sites: [site("indeed", PRESET_URLS.indeed)],
+    },
+    { indeed: { enabled: true, accepted: true } },
+  );
+  server.use(
+    http.put("*/api/browser/linkedin", () =>
+      HttpResponse.json({ detail: "Unavailable." }, { status: 503 }),
+    ),
+  );
+  await within(dialog).findByText("Permission given.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The LinkedIn permission was not confirmed.",
+  );
+  expect(writes).toEqual([
+    { kind: "indeed", body: { enabled: false, base_revision: 7 } },
+  ]);
+  expect(states.indeed.enabled).toBe(false);
+  expect(states.linkedin.enabled).toBe(false);
+  expect(starts).toEqual([]);
+});
 
 it("writes nothing for a ticked website whose permission is current", async () => {
   const { starts, writes, user, dialog } = await open(
@@ -1030,8 +1128,9 @@ it("writes no permission when the reviewed profile save is stale", async () => {
 });
 
 it("gives the platform's permission for a website of her own at its address, once for two rows", async () => {
-  const { starts, writes, user, dialog } = await open();
+  const { profile, starts, writes, user, dialog } = await open();
   await within(dialog).findByText("Current indeed risk sentence, version 4.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
   await user.type(
     within(dialog).getByRole("textbox", { name: "Custom website URL" }),
     "https://fr.indeed.com/emplois",
@@ -1051,10 +1150,20 @@ it("gives the platform's permission for a website of her own at its address, onc
     "https://careers.example.org/",
   );
   await user.click(within(dialog).getByRole("button", { name: "Add website" }));
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  expect(
+    within(dialog).getByRole("checkbox", { name: "Indeed" }),
+  ).toBeChecked();
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 8 }]);
+  });
+  expect(profile.saves).toHaveLength(1);
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    interactive_sites: [
+      site("indeed", PRESET_URLS.indeed),
+      site("custom", "https://fr.indeed.com/emplois"),
+      site("custom", "https://careers.example.org/"),
+    ],
   });
   expect(writes).toEqual([
     {
@@ -1062,6 +1171,78 @@ it("gives the platform's permission for a website of her own at its address, onc
       body: { enabled: true, accept_version: 4, base_revision: 7 },
     },
   ]);
+});
+
+it("unticks every website of hers at Indeed's address with Indeed's box and takes the permission back", async () => {
+  const { profile, starts, writes, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      interactive_sites: [
+        site("custom", "https://fr.indeed.com/"),
+        site("custom", "https://careers.example.org/"),
+      ],
+    },
+    { indeed: { enabled: true, accepted: true } },
+  );
+  const box = within(dialog).getByRole("checkbox", { name: "Indeed" });
+  const own = within(dialog).getByRole("checkbox", {
+    name: "https://fr.indeed.com/",
+  });
+  expect(box).toBeChecked();
+  expect(own).toBeChecked();
+  await within(dialog).findAllByText(/Permission given\./);
+  await user.click(box);
+  expect(box).not.toBeChecked();
+  expect(own).not.toBeChecked();
+  expect(
+    within(dialog).getByRole("checkbox", {
+      name: "https://careers.example.org/",
+    }),
+  ).toBeChecked();
+  expect(dialog).toHaveTextContent("Saving removes this permission.");
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 8 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    interactive_sites: [
+      site("custom", "https://fr.indeed.com/", false),
+      site("custom", "https://careers.example.org/"),
+    ],
+  });
+  expect(writes).toEqual([
+    { kind: "indeed", body: { enabled: false, base_revision: 7 } },
+  ]);
+});
+
+it("adds www.indeed.com when Indeed's box is ticked again after unticking her own Indeed address", async () => {
+  const { profile, starts, writes, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      interactive_sites: [site("custom", "https://fr.indeed.com/")],
+    },
+    { indeed: { enabled: true, accepted: true } },
+  );
+  const box = within(dialog).getByRole("checkbox", { name: "Indeed" });
+  await within(dialog).findAllByText(/Permission given\./);
+  await user.click(box);
+  expect(box).not.toBeChecked();
+  await user.click(box);
+  expect(box).toBeChecked();
+  expect(
+    within(dialog).getByRole("checkbox", { name: "https://fr.indeed.com/" }),
+  ).not.toBeChecked();
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    interactive_sites: [
+      site("custom", "https://fr.indeed.com/", false),
+      site("indeed", PRESET_URLS.indeed),
+    ],
+  });
+  expect(writes).toEqual([]);
 });
 
 it("turns a website of her own off and on with its box", async () => {

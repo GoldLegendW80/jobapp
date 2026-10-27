@@ -193,6 +193,10 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
       /Saving with this box ticked gives this permission\./,
     );
   }
+  // LinkedIn's one switch also covers Easy Apply, and its box says so (owner, 2026-10-27).
+  await expect(
+    setup.getByRole("checkbox", { name: "LinkedIn", exact: true }),
+  ).toHaveAccessibleDescription(/also allows Easy Apply/);
   await expect(
     setup.getByRole("button", { name: "Review website permissions" }),
   ).toHaveCount(0);

@@ -158,14 +158,16 @@ export type PermissionPlan =
   | { refused: Protected; reason: "unloaded" | "unread" | "words" };
 
 /**
- * The consent writes a Save makes, in PROTECTED order. A ticked platform without a current
- * permission is given one at the version of the sentence shown, which must be the server's
- * current one ("unread" otherwise: the person reads the new sentence first); a platform whose
- * state could not be read refuses the save ("unloaded"). Nothing is written for a platform
- * already in the state its box asks for.
+ * The consent writes a Save makes: every take back first, then every grant, each in PROTECTED
+ * order, so a write that fails part way leaves fewer permissions on, never more. A ticked
+ * platform without a current permission is given one at the version of the sentence shown,
+ * which must be the server's current one ("unread" otherwise: the person reads the new sentence
+ * first); a platform whose state could not be read refuses the save ("unloaded"). Nothing is
+ * written for a platform already in the state its box asks for.
  */
 export function permissionPlan(input: PermissionInput): PermissionPlan {
-  const changes: PermissionChange[] = [];
+  const withdrawals: PermissionChange[] = [];
+  const grants: PermissionChange[] = [];
   for (const platform of PROTECTED) {
     const state = input.states[platform];
     if (input.ticked.has(platform)) {
@@ -185,12 +187,12 @@ export function permissionPlan(input: PermissionInput): PermissionPlan {
           body.query = input.words;
         }
       }
-      changes.push({ platform, body });
+      grants.push({ platform, body });
     } else if (withdraws(platform, input)) {
-      changes.push({ platform, body: { enabled: false } });
+      withdrawals.push({ platform, body: { enabled: false } });
     }
   }
-  return { changes };
+  return { changes: [...withdrawals, ...grants] };
 }
 
 /** The words of a new reader row: the first title to include, as one line of at most 200
