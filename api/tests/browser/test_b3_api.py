@@ -4,6 +4,7 @@ browserd's own lease logic behind an httpx transport (b3_support.FakeBrowserd).
 Two people, A and B: B never sees A's lease, its id or its token, and cannot end it.
 """
 
+import logging
 import threading
 import uuid
 from collections.abc import Iterator
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.browser import profiles
 from app.browser.leases import DbProfiles, Leases
 from app.browser.models import UID_MIN
-from app.browser.router import NO_SESSION, UNAVAILABLE
+from app.browser.router import NO_SESSION, NOT_SET_UP, UNAVAILABLE
 from app.main import create_app
 from tests.browser.b3_support import (
     IDLE_S,
@@ -42,6 +43,8 @@ __all__ = ["engine", "factory", "migrated_url", "redis_url"]
 
 USER_A = "e2e-browser-a@example.org"
 USER_B = "e2e-browser-b@example.org"
+# An invented job website: a Sign in of Find jobs opens its address (B17).
+SITE = "https://jobs.example.org/"
 SECRET_KEY = "e2e-only-not-a-secret-" + "0" * 24
 
 
@@ -239,20 +242,53 @@ def test_browserd_down_is_503_and_get_says_unavailable(
     assert shown.json()["available"] is False
 
 
-@pytest.mark.parametrize("broken", ["no_secret", "no_redis"])
+@pytest.mark.parametrize(
+    ("broken", "detail", "logged"),
+    [
+        # Production on 2026-10-27: Sign in answered 503 in a few milliseconds, browserd healthy,
+        # and no log line said why. The page now says the browser is not set up, the log says
+        # which setting is empty (never a value).
+        ("no_secret", NOT_SET_UP, "browserd not configured: BROWSER_CONTROL_SECRET is empty"),
+        ("no_redis", UNAVAILABLE, "browser lease store unavailable: "),
+    ],
+)
+@pytest.mark.parametrize("body", [{"purpose": "look"}, {"purpose": "signin", "address": SITE}])
 def test_the_settings_path_without_a_secret_or_redis(
-    migrated_url: str, redis_url: str, factory: sessionmaker[Session], broken: str
+    migrated_url: str,
+    redis_url: str,
+    factory: sessionmaker[Session],
+    broken: str,
+    detail: str,
+    logged: str,
+    body: dict[str, str],
 ) -> None:
     url = redis_url if broken == "no_secret" else f"redis://127.0.0.1:{free_port()}/0"
     made = create_app(make_settings(migrated_url, secret_key=SECRET_KEY, redis_url=url))
-    with TestClient(made, follow_redirects=False) as client:
-        api = Api(client)
-        _, token = sign_in(factory, api, USER_A)
-        answer = api.post("/api/browser/sessions", token=token, json={"purpose": "look"})
-        assert (answer.status_code, answer.json()) == (503, {"detail": UNAVAILABLE})
-        shown = api.get("/api/browser", token=token)
-        assert shown.status_code == 200
-        assert shown.json()["available"] is False
+    # The app's logging replaces the root's handlers (pytest's too): read the module's records.
+    lines = Lines()
+    logging.getLogger("app.browser").addHandler(lines)
+    try:
+        with TestClient(made, follow_redirects=False) as client:
+            api = Api(client)
+            _, token = sign_in(factory, api, USER_A)
+            answer = api.post("/api/browser/sessions", token=token, json=body)
+            assert (answer.status_code, answer.json()) == (503, {"detail": detail})
+            assert any(line.startswith(logged) for line in lines.lines), lines.lines
+            assert not any(SECRET_KEY in line for line in lines.lines)
+            shown = api.get("/api/browser", token=token)
+            assert shown.status_code == 200
+            assert shown.json()["available"] is False
+    finally:
+        logging.getLogger("app.browser").removeHandler(lines)
+
+
+class Lines(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
 
 
 def test_the_routes_need_a_session_csrf_and_a_known_purpose(

@@ -870,6 +870,15 @@ out_has "browser running:unhealthy"
 ok "a run that failed at its verify step names the figures that failed (a running browser that is not healthy)"
 
 fresh
+mkpr 72
+echo 1 >"$STATE/deploy_exit"
+verify_line 8 8 0 0 0042_ship 1 0 unconfigured - - fail >"$STATE/verify"
+run 1 ship --approved
+out_has "SHIP: FAIL the Jetson after the deploy: browser unconfigured: BROWSER_CONTROL_SECRET is empty in the Jetson's .env"
+out_has "browser unconfigured"
+ok "a healthy browser whose api has no control secret fails the ship and names the setting, never a value (production, 2026-10-27)"
+
+fresh
 mkpr 68
 rm -f "$STATE/verify"
 run 1 ship --approved

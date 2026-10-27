@@ -21,7 +21,8 @@ an error. The gate's capability comes back from `start` for the gate's purposes 
 
 Every failure is a BrowserError whose `code` is one of CODES, never browserd's text:
 
-    unavailable   no secret configured, nobody answers within TIMEOUT_S, the connection broke,
+    unavailable   no secret configured (logged as such at most once each UNCONFIGURED_EVERY_S
+                  per client, never a value), nobody answers within TIMEOUT_S, the connection broke,
                   browserd answered 401 (a secret that differs) or 5xx (Chromium did not start)
     busy          browserd holds another lease (409); `holder_purpose` says its purpose, and no
                   id or person of it ever comes back
@@ -41,7 +42,7 @@ not store it. One log line per call: the route, the status and the duration.
 import logging
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,6 +64,9 @@ CODES = ("unavailable", "busy", "refused", "ended", "waiting_person")
 HANDOFF_ACTIONS = ("done", "cancel")
 # browserd's answers that keep a profile's directory for now (browser/browserd/signin.py).
 REMOVAL_KEPT = {(409, "profile_in_use"), (409, "profile_uid_mismatch"), (503, "not_removed")}
+# A client without its secret says so in the log once a minute at most: the page polls and the
+# worker sweeps, and one line is enough to find the cause (production, 2026-10-27).
+UNCONFIGURED_EVERY_S = 60.0
 FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.pdf$")  # browserd/tools/policy.py
 
 
@@ -115,10 +119,15 @@ class BrowserdClient:
         base_url: str,
         secret: str | None,
         transport: httpx.AsyncBaseTransport | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._secret = secret or ""
+        # browserd strips its own copy: a secret of blanks only is no secret there either.
+        self._secret = secret if secret and secret.strip() else ""
         self._transport = transport
+        self._clock = clock
+        self._unconfigured_said: float | None = None
 
     @property
     def configured(self) -> bool:
@@ -352,12 +361,22 @@ class BrowserdClient:
         content: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, Any]:
-        if not self._secret:
-            raise BrowserError("unavailable")
         # The route without the lease id nor a file's name; a tool's name is kept.
         route = re.sub(r"^/leases/(?!current$)[^/]+", "/leases/{id}", path)
         route = re.sub(r"/files/[^/]+$", "/files/{name}", route)
         route = re.sub(r"^/profiles/[^/]+", "/profiles/{id}", route)
+        if not self._secret:
+            now = self._clock()
+            if self._unconfigured_said is None or now - self._unconfigured_said >= (
+                UNCONFIGURED_EVERY_S
+            ):
+                self._unconfigured_said = now
+                logger.warning(
+                    "browserd not configured: BROWSER_CONTROL_SECRET is empty (%s %s)",
+                    method,
+                    route,
+                )
+            raise BrowserError("unavailable")
         began = time.monotonic()
         try:
             async with httpx.AsyncClient(
