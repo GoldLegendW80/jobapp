@@ -1,5 +1,6 @@
-import { screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useForm, type UseFormReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -8,7 +9,9 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 
-import type { Search, SectionData } from "./api";
+import { EMPTY, type Search, type SectionData } from "./api";
+import { toSearchForm, type SearchForm } from "./editor-forms";
+import { SearchLists } from "./search-lists";
 
 afterEach(() => {
   toast.dismiss();
@@ -157,5 +160,34 @@ describe("the four plain lists of the search", () => {
       terms: ["Canada"],
     });
     expect(saved(state).location).toEqual(sections.search.location);
+  });
+});
+
+describe("the lists' Advanced", () => {
+  it("opens again when a reload brings a list of regular expressions", async () => {
+    let form: UseFormReturn<SearchForm> | undefined;
+    function Harness() {
+      form = useForm<SearchForm>({
+        defaultValues: toSearchForm(structuredClone(EMPTY.search)),
+      });
+      return <SearchLists form={form} />;
+    }
+    render(<Harness />);
+    const button = screen.getByRole("button", { name: "Advanced" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    act(() => {
+      form!.reset(
+        toSearchForm({
+          ...structuredClone(EMPTY.search),
+          location_exclude: { advanced_regex: true, terms: ["\\bUSA?\\b"] },
+        }),
+      );
+    });
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(regexSwitch(WORDING.unwantedPlaces)).toBeChecked();
+    // Folded by the person, it stays folded while the list keeps its expressions.
+    await userEvent.setup().click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText(WORDING.listUsesRegularExpressions)).toBeVisible();
   });
 });

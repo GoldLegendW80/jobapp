@@ -2,8 +2,9 @@
  * The four plain word lists of the search (owner, 2026-10-27): Job titles, Unwanted titles,
  * Places and Unwanted places, as chips of words. Each list's regular expression switch sits
  * under the shared Advanced, off by default. Advanced opens by itself when a list holds regular
- * expressions (a saved one, or one a reload brings back), so a saved pattern is never hidden; the
- * person can still fold it, and the list then says under its chips that it holds expressions.
+ * expressions (a saved one, or one a reload brings back), so the switch of a saved pattern shows
+ * at load; the person can still fold it, and the list then says under its chips that it holds
+ * expressions (search-lists.test.tsx).
  * Used by the profile's Search tab and by the Find jobs setup (jobs/search-setup.tsx).
  */
 import { useState } from "react";
