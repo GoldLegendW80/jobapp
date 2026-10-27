@@ -391,6 +391,39 @@ def test_an_address_read_two_ways_counts_once_and_the_refusal_wins(
     assert (entry["found"], entry.get("other_contract", 0), entry.get("unwanted", 0)) == counts
 
 
+@pytest.mark.parametrize(
+    ("first", "then", "saved", "unwanted"),
+    [
+        ("Robot Engineer", "Robot Sales Lead", ["Robot Engineer"], 0),  # stored stays, once
+        ("Robot Sales Lead", "Robot Engineer", [], 1),  # unwanted first: never stored
+        ("Robot Engineer", "Robot Engineer", ["Robot Engineer"], 0),
+    ],
+)
+def test_a_stored_address_stays_stored_once_whatever_a_later_search_reads(
+    first, then, saved, unwanted
+):
+    """The searches' verified batches on their way to the store (jobs J11): a posting is saved
+    once, and an earlier unwanted reading keeps a later wanted one out."""
+    stored: list[str] = []
+
+    class Commits:
+        async def save(self, source_id, host, batch):
+            stored.extend(finding.title for finding in batch.findings)
+
+    planned = searches_for(selected(title_exclude={"terms": ["sales"]}))
+    site = interactive._Site(planned, commits=Commits(), source_id="s", host="jobs.example.test")
+    url = BASE + "jobs/fleet"
+
+    def batch(title: str) -> finder.VerifiedBatch:
+        return finder.VerifiedBatch(
+            (finder.VerifiedFinding(title, "Paris", url, title, None, None, {}, ""),)
+        )
+
+    asyncio.run(site.verified(batch(first)))
+    asyncio.run(site.verified(batch(then)))
+    assert (stored, len(site.unwanted), site.found) == (saved, unwanted, set())
+
+
 def test_an_error_in_one_search_stops_the_website_and_keeps_what_was_read():
     site = SearchSite(results={"robot": ["Robot Engineer"]})
     calls: list[str] = []
