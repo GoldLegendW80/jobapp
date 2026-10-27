@@ -147,9 +147,7 @@ def test_a_websites_only_run_reads_no_board_feed_or_fixed_reader(
     async def browser(plan: Any, *args: Any) -> None:
         visited.append((plan.sources, [s.url for s in plan.search.interactive_sites]))
 
-    asyncio.run(
-        sweep.run_sweep(factory, sweep_id, NoAts(), clock, browser=browser, feeds=no_feeds)
-    )
+    asyncio.run(sweep.run_sweep(factory, sweep_id, NoAts(), clock, browser=browser, feeds=no_feeds))
     row = read_sweep(factory, sweep_id)
     assert row.status is SweepStatus.done, row.error
     assert visited == [([], [SITE["url"]])]
@@ -175,3 +173,24 @@ def test_a_frozen_websites_only_run_without_a_website_fails_with_the_websites_me
     row = read_sweep(factory, sweep_id)
     assert row.status is SweepStatus.failed
     assert row.error == sweep.NO_WEBSITES
+
+
+def test_the_schedule_searches_every_source(
+    clock: Clock, factory: sessionmaker[Session], alice: Signed
+) -> None:
+    tick = clock().replace(hour=9, minute=2, second=0, microsecond=0)
+    schedule = {"enabled": True, "times": ["09:00"], "timezone": "UTC"}
+    set_profile(factory, alice.id, everything(sweep_schedule=schedule))
+    with factory() as db:
+        [due] = sweep.scheduled_due(db, tick)
+        row = sweep.start_scheduled(db, due, tick)
+        assert row is not None
+        scope = row.stats["search_scope"]
+        db.commit()
+    assert scope["websites_only"] is False
+    assert sorted(s["mode"] for s in scope["sources"]) == [
+        "api",
+        "feed",
+        "fixed_reader",
+        "llm_browser",
+    ]

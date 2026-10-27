@@ -1039,7 +1039,7 @@ it("gives the platform's permission for a website of her own at its address, onc
   await user.click(within(dialog).getByRole("button", { name: "Add website" }));
   const row = within(dialog)
     .getAllByRole("listitem")
-    .find((item) => item.textContent?.includes("https://fr.indeed.com/"));
+    .find((item) => item.textContent.includes("https://fr.indeed.com/"));
   expect(row).toBeDefined();
   expect(row).toHaveTextContent(
     "This address is Indeed's: its search needs Indeed's permission. Saving with this box ticked gives this permission.",

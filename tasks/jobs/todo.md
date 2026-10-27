@@ -128,3 +128,7 @@ Task [#638](https://github.com/GoldLegendW80/jobapp/issues/638). Acceptance, own
 ### J16: keep source modes and pending outcomes truthful in the current summary
 
 Task [#641](https://github.com/GoldLegendW80/jobapp/issues/641). Small client compatibility follow up for J9's expanded source statuses. Acceptance and owned files are in that issue and the linked plan. Status: implementation and checks in progress; no deployment claimed.
+
+### J17: a ticked website is its permission, and Websites only
+
+Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing #651's separate permission cards. Find jobs shows each job website's risk sentence beside its box; Save records the consent of every ticked website through the platform's consent route on the reviewed revision and takes back the one of a website unticked; "Websites only" searches the ticked websites alone (`POST /api/jobs/sweeps {websites_only}`). The search's permission checks, pause, caps and pacing are unchanged. Status: built on the combined branch, journeys run by the orchestrator.
