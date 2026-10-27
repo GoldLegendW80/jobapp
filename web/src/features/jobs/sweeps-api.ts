@@ -39,11 +39,12 @@ export const sweepSourceSchema = z.object({
   skipped_by_rule: z.number().int().nonnegative().default(0),
   // Parser exceptions only, absent from an older api.
   items_skipped: z.number().int().nonnegative().default(0),
-  // A website searched in the browser (jobs J10): the native searches that ran, the title and
-  // place combinations planned (capped) and all of them; absent from an older api.
+  // A website searched in the browser (jobs J18): how many searches its agent ran, and the
+  // first ones, each a saved title and the saved place chosen if any; absent from an older api.
   searches: z.number().int().nonnegative().optional(),
-  searches_planned: z.number().int().nonnegative().optional(),
-  searches_total: z.number().int().nonnegative().optional(),
+  searched: z
+    .array(z.object({ title: z.string(), place: z.string().nullable() }))
+    .optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

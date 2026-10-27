@@ -79,7 +79,6 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "agent_failed",
       "page_budget",
       "token_budget",
-      "turn_limit",
     ]) {
       const sentence = SOURCE_PROBLEMS[code] ?? "";
       expect(sentence).not.toBe("");
@@ -87,48 +86,59 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
     }
   });
 
-  it("says a website's limits hold for all its searches, not one (review of 715)", () => {
-    for (const code of ["page_budget", "token_budget", "turn_limit"]) {
+  it("names no budget of a website's own agent (owner, 2026-10-27, jobs J18)", () => {
+    // The agent of a website has no turn cap: the code is gone, and the page and token
+    // sentences speak of the platform's day and a careers page's run.
+    expect(SOURCE_PROBLEMS.turn_limit).toBeUndefined();
+    expect(SOURCE_PROBLEMS.page_budget).toBe(
+      "The app read as many pages of this website as it may today. What was read is kept.",
+    );
+    for (const code of ["page_budget", "token_budget"]) {
       const sentence = SOURCE_PROBLEMS[code] ?? "";
-      expect(sentence).toContain("shared by all its searches");
-      expect(sentence).not.toContain("in one search");
+      expect(sentence).not.toContain("searches");
       expect(sentence).toMatch(/What was read is kept\.$/);
     }
   });
 });
 
-describe("searchesSentence (one search per title and place, owner 2026-10-26)", () => {
-  it("stays silent for a website with one combination or an older api", () => {
+describe("searchesSentence (one agent per website, owner 2026-10-27)", () => {
+  it("stays silent when the agent ran no search or the api is older", () => {
     expect(searchesSentence({})).toBe("");
-    expect(
-      searchesSentence({ searches: 1, searches_planned: 1, searches_total: 1 }),
-    ).toBe("");
+    expect(searchesSentence({ searches: 0, searched: [] })).toBe("");
   });
 
-  it("counts the searches that ran", () => {
+  it("names each search the agent ran, a title in a place or a title alone", () => {
     expect(
-      searchesSentence({ searches: 1, searches_planned: 4, searches_total: 4 }),
-    ).toBe("1 search ran.");
-    expect(
-      searchesSentence({ searches: 4, searches_planned: 4, searches_total: 4 }),
-    ).toBe("4 searches ran.");
-  });
-
-  it("says in one plain sentence when the cap left combinations out", () => {
+      searchesSentence({
+        searches: 1,
+        searched: [{ title: "engineer", place: "Paris" }],
+      }),
+    ).toBe("1 search ran: engineer in Paris.");
     const sentence = searchesSentence({
-      searches: 6,
-      searches_planned: 6,
-      searches_total: 12,
+      searches: 3,
+      searched: [
+        { title: "robot engineer", place: "Paris" },
+        { title: "robot engineer", place: "Lyon" },
+        { title: "drone pilot", place: null },
+      ],
     });
     expect(sentence).toBe(
-      "6 searches ran. At most 6 of your 12 title and place combinations are searched on a website, in the order you saved them.",
+      "3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot.",
     );
     expect(sentence).not.toMatch(/[–—]| - /);
-    // A budget can stop the website before the cap: the sentence never says more ran.
-    expect(
-      searchesSentence({ searches: 2, searches_planned: 6, searches_total: 9 }),
-    ).toBe(
-      "2 searches ran. At most 6 of your 9 title and place combinations are searched on a website, in the order you saved them.",
+  });
+
+  it("counts the searches it does not name, and says only the count from an older row", () => {
+    const searched = Array.from({ length: 50 }, (_, n) => ({
+      title: `t${n}`,
+      place: null,
+    }));
+    expect(searchesSentence({ searches: 60, searched })).toMatch(
+      /^60 searches ran: t0; t1; .*; t49, and 10 more\.$/,
+    );
+    expect(searchesSentence({ searches: 2 })).toBe("2 searches ran.");
+    expect(searchesSentence({ searches: 1_234, searched: [] })).toBe(
+      "1,234 searches ran.",
     );
   });
 });

@@ -37,8 +37,9 @@ import {
  *   The site sees GET requests only, none for the address, the profile keeps its revision.
  * - The company careers page of browser B9 (tests/browser_pages/b9/) stays a source of its own
  *   and its posting is saved to the list.
- * - Pacing and caps: the site's requests are at least the pause apart (PAGE_PAUSE_S, 5 s) and
- *   fewer than the page cap (finder.PAGES_MAX, 20).
+ * - Pacing: the site's requests are at least the pause apart (PAGE_PAUSE_S, 5 s). The agent of a
+ *   website has no page cap of its own (owner, 2026-10-27, jobs J18): its one run reads the
+ *   pages its searches need. The summary names the search it ran, from its own tool calls.
  * - Reopened at 375 px in the dark, by keyboard, the setup holds her websites and criteria.
  *
  * What the stack does not do yet, so this journey asserts the current truth: the four job
@@ -65,7 +66,6 @@ const PERMISSIONS = {
   freework: "/api/opportunities/platforms/freework",
 };
 const PAUSE_MIN_S = 5; // app/browser/sources PAGE_PAUSE_S, the shortest pause
-const PAGES_MAX = 20; // app/browser/finder.py PAGES_MAX
 const INSTRUCTIONS = "Prefer teams that build robots.";
 const shots = makeShots("jobs-j15");
 const tail = () => Math.random().toString(36).slice(2, 12).padEnd(10, "x");
@@ -81,6 +81,8 @@ type Source = {
   result_pages: number;
   error: string | null;
   outcome?: string | null;
+  searches?: number;
+  searched?: { title: string; place: string | null }[];
 };
 type Sweep = { id: string; status: string; new: number; sources: Source[] };
 type Seen = { method: string; path: string; at: number };
@@ -262,7 +264,7 @@ test("the websites end in words, the company page's posting is saved, nothing is
   await expect(
     sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
   ).toContainText(
-    "1 posting found, 1 new. The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
+    "1 search ran: engineer in Paris. 1 posting found, 1 new. The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
   );
   await expect(summary).not.toContainText(/[–—]| - /);
   await shots(page, "summary");
@@ -303,9 +305,12 @@ test("the websites end in words, the company page's posting is saved, nothing is
     found: 1,
     new: 1,
     error: "unsupported_interaction",
+    // One run for the website (jobs J18): the search its tool calls ran, a saved title typed
+    // and a saved place chosen.
+    searches: 1,
+    searched: [{ title: "engineer", place: "Paris" }],
   });
   expect(own?.result_pages ?? 0).toBeGreaterThanOrEqual(4);
-  expect(own?.result_pages ?? 0).toBeLessThanOrEqual(PAGES_MAX);
   // The company careers page (browser B9): its Paris posting is saved.
   const company = sources.find((item) => item.kind === "site");
   expect(company?.new ?? 0, detail).toBeGreaterThanOrEqual(1);

@@ -190,37 +190,32 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
     "The assistant stopped before the end. Postings saved before are kept.",
-  // The limits of a website, shared by all its searches of the run (SPEC-browser, owner
-  // 2026-10-26): what its searches saved before the stop is kept (jobs J11).
+  // A platform's own cap (LinkedIn's pages a day, app/browser/platform_policy.py); the agent of
+  // a website has no cap of its own (owner, 2026-10-27, jobs J18). What was saved is kept.
   page_budget:
-    "The app read as many pages of this website as it may this time, shared by all its searches. What was read is kept.",
+    "The app read as many pages of this website as it may today. What was read is kept.",
+  // A company careers page's run (browser B9).
   token_budget:
-    "The assistant used all it may read on this website this time, shared by all its searches. What was read is kept.",
-  turn_limit:
-    "The assistant took as many steps on this website as it may this time, shared by all its searches. What was read is kept.",
+    "The assistant used all it may read on this site this time. What was read is kept.",
 };
 
-/** How many native searches a website ran, one per title and place combination (owner,
- * 2026-10-26), and a plain sentence when the cap left combinations out. Empty for a website
- * with a single combination, so its summary reads as before. */
+/** The searches the agent of a website ran (jobs J18, owner 2026-10-27), from its own tool
+ * calls: how many, and which, each a saved title, in the saved place it chose if any. Empty
+ * when it ran none or the api is older. */
 export function searchesSentence(source: {
   searches?: number;
-  searches_planned?: number;
-  searches_total?: number;
+  searched?: { title: string; place: string | null }[];
 }): string {
   const ran = source.searches ?? 0;
-  const planned = source.searches_planned ?? 0;
-  const total = source.searches_total ?? 0;
-  if (total <= 1) return "";
-  const parts = [
-    `${ran.toLocaleString("en-GB")} ${ran === 1 ? "search" : "searches"} ran.`,
-  ];
-  if (total > planned) {
-    parts.push(
-      `At most ${planned.toLocaleString("en-GB")} of your ${total.toLocaleString("en-GB")} title and place combinations are searched on a website, in the order you saved them.`,
-    );
-  }
-  return parts.join(" ");
+  if (ran <= 0) return "";
+  const head = `${ran.toLocaleString("en-GB")} ${ran === 1 ? "search" : "searches"} ran`;
+  const named = (source.searched ?? []).map((one) =>
+    one.place ? `${one.title} in ${one.place}` : one.title,
+  );
+  if (!named.length) return `${head}.`;
+  const more = ran - named.length;
+  const rest = more > 0 ? `, and ${more.toLocaleString("en-GB")} more` : "";
+  return `${head}: ${named.join("; ")}${rest}.`;
 }
 
 export function sourceName(source: {

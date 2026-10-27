@@ -80,6 +80,7 @@ type Source = {
   mode?: string | null;
   found: number;
   error: string | null;
+  searches?: number;
 };
 type Sweep = { id: string; status: string; sources: Source[] };
 type Seen = { method: string; path: string; at: number; member?: boolean };
@@ -268,7 +269,8 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
 
   const own = sweep.sources.find((item) => item.kind === "custom");
   const detail = JSON.stringify(sweep.sources);
-  expect(own, detail).toMatchObject({ mode: "llm_browser", host: HOST });
+  // One run for the website (jobs J18), its one search typed and submitted signed in.
+  expect(own, detail).toMatchObject({ mode: "llm_browser", host: HOST, searches: 1 });
   expect(own?.error, detail).not.toBe("platform_signin");
   expect(own?.found ?? 0, detail).toBeGreaterThanOrEqual(1);
 

@@ -349,7 +349,7 @@ describe("Find jobs", () => {
               phase: "done",
               outcome: "no_matches",
             }),
-            // One native search per title and place combination (owner, 2026-10-26).
+            // One agent per website, its searches named (owner, 2026-10-27, jobs J18).
             source("indeed", {
               mode: "llm_browser",
               query: "",
@@ -357,19 +357,24 @@ describe("Find jobs", () => {
               outcome: "partial",
               found: 2,
               searches: 3,
-              searches_planned: 3,
-              searches_total: 3,
+              searched: [
+                { title: "robot engineer", place: "Paris" },
+                { title: "robot engineer", place: "Lyon" },
+                { title: "drone pilot", place: null },
+              ],
               error: "finding_persistence_pending",
             }),
-            source("welcome_to_the_jungle", {
+            source("linkedin", {
               mode: "llm_browser",
               query: "",
               phase: "done",
               outcome: "partial",
               found: 1,
-              searches: 6,
-              searches_planned: 6,
-              searches_total: 9,
+              searches: 2,
+              searched: [
+                { title: "robot engineer", place: "Paris" },
+                { title: "drone pilot", place: "Paris" },
+              ],
               error: "page_budget",
             }),
             source("remoteok", { mode: "feed", query: "", found: 2, new: 1 }),
@@ -395,8 +400,8 @@ describe("Find jobs", () => {
       "LinkedIn, not attempted: not searched this time.",
       "LinkedIn, waiting: not searched this time.",
       "LinkedIn, searched: 0 postings found, 0 new.",
-      "Indeed: 3 searches ran. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
-      "Welcome to the Jungle: 6 searches ran. At most 6 of your 9 title and place combinations are searched on a website, in the order you saved them. 1 posting found, 0 new. The app read as many pages of this website as it may this time, shared by all its searches. What was read is kept.",
+      "Indeed: 3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
+      "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 1 posting found, 0 new. The app read as many pages of this website as it may today. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
