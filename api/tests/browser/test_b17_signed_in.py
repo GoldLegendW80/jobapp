@@ -7,24 +7,28 @@ and the interactive source's signed in scope and expired login.
 
 import asyncio
 import sqlite3
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
 
-import pytest
-import sqlalchemy as sa
-from browserd import prep, signin  # test_b7_api puts browser/ on the path
-from browserd.tools import discovery
-from sqlalchemy.orm import Session, sessionmaker
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "browser"))
 
-from app.browser import site_logins, sources
-from app.browser.site_router import NOT_SIGNED_IN
-from tests.browser import b3_support
-from tests.browser import test_b7_api as b7
-from tests.browser import test_selected_interactive as selected_module
-from tests.browser.test_b9_site import ScriptedFinder
-from tests.browser.test_b13_runtime import BASE, InteractiveTools
-from tests.identity.api_helpers import Api
+import pytest  # noqa: E402
+import sqlalchemy as sa  # noqa: E402
+from browserd import prep, signin  # noqa: E402
+from browserd.tools import discovery  # noqa: E402
+from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+
+from app.browser import site_logins, sources  # noqa: E402
+from app.browser.site_router import NOT_SIGNED_IN  # noqa: E402
+from tests.browser import b3_support  # noqa: E402
+from tests.browser import test_b7_api as b7  # noqa: E402
+from tests.browser import test_selected_interactive as selected_module  # noqa: E402
+from tests.browser.test_b9_site import ScriptedFinder  # noqa: E402
+from tests.browser.test_b13_runtime import BASE, InteractiveTools  # noqa: E402
+from tests.identity.api_helpers import Api  # noqa: E402
 
 # The fixtures of the B7 api tests: browserd's real routes over a fake Chromium.
 api, app, browserd, clock, measured, volume = (
@@ -283,6 +287,27 @@ def test_expired_then_forget_all_logins_removes_every_site(
     assert api.get("/api/browser/sites", token=user_a[1]).json() == {"sites": []}
     with factory() as db:
         assert db.execute(sa.text("SELECT count(*) FROM browser_site_logins")).scalar() == 0
+
+
+def test_a_login_is_recorded_only_on_the_profile_whose_cookies_were_read(
+    api: Api, factory, volume: Volume, cookie_reader, user_a, user_b
+) -> None:
+    """A Forget and a new profile between browserd's check and the write: the new, empty
+    profile never gets the login, and nobody's checked profile records for another person."""
+    read = sign_in_on(api, factory, volume, user_a, "members.example.test")
+    assert api.request("DELETE", "/api/browser/profile", token=user_a[1]).status_code == 204
+    from app.browser import profiles
+
+    fresh = profiles.ensure(factory, user_a[0])
+    assert fresh.profile_id != str(read.profile_id)
+    at = site_logins.datetime.now(site_logins.UTC)
+    host = "members.example.test"
+    assert not site_logins.record(factory, user_a[0], host, at, str(read.profile_id))
+    assert not site_logins.record(factory, user_b[0], host, at, fresh.profile_id)
+    assert api.get("/api/browser/sites", token=user_a[1]).json() == {"sites": []}
+    assert site_logins.record(factory, user_a[0], host, at, fresh.profile_id)
+    assert site_logins.signed_in(factory, user_a[0], host)
+    assert not site_logins.signed_in(factory, user_b[0], host)
 
 
 # --- the interactive source: signed in scope, isolation, expired login --------------------------

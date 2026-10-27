@@ -97,8 +97,12 @@ async def done(
             content={"detail": BUSY, "code": "busy"},
             headers={"Cache-Control": "no-store"},
         )
-    if not present or not await run_in_threadpool(
-        site_logins.record, sessions, user.id, host, datetime.now(UTC)
+    if (
+        not present
+        or profile is None
+        or not await run_in_threadpool(
+            site_logins.record, sessions, user.id, host, datetime.now(UTC), profile[0]
+        )
     ):
         return DoneOut(host=host, state="not_signed_in", detail=NOT_SIGNED_IN)
     return DoneOut(host=host, state="signed_in")

@@ -65,10 +65,21 @@ def profile_of(sessions: sessionmaker[Session], user_id: uuid.UUID) -> tuple[str
     return None if found is None else (str(found.profile_id), found.uid)
 
 
-def record(sessions: sessionmaker[Session], user_id: uuid.UUID, host: str, at: datetime) -> bool:
-    """The website's login saved now in the person's profile; False when they have none."""
+def record(
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    host: str,
+    at: datetime,
+    checked: str | None = None,
+) -> bool:
+    """The website's login saved now in the person's profile; False when they have none, or when
+    `checked` (the profile whose cookies browserd read) is no longer the person's: a Forget and a
+    new profile between the check and this write never get a login they do not hold."""
     with sessions() as db:
-        profile_id = db.execute(_profile(user_id)).scalar_one_or_none()
+        query = _profile(user_id)
+        if checked is not None:
+            query = query.where(BrowserProfile.profile_id == uuid.UUID(checked))
+        profile_id = db.execute(query).scalar_one_or_none()
         if profile_id is None:
             return False
         db.execute(

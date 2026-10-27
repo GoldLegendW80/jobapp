@@ -244,3 +244,73 @@ def test_an_anonymous_scope_never_touches_the_persons_context() -> None:
     assert context.routes == []
     assert context.scripts == []
     assert not tab.state.signed_in
+
+
+# What a signed in page may ask without the person: never to sign them out (path or query, any
+# spelling), while the reads of a search, their account data and words that only contain the
+# letters stay allowed.
+@pytest.mark.parametrize(
+    ("url", "refused"),
+    [
+        ("https://jobs.example.test/logout", True),
+        ("https://jobs.example.test/LogOut", True),
+        ("https://jobs.example.test/log-out", True),
+        ("https://jobs.example.test/log_out?next=/", True),
+        ("https://jobs.example.test/api/v2/sign-out", True),
+        ("https://jobs.example.test/users/sign_out", True),
+        ("https://jobs.example.test/SignOut.aspx", True),
+        ("https://jobs.example.test/logoff", True),
+        ("https://jobs.example.test/fr/deconnexion", True),
+        ("https://jobs.example.test/fr/se-deconnecter", True),
+        ("https://jobs.example.test/de/abmelden", True),
+        ("https://jobs.example.test/account/disconnect", True),
+        ("https://jobs.example.test/index.php?action=logout", True),
+        ("https://jobs.example.test/a?do=sign-out", True),
+        ("https://jobs.example.test/a?logout", True),
+        ("https://jobs.example.test/a?next=%2Flogout", True),
+        ("https://jobs.example.test/jobs/42/apply", True),
+        ("https://jobs.example.test/api/jobs/42/save", True),
+        ("https://jobs.example.test/api/alerts/7/delete", True),
+        ("https://jobs.example.test/checkout", True),
+        ("https://jobs.example.test/jobs/42/candidater", True),
+        ("https://jobs.example.test/search?q=robot", False),
+        ("https://jobs.example.test/api/me", False),
+        ("https://jobs.example.test/api/account", False),
+        ("https://jobs.example.test/jobs/logistics-engineer", False),
+        ("https://jobs.example.test/jobs/log-analyst", False),
+        ("https://jobs.example.test/jobs/sign-language-teacher", False),
+        ("https://jobs.example.test/blog/out-of-office", False),
+        ("https://jobs.example.test/connexions-reseau", False),
+        ("https://jobs.example.test/jobs?q=signal+outage", False),
+        ("https://jobs.example.test/jobs?location=Logrono", False),
+        ("https://cdn.example.net/static/app.4f2a.js", False),
+        ("https://jobs.example.test/jobs/supply-chain-lead", False),
+        ("https://jobs.example.test/jobs/applied-scientist", False),
+    ],
+)
+def test_a_signed_in_request_never_signs_the_person_out(url: str, refused: bool) -> None:
+    assert discovery.destructive(url) is refused
+
+
+@pytest.mark.parametrize(
+    ("url", "signin"),
+    [
+        ("https://jobs.example.test/login", True),
+        ("https://jobs.example.test/log-in", True),
+        ("https://jobs.example.test/users/sign_in", True),
+        ("https://jobs.example.test/SignIn?ReturnUrl=%2Fjobs", True),
+        ("https://jobs.example.test/logon.aspx", True),
+        ("https://jobs.example.test/fr/connexion", True),
+        ("https://jobs.example.test/fr/se-connecter", True),
+        ("https://sso.example.test/sso/start", True),
+        ("https://auth.example.test/auth/realms/x", True),
+        ("https://jobs.example.test/search?q=login", False),
+        ("https://jobs.example.test/jobs/42", False),
+        ("https://jobs.example.test/jobs/logistics", False),
+        ("https://jobs.example.test/signals", False),
+        ("https://jobs.example.test/", False),
+        ("", False),
+    ],
+)
+def test_the_sign_in_address_is_read_from_the_path(url: str, signin: bool) -> None:
+    assert discovery.signin_url(url) is signin
