@@ -240,12 +240,14 @@ class Tab:
         Playwright's route never sees a request a service worker answers or makes, nor a
         WebSocket, nor (not proved) a worker's, so before the first navigation the tab bypasses
         every service worker of the profile (each request of the page then reaches the route),
-        blocks ws:// and wss://, and its pages get no Worker, SharedWorker, WebSocket nor
-        WebTransport and no `navigator.serviceWorker` (SIGNED_IN_JS): a page can neither
-        register a service worker nor message one the profile already holds, whose own fetch
-        would leave without the route. Declared open point: an event the browser itself
-        delivers to such a worker (push, background sync, a cookie change) can still wake it.
-        A step that fails ends the discovery: nothing is read."""
+        asks Chromium to block ws:// and wss://, and its pages get no Worker, SharedWorker,
+        WebSocket nor WebTransport and no `navigator.serviceWorker` (SIGNED_IN_JS): a page can
+        neither register a service worker nor message one the profile already holds, whose own
+        fetch would leave without the route. Declared open points: an event the browser itself
+        delivers to such a worker (push, background sync, a cookie change) can still wake it;
+        `Network.setBlockedURLs` stopped a fetch but not a page's WebSocket in Chromium 153, so
+        SIGNED_IN_JS is what refuses a socket there. A step that fails ends the discovery:
+        nothing is read."""
         self.state.signed_in = True
         try:
             async with asyncio.timeout(ACTION_S):

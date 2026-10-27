@@ -2,7 +2,7 @@
 
 Only the Playwright and CDP boundary is fake (no Chromium here; the journey
 web/e2e/browser-b17.spec.ts runs the real one). Before the first navigation the tab bypasses
-every service worker, blocks WebSockets and gets the script that removes workers and
+every service worker, asks Chromium to block WebSockets and gets the script that removes workers and
 `navigator.serviceWorker`; any step that
 fails ends the discovery with nothing read. The route lets a request leave only by
 `discovery.signed_request`, and a tab sent to a sign in page is told `signin_required`.

@@ -60,7 +60,7 @@ const PROBES = [
 ];
 const PROBE_RAN = "/j15/b17-ran?";
 const probed = (seen: Seen[]) =>
-  seen.filter((item) => PROBES.includes(item.path.split("?")[0]));
+  seen.filter((item) => PROBES.includes(item.path.replace(/\?.*$/s, "")));
 const shots = makeShots("browser-b17");
 const tail = () => Math.random().toString(36).slice(2, 12).padEnd(10, "x");
 const KEY = `sk-ant-api03-e2emembers${tail()}${tail()}Fb17`;

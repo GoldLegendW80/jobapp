@@ -58,7 +58,7 @@ J15_PAGE = (
 # Every way out of a page that B17's signed in search must hold, tried once per member page.
 B17_PROBE_JS = """<script>
 (() => {
-  const tried = {}, kept = (window.__b17Probe = []);  // kept: a socket is never collected
+  const tried = {}, kept = (window.__b17Probe = []);  // kept, so no socket is collected unopened
   const attempt = (name, act) => {
     try {
       const out = act();
