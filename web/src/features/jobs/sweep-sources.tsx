@@ -10,7 +10,12 @@ import { Globe } from "lucide-react";
 import { isFeedKind } from "@/features/opportunities/sources/source-words";
 import { SweepFeeds } from "@/features/opportunities/sources/sweep-feeds";
 
-import { SOURCE_PROBLEMS, searchesSentence, sourceName } from "./labels";
+import {
+  SOURCE_PROBLEMS,
+  leftOutSentence,
+  searchesSentence,
+  sourceName,
+} from "./labels";
 import { plural } from "./selection";
 import type { SweepSource } from "./sweeps-api";
 
@@ -39,7 +44,9 @@ function sourceStatus(source: SweepSource): string {
   if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
   const searches = searchesSentence(source);
   const found = `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
-  const counts = searches ? `${searches} ${found}` : found;
+  const counts = [searches, leftOutSentence(source), found]
+    .filter((part) => part !== "")
+    .join(" ");
   return source.error
     ? `${counts} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
     : counts;

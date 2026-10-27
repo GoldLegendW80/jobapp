@@ -734,6 +734,10 @@ class SourceOut(BaseModel):
     # and the first SEARCHES_LISTED of them.
     searches: int = Field(default=0, ge=0)
     searched: list[SearchRanOut] = Field(default_factory=list)
+    # Saved titles and places its frozen scope could not carry (more than 100 of one, or more
+    # than 32 KiB in all): the first ones that fit were searched, these were left out.
+    titles_left_out: int = Field(default=0, ge=0)
+    places_left_out: int = Field(default=0, ge=0)
     error: str | None = None
     source_id: str | None = None
     mode: str | None = None

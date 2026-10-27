@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   SOURCE_PROBLEMS,
+  leftOutSentence,
   searchesSentence,
   sourceLabel,
   sourceName,
@@ -140,5 +141,34 @@ describe("searchesSentence (one agent per website, owner 2026-10-27)", () => {
     expect(searchesSentence({ searches: 1_234, searched: [] })).toBe(
       "1,234 searches ran.",
     );
+  });
+});
+
+describe("leftOutSentence (more saved values than a website's search takes)", () => {
+  it("stays silent when nothing was left out or the api is older", () => {
+    expect(leftOutSentence({})).toBe("");
+    expect(leftOutSentence({ titles_left_out: 0, places_left_out: 0 })).toBe(
+      "",
+    );
+  });
+
+  it("says how many saved titles and places were left out", () => {
+    expect(leftOutSentence({ titles_left_out: 1 })).toBe(
+      "1 saved title was left out: a website's search takes the first ones that fit.",
+    );
+    expect(leftOutSentence({ places_left_out: 3 })).toBe(
+      "3 saved places were left out: a website's search takes the first ones that fit.",
+    );
+    expect(leftOutSentence({ titles_left_out: 1, places_left_out: 1 })).toBe(
+      "1 saved title and 1 saved place were left out: a website's search takes the first ones that fit.",
+    );
+    const sentence = leftOutSentence({
+      titles_left_out: 1_200,
+      places_left_out: 20,
+    });
+    expect(sentence).toBe(
+      "1,200 saved titles and 20 saved places were left out: a website's search takes the first ones that fit.",
+    );
+    expect(sentence).not.toMatch(/[–—]| - /);
   });
 });

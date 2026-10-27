@@ -11,10 +11,14 @@ counted, as `finding_persistence_pending`.
 One agent per website (owner, 2026-10-27, jobs J18): "An LLM agent for each website that will
 search intelligently, just like a human, using all the parameters provided to it." A website is
 one lease and one finder run a sweep. Its frozen scope (`searches_for`) holds every saved title
-and place; the agent decides which searches to run, in which order, and when the website is
-covered, and browserd lets it type only one saved title in a search box or one saved place in
-the place box (or nothing, to clear one), and set a native filter only to its saved value
-(browser/browserd/tools/discovery.py). Its budget a website is "no limit" (owner): no cap on its
+and place, or the first ones that fit when the person saved more than it carries (100 of each,
+32 KiB as sent: `_carried`), the rest counted in the summary as left out; the agent decides
+which searches to run, in which order, and when the website is covered, and browserd lets it
+type only one saved title in a search box or one saved place in the place box (or nothing, to
+clear one), and set a native filter only to its saved value (browser/browserd/tools/
+discovery.py). A value the model types that its box does not take, or a choice that is no saved
+value, is its own slip: told to it before the browser and counted apart, it never ends the
+website (finder.FinderSession._slip). Its budget a website is "no limit" (owner): no cap on its
 turns, pages, tokens or verified postings. What bounds it is not its budget: its share of the
 sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
 never starves the next), which it is told; the lease's own maximum; the platform policy's caps
@@ -200,6 +204,41 @@ class Searches:
     contracts: frozenset[str] = frozenset()  # checked after reading, empty when native
     unwanted_titles: re.Pattern[str] | None = None
     unwanted_places: re.Pattern[str] | None = None
+    # Saved titles and places the scope could not carry (`_carried`), told in the summary.
+    titles_left_out: int = 0
+    places_left_out: int = 0
+
+
+def _carried(
+    titles: list[str], places: list[str], start: str, filters: list[tuple[str, str]]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The saved titles and places a website's frozen scope carries (jobs J18): the first ones
+    that fit, in saved order, taken a title then a place in turn, so a long list of one leaves
+    room for the other. A value fits when it is at most finder.SCOPE_VALUE_MAX characters, its
+    list holds fewer than finder.SCOPE_VALUES_MAX, and the scope as sent stays within
+    finder.SCOPE_BYTES_MAX, room kept for the signed in flag (B17). The rest is left out."""
+    size = len(
+        json.dumps(
+            {
+                "start": start,
+                "titles": [],
+                "places": [],
+                "filters": dict(filters),
+                "signed_in": True,
+            }
+        )
+    )
+    kept: tuple[list[str], list[str]] = ([], [])
+    for index in range(max(len(titles), len(places))):
+        for values, held in zip((titles, places), kept, strict=True):
+            if index >= len(values) or len(held) >= finder.SCOPE_VALUES_MAX:
+                continue
+            value = values[index]
+            cost = len(json.dumps(value)) + (2 if held else 0)  # ", " between two values
+            if len(value) <= finder.SCOPE_VALUE_MAX and size + cost <= finder.SCOPE_BYTES_MAX:
+                held.append(value)
+                size += cost
+    return tuple(kept[0]), tuple(kept[1])
 
 
 def _unwanted(terms: Any) -> re.Pattern[str] | None:
@@ -213,9 +252,10 @@ def _unwanted(terms: Any) -> re.Pattern[str] | None:
 
 
 def searches_for(search: SearchSection, start: str = "") -> Searches:
-    """Use exact saved values, with no inferred website-specific filter encoding: every saved
-    title and place, the agent typing one at a time (ValueError when one cannot be typed or the
-    scope is too large for browserd, `unsupported_criteria` before a lease).
+    """Use exact saved values, with no inferred website-specific filter encoding: the saved
+    titles and places the scope carries (`_carried`: all of them, or the first ones that fit,
+    the rest counted as left out), the agent typing one at a time (ValueError when one cannot
+    be typed or no title fits, `unsupported_criteria` before a lease).
 
     Other preferences remain private context, not permission to vary the native request.
     """
@@ -229,11 +269,13 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
     contracts = list(search.contract_types)
     if len(contracts) == 1:
         filters.append(("contract", contracts[0]))
+    start = start or search.interactive_sites[0].url
+    carried_titles, carried_places = _carried(titles, places, start, filters)
     return Searches(
         finder.InteractiveScope(
-            start or search.interactive_sites[0].url,
-            tuple(titles),
-            tuple(places),
+            start,
+            carried_titles,
+            carried_places,
             tuple(filters),
             criteria=json.dumps(search.model_dump(mode="json", include=CRITERIA)),
             instructions=search.interactive_instructions or "",
@@ -241,6 +283,8 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
         frozenset(contracts) if len(contracts) > 1 else frozenset(),
         _unwanted(search.title_exclude),
         _unwanted(getattr(search, "location_exclude", None)),
+        len(titles) - len(carried_titles),
+        len(places) - len(carried_places),
     )
 
 
@@ -318,6 +362,10 @@ class _Site:
     def write(self, entry: dict[str, Any]) -> None:
         entry["result_pages"] = self.pages
         entry["searches"] = len(self.searches)
+        # Saved titles and places the website's scope could not carry (searches_for).
+        for name in ("titles_left_out", "places_left_out"):
+            if getattr(self.planned, name):
+                entry[name] = getattr(self.planned, name)
         # The person's own saved values only (FinderSession.searches), as the summary names them.
         entry["searched"] = [
             {"title": title, "place": place}

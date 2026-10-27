@@ -45,6 +45,10 @@ export const sweepSourceSchema = z.object({
   searched: z
     .array(z.object({ title: z.string(), place: z.string().nullable() }))
     .optional(),
+  // Saved titles and places its search could not carry (more than 100 of one, or too long in
+  // all): the first ones that fit were searched. Absent from an older api.
+  titles_left_out: z.number().int().nonnegative().optional(),
+  places_left_out: z.number().int().nonnegative().optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

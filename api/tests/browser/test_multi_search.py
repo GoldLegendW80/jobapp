@@ -5,7 +5,9 @@ shared fairly among the websites still to run.
 """
 
 import asyncio
+import dataclasses
 import json
+import random
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -657,23 +659,156 @@ def test_a_plain_regular_expression_is_searched_and_any_other_stays_unsupported(
     assert not leases.acquired
 
 
-@pytest.mark.parametrize(
-    "terms",
-    [
-        [
-            f"robot{n}" for n in range(finder.SCOPE_VALUES_MAX + 1)
-        ],  # more values than browserd takes
-        ["r" * (finder.SCOPE_VALUE_MAX + 1)],  # a value longer than browserd takes
-        ["é" * 190 + f"{n:03d}" for n in range(30)],  # over SCOPE_BYTES_MAX as sent
-    ],
-)
-def test_a_scope_browserd_would_refuse_is_unsupported_before_a_lease(terms):
-    search = selected(title_include={"terms": terms, "advanced_regex": True})
+# --- more saved values than a scope carries (review follow up 4) -------------------------------
+
+
+def sent(scope: finder.InteractiveScope) -> int:
+    """The scope's size as sent with every tool call, signed in (the larger of its two forms)."""
+    return len(json.dumps(dataclasses.replace(scope, signed_in=True).tool_scope()))
+
+
+def carried_by_rule(titles: list[str], places: list[str]) -> None:
+    """The rule of `_carried`, checked on what it gave: each list a subsequence of the saved one
+    in saved order, within every bound, and every value left out could not have been added."""
+    planned = searches_for(selected(title_include={"terms": titles}, location={"terms": places}))
+    scope = planned.scope
+    size = sent(scope)
+    assert size <= finder.SCOPE_BYTES_MAX
+    for saved, kept, left in (
+        (titles, scope.titles, planned.titles_left_out),
+        (places, scope.places, planned.places_left_out),
+    ):
+        assert len(kept) <= finder.SCOPE_VALUES_MAX
+        assert left == len(saved) - len(kept)
+        rest = iter(saved)
+        assert all(value in rest for value in kept)  # in saved order
+        for value in set(saved) - set(kept):
+            assert (
+                len(value) > finder.SCOPE_VALUE_MAX
+                or len(kept) == finder.SCOPE_VALUES_MAX
+                or size + len(json.dumps(value)) + 2 > finder.SCOPE_BYTES_MAX
+            ), value
+
+
+def test_more_than_100_titles_and_places_carry_the_first_100_of_each_and_count_the_rest():
+    titles = [f"robot{n}" for n in range(150)]
+    places = [f"Ville{n}" for n in range(120)]
+    site = SearchSite()
+    seen: list[finder.FinderSession] = []
+    entry, _, leases = run(
+        selected(title_include={"terms": titles}, location={"terms": places}),
+        site,
+        ScriptedFinder(searching(site, log=seen)),
+        pacer=NoPause(),
+    )
+    [session] = seen
+    assert session.interactive.titles == tuple(titles[:100])
+    assert session.interactive.places == tuple(places[:100])
+    assert (entry["titles_left_out"], entry["places_left_out"]) == (50, 20)
+    assert entry["error"] != "unsupported_criteria"
+    assert len(leases.acquired) == 1
+    carried_by_rule(titles, places)
+
+
+def test_one_title_too_many_is_left_out_and_said():
+    titles = [f"robot{n}" for n in range(finder.SCOPE_VALUES_MAX + 1)]
+    planned = searches_for(selected(title_include={"terms": titles, "advanced_regex": True}))
+    assert planned.scope.titles == tuple(titles[:-1])
+    assert (planned.titles_left_out, planned.places_left_out) == (1, 0)
+    entry, _, _ = run(
+        selected(title_include={"terms": titles}), SearchSite(), ScriptedFinder(lambda _: None)
+    )
+    assert entry["titles_left_out"] == 1
+    assert "places_left_out" not in entry
+
+
+def test_a_scope_over_32_kib_carries_the_first_values_that_fit_in_turn():
+    """Each of these is about 1,150 bytes as sent (an accented letter is sent as \\u00e9), so
+    some 28 fit: a title then a place in turn, so neither list takes all the room."""
+    titles = ["é" * 190 + f"{n:03d}" for n in range(30)]
+    places = ["è" * 190 + f"{n:03d}" for n in range(30)]
+    alone = searches_for(selected(title_include={"terms": titles, "advanced_regex": True}))
+    assert 20 < len(alone.scope.titles) < 30
+    assert alone.scope.titles == tuple(titles[: len(alone.scope.titles)])
+    assert alone.titles_left_out == 30 - len(alone.scope.titles)
+    both = searches_for(selected(title_include={"terms": titles}, location={"terms": places}))
+    assert abs(len(both.scope.titles) - len(both.scope.places)) <= 1
+    assert both.scope.titles == tuple(titles[: len(both.scope.titles)])
+    assert both.scope.places == tuple(places[: len(both.scope.places)])
+    carried_by_rule(titles, places)
+    # The signed in flag (B17) fits too: the scope is made again with it, never refused.
+    assert sent(both.scope) <= finder.SCOPE_BYTES_MAX
+
+
+def test_a_value_longer_than_browserd_takes_is_left_out_and_the_next_ones_carried():
+    long = "r" * (finder.SCOPE_VALUE_MAX + 1)
+    planned = searches_for(
+        selected(
+            title_include={"terms": [long, "robot"], "advanced_regex": True},
+            location={"terms": ["Paris", "P" * 301, "Lyon"], "advanced_regex": True},
+        )
+    )
+    assert (planned.scope.titles, planned.scope.places) == (("robot",), ("Paris", "Lyon"))
+    assert (planned.titles_left_out, planned.places_left_out) == (1, 1)
+
+
+def test_no_title_that_fits_is_still_unsupported_before_a_lease():
+    search = selected(
+        title_include={"terms": ["r" * (finder.SCOPE_VALUE_MAX + 1)], "advanced_regex": True}
+    )
     with pytest.raises(ValueError, match="invalid discovery scope"):
         searches_for(search)
     entry, _, leases = run(search, SearchSite(), ScriptedFinder(lambda _: None))
     assert entry["reason"] == "unsupported_criteria"
     assert not leases.acquired
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_generated_lists_are_carried_by_the_rule(seed):
+    rng = random.Random(seed)  # noqa: S311  seeded test data
+
+    def term(n: int) -> str:
+        letters = rng.choice(["abc", "éàü", "机器人", "x"])
+        return "".join(rng.choice(letters) for _ in range(rng.choice([1, 5, 40, 190]))) + str(n)
+
+    titles = [term(n) for n in range(rng.randrange(1, 300))]
+    places = [term(n) for n in range(rng.randrange(0, 300))]
+    # Within the agent's own context bound (InteractiveScope.criteria, 100,000 characters, a
+    # declared open point), well past the scope's 32 KiB.
+    while len(json.dumps([*titles, *places])) > 90_000:
+        (titles if len(titles) > len(places) else places).pop()
+    carried_by_rule(titles, places)
+
+
+def test_a_scope_that_fits_is_carried_whole_and_says_nothing():
+    planned = searches_for(selected(title_include={"terms": ["robot", "drone"]}))
+    assert (planned.titles_left_out, planned.places_left_out) == (0, 0)
+    entry, _, _ = run(
+        selected(title_include={"terms": ["robot", "drone"]}),
+        SearchSite(),
+        ScriptedFinder(lambda _: None),
+    )
+    assert "titles_left_out" not in entry
+    assert "places_left_out" not in entry
+
+
+@pytest.mark.parametrize(
+    ("stored", "shown"),
+    [
+        ({"titles_left_out": 50, "places_left_out": 20}, (50, 20)),
+        ({"titles_left_out": 1}, (1, 0)),
+        ({}, (0, 0)),  # an older row
+        ({"titles_left_out": -3, "places_left_out": True}, (0, 0)),
+        ({"titles_left_out": "5", "places_left_out": 2.5}, (0, 0)),
+    ],
+)
+def test_the_summary_says_how_many_saved_values_were_left_out(stored, shown):
+    from app.jobs import sweep_router
+    from tests.opportunities.test_o8_summary import row
+
+    entry = {"kind": "indeed", "query": "", "mode": "llm_browser", "found": 1, **stored}
+    [source] = sweep_router.sweep_out(row([entry])).sources
+    assert (source.titles_left_out, source.places_left_out) == shown
 
 
 def test_no_place_means_no_place_to_type_and_a_search_by_title():
