@@ -163,8 +163,9 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   linkedin_off: "LinkedIn is off for you, so it was not searched.",
   linkedin_paused:
     "LinkedIn showed a security check, so all LinkedIn work is paused for a week. It was not searched.",
+  // Sweeps before 2026-10-28 only: no website has a daily limit since (owner).
   linkedin_daily:
-    "LinkedIn was already searched today. It is searched again tomorrow.",
+    "LinkedIn had already been searched that day, so it was not searched.",
   linkedin_signin:
     "LinkedIn needs you to sign in. Nothing else was opened on LinkedIn.",
   linkedin_checkpoint:
@@ -176,8 +177,9 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "Your permission for this website was turned off during the search, so it stopped. What was read is kept.",
   permission_checkpoint:
     "This website showed a security check, so it is paused for a week. It was not searched further.",
+  // Sweeps before 2026-10-28 only, as linkedin_daily.
   platform_daily:
-    "This website was already searched today. It is searched again tomorrow.",
+    "This website had already been searched that day, so it was not searched.",
   platform_signin:
     "This website needs you to sign in. Use Sign in beside it in Find jobs, then search again. Nothing else was opened on it.",
   // Sweeps before jobs J11 (#632) counted the postings of a website without saving them.
@@ -190,10 +192,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
     "The assistant stopped before the end. Postings saved before are kept.",
-  // A platform's own cap (LinkedIn's pages a day, app/browser/platform_policy.py); the agent of
-  // a website has no cap of its own (owner, 2026-10-27, jobs J18). What was saved is kept.
+  // A company careers page's page cap (app/browser/finder.py), or LinkedIn's in sweeps before
+  // 2026-10-28; the agent of a job website has no cap (owner, 2026-10-27 and 2026-10-28).
   page_budget:
-    "The app read as many pages of this website as it may today. What was read is kept.",
+    "The app read as many pages of this website as it may this time. What was read is kept.",
   // A company careers page's run (browser B9).
   token_budget:
     "The assistant used all it may read on this site this time. What was read is kept.",

@@ -1,8 +1,9 @@
 """LinkedIn job search (browser B10, owner decision 2 "Full use"): the results of a search and the
 page of each posting, read from the person's own signed in session, no model. It runs only when
 app/browser/linkedin_guard.py allows it (the Runner's check, before any lease), at the pace of
-SPEC-browser decision 2: RESULT_PAGES result pages at most, PAUSE_S between two pages of the
-host on the shared per host pacer, one sweep a day (the guard).
+SPEC-browser decision 2: PAUSE_S between two pages of the host on the shared per host pacer. No
+page cap and no daily limit (owner, 2026-10-28): it reads result pages until one brings no new
+card or fewer than PER_PAGE, within the sweep's time (what was read is stored).
 
 Modelled on the snapshots of 2026-10-20 (PR body; invented postings in every test):
 - results: `https://www.linkedin.com/jobs/search/?keywords=<query>&location=<location>&start=
@@ -21,10 +22,10 @@ reader asked for and whose heading speaks of a security check or unusual activit
 `/authwall`, `/uas/` or `/signup`, or a sign in heading on a page that is not what was asked, is
 `linkedin_signin`: the source is skipped and the person told ("LinkedIn needs you to sign in");
 this module never starts a sign in hand off (that is B12b's, when the person opens it). Both set
-`result_pages` to the page they met, so the guard counts the sweep of the day. Every counted
-result page and every wall goes through `read.met` the moment it is met, before the read goes on
-or ends: the sweep's progress then holds the day's count and the code, and the guard's wall hook
-records a checkpoint (`linkedin_guard.record_checkpoint`), so a kill right after keeps both.
+`result_pages` to the page they met. Every counted result page and every wall goes through
+`read.met` the moment it is met, before the read goes on or ends: the sweep's progress then
+holds the page count and the code, and the guard's wall hook records a checkpoint
+(`linkedin_guard.record_checkpoint`), so a kill right after keeps both.
 
 Fail closed: a results page without its heading, or a card with a posting link but no title or
 company, is `layout_changed`; a posting page without "About the job" is too. A posting page
@@ -35,6 +36,7 @@ one, is the job's address (apply then works on the company's form, and the posti
 API on that board is the same row by address); the LinkedIn address ends the posting text.
 """
 
+import itertools
 import re
 import unicodedata
 from typing import NoReturn
@@ -58,7 +60,6 @@ from app.profile.schemas import BrowserSource
 
 HOST = "www.linkedin.com"
 SEARCH = "https://www.linkedin.com/jobs/search/"
-RESULT_PAGES = 5  # SPEC-browser decision 2
 PER_PAGE = 25
 PAUSE_S = (10.0, 30.0)  # SPEC-browser decision 2: 10 to 30 seconds per page
 URL_MAX = 2048
@@ -396,7 +397,7 @@ class LinkedIn:
         self, pages: Pages, source: BrowserSource, wanted: Wanted, read: Read, base: str | None
     ) -> None:
         seen: set[str] = set()
-        for number in range(1, RESULT_PAGES + 1):
+        for number in itertools.count(1):
             asked = results_url(source, number, base)
             root, opened = await self._open(pages, asked, read, number, base)
             try:

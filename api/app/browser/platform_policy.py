@@ -8,24 +8,24 @@ selected website it reads, from the database and in a session of its own:
   the person's current consent for the platform (LinkedIn: the `linkedin` entry of
   `browser_sources`, linkedin_guard; Free-Work: its `browser_sources` entry; Indeed and Welcome
   to the Jungle: `search.platform_consents`, opportunities/platforms/guard.py), at the version
-  of the risk sentence now shown, the 7 day pause of a checkpoint, and one sweep a day. A
-  platform without consent ends `permission_unavailable`; consent removed after the first page
-  ends `permission_revoked`; a pause ends `permission_checkpoint` (LinkedIn's own:
-  `linkedin_paused` reads the same); a sweep that already opened it today ends `linkedin_daily`
-  or `platform_daily`. The other selected websites go on.
+  of the risk sentence now shown, and the 7 day pause of a checkpoint. A platform without
+  consent ends `permission_unavailable`; consent removed after the first page ends
+  `permission_revoked`; a pause ends `permission_checkpoint` (LinkedIn's own: `linkedin_paused`
+  reads the same). No website has a daily limit (owner, 2026-10-28: "i don't want limit on
+  search by day"): `linkedin_daily` and `platform_daily` stay readable in older sweeps only.
+  The other selected websites go on.
 - reserve, once, after the lease and the fresh check, before the first navigation: records
   `opened_at` and `platform` in every entry of the source in the sweep row (guard.reserve, under
-  the person's platform lock and the row's lock) and commits, so a busy browser never spends
-  the day's sweep and a kill after the first page keeps it.
+  the person's platform lock and the row's lock) and commits, so a kill after the first page
+  keeps the history the 7 day pause reads.
 - observe, on each page code read (the snapshot's address and text, bounded by the caller):
   a checkpoint or block page records `checkpoint_at` (LinkedIn: also its `linkedin_checkpoints`
   row) and a sign in page records its code, both committed before the page reaches the model.
 
-The platform's account safety caps hold per platform and per sweep, so two addresses of the
-same platform share them: LinkedIn reads at most RESULT_PAGES pages a sweep, paced 10 to 30
-seconds (sources/linkedin.py, SPEC-browser decision 2). The other platforms have no page cap:
-the agent of a job website has none (owner, 2026-10-27, jobs J18), only their pacing, one sweep
-a day and the 7 day pause. A page is counted when code reads a new address on it.
+No platform has a page cap, LinkedIn included (owner, 2026-10-27 for the agent of a job website,
+jobs J18; 2026-10-28 for LinkedIn): its pacing (LinkedIn 10 to 30 seconds a page, shared by
+every address of the platform, sources/linkedin.py), the 7 day pause and the sweep's time bound
+it.
 
 The platform is classified from the address by code (`platform_of`), whatever label the
 person gave it: any host label equal to a platform's name counts, so `indeed.fr`, `fr.indeed.com`
@@ -33,8 +33,7 @@ or `linkedin.com.example.test` all need that platform's consent. When unsure, th
 platform's (fail closed). A write that fails ends the source (`permission_unavailable`): no page
 opens without its durable record.
 
-Declared open points: a page is counted per new address read, so a search that changes no
-address counts once; the wall headings are an allow list of known wording (English and French),
+Declared open points: the wall headings are an allow list of known wording (English and French),
 a block page worded otherwise is not recognised by its text (its address may still be).
 """
 
@@ -74,7 +73,6 @@ BRANDS = {
     "wttj": "welcome_to_the_jungle",
 }
 PLATFORMS = frozenset(BRANDS.values())
-PAGES = {"linkedin": linkedin.RESULT_PAGES}  # the only platform with a page cap (jobs J18)
 PAUSES = {"linkedin": linkedin.PAUSE_S}
 
 CHECKPOINT_SEGMENTS = frozenset(
@@ -203,8 +201,6 @@ def source_code(platform: str, refused: str, reserved: bool) -> str:
     """The sources' code (sources.ERRORS) of a guard's refusal."""
     if refused.endswith("_paused") or refused == "permission_checkpoint":
         return "permission_checkpoint"
-    if refused.endswith("_daily"):
-        return "linkedin_daily" if platform == "linkedin" else "platform_daily"
     return "permission_revoked" if reserved else "permission_unavailable"
 
 
@@ -213,20 +209,15 @@ def refusal(
 ) -> str | None:
     """The guard's refusal of the platform for this sweep now, None when it may open."""
     if platform == "linkedin":
-        refused = linkedin_guard.sweep_refusal(db, user_id, sweep_id, now)
-        if refused is None and guard.swept_today(db, user_id, platform, now, sweep_id):
-            refused = "linkedin_daily"
-        return refused
+        return linkedin_guard.sweep_refusal(db, user_id, sweep_id, now)
     return guard.sweep_refusal(db, user_id, platform, sweep_id, now)
 
 
 @dataclass
 class _Run:
-    """What this process knows of one sweep: the sources reserved, the pages per platform."""
+    """What this process knows of one sweep: the sources reserved."""
 
     reserved: set[str] = field(default_factory=set)
-    pages: dict[str, int] = field(default_factory=dict)
-    last_url: dict[str, str] = field(default_factory=dict)
 
 
 class PlatformPolicy:
@@ -253,11 +244,7 @@ class PlatformPolicy:
             return None
         if context.sweep_id is None:
             return "permission_unavailable"
-        run = self._run(context)
-        cap = PAGES.get(platform)
-        if cap is not None and run.pages.get(platform, 0) >= cap:
-            return "page_budget"
-        reserved = context.source_id in run.reserved
+        reserved = context.source_id in self._run(context).reserved
         try:
             refused = await asyncio.to_thread(self._refusal, context, platform)
         except Exception as exc:
@@ -321,10 +308,6 @@ class PlatformPolicy:
         platform = platform_for(context)
         if platform == CUSTOM:
             return None
-        run = self._run(context)
-        if run.last_url.get(context.source_id) != url:
-            run.last_url[context.source_id] = url
-            run.pages[platform] = run.pages.get(platform, 0) + 1
         code = wall(platform, url, snapshot, self.base_url)
         if code is None:
             return None

@@ -155,16 +155,15 @@ def test_a_checkpoint_met_by_a_sweep_is_recorded_in_postgres(
     assert refusal(factory, alice, datetime.now(UTC)) == "linkedin_paused"
 
 
-def test_one_sweep_a_day(factory: sessionmaker[Session], alice: uuid.UUID) -> None:
+def test_no_daily_limit(factory: sessionmaker[Session], alice: uuid.UUID) -> None:
+    """Owner, 2026-10-28: no limit on searches a day, LinkedIn too. A sweep of the day that
+    opened LinkedIn refuses no other; the switch and the 7 day pause still do."""
     set_profile(factory, alice, search(browser_sources=[linkedin()]))
     today = add_sweep(factory, alice, {"error": None}, NOW - timedelta(hours=2))
     with factory() as db:
-        assert guard.sweep_refusal(db, alice, None, NOW) == "linkedin_daily"
-        assert guard.sweep_refusal(db, alice, today, NOW) is None  # that sweep itself
+        assert guard.sweep_refusal(db, alice, None, NOW) is None
+        assert guard.sweep_refusal(db, alice, today, NOW) is None
         assert guard.sweep_refusal(db, alice, None, NOW + timedelta(days=1)) is None
-    # A sweep that opened no LinkedIn page (busy browser) is not the sweep of the day.
-    with factory() as db:
-        assert not guard.swept_today(db, alice, NOW + timedelta(days=1))
 
 
 def test_person_b_never_reads_a(
@@ -257,7 +256,7 @@ def test_linkedins_longer_location_dedupes_and_noting_keeps_updated_at(
     assert after.updated_at == before.updated_at  # noting a source is not an edit
 
 
-def test_a_second_sweep_the_same_day_is_refused(
+def test_a_second_sweep_the_same_day_reads_linkedin_again(
     factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
     made = pages.offers(1)
@@ -272,8 +271,8 @@ def test_a_second_sweep_the_same_day_is_refused(
     assert first.stats["sources"][0]["error"] is None
     tools = FakeTools(dict(site))
     second = run(factory, new_sweep(factory, alice), fake_ats, browser=checked(factory, tools))
-    assert second.stats["sources"][0]["error"] == "linkedin_daily"
-    assert tools.calls == []
+    assert second.stats["sources"][0]["error"] is None
+    assert tools.calls != []
 
 
 def test_switched_off_after_a_sweep_stops(

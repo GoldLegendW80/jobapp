@@ -22,8 +22,8 @@ the website unsupported (finder.FinderSession._slip). Its budget a website is "n
 (owner): no cap on its turns, pages, tokens or verified postings. What bounds it is not its
 budget: its share of the
 sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
-never starves the next), which it is told; the lease's own maximum; the platform policy's caps
-(LinkedIn's pages a sweep and one sweep a day), pacing per platform and the 7 day pause.
+never starves the next), which it is told; the lease's own maximum; pacing per platform and the
+7 day pause (no daily limit and no page cap on any website, LinkedIn included, owner 2026-10-28).
 Its postings merge into the website's one result, counted once per canonical address, in one
 place only: an unwanted reading wins over another contract, which wins over a kept one
 (`_Site.place`). One contract type is the website's own filter; several are checked on what

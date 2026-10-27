@@ -89,16 +89,32 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
 
   it("names no budget of a website's own agent (owner, 2026-10-27, jobs J18)", () => {
     // The agent of a website has no turn cap: the code is gone, and the page and token
-    // sentences speak of the platform's day and a careers page's run.
+    // sentences speak of a run, never of a day (no daily limit, owner 2026-10-28).
     expect(SOURCE_PROBLEMS.turn_limit).toBeUndefined();
     expect(SOURCE_PROBLEMS.page_budget).toBe(
-      "The app read as many pages of this website as it may today. What was read is kept.",
+      "The app read as many pages of this website as it may this time. What was read is kept.",
     );
     for (const code of ["page_budget", "token_budget"]) {
       const sentence = SOURCE_PROBLEMS[code] ?? "";
       expect(sentence).not.toContain("searches");
       expect(sentence).toMatch(/What was read is kept\.$/);
     }
+  });
+});
+
+describe("no daily limit (owner, 2026-10-28)", () => {
+  it("keeps the old daily codes readable without promising a search tomorrow", () => {
+    for (const code of ["linkedin_daily", "platform_daily", "page_budget"]) {
+      const sentence = SOURCE_PROBLEMS[code] ?? "";
+      expect(sentence).not.toBe("");
+      expect(sentence).not.toMatch(/tomorrow|today/);
+    }
+    expect(SOURCE_PROBLEMS.linkedin_daily).toBe(
+      "LinkedIn had already been searched that day, so it was not searched.",
+    );
+    expect(SOURCE_PROBLEMS.platform_daily).toBe(
+      "This website had already been searched that day, so it was not searched.",
+    );
   });
 });
 
