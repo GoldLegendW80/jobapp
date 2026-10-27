@@ -57,7 +57,12 @@ def selected(url=BASE, **search):
 class Tools(InteractiveTools):
     async def call(self, name, args):
         scope = args["_discovery_scope"]
-        assert scope == {"start": BASE, "query": "robot", "filters": {"remote": "remote"}}
+        assert scope == {
+            "start": BASE,
+            "titles": ["robot"],
+            "places": [],
+            "filters": {"remote": "remote"},
+        }
         args = {**args, "_discovery_scope": {**scope, "filters": {"remote": "1"}}}
         return await super().call(name, args)
 
@@ -175,9 +180,8 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
     [made] = runs_of(runtime.factory, alice)
     assert made.agent == finder.INTERACTIVE_NAME
     assert made.model == (finder.MODEL if subscription else finder.MODEL_API_KEY)
-    # Numbers only: the website's turns left (its first search: all 40) beside its tokens.
-    assert set(made.input) == {"request", "token_budget", "turn_budget"}
-    assert made.input["turn_budget"] == finder.MAX_TURNS
+    # The agent of a website has no token or turn budget (jobs J18): its input is its key.
+    assert set(made.input) == {"request"}
     assert CANARY not in json.dumps(progress)
     assert not finder._SCOPES
     assert not finder._SESSIONS
@@ -470,17 +474,18 @@ def test_elapsed_sweep_budget_does_not_open_a_source():
 def test_private_criteria_and_instructions_cannot_change_native_scope():
     from app.browser.sources.interactive import searches_for
 
-    [scope] = searches_for(selected(location={"terms": ["Paris"]}, contract_types=["CDI"])).scopes
-    assert scope.tool_scope()["filters"] == {
-        "location": "Paris",
-        "remote": "remote",
-        "contract": "CDI",
+    scope = searches_for(selected(location={"terms": ["Paris"]}, contract_types=["CDI"])).scope
+    assert scope.tool_scope() == {
+        "start": BASE,
+        "titles": ["robot"],
+        "places": ["Paris"],
+        "filters": {"remote": "remote", "contract": "CDI"},
     }
     assert CANARY not in json.dumps(scope.tool_scope())
     assert scope.instructions == CANARY
     assert json.loads(scope.criteria)["location"]["terms"] == ["Paris"]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        scope.query = "changed"
+        scope.titles = ("changed",)
 
 
 def test_production_runner_keeps_normal_sdk_backend(runtime):  # noqa: F811
@@ -568,35 +573,45 @@ def test_observed_wall_is_awaited_before_model_text_and_releases_lease():
 
 @pytest.mark.parametrize("stopped", ["token_budget", "turn_limit", "error", "cancelled", "busy"])
 def test_runtime_budget_or_failure_is_reported_without_borrowing_legacy_storage(stopped):
+    """The agent of a website has no budget of its own (jobs J18): a runtime stop of any kind,
+    a ceiling of the runtime included, is the assistant stopping early."""
+
     async def script(session):
-        assert session.token_budget == 600_000
         return finder.Ran(stopped=stopped)
 
     entries, stored, leases, _, _ = asyncio.run(
         execute(selected(), "e2e-person", ScriptedFinder(script))
     )
-    assert entries[0]["reason"] == (
-        stopped if stopped in {"token_budget", "turn_limit"} else "agent_failed"
-    )
+    assert entries[0]["reason"] == "agent_failed"
     assert not stored
     assert leases.released == ["lease-1"]
 
 
-def test_page_budget_blocks_the_next_action_and_keeps_the_runtime_ceiling():
+def test_a_website_has_no_page_cap_and_a_careers_page_keeps_its_ceilings():
+    """Jobs J18: the 20 pages of a careers page are not a website's (owner, "no limit")."""
+
     async def script(session):
-        session.pages.count = finder.PAGES_MAX
-        assert (await session.interact("browser_click", {"ref": "e3"}))[1]
+        session.pages.count = finder.PAGES_MAX * 3
+        assert not (await session.interact("browser_type", {"ref": "e1", "text": "robot"}))[1]
+        assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
+        assert not (await session.interact("browser_click", {"ref": "e4"}))[1]
+        assert not (await session.navigate(BASE + "b13/jobs/robot"))[1]
         return finder.Ran()
 
     entries, _, leases, tools, _ = asyncio.run(
         execute(selected(), "e2e-person", ScriptedFinder(script))
     )
-    assert finder.PAGES_MAX == 20
-    assert finder.MAX_TURNS == 40
-    assert finder.WALL_TIME_S == 840
-    assert finder.POSTINGS_MAX == 100
-    assert entries[0]["reason"] == "page_budget"
-    assert tools.actions == ["browser_navigate"]
+    assert (finder.PAGES_MAX, finder.MAX_TURNS, finder.WALL_TIME_S) == (20, 40, 840)
+    assert (finder.POSTINGS_MAX, finder.TOKEN_BUDGET) == (100, 600_000)
+    assert entries[0]["reason"] is None
+    assert entries[0]["result_pages"] == finder.PAGES_MAX * 3 + 4
+    assert tools.actions == [
+        "browser_navigate",
+        "browser_type",
+        "browser_click",
+        "browser_click",
+        "browser_navigate",
+    ]
     assert leases.released == ["lease-1"]
 
 

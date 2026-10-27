@@ -542,7 +542,9 @@ async def _search(
                 return session.stopped
             if ran.stopped:
                 return "no_credential" if ran.stopped == "no_credential" else "agent_failed"
-            if session.refused or not all(
+            # A posting the agent reported again (another of its searches listed it) is merged,
+            # not refused by the website: it is no reason to say the website was unsupported.
+            if set(session.refused) - {"duplicate"} or not all(
                 session.interactions[name] for name in ("browser_type", "browser_click")
             ):
                 return "unsupported_interaction"

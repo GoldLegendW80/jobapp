@@ -28,7 +28,9 @@ from browserd.leases import Request  # noqa: E402
 from browserd.tools import actions, discovery, pacing  # noqa: E402
 
 START = "https://jobs.example.test/search"
-SCOPE = discovery.Scope.parse({"start": START, "query": "robot", "filters": {}, "signed_in": True})
+SCOPE = discovery.Scope.parse(
+    {"start": START, "titles": ["robot"], "places": [], "filters": {}, "signed_in": True}
+)
 
 
 class Cdp:
@@ -237,7 +239,9 @@ def test_an_anonymous_scope_never_touches_the_persons_context() -> None:
     page = Page()
     context = Context([page])
     tab = tab_on(context)
-    anonymous = discovery.Scope.parse({"start": START, "query": "robot", "filters": {}})
+    anonymous = discovery.Scope.parse(
+        {"start": START, "titles": ["robot"], "places": [], "filters": {}}
+    )
     made: list[dict[str, Any]] = []
 
     async def new_context(**options: Any) -> Any:
@@ -308,8 +312,9 @@ def test_a_signed_in_request_never_signs_the_person_out(url: str, refused: bool)
 OWN = discovery.Scope.parse(
     {
         "start": START,
-        "query": "apply engineer",
-        "filters": {"category": "Sender", "location": "Sendai"},
+        "titles": ["apply engineer"],
+        "places": ["Sendai"],
+        "filters": {"category": "Sender"},
         "signed_in": True,
     }
 )

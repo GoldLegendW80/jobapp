@@ -44,7 +44,12 @@ user_a, user_b, redis_url = b7.user_a, b7.user_b, b3_support.redis_url
 Volume, row, start = b7.Volume, b7.row, b7.start
 
 SITE = "https://members.example.test/jobs/search"
-SCOPE = {"start": "https://jobs.example.test/search", "query": "robot", "filters": {}}
+SCOPE = {
+    "start": "https://jobs.example.test/search",
+    "titles": ["robot"],
+    "places": [],
+    "filters": {},
+}
 
 # --- browserd: the signed in scope and its request rule --------------------------------------
 

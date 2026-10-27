@@ -236,9 +236,12 @@ def test_parallel_registered_reports_reserve_budget_and_duplicates_once(monkeypa
         await second_started.wait()
         release.set()
         await asyncio.gather(first, pending)
-        assert len(committed) == 1
-        assert one.verified_count == (finder.POSTINGS_MAX if at_limit else 1)
-        assert one.refused["postings_max" if at_limit else "duplicate"] == 1
+        # A job website's verified postings have no cap (jobs J18): past POSTINGS_MAX, a second
+        # address is kept too; the same address twice is still one.
+        assert len(committed) == (2 if at_limit else 1)
+        assert one.verified_count == (finder.POSTINGS_MAX + 1 if at_limit else 1)
+        assert one.refused["duplicate"] == (0 if at_limit else 1)
+        assert not one.refused["postings_max"]
 
     asyncio.run(scenario())
 
@@ -629,9 +632,12 @@ def test_current_observation_and_known_url_memory_have_explicit_bounds():
             assert len(one.seen) <= finder.SEEN_MAX
             assert not one.found
         assert one.first == ""
-        one.verified_count = finder.POSTINGS_MAX
+        one.verified_count = finder.POSTINGS_MAX  # no cap of a job website's (jobs J18)
         await one.report_verified([report("/results/9")])
-        assert one.refused["postings_max"] == 1
+        assert (one.verified_count, one.refused["postings_max"]) == (finder.POSTINGS_MAX + 1, 0)
+        # One report call still takes a bounded list.
+        answer, error = await one.report_verified([report()] * (finder.POSTINGS_MAX + 1))
+        assert (answer, error) == ("postings must be a bounded list.", True)
 
     asyncio.run(scenario())
 
