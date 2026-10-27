@@ -68,6 +68,12 @@ export const sweepSchema = z.object({
   duration: z.number().nullable(),
   // Absent from an api older than browser B8.
   sources: z.array(sweepSourceSchema).default([]),
+  // The frozen scope's public part (jobs J9): absent from older sweeps. `websites_only` (jobs
+  // J17): the sweep searched the ticked websites and no board, feed or fixed reader.
+  search_scope: z
+    .object({ websites_only: z.boolean().default(false) })
+    .nullable()
+    .optional(),
 });
 export type Sweep = z.infer<typeof sweepSchema>;
 
@@ -105,12 +111,21 @@ export type SweepList = z.infer<typeof sweepListSchema>;
 
 export const sweepsKey = ["jobs", "sweeps"] as const;
 
-export function startSweep(profileRevision?: number): Promise<Sweep> {
+/** Start a sweep; `websitesOnly` (jobs J17) searches the ticked websites alone. */
+export function startSweep(
+  profileRevision?: number,
+  websitesOnly = false,
+): Promise<Sweep> {
   return request("/jobs/sweeps", {
     method: "POST",
     ...(profileRevision === undefined
       ? {}
-      : { body: { profile_revision: profileRevision } }),
+      : {
+          body: {
+            profile_revision: profileRevision,
+            ...(websitesOnly ? { websites_only: true } : {}),
+          },
+        }),
     timeoutMs: 15_000,
     validate: (data) => sweepSchema.parse(data),
   });

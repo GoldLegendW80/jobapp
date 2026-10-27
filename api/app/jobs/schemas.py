@@ -738,6 +738,9 @@ class SweepStartIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     profile_revision: Annotated[int, Field(ge=0, le=2_147_483_647)] | None = None
+    # Jobs J17, "Websites only" of Find jobs: search the ticked websites and no board, feed or
+    # fixed reader, for this sweep only (the schedule always searches every source).
+    websites_only: bool = False
 
 
 class SearchScopeOut(BaseModel):
@@ -749,6 +752,7 @@ class SearchScopeOut(BaseModel):
     trigger: str
     source_count: int
     criteria: dict[str, Any]
+    websites_only: bool = False
 
 
 class SweepOut(BaseModel):

@@ -139,7 +139,10 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
 
 function summaryLine(sweep: Sweep): string {
   const parts = [
-    `${plural(sweep.boards_ok, "board")} read`,
+    // Jobs J17: a websites only sweep read no board, so it says what it searched instead.
+    sweep.search_scope?.websites_only
+      ? "Websites only, no board or feed searched"
+      : `${plural(sweep.boards_ok, "board")} read`,
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),
@@ -367,6 +370,9 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {sweep.trigger === "schedule" ? "Automatic" : "By hand"}
+                        {sweep.search_scope?.websites_only
+                          ? ", websites only"
+                          : ""}
                         , {STATUS_TEXT[sweep.status] ?? sweep.status}
                         {sweep.boards_failed.length
                           ? `, ${plural(sweep.boards_failed.length, "board")} failed`
