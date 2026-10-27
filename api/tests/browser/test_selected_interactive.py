@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 import random
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -255,6 +256,110 @@ def test_the_registered_report_tool_stores_its_finding_through_the_run_commits(
     assert counted is not None
     assert counted.stats["new"] == 1
     assert CANARY not in json.dumps([*events, progress])
+
+
+class TearsDownReport(Recording):
+    """The SDK's side of a report tool call held inside its commit: torn down (cancelled), or
+    abandoned (no longer awaited while the handler goes on)."""
+
+    def __init__(self, inside, abandon):
+        super().__init__()
+        self.inside, self.abandon, self.left = inside, abandon, []
+
+    async def _call(self, request, block):
+        if block["name"] != "mcp__app__report_postings":
+            return await super()._call(request, block)
+        call = asyncio.create_task(super()._call(request, block))
+        await asyncio.to_thread(self.inside.wait, 30)
+        if self.abandon:
+            self.left.append(call)
+        else:
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+        return {
+            "type": "tool_result",
+            "tool_use_id": block["id"],
+            "content": [{"type": "text", "text": "{}"}],
+            "is_error": False,
+        }
+
+
+@pytest.mark.parametrize("abandon", [False, True])
+def test_a_registered_report_torn_down_during_its_commit_is_stored_and_counted_at_settle(
+    runtime: Runtime,  # noqa: F811
+    alice,  # noqa: F811
+    monkeypatch,
+    abandon,
+):
+    """Jobs J11b (#655): the real RuntimeFinder's registered report tool, its call torn down or
+    abandoned while its batch is inside the database: the commit ends, its job is stored, and
+    it is counted when its source settles."""
+    runtime.give_key(alice)
+    inside, release = threading.Event(), threading.Event()
+    original = sweep._counted
+
+    def held(stats, *args):
+        original(stats, *args)
+        if threading.current_thread() is not threading.main_thread():
+            inside.set()
+            assert release.wait(30), "the test never released the commit"
+
+    monkeypatch.setattr(sweep, "_counted", held)
+    from tests.browser import b13_runtime as backend_steps
+
+    monkeypatch.setattr(
+        backend_steps,
+        "STEPS",
+        [
+            (name, {**args, "values": ["remote"]} if name == "browser_select_option" else args)
+            for name, args in backend_steps.STEPS
+        ],
+    )
+    backend = TearsDownReport(inside, abandon)
+    context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
+    with runtime.factory() as database:
+        row = Sweep(user_id=alice, trigger=SweepTrigger.manual, stats={})
+        database.add(row)
+        database.commit()
+        sweep_id = row.id
+    settled_with: list[int] = []
+    original_settle = sweep.Commits.settle
+
+    async def settle(self, *, close=False):
+        release.set()  # the commit's thread may now end
+        result = await original_settle(self, close=close)
+        settled_with.append(self.stats.new)
+        return result
+
+    monkeypatch.setattr(sweep.Commits, "settle", settle)
+
+    def prepare(given, stats):
+        with runtime.factory() as database:
+            known = sweep.Known(database, alice)
+        plan = sweep.Plan(
+            sweep_id=sweep_id, user_id=alice, boards=[], filter=sweep.SearchFilter.of(given.search),
+            rules=[], skills=None, known=known, search=given.search,
+            search_scope=given.search_scope,
+        )  # fmt: skip
+        plan.commits = sweep.Commits(runtime.factory, plan, stats, lambda: datetime.now(UTC))
+        return plan
+
+    try:
+        entries, stored, _, _, _ = asyncio.run(
+            execute(selected(), alice, finder.RuntimeFinder(lambda: context), prepare=prepare)
+        )
+    finally:
+        release.set()
+    [entry] = entries
+    assert settled_with[0] == 1  # counted when its source settled, before anything after it
+    assert (entry["found"], entry["postings"], stored) == (1, 1, [])
+    with runtime.factory() as database:
+        [job] = database.scalars(sa.select(Job).where(Job.user_id == alice)).all()
+        counted = database.get(Sweep, sweep_id)
+    assert job.title == "Robot Engineer"
+    assert counted is not None
+    assert counted.stats["new"] == 1
 
 
 @pytest.mark.parametrize(

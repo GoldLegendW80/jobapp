@@ -9,7 +9,9 @@ One sweep, `run_sweep(sweep_id)`:
    pre-v1 rows without `stats.search_scope` explicitly retain claim-time profile reads.
    Without an enabled source the sweep fails with a clear message. Selected interactive sites
    run through the bounded interactive finder; each batch of findings it verified is stored
-   as it is reported (`Commits`, jobs J11 and J11b, below).
+   as it is reported (`Commits`, jobs J11 and J11b, below). A "Websites only" start (jobs
+   J17, `websites_only`, a hand start of Find jobs only) freezes the ticked websites alone:
+   no board, feed or fixed reader is in its scope or its plan, and its public scope says so.
 2. Fetch. Boards are read through ats.AtsClient, CONCURRENCY at a time, each failure recorded
    with its code; the others go on.
 3. Keep. For each posting, in the engine's order: the title matches `title_include` (an empty
@@ -143,6 +145,7 @@ TIMED_OUT = "The sweep took too long and was stopped."
 INTERRUPTED = "The sweep was interrupted (the worker restarted). Start it again."
 INTERNAL = "The sweep failed because of an internal error."
 NO_BOARDS = "No board is enabled in the search section of your profile."
+NO_WEBSITES = "Tick at least one website to search websites only."
 SEARCH_INVALID = (
     "The search section of your profile no longer passes the checks. "
     "Open the Search tab of your profile and save it again."
@@ -302,12 +305,18 @@ def enabled_feeds(search: SearchSection | None) -> list[Feed]:
     return [feed for feed in search.feeds if feed.enabled] if search else []
 
 
-def has_sources(search: SearchSection | None) -> bool:
+def has_websites(search: SearchSection | None) -> bool:
+    return bool(search and any(site.enabled for site in search.interactive_sites))
+
+
+def has_sources(search: SearchSection | None, websites_only: bool = False) -> bool:
+    if websites_only:
+        return has_websites(search)
     return bool(
         enabled_boards(search)
         or enabled_sources(search)
         or enabled_feeds(search)
-        or (search and any(site.enabled for site in search.interactive_sites))
+        or has_websites(search)
     )
 
 
@@ -316,11 +325,14 @@ def _source_id(mode: str, *key: str) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
-def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) -> dict[str, Any]:
+def freeze_scope(
+    profile: Profile | None, trigger: SweepTrigger, now: datetime, websites_only: bool = False
+) -> dict[str, Any]:
     """Private v1 intent, captured under the profile lock before the queue can see the run.
 
     Permissions are not frozen authority. Browser guards still read current server state.
     Old rows without search_scope retain the explicit claim-time legacy path below.
+    `websites_only` (jobs J17) leaves the boards, feeds and fixed readers out of the sources.
     """
     sections = copy.deepcopy(profile.sections or {}) if profile else {}
     raw = sections.get("search")
@@ -331,6 +343,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+    if search is not None and not websites_only:
         sources.extend(
             {
                 "source_id": _source_id("api", board.ats, board.org),
@@ -354,6 +367,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             }
             for s in enabled_sources(search)
         )
+    if search is not None:
         sources.extend(
             {
                 **site.model_dump(mode="json"),
@@ -369,6 +383,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         "profile_revision": profile.revision if profile else 0,
         "created_at": now.isoformat(),
         "trigger": trigger.value,
+        "websites_only": websites_only,
         "search": raw,
         "skills": sections.get("skills"),
         "sources": sources,
@@ -861,9 +876,12 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             error = NO_BOARDS
         except (ValueError, KeyError, re.error):
             search, search_filter, error = None, None, SEARCH_INVALID
-        boards = enabled_boards(search)
-        sources = enabled_sources(search)
-        feeds = enabled_feeds(search)
+        websites_only = isinstance(scope, dict) and scope.get("websites_only") is True
+        boards = [] if websites_only else enabled_boards(search)
+        sources = [] if websites_only else enabled_sources(search)
+        feeds = [] if websites_only else enabled_feeds(search)
+        if websites_only:
+            error = NO_WEBSITES if error == NO_BOARDS else error
         slot = sweep.stats.get("schedule_slot")
         stats = Stats(
             boards_total=len(boards),
@@ -872,7 +890,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=slot if isinstance(slot, str) else None,
         )
         sweep.stats = _stats_json(sweep, stats)
-        if search is None or search_filter is None or not has_sources(search):
+        if search is None or search_filter is None or not has_sources(search, websites_only):
             if error == SEARCH_INVALID:
                 logger.warning(
                     "sweep failed: the stored search section does not validate",
@@ -1616,7 +1634,13 @@ def schedule_of(search: SearchSection | None) -> SweepSchedule:
     return search.sweep_schedule if search is not None else SweepSchedule()
 
 
-def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime) -> Sweep:
+def start(
+    db: Session,
+    user_id: uuid.UUID,
+    trigger: SweepTrigger,
+    now: datetime,
+    websites_only: bool = False,
+) -> Sweep:
     """A new running sweep for the user, after failing a stale one of theirs. Raises
     service.SweepRunningError when one is running; the caller commits."""
     profile = db.execute(
@@ -1624,14 +1648,20 @@ def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime)
     ).scalar_one_or_none()
     reap_stale(db, now, user_id)
     row = service.start_sweep(db, user_id, trigger, now)
-    scope = freeze_scope(profile, trigger, now)
+    scope = freeze_scope(profile, trigger, now, websites_only)
     row.stats = {**row.stats, "search_scope": scope, "sources": initial_sources(scope)}
     db.flush()
     return row
 
 
 BeginOutcome = Literal[
-    "started", "running", "no_boards", "search_invalid", "queue_down", "revision_conflict"
+    "started",
+    "running",
+    "no_boards",
+    "no_websites",
+    "search_invalid",
+    "queue_down",
+    "revision_conflict",
 ]
 
 
@@ -1652,6 +1682,7 @@ def _insert[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
+    websites_only: bool = False,
 ) -> Begun[T]:
     with sessions() as db:
         profile = db.execute(
@@ -1665,17 +1696,17 @@ def _insert[T](
             search = load_search(db, user_id)
         except InvalidSearchError:
             return Begun("search_invalid")
-        if not has_sources(search):
-            return Begun("no_boards")
+        if not has_sources(search, websites_only):
+            return Begun("no_websites" if websites_only else "no_boards")
         try:
-            row = start(db, user_id, SweepTrigger.manual, now)
+            row = start(db, user_id, SweepTrigger.manual, now, websites_only)
             begun = Begun("started", row.id, view(row))
             db.commit()
         except service.SweepRunningError:
             db.rollback()
             running = service.running_sweep(db, user_id)
             if running is None:  # finished between the insert and this read
-                return _insert(sessions, user_id, now, view, profile_revision)
+                return _insert(sessions, user_id, now, view, profile_revision, websites_only)
             return Begun("running", running.id)
     return begun
 
@@ -1687,12 +1718,16 @@ async def begin[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
+    websites_only: bool = False,
 ) -> Begun[T]:
     """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
     and of the first login wizard's Start (opportunities O5). No sweep without an enabled board
-    or source, or with a search section that no longer validates; the running one when the user
-    has one; a queue that is down fails the new sweep at once, so it never blocks the next try."""
-    begun = await asyncio.to_thread(_insert, sessions, user_id, now, view, profile_revision)
+    or source (with `websites_only`, jobs J17: without an enabled website), or with a search
+    section that no longer validates; the running one when the user has one; a queue that is
+    down fails the new sweep at once, so it never blocks the next try."""
+    begun = await asyncio.to_thread(
+        _insert, sessions, user_id, now, view, profile_revision, websites_only
+    )
     if begun.outcome != "started" or begun.sweep_id is None:
         return begun
     try:

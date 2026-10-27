@@ -736,3 +736,59 @@ describe("Sweep history", () => {
     expect(dialog).toHaveTextContent("No sweep yet.");
   });
 });
+
+describe("Websites only (jobs J17)", () => {
+  const scope = {
+    version: 1,
+    profile_revision: 6,
+    created_at: "2026-10-09T08:00:00Z",
+    trigger: "manual",
+    source_count: 1,
+    criteria: {},
+    websites_only: true,
+  };
+
+  it("says the sweep searched the websites alone, in its summary and its history line", async () => {
+    const done = finished({
+      boards_total: 0,
+      boards_done: 0,
+      boards_ok: 0,
+      boards_failed: [],
+      search_scope: scope,
+    });
+    fakeSweeps({
+      list: [{ ...done, status: "done" }],
+      states: [done],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Sweep history" }));
+    const history = await screen.findByRole("dialog", { name: "Sweeps" });
+    const [item] = within(
+      within(history).getByRole("list", { name: "Last sweeps" }),
+    ).getAllByRole("button");
+    expect(item).toHaveTextContent(/By hand, websites only, Done/);
+    await user.click(item!);
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(summary).toHaveTextContent(
+      "Websites only, no board or feed searched, 120 postings seen, 4 matched your search, 2 new postings.",
+    );
+    expect(summary).not.toHaveTextContent("boards read");
+    expect(summary).not.toHaveTextContent(/[–—]| - /);
+  });
+
+  it("keeps the boards line of a sweep without the choice", async () => {
+    fakeSweeps({
+      states: [finished({ search_scope: { ...scope, websites_only: false } })],
+    });
+    await openJobs();
+    await startSearch();
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
+    expect(summary).not.toHaveTextContent("Websites only");
+  });
+});
