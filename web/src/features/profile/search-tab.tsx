@@ -1,8 +1,9 @@
 /**
- * Search: what the sweep looks for. Title include and exclude terms and location terms as chips
- * (each list with its advanced switch), contract types as toggles, the remote stance, the minimum
- * fit to shortlist, the posting age window, the company boards (boards-table.tsx), the job sites
- * read in the browser (browser-sources-card.tsx), the freelance and project sources
+ * Search: what the sweep looks for. The four plain lists, job titles, unwanted titles, places and
+ * unwanted places, as chips (search-lists.tsx, their regular expression switches under Advanced),
+ * contract types as toggles, the remote stance, the minimum fit to shortlist, the posting age
+ * window, the company boards (boards-table.tsx), the job sites read in the browser
+ * (browser-sources-card.tsx), the freelance and project sources
  * (opportunities/sources, O8) and the never-apply rules. Then what the person
  * aims for (target-fields.tsx, O4) and, as a card with its own Save, the preferences section
  * (preferences-card.tsx). On top, the starter list of boards and sites (starter-card.tsx, O5c).
@@ -40,6 +41,7 @@ import {
 import { BoardsTable } from "./boards-table";
 import { BrowserSourcesCard } from "./browser-sources-card";
 import { PreferencesCard } from "./preferences-card";
+import { SearchLists } from "./search-lists";
 import { STARTER_BUSY, StarterCard } from "./starter-card";
 import { TargetFields } from "./target-fields";
 import { describeSchedule } from "./schedule";
@@ -58,7 +60,6 @@ import {
   SaveBar,
   TextField,
 } from "./section-ui";
-import { TermChips } from "./term-chips";
 import { useSectionForm } from "./use-section-form";
 
 const CONTRACT_LABELS: Record<(typeof CONTRACT_TYPES)[number], string> = {
@@ -189,29 +190,12 @@ function SearchForms({
         >
           <FormErrorAlert message={formError} />
           <Group
-            title="Job titles"
-            description="Plain terms match whole words in any case, with an optional plural. Switch a list to advanced to write regular expressions instead."
+            title="Titles and places"
+            description="Each word or phrase matches as a whole word, in any case, with an optional plural."
           >
-            <TermChips
-              form={form}
-              name="title_include"
-              label="Titles to include"
-              description="A posting is kept when its title matches one of these."
-            />
-            <TermChips
-              form={form}
-              name="title_exclude"
-              label="Titles to exclude"
-              description="A posting whose title matches one of these is dropped."
-            />
+            <SearchLists form={form} />
           </Group>
           <Group title="Where and how">
-            <TermChips
-              form={form}
-              name="location"
-              label="Locations"
-              description="Cities, countries or Remote, matched against the posting location."
-            />
             <FormField
               control={control}
               name="remote_stance"

@@ -16,7 +16,9 @@ One sweep, `run_sweep(sweep_id)`:
    with its code; the others go on.
 3. Keep. For each posting, in the engine's order: the title matches `title_include` (an empty
    list keeps every title), matches neither `title_exclude` nor the board's `extra_exclude`, the
-   location matches `location` (empty: any), and the published date is within `days` of today
+   location matches `location` (empty: any) and not `location_exclude` (the unwanted places,
+   which win over a wanted one: "Remote, United States" is left out by an unwanted "United
+   States"), and the published date is within `days` of today
    (Europe/Paris; a posting without a date is left out, as the engine's string comparison did).
    Then one step the engine did not have: the contract type read from the title, location and
    URL (engine `kind`, app/jobs/importer.py) must be one of `contract_types` (empty: any).
@@ -180,6 +182,7 @@ class SearchFilter:
     include: Matcher | None
     exclude: Matcher | None
     location: Matcher | None
+    location_exclude: Matcher | None  # the unwanted places
     contract_types: frozenset[str]
     days: int
 
@@ -192,6 +195,7 @@ class SearchFilter:
             include=compile_list(search.title_include),
             exclude=compile_list(search.title_exclude),
             location=compile_list(search.location),
+            location_exclude=compile_list(search.location_exclude),
             contract_types=frozenset(search.contract_types),
             days=search.days,
         )
@@ -217,6 +221,8 @@ class SearchFilter:
             return "board_excluded"
         if self.location is not None and not self.location.search(location):
             return "location"
+        if self.location_exclude is not None and self.location_exclude.search(location):
+            return "location_excluded"
         if not published >= since:
             return "too_old"
         return None

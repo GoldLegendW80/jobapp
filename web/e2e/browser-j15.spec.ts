@@ -194,16 +194,16 @@ test("A chooses websites, opts in per website, sets criteria and starts Find job
   }
 
   await expect(
-    setup.getByRole("list", { name: "Terms of Titles to include" }),
+    setup.getByRole("list", { name: "Terms of Job titles" }),
   ).toContainText("engineer");
   await setup
-    .getByRole("textbox", { name: "New term for Locations" })
+    .getByRole("textbox", { name: "New term for Places" })
     .fill("Paris");
   await setup
-    .getByRole("textbox", { name: "New term for Locations" })
+    .getByRole("textbox", { name: "New term for Places" })
     .press("Enter");
   await expect(
-    setup.getByRole("list", { name: "Terms of Locations" }),
+    setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
   await setup.getByLabel("Instructions for this search").fill(INSTRUCTIONS);
   await expect(
@@ -374,7 +374,7 @@ test("reopened by keyboard at 375 px in the dark, the setup holds her choices", 
     ).toBeChecked();
   await expect(setup).toContainText(SITE);
   await expect(
-    setup.getByRole("list", { name: "Terms of Locations" }),
+    setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
   await expect(setup.getByLabel("Instructions for this search")).toHaveValue(
     INSTRUCTIONS,

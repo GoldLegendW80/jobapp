@@ -118,6 +118,13 @@ choice made by the build that stands until the owner says otherwise.
   `posting` names are renamed too (to `opportunity_id` and so on) in O11b's migration. Old API
   paths answer 308 for 30 days or two releases, whichever is later. Existing accounts with a
   profile never see the wizard, only a "Finish setting up" card for those with steps left.
+- 2026-10-27, owner decision on the search lists (#626, #703): the search is four plain word
+  lists, Job titles, Unwanted titles, Places and a new Unwanted places (`location_exclude`), in
+  the Search tab and the Find jobs setup alike; each list's regular expression switch moves under
+  the shared Advanced, off by default, and Advanced opens by itself when a list holds one. An
+  unwanted place leaves a posting out wherever the search filters (boards, feeds, browser sources
+  and the website searches), through the same matcher as the unwanted titles, and wins over a
+  wanted place.
 
 ## Mail (2026-10-13; paused 2026-10-14 after M4)
 

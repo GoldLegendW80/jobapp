@@ -90,17 +90,21 @@ describe("search tab: terms and preferences", () => {
   it("shows the terms, preferences, boards and rules", async () => {
     await openSearch();
     const include = screen.getByRole("list", {
-      name: "Terms of Titles to include",
+      name: "Terms of Job titles",
     });
     expect(include).toHaveTextContent("applied ai");
+    // The saved regular expressions open the lists' Advanced by themselves.
     expect(
       screen.getByRole("switch", {
-        name: "Advanced (regular expressions) for Titles to include",
+        name: "Regular expressions for Job titles",
       }),
     ).toBeChecked();
     expect(
-      screen.getByRole("list", { name: "Terms of Locations" }),
+      screen.getByRole("list", { name: "Terms of Places" }),
     ).toHaveTextContent("Paris");
+    expect(
+      screen.getByRole("list", { name: "Terms of Unwanted places" }),
+    ).toHaveTextContent("United States");
     expect(
       screen.getByRole("button", { name: "CDI (permanent)" }),
     ).toHaveAttribute("aria-pressed", "true");
@@ -127,12 +131,16 @@ describe("search tab: terms and preferences", () => {
   it("edits terms, contract types, stance, fit and days, then saves", async () => {
     const { user, state } = await openSearch();
     await user.type(
-      screen.getByLabelText("New term for Titles to exclude"),
+      screen.getByLabelText("New term for Unwanted titles"),
       "\\bintern{enter}",
     );
     await user.type(
-      screen.getByLabelText("New term for Locations"),
+      screen.getByLabelText("New term for Places"),
       "Lyon{enter}",
+    );
+    await user.type(
+      screen.getByLabelText("New term for Unwanted places"),
+      "Canada{enter}",
     );
     await user.click(screen.getByRole("button", { name: "Remove Remote" }));
     await user.click(screen.getByRole("button", { name: "VIE" }));
@@ -158,6 +166,10 @@ describe("search tab: terms and preferences", () => {
       terms: ["\\bcyber\\b", "\\bintern"],
     });
     expect(data.location.terms).toEqual(["Paris", "Lyon"]);
+    expect(data.location_exclude).toEqual({
+      advanced_regex: false,
+      terms: ["United States", "Canada"],
+    });
     // Always in the canonical order, whatever the order of the clicks.
     expect(data.contract_types).toEqual(["CDI", "CDD", "VIE"]);
     expect(data.remote_stance).toBe("hybrid");
@@ -203,7 +215,7 @@ describe("search tab: terms and preferences", () => {
     await user.click(screen.getByRole("button", { name: "VIE" }));
     await user.click(save());
     const list = screen.getByRole("list", {
-      name: "Terms of Titles to include",
+      name: "Terms of Job titles",
     });
     const llm = within(list).getAllByRole("listitem")[1]!;
     expect(
@@ -250,11 +262,12 @@ describe("search tab: terms and preferences", () => {
     const { user, state } = await openSearch(null);
     expect(screen.getByText("No board yet.")).toBeVisible();
     expect(screen.getByText("No rule yet.")).toBeVisible();
-    // Titles to include and exclude, locations, and the industries kept mounted under Advanced.
-    expect(screen.getAllByText("No term yet.")).toHaveLength(4);
+    // The four lists (job titles, unwanted titles, places, unwanted places), and the industries
+    // kept mounted under Advanced.
+    expect(screen.getAllByText("No term yet.")).toHaveLength(5);
     expect(screen.getByLabelText("Minimum fit")).toHaveValue("70");
     await user.type(
-      screen.getByLabelText("New term for Titles to include"),
+      screen.getByLabelText("New term for Job titles"),
       "ai engineer{enter}",
     );
     await user.click(save());
@@ -263,6 +276,7 @@ describe("search tab: terms and preferences", () => {
       title_include: { advanced_regex: false, terms: ["ai engineer"] },
       title_exclude: { advanced_regex: false, terms: [] },
       location: { advanced_regex: false, terms: [] },
+      location_exclude: { advanced_regex: false, terms: [] },
       contract_types: [],
       remote_stance: null,
       min_fit: 70,

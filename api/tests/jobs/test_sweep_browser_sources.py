@@ -107,6 +107,23 @@ def test_browser_postings_are_stored_scored_and_ruled(
     assert leases.acquired[0][0] == str(alice)
 
 
+def test_browser_postings_in_an_unwanted_place_are_not_kept(
+    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+) -> None:
+    made = (
+        offer("AI Engineer", number=1),  # Paris, France
+        pages.Offer("GenAI Engineer", "Example Robotics", "London, United Kingdom", 2),
+        pages.Offer("Forward Deployed Engineer", "Example Robotics", "Remote; London", 3),
+    )
+    unwanted = {"terms": ["london"], "advanced_regex": False}
+    set_profile(factory, alice, search(browser_sources=[SOURCE], location_exclude=unwanted))
+    row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(FakeTools(site(*made))))
+    assert (row.status, row.error) == (SweepStatus.done, None)
+    assert [job.title for job in jobs_of(factory, alice)] == ["AI Engineer"]
+    assert row.stats["sources"][0]["found"] == 3  # read completely; the unwanted places are not new
+    assert row.stats["sources"][0]["postings"] == 1
+
+
 def test_a_posting_the_api_found_is_no_new_row(
     factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
