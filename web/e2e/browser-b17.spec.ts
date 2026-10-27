@@ -270,7 +270,11 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
   const own = sweep.sources.find((item) => item.kind === "custom");
   const detail = JSON.stringify(sweep.sources);
   // One run for the website (jobs J18), its one search typed and submitted signed in.
-  expect(own, detail).toMatchObject({ mode: "llm_browser", host: HOST, searches: 1 });
+  expect(own, detail).toMatchObject({
+    mode: "llm_browser",
+    host: HOST,
+    searches: 1,
+  });
   expect(own?.error, detail).not.toBe("platform_signin");
   expect(own?.found ?? 0, detail).toBeGreaterThanOrEqual(1);
 
