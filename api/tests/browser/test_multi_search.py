@@ -5,13 +5,14 @@ page cap, token budget, pacing and the platform's caps; the postings merge into 
 """
 
 import asyncio
+import random
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
-from app.browser import finder, platform_policy
+from app.browser import finder, platform_policy, sources
 from app.browser.sources import interactive
 from app.browser.sources.interactive import PLAIN, SEARCHES_MAX, searches_for
 from app.profile.schemas import SearchSection
@@ -199,6 +200,230 @@ def test_the_token_budget_is_shared_by_the_searches_of_a_website():
     assert len(leases.acquired) == 2
 
 
+def busy(calls: int, sessions: list[finder.FinderSession], turns: int = 0):
+    """The model: types its words, presses Search, then reads the page again until it made
+    `calls` tool calls, or until a tool tells it to stop; the runtime counts `turns` (0: none)."""
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        sessions.append(session)
+        query = session.interactive.query
+        steps = [
+            lambda: session.interact("browser_type", {"ref": "e1", "text": query}),
+            lambda: session.interact("browser_click", {"ref": "e3"}),
+            *[session.snapshot] * (calls - 2),
+        ]
+        for step in steps:
+            if (await step())[0].startswith("Stopped:"):
+                break  # told to stop, as a model is
+        return finder.Ran(input_tokens=10, output_tokens=1, turns=turns)
+
+    return script
+
+
+@pytest.mark.parametrize(
+    ("titles", "calls", "budgets"),
+    [
+        # Six searches of 9 calls: 4 of them use 36 turns, the fifth stops at 4 more.
+        (["a1", "b2", "c3", "d4", "e5", "f6"], 9, [40, 31, 22, 13, 4]),
+        # The reviewer's probe: 30 calls a search, the second stops at 40 in all.
+        (["a1", "b2", "c3"], 30, [40, 10]),
+    ],
+)
+def test_the_website_turn_cap_is_shared_by_its_searches(titles, calls, budgets):
+    """SPEC-browser's 40 model turns hold for the website, across all its native searches."""
+    sessions: list[finder.FinderSession] = []
+    entry, _, leases = run(
+        selected(title_include={"terms": titles}),
+        SearchSite(),
+        ScriptedFinder(busy(calls, sessions)),
+    )
+    assert finder.MAX_TURNS == 40
+    assert [s.turn_budget for s in sessions] == budgets
+    assert [s.turns for s in sessions] == [*[calls] * (len(budgets) - 1), budgets[-1]]
+    assert sum(s.turns for s in sessions) == finder.MAX_TURNS
+    assert sessions[-1].stopped == "turn_limit"
+    assert (entry["searches"], entry["error"]) == (len(budgets), "turn_limit")
+    assert len(leases.acquired) == len(budgets)  # the later combinations never asked
+
+
+def test_the_runtime_s_turn_count_wins_when_it_is_higher_and_its_stop_ends_the_website():
+    """A turn the tools never see (text only, a refused tool) is counted by the runtime."""
+    sessions: list[finder.FinderSession] = []
+    entry, _, leases = run(
+        selected(title_include={"terms": ["a1", "b2", "c3"]}),
+        SearchSite(),
+        ScriptedFinder(busy(3, sessions, turns=25)),
+    )
+    assert [s.turn_budget for s in sessions] == [40, 15]
+    assert (entry["searches"], entry["error"], len(leases.acquired)) == (2, "turn_limit", 2)
+
+    async def stopped(session: finder.FinderSession) -> finder.Ran:
+        sessions.append(session)
+        await busy(3, [])(session)
+        return finder.Ran(stopped="turn_limit", turns=4)  # the runtime cut the run
+
+    sessions.clear()
+    entry, _, leases = run(
+        selected(title_include={"terms": ["a1", "b2"]}), SearchSite(), ScriptedFinder(stopped)
+    )
+    assert (len(sessions), entry["error"], len(leases.acquired)) == (1, "turn_limit", 1)
+
+
+def test_each_tool_call_is_a_turn_and_none_runs_past_the_budget():
+    site = SearchSite(results={"robot": ["Robot Engineer"]}, current=BASE, pages={BASE: FIRST})
+    pages = sources.Pages(
+        site,
+        1000,
+        sleep=lambda _: asyncio.sleep(0),
+        rng=random.Random(1),  # noqa: S311  deterministic test pacing
+        monotonic=lambda: 0,
+    )
+    scope = finder.InteractiveScope(BASE, "robot", ())
+    session = finder.FinderSession(pages, BASE, FIRST, "e2e-person", interactive=scope)
+    assert session.turn_budget is None  # a career site: the runtime's 40 turns alone
+    session.turn_budget = 6
+    posting = BASE + "jobs/robot-engineer"
+
+    async def model() -> list[tuple[str, bool]]:
+        return [
+            await session.interact("browser_type", {"ref": "e1", "text": "robot"}),
+            await session.interact("browser_click", {"ref": "e3"}),
+            await session.navigate(posting),
+            session.report([{"title": "Robot Engineer", "url": posting, "text": "x"}]),
+            await session.wait_for(None, 1),
+            await session.snapshot(),
+            await session.snapshot(),  # the seventh
+            await session.navigate(posting),
+            await session.report_verified([]),
+        ]
+
+    answers = asyncio.run(model())
+    assert all(not error for _, error in answers[:6]), answers
+    stop = "Stopped: turn_limit. Report what you found, then stop."
+    assert answers[6:] == [(stop, True)] * 3
+    assert (session.turns, session.stopped, len(session.found)) == (6, "turn_limit", 1)
+    assert site.actions == ["browser_type", "browser_click", "browser_navigate"]
+
+    # One verified report is one turn, never two.
+    saved: list[finder.VerifiedBatch] = []
+
+    async def save(batch: finder.VerifiedBatch) -> None:
+        saved.append(batch)
+
+    verified = finder.FinderSession(
+        pages, BASE, FIRST, "e2e-person", interactive=scope, turn_budget=1, on_verified=save
+    )
+    assert not asyncio.run(verified.report_verified([]))[1]
+    assert asyncio.run(verified.snapshot())[0].startswith("Stopped: turn_limit")
+    assert verified.turns == 1
+
+    # Without a budget (a company careers page, one run a source) nothing is counted against.
+    career = finder.FinderSession(pages, BASE, FIRST, "e2e-person")
+    for _ in range(finder.MAX_TURNS + 5):
+        assert not asyncio.run(career.snapshot())[1]
+    assert (career.turns, career.stopped) == (finder.MAX_TURNS + 5, "")
+
+
+def test_the_website_finder_time_is_shared_by_its_searches():
+    """SPEC-browser's 840 s finder limit holds for the website, not for each of its searches:
+    two searches of 500 s leave no time for a third (the sweep's own limit is far)."""
+    site = SearchSite()
+    now = [0.0]
+    deadlines: list[float] = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        deadlines.append(session.pages.deadline)
+        done = await searching(site)(session)
+        now[0] += 500  # the model's time in this search
+        return done
+
+    entry, _, leases = run(
+        selected(title_include={"terms": ["robot", "drone", "rover"]}),
+        site,
+        ScriptedFinder(script),
+        now=now,
+    )
+    assert finder.WALL_TIME_S == 840
+    assert deadlines == [finder.WALL_TIME_S] * 2  # the website's 840 s, not the sweep's
+    assert (entry["searches"], entry["error"]) == (2, "time_budget")
+    assert len(leases.acquired) == 2  # the third search never asked for the browser
+
+
+@pytest.mark.parametrize(
+    ("contracts", "places", "counts"),
+    [
+        # (found, other_contract, unwanted) once both searches read the address.
+        ([], ("Paris", "Lyon"), (0, 0, 1)),
+        ([], ("Lyon", "Paris"), (0, 0, 1)),
+        (["CDI", "Stage"], ("Paris CDD", "Lyon"), (0, 0, 1)),
+        (["CDI", "Stage"], ("Lyon", "Paris CDD"), (0, 0, 1)),
+        (["CDI", "Stage"], ("Paris", "Paris CDD"), (0, 1, 0)),
+        (["CDI", "Stage"], ("Paris CDD", "Paris"), (0, 1, 0)),
+        ([], ("Paris", "Paris"), (1, 0, 0)),
+    ],
+)
+def test_an_address_read_two_ways_counts_once_and_the_refusal_wins(
+    monkeypatch, contracts, places, counts
+):
+    """Two searches report one posting with other places: it counts in one place only, and an
+    unwanted reading wins over another contract, which wins over a kept one (fail closed)."""
+    monkeypatch.setattr(
+        SearchSection, "location_exclude", property(lambda self: ["Lyon"]), raising=False
+    )
+    site = SearchSite(results={"robot": ["Fleet Lead"], "drone": ["Fleet Lead"]})
+    place = dict(zip(("robot", "drone"), places, strict=True))
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        query = session.interactive.query
+        await session.interact("browser_type", {"ref": "e1", "text": query})
+        await session.interact("browser_click", {"ref": "e3"})
+        url = f"{site.base}jobs/fleet-lead"
+        await session.navigate(url)
+        session.report([{"title": "Fleet Lead", "location": place[query], "url": url, "text": "x"}])
+        return finder.Ran()
+
+    entry, _, _ = run(
+        selected(title_include={"terms": ["robot", "drone"]}, contract_types=contracts),
+        site,
+        ScriptedFinder(script),
+    )
+    assert entry["searches"] == 2
+    assert (entry["found"], entry.get("other_contract", 0), entry.get("unwanted", 0)) == counts
+
+
+@pytest.mark.parametrize(
+    ("first", "then", "saved", "unwanted"),
+    [
+        ("Robot Engineer", "Robot Sales Lead", ["Robot Engineer"], 0),  # stored stays, once
+        ("Robot Sales Lead", "Robot Engineer", [], 1),  # unwanted first: never stored
+        ("Robot Engineer", "Robot Engineer", ["Robot Engineer"], 0),
+    ],
+)
+def test_a_stored_address_stays_stored_once_whatever_a_later_search_reads(
+    first, then, saved, unwanted
+):
+    """The searches' verified batches on their way to the store (jobs J11): a posting is saved
+    once, and an earlier unwanted reading keeps a later wanted one out."""
+    stored: list[str] = []
+
+    class Commits:
+        async def save(self, source_id, host, batch):
+            stored.extend(finding.title for finding in batch.findings)
+
+    planned = searches_for(selected(title_exclude={"terms": ["sales"]}))
+    site = interactive._Site(planned, commits=Commits(), source_id="s", host="jobs.example.test")
+    url = BASE + "jobs/fleet"
+
+    def batch(title: str) -> finder.VerifiedBatch:
+        return finder.VerifiedBatch(
+            (finder.VerifiedFinding(title, "Paris", url, title, None, None, {}, ""),)
+        )
+
+    asyncio.run(site.verified(batch(first)))
+    asyncio.run(site.verified(batch(then)))
+    assert (stored, len(site.unwanted), site.found) == (saved, unwanted, set())
+
+
 def test_an_error_in_one_search_stops_the_website_and_keeps_what_was_read():
     site = SearchSite(results={"robot": ["Robot Engineer"]})
     calls: list[str] = []
@@ -300,7 +525,7 @@ def test_linkedin_pages_of_the_day_are_shared_by_all_its_searches():
     assert entry["searches"] == 3  # the third opened its page five, then the cap held
     assert entry["found"] == 2
     assert len(leases.acquired) == 3
-    assert len(set(policy.reserved)) == 1  # one source of the sweep, reserved by each search
+    assert policy.reserved == [policy.reserved[0]] * 3  # one source, reserved by each search
 
 
 def test_one_contract_is_the_website_filter_and_several_are_checked_after_reading():

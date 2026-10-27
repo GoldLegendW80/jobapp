@@ -174,7 +174,9 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
     [made] = runs_of(runtime.factory, alice)
     assert made.agent == finder.INTERACTIVE_NAME
     assert made.model == (finder.MODEL if subscription else finder.MODEL_API_KEY)
-    assert set(made.input) == {"request", "token_budget"}
+    # Numbers only: the website's turns left (its first search: all 40) beside its tokens.
+    assert set(made.input) == {"request", "token_budget", "turn_budget"}
+    assert made.input["turn_budget"] == finder.MAX_TURNS
     assert CANARY not in json.dumps(progress)
     assert not finder._SCOPES
     assert not finder._SESSIONS

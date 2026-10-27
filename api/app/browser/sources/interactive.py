@@ -12,17 +12,22 @@ One search per combination (owner, 2026-10-26): a website runs one native search
 title term and a location term, in the order saved (titles first, then places), at most
 SEARCHES_MAX a sweep. Each search is its own lease with its own frozen scope (browserd binds one
 scope to a lease), so only that search's exact words and filters can be typed in it. The
-searches of a website share its limits: the finder's PAGES_MAX pages, its TOKEN_BUDGET, the
-platform's pace key and the platform policy's caps (LinkedIn's pages and its one sweep a day).
-Their postings merge into the website's one result, counted once per canonical address. One
-contract type is the website's own filter; several are checked on what was read (the engine's
-`kind` of the title, location and address), as a native filter takes one value. Places are
-typed as the person wrote them, never mapped to a website's own codes. Unwanted titles and
-unwanted places reach the agent as plain context (`criteria`) and are dropped after reading.
+searches of a website share its limits (SPEC-browser's per-source caps): the finder's PAGES_MAX
+pages, its TOKEN_BUDGET, its MAX_TURNS model turns (each search's run gets what the earlier ones
+left, `turn_limit` when none is left), its WALL_TIME_S from the website's start (`time_budget`),
+the platform's pace key and the platform policy's caps (LinkedIn's pages and its one sweep a
+day). Their postings merge into the website's one result, counted once per canonical address,
+in one place only: an unwanted reading wins over another contract, which wins over a kept one
+(`_Site.place`). One contract type is the website's own filter; several are checked on what
+was read (the engine's `kind` of the title, location and address), as a native filter takes one
+value. Places are typed as the person wrote them, never mapped to a website's own codes.
+Unwanted titles and unwanted places reach the agent as plain context (`criteria`) and are
+dropped after reading.
 With the run's commits, each search's verified batches go through its website's `_Site.verified`
 on their way to the store: a posting an earlier search of the website gave, an unwanted one and
 one of another contract are counted there and never stored, so the searches of a website store
-a posting once.
+a posting once. An address stored by an earlier search stays stored and counted once, whatever
+a later search reads on it.
 
 A website the person signed in to (B17, app/browser/site_logins.py) is read signed in: the
 scope says so and browserd runs it in the person's own persisted context, the lease being that
@@ -243,6 +248,7 @@ class _Site:
     pages: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    turns: int = 0  # model turns of its searches, the greater of code's and the runtime's count
     searches: int = 0
     found: set[str] = field(default_factory=set)
     other_contract: set[str] = field(default_factory=set)
@@ -268,10 +274,22 @@ class _Site:
             return self.other_contract
         return self.found
 
+    def place(self, url: str, into: set[str]) -> bool:
+        """Put an address in one set only: unwanted wins over another contract, which wins over
+        found (fail closed). False when a stronger reading already holds it."""
+        order = (self.unwanted, self.other_contract, self.found)
+        rank = next(index for index, held in enumerate(order) if held is into)
+        if any(url in held for held in order[:rank]):
+            return False
+        for weaker in order[rank + 1 :]:
+            weaker.discard(url)
+        into.add(url)
+        return True
+
     def keep(self, session: finder.FinderSession) -> None:
         for posting in session.found:
             url = finder.canonical(posting.url) or posting.url
-            self._sort(posting.title, posting.location, url).add(url)
+            self.place(url, self._sort(posting.title, posting.location, url))
         self.refused.update(session.refused)
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
@@ -279,13 +297,14 @@ class _Site:
         kept: list[finder.VerifiedFinding] = []
         for finding in batch.findings:
             url = finding.url  # canonical (finder.FinderSession._verified)
-            if url in self.sent or url in self.unwanted or url in self.other_contract:
-                continue
+            if url in self.sent:
+                continue  # stored already: counted once, by the commits
             place = self._sort(finding.title, finding.location, url)
             if place is self.found:
-                kept.append(finding)
+                if url not in self.unwanted and url not in self.other_contract:
+                    kept.append(finding)
             else:
-                place.add(url)
+                self.place(url, place)
         if kept:
             # Marked before the commit: a commit whose caller is cancelled still lands.
             self.sent.update(finding.url for finding in kept)
@@ -399,6 +418,8 @@ async def _one(
         source_id=entry["source_id"],
         host=entry.get("host") or "",
     )
+    # The finder's time is the website's, from its first search on, inside the sweep's.
+    deadline = min(deadline, runner.monotonic() + finder.WALL_TIME_S)
     code: str | None = None
     try:
         for index, scope in enumerate(planned.scopes):
@@ -406,6 +427,8 @@ async def _one(
                 code = "page_budget"
             elif site.input_tokens >= finder.TOKEN_BUDGET:
                 code = "token_budget"
+            elif site.turns >= finder.MAX_TURNS:
+                code = "turn_limit"
             else:
                 code = await _combination(runner, plan, context, scope, site, deadline, index)
             site.write(entry)
@@ -487,6 +510,7 @@ async def _search(
         pages.lease_until - pages.monotonic(),
     )
     session = None
+    ran = finder.Ran()
     cap = asyncio.timeout(max(0.0, remaining))
     try:
         async with cap:
@@ -519,6 +543,7 @@ async def _search(
                 pages.last_text,
                 user_id=user,
                 token_budget=finder.TOKEN_BUDGET - site.input_tokens,
+                turn_budget=finder.MAX_TURNS - site.turns,
                 interactive=scope,
                 on_verified=None if site.commits is None else site.verified,
             )
@@ -546,4 +571,8 @@ async def _search(
     finally:
         site.pages = pages.count
         if session:
+            # The runtime also counts the turns code never sees (a text only turn, a refused
+            # tool); its turn cap spends what the website had left.
+            used = session.turn_budget if ran.stopped == "turn_limit" else ran.turns
+            site.turns = min(finder.MAX_TURNS, site.turns + max(session.turns, used or 0))
             site.keep(session)

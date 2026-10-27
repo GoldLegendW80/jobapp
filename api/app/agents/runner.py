@@ -221,6 +221,10 @@ NOT_STORED = "[not stored]"
 BUDGET_KEY = "token_budget"
 BUDGET_STOP = "The run reached its token budget."
 BUDGET_UNSURE = "The run's token count could not be confirmed."
+# The agents whose input may lower the run's max_turns (`turn_budget`, validated by their input
+# model, never above the definition's): a form fill's profile (apply A18) and the native search
+# of a job website, whose searches share its turns (app/browser/finder.py).
+TURN_BUDGETED = frozenset({"apply_form", "browser_discovery"})
 
 # Built-in Claude Code tools, denied by name on top of `tools=[]` (which already leaves the model
 # none) and of the PreToolUse gate (which denies anything outside the allow list): shell, files,
@@ -1489,7 +1493,7 @@ async def _execute(
             stderr=stderr_lines.append,
             partial_messages=live_store is not None,
             model=model,
-            turn_budget=data.get("turn_budget") if definition.name == "apply_form" else None,
+            turn_budget=data.get("turn_budget") if definition.name in TURN_BUDGETED else None,
         )
         if live_store is not None:
             state.live_text = live.LiveText(
