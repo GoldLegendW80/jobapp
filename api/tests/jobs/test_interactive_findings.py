@@ -21,7 +21,6 @@ from app.browser import finder
 from app.browser.sources import MemoryPacer, Runner
 from app.jobs import ats, sweep
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
-from app.profile.schemas import SearchSection
 from tests.browser.test_b8_sources import FakeLeases
 from tests.browser.test_b9_site import ScriptedFinder
 from tests.jobs.sweep_helpers import jobs_of, new_sweep, now, read_sweep, search, set_profile
@@ -890,21 +889,18 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
 
 
 def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reach_the_store(
-    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     """Review of pull request 715, follow ups 2: the unwanted titles and places and the several
     contracts are applied to each verified batch before it is saved, not only in the counts; an
     address one search reads as unwanted and the next as wanted is never saved and counts once
     (unwanted wins, fail closed)."""
-    # The plain place lists of another task (field location_exclude), read defensively.
-    monkeypatch.setattr(
-        SearchSection, "location_exclude", property(lambda self: ["Lyon"]), raising=False
-    )
     profile(
         factory,
         alice,
         title_include={"terms": ["robot", "arm"], "advanced_regex": False},
         title_exclude={"terms": ["sales"], "advanced_regex": False},
+        location_exclude={"terms": ["Lyon"], "advanced_regex": False},
         contract_types=["CDI", "Stage"],
     )
     paths = ("jobs/robot", "jobs/lyon", "jobs/cdd", "jobs/flip")
