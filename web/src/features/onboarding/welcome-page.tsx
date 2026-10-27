@@ -71,8 +71,8 @@ const SWEEP_SENTENCE = {
   started:
     "Your first search has started. New postings appear as it finds them.",
   running: "A search was already running: it is your first one.",
-  no_boards:
-    "Add the company boards to search in Search options, then find new postings.",
+  no_websites:
+    "Tick the job websites to search in Find jobs, then find new postings.",
   search_invalid:
     "Open Search options and save them again, then find new postings.",
   queue_down:

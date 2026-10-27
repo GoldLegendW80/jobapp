@@ -1,7 +1,6 @@
 """A permission-only switch does not become a reader when interactive selection is removed."""
 
 import asyncio
-import uuid
 from typing import Any
 
 import pytest
@@ -98,9 +97,14 @@ def test_real_runner_and_sweep_do_not_fall_back_after_setup_changes(
         json={"data": search, "base_revision": current["revision"]},
     )
     assert saved.status_code == 200, saved.text
-    started = api.post("/api/jobs/sweeps", token=owner.token)
-    assert started.status_code == 202, started.text
-    run_id = uuid.UUID(started.json()["id"])
+    # The engine with every kind of source (its internal start; every search runs the websites
+    # alone since 2026-10-28): even there a permission row never becomes a reader.
+    started = asyncio.run(
+        sweep.begin(factory, fake_queue, owner.id, clock(), lambda row: row.id, websites_only=False)
+    )
+    assert started.outcome == "started"
+    run_id = started.sweep_id
+    assert run_id is not None
     frozen = read_sweep(factory, run_id).stats["search_scope"]
     assert not any(row["mode"] in ("fixed_reader", "legacy_finder") for row in frozen["sources"])
     assert len(frozen["sources"]) == (2 if selection == "enabled" else 1)

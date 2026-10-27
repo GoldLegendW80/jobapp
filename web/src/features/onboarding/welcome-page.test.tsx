@@ -119,7 +119,7 @@ function fakeOnboarding(
       };
       return HttpResponse.json({
         state: current(),
-        sweep: "no_boards",
+        sweep: "no_websites",
         sweep_id: null,
       });
     }),

@@ -12,6 +12,7 @@ import time
 import tracemalloc
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
@@ -31,6 +32,7 @@ from app.jobs.models import (
 from app.jobs.service import SweepRunningError
 from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import (
+    SITE,
     board,
     fake_ats,
     jobs_of,
@@ -784,7 +786,7 @@ def due_users(factory: sessionmaker[Session], at: datetime = TICK) -> list[tuple
         return [(d.user_id, d.slot.key) for d in sweep.scheduled_due(db, at)]
 
 
-def test_only_enabled_schedules_of_active_users_with_boards_are_due(
+def test_only_enabled_schedules_of_active_users_with_websites_are_due(
     factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
 ) -> None:
     from tests.jobs.conftest import new_user
@@ -794,15 +796,27 @@ def test_only_enabled_schedules_of_active_users_with_boards_are_due(
     erin = new_user(factory, "erin@example.org")
     frank = new_user(factory, "frank@example.org")
     new_user(factory, "gina@example.org")  # no profile at all
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
-    set_profile(factory, bob, search(board("fake-ok")))  # the default: off
     set_profile(
-        factory, carol, search({**board("fake-ok"), "enabled": False}, sweep_schedule=DAILY)
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
     )
-    set_profile(factory, dave, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(factory, bob, search(board("fake-ok"), interactive_sites=[SITE]))  # default: off
+    set_profile(
+        factory,
+        carol,
+        search(
+            board("fake-ok"), interactive_sites=[{**SITE, "enabled": False}], sweep_schedule=DAILY
+        ),
+    )
+    set_profile(
+        factory, dave, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     set_profile(factory, erin, {"days": "not a number"})
     set_profile(
-        factory, frank, search(board("fake-ok"), sweep_schedule={**DAILY, "enabled": False})
+        factory,
+        frank,
+        search(
+            board("fake-ok"), interactive_sites=[SITE], sweep_schedule={**DAILY, "enabled": False}
+        ),
     )
     with factory() as db:
         db.execute(sa.update(User).where(User.id == dave).values(is_active=False))
@@ -810,7 +824,9 @@ def test_only_enabled_schedules_of_active_users_with_boards_are_due(
     assert due_users(factory) == [(alice, SLOT)]
     # Not every day: Saturday 10 October is not in a weekdays-only schedule.
     weekdays = {**DAILY, "days": ["monday", "tuesday", "wednesday", "thursday", "friday"]}
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=weekdays))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=weekdays)
+    )
     assert due_users(factory) == []
 
 
@@ -860,7 +876,9 @@ def test_a_section_without_a_schedule_or_with_the_old_flag_is_off(
 def test_a_slot_starts_once_whatever_the_ticks(
     factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     [due] = sweep_due(factory)
     with factory() as db:
         row = sweep.start_scheduled(db, due, TICK)
@@ -872,11 +890,18 @@ def test_a_slot_starts_once_whatever_the_ticks(
     with factory() as db:
         assert sweep.start_scheduled(db, due, TICK) is None
         db.rollback()
-    # Run it: the slot stays recorded through the claim, the progress and the end.
-    finished = run(factory, row.id, fake_ats)
+    # Run it: the slot stays recorded through the claim, the progress and the end. It searches
+    # the website alone (owner, 2026-10-28): the board is never read.
+    searched: list[str] = []
+
+    async def browser(plan: Any, *args: Any) -> None:
+        searched.extend(site.url for site in plan.search.interactive_sites)
+
+    finished = run(factory, row.id, fake_ats, browser=browser)
     assert finished.status is SweepStatus.done
     assert finished.stats["schedule_slot"] == SLOT
-    assert finished.stats["new"] == 2
+    assert (finished.stats["boards_total"], finished.stats["new"]) == (0, 0)
+    assert searched == [SITE["url"]]
     assert due_users(factory, TICK + timedelta(minutes=10)) == []
     # The next day's slot is a new one.
     assert due_users(factory, TICK + timedelta(days=1)) == [
@@ -892,7 +917,9 @@ def sweep_due(factory: sessionmaker[Session], at: datetime = TICK) -> list[sweep
 def test_a_user_already_sweeping_is_skipped_and_retried_within_the_window(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     with factory() as db:
         manual = sweep.start(db, alice, SweepTrigger.manual, TICK).id
         db.commit()
@@ -914,7 +941,9 @@ def test_a_user_already_sweeping_is_skipped_and_retried_within_the_window(
 def test_concurrent_ticks_start_a_slot_once(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     [due] = sweep_due(factory)
     outcomes: list[str] = []
     barrier = threading.Barrier(6)
@@ -943,11 +972,17 @@ def test_concurrent_ticks_start_a_slot_once(
 def test_schedules_are_per_user(
     factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     set_profile(
         factory,
         bob,
-        search(board("fake-ok"), sweep_schedule={**DAILY, "times": ["06:17"], "timezone": "UTC"}),
+        search(
+            board("fake-ok"),
+            interactive_sites=[SITE],
+            sweep_schedule={**DAILY, "times": ["06:17"], "timezone": "UTC"},
+        ),
     )
     assert due_users(factory) == [(alice, SLOT)]
     [due] = sweep_due(factory)

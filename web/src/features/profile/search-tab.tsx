@@ -266,6 +266,12 @@ function SearchForms({
             />
           </Group>
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
+          {/* Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. */}
+          <p className="text-sm text-muted-foreground">
+            Searches now run only the job websites ticked in Find jobs. The
+            company boards, job sites and feeds below stay saved, and are no
+            longer searched.
+          </p>
           <BoardsTable form={form} />
           <BrowserSourcesCard form={form} />
           {/* B17: sign in to a job website of Find jobs, then searches read it signed in. */}

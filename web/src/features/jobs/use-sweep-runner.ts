@@ -25,7 +25,7 @@ export interface SweepRunner {
   /** The sweep being followed, with its latest progress. */
   running: Sweep | null;
   starting: boolean;
-  start: (profileRevision?: number, websitesOnly?: boolean) => Promise<void>;
+  start: (profileRevision?: number) => Promise<void>;
   summary: SweepDetail | null;
   showSummary: (sweep: SweepDetail | null) => void;
 }
@@ -69,9 +69,9 @@ export function useSweepRunner(): SweepRunner {
   }, [target, client]);
 
   const start = useCallback(
-    async (profileRevision?: number, websitesOnly = false) => {
+    async (profileRevision?: number) => {
       setStarting(true);
-      return startSweep(profileRevision, websitesOnly).then(
+      return startSweep(profileRevision).then(
         (sweep) => {
           setStarting(false);
           setProgress(sweep);

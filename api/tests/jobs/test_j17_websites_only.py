@@ -1,5 +1,7 @@
-"""Jobs J17: "Websites only" of Find jobs searches the ticked websites and no board, feed or
-fixed reader, for that sweep only, and its public scope says so (app/jobs/sweep.py)."""
+"""Every search runs the ticked websites and no board, feed or fixed reader (owner, 2026-10-28,
+replacing the "Websites only" choice of jobs J17), by hand and on the schedule; the saved
+settings of the other sources stay in the profile and the frozen search, and the public scope
+says `websites_only` (app/jobs/sweep.py)."""
 
 import asyncio
 import uuid
@@ -72,7 +74,7 @@ def test_websites_only_freezes_the_websites_alone_and_says_so(
 
 
 @pytest.mark.parametrize("body", [None, {}, {"profile_revision": 1}, {"websites_only": False}])
-def test_every_other_start_keeps_every_source(
+def test_every_start_searches_the_websites_alone(
     api: Api,
     factory: sessionmaker[Session],
     alice: Signed,
@@ -82,9 +84,13 @@ def test_every_other_start_keeps_every_source(
     set_profile(factory, alice.id, everything())
     created = start(api, alice, **({} if body is None else {"json": body}))
     assert created.status_code == 202, created.text
-    assert created.json()["search_scope"]["websites_only"] is False
-    modes = sorted(s["mode"] for s in created.json()["sources"])
-    assert modes == ["api", "feed", "fixed_reader", "llm_browser"]
+    assert created.json()["search_scope"]["websites_only"] is True
+    assert [s["mode"] for s in created.json()["sources"]] == ["llm_browser"]
+    scope = read_sweep(factory, uuid.UUID(created.json()["id"])).stats["search_scope"]
+    # Nothing is deleted: the board, the feed and the reader stay saved, switched on.
+    assert scope["search"]["boards"][0]["enabled"] is True
+    assert scope["search"]["feeds"][0]["enabled"] is True
+    assert scope["search"]["browser_sources"][0]["enabled"] is True
 
 
 @pytest.mark.parametrize("value", ["true", 1, None, [True]])
@@ -100,21 +106,23 @@ def test_websites_only_is_a_strict_boolean(
 @pytest.mark.parametrize(
     "sites", [[], [{**SITE, "enabled": False}]], ids=["no website", "website off"]
 )
-def test_websites_only_without_a_ticked_website_starts_nothing(
+@pytest.mark.parametrize("body", [None, {"websites_only": True}, {"websites_only": False}])
+def test_a_search_without_a_ticked_website_starts_nothing(
     api: Api,
     factory: sessionmaker[Session],
     alice: Signed,
     fake_queue: FakeQueue,
     sites: list[dict[str, Any]],
+    body: dict[str, Any] | None,
 ) -> None:
+    # An enabled board, feed and reader no longer make a search on their own.
     set_profile(factory, alice.id, everything(interactive_sites=sites))
-    refused = start(api, alice, json={"websites_only": True})
+    refused = start(api, alice, **({} if body is None else {"json": body}))
     assert refused.status_code == 422
     assert refused.json()["detail"] == sweep.NO_WEBSITES
+    assert "board" not in sweep.NO_WEBSITES
     assert fake_queue.calls == []
     assert sweep_count(factory, alice) == 0
-    # The same settings without the choice still search the board, the feed and the reader.
-    assert start(api, alice).status_code == 202
 
 
 def test_a_websites_only_run_reads_no_board_feed_or_fixed_reader(
@@ -175,7 +183,7 @@ def test_a_frozen_websites_only_run_without_a_website_fails_with_the_websites_me
     assert row.error == sweep.NO_WEBSITES
 
 
-def test_the_schedule_searches_every_source(
+def test_the_schedule_searches_the_websites_alone(
     clock: Clock, factory: sessionmaker[Session], alice: Signed
 ) -> None:
     tick = clock().replace(hour=9, minute=2, second=0, microsecond=0)
@@ -187,10 +195,19 @@ def test_the_schedule_searches_every_source(
         assert row is not None
         scope = row.stats["search_scope"]
         db.commit()
-    assert scope["websites_only"] is False
-    assert sorted(s["mode"] for s in scope["sources"]) == [
-        "api",
-        "feed",
-        "fixed_reader",
-        "llm_browser",
-    ]
+    assert scope["websites_only"] is True
+    assert [s["mode"] for s in scope["sources"]] == ["llm_browser"]
+
+
+def test_the_schedule_starts_nothing_without_a_ticked_website(
+    api: Api, clock: Clock, factory: sessionmaker[Session], alice: Signed
+) -> None:
+    tick = clock().replace(hour=9, minute=2, second=0, microsecond=0)
+    schedule = {"enabled": True, "times": ["09:00"], "timezone": "UTC"}
+    set_profile(factory, alice.id, everything(interactive_sites=[], sweep_schedule=schedule))
+    with factory() as db:
+        assert sweep.scheduled_due(db, tick) == []
+    # The schedule says it runs nothing: a board, a feed and a reader are no longer a search.
+    listed = api.request("GET", "/api/jobs/sweeps", token=alice.token).json()
+    assert listed["schedule"]["enabled"] is True
+    assert listed["schedule"]["active"] is False

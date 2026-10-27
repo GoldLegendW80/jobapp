@@ -814,7 +814,7 @@ def test_b_feeds_are_never_swept_for_a(
     assert {job.source for job in jobs_of(factory, person_b.user_id)} == {"remoteok"}
 
 
-def test_a_schedule_runs_for_a_person_with_feeds_only(
+def test_a_schedule_never_runs_for_a_person_with_feeds_only(
     factory: sessionmaker[Session], person_a: Person
 ) -> None:
     schedule = {
@@ -827,7 +827,8 @@ def test_a_schedule_runs_for_a_person_with_feeds_only(
     now = datetime(2026, 10, 20, 4, 5, tzinfo=UTC)  # 06:05 in Paris
     with factory() as db:
         due = sweep.scheduled_due(db, now)
-    assert person_a.user_id in {item.user_id for item in due}
+    # Every search runs the ticked websites alone (owner, 2026-10-28): a feed is not one.
+    assert person_a.user_id not in {item.user_id for item in due}
 
 
 # --- the profile field -------------------------------------------------------------------------

@@ -7,7 +7,6 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
-import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +40,6 @@ import {
   profileKey,
   saveSection,
   type InteractiveSite,
-  type BrowserSource,
   type Profile,
   type Search,
 } from "@/features/profile/api";
@@ -71,7 +69,6 @@ import {
   type PermissionChange,
   type Protected,
 } from "./site-permissions";
-import { listSweeps, sweepsKey, type SweepList } from "./sweeps-api";
 import type { SweepRunner } from "./use-sweep-runner";
 
 const PRESETS = [
@@ -160,12 +157,6 @@ function stable(value: unknown): string {
   )
     return "null";
   return JSON.stringify(value);
-}
-
-/** The choice of the last search started by hand, so a reopened setup keeps it. */
-function lastWebsitesOnly(sweeps: SweepList | undefined): boolean {
-  const last = sweeps?.items.find((sweep) => sweep.trigger === "manual");
-  return last?.search_scope?.websites_only === true;
 }
 
 export function SearchSetup({
@@ -269,13 +260,6 @@ function SetupForm({
   const [instructions, setInstructions] = useState(
     profile.sections.search.interactive_instructions ?? "",
   );
-  // Websites only: the person's choice here, else the one of the last search started by hand.
-  const sweeps = useQuery({
-    queryKey: sweepsKey,
-    queryFn: ({ signal }) => listSweeps(signal),
-  });
-  const [chosen, setChosen] = useState<boolean | null>(null);
-  const websitesOnly = chosen ?? lastWebsitesOnly(sweeps.data);
   const [custom, setCustom] = useState("");
   const [revision, setRevision] = useState(profile.revision);
   const [reviewed, setReviewed] = useState(() =>
@@ -412,13 +396,6 @@ function SetupForm({
       setError("Add the custom website or clear its address before starting.");
       return;
     }
-    if (
-      websitesOnly &&
-      !settings.data.interactive_sites.some((site) => site.enabled)
-    ) {
-      setError("Tick at least one website to search websites only.");
-      return;
-    }
     busy.current = true;
     setSaving(true);
     setError(null);
@@ -484,7 +461,7 @@ function SetupForm({
         if (!next) return;
         current = next;
       }
-      await runner.start(current.revision, websitesOnly);
+      await runner.start(current.revision);
       onClose();
     } catch (failure) {
       if (!isMounted()) return;
@@ -740,24 +717,6 @@ function SetupForm({
                 </Button>
               </div>
             </div>
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  className="size-4 shrink-0 accent-primary"
-                  aria-describedby={`${id}-only`}
-                  checked={websitesOnly}
-                  onChange={(event) => {
-                    setChosen(event.target.checked);
-                  }}
-                />
-                Websites only
-              </label>
-              <p id={`${id}-only`} className="text-xs text-muted-foreground">
-                Search only the websites ticked above. API boards, feeds and the
-                other readers below are skipped.
-              </p>
-            </div>
           </section>
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
@@ -783,13 +742,6 @@ function SetupForm({
               your next search.
             </p>
           </div>
-          <OtherSources
-            form={form}
-            skipped={websitesOnly}
-            consentOnly={(reviewed.browser_sources ?? []).filter(
-              (source) => source.interactive_only === true,
-            )}
-          />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
@@ -911,105 +863,5 @@ function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
         )}
       />
     </>
-  );
-}
-
-function OtherSources({
-  form,
-  skipped,
-  consentOnly,
-}: {
-  form: UseFormReturn<SearchForm>;
-  skipped: boolean;
-  consentOnly: readonly BrowserSource[];
-}) {
-  const values = form.getValues();
-  return (
-    <section
-      aria-label="Other search sources"
-      className="space-y-3 rounded-md border p-3"
-    >
-      <h3 className="text-sm font-medium">Other search sources</h3>
-      <p className="text-xs text-muted-foreground">
-        These use their own API, feed or existing reader. They stay separate
-        from LLM with Playwright.
-      </p>
-      {skipped ? (
-        <p className="text-xs font-medium">
-          Websites only is ticked: this search skips them.
-        </p>
-      ) : null}
-      {values.browser_sources.some((source) =>
-        ["linkedin", "freework"].includes(source.kind),
-      ) ? (
-        <p className="text-xs text-muted-foreground">
-          Protected readers use your existing browser permissions. Manage
-          browser access from Account.
-        </p>
-      ) : null}
-      {values.boards.map((board, index) => (
-        <label
-          key={`${board.ats}:${board.org}`}
-          className="flex min-w-0 items-center gap-2 break-all text-sm"
-        >
-          <input
-            type="checkbox"
-            className="size-4 shrink-0 accent-primary"
-            {...form.register(`boards.${index}.enabled`)}
-          />
-          {board.company} (API board)
-        </label>
-      ))}
-      {values.feeds.map((feed, index) => (
-        <label
-          key={feed.kind}
-          className="flex min-w-0 items-center gap-2 break-all text-sm"
-        >
-          <input
-            type="checkbox"
-            className="size-4 shrink-0 accent-primary"
-            {...form.register(`feeds.${index}.enabled`)}
-          />
-          {
-            {
-              remoteok: "Remote OK",
-              weworkremotely: "We Work Remotely",
-              hackernews_freelance: "Hacker News freelance",
-              hackernews_hiring: "Hacker News hiring",
-            }[feed.kind]
-          }{" "}
-          (feed)
-        </label>
-      ))}
-      {values.browser_sources.map((source, index) =>
-        consentOnly.some(
-          (row) => row.kind === source.kind && row.query === source.query,
-        ) ? null : (
-          <label
-            key={`${source.kind}:${index}`}
-            className="flex min-w-0 items-center gap-2 break-all text-sm"
-          >
-            <input
-              type="checkbox"
-              className="size-4 shrink-0 accent-primary"
-              disabled={["linkedin", "freework"].includes(source.kind)}
-              {...form.register(`browser_sources.${index}.enabled`)}
-            />
-            {source.kind === "google_careers"
-              ? "Google Careers (fixed reader)"
-              : source.kind === "vie"
-                ? "VIE (fixed reader)"
-                : source.kind === "freework"
-                  ? "Free-Work (existing reader)"
-                  : source.kind === "linkedin"
-                    ? "LinkedIn (existing reader)"
-                    : `${source.query} (legacy finder)`}
-          </label>
-        ),
-      )}
-      <Link to="/profile?tab=search" className="text-sm underline">
-        Manage API boards, feeds and search options
-      </Link>
-    </section>
   );
 }

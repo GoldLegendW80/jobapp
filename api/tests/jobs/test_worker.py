@@ -31,7 +31,16 @@ from app.jobs.models import Job, Sweep, SweepStatus, SweepTrigger
 from app.logging_config import JsonFormatter
 from tests.conftest import make_settings
 from tests.jobs.fake_ats import FakeAts
-from tests.jobs.sweep_helpers import board, client, fake_ats, new_sweep, now, search, set_profile
+from tests.jobs.sweep_helpers import (
+    SITE,
+    board,
+    client,
+    fake_ats,
+    new_sweep,
+    now,
+    search,
+    set_profile,
+)
 from tests.pg import docker_available
 from tests.redis_server import start_redis
 
@@ -619,11 +628,17 @@ def test_the_schedule_cron_enqueues_each_due_slot_once(
     from tests.jobs.conftest import new_user
 
     carol = new_user(factory, "carol@example.org")
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     set_profile(
         factory,
         bob,
-        search(board("fake-ok2", "lever"), sweep_schedule={**DAILY, "times": ["06:15"]}),
+        search(
+            board("fake-ok2", "lever"),
+            interactive_sites=[SITE],
+            sweep_schedule={**DAILY, "times": ["06:15"]},
+        ),
     )
     set_profile(factory, carol, search(board("fake-ok")))  # schedule off: never enqueued
     ctx = context(settings, fake_ats)
@@ -691,8 +706,12 @@ def test_the_schedule_tick_skips_a_user_already_sweeping_and_fails_what_it_canno
     bob: uuid.UUID,
     fake_ats: FakeAts,
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=DAILY))
-    set_profile(factory, bob, search(board("fake-ok"), sweep_schedule=DAILY))
+    set_profile(
+        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
+    set_profile(
+        factory, bob, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
+    )
     with factory() as db:
         manual = sweep.start(db, alice, SweepTrigger.manual, TICK).id
         db.commit()

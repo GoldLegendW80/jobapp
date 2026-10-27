@@ -3,6 +3,7 @@
  * sought, then, under the shared Advanced, the industries and the company types. Seniority,
  * industries and company types add a small bonus to the fit of a posting that names them (at most
  * 10 points, api/app/jobs/scoring.py `bonus`); they never hide a posting. The pay changes no score.
+ * Industries are words only, with no regular expression switch (owner, 2026-10-28).
  */
 import { useState } from "react";
 import { type UseFormReturn } from "react-hook-form";
@@ -70,6 +71,7 @@ export function TargetFields({ form }: { form: UseFormReturn<SearchForm> }) {
           name="industries"
           label="Industries"
           description="Sectors such as fintech or gaming, matched as whole words in the posting."
+          regexSwitch={false}
         />
         <Toggles
           form={form}

@@ -1,9 +1,12 @@
-"""Every frozen source has one durable identity throughout the sweep lifecycle."""
+"""Every frozen source has one durable identity throughout the sweep lifecycle.
+
+Every search runs the websites alone since the owner's decision of 2026-10-28; these tests
+start the sweep engine with every kind of source (`websites_only=False`, its internal start),
+so the identities of boards, feeds and readers stay pinned while the engine keeps them."""
 
 import asyncio
 import copy
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -18,11 +21,18 @@ from app.profile import schemas
 from app.profile import service as profile_service
 from tests.browser.test_b8_sources import FakeTools
 from tests.jobs.sweep_helpers import board, read_sweep, search, set_profile
-from tests.jobs.test_frozen_search_scope import CANARY, alice, fake_queue, site, start
+from tests.jobs.test_frozen_search_scope import CANARY, alice, fake_queue, site
 from tests.jobs.test_sweep_browser_sources import offer, runner
 from tests.jobs.test_sweep_browser_sources import site as browser_pages
 
 __all__ = ["alice", "fake_queue"]
+
+
+def start_everything(factory, alice, clock, queue):
+    """The engine's start with every enabled source, through the shared `begin`."""
+    return asyncio.run(
+        sweep.begin(factory, queue, alice.id, clock(), sweep_out, websites_only=False)
+    )
 
 
 def mixed_search():
@@ -44,8 +54,8 @@ def test_all_selected_sources_survive_start_reopened_and_terminal_views(
 ):
     set_profile(factory, alice.id, mixed_search())
     fake_queue.down = ending == "queue"
-    response = start(api, alice)
-    assert response.status_code == (503 if ending == "queue" else 202)
+    begun = start_everything(factory, alice, clock, fake_queue)
+    assert begun.outcome == ("queue_down" if ending == "queue" else "started")
     with factory() as db:
         row = db.query(Sweep).filter_by(user_id=alice.id).one()
         sweep_id = row.id
@@ -63,7 +73,7 @@ def test_all_selected_sources_survive_start_reopened_and_terminal_views(
         "llm_browser",
     }
     if ending != "queue":
-        assert response.json()["sources"] == entries
+        assert begun.view.model_dump(mode="json")["sources"] == entries
         assert {entry["phase"] for entry in entries} == {"pending"}
         for path in ("/api/jobs/sweeps", f"/api/jobs/sweeps/{sweep_id}"):
             before_work = api.request("GET", path, token=alice.token)
@@ -123,12 +133,12 @@ def test_colon_neighbors_have_distinct_stable_source_identities(factory, clock, 
         ]
     )
     set_profile(factory, alice.id, selected)
-    begun = sweep._insert(factory, alice.id, clock(), sweep_out)
+    begun = sweep._insert(factory, alice.id, clock(), sweep_out, websites_only=False)
     first = read_sweep(factory, begun.sweep_id).stats["search_scope"]["sources"]
     assert len(first) == 2
     assert len({entry["source_id"] for entry in first}) == 2
     sweep.finish_done(factory, begun.sweep_id, sweep.Stats(), clock())
-    again = sweep._insert(factory, alice.id, clock(), sweep_out)
+    again = sweep._insert(factory, alice.id, clock(), sweep_out, websites_only=False)
     assert read_sweep(factory, again.sweep_id).stats["search_scope"]["sources"] == first
 
 
@@ -136,7 +146,7 @@ def test_reader_updates_bind_to_frozen_entries_without_duplicate_or_counter_loss
     factory, clock, api, alice, fake_queue, monkeypatch
 ):
     set_profile(factory, alice.id, mixed_search())
-    sweep_id = uuid.UUID(start(api, alice).json()["id"])
+    sweep_id = start_everything(factory, alice, clock, fake_queue).sweep_id
     initial = read_sweep(factory, sweep_id).stats["sources"]
     snapshots = []
     original = sweep.save_progress
@@ -242,7 +252,7 @@ def test_held_start_wins_and_later_edit_cannot_change_frozen_scope(factory, cloc
     sa.event.listen(engine, "before_cursor_execute", observe)
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            started = pool.submit(sweep._insert, factory, alice.id, clock(), view, 1)
+            started = pool.submit(sweep._insert, factory, alice.id, clock(), view, 1, False)
             try:
                 assert viewed.wait(30)
                 edited = pool.submit(edit)

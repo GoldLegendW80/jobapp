@@ -63,6 +63,7 @@ from app.jobs import sweep
 from app.jobs.importer import kind
 from app.jobs.schemas import SEARCHES_LISTED
 from app.profile import matching
+from app.profile.plain_terms import typed_words
 from app.profile.schemas import InteractiveSite, SearchSection, TermList
 
 if TYPE_CHECKING:
@@ -88,9 +89,6 @@ CRITERIA = frozenset(
         "compensation",
     }
 )
-# A saved regular expression is read as a plain term only when it is one: words of letters or
-# digits joined by single spaces, hyphens or apostrophes, with no character a pattern reads.
-PLAIN = re.compile(r"[^\W_]+(?:[ '-][^\W_]+)*")
 
 
 @dataclass(frozen=True)
@@ -190,11 +188,15 @@ class GuardedTools:
         return await self.tools.wait_for(**args)
 
 
-def _plain(terms: TermList) -> list[str]:
-    """The saved terms as typed words; a regular expression only when it is a plain word."""
-    if terms.advanced_regex and not all(PLAIN.fullmatch(term) for term in terms.terms):
+def _plain(terms: TermList) -> tuple[list[str], int]:
+    """The saved terms as typed words, and how many saved terms gave none: a list saved as
+    regular expressions gives the plain words of each one that converts safely
+    (plain_terms.typed_words, owner 2026-10-28), the others stay in the criteria the agent
+    reads. A list that holds terms and gives no word refuses the search, never widens it."""
+    words, dropped = typed_words(terms)
+    if terms.terms and not words:
         raise ValueError("unsupported_criteria")
-    return list(terms.terms)
+    return words, dropped
 
 
 @dataclass(frozen=True)
@@ -260,8 +262,8 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
 
     Other preferences remain private context, not permission to vary the native request.
     """
-    titles = _plain(search.title_include)
-    places = _plain(search.location)
+    titles, titles_dropped = _plain(search.title_include)
+    places, places_dropped = _plain(search.location)
     if not titles:
         raise ValueError("unsupported_criteria")
     filters: list[tuple[str, str]] = []
@@ -284,8 +286,8 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
         frozenset(contracts) if len(contracts) > 1 else frozenset(),
         _unwanted(search.title_exclude),
         _unwanted(getattr(search, "location_exclude", None)),
-        len(titles) - len(carried_titles),
-        len(places) - len(carried_places),
+        titles_dropped + len(titles) - len(carried_titles),
+        places_dropped + len(places) - len(carried_places),
     )
 
 

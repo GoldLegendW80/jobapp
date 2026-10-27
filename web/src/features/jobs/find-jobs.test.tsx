@@ -403,7 +403,7 @@ describe("Find jobs", () => {
       "LinkedIn, waiting: not searched this time.",
       "LinkedIn, searched: 0 postings found, 0 new.",
       "Indeed: 3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
-      "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 20 saved titles and 1 saved place were left out: a website's search takes the first ones that fit. 1 posting found, 0 new. The app read as many pages of this website as it may today. What was read is kept.",
+      "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 20 saved titles and 1 saved place were left out: a website's search types plain words, the first ones that fit. 1 posting found, 0 new. The app read as many pages of this website as it may today. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
@@ -539,34 +539,30 @@ describe("Find jobs", () => {
     ).toBeInTheDocument();
   });
 
-  it("explains a profile without boards (422) and offers to open it", async () => {
+  it("explains a search without a ticked website (422)", async () => {
     fakeSweeps({
       start: () =>
         HttpResponse.json(
           {
             detail:
-              "No board is enabled in the search section of your profile.",
+              "Tick at least one job website in Find jobs, then start the search again.",
           },
           { status: 422 },
         ),
     });
-    const { app } = await openJobs();
+    await openJobs();
     const user = userEvent.setup();
     await startSearch(user);
     expect(
-      await screen.findByText(
-        /No board is enabled in the search section of your profile/,
-      ),
+      await screen.findByText(/Tick at least one job website in Find jobs/),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Save and Start" }),
     ).toBeEnabled();
-    await user.click(
-      screen.getByRole("link", {
-        name: "Manage API boards, feeds and search options",
-      }),
-    );
-    expect(app.location()).toBe("/profile?tab=search");
+    // The setup no longer offers boards, feeds or their link (owner, 2026-10-28).
+    expect(
+      screen.queryByRole("link", { name: /API boards/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("asks to save the Search tab again when the stored section no longer passes (422)", async () => {
@@ -575,7 +571,7 @@ describe("Find jobs", () => {
     fakeSweeps({
       start: () => HttpResponse.json({ detail }, { status: 422 }),
     });
-    const { app } = await openJobs();
+    await openJobs();
     const user = userEvent.setup();
     await startSearch(user);
     await screen.findByText(
@@ -584,12 +580,6 @@ describe("Find jobs", () => {
     expect(
       screen.getByRole("button", { name: "Save and Start" }),
     ).toBeEnabled();
-    await user.click(
-      screen.getByRole("link", {
-        name: "Manage API boards, feeds and search options",
-      }),
-    );
-    expect(app.location()).toBe("/profile?tab=search");
   });
 
   it("reports a sweep that could not start (503) and stays usable", async () => {
@@ -744,7 +734,7 @@ describe("Sweep history", () => {
   });
 });
 
-describe("Websites only (jobs J17)", () => {
+describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
   const scope = {
     version: 1,
     profile_revision: 6,
@@ -755,13 +745,27 @@ describe("Websites only (jobs J17)", () => {
     websites_only: true,
   };
 
-  it("says the sweep searched the websites alone, in its summary and its history line", async () => {
+  it("counts the websites it searched instead of boards, in its summary", async () => {
+    const website = (host: string): SweepSource => ({
+      kind: "custom",
+      query: "",
+      location: null,
+      mode: "llm_browser",
+      host,
+      result_pages: 1,
+      found: 3,
+      new: 1,
+      skipped_by_rule: 0,
+      items_skipped: 0,
+      error: null,
+    });
     const done = finished({
       boards_total: 0,
       boards_done: 0,
       boards_ok: 0,
       boards_failed: [],
       search_scope: scope,
+      sources: [website("jobs.example.org"), website("careers.example.net")],
     });
     fakeSweeps({
       list: [{ ...done, status: "done" }],
@@ -774,19 +778,20 @@ describe("Websites only (jobs J17)", () => {
     const [item] = within(
       within(history).getByRole("list", { name: "Last sweeps" }),
     ).getAllByRole("button");
-    expect(item).toHaveTextContent(/By hand, websites only, Done/);
+    expect(item).toHaveTextContent(/By hand, Done/);
+    expect(item).not.toHaveTextContent(/websites only/i);
     await user.click(item!);
     const summary = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
     expect(summary).toHaveTextContent(
-      "Websites only, no board or feed searched, 120 postings seen, 4 matched your search, 2 new postings.",
+      "2 websites searched, 120 postings seen, 4 matched your search, 2 new postings.",
     );
     expect(summary).not.toHaveTextContent("boards read");
     expect(summary).not.toHaveTextContent(/[–—]| - /);
   });
 
-  it("keeps the boards line of a sweep without the choice", async () => {
+  it("keeps the boards line of an older sweep that read boards", async () => {
     fakeSweeps({
       states: [finished({ search_scope: { ...scope, websites_only: false } })],
     });
@@ -796,6 +801,6 @@ describe("Websites only (jobs J17)", () => {
       name: "2 new postings found",
     });
     expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
-    expect(summary).not.toHaveTextContent("Websites only");
+    expect(summary).not.toHaveTextContent("websites searched");
   });
 });

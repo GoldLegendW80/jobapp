@@ -4,6 +4,7 @@ import { delay, http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { WORDING } from "@/lib/wording";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -93,12 +94,13 @@ describe("search tab: terms and preferences", () => {
       name: "Terms of Job titles",
     });
     expect(include).toHaveTextContent("applied ai");
-    // The saved regular expressions open the lists' Advanced by themselves.
+    // Saved regular expressions keep working and say so; there is no switch (owner, 2026-10-28).
     expect(
-      screen.getByRole("switch", {
-        name: "Regular expressions for Job titles",
-      }),
-    ).toBeChecked();
+      screen.getAllByText(WORDING.listUsesRegularExpressions).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("switch", { name: /regular expressions/i }),
+    ).toBeNull();
     expect(
       screen.getByRole("list", { name: "Terms of Places" }),
     ).toHaveTextContent("Paris");
