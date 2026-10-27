@@ -136,6 +136,9 @@ def test_a_website_s_run_has_no_turn_or_token_cap_and_is_told_its_time(
     assert set(made.input) == {"request"}  # no token budget, no turn budget
     with pytest.raises(ValueError, match="turn_budget"):
         finder.FinderInput(request="a" * 32, turn_budget=3)
+    from app.agents import runner
+
+    assert {"apply_form"} == runner.TURN_BUDGETED  # no input lowers this agent's max_turns
 
 
 def test_scope_is_immutable_and_legacy_tools_and_model_schemas_stay_restricted():
