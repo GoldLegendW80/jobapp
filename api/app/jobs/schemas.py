@@ -700,6 +700,17 @@ class BoardFailureOut(BaseModel):
     message: str
 
 
+SEARCHES_LISTED = 50  # the searches a website's summary names (all are counted, jobs J18)
+
+
+class SearchRanOut(BaseModel):
+    """One search the agent of a job website ran (jobs J18): a saved title it typed and the saved
+    place it typed or chose, if any."""
+
+    title: str
+    place: str | None = None
+
+
 class SourceOut(BaseModel):
     """One selected source of the sweep: API boards, feeds and browser readers. The postings it read
     completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
@@ -719,11 +730,10 @@ class SourceOut(BaseModel):
     new: int = 0
     skipped_by_rule: int = 0
     items_skipped: int = Field(default=0, ge=0)
-    # A website searched in the person's browser (jobs J10): the native searches that ran, and
-    # the title and place combinations planned (at most interactive.SEARCHES_MAX) of all saved.
+    # A website searched in the person's browser (jobs J18): how many searches its agent ran,
+    # and the first SEARCHES_LISTED of them.
     searches: int = Field(default=0, ge=0)
-    searches_planned: int = Field(default=0, ge=0)
-    searches_total: int = Field(default=0, ge=0)
+    searched: list[SearchRanOut] = Field(default_factory=list)
     error: str | None = None
     source_id: str | None = None
     mode: str | None = None

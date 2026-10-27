@@ -21,10 +21,11 @@ selected website it reads, from the database and in a session of its own:
   a checkpoint or block page records `checkpoint_at` (LinkedIn: also its `linkedin_checkpoints`
   row) and a sign in page records its code, both committed before the page reaches the model.
 
-Caps that are tighter than the interactive source's own win, per platform and per sweep, so two
-addresses of the same platform share them: LinkedIn reads at most RESULT_PAGES pages a sweep,
-paced 10 to 30 seconds (sources/linkedin.py, SPEC-browser decision 2); the other platforms
-share the finder's PAGES_MAX. A page is counted when code reads a new address on it.
+The platform's account safety caps hold per platform and per sweep, so two addresses of the
+same platform share them: LinkedIn reads at most RESULT_PAGES pages a sweep, paced 10 to 30
+seconds (sources/linkedin.py, SPEC-browser decision 2). The other platforms have no page cap:
+the agent of a job website has none (owner, 2026-10-27, jobs J18), only their pacing, one sweep
+a day and the 7 day pause. A page is counted when code reads a new address on it.
 
 The platform is classified from the address by code (`platform_of`), whatever label the
 person gave it: any host label equal to a platform's name counts, so `indeed.fr`, `fr.indeed.com`
@@ -73,7 +74,7 @@ BRANDS = {
     "wttj": "welcome_to_the_jungle",
 }
 PLATFORMS = frozenset(BRANDS.values())
-PAGES = {"linkedin": linkedin.RESULT_PAGES}  # tighter than finder.PAGES_MAX, which the rest share
+PAGES = {"linkedin": linkedin.RESULT_PAGES}  # the only platform with a page cap (jobs J18)
 PAUSES = {"linkedin": linkedin.PAUSE_S}
 
 CHECKPOINT_SEGMENTS = frozenset(
@@ -253,7 +254,8 @@ class PlatformPolicy:
         if context.sweep_id is None:
             return "permission_unavailable"
         run = self._run(context)
-        if run.pages.get(platform, 0) >= PAGES.get(platform, finder.PAGES_MAX):
+        cap = PAGES.get(platform)
+        if cap is not None and run.pages.get(platform, 0) >= cap:
             return "page_budget"
         reserved = context.source_id in run.reserved
         try:

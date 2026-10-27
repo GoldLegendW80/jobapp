@@ -73,7 +73,8 @@ for _action in ("browser_type", "browser_click", "browser_select_option"):
         "additionalProperties": False,
     }
 DESCRIPTIONS = {
-    "browser_type": "Enter a query in an observed native search field. Never submits.",
+    "browser_type": "Type one saved title in an observed search box, or one saved place in its "
+    "place box, exactly as in your search scope, or nothing to clear the field. Never submits.",
     "browser_click": "Submit a native GET search or follow an observed pagination link.",
     "browser_select_option": "Choose an observed native search filter option.",
     "browser_navigate": "Open a page of this careers site by its address and read it. Other "

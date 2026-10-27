@@ -39,8 +39,10 @@ from app.identity.schemas import ErrorOut
 from app.jobs import schedule, service, sweep
 from app.jobs.models import Sweep, SweepStatus
 from app.jobs.schemas import (
+    SEARCHES_LISTED,
     BoardFailureOut,
     ScheduleOut,
+    SearchRanOut,
     SearchScopeOut,
     SourceOut,
     SweepConflictOut,
@@ -101,6 +103,19 @@ def sweep_out(row: Sweep) -> SweepOut:
         value = item.get(name)
         return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
+    def searched(value: Any) -> list[SearchRanOut]:
+        """The searches a website's agent ran (jobs J18), read defensively: a stored row is
+        data, so anything but a list of {title, place} with text is left out."""
+        if not isinstance(value, list):
+            return []
+        return [
+            SearchRanOut(title=one["title"], place=one.get("place"))
+            for one in value[:SEARCHES_LISTED]
+            if isinstance(one, dict)
+            and isinstance(one.get("title"), str)
+            and isinstance(one.get("place"), str | None)
+        ]
+
     sources = [
         SourceOut(
             kind=str(item.get("kind", "")),
@@ -112,8 +127,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             skipped_by_rule=count(item, "skipped_by_rule"),
             items_skipped=max(0, count(item, "items_skipped")),
             searches=max(0, count(item, "searches")),
-            searches_planned=max(0, count(item, "searches_planned")),
-            searches_total=max(0, count(item, "searches_total")),
+            searched=searched(item.get("searched")),
             error=item["error"] if isinstance(item.get("error"), str) else None,
             **{
                 name: item.get(name) if isinstance(item.get(name), str) else None

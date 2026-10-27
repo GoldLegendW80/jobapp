@@ -8,26 +8,30 @@ next source starts. A source's `found` counts the findings stored or found dupli
 the new jobs. Without the run's commits (a caller that is not a sweep) findings are only
 counted, as `finding_persistence_pending`.
 
-One search per combination (owner, 2026-10-26): a website runs one native search per pair of a
-title term and a location term, in the order saved (titles first, then places), at most
-SEARCHES_MAX a sweep. Each search is its own lease with its own frozen scope (browserd binds one
-scope to a lease), so only that search's exact words and filters can be typed in it. The
-searches of a website share its limits (SPEC-browser's per-source caps): the finder's PAGES_MAX
-pages, its TOKEN_BUDGET, its MAX_TURNS model turns (each search's run gets what the earlier ones
-left, `turn_limit` when none is left), its WALL_TIME_S from the website's start (`time_budget`),
-the platform's pace key and the platform policy's caps (LinkedIn's pages and its one sweep a
-day). Their postings merge into the website's one result, counted once per canonical address,
-in one place only: an unwanted reading wins over another contract, which wins over a kept one
+One agent per website (owner, 2026-10-27, jobs J18): "An LLM agent for each website that will
+search intelligently, just like a human, using all the parameters provided to it." A website is
+one lease and one finder run a sweep. Its frozen scope (`searches_for`) holds every saved title
+and place; the agent decides which searches to run, in which order, and when the website is
+covered, and browserd lets it type only one saved title in a search box or one saved place in
+the place box (or nothing, to clear one), and set a native filter only to its saved value
+(browser/browserd/tools/discovery.py). Its budget a website is "no limit" (owner): no cap on its
+turns, pages, tokens or verified postings. What bounds it is not its budget: its share of the
+sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
+never starves the next), which it is told; the lease's own maximum; the platform policy's caps
+(LinkedIn's pages a sweep and one sweep a day), pacing per platform and the 7 day pause.
+Its postings merge into the website's one result, counted once per canonical address, in one
+place only: an unwanted reading wins over another contract, which wins over a kept one
 (`_Site.place`). One contract type is the website's own filter; several are checked on what
 was read (the engine's `kind` of the title, location and address), as a native filter takes one
 value. Places are typed as the person wrote them, never mapped to a website's own codes.
-Unwanted titles and unwanted places reach the agent as plain context (`criteria`) and are
-dropped after reading.
-With the run's commits, each search's verified batches go through its website's `_Site.verified`
-on their way to the store: a posting an earlier search of the website gave, an unwanted one and
-one of another contract are counted there and never stored, so the searches of a website store
-a posting once. An address stored by an earlier search stays stored and counted once, whatever
-a later search reads on it.
+The other criteria (unwanted titles and places, seniority, industries, company types, pay, the
+days) reach the agent as plain context (`criteria`), never typed; unwanted titles and unwanted
+places are dropped after reading.
+With the run's commits, the verified batches go through the website's `_Site.verified` on their
+way to the store: a posting given before, an unwanted one and one of another contract are
+counted there and never stored, so a website stores a posting once. An address stored stays
+stored and counted once, whatever a later reading of it says. The summary names the searches
+the agent ran, from its own tool calls (`FinderSession.searches`), and counts them.
 
 A website the person signed in to (B17, app/browser/site_logins.py) is read signed in: the
 scope says so and browserd runs it in the person's own persisted context, the lease being that
@@ -52,6 +56,7 @@ from app.browser.leases import StoreUnavailableError
 from app.browser.sources import ERRORS, PAGE_BUDGET_S, STOPS_SWEEP, Pages, SourceError
 from app.jobs import sweep
 from app.jobs.importer import kind
+from app.jobs.schemas import SEARCHES_LISTED
 from app.profile import matching
 from app.profile.schemas import InteractiveSite, SearchSection, TermList
 
@@ -61,20 +66,23 @@ if TYPE_CHECKING:
     from app.browser.sources import Runner
 
 SIGNIN_CODE = "platform_signin"  # guard.SIGNIN, the sources' code of a sign in page
+# All the person's criteria, the agent's context (jobs J18); only titles, places and the native
+# filters' values can be typed or chosen.
 CRITERIA = frozenset(
     {
         "title_include",
         "title_exclude",
         "location",
-        "location_exclude",  # unwanted places, once the plain lists land (read defensively)
+        "location_exclude",
         "remote_stance",
         "contract_types",
         "seniority",
+        "industries",
+        "company_types",
         "days",
         "compensation",
     }
 )
-SEARCHES_MAX = 6  # native searches per website per sweep (owner, 2026-10-26)
 # A saved regular expression is read as a plain term only when it is one: words of letters or
 # digits joined by single spaces, hyphens or apostrophes, with no character a pattern reads.
 PLAIN = re.compile(r"[^\W_]+(?:[ '-][^\W_]+)*")
@@ -186,10 +194,9 @@ def _plain(terms: TermList) -> list[str]:
 
 @dataclass(frozen=True)
 class Searches:
-    """The native searches of one website, frozen from the sweep's frozen criteria."""
+    """The search of one website, frozen from the sweep's frozen criteria."""
 
-    scopes: tuple[finder.InteractiveScope, ...]
-    total: int  # combinations before the SEARCHES_MAX cap
+    scope: finder.InteractiveScope
     contracts: frozenset[str] = frozenset()  # checked after reading, empty when native
     unwanted_titles: re.Pattern[str] | None = None
     unwanted_places: re.Pattern[str] | None = None
@@ -206,34 +213,31 @@ def _unwanted(terms: Any) -> re.Pattern[str] | None:
 
 
 def searches_for(search: SearchSection, start: str = "") -> Searches:
-    """Use exact saved values, with no inferred website-specific filter encoding.
+    """Use exact saved values, with no inferred website-specific filter encoding: every saved
+    title and place, the agent typing one at a time (ValueError when one cannot be typed or the
+    scope is too large for browserd, `unsupported_criteria` before a lease).
 
     Other preferences remain private context, not permission to vary the native request.
     """
     titles = _plain(search.title_include)
-    places: list[str | None] = [*_plain(search.location)] or [None]
+    places = _plain(search.location)
     if not titles:
         raise ValueError("unsupported_criteria")
-    shared: list[tuple[str, str]] = []
+    filters: list[tuple[str, str]] = []
     if search.remote_stance not in (None, "any"):
-        shared.append(("remote", search.remote_stance))
+        filters.append(("remote", search.remote_stance))
     contracts = list(search.contract_types)
     if len(contracts) == 1:
-        shared.append(("contract", contracts[0]))
-    criteria = json.dumps(search.model_dump(mode="json", include=CRITERIA))
-    pairs = [(title, place) for title in titles for place in places]
+        filters.append(("contract", contracts[0]))
     return Searches(
-        tuple(
-            finder.InteractiveScope(
-                start or search.interactive_sites[0].url,
-                title,
-                (*((("location", place),) if place else ()), *shared),
-                criteria=criteria,
-                instructions=search.interactive_instructions or "",
-            )
-            for title, place in pairs[:SEARCHES_MAX]
+        finder.InteractiveScope(
+            start or search.interactive_sites[0].url,
+            tuple(titles),
+            tuple(places),
+            tuple(filters),
+            criteria=json.dumps(search.model_dump(mode="json", include=CRITERIA)),
+            instructions=search.interactive_instructions or "",
         ),
-        len(pairs),
         frozenset(contracts) if len(contracts) > 1 else frozenset(),
         _unwanted(search.title_exclude),
         _unwanted(getattr(search, "location_exclude", None)),
@@ -242,14 +246,14 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
 
 @dataclass
 class _Site:
-    """What the searches of one website read together: their shared budgets and postings."""
+    """What the agent of one website read: its pages, tokens, searches and postings."""
 
     planned: Searches
     pages: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    turns: int = 0  # model turns of its searches, the greater of code's and the runtime's count
-    searches: int = 0
+    started: bool = False  # the start page opened and the agent ran
+    searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     found: set[str] = field(default_factory=set)
     other_contract: set[str] = field(default_factory=set)
     unwanted: set[str] = field(default_factory=set)
@@ -291,9 +295,10 @@ class _Site:
             url = finder.canonical(posting.url) or posting.url
             self.place(url, self._sort(posting.title, posting.location, url))
         self.refused.update(session.refused)
+        self.searches.update(session.searches)
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
-        """One search's verified batch on its way to the store (module docstring)."""
+        """A verified batch on its way to the store (module docstring)."""
         kept: list[finder.VerifiedFinding] = []
         for finding in batch.findings:
             url = finding.url  # canonical (finder.FinderSession._verified)
@@ -312,10 +317,15 @@ class _Site:
 
     def write(self, entry: dict[str, Any]) -> None:
         entry["result_pages"] = self.pages
-        entry["searches"] = self.searches
+        entry["searches"] = len(self.searches)
+        # The person's own saved values only (FinderSession.searches), as the summary names them.
+        entry["searched"] = [
+            {"title": title, "place": place}
+            for title, place in list(self.searches)[:SEARCHES_LISTED]
+        ]
         if self.tokens_seen:
             entry["tokens"] = {"input": self.input_tokens, "output": self.output_tokens}
-        if self.searches:
+        if self.started:
             if self.commits is None:
                 entry["found"] = len(self.found)
             entry["refused"] = dict(self.refused)
@@ -336,9 +346,8 @@ async def run_selected(
     search = getattr(plan, "search", None)
     if search is None:
         return  # Pre-v1 legacy callers have no selected interactive sources.
-    for source in search.interactive_sites:
-        if not source.enabled:
-            continue
+    sites = [source for source in search.interactive_sites if source.enabled]
+    for index, source in enumerate(sites):
         entry = sweep.bind_source(
             stats,
             "llm_browser",
@@ -363,8 +372,15 @@ async def run_selected(
             commits = getattr(plan, "commits", None)
             if commits is not None:
                 commits.admit(entry["source_id"])
+            # The website's share of the sweep's time: what is left, divided by the websites left
+            # (jobs J18), so one website never starves the next; one that ends early leaves its
+            # rest to the next ones.
+            now = runner.monotonic()
+            share = now + max(0.0, deadline - now) / (len(sites) - index)
             try:
-                entry["error"] = await _one(runner, plan, source, search, entry, deadline)
+                entry["error"] = await _one(
+                    runner, plan, source, search, entry, min(deadline, share)
+                )
             except (BrowserError, StoreUnavailableError):
                 entry["error"] = "browser_unavailable"
             except Exception:
@@ -411,52 +427,30 @@ async def _one(
         return "unsupported_criteria"
     if runner.finder is None or not await runner.finder.available(str(plan.user_id)):
         return "no_credential"
-    entry.update(searches_planned=len(planned.scopes), searches_total=planned.total)
     site = _Site(
         planned,
         commits=getattr(plan, "commits", None),
         source_id=entry["source_id"],
         host=entry.get("host") or "",
     )
-    # The finder's time is the website's, from its first search on, inside the sweep's.
-    deadline = min(deadline, runner.monotonic() + finder.WALL_TIME_S)
-    code: str | None = None
     try:
-        for index, scope in enumerate(planned.scopes):
-            if site.pages >= finder.PAGES_MAX:
-                code = "page_budget"
-            elif site.input_tokens >= finder.TOKEN_BUDGET:
-                code = "token_budget"
-            elif site.turns >= finder.MAX_TURNS:
-                code = "turn_limit"
-            else:
-                code = await _combination(runner, plan, context, scope, site, deadline, index)
-            site.write(entry)
-            if code is not None:
-                break
+        code = await _website(runner, plan, context, planned.scope, site, deadline)
     finally:
         site.write(entry)
     return code or ("finding_persistence_pending" if site.found else None)
 
 
-async def _combination(
+async def _website(
     runner: Runner,
     plan: Any,
     context: SourceContext,
     scope: finder.InteractiveScope,
     site: _Site,
     deadline: float,
-    index: int,
 ) -> str | None:
-    """One native search on its own lease, inside what the website's earlier searches left."""
+    """The website's one agent run on one lease, until its share of the sweep's time ends."""
     from app.browser import platform_policy
 
-    if index:
-        # The first search's permission was read just before; a later one reads it again.
-        try:
-            await _permit(runner.interactive_policy, context)
-        except SourceError as exc:
-            return exc.code
     asked = runner.monotonic()
     if asked + PAGE_BUDGET_S >= deadline:
         return "time_budget"
@@ -490,7 +484,6 @@ async def _combination(
             lease_until=asked + min(got.lease.max_s, 900),
             pause=platform_policy.pause_for(paced),
         )
-        pages.count = site.pages  # the website's searches share its page cap
         return await _search(runner.finder, pages, scope, str(plan.user_id), site)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
@@ -503,14 +496,10 @@ async def _search(
     user: str,
     site: _Site,
 ) -> str | None:
-    """Bound the complete search, including the first navigation, by all outer deadlines."""
-    remaining = min(
-        finder.WALL_TIME_S,
-        pages.deadline - pages.monotonic(),
-        pages.lease_until - pages.monotonic(),
-    )
+    """Bound the complete run, including the first navigation, by the website's share of the
+    sweep's time and the lease's (no cap of its own, jobs J18)."""
+    remaining = min(pages.deadline - pages.monotonic(), pages.lease_until - pages.monotonic())
     session = None
-    ran = finder.Ran()
     cap = asyncio.timeout(max(0.0, remaining))
     try:
         async with cap:
@@ -536,14 +525,12 @@ async def _search(
                 return exc.code
             if finder.canonical(pages.last_url) != scope.start:
                 return "unsupported_interaction"
-            site.searches += 1
+            site.started = True
             session = finder.FinderSession(
                 pages,
                 scope.start,
                 pages.last_text,
                 user_id=user,
-                token_budget=finder.TOKEN_BUDGET - site.input_tokens,
-                turn_budget=finder.MAX_TURNS - site.turns,
                 interactive=scope,
                 on_verified=None if site.commits is None else site.verified,
             )
@@ -554,11 +541,7 @@ async def _search(
             if session.stopped:
                 return session.stopped
             if ran.stopped:
-                return (
-                    ran.stopped
-                    if ran.stopped in {"no_credential", "token_budget", "turn_limit"}
-                    else "agent_failed"
-                )
+                return "no_credential" if ran.stopped == "no_credential" else "agent_failed"
             if session.refused or not all(
                 session.interactions[name] for name in ("browser_type", "browser_click")
             ):
@@ -571,8 +554,4 @@ async def _search(
     finally:
         site.pages = pages.count
         if session:
-            # The runtime also counts the turns code never sees (a text only turn, a refused
-            # tool); its turn cap spends what the website had left.
-            used = session.turn_budget if ran.stopped == "turn_limit" else ran.turns
-            site.turns = min(finder.MAX_TURNS, site.turns + max(session.turns, used or 0))
             site.keep(session)

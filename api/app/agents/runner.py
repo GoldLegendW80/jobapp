@@ -222,9 +222,9 @@ BUDGET_KEY = "token_budget"
 BUDGET_STOP = "The run reached its token budget."
 BUDGET_UNSURE = "The run's token count could not be confirmed."
 # The agents whose input may lower the run's max_turns (`turn_budget`, validated by their input
-# model, never above the definition's): a form fill's profile (apply A18) and the native search
-# of a job website, whose searches share its turns (app/browser/finder.py).
-TURN_BUDGETED = frozenset({"apply_form", "browser_discovery"})
+# model, never above the definition's): a form fill's profile (apply A18). The agent of a job
+# website has no turn cap (jobs J18, app/browser/finder.py).
+TURN_BUDGETED = frozenset({"apply_form"})
 
 # Built-in Claude Code tools, denied by name on top of `tools=[]` (which already leaves the model
 # none) and of the PreToolUse gate (which denies anything outside the allow list): shell, files,
