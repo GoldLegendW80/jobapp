@@ -8,7 +8,12 @@ import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
 import type { Browser } from "./browser-api";
-import { EXPIRED, SIGN_IN_HINT, SiteSignIn } from "./site-signin";
+import {
+  EXPIRED,
+  JobWebsitesSignIn,
+  SIGN_IN_HINT,
+  SiteSignIn,
+} from "./site-signin";
 
 const SITE = "https://members.example.test/jobs/search";
 const SIGNING_IN: Browser = {
@@ -126,6 +131,42 @@ describe("SiteSignIn", () => {
   it("shows nothing for an address that is not a website", () => {
     fakeApi([]);
     const { container } = renderWithQuery(<SiteSignIn url="not a website" />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("JobWebsitesSignIn", () => {
+  it("lists each website of Find jobs with its own Sign in and state", async () => {
+    fakeApi([
+      {
+        host: "members.example.test",
+        state: "signed_in",
+        signed_in_at: "2026-10-26T10:00:00Z",
+      },
+    ]);
+    renderWithQuery(
+      <JobWebsitesSignIn
+        urls={[SITE, "https://jobs.example-robotics.test/j15/"]}
+      />,
+    );
+    const list = screen.getByRole("region", {
+      name: "Sign in to your job websites",
+    });
+    expect(list).toHaveTextContent(SITE);
+    expect(
+      await screen.findByRole("button", {
+        name: "Sign in to jobs.example-robotics.test",
+      }),
+    ).toHaveTextContent("Sign in");
+    expect(
+      screen.getByRole("button", { name: "Sign in to members.example.test" }),
+    ).toBeInTheDocument();
+    expect(await screen.findAllByText("Signed in")).toHaveLength(1);
+  });
+
+  it("shows nothing without a website", () => {
+    fakeApi([]);
+    const { container } = renderWithQuery(<JobWebsitesSignIn urls={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

@@ -88,9 +88,7 @@ async def done(
         await store.release(str(user.id), purposes=("signin",))
         await store.cancel(str(user.id), purposes=("signin",))
         profile = await run_in_threadpool(site_logins.profile_of, sessions, user.id)
-        present = (
-            False if profile is None else await store.client.site_session(*profile, host)
-        )
+        present = False if profile is None else await store.client.site_session(*profile, host)
     except (BrowserError, StoreUnavailableError):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from None
     if present is None:

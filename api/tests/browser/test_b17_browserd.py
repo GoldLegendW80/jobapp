@@ -27,9 +27,7 @@ from browserd.leases import Request  # noqa: E402
 from browserd.tools import actions, discovery, pacing  # noqa: E402
 
 START = "https://jobs.example.test/search"
-SCOPE = discovery.Scope.parse(
-    {"start": START, "query": "robot", "filters": {}, "signed_in": True}
-)
+SCOPE = discovery.Scope.parse({"start": START, "query": "robot", "filters": {}, "signed_in": True})
 
 
 class Cdp:
@@ -119,9 +117,13 @@ def test_the_persons_context_bypasses_service_workers_and_blocks_sockets_first()
     first, other = Page(), Page()
     context = Context([first, other])
     tab = begin(context)
-    assert tab.state.signed_in and tab.state.discovery
-    assert tab.state.native_context is context and tab.state.page is first
-    assert other.closed and not first.closed and not context.closed
+    assert tab.state.signed_in
+    assert tab.state.discovery
+    assert tab.state.native_context is context
+    assert tab.state.page is first
+    assert other.closed
+    assert not first.closed
+    assert not context.closed
     assert context.scripts == [actions.SIGNED_IN_JS]
     assert context.order == ["script", "route", "cdp"]  # all before the first navigation
     assert context.cdp.sent == [
@@ -144,7 +146,8 @@ def test_a_hardening_step_that_fails_ends_the_discovery(fail: str) -> None:
     with pytest.raises(actions.UnsupportedDiscovery):
         asyncio.run(tab.begin_discovery(SCOPE, "browser_navigate", {"url": START}))
     assert tab.state.native_failed
-    assert page.closed and not context.closed  # the tab only, never the person's context
+    assert page.closed  # the tab only, never the person's context
+    assert not context.closed
 
 
 def test_a_page_already_open_is_never_upgraded() -> None:
@@ -152,7 +155,8 @@ def test_a_page_already_open_is_never_upgraded() -> None:
     tab = tab_on(context)
     with pytest.raises(actions.UnsupportedDiscovery):
         asyncio.run(tab.begin_discovery(SCOPE, "browser_navigate", {"url": START}))
-    assert context.routes == [] and context.cdp.sent == []
+    assert context.routes == []
+    assert context.cdp.sent == []
 
 
 class Route:
@@ -211,7 +215,8 @@ def test_a_sign_in_page_is_told_and_nothing_leaves_after_the_end() -> None:
     route = Route()
     asyncio.run(tab._signed_route(route, request("https://jobs.example.test/login", "GET", "main")))
     assert route.outcome == "blockedbyclient"
-    assert tab.state.signin_seen and tab.state.blocked
+    assert tab.state.signin_seen
+    assert tab.state.blocked
     asyncio.run(tab.close_discovery())
     for url in (f"{START}?q=robot", "https://cdn.example.net/app.js"):
         route = Route()
@@ -233,5 +238,9 @@ def test_an_anonymous_scope_never_touches_the_persons_context() -> None:
     tab.browser.browser.new_context = new_context
     with pytest.raises(actions.UnsupportedDiscovery):
         asyncio.run(tab.begin_discovery(anonymous, "browser_navigate", {"url": START}))
-    assert made == [{"java_script_enabled": False, "service_workers": "block", "accept_downloads": False}]
-    assert context.routes == [] and context.scripts == [] and not tab.state.signed_in
+    assert made == [
+        {"java_script_enabled": False, "service_workers": "block", "accept_downloads": False}
+    ]
+    assert context.routes == []
+    assert context.scripts == []
+    assert not tab.state.signed_in

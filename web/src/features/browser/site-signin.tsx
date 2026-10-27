@@ -181,3 +181,31 @@ export function SiteSignIn({ url }: { url: string }) {
     </div>
   );
 }
+
+/**
+ * The job websites of Find jobs in the profile's Search tab (browser B17), each with its Sign
+ * in: the same action as in the Find jobs setup, for the saved websites.
+ */
+export function JobWebsitesSignIn({ urls }: { urls: string[] }) {
+  if (!urls.length) return null;
+  return (
+    <section aria-label="Sign in to your job websites" className="space-y-2">
+      <h3 className="font-medium">Sign in to your job websites</h3>
+      <p className="text-sm text-muted-foreground">
+        For a website of Find jobs that shows its jobs to members only: sign in
+        once, and the next searches read it signed in, in your own browser only.
+      </p>
+      <ul className="divide-y rounded-md border">
+        {urls.map((url, index) => (
+          <li
+            key={`${url}:${index}`}
+            className="flex min-w-0 flex-wrap items-center gap-2 p-2 text-sm"
+          >
+            <span className="min-w-0 flex-1 break-all">{url}</span>
+            <SiteSignIn url={url} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
