@@ -24,7 +24,8 @@ an address whose path applies, submits, deletes or pays, nor one whose path or q
 submits or signs the person out, and a frame's navigation only within the frozen scope
 (discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`). Service
 workers are bypassed and out of the page's reach (SIGNED_IN_JS removes
-`navigator.serviceWorker`).
+`navigator.serviceWorker`), and the page's frames, an inline sandboxed one included (a sweep
+lease disables IsolateSandboxedIframes, chromium.switches), get the same script and route.
 
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
@@ -62,13 +63,14 @@ DEEP_FOCUS_JS = """() => {
 FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.documentElement) ? 'BODY' : e.tagName"  # noqa: E501  one JS expression run in the page
 
 
-# B17: run before any script of every document of a signed in discovery (its JavaScript is on):
+# B17: run before any script of every document of a signed in discovery (its JavaScript is on;
+# an inline sandboxed frame too, as a sweep lease keeps it in its embedder's process):
 # no worker, no socket, and no `navigator.serviceWorker` at all, so a page can neither register
 # a service worker nor message one the profile already holds: their traffic the route would not
 # see (a worker's own fetch, measured in Chromium 153, left without the route).
 SIGNED_IN_JS = """(() => {
   const refuse = function () { throw new DOMException("Blocked during a search", "SecurityError"); };
-  for (const name of ["Worker", "SharedWorker", "WebSocket", "WebTransport"]) {
+  for (const name of ["Worker", "SharedWorker", "WebSocket", "WebSocketStream", "WebTransport"]) {
     try { Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false }); } catch (e) {}
   }
   try {
@@ -241,13 +243,16 @@ class Tab:
         WebSocket, nor (not proved) a worker's, so before the first navigation the tab bypasses
         every service worker of the profile (each request of the page then reaches the route),
         asks Chromium to block ws:// and wss://, and its pages get no Worker, SharedWorker,
-        WebSocket nor WebTransport and no `navigator.serviceWorker` (SIGNED_IN_JS): a page can
-        neither register a service worker nor message one the profile already holds, whose own
-        fetch would leave without the route. Declared open points: an event the browser itself
-        delivers to such a worker (push, background sync, a cookie change) can still wake it;
-        `Network.setBlockedURLs` stopped a fetch but not a page's WebSocket in Chromium 153, so
-        SIGNED_IN_JS is what refuses a socket there. A step that fails ends the discovery:
-        nothing is read."""
+        WebSocket, WebSocketStream nor WebTransport and no `navigator.serviceWorker`
+        (SIGNED_IN_JS): a page can neither register a service worker nor message one the
+        profile already holds, whose own fetch would leave without the route. An inline
+        sandboxed frame (`<iframe sandbox srcdoc>`) gets the script and the route too only
+        because a sweep lease runs with IsolateSandboxedIframes disabled (chromium.switches):
+        isolated, its script ran first and its POST and sockets left (Chromium 153). Declared
+        open points: an event the browser itself delivers to such a worker (push, background
+        sync, a cookie change) can still wake it; `Network.setBlockedURLs` stopped a fetch but
+        not a page's WebSocket in Chromium 153, so SIGNED_IN_JS is what refuses a socket there.
+        A step that fails ends the discovery: nothing is read."""
         self.state.signed_in = True
         try:
             async with asyncio.timeout(ACTION_S):

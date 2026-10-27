@@ -26,9 +26,11 @@ GET /b17/log answers what that website saw (method, path, time, whether a member
 with it), and GET /b17/expire ends every login made so far (the cookie names an epoch), so the
 next search meets the sign in page again. Its member pages (the same J15 pages, JavaScript on
 in a signed in search) run B17_PROBE_JS: on load it tries a fetch POST, a sendBeacon, a keepalive
-POST, a WebSocket, a Worker and an image at /j15/logout, each on its own path, then asks
-GET /j15/b17-ran?<what each attempt did>; the log tells the journey which of them reached the
-site. It adds no element to the page. J15's own pages, on its own name, stay script free.
+POST, a WebSocket, a WebSocketStream, a Worker and an image at /j15/logout, each on its own path,
+then asks GET /j15/b17-ran?<what each attempt did>, and adds a hidden inline sandboxed frame whose
+script tries a POST, a WebSocket and a WebSocketStream at /j15/b17-sbx-*; the log tells the
+journey which of them reached the site. Nothing it adds shows in the page's snapshot. J15's own
+pages, on its own name, stay script free.
 """
 
 import http.server
@@ -71,9 +73,23 @@ B17_PROBE_JS = """<script>
   attempt("keepalive", () =>
     fetch("/j15/b17-keepalive", {method: "POST", body: "x", keepalive: true}).catch(() => 0));
   attempt("ws", () => new WebSocket("ws://" + location.host + "/j15/b17-ws"));
+  attempt("wss", () => new WebSocketStream("ws://" + location.host + "/j15/b17-wss"));
   attempt("worker", () => new Worker("/j15/b17-worker.js"));
   attempt("img", () => { const img = new Image(); img.src = "/j15/logout"; return img; });
   fetch("/j15/b17-ran?" + new URLSearchParams(tried)).catch(() => 0);
+  // An inline sandboxed frame (its own process unless the sweep lease keeps it in the page's),
+  // hidden, so the snapshot and its refs stay those of the page: a POST and two sockets.
+  const at = "//" + location.host + "/j15/b17-sbx-", http = location.protocol + at;
+  const box = document.createElement("div"), frame = document.createElement("iframe");
+  box.hidden = true;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.srcdoc = "<script>" + [
+    `fetch("${http}post", {method: "POST", body: "x", mode: "no-cors"}).catch(() => 0)`,
+    `window.ws = new WebSocket("ws:${at}ws")`,
+    `window.wss = new WebSocketStream("ws:${at}wss")`,
+  ].map((act) => `try { ${act}; } catch (e) {}`).join(" ") + "</" + "script>";
+  box.append(frame);
+  document.body.append(box);
 })();
 </script>"""
 

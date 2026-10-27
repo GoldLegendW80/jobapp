@@ -114,7 +114,7 @@ def begin(context: Context) -> actions.Tab:
     return tab
 
 
-def test_the_persons_context_bypasses_service_workers_and_blocks_sockets_first() -> None:
+def test_the_persons_context_bypasses_service_workers_and_removes_sockets_first() -> None:
     first, other = Page(), Page()
     context = Context([first, other])
     tab = begin(context)
@@ -132,8 +132,12 @@ def test_the_persons_context_bypasses_service_workers_and_blocks_sockets_first()
         ("Network.setBypassServiceWorker", {"bypass": True}),
         ("Network.setBlockedURLs", {"urls": ["ws://*", "wss://*"]}),
     ]
-    for name in ("Worker", "SharedWorker", "WebSocket", "WebTransport", '"register"'):
-        assert name in actions.SIGNED_IN_JS
+    # Network.setBlockedURLs stops no WebSocket in Chromium 153 (measured: the handshake reached
+    # the site with it in place), so the init script is what refuses a socket: every constructor
+    # of a worker or a socket, WebSocketStream included (native in 153), is replaced.
+    for name in ("Worker", "SharedWorker", "WebSocket", "WebSocketStream", "WebTransport"):
+        assert f'"{name}"' in actions.SIGNED_IN_JS
+    assert '"register"' in actions.SIGNED_IN_JS
     # A service worker the profile already holds is out of the page's reach: with no
     # navigator.serviceWorker, getRegistration().active.postMessage cannot wake it, and its own
     # fetch (which Playwright's route never sees) never starts. Measured in Chromium 153.
@@ -483,6 +487,67 @@ ROUND1 = [
 @pytest.mark.parametrize(("url", "document", "leaves"), ROUND1)
 def test_round1_regressions(url: str, document: bool, leaves: bool) -> None:
     assert discovery.signed_request(url, "GET", document, OWN) is leaves
+
+
+# B17 round 2 (follow up 1): a server reads `/ap%70ly` as `/apply`, so the path of a request is
+# percent decoded once before its words are read, and a `%` still in it after that decode is
+# refused (fails closed). A document with any `%` in its path was already refused (read_url).
+@pytest.mark.parametrize(
+    ("path", "refused"),
+    [
+        ("/jobs/42/ap%70ly", True),  # the reviewer's two rows of round 2, never deleted
+        ("/%61pply", True),
+        ("/jobs/42/AP%50LY", True),
+        ("/jobs/42/ap%70ly/", True),
+        ("/jobs/42/%61%70%70%6c%79", True),
+        ("/jobs/42/%61%70%70%6C%79", True),
+        ("/jobs%2F42%2Fapply", True),
+        ("/jobs/42/apply%3Fsource%3Dlist", True),
+        ("/jobs/42/easy%5Fapply", True),
+        ("/jobs/42/easy%20apply", True),
+        ("/jobs/42/postu%6Cer", True),
+        ("/jobs/42/candi%64ater", True),
+        ("/offres/42/candidat%75re", True),
+        ("/stellen/42/bewer%62en", True),
+        ("/vacatures/42/sollicit%65ren", True),
+        ("/form/sub%6Dit", True),
+        ("/form/env%6Fyer", True),
+        ("/api/jobs/42/sa%76e", True),
+        ("/api/alerts/7/de%6Cete", True),
+        ("/check%6Fut", True),
+        ("/log%6Fut", True),
+        ("/users/sign%5Fout", True),
+        ("/fr/d%C3%A9connexion", True),
+        ("/de/ab%6Delden", True),
+        ("/jobs/42/ap%E2%80%8Bply", True),  # a zero width space, dropped as the detector does
+        ("/jobs/42/ap%C2%ADply", True),  # a soft hyphen
+        ("/jobs/42/%EF%BD%81pply", True),  # a full width a
+        ("/jobs/42/ap%2570ly", True),  # encoded twice: a `%` is left
+        ("/jobs/42/ap%ply", True),  # not an escape: a `%` is left
+        ("/static/100%25.png", True),  # declared: an encoded percent sign is refused too
+        ("/search/data%20engineer", False),
+        ("/search/robot%2Bengineer", False),
+        ("/jobs/ing%C3%A9nieur-donn%C3%A9es", False),
+        ("/jobs/m%C3%BCnchen", False),
+        ("/jobs/%E6%97%A5%E6%9C%AC", False),
+        ("/jobs/%D0%B8%D0%BD%D0%B6%D0%B5%D0%BD%D0%B5%D1%80", False),
+        ("/jobs/applied%2Dscientist", False),
+        ("/jobs/supply%20chain%20lead", False),
+        ("/jobs/log%20analyst", False),
+        ("/jobs/sign%20language%20teacher", False),
+        ("/blog/out%20of%20office", False),
+        ("/img/logo%402x.png", False),
+        ("/fonts/Inter%20Var.woff2", False),
+        ("/jobs/42", False),
+    ],
+)
+def test_a_percent_encoded_path_is_read_as_the_server_reads_it(path: str, refused: bool) -> None:
+    for host in ("https://jobs.example.test", "https://cdn.example.net"):
+        url = host + path
+        assert discovery.destructive(url, OWN) is refused, url
+        assert discovery.signed_request(url, "GET", False, OWN) is not refused, url
+    if "%" in path:
+        assert not discovery.signed_request(f"https://jobs.example.test{path}", "GET", True, OWN)
 
 
 @pytest.mark.parametrize(

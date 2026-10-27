@@ -29,8 +29,10 @@ import {
  *   with her member's cookie, the site saw GET requests only, and the posting's Send application
  *   button and the address the posting asks for were refused, as on the anonymous website. Each
  *   member page runs a script that tries a fetch POST, a sendBeacon, a keepalive POST, a
- *   WebSocket, a Worker and an image at /j15/logout: in A's own sign in session they reach the
- *   site, in the search none does, and the script finds no WebSocket nor Worker to make.
+ *   WebSocket, a WebSocketStream, a Worker and an image at /j15/logout, and adds a hidden
+ *   inline sandboxed frame that tries a POST, a WebSocket and a WebSocketStream: in A's own
+ *   sign in session they reach the site, in the search none does, and the script finds no
+ *   WebSocket, WebSocketStream nor Worker to make.
  * - The site ends every login (GET /b17/expire): the next search meets the sign in page, ends the
  *   website `platform_signin`, the summary asks to sign in again and the row says Sign in again.
  * - Person B has no login of the website, and B's Done reads B's own browser only.
@@ -48,15 +50,21 @@ const HOST = "members.example-robotics.test";
 const SITE = `http://${HOST}:8080/j15/`;
 const CSRF = { "X-Requested-With": "jobapp" };
 const SIGN_IN_AGAIN = "Use Sign in beside it in Find jobs, then search again.";
-// The ways out a member page's script tries (server.py, B17_PROBE_JS), one path each, and the
-// address it asks last to say what each attempt did.
+// The ways out a member page's script tries (server.py, B17_PROBE_JS), one path each, those of
+// its hidden inline sandboxed frame (b17-sbx-*), and the address it asks to say what each
+// attempt of the page did.
+const SANDBOXED_POST = "/j15/b17-sbx-post";
 const PROBES = [
   "/j15/b17-post",
   "/j15/b17-beacon",
   "/j15/b17-keepalive",
   "/j15/b17-ws",
+  "/j15/b17-wss",
   "/j15/b17-worker.js",
   "/j15/logout",
+  SANDBOXED_POST,
+  "/j15/b17-sbx-ws",
+  "/j15/b17-sbx-wss",
 ];
 const PROBE_RAN = "/j15/b17-ran?";
 const probed = (seen: Seen[]) =>
@@ -237,17 +245,16 @@ test("A signs in to the members website from its row in Find jobs", async () => 
   expect(currentLease().lease).toBeNull();
   expect(await sites(page)).toMatchObject([{ host: HOST, state: "signed_in" }]);
   await shots(page, "signed-in");
-  // A's own sign in session holds nothing back: the member page's script reached the site
-  // there, so the search's check below can fail.
+  // A's own sign in session holds nothing back: the member page's script and its sandboxed
+  // frame's reached the site there, so the search's checks below can fail.
+  const posted = () =>
+    siteLog()
+      .slice(before)
+      .filter((item) => item.method === "POST")
+      .map((item) => item.path);
   await expect
-    .poll(
-      () =>
-        siteLog()
-          .slice(before)
-          .some((item) => item.method === "POST" && item.path === PROBES[0]),
-      { timeout: 30_000, intervals: [2_000] },
-    )
-    .toBe(true);
+    .poll(posted, { timeout: 30_000, intervals: [2_000] })
+    .toEqual(expect.arrayContaining([PROBES[0], SANDBOXED_POST]));
   before = siteLog().length;
 });
 
@@ -282,12 +289,15 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
   expect(seen.every((item) => item.method === "GET")).toBe(true);
   expect(seen.some((item) => item.path.includes("send"))).toBe(false);
   // The member pages ran their script (JavaScript on), and none of its ways out reached the
-  // site: no POST, beacon, keepalive POST, WebSocket, Worker nor /j15/logout.
+  // site: no POST, beacon, keepalive POST, WebSocket, WebSocketStream, Worker nor /j15/logout,
+  // and nothing of the sandboxed frame's (it runs in the page's process in a sweep lease, so
+  // the route and the script reach it).
   const ran = seen.filter((item) => item.path.startsWith(PROBE_RAN));
   expect(ran.length, JSON.stringify(seen)).toBeGreaterThanOrEqual(1);
   for (const item of ran) {
     const tried = new URLSearchParams(item.path.slice(PROBE_RAN.length));
     expect(tried.get("ws"), item.path).toBe("err:SecurityError");
+    expect(tried.get("wss"), item.path).toBe("err:SecurityError");
     expect(tried.get("worker"), item.path).toBe("err:SecurityError");
   }
   expect(probed(seen), JSON.stringify(seen)).toEqual([]);

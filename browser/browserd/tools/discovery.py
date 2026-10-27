@@ -2,9 +2,11 @@
 
 A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
 the site's JavaScript on, for a website the person signed in to: the same controls are refused
-and every request the page makes is held to `signed_request`, GET or HEAD only, never to an
-address whose path applies, submits, deletes or pays, nor one whose path or query applies,
-submits or signs the person out (`destructive`), the documents within the frozen search scope.
+and every request the page makes is held to `signed_request` (its frames' too, an inline
+sandboxed one included: a sweep lease keeps it in the page's process, chromium.switches), GET or
+HEAD only, never to an address whose path applies, submits, deletes or pays, nor one whose path
+or query applies, submits or signs the person out (`destructive`, the path percent decoded
+once), the documents within the frozen search scope.
 Declared open points: a delete or payment word in the query only (`?action=delete`), the save
 and update words in the query only (`?action=save`), and a query value that is the person's own
 search words, whatever its key (a search for "apply" lets `?action=apply` leave), are not
@@ -12,7 +14,7 @@ refused.
 """
 
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from browserd import detect
 
@@ -167,7 +169,7 @@ def ends_session(url: str) -> bool:
         pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
     except ValueError:
         return True
-    texts = [*parts.path.split("/"), *(text for pair in pairs for text in pair)]
+    texts = [*unquote(parts.path).split("/"), *(text for pair in pairs for text in pair)]
     glued = ["".join(detect.words(text)) for text in texts]
     return any(end in text for text in glued for end in SESSION_ENDS)
 
@@ -225,14 +227,19 @@ def destructive(url: str, scope: Scope | None = None) -> bool:
     """An address that applies, submits, deletes, pays or signs the person out by its path
     words (read_url's rule without the account words: a signed in page reads the person's own
     account data), or applies, submits or signs the person out by its query (query_applies,
-    which skips the person's own search words of `scope`, and ends_session)."""
+    which skips the person's own search words of `scope`, and ends_session). The path is read
+    as the server reads it, percent decoded once (`/jobs/42/ap%70ly` is `/jobs/42/apply`); a `%`
+    still in it after that decode is refused, never guessed (`ap%2570ly`, `100%25.png`)."""
     try:
         parts = urlsplit(url)
     except ValueError:
         return True
     if parts.scheme not in {"http", "https"} or parts.username or parts.password:
         return True
-    segments = parts.path.strip("/").split("/")
+    path = unquote(parts.path)
+    if "%" in path:
+        return True
+    segments = path.strip("/").split("/")
     tokens = [word for segment in segments for word in detect.words(segment)]
     return (
         detect.says_submit(segments, profile_edit=True)
