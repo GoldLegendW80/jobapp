@@ -24,7 +24,11 @@ a member's cookie, else a 302 to /j15/login?next=<path>; its sign in page (b17/l
 a name by GET to /j15/session, which sets the cookie (30 days, HttpOnly) and goes back to `next`.
 GET /b17/log answers what that website saw (method, path, time, whether a member's cookie came
 with it), and GET /b17/expire ends every login made so far (the cookie names an epoch), so the
-next search meets the sign in page again.
+next search meets the sign in page again. Its member pages (the same J15 pages, JavaScript on
+in a signed in search) run B17_PROBE_JS: on load it tries a fetch POST, a sendBeacon, a keepalive
+POST, a WebSocket, a Worker and an image at /j15/logout, each on its own path, then asks
+GET /j15/b17-ran?<what each attempt did>; the log tells the journey which of them reached the
+site. It adds no element to the page. J15's own pages, on its own name, stay script free.
 """
 
 import http.server
@@ -51,6 +55,27 @@ J15_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title></head>'
     "<body><main><h1>{title}</h1>{body}</main></body></html>"
 )
+# Every way out of a page that B17's signed in search must hold, tried once per member page.
+B17_PROBE_JS = """<script>
+(() => {
+  const tried = {}, kept = (window.__b17Probe = []);  // kept: a socket is never collected
+  const attempt = (name, act) => {
+    try {
+      const out = act();
+      kept.push(out);
+      tried[name] = typeof out === "boolean" ? String(out) : "made";
+    } catch (e) { tried[name] = "err:" + e.name; }
+  };
+  attempt("post", () => fetch("/j15/b17-post", {method: "POST", body: "x"}).catch(() => 0));
+  attempt("beacon", () => navigator.sendBeacon("/j15/b17-beacon", "x"));
+  attempt("keepalive", () =>
+    fetch("/j15/b17-keepalive", {method: "POST", body: "x", keepalive: true}).catch(() => 0));
+  attempt("ws", () => new WebSocket("ws://" + location.host + "/j15/b17-ws"));
+  attempt("worker", () => new Worker("/j15/b17-worker.js"));
+  attempt("img", () => { const img = new Image(); img.src = "/j15/logout"; return img; });
+  fetch("/j15/b17-ran?" + new URLSearchParams(tried)).catch(() => 0);
+})();
+</script>"""
 
 
 def j15_search(query) -> str:
@@ -146,6 +171,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return True
         return False
 
+    def member_page(self, url, query) -> str | None:
+        """A J15 page as a member sees it on the members only website: with B17_PROBE_JS."""
+        if url.path == "/j15/search":
+            html = j15_search(query)
+        else:
+            path = self.translate_path(url.path)
+            if os.path.isdir(path):
+                path = os.path.join(path, "index.html")
+            if not path.endswith(".html") or not os.path.isfile(path):
+                return None
+            with open(path, encoding="utf-8") as page:
+                html = page.read()
+        return html.replace("</body>", B17_PROBE_JS + "</body>", 1)
+
     def redirect(self, to: str, cookie: str | None = None) -> None:
         self.send_response(302)
         self.send_header("Location", to)
@@ -187,6 +226,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send(json.dumps(MEMBERS))
         if self.members() and url.path.startswith("/j15/") and self.b17(url):
             return None
+        if self.members() and url.path.startswith("/j15/"):
+            page = self.member_page(url, query)
+            if page is not None:
+                return self.send(page, "text/html; charset=utf-8")
         if not self.members():
             self.j15_note(url.path)
         if url.path == "/j15/log":

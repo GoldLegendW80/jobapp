@@ -2,7 +2,8 @@
 
 Only the Playwright and CDP boundary is fake (no Chromium here; the journey
 web/e2e/browser-b17.spec.ts runs the real one). Before the first navigation the tab bypasses
-every service worker, blocks WebSockets and gets the script that removes workers; any step that
+every service worker, blocks WebSockets and gets the script that removes workers and
+`navigator.serviceWorker`; any step that
 fails ends the discovery with nothing read. The route lets a request leave only by
 `discovery.signed_request`, and a tab sent to a sign in page is told `signin_required`.
 """
@@ -133,6 +134,10 @@ def test_the_persons_context_bypasses_service_workers_and_blocks_sockets_first()
     ]
     for name in ("Worker", "SharedWorker", "WebSocket", "WebTransport", '"register"'):
         assert name in actions.SIGNED_IN_JS
+    # A service worker the profile already holds is out of the page's reach: with no
+    # navigator.serviceWorker, getRegistration().active.postMessage cannot wake it, and its own
+    # fetch (which Playwright's route never sees) never starts. Measured in Chromium 153.
+    assert "delete Navigator.prototype.serviceWorker;" in actions.SIGNED_IN_JS
 
 
 @pytest.mark.parametrize(
@@ -290,6 +295,194 @@ def test_an_anonymous_scope_never_touches_the_persons_context() -> None:
 )
 def test_a_signed_in_request_never_signs_the_person_out(url: str, refused: bool) -> None:
     assert discovery.destructive(url) is refused
+
+
+# B17 round 1 (blocker 3): the apply and submit words are read in the query's keys and values
+# too, so a GET that applies through its query never leaves a signed in page. The table is made
+# from the rule: every spelling of an apply or submit word, in every place of a query, refused;
+# the reads of a search and the person's own search words, allowed.
+OWN = discovery.Scope.parse(
+    {
+        "start": START,
+        "query": "apply engineer",
+        "filters": {"category": "Sender", "location": "Sendai"},
+        "signed_in": True,
+    }
+)
+ACTION_SPELLINGS = (
+    "apply",
+    "Apply",
+    "APPLY",
+    "easyApply",
+    "easy_apply",
+    "easy-apply",
+    "EasyApply",
+    "EASY_APPLY",
+    "easy apply",
+    "easyapply",
+    "quickApply",
+    "oneClickApply",
+    "1-click-apply",
+    "applyNow",
+    "apply_now",
+    "ａｐｐｌｙ",  # full width
+    "ap​ply",  # a zero width space inside
+    "postuler",
+    "Postulez",
+    "postulér",
+    "candidater",
+    "candidatez",
+    "candidature",
+    "candidature-spontanee",
+    "bewerben",
+    "jetzt-bewerben",
+    "Bewerbung",
+    "solliciteren",
+    "submit",
+    "submitApplication",
+    "submit_application",
+    "Submit Application",
+    "Soumettre",
+    "soumission",
+    "envoyer",
+    "send",
+    "validerCandidature",
+    "confirm_application",
+    "finalizeApplication",
+    "complete-application",
+    "confirmapplication",  # glued: the noun read inside the word
+    "finishapplication",
+    "completeapplication",
+)
+ACTION_PLACES = (
+    "action={}&id=42",
+    "do={}&offre=42",
+    "op={}&job=42",
+    "id=42&cmd={}",
+    "{}=true&id=42",
+    "{}=1",
+    "{}",
+    "a=1;action={}",
+    "operationName={}",
+    "&".join(f"f{n}=x" for n in range(70)) + "&op={}",  # past detect's 60 names
+    "note=" + "x" * 600 + " {}",  # past detect's 500 characters
+)
+
+
+@pytest.mark.parametrize("word", ACTION_SPELLINGS)
+def test_an_apply_or_submit_word_anywhere_in_the_query_never_leaves(word: str) -> None:
+    for place in ACTION_PLACES:
+        for host in ("https://jobs.example.test/index.php", "https://api.example.net/v1/x"):
+            url = f"{host}?{place.format(word)}"
+            assert discovery.destructive(url, OWN), url
+            assert not discovery.signed_request(url, "GET", False, OWN), url
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "q=applied+scientist",
+        "q=supply+chain",
+        "category=payments",
+        "category=achats",
+        "event=page_view",
+        "en=view_item_list&tid=G-EXAMPLE",
+        "q=robot&location=Paris&page=2&sort=date",
+        "keywords=robot&radius=25&remote=true&contract=CDI",
+        "sort=updated_at",
+        "orderBy=updatedAt&updatedSince=2026-10-01",
+        "sort=-updated",
+        "saved=true",
+        "savedSearchId=7",
+        "hasApplied=false",
+        "applied=true",
+        "status=applied",
+        "applicants=10",
+        "appliedFilters=remote",
+        "include=applications",
+        "q=appliance+technician",
+        "q=Postal+worker",
+        "q=post+office",
+        "ns=postings&lang=fr",
+        "type=candidat",
+        "q=candidate+experience",
+        "q=solicitor",
+        "q=supplier+quality",
+        "filter=happy",
+        "ref=applist",
+        "fields=category,location,contract",
+        "v=4f2a",
+        "display=swap",
+        "dl=https%3A%2F%2Fjobs.example.test%2Fjobs%2Fapplied-scientist",
+        "operationName=JobSearch&variables=%7B%22q%22%3A%22robot%22%7D",
+        "",
+        # The person's own search words, in any case or spelling, whatever the key.
+        "q=apply+engineer",
+        "keywords=Apply%20Engineer&page=2",
+        "q=apply-engineer",
+        "text=APPLY_ENGINEER",
+        "category=Sender",
+        "city=sendai",
+    ],
+)
+def test_the_reads_of_a_search_and_the_persons_own_words_still_leave(query: str) -> None:
+    url = f"https://jobs.example.test/api/jobs?{query}"
+    assert not discovery.query_applies(query, OWN), query
+    assert not discovery.destructive(url, OWN), url
+    assert discovery.signed_request(url, "GET", False, OWN), url
+
+
+@pytest.mark.parametrize(
+    ("query", "refused"),
+    [
+        ("q=apply", True),  # not the person's words: those are "apply engineer"
+        ("q=apply+engineer+now", True),
+        ("q=applyengineer", True),
+        ("q=apply+engineer&action=apply", True),
+        ("apply+engineer=1", True),  # a key is always read
+        ("city=Sender+Freiburg", True),
+        ("category=Sendai", False),  # a filter's value under another key is still the person's
+        ("q=Apply+Engineer", False),
+    ],
+)
+def test_only_a_value_that_is_exactly_the_persons_words_is_skipped(query, refused) -> None:
+    assert discovery.query_applies(query, OWN) is refused
+    assert discovery.query_applies(query) is True  # no scope: no words of the person's
+
+
+def test_a_query_that_cannot_be_split_is_refused() -> None:
+    query = "&".join(f"f{n}=x" for n in range(101))
+    assert discovery.query_applies(query, OWN)
+    assert discovery.destructive(f"https://jobs.example.test/api?{query}", OWN)
+
+
+# The reviewer's inputs of round 1, never deleted: (url, document, may leave).
+ROUND1 = [
+    ("https://jobs.example.test/index.php?action=apply&id=42", False, False),
+    ("https://jobs.example.test/ajax?do=postuler&offre=42", False, False),
+    ("https://jobs.example.test/api/jobs/42?easyApply=true", False, False),
+    ("https://jobs.example.test/api?op=submitApplication&job=42", False, False),
+    ("https://jobs.example.test/search?q=applied+scientist", False, True),
+    ("https://jobs.example.test/search?q=supply+chain", False, True),
+    ("https://jobs.example.test/search?category=payments", False, True),
+    ("https://jobs.example.test/search?event=page_view", False, True),
+    # A frame's navigation is held to the same address rule: it never signs the person out.
+    ("https://jobs.example.test/logoff", True, False),
+    ("https://jobs.example.test/fr/deconnexion", True, False),
+    ("https://jobs.example.test/fr/se-deconnecter", True, False),
+    ("https://jobs.example.test/de/abmelden", True, False),
+    ("https://jobs.example.test/jobs/42", True, True),
+    (
+        "https://jobs.example.test/search?q=apply+engineer&category=Sender&location=Sendai",
+        True,
+        True,
+    ),
+]
+
+
+@pytest.mark.parametrize(("url", "document", "leaves"), ROUND1)
+def test_round1_regressions(url: str, document: bool, leaves: bool) -> None:
+    assert discovery.signed_request(url, "GET", document, OWN) is leaves
 
 
 @pytest.mark.parametrize(

@@ -20,8 +20,11 @@ CDP Fetch holds requests before sending and responses before receiving their bod
 responses are refused before Chromium follows them. A signed in discovery (B17: a website the
 person signed in to, `Scope.signed_in`) runs in the person's own persisted context instead, with
 the site's JavaScript on: a route on that context lets only GET and HEAD requests leave, never to
-an apply, submit, delete or payment address, and a frame's navigation only within the frozen
-scope (discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`).
+an address whose path applies, submits, deletes or pays, nor one whose path or query applies,
+submits or signs the person out, and a frame's navigation only within the frozen scope
+(discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`). Service
+workers are bypassed and out of the page's reach (SIGNED_IN_JS removes
+`navigator.serviceWorker`).
 
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
@@ -60,7 +63,9 @@ FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.docume
 
 
 # B17: run before any script of every document of a signed in discovery (its JavaScript is on):
-# no worker, socket or service worker registration, whose traffic the route would not see.
+# no worker, no socket, and no `navigator.serviceWorker` at all, so a page can neither register
+# a service worker nor message one the profile already holds: their traffic the route would not
+# see (a worker's own fetch, measured in Chromium 153, left without the route).
 SIGNED_IN_JS = """(() => {
   const refuse = function () { throw new DOMException("Blocked during a search", "SecurityError"); };
   for (const name of ["Worker", "SharedWorker", "WebSocket", "WebTransport"]) {
@@ -74,6 +79,7 @@ SIGNED_IN_JS = """(() => {
       });
     }
   } catch (e) {}
+  try { delete Navigator.prototype.serviceWorker; } catch (e) {}
 })();"""  # noqa: E501  one script run in the page
 
 
@@ -231,11 +237,15 @@ class Tab:
         """B17: the person's own persisted context (their logins), its JavaScript on; one tab,
         every request it makes held by `_signed_route` from the first navigation on.
 
-        Playwright's route never sees a request a service worker answers, nor a WebSocket, nor
-        (not proved) a worker's, so before the first navigation the tab bypasses every service
-        worker of the profile (each request then reaches the route), blocks ws:// and wss://,
-        and its pages get no Worker, SharedWorker, WebSocket, WebTransport nor service worker
-        registration (SIGNED_IN_JS). A step that fails ends the discovery: nothing is read."""
+        Playwright's route never sees a request a service worker answers or makes, nor a
+        WebSocket, nor (not proved) a worker's, so before the first navigation the tab bypasses
+        every service worker of the profile (each request of the page then reaches the route),
+        blocks ws:// and wss://, and its pages get no Worker, SharedWorker, WebSocket nor
+        WebTransport and no `navigator.serviceWorker` (SIGNED_IN_JS): a page can neither
+        register a service worker nor message one the profile already holds, whose own fetch
+        would leave without the route. Declared open point: an event the browser itself
+        delivers to such a worker (push, background sync, a cookie change) can still wake it.
+        A step that fails ends the discovery: nothing is read."""
         self.state.signed_in = True
         try:
             async with asyncio.timeout(ACTION_S):

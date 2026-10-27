@@ -2,8 +2,13 @@
 
 A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
 the site's JavaScript on, for a website the person signed in to: the same controls are refused
-and every request the page makes is held to `signed_request`, GET or HEAD only, never an apply,
-submit, delete or payment address, the documents within the frozen search scope.
+and every request the page makes is held to `signed_request`, GET or HEAD only, never to an
+address whose path applies, submits, deletes or pays, nor one whose path or query applies,
+submits or signs the person out (`destructive`), the documents within the frozen search scope.
+Declared open points: a delete or payment word in the query only (`?action=delete`), the save
+and update words in the query only (`?action=save`), and a query value that is the person's own
+search words, whatever its key (a search for "apply" lets `?action=apply` leave), are not
+refused.
 """
 
 from dataclasses import dataclass
@@ -167,10 +172,60 @@ def ends_session(url: str) -> bool:
     return any(end in text for text in glued for end in SESSION_ENDS)
 
 
-def destructive(url: str) -> bool:
-    """An address that applies, submits, deletes, pays or signs the person out, by its path
+def _applies(texts: list[str]) -> bool:
+    """Whether these query keys and values apply or submit: an APPLY_PARTS word inside any of
+    their words, or a word starting with a submit stem, or a confirm verb with an application
+    noun anywhere in the query (detect.says_submit's rule without its caps on names, so a 61st
+    field or a value past 500 characters is read too). Each text is read split and glued
+    (`easyApply`, `easy_apply`, `EASYAPPLY`)."""
+    tokens = []
+    for text in texts:
+        tokens.extend(detect.words(text))
+        tokens.extend(detect.words(text.replace(" ", "").replace("_", "").replace("-", "")))
+    return (
+        any(t.startswith(detect.SUBMIT_STEMS) for t in tokens)
+        or any(part in t for t in tokens for part in APPLY_PARTS)
+        or (  # the noun read inside a word too: `confirmapplication`, `finishApplication`
+            any(t.startswith(detect.CONFIRM_VERBS) for t in tokens)
+            and any(noun in t for t in tokens for noun in detect.APPLICATION_NOUNS)
+        )
+    )
+
+
+def own_words(scope: Scope | None) -> set[tuple[str, ...]]:
+    """The person's own search words, as folded words (case, accents and separators aside): the
+    frozen scope's query and each filter value."""
+    if scope is None:
+        return set()
+    texts = [scope.query, *(value for _, value in scope.filters)]
+    return {tuple(words) for words in map(detect.words, texts) if words}
+
+
+def query_applies(query: str, scope: Scope | None = None) -> bool:
+    """Whether a request's query applies or submits (B17), by its keys and values:
+    `?action=apply`, `?do=postuler`, `?easyApply=true`, `?op=submitApplication`. Every key is
+    read; a value whose folded words are the person's own search words (own_words) is skipped,
+    so a search for "apply engineer" or "Sender" is read. Fails closed: a query that cannot be
+    split (more than 100 fields) is refused. The save and update words of the path rule, and
+    its delete and payment words, are not read here: `sort=updated`, `saved=true` and
+    `category=payments` are reads (declared open point: `?action=delete` leaves)."""
+    if not query:
+        return False
+    try:
+        pairs = parse_qsl(query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return True
+    own = own_words(scope)
+    texts = [key for key, _ in pairs]
+    texts.extend(value for _, value in pairs if tuple(detect.words(value)) not in own)
+    return _applies(texts)
+
+
+def destructive(url: str, scope: Scope | None = None) -> bool:
+    """An address that applies, submits, deletes, pays or signs the person out by its path
     words (read_url's rule without the account words: a signed in page reads the person's own
-    account data) and, for signing out, its query too."""
+    account data), or applies, submits or signs the person out by its query (query_applies,
+    which skips the person's own search words of `scope`, and ends_session)."""
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -184,6 +239,7 @@ def destructive(url: str) -> bool:
         or detect.says_danger(segments)
         or any(part in t for t in tokens for part in APPLY_PARTS)
         or ends_session(url)
+        or query_applies(parts.query, scope)
     )
 
 
@@ -203,13 +259,14 @@ def signin_url(url: str) -> bool:
 
 def signed_request(url: str, method: str, document: bool, scope: Scope) -> bool:
     """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, never a
-    destructive address on any host, and a document (a frame's navigation) only within the
+    destructive address on any host (a document's too: `/logoff` or `/fr/deconnexion` in a
+    frame would sign the person out), and a document (a frame's navigation) only within the
     frozen scope, as read_url holds the anonymous discovery."""
     if method not in {"GET", "HEAD"} or not isinstance(url, str) or len(url) > 8000:
         return False
-    if document:
-        return read_url(url, scope.start, scope=scope)
-    return not destructive(url)
+    if document and not read_url(url, scope.start, scope=scope):
+        return False
+    return not destructive(url, scope)
 
 
 def verdict(

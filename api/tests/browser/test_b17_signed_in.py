@@ -403,6 +403,30 @@ def test_signin_required_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
     assert logins.expired == []
 
 
+class SignInPage(ScopeTools):
+    """The website answers its sign in page at the search's own address: a heading, no redirect."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pages[BASE] = '- heading "Sign in"\n- textbox "Email" [ref=e1]'
+
+
+def test_a_sign_in_heading_while_signed_in_ends_platform_signin_and_expires(monkeypatch) -> None:
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    [entry] = run_for(alice, logins, SignInPage(), monkeypatch)
+    assert entry["error"] == "platform_signin"
+    assert logins.expired == [(alice, HOST)]
+
+
+def test_a_sign_in_heading_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
+    bob = str(uuid.uuid4())
+    logins = Logins({})
+    [entry] = run_for(bob, logins, SignInPage(), monkeypatch)
+    assert entry["error"] != "platform_signin"
+    assert logins.expired == []
+
+
 def test_the_migration_is_in_step(factory) -> None:
     with factory() as db:
         assert db.execute(sa.text("SELECT count(*) FROM browser_site_logins")).scalar() == 0
