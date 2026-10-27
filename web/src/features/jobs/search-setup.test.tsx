@@ -1,20 +1,11 @@
-import {
-  act,
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import {
   EMPTY,
-  getProfile,
   interactiveSettingsSchema,
-  profileKey,
-  type Profile,
   type Search,
 } from "@/features/profile/api";
 import {
@@ -23,21 +14,29 @@ import {
   toSearchForm,
 } from "@/features/profile/editor-forms";
 import { admin, fakeSession } from "@/test/auth";
-import { waitForOnFakeClock } from "@/test/clock";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { fakeProfile, profileBody, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
-import { server } from "@/test/server";
-import { DEFAULT_TIMEOUT_MS } from "@/lib/api";
+import { emptySweeps, server } from "@/test/server";
+
+import { PROTECTED, type Protected } from "./site-permissions";
 
 beforeEach(() => {
   fakeSession(admin);
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
-async function open(search: Search = structuredClone(EMPTY.search)) {
+async function open(
+  search: Search = structuredClone(EMPTY.search),
+  initial: Partial<Record<Protected, Partial<FakePermission>>> = {},
+) {
   const profile = fakeProfile({ search }, 6);
+  const permissions = permissionApi(profile, initial);
   fakeJobsApi([makeJob(1)]);
+  // Browser B17: no website signed in yet (each website row has its Sign in).
+  server.use(
+    http.get("*/api/browser/sites", () => HttpResponse.json({ sites: [] })),
+  );
   const starts: unknown[] = [];
   server.use(
     http.post("*/api/jobs/sweeps", async ({ request }) => {
@@ -58,9 +57,165 @@ async function open(search: Search = structuredClone(EMPTY.search)) {
     starts,
     user,
     dialog,
+    writes: permissions.writes,
+    states: permissions.states,
     client: view.client,
-    router: view.router,
   };
+}
+
+const LABELS: Record<Protected, string> = {
+  linkedin: "LinkedIn",
+  welcome_to_the_jungle: "Welcome to the Jungle",
+  indeed: "Indeed",
+  freework: "Free-Work",
+};
+const READERS: readonly Protected[] = ["linkedin", "freework"];
+const permissionPath = (kind: Protected) =>
+  kind === "linkedin"
+    ? "*/api/browser/linkedin"
+    : `*/api/opportunities/platforms/${kind}`;
+
+interface FakePermission {
+  enabled: boolean;
+  accepted: boolean;
+  version: number;
+  query: string | null;
+  paused_until: string | null;
+  /** The status GET answers instead of the state, when set. */
+  fails: number | null;
+}
+
+/** The consent routes as the api answers them: a stale base revision or sentence version is a
+ * 409, the reader fields are refused on Indeed and Welcome to the Jungle, each write moves the
+ * profile revision, and LinkedIn and Free-Work keep their permission on a reader row. */
+function permissionApi(
+  profile: FakeProfile,
+  initial: Partial<Record<Protected, Partial<FakePermission>>> = {},
+) {
+  const writes: { kind: Protected; body: Record<string, unknown> }[] = [];
+  const states = Object.fromEntries(
+    PROTECTED.map((kind) => [
+      kind,
+      {
+        enabled: false,
+        accepted: false,
+        version: 4,
+        query: "junior engineer",
+        paused_until: null,
+        fails: null,
+        ...initial[kind],
+      },
+    ]),
+  ) as Record<Protected, FakePermission>;
+  for (const kind of PROTECTED) {
+    const state = states[kind];
+    const response = () => ({
+      enabled: state.enabled,
+      accepted: state.accepted,
+      allowed: state.enabled && state.accepted && !state.paused_until,
+      text: `Current ${kind} risk sentence, version ${state.version}.`,
+      text_version: state.version,
+      query: state.query,
+      location: null,
+      paused_until: state.paused_until,
+      needs_signin: false,
+    });
+    server.use(
+      http.get(permissionPath(kind), () =>
+        state.fails
+          ? HttpResponse.json(
+              { detail: "Unavailable." },
+              { status: state.fails },
+            )
+          : HttpResponse.json(response()),
+      ),
+      http.put(permissionPath(kind), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        writes.push({ kind, body });
+        if (body.base_revision !== profile.revision)
+          return HttpResponse.json(
+            { detail: "Your profile changed in another tab. Try again." },
+            { status: 409 },
+          );
+        if (
+          (body.accept_version !== undefined &&
+            body.accept_version !== state.version) ||
+          (body.enabled && !state.accepted && body.accept_version === undefined)
+        )
+          return HttpResponse.json(
+            { detail: "The risk sentence changed: read it again." },
+            { status: 409 },
+          );
+        // A copy: the bodies of the profile saves recorded before stay as they were sent.
+        const search = structuredClone(profile.sections.search) as Search;
+        profile.sections.search = search;
+        if (READERS.includes(kind)) {
+          if (body.enabled && !state.query && !body.query)
+            return HttpResponse.json(
+              { detail: "Type the words to search." },
+              { status: 422 },
+            );
+          const rows = search.browser_sources ?? [];
+          const existing = rows.find((row) => row.kind === kind);
+          if (body.enabled) {
+            state.query = state.query ?? String(body.query);
+            search.browser_sources = [
+              ...rows.filter((row) => row.kind !== kind),
+              {
+                kind: kind as "linkedin" | "freework",
+                query: state.query,
+                location: existing?.location ?? null,
+                enabled: true,
+                interactive_only:
+                  existing?.enabled === true
+                    ? existing.interactive_only
+                    : body.interactive_only === true,
+              },
+            ];
+          } else if (existing) existing.enabled = false;
+        } else if (
+          ["query", "location", "interactive_only"].some((key) => key in body)
+        )
+          return HttpResponse.json(
+            { detail: "This platform consent does not accept reader intent." },
+            { status: 422 },
+          );
+        state.enabled = body.enabled === true;
+        if (body.accept_version === state.version) state.accepted = true;
+        profile.revision += 1;
+        return HttpResponse.json(response());
+      }),
+    );
+  }
+  return { writes, states };
+}
+
+function site(platform: Protected | "custom", url: string, enabled = true) {
+  return { platform, url, enabled, mode: "llm_browser" as const };
+}
+
+const PRESET_URLS: Record<Protected, string> = {
+  linkedin: "https://www.linkedin.com/",
+  welcome_to_the_jungle: "https://www.welcometothejungle.com/",
+  indeed: "https://www.indeed.com/",
+  freework: "https://www.free-work.com/",
+};
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((ready) => {
+    resolve = ready;
+  });
+  return { promise, resolve };
+}
+
+async function saveAndStart(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  );
 }
 
 it("opens setup before any save or start and closes without saving", async () => {
@@ -102,7 +257,7 @@ it("saves the reviewed sites and criteria before starting with the returned revi
     { kind: "vie", query: "engineer", location: "Paris", enabled: true },
   ];
   existing.sweep_schedule.enabled = true;
-  const { profile, starts, user, dialog } = await open(existing);
+  const { profile, starts, writes, user, dialog } = await open(existing);
   await user.click(within(dialog).getByRole("checkbox", { name: "Free-Work" }));
   await user.type(
     within(dialog).getByRole("textbox", {
@@ -114,10 +269,23 @@ it("saves the reviewed sites and criteria before starting with the returned revi
     within(dialog).getByRole("button", { name: "Save and Start" }),
   );
   await waitFor(() => {
-    expect(starts).toEqual([{ profile_revision: 7 }]);
+    expect(starts).toEqual([{ profile_revision: 8 }]);
   });
   const saved = profile.saves[0]!.body;
   expect(saved.base_revision).toBe(6);
+  // The ticked Free-Work is its permission, written by its own route on the saved revision.
+  expect(writes).toEqual([
+    {
+      kind: "freework",
+      body: {
+        enabled: true,
+        accept_version: 4,
+        interactive_only: true,
+        base_revision: 7,
+      },
+    },
+  ]);
+  expect(saved.data).not.toHaveProperty("platform_consents");
   expect(saved.data).toMatchObject({
     boards: existing.boards,
     feeds: existing.feeds,
@@ -405,257 +573,289 @@ it.each(["linkedin", "freework"] as const)(
   },
 );
 
-const PERMISSIONS = [
-  ["linkedin", "LinkedIn"],
-  ["freework", "Free-Work"],
-  ["indeed", "Indeed"],
-  ["welcome_to_the_jungle", "Welcome to the Jungle"],
-] as const;
-type PermissionKind = (typeof PERMISSIONS)[number][0];
-const permissionPath = (kind: PermissionKind) =>
-  kind === "linkedin"
-    ? "*/api/browser/linkedin"
-    : `*/api/opportunities/platforms/${kind}`;
+// Jobs J17 (owner, 2026-10-27): ticking a job website and saving is the permission to search
+// it, written by the platform's own consent route after the reviewed profile save.
 
-function permissionApi(profile: FakeProfile, initiallyEnabled = false) {
-  const writes: { kind: PermissionKind; body: Record<string, unknown> }[] = [];
-  for (const [kind] of PERMISSIONS) {
-    let enabled = initiallyEnabled;
-    let accepted = initiallyEnabled;
-    const response = () => ({
-      enabled,
-      accepted,
-      allowed: enabled && accepted,
-      text: `Current ${kind} risk sentence.`,
-      text_version: 4,
-      query: "junior engineer",
-      location: null,
-      paused_until: null,
-      needs_signin: false,
-    });
-    server.use(
-      http.get(permissionPath(kind), () => HttpResponse.json(response())),
-      http.put(permissionPath(kind), async ({ request }) => {
-        const body = (await request.json()) as Record<string, unknown>;
-        writes.push({ kind, body });
-        if (body.base_revision !== profile.revision)
-          return HttpResponse.json(
-            { detail: "Your profile changed in another tab. Review it." },
-            { status: 409 },
-          );
-        if (typeof body.enabled !== "boolean")
-          return HttpResponse.json(
-            { detail: "Enabled is required." },
-            { status: 422 },
-          );
-        if (
-          (body.accept_version !== undefined && body.accept_version !== 4) ||
-          (body.enabled && !accepted && body.accept_version !== 4)
-        )
-          return HttpResponse.json(
-            { detail: "Review the current risk sentence." },
-            { status: 409 },
-          );
-        const search = profile.sections.search as Search;
-        if (kind === "linkedin" || kind === "freework") {
-          const rows = search.browser_sources ?? [];
-          const existing = rows.find((row) => row.kind === kind);
-          if (body.enabled && !existing && rows.length === 10)
-            return HttpResponse.json(
-              { detail: "Keep at most 10 browser sources." },
-              { status: 422 },
-            );
-          if (body.enabled) {
-            const row = {
-              ...existing,
-              kind,
-              query: String(body.query),
-              location: existing?.location ?? null,
-              enabled: true,
-              interactive_only: body.interactive_only === true,
-            };
-            search.browser_sources = [
-              ...rows.filter((item) => item.kind !== kind),
-              row,
-            ];
-          } else if (existing) existing.enabled = false;
-        } else if (
-          ["query", "location", "interactive_only"].some((key) => key in body)
-        )
-          return HttpResponse.json(
-            { detail: "This platform consent does not accept reader fields." },
-            { status: 422 },
-          );
-        enabled = body.enabled;
-        if (body.accept_version === 4) accepted = true;
-        profile.revision += 1;
-        return HttpResponse.json(response());
-      }),
-    );
-  }
-  return writes;
-}
-
-async function reviewPermission(
-  user: ReturnType<typeof userEvent.setup>,
-  dialog: HTMLElement,
-  label: string,
-) {
-  await user.click(
-    within(dialog).getByRole("button", { name: "Review website permissions" }),
-  );
-  const card = await within(dialog).findByRole("region", {
-    name: `${label} browser permission`,
-  });
-  await within(card).findByText(new RegExp(`Current .* risk sentence`));
-  return card;
-}
-
-const MAP_PERMISSIONS: (typeof PERMISSIONS)[number][] = PERMISSIONS.filter(
-  ([kind]) => kind === "indeed" || kind === "welcome_to_the_jungle",
-);
-it.each(MAP_PERMISSIONS)(
-  "binds explicit %s Enable and Disable to reviewed revisions",
-  async (kind, label) => {
-    const { profile, starts, user, dialog } = await open();
-    const writes = permissionApi(profile);
-    const card = await reviewPermission(user, dialog, label);
-    expect(writes).toEqual([]);
-    const enable = within(card).getByRole("button", {
-      name: `Enable ${label} browsing`,
-    });
-    expect(enable).toBeDisabled();
-    if (kind === "linkedin" || kind === "freework")
-      await user.type(
-        within(card).getByRole("textbox", { name: `${label} search words` }),
-        "junior engineer",
+it("shows each job website's current risk sentence beside its box and no separate permission step", async () => {
+  const { dialog } = await open();
+  for (const kind of PROTECTED) {
+    const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
+    await waitFor(() => {
+      expect(box).toHaveAccessibleDescription(
+        `Current ${kind} risk sentence, version 4.`,
       );
-    await user.click(
-      within(card).getByRole("checkbox", {
-        name: `I accept the ${label} risk above`,
-      }),
+    });
+  }
+  expect(
+    within(dialog).queryByRole("button", {
+      name: "Review website permissions",
+    }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(dialog).queryByRole("button", { name: /Enable .* browsing/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(dialog).queryByRole("checkbox", { name: /I accept/ }),
+  ).not.toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent(/[–—]| - /);
+});
+
+it.each(PROTECTED)(
+  "records the %s permission of a ticked website after the reviewed save",
+  async (kind) => {
+    const { profile, starts, writes, user, dialog } = await open();
+    const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
+    await within(dialog).findByText(
+      `Current ${kind} risk sentence, version 4.`,
     );
-    await user.click(enable);
-    await within(card).findByText("Browsing allowed");
+    await user.click(box);
+    expect(dialog).toHaveTextContent(
+      "Saving with this box ticked gives this permission.",
+    );
+    expect(writes).toEqual([]);
+    await saveAndStart(user, dialog);
+    await waitFor(() => {
+      expect(starts).toEqual([{ profile_revision: 8 }]);
+    });
+    expect(profile.saves).toHaveLength(1);
+    expect(profile.saves[0]!.body.base_revision).toBe(6);
+    expect(profile.saves[0]!.body.data).toMatchObject({
+      interactive_sites: [site(kind, PRESET_URLS[kind])],
+    });
+    expect(profile.saves[0]!.body.data).not.toHaveProperty("platform_consents");
     expect(writes).toEqual([
       {
         kind,
         body: {
           enabled: true,
-          base_revision: 6,
           accept_version: 4,
-          ...(kind === "linkedin" || kind === "freework"
-            ? { query: "junior engineer", interactive_only: true }
-            : {}),
+          ...(READERS.includes(kind) ? { interactive_only: true } : {}),
+          base_revision: 7,
         },
       },
     ]);
-    await user.click(
-      within(card).getByRole("button", { name: `Disable ${label} browsing` }),
-    );
-    await waitFor(() => {
-      expect(writes).toHaveLength(2);
-    });
-    expect(writes[1]).toEqual({
-      kind,
-      body: { enabled: false, base_revision: 7 },
-    });
-    await waitFor(() => {
-      expect(
-        within(dialog).getByRole("button", { name: "Save and Start" }),
-      ).toBeEnabled();
-    });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Save and Start" }),
-    );
-    await waitFor(() => {
-      expect(starts).toEqual([{ profile_revision: 9 }]);
-    });
-    expect(profile.saves[0]!.body.base_revision).toBe(8);
   },
 );
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((ready) => {
-    resolve = ready;
-  });
-  return { promise, resolve };
-}
+it.each(PROTECTED)(
+  "takes the %s permission back when its ticked box is unticked and saved",
+  async (kind) => {
+    const { starts, writes, user, dialog } = await open(
+      { ...EMPTY.search, interactive_sites: [site(kind, PRESET_URLS[kind])] },
+      { [kind]: { enabled: true, accepted: true } },
+    );
+    await within(dialog).findByText("Permission given.");
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: LABELS[kind] }),
+    );
+    expect(dialog).toHaveTextContent("Saving removes this permission.");
+    await saveAndStart(user, dialog);
+    await waitFor(() => {
+      expect(starts).toEqual([{ profile_revision: 8 }]);
+    });
+    expect(writes).toEqual([
+      { kind, body: { enabled: false, base_revision: 7 } },
+    ]);
+  },
+);
 
-async function acceptPermission(
-  user: ReturnType<typeof userEvent.setup>,
-  card: HTMLElement,
-  label: string,
-) {
-  const words = within(card).queryByRole("textbox", {
-    name: `${label} search words`,
+it("writes nothing for a ticked website whose permission is current", async () => {
+  const { starts, writes, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      interactive_sites: [site("indeed", PRESET_URLS.indeed)],
+    },
+    { indeed: { enabled: true, accepted: true } },
+  );
+  await within(dialog).findByText("Permission given.");
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
   });
-  if (words) {
-    await user.clear(words);
-    await user.type(words, "junior engineer");
-  }
-  await user.click(
-    within(card).getByRole("checkbox", {
-      name: `I accept the ${label} risk above`,
+  expect(writes).toEqual([]);
+});
+
+it.each(READERS)(
+  "leaves a %s permission given for its reader alone when its box was never ticked",
+  async (kind) => {
+    const { starts, writes, user, dialog } = await open(
+      structuredClone(EMPTY.search),
+      {
+        [kind]: { enabled: true, accepted: true },
+      },
+    );
+    await within(dialog).findByText(
+      "Your permission given elsewhere stays on.",
+    );
+    await saveAndStart(user, dialog);
+    await waitFor(() => {
+      expect(starts).toEqual([{ profile_revision: 7 }]);
+    });
+    expect(writes).toEqual([]);
+  },
+);
+
+it("takes back a websites only LinkedIn permission whose box is unticked", async () => {
+  const { starts, writes, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      browser_sources: [
+        {
+          kind: "linkedin",
+          query: "junior engineer",
+          location: null,
+          enabled: true,
+          interactive_only: true,
+        },
+      ],
+    },
+    { linkedin: { enabled: true, accepted: true } },
+  );
+  await within(dialog).findByText("Saving removes this permission.");
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 8 }]);
+  });
+  expect(writes).toEqual([
+    { kind: "linkedin", body: { enabled: false, base_revision: 7 } },
+  ]);
+});
+
+it.each(READERS)(
+  "gives a new %s reader row the first title as its words",
+  async (kind) => {
+    const search = structuredClone(EMPTY.search);
+    search.title_include.terms = ["Robot Engineer", "Roboticist"];
+    const { starts, writes, user, dialog } = await open(search, {
+      [kind]: { query: null },
+    });
+    await within(dialog).findByText(
+      `Current ${kind} risk sentence, version 4.`,
+    );
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: LABELS[kind] }),
+    );
+    await saveAndStart(user, dialog);
+    await waitFor(() => {
+      expect(starts).toEqual([{ profile_revision: 8 }]);
+    });
+    expect(writes[0]?.body).toEqual({
+      enabled: true,
+      accept_version: 4,
+      interactive_only: true,
+      query: "Robot Engineer",
+      base_revision: 7,
+    });
+  },
+);
+
+it("refuses to save a LinkedIn tick without words for its reader row", async () => {
+  const { profile, starts, writes, user, dialog } = await open(
+    structuredClone(EMPTY.search),
+    { linkedin: { query: null } },
+  );
+  await within(dialog).findByText("Current linkedin risk sentence, version 4.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "LinkedIn needs words to search: add a title to include",
+  );
+  expect(profile.saves).toEqual([]);
+  expect(writes).toEqual([]);
+  expect(starts).toEqual([]);
+});
+
+it("asks to read a risk sentence that changed after it was shown, then gives the new version", async () => {
+  const { profile, starts, writes, states, user, dialog } = await open();
+  await within(dialog).findByText("Current indeed risk sentence, version 4.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  states.indeed.version = 5;
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The Indeed risk sentence beside its box is new. Read it, then Save and Start again.",
+  );
+  expect(
+    within(dialog).getByText("Current indeed risk sentence, version 5."),
+  ).toBeVisible();
+  expect(profile.saves).toEqual([]);
+  expect(writes).toEqual([]);
+  expect(starts).toEqual([]);
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 8 }]);
+  });
+  expect(writes).toEqual([
+    {
+      kind: "indeed",
+      body: { enabled: true, accept_version: 5, base_revision: 7 },
+    },
+  ]);
+});
+
+it("refuses a ticked website whose risk sentence cannot be loaded, and saves once it is unticked", async () => {
+  const { profile, starts, writes, user, dialog } = await open(
+    structuredClone(EMPTY.search),
+    { welcome_to_the_jungle: { fails: 503 } },
+  );
+  const box = within(dialog).getByRole("checkbox", {
+    name: "Welcome to the Jungle",
+  });
+  await waitFor(() => {
+    expect(box).toHaveAccessibleDescription(
+      "The Welcome to the Jungle risk sentence could not be loaded, so its permission cannot be given now.",
+    );
+  });
+  await user.click(box);
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Untick Welcome to the Jungle or try again later.",
+  );
+  expect(profile.saves).toEqual([]);
+  expect(starts).toEqual([]);
+  await user.click(box);
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(writes).toEqual([]);
+});
+
+it("makes a stale consent revision a conflict, never a silent retry", async () => {
+  const { profile, starts, writes, user, dialog } = await open();
+  await within(dialog).findByText("Current indeed risk sentence, version 4.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  server.use(
+    http.put("*/api/profile/search", async ({ request }) => {
+      const body = (await request.json()) as {
+        base_revision: number;
+        data: Search;
+      };
+      profile.saves.push({ section: "search", body });
+      profile.sections.search = body.data;
+      profile.revision += 1;
+      const answer = profileBody(profile);
+      profile.revision += 1; // another tab saved right after this save
+      return HttpResponse.json(answer);
     }),
   );
-  await user.click(
-    within(card).getByRole("button", { name: `Enable ${label} browsing` }),
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The Indeed permission or its risk sentence changed in another tab.",
   );
-}
+  expect(writes).toHaveLength(1);
+  expect(starts).toEqual([]);
+  expect(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  ).toBeDisabled();
+  expect(
+    within(dialog).getByRole("button", { name: "Load current settings" }),
+  ).toBeVisible();
+  expect(
+    within(dialog).getByRole("checkbox", { name: "Indeed" }),
+  ).toBeChecked();
+});
 
-function reviewedSearch(): Search {
-  const search = structuredClone(EMPTY.search);
-  search.boards = [
-    {
-      company: "Example Robotics",
-      ats: "lever",
-      org: "example",
-      enabled: true,
-      extra_exclude: { advanced_regex: false, terms: [] },
-    },
-  ];
-  search.feeds = [
-    {
-      kind: "remoteok",
-      enabled: true,
-      terms: { advanced_regex: false, terms: ["engineering"] },
-    },
-  ];
-  search.browser_sources = [
-    {
-      kind: "linkedin",
-      query: "reviewed LinkedIn words",
-      location: "Paris",
-      enabled: false,
-    },
-    {
-      kind: "freework",
-      query: "reviewed Free-Work words",
-      location: "Lyon",
-      enabled: false,
-    },
-    {
-      kind: "site",
-      query: "https://careers.example.org/",
-      location: null,
-      enabled: true,
-    },
-  ];
-  search.interactive_sites = [
-    {
-      platform: "custom",
-      url: "https://careers.example.org/",
-      enabled: true,
-      mode: "llm_browser",
-    },
-  ];
-  search.interactive_instructions = "Reviewed instructions.";
-  return search;
-}
-
-const ORDINARY_EDITS: [string, (search: Search) => void][] = [
+const OTHER_TAB_EDITS: [string, (search: Search) => void][] = [
   [
     "recency",
     (search) => {
@@ -669,18 +869,6 @@ const ORDINARY_EDITS: [string, (search: Search) => void][] = [
     },
   ],
   [
-    "board state",
-    (search) => {
-      search.boards[0]!.enabled = false;
-    },
-  ],
-  [
-    "feed terms",
-    (search) => {
-      search.feeds![0]!.terms.terms = ["newer feed terms"];
-    },
-  ],
-  [
     "interactive instructions",
     (search) => {
       search.interactive_instructions = "Newer tab instructions.";
@@ -689,19 +877,7 @@ const ORDINARY_EDITS: [string, (search: Search) => void][] = [
   [
     "interactive website",
     (search) => {
-      search.interactive_sites![0]!.url = "https://newer.example.org/";
-    },
-  ],
-  [
-    "legacy LinkedIn query",
-    (search) => {
-      search.browser_sources![0]!.query = "newer tab words";
-    },
-  ],
-  [
-    "legacy Free-Work location",
-    (search) => {
-      search.browser_sources![1]!.location = "Nantes";
+      search.interactive_sites = [site("custom", "https://newer.example.org/")];
     },
   ],
   [
@@ -712,18 +888,16 @@ const ORDINARY_EDITS: [string, (search: Search) => void][] = [
   ],
 ];
 
-it.each(ORDINARY_EDITS)(
-  "retains the draft when %s changes after consent commits",
+it.each(OTHER_TAB_EDITS)(
+  "keeps the draft and starts nothing when %s changes in another tab while a permission is saved",
   async (_name, edit) => {
-    const { profile, starts, user, dialog } = await open(reviewedSearch());
-    permissionApi(profile);
-    const card = await reviewPermission(user, dialog, "Indeed");
+    const { profile, starts, writes, user, dialog } = await open();
+    await within(dialog).findByText("Current indeed risk sentence, version 4.");
     await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
     const instructions = within(dialog).getByRole("textbox", {
       name: "Instructions for this search",
     });
-    await user.clear(instructions);
-    await user.type(instructions, "Keep my unsaved draft.");
+    await user.type(instructions, "Keep my draft.");
     const entered = deferred();
     const release = deferred();
     server.use(
@@ -733,683 +907,220 @@ it.each(ORDINARY_EDITS)(
         return HttpResponse.json(profileBody(profile));
       }),
     );
-    await acceptPermission(user, card, "Indeed");
+    await saveAndStart(user, dialog);
     await entered.promise;
-    expect(profile.revision).toBe(7);
+    expect(writes).toHaveLength(1);
     edit(profile.sections.search as Search);
     profile.revision += 1;
     release.resolve();
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "changed",
+      "Your search settings changed in another tab while a website permission was saved.",
     );
-    expect(instructions).toHaveValue("Keep my unsaved draft.");
-    expect(
-      within(dialog).getByRole("spinbutton", {
-        name: "Posted within the last days",
-      }),
-    ).toHaveValue(30);
+    expect(instructions).toHaveValue("Keep my draft.");
     expect(
       within(dialog).getByRole("checkbox", { name: "Indeed" }),
     ).toBeChecked();
     expect(
       within(dialog).getByRole("button", { name: "Save and Start" }),
     ).toBeDisabled();
-    expect(profile.saves).toEqual([]);
     expect(starts).toEqual([]);
   },
 );
 
-const confirmedPermission = {
-  enabled: true,
-  accepted: true,
-  allowed: true,
-  text: "Current indeed risk sentence.",
-  text_version: 4,
-};
-
-it.each(["network", "aborted body", "malformed JSON", "malformed shape"])(
-  "blocks Save and Start after an ambiguous %s permission result",
+it.each(["network", "malformed shape", "server error"])(
+  "blocks Start after an unconfirmed %s consent answer",
   async (fault) => {
     const { profile, starts, user, dialog } = await open();
-    permissionApi(profile);
-    const card = await reviewPermission(user, dialog, "Indeed");
-    await user.type(
-      within(dialog).getByRole("textbox", {
-        name: "Instructions for this search",
-      }),
-      "Retain this draft.",
-    );
-    const writes: unknown[] = [];
+    await within(dialog).findByText("Current indeed risk sentence, version 4.");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
     server.use(
-      http.put(permissionPath("indeed"), async ({ request }) => {
-        writes.push(await request.json());
-        profile.revision = 7; // The request committed before its response was lost or unusable.
+      http.put(permissionPath("indeed"), () => {
+        profile.revision += 1; // it may have committed before its answer was lost
         if (fault === "network") return HttpResponse.error();
-        if (fault === "aborted body")
-          return new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.error(
-                  new DOMException("response body aborted", "AbortError"),
-                );
-              },
-            }),
-          );
-        if (fault === "malformed JSON")
-          return new HttpResponse("{unfinished", {
-            headers: { "Content-Type": "application/json" },
-          });
+        if (fault === "server error")
+          return HttpResponse.json({ detail: "Failed." }, { status: 502 });
         return HttpResponse.json({ enabled: true });
       }),
     );
-    await acceptPermission(user, card, "Indeed");
+    await saveAndStart(user, dialog);
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "not confirmed",
+      "The Indeed permission was not confirmed.",
     );
     expect(
       within(dialog).getByRole("button", { name: "Save and Start" }),
     ).toBeDisabled();
-    expect(
-      within(dialog).getByRole("textbox", {
-        name: "Instructions for this search",
-      }),
-    ).toHaveValue("Retain this draft.");
-    expect(writes).toHaveLength(1);
-    expect(profile.saves).toEqual([]);
     expect(starts).toEqual([]);
   },
 );
 
-it("blocks Save and Start after a committed permission request times out", async () => {
-  const { profile, starts, user, dialog } = await open();
-  permissionApi(profile);
-  const card = await reviewPermission(user, dialog, "Indeed");
-  await user.click(
-    within(card).getByRole("checkbox", {
-      name: "I accept the Indeed risk above",
-    }),
-  );
-  const release = deferred();
-  let entered = false;
+it("keeps the draft editable after a consent route refuses its body", async () => {
+  const { starts, user, dialog } = await open();
+  await within(dialog).findByText("Current indeed risk sentence, version 4.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
   server.use(
-    http.put(permissionPath("indeed"), async () => {
-      profile.revision = 7;
-      entered = true;
-      await release.promise;
-      return HttpResponse.json(confirmedPermission);
-    }),
-  );
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    fireEvent.click(
-      within(card).getByRole("button", { name: "Enable Indeed browsing" }),
-    );
-    await waitForOnFakeClock(
-      () => {
-        expect(entered).toBe(true);
-      },
-      1,
-      100,
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
-    });
-    await waitForOnFakeClock(() => {
-      expect(within(dialog).getByRole("alert")).toHaveTextContent(
-        "not confirmed",
-      );
-    });
-    expect(
-      within(dialog).getByRole("button", { name: "Save and Start" }),
-    ).toBeDisabled();
-    expect(profile.saves).toEqual([]);
-    expect(starts).toEqual([]);
-  } finally {
-    release.resolve();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    vi.useRealTimers();
-  }
-});
-
-it("requires reconciliation when PUT succeeds but the final profile GET fails", async () => {
-  const { profile, starts, user, dialog } = await open();
-  permissionApi(profile);
-  const card = await reviewPermission(user, dialog, "Indeed");
-  server.use(
-    http.get("*/api/profile", () =>
+    http.put(permissionPath("indeed"), () =>
       HttpResponse.json(
-        { detail: "Verification unavailable." },
-        { status: 503 },
+        {
+          detail:
+            "Your search settings do not validate. Fix them in your profile first.",
+        },
+        { status: 422 },
       ),
     ),
   );
-  await acceptPermission(user, card, "Indeed");
+  await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "not confirmed",
+    "The Indeed permission was not saved. Your search settings do not validate.",
   );
-  expect(profile.revision).toBe(7);
+  expect(starts).toEqual([]);
   expect(
     within(dialog).getByRole("button", { name: "Save and Start" }),
-  ).toBeDisabled();
+  ).toBeEnabled();
+});
+
+it("writes no permission when the reviewed profile save is stale", async () => {
+  const { profile, starts, writes, user, dialog } = await open();
+  await within(dialog).findByText("Current indeed risk sentence, version 4.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  profile.revision += 1;
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Your profile changed in another tab.",
+  );
+  expect(writes).toEqual([]);
+  expect(starts).toEqual([]);
+});
+
+it("gives the platform's permission for a website of her own at its address, once for two rows", async () => {
+  const { starts, writes, user, dialog } = await open();
+  await within(dialog).findByText("Current indeed risk sentence, version 4.");
+  await user.type(
+    within(dialog).getByRole("textbox", { name: "Custom website URL" }),
+    "https://fr.indeed.com/emplois",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Add website" }));
+  const row = within(dialog)
+    .getAllByRole("listitem")
+    .find((item) => item.textContent?.includes("https://fr.indeed.com/"));
+  expect(row).toBeDefined();
+  expect(row).toHaveTextContent(
+    "This address is Indeed's: its search needs Indeed's permission. Saving with this box ticked gives this permission.",
+  );
+  expect(row).toHaveTextContent("Current indeed risk sentence, version 4.");
+  // An address of no job website has no sentence and needs no permission.
+  await user.type(
+    within(dialog).getByRole("textbox", { name: "Custom website URL" }),
+    "https://careers.example.org/",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Add website" }));
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 8 }]);
+  });
+  expect(writes).toEqual([
+    {
+      kind: "indeed",
+      body: { enabled: true, accept_version: 4, base_revision: 7 },
+    },
+  ]);
+});
+
+it("turns a website of her own off and on with its box", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...EMPTY.search,
+    interactive_sites: [site("custom", "https://careers.example.org/")],
+  });
+  const box = within(dialog).getByRole("checkbox", {
+    name: "https://careers.example.org/",
+  });
+  expect(box).toBeChecked();
+  await user.click(box);
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toHaveLength(1);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    interactive_sites: [site("custom", "https://careers.example.org/", false)],
+  });
+});
+
+it("searches the ticked websites only when Websites only is ticked", async () => {
+  const { starts, user, dialog } = await open({
+    ...EMPTY.search,
+    interactive_sites: [site("custom", "https://careers.example.org/")],
+  });
+  const only = within(dialog).getByRole("checkbox", { name: "Websites only" });
+  expect(only).not.toBeChecked();
+  expect(only).toHaveAccessibleDescription(
+    "Search only the websites ticked above. API boards, feeds and the other readers below are skipped.",
+  );
+  await user.click(only);
+  expect(
+    within(dialog).getByRole("region", { name: "Other search sources" }),
+  ).toHaveTextContent("Websites only is ticked: this search skips them.");
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7, websites_only: true }]);
+  });
+});
+
+it("refuses Websites only without a ticked website", async () => {
+  const { profile, starts, user, dialog } = await open();
+  await user.click(
+    within(dialog).getByRole("checkbox", { name: "Websites only" }),
+  );
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Tick at least one website to search websites only.",
+  );
   expect(profile.saves).toEqual([]);
   expect(starts).toEqual([]);
 });
 
-it.each(["PUT", "final GET"])(
-  "admits one permission action and no Save while %s is held",
-  async (held) => {
-    const { profile, starts, user, dialog } = await open();
-    const writes = permissionApi(profile);
-    const indeed = await reviewPermission(user, dialog, "Indeed");
-    const jungle = within(dialog).getByRole("region", {
-      name: "Welcome to the Jungle browser permission",
-    });
-    await within(jungle).findByText(
-      "Current welcome_to_the_jungle risk sentence.",
-    );
-    for (const [card, label] of [
-      [indeed, "Indeed"],
-      [jungle, "Welcome to the Jungle"],
-    ] as const)
-      await user.click(
-        within(card).getByRole("checkbox", {
-          name: `I accept the ${label} risk above`,
-        }),
-      );
-    const entered = deferred();
-    const release = deferred();
-    if (held === "PUT")
-      server.use(
-        http.put(permissionPath("indeed"), async ({ request }) => {
-          writes.push({
-            kind: "indeed",
-            body: (await request.json()) as Record<string, unknown>,
-          });
-          entered.resolve();
-          await release.promise;
-          profile.revision += 1;
-          return HttpResponse.json(confirmedPermission);
-        }),
-      );
-    else
-      server.use(
-        http.get("*/api/profile", async () => {
-          entered.resolve();
-          await release.promise;
-          return HttpResponse.json(profileBody(profile));
-        }),
-      );
-    const save = within(dialog).getByRole("button", { name: "Save and Start" });
-    try {
-      act(() => {
-        within(indeed)
-          .getByRole("button", { name: "Enable Indeed browsing" })
-          .click();
-        within(jungle)
-          .getByRole("button", {
-            name: "Enable Welcome to the Jungle browsing",
-          })
-          .click();
-        save.click();
-      });
-      await entered.promise;
-      expect(save).toHaveTextContent("Save and Start");
-      expect(writes).toHaveLength(1);
-      expect(profile.saves).toEqual([]);
-      expect(starts).toEqual([]);
-      expect(save).toBeDisabled();
-    } finally {
-      release.resolve();
-    }
-  },
-);
-
-const OFF_PLATFORMS: PermissionKind[] = ["indeed"];
-it.each(OFF_PLATFORMS)(
-  "keeps a newer %s Off decision over an older Enable response",
-  async (kind) => {
-    const { profile, starts, user, dialog } = await open();
-    permissionApi(profile);
-    const label = kind === "linkedin" ? "LinkedIn" : "Indeed";
-    const card = await reviewPermission(user, dialog, label);
-    const entered = deferred();
-    const release = deferred();
-    server.use(
-      http.put(permissionPath(kind), async () => {
-        if (kind === "linkedin")
-          (profile.sections.search as Search).browser_sources = [
-            {
-              kind,
-              query: "junior engineer",
-              location: null,
-              enabled: true,
-              interactive_only: true,
-            },
-          ];
-        else
-          Object.assign(profile.sections.search!, {
-            platform_consents: {
-              indeed: {
-                enabled: true,
-                accepted_at: "2026-10-24T10:00:00Z",
-                text_version: 4,
-              },
-            },
-          });
-        profile.revision = 7;
-        entered.resolve();
-        await release.promise;
-        return HttpResponse.json({
-          ...confirmedPermission,
-          text: `Current ${kind} risk sentence.`,
-        });
-      }),
-    );
-    await acceptPermission(user, card, label);
-    await entered.promise;
-    if (kind === "linkedin")
-      (profile.sections.search as Search).browser_sources![0]!.enabled = false;
-    else
-      Object.assign(profile.sections.search!, {
-        platform_consents: {
-          indeed: {
-            enabled: false,
-            accepted_at: "2026-10-24T10:00:00Z",
-            text_version: 4,
-          },
-        },
-      });
-    profile.revision = 8;
-    server.use(
-      http.get(permissionPath(kind), () =>
-        HttpResponse.json({
-          ...confirmedPermission,
-          enabled: false,
-          accepted: true,
-          allowed: false,
-          text: `Current ${kind} risk sentence.`,
-        }),
-      ),
-    );
-    release.resolve();
-    await waitFor(() => {
-      expect(
-        within(dialog).getByRole("button", { name: "Save and Start" }),
-      ).toBeEnabled();
-    });
-    expect(
-      within(card).queryByText("Browsing allowed"),
-    ).not.toBeInTheDocument();
-    expect(
-      within(card).queryByRole("button", { name: `Disable ${label} browsing` }),
-    ).not.toBeInTheDocument();
-    expect(profile.revision).toBe(8);
-    expect(profile.saves).toEqual([]);
-    expect(starts).toEqual([]);
-  },
-);
-
-it.each([false, true])(
-  "does not replace a newer profile with an old verification response, reopen=%s",
-  async (reopen) => {
-    const { profile, starts, user, dialog, client, router } = await open();
-    permissionApi(profile);
-    const card = await reviewPermission(user, dialog, "Indeed");
-    if (!reopen)
-      await user.type(
-        within(dialog).getByRole("textbox", {
-          name: "Instructions for this search",
-        }),
-        "Newer mounted draft.",
-      );
-    const entered = deferred();
-    const release = deferred();
-    server.use(
-      http.get(
-        "*/api/profile",
-        async () => {
-          const old = structuredClone(profileBody(profile));
-          entered.resolve();
-          await release.promise;
-          return HttpResponse.json(old);
-        },
-        { once: true },
-      ),
-    );
-    await acceptPermission(user, card, "Indeed");
-    await entered.promise;
-    (profile.sections.search as Search).days = 7;
-    profile.revision = 8;
-    if (reopen) {
-      await act(async () => {
-        await router.navigate("/privacy");
-      });
-      await act(async () => {
-        await router.navigate("/jobs");
-      });
-      await screen.findByRole("table", { name: "Postings" });
-      await user.click(screen.getByRole("button", { name: "Find jobs" }));
-    }
-    const fresh = await getProfile();
-    act(() => {
-      client.setQueryData(profileKey, fresh);
-    });
-    const active = screen.getByRole("dialog", { name: "Find jobs setup" });
-    if (reopen)
-      await user.type(
-        within(active).getByRole("textbox", {
-          name: "Instructions for this search",
-        }),
-        "Newer mounted draft.",
-      );
-    release.resolve();
-    await waitFor(() => {
-      expect(
-        within(active).getByRole("textbox", {
-          name: "Instructions for this search",
-        }),
-      ).toBeEnabled();
-    });
-    expect(client.getQueryData<Profile>(profileKey)!.revision).toBe(8);
-    expect(
-      within(active).getByRole("textbox", {
-        name: "Instructions for this search",
-      }),
-    ).toHaveValue("Newer mounted draft.");
-    expect(profile.saves).toEqual([]);
-    expect(starts).toEqual([]);
-  },
-);
-
-it("requires a new explicit checkbox action when the current disclosure changes", async () => {
-  const { profile, user, dialog, client } = await open();
-  const writes = permissionApi(profile);
-  const card = await reviewPermission(user, dialog, "Indeed");
-  const acceptance = within(card).getByRole("checkbox", {
-    name: "I accept the Indeed risk above",
+it("reopens with the Websites only choice of the last search started by hand", async () => {
+  const sweep = (trigger: string, websitesOnly: boolean, id: string) => ({
+    id,
+    trigger,
+    status: "done",
+    started_at: "2026-10-27T08:00:00Z",
+    finished_at: "2026-10-27T08:05:00Z",
+    error: null,
+    boards_total: 0,
+    boards_done: 0,
+    boards_ok: 0,
+    boards_failed: [],
+    current_board: null,
+    seen: 0,
+    matched: 0,
+    new: 0,
+    duplicates: 0,
+    skipped_by_rule: 0,
+    duration: 1,
+    sources: [],
+    search_scope: {
+      version: 1,
+      profile_revision: 6,
+      created_at: "2026-10-27T08:00:00Z",
+      trigger,
+      source_count: 1,
+      criteria: {},
+      websites_only: websitesOnly,
+    },
   });
-  await user.click(acceptance);
-  expect(acceptance).toBeChecked();
   server.use(
-    http.get(permissionPath("indeed"), () =>
+    http.get("*/api/jobs/sweeps", () =>
       HttpResponse.json({
-        ...confirmedPermission,
-        enabled: false,
-        accepted: false,
-        allowed: false,
-        text: "New current risk sentence.",
-        text_version: 5,
+        ...emptySweeps,
+        items: [sweep("schedule", false, "s2"), sweep("manual", true, "s1")],
       }),
     ),
   );
-  await act(async () => {
-    await client.invalidateQueries({
-      queryKey: ["search-permission", "indeed"],
-    });
+  const { dialog } = await open({
+    ...EMPTY.search,
+    interactive_sites: [site("custom", "https://careers.example.org/")],
   });
   expect(
-    await within(card).findByText("New current risk sentence."),
-  ).toBeVisible();
-  expect(acceptance).not.toBeChecked();
-  expect(
-    within(card).getByRole("button", { name: "Enable Indeed browsing" }),
-  ).toBeDisabled();
-  expect(writes).toEqual([]);
+    within(dialog).getByRole("checkbox", { name: "Websites only" }),
+  ).toBeChecked();
 });
-
-const FINAL_PERMISSION_UPDATES = [
-  "newer Off and profile",
-  "permission-only Off",
-  "equal Off on a frozen clock",
-  "unrelated profile edit",
-  "newer Enabled after Disable",
-  "recreated permission cache",
-  "recreated profile cache",
-  "unmount",
-  "unchanged",
-] as const;
-
-it.each(
-  MAP_PERMISSIONS.flatMap(([kind, label]) =>
-    FINAL_PERMISSION_UPDATES.map((update) => ({ kind, label, update })),
-  ),
-)(
-  "guards final $kind permission GET after $update",
-  async ({ kind, label, update }) => {
-    const { profile, starts, user, dialog, client, router } = await open();
-    const disabling = update === "newer Enabled after Disable";
-    const writes = permissionApi(profile, disabling);
-    const card = await reviewPermission(user, dialog, label);
-    const key = ["search-permission", kind];
-    const initial = client.getQueryData<typeof confirmedPermission>(key)!;
-    const instructions = within(dialog).getByRole("textbox", {
-      name: "Instructions for this search",
-    });
-    await user.type(instructions, "Keep this final GET draft.");
-    await user.click(within(dialog).getByRole("checkbox", { name: label }));
-    const entered = deferred();
-    const release = deferred();
-    const consumed = deferred();
-    const snapshot = {
-      ...confirmedPermission,
-      enabled: !disabling,
-      allowed: !disabling,
-      text: `Current ${kind} risk sentence.`,
-    };
-    server.use(
-      http.get(
-        permissionPath(kind),
-        async () => {
-          entered.resolve();
-          await release.promise;
-          return HttpResponse.json(snapshot);
-        },
-        { once: true },
-      ),
-    );
-    const fetch = globalThis.fetch;
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (...args) => {
-        const response = await fetch(...args);
-        if (
-          typeof args[0] === "string" &&
-          args[0].endsWith(`/opportunities/platforms/${kind}`) &&
-          args[1]?.method === "GET"
-        ) {
-          const text = response.text.bind(response);
-          response.text = async () => {
-            try {
-              return await text();
-            } finally {
-              consumed.resolve();
-            }
-          };
-        }
-        return response;
-      });
-    let frozen: { mockRestore: () => void } | undefined;
-    let active = dialog;
-    let expected = initial;
-    try {
-      if (disabling)
-        await user.click(
-          within(card).getByRole("button", {
-            name: `Disable ${label} browsing`,
-          }),
-        );
-      else await acceptPermission(user, card, label);
-      await entered.promise;
-      expect(profile.revision).toBe(7);
-      expect(
-        within(dialog).getByRole("button", { name: "Save and Start" }),
-      ).toBeDisabled();
-      expect(instructions).toBeDisabled();
-      expect(writes).toEqual([
-        {
-          kind,
-          body: disabling
-            ? { enabled: false, base_revision: 6 }
-            : { enabled: true, base_revision: 6, accept_version: 4 },
-        },
-      ]);
-      if (
-        ["newer Off and profile", "permission-only Off", "unmount"].includes(
-          update,
-        )
-      ) {
-        expected = {
-          ...initial,
-          enabled: false,
-          accepted: true,
-          allowed: false,
-        };
-        act(() => {
-          client.setQueryData(key, expected);
-        });
-      }
-      if (
-        ["newer Off and profile", "unrelated profile edit", "unmount"].includes(
-          update,
-        )
-      ) {
-        profile.revision = 8;
-        if (update === "unrelated profile edit")
-          profile.sections.identity = {
-            ...EMPTY.identity,
-            headline: "Newer profile headline",
-          };
-        const newer = await getProfile();
-        act(() => {
-          client.setQueryData(profileKey, newer);
-        });
-      }
-      if (update === "equal Off on a frozen clock") {
-        const before = client.getQueryState(key)!;
-        frozen = vi.spyOn(Date, "now").mockReturnValue(before.dataUpdatedAt);
-        act(() => {
-          client.setQueryData(key, structuredClone(initial));
-        });
-        expect(client.getQueryData(key)).toBe(before.data);
-        expect(client.getQueryState(key)!.dataUpdatedAt).toBe(
-          before.dataUpdatedAt,
-        );
-        expect(client.getQueryState(key)!.dataUpdateCount).toBe(
-          before.dataUpdateCount + 1,
-        );
-      }
-      if (disabling)
-        act(() => {
-          client.setQueryData(key, structuredClone(initial));
-        });
-      if (
-        update === "recreated permission cache" ||
-        update === "recreated profile cache"
-      ) {
-        const changedKey =
-          update === "recreated profile cache" ? profileKey : key;
-        const before = client.getQueryState(changedKey)!;
-        act(() => {
-          client.removeQueries({ queryKey: changedKey, exact: true });
-          for (let count = 0; count < before.dataUpdateCount; count += 1)
-            client.setQueryData(changedKey, before.data, {
-              updatedAt: before.dataUpdatedAt,
-            });
-        });
-        expect(client.getQueryState(changedKey)!.dataUpdateCount).toBe(
-          before.dataUpdateCount,
-        );
-        expect(client.getQueryState(changedKey)!.dataUpdatedAt).toBe(
-          before.dataUpdatedAt,
-        );
-        expect(client.getQueryData(changedKey)).toBe(before.data);
-      }
-      if (update === "unmount") {
-        await act(async () => {
-          await router.navigate("/privacy");
-        });
-        await act(async () => {
-          await router.navigate("/jobs");
-        });
-        await screen.findByRole("table", { name: "Postings" });
-        await user.click(screen.getByRole("button", { name: "Find jobs" }));
-        active = await screen.findByRole("dialog", { name: "Find jobs setup" });
-        await user.type(
-          within(active).getByRole("textbox", {
-            name: "Instructions for this search",
-          }),
-          "New mounted draft.",
-        );
-      }
-      const currentProfile = client.getQueryData<Profile>(profileKey)!;
-      await act(async () => {
-        release.resolve();
-        await consumed.promise;
-      });
-      expect(client.getQueryData<Profile>(profileKey)).toBe(currentProfile);
-      expect(client.getQueryData(key)).toEqual(
-        update === "unchanged" ? snapshot : expected,
-      );
-      expect(writes).toHaveLength(1);
-      expect(profile.saves).toEqual([]);
-      expect(starts).toEqual([]);
-      const draft = within(active).getByRole("textbox", {
-        name: "Instructions for this search",
-      });
-      expect(draft).toHaveValue(
-        update === "unmount"
-          ? "New mounted draft."
-          : "Keep this final GET draft.",
-      );
-      expect(draft).toBeEnabled();
-      if (update !== "unmount")
-        expect(
-          within(dialog).getByRole("checkbox", { name: label }),
-        ).toBeChecked();
-      if (update === "unchanged") {
-        expect(within(card).getByText("Browsing allowed")).toBeVisible();
-        await user.click(
-          within(dialog).getByRole("button", { name: "Save and Start" }),
-        );
-        await waitFor(() => {
-          expect(starts).toEqual([{ profile_revision: 8 }]);
-        });
-        expect(profile.saves[0]!.body.base_revision).toBe(7);
-        expect(writes).toHaveLength(1);
-      } else if (update !== "unmount") {
-        expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-          "browser permission changed",
-        );
-        expect(
-          within(dialog).getByRole("button", { name: "Save and Start" }),
-        ).toBeDisabled();
-        expect(
-          within(dialog).getByRole("button", { name: "Load current settings" }),
-        ).toBeEnabled();
-        if (update === "unrelated profile edit")
-          expect(
-            client.getQueryData<Profile>(profileKey)!.sections.identity
-              .headline,
-          ).toBe("Newer profile headline");
-        if (disabling)
-          expect(within(card).getByText("Browsing allowed")).toBeVisible();
-        else
-          expect(
-            within(card).queryByText("Browsing allowed"),
-          ).not.toBeInTheDocument();
-      } else {
-        expect(
-          within(active).getByRole("button", { name: "Save and Start" }),
-        ).toBeEnabled();
-        expect(within(active).queryByRole("alert")).not.toBeInTheDocument();
-        expect(client.getQueryData<Profile>(profileKey)!.revision).toBe(8);
-      }
-    } finally {
-      release.resolve();
-      fetchSpy.mockRestore();
-      frozen?.mockRestore();
-    }
-  },
-);

@@ -171,7 +171,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "LinkedIn showed a security check, so all LinkedIn work is paused for a week.",
   // The job websites searched in the person's browser (jobs J10, app/browser/sources/interactive.py).
   permission_unavailable:
-    "Searching this website needs your permission for it, so it was not opened. Turn it on in the website permissions of Find jobs.",
+    "Searching this website needs your permission for it, so it was not opened. Tick it in Find jobs and save to give it.",
   permission_revoked:
     "Your permission for this website was turned off during the search, so it stopped. What was read is kept.",
   permission_checkpoint:
