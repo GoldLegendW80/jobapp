@@ -213,7 +213,7 @@ export function searchesSentence(source: {
   ];
   if (total > planned) {
     parts.push(
-      `Only the first ${planned.toLocaleString("en-GB")} of your ${total.toLocaleString("en-GB")} title and place combinations were searched, the most relevant first.`,
+      `At most ${planned.toLocaleString("en-GB")} of your ${total.toLocaleString("en-GB")} title and place combinations are searched on a website, in the order you saved them.`,
     );
   }
   return parts.join(" ");

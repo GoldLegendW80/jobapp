@@ -111,8 +111,14 @@ describe("searchesSentence (one search per title and place, owner 2026-10-26)", 
       searches_total: 12,
     });
     expect(sentence).toBe(
-      "6 searches ran. Only the first 6 of your 12 title and place combinations were searched, the most relevant first.",
+      "6 searches ran. At most 6 of your 12 title and place combinations are searched on a website, in the order you saved them.",
     );
     expect(sentence).not.toMatch(/[–—]| - /);
+    // A budget can stop the website before the cap: the sentence never says more ran.
+    expect(
+      searchesSentence({ searches: 2, searches_planned: 6, searches_total: 9 }),
+    ).toBe(
+      "2 searches ran. At most 6 of your 9 title and place combinations are searched on a website, in the order you saved them.",
+    );
   });
 });
