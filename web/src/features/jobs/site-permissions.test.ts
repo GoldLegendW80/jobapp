@@ -227,6 +227,33 @@ describe("permissionPlan", () => {
       })),
     });
   });
+
+  it("takes every permission back before it gives any, each in the fixed order", () => {
+    const on = state({ enabled: true, accepted: true });
+    const states = {
+      ...input().states,
+      welcome_to_the_jungle: on,
+      freework: on,
+    };
+    const plan = permissionPlan(
+      input({
+        ticked: new Set(["linkedin", "indeed"]),
+        opened: new Set(["welcome_to_the_jungle", "freework"]),
+        states,
+      }),
+    );
+    expect(plan).toEqual({
+      changes: [
+        { platform: "welcome_to_the_jungle", body: { enabled: false } },
+        { platform: "freework", body: { enabled: false } },
+        {
+          platform: "linkedin",
+          body: { enabled: true, accept_version: 3, interactive_only: true },
+        },
+        { platform: "indeed", body: { enabled: true, accept_version: 3 } },
+      ],
+    });
+  });
 });
 
 describe("withdraws", () => {

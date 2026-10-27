@@ -528,8 +528,18 @@ function SetupForm({
     setError(null);
   };
   const tickPreset = (preset: (typeof PRESETS)[number], checked: boolean) => {
+    // The box shows whether any website at the platform's address is ticked, her own included,
+    // so unticking it unticks them all: the platform's permission is then taken back on save.
     if (!checked) {
-      setSites(sites.filter((site) => site.platform !== preset.platform));
+      setSites(
+        sites
+          .filter((site) => site.platform !== preset.platform)
+          .map((site) =>
+            platformOf(site) === preset.platform
+              ? { ...site, enabled: false }
+              : site,
+          ),
+      );
       return;
     }
     if (sites.some((site) => site.platform === preset.platform))
@@ -652,7 +662,7 @@ function SetupForm({
                     </div>
                     <RiskSentence
                       id={`${id}-${preset.platform}-risk`}
-                      label={preset.label}
+                      platform={preset.platform}
                       state={permissionOf(preset.platform)}
                       note={noteOf(preset.platform)}
                     />
@@ -703,7 +713,7 @@ function SetupForm({
                     {platform ? (
                       <RiskSentence
                         id={`${id}-${index}-risk`}
-                        label={LABELS[platform]}
+                        platform={platform}
                         state={permissionOf(platform)}
                         note={`This address is ${LABELS[platform]}'s: its search needs ${LABELS[platform]}'s permission. ${noteOf(platform) ?? ""}`.trim()}
                       />
@@ -794,35 +804,44 @@ function SetupForm({
   );
 }
 
-/** A job website's risk sentence as the server words it now, and what saving does. */
+// LinkedIn keeps one switch for its search, its reader and Easy Apply (owner, 2026-10-27), so
+// its box says what else the tick allows. The server's sentence and its version stay as they are.
+const ALSO_ALLOWS: Partial<Record<Protected, string>> = {
+  linkedin:
+    "Ticking LinkedIn also allows Easy Apply with your LinkedIn account. Each application still needs your approval before it is sent.",
+};
+
+/** A job website's risk sentence as the server words it now, what else its tick allows, and
+ * what saving does: all inside the element the box names as its description. */
 function RiskSentence({
   id,
-  label,
+  platform,
   state,
   note,
 }: {
   id: string;
-  label: string;
+  platform: Protected;
   state: UseQueryResult<Permission>;
   note: string | null;
 }) {
-  if (state.isPending)
-    return (
-      <p id={id} className="text-xs text-muted-foreground">
-        Loading the {label} risk sentence…
-      </p>
-    );
-  if (state.isError)
-    return (
-      <p id={id} className="text-xs text-destructive">
-        The {label} risk sentence could not be loaded, so its permission cannot
-        be given now.
-      </p>
-    );
+  const label = LABELS[platform];
+  const also = ALSO_ALLOWS[platform];
   return (
     <div id={id} className="space-y-1 text-xs">
-      <p className="text-muted-foreground">{state.data.text}</p>
-      {note ? <p>{note}</p> : null}
+      {state.isPending ? (
+        <p className="text-muted-foreground">
+          Loading the {label} risk sentence…
+        </p>
+      ) : state.isError ? (
+        <p className="text-destructive">
+          The {label} risk sentence could not be loaded, so its permission
+          cannot be given now.
+        </p>
+      ) : (
+        <p className="text-muted-foreground">{state.data.text}</p>
+      )}
+      {also ? <p>{also}</p> : null}
+      {note && state.isSuccess ? <p>{note}</p> : null}
     </div>
   );
 }

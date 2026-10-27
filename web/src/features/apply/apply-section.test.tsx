@@ -118,6 +118,11 @@ describe("starting", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(
+      within(section).getByText(/Turn on LinkedIn in Account/),
+    ).toHaveTextContent(
+      "Turn on LinkedIn in Account and accept its current sentence to use Easy Apply, or tick LinkedIn in Find jobs and save. You can also apply yourself.",
+    );
+    expect(
       within(section).getByText(/Turn on LinkedIn in Account/).textContent,
     ).not.toMatch(SEPARATOR);
     link.addEventListener("click", (event) => {
