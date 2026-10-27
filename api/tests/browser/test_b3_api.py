@@ -262,6 +262,9 @@ def test_the_settings_path_without_a_secret_or_redis(
     logged: str,
     body: dict[str, str],
 ) -> None:
+    # This worker's Redis may still hold a lease of the test before (no `app` fixture here): with
+    # a holder, the start would queue (202) instead of asking browserd.
+    flush(redis_url)
     url = redis_url if broken == "no_secret" else f"redis://127.0.0.1:{free_port()}/0"
     made = create_app(make_settings(migrated_url, secret_key=SECRET_KEY, redis_url=url))
     # The app's logging replaces the root's handlers (pytest's too): read the module's records.
