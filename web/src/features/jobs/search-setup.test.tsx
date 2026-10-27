@@ -1201,7 +1201,19 @@ it("gives the platform's permission for a website of her own at its address, onc
   ]);
 });
 
-it("unticks every website of hers at Indeed's address with Indeed's box and takes the permission back", async () => {
+// Her own addresses at each job website, in the shapes the server reads as that website.
+const OWN_ADDRESSES: [Protected, string, string][] = [
+  ["linkedin", "https://fr.linkedin.com/jobs/", "https://lnkd.in/jobs"],
+  [
+    "welcome_to_the_jungle",
+    "https://app.welcometothejungle.com/fr/jobs",
+    "https://wttj.co/jobs",
+  ],
+  ["indeed", "https://fr.indeed.com/", "https://indeed.fr/emplois"],
+  ["freework", "https://fr.free-work.com/jobs", "https://www.freework.fr/"],
+];
+
+it("unticks her own Indeed address with Indeed's box and takes the permission back", async () => {
   const { profile, starts, writes, user, dialog } = await open(
     {
       ...EMPTY.search,
@@ -1242,6 +1254,49 @@ it("unticks every website of hers at Indeed's address with Indeed's box and take
     { kind: "indeed", body: { enabled: false, base_revision: 7 } },
   ]);
 });
+
+it.each(OWN_ADDRESSES)(
+  "unticks the %s row and every address of hers there with its box: %s, %s",
+  async (kind, first, second) => {
+    const { profile, starts, writes, user, dialog } = await open(
+      {
+        ...EMPTY.search,
+        interactive_sites: [
+          site(kind, PRESET_URLS[kind]),
+          site("custom", first),
+          site("custom", second),
+          site("custom", "https://careers.example.org/"),
+        ],
+      },
+      { [kind]: { enabled: true, accepted: true } },
+    );
+    const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
+    await within(dialog).findAllByText(/Permission given\./);
+    await user.click(box);
+    expect(box).not.toBeChecked();
+    for (const name of [first, second])
+      expect(within(dialog).getByRole("checkbox", { name })).not.toBeChecked();
+    expect(
+      within(dialog).getByRole("checkbox", {
+        name: "https://careers.example.org/",
+      }),
+    ).toBeChecked();
+    await saveAndStart(user, dialog);
+    await waitFor(() => {
+      expect(starts).toEqual([{ profile_revision: 8 }]);
+    });
+    expect(profile.saves[0]!.body.data).toMatchObject({
+      interactive_sites: [
+        site("custom", first, false),
+        site("custom", second, false),
+        site("custom", "https://careers.example.org/"),
+      ],
+    });
+    expect(writes).toEqual([
+      { kind, body: { enabled: false, base_revision: 7 } },
+    ]);
+  },
+);
 
 it("adds www.indeed.com when Indeed's box is ticked again after unticking her own Indeed address", async () => {
   const { profile, starts, writes, user, dialog } = await open(
