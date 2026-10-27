@@ -106,6 +106,7 @@ FULL: dict[str, dict[str, Any]] = {
         "title_include": {"terms": ["ai engineer", "llm"], "advanced_regex": False},
         "title_exclude": {"terms": [r"\b(staff|principal)\b"], "advanced_regex": True},
         "location": {"terms": ["paris", "france", "remote"], "advanced_regex": False},
+        "location_exclude": {"terms": ["united states"], "advanced_regex": False},
         "contract_types": ["CDI", "VIE"],
         "remote_stance": "hybrid",
         "min_fit": 60,

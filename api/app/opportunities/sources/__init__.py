@@ -31,8 +31,8 @@ reads already in flight finish).
    comments beyond that cap stay unread and do not count as parser skips.
 3. Keep. The feed's own `terms`, when set, must match the title too.
 4. Store. The sweep's own store (sweep.store_postings, in one transaction per feed), the same
-   rules as a board: the search's include, exclude, location and contract terms, the days
-   window, duplicates (same address, same company, title and location, or for a feed same
+   rules as a board: the search's include, exclude, location, unwanted place and contract terms,
+   the days window, duplicates (same address, same company, title and location, or for a feed same
    company and title, unless the company is the placeholder of an unnamed client: one row
    naming every source that found it), the score, status `found`; a posting the person's never
    apply rules match (the sweep's folded match of app/jobs/never_apply.py, as for a board and
