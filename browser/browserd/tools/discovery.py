@@ -1,12 +1,15 @@
 """Conservative native GET discovery. Labels alone never grant a search submission.
 
 The frozen scope (`Scope`, jobs J18) carries the person's own saved values, one agent searching
-a website with all of them: a search box (QUERY names) takes exactly one saved title, the
-`location` box exactly one saved place, either of them nothing to clear it; a native filter
-takes its one saved value (remote, contract), the `location` select one saved place. Any other
-value is refused (exact string match, no folding: an allow list, fail closed). A search request
-carries one saved title in one search key, one saved place when places are saved, and every
-saved filter (`Scope.criteria`).
+a website with all of them: a search box (QUERY names) takes one saved title, the `location` box
+one saved place, either of them nothing to clear it; a native filter takes its one saved value
+(remote, contract), the `location` select one saved place. A value is one of the allow list with
+its case and accents aside (`saved_as`, owner 2026-10-28: the agent reads the person's words as
+the person would, and a website may want "GenAI Engineer" for the saved "genai engineer"): the
+same letters in the same order, no control character, nothing else; any other value, a
+translation included, is refused (fail closed). A search request carries one search key holding
+a saved title, a saved place or nothing in `location` (or no `location` at all: the place box
+left empty is always allowed), and every saved filter (`Scope.criteria`).
 
 A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
 the site's JavaScript on, for a website the person signed in to: the same controls are refused
@@ -25,6 +28,7 @@ written in one case is one word, so the path rule lets `/jobs/42/confirmapplicat
 query rule reads the noun inside a word).
 """
 
+import unicodedata
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
@@ -81,6 +85,27 @@ APPLY_PARTS = (
 CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
 
 
+def _control(text: str) -> bool:
+    return any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text)
+
+
+def fold(text: str) -> str:
+    """A value with its case and accents aside: case folded, decomposed, combining marks
+    dropped. Nothing else is folded: spacing, punctuation, full width forms, look alike letters
+    of another script and invisible characters stay as written."""
+    decomposed = unicodedata.normalize("NFD", text.casefold())
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
+    """The saved value `text` is, with its case and accents aside (`fold`); None for anything
+    else: not text, longer than VALUE_MAX, a control character, or no saved value folds alike."""
+    if not isinstance(text, str) or not text or len(text) > VALUE_MAX or _control(text):
+        return None
+    key = fold(text)
+    return next((value for value in saved if fold(value) == key), None)
+
+
 def _values(raw: object, *, needed: bool) -> tuple[str, ...] | None:
     """A list of saved values as the api sends it: strings with a non blank character, no
     control character, at most VALUE_MAX characters each and VALUES_MAX in all, none twice."""
@@ -91,7 +116,7 @@ def _values(raw: object, *, needed: bool) -> tuple[str, ...] | None:
             not isinstance(value, str)
             or not value.strip()
             or len(value) > VALUE_MAX
-            or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value)
+            or _control(value)
         ):
             return None
     return tuple(raw) if len(set(raw)) == len(raw) else None
@@ -132,22 +157,23 @@ class Scope:
             return None
         return cls(start, titles, places, tuple(sorted(filters.items())), signed_in)
 
-    def typable(self, name: object) -> frozenset[str]:
-        """What may be typed in a text field of this name: one saved title in a search box, one
-        saved place in the location box, nothing to clear either; in any other field, nothing."""
-        if name in QUERY:
-            return frozenset({*self.titles, ""})
-        if name == "location":
-            return frozenset({*self.places, ""})
-        return frozenset()
+    def takes(self, name: object, text: object) -> bool:
+        """Whether this text may be typed in a text field of this name: one saved title in a
+        search box, one saved place in the location box (`saved_as`), nothing to clear either;
+        in any other field, nothing."""
+        if name not in QUERY and name != "location":
+            return False
+        return (
+            text == "" or saved_as(text, self.titles if name in QUERY else self.places) is not None
+        )
 
-    def choices(self, name: object) -> frozenset[str]:
-        """What a native select of this name may be set to: one saved place, or the filter's one
-        saved value; nothing for any other select."""
+    def chooses(self, name: object, value: object) -> bool:
+        """Whether a native select of this name may be set to this value: one saved place, or
+        the filter's one saved value (`saved_as`); nothing for any other select."""
         if name == "location":
-            return frozenset(self.places)
-        value = dict(self.filters).get(name) if isinstance(name, str) else None
-        return frozenset() if value is None else frozenset({value})
+            return saved_as(value, self.places) is not None
+        saved = dict(self.filters).get(name) if isinstance(name, str) else None
+        return saved is not None and saved_as(value, (saved,)) is not None
 
     def criteria(self, pairs: list[tuple[str, str]], *, complete: bool) -> bool:
         keys = [k for k, _ in pairs]
@@ -155,22 +181,20 @@ class Scope:
             return False
         expected = dict(self.filters)
         for key, value in pairs:
-            if key in QUERY:
-                if value not in self.titles:
+            if key in QUERY:  # a search carries a saved title: the box is cleared only to type
+                if saved_as(value, self.titles) is None:
                     return False
             elif key == "page":
                 if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 1000:
                     return False
             elif key == "location":
-                if value not in self.places:
+                if not self.takes(key, value):
                     return False
-            elif key not in expected or value != expected[key]:
+            elif key not in expected or saved_as(value, (expected[key],)) is None:
                 return False
-        return not complete or (
-            sum(k in QUERY for k in keys) == 1
-            and expected.keys() <= set(keys)
-            and (not self.places or "location" in keys)
-        )
+        # The place box left empty, or no place box at all, is always allowed (owner,
+        # 2026-10-28).
+        return not complete or (sum(k in QUERY for k in keys) == 1 and expected.keys() <= set(keys))
 
 
 def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None = None) -> bool:
@@ -419,17 +443,13 @@ def verdict(
                     break
         if tool == "browser_type":
             # Without a scope only a search box, as before; the location box needs the scope's
-            # saved places. With one, the text is a saved value of that field, exactly.
+            # saved places. With one, the text is a saved value of that field (Scope.takes).
             text = (args or {}).get("text")
             allowed = (
                 allowed
                 and facts.get("tag") == "input"
                 and facts.get("type") in {"text", "search"}
-                and (
-                    d.get("name") in QUERY
-                    if scope is None
-                    else isinstance(text, str) and text in scope.typable(d.get("name"))
-                )
+                and (d.get("name") in QUERY if scope is None else scope.takes(d.get("name"), text))
             )
         elif tool == "browser_select_option":
             allowed = allowed and facts.get("tag") == "select" and d.get("name") in FIELDS - QUERY
@@ -439,8 +459,7 @@ def verdict(
                     allowed
                     and isinstance(values, list)
                     and len(values) == 1
-                    and isinstance(values[0], str)
-                    and values[0] in scope.choices(d.get("name"))
+                    and scope.chooses(d.get("name"), values[0])
                 )
         elif tool == "browser_click":
             allowed = (

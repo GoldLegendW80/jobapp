@@ -253,7 +253,8 @@ def _unwanted(terms: Any) -> re.Pattern[str] | None:
 
 
 def searches_for(search: SearchSection, start: str = "") -> Searches:
-    """Use exact saved values, with no inferred website-specific filter encoding: the saved
+    """Use the saved values (typed as saved, or with another case or accents, browserd's
+    discovery.saved_as), with no inferred website-specific filter encoding: the saved
     titles and places the scope carries (`_carried`: all of them, or the first ones that fit,
     the rest counted as left out), the agent typing one at a time (ValueError when one cannot
     be typed or no title fits, `unsupported_criteria` before a lease).

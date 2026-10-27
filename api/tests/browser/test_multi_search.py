@@ -220,7 +220,8 @@ def test_postings_merge_once_per_address_across_the_agent_s_searches():
     "typed",
     [
         "drone",  # a saved title of another person's search
-        "Robot",
+        "Robotics",  # "Robot" is the saved title, its case aside (owner, 2026-10-28)
+        "ROBOT\t",
         "robot ",
         " robot",
         "robots",
