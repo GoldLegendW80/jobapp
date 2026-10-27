@@ -738,7 +738,7 @@ it.each(PROTECTED)(
   },
 );
 
-it("takes a permission back before it gives one, so a failed write leaves fewer on", async () => {
+it("takes a permission back before it gives one", async () => {
   const { starts, writes, user, dialog } = await open(
     {
       ...EMPTY.search,
@@ -767,7 +767,7 @@ it("takes a permission back before it gives one, so a failed write leaves fewer 
   ]);
 });
 
-it("keeps a take back done when the grant after it fails", async () => {
+it("leaves Indeed taken back and LinkedIn off when LinkedIn's grant after it fails", async () => {
   const { starts, writes, states, user, dialog } = await open(
     {
       ...EMPTY.search,
@@ -791,6 +791,34 @@ it("keeps a take back done when the grant after it fails", async () => {
     { kind: "indeed", body: { enabled: false, base_revision: 7 } },
   ]);
   expect(states.indeed.enabled).toBe(false);
+  expect(states.linkedin.enabled).toBe(false);
+  expect(starts).toEqual([]);
+});
+
+it("gives LinkedIn no permission when taking Indeed's back fails first", async () => {
+  const { starts, writes, states, user, dialog } = await open(
+    {
+      ...EMPTY.search,
+      interactive_sites: [site("indeed", PRESET_URLS.indeed)],
+    },
+    { indeed: { enabled: true, accepted: true } },
+  );
+  const failed: unknown[] = [];
+  server.use(
+    http.put(permissionPath("indeed"), async ({ request }) => {
+      failed.push(await request.json());
+      return HttpResponse.json({ detail: "Unavailable." }, { status: 503 });
+    }),
+  );
+  await within(dialog).findByText("Permission given.");
+  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await saveAndStart(user, dialog);
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The Indeed permission was not confirmed.",
+  );
+  expect(failed).toEqual([{ enabled: false, base_revision: 7 }]);
+  expect(writes).toEqual([]);
   expect(states.linkedin.enabled).toBe(false);
   expect(starts).toEqual([]);
 });

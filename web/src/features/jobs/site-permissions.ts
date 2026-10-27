@@ -159,11 +159,12 @@ export type PermissionPlan =
 
 /**
  * The consent writes a Save makes: every take back first, then every grant, each in PROTECTED
- * order, so a write that fails part way leaves fewer permissions on, never more. A ticked
- * platform without a current permission is given one at the version of the sentence shown,
- * which must be the server's current one ("unread" otherwise: the person reads the new sentence
- * first); a platform whose state could not be read refuses the save ("unloaded"). Nothing is
- * written for a platform already in the state its box asks for.
+ * order. The writes stop at the first failure, so no permission is given while one the person
+ * took back is still on. A ticked platform without a current permission is given one at the
+ * version of the sentence shown, which must be the server's current one ("unread" otherwise:
+ * the person reads the new sentence first); a platform whose state could not be read refuses
+ * the save ("unloaded"). Nothing is written for a platform already in the state its box asks
+ * for.
  */
 export function permissionPlan(input: PermissionInput): PermissionPlan {
   const withdrawals: PermissionChange[] = [];
