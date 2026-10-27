@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -26,6 +27,8 @@ from browserd import chromium  # noqa: E402
 from browserd.config import Config  # noqa: E402
 from browserd.leases import Request  # noqa: E402
 from browserd.tools import actions, discovery, pacing  # noqa: E402
+
+from tests.browser.case_support import case_spellings  # noqa: E402
 
 START = "https://jobs.example.test/search"
 SCOPE = discovery.Scope.parse(
@@ -553,6 +556,106 @@ def test_a_percent_encoded_path_is_read_as_the_server_reads_it(path: str, refuse
         assert discovery.signed_request(url, "GET", False, OWN) is not refused, url
     if "%" in path:
         assert not discovery.signed_request(f"https://jobs.example.test{path}", "GET", True, OWN)
+
+
+# B17 round 3 (follow up 3, the shared detector): a case insensitive server serves
+# `/jobs/42/AppLy` as `/jobs/42/apply`, so a path or query word refused in lower case is refused in
+# each of its case spellings (detect.match_words). Generated from the rule: the spellings tables
+# times every case spelling (case_support) times the places of a path and a query. Declared: the
+# path rule reads a glued confirm verb and application noun (`confirmapplication`) in no case, the
+# query rule does (its noun is read inside a word), so those spellings are checked in the query.
+PATH_GLUED = (
+    "finalizeApplication",
+    "confirmapplication",
+    "finishapplication",
+    "completeapplication",
+)
+PATH_WORDS = (
+    "logout",
+    "log-out",
+    "sign_out",
+    "deconnexion",
+    "se-deconnecter",
+    "abmelden",
+    "delete",
+    "remove",
+    "checkout",
+    "unsubscribe",
+    "payment",
+    "save",
+    "update",
+)
+PATH_PLACES = ("/jobs/42/{}", "/{}", "/{}.html", "/api/v2/{}/42")
+
+
+@pytest.mark.parametrize("word", [*ACTION_SPELLINGS, *PATH_WORDS])
+def test_every_case_spelling_of_a_refused_word_never_leaves(word: str) -> None:
+    places = ["/a?action={}"]
+    if word not in PATH_GLUED:
+        places.extend(PATH_PLACES)
+    if word in PATH_WORDS:
+        places = list(PATH_PLACES)
+    for spelling in case_spellings(word):
+        for place in places:
+            url = "https://jobs.example.test" + place.format(quote(spelling, safe=""))
+            assert discovery.destructive(url, OWN), url
+            assert not discovery.signed_request(url, "GET", False, OWN), url
+            assert not discovery.signed_request(url, "GET", True, OWN), url
+
+
+def test_only_the_declared_glued_words_are_not_read_in_a_path() -> None:
+    left = [
+        word
+        for word in ACTION_SPELLINGS
+        if not discovery.destructive(f"https://jobs.example.test/jobs/42/{quote(word.lower())}")
+    ]
+    assert left == list(PATH_GLUED)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/search?q=robot",
+        "/api/me",
+        "/api/account",
+        "/jobs/logistics-engineer",
+        "/jobs/log-analyst",
+        "/jobs/sign-language-teacher",
+        "/blog/out-of-office",
+        "/connexions-reseau",
+        "/jobs/supply-chain-lead",
+        "/jobs/applied-scientist",
+        "/jobs/appliance-technician",
+        "/jobs/candidate-experience",
+        "/jobs/solicitor",
+        "/jobs/postal-worker",
+        "/search?q=applied+scientist&sort=updated",
+        "/fonts/inter-var.woff2",
+    ],
+)
+def test_a_read_written_in_one_case_still_leaves(path: str) -> None:
+    for spelling in {path, path.lower(), path.upper(), path.title()}:
+        url = "https://jobs.example.test" + spelling
+        assert not discovery.destructive(url, OWN), url
+        assert discovery.signed_request(url, "GET", False, OWN), url
+
+
+# The reviewer's rows of B17 round 3, never deleted: each left on cf91a8a0 and 4b547a0a.
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://x.test/jobs/42/AppLy",
+        "https://x.test/jobs/42/ApPly",
+        "https://x.test/jobs/42/SubMit",
+        "https://x.test/jobs/42/sUbmit",
+        "https://x.test/jobs/42/EasyAppLy",
+        "https://x.test/a?action=AppLy",
+        "https://x.test/a?op=SubMitApplication",
+    ],
+)
+def test_round3_mixed_case_rows_never_leave(url: str) -> None:
+    assert discovery.destructive(url, OWN)
+    assert not discovery.read_url(url, "https://x.test/")
 
 
 @pytest.mark.parametrize(

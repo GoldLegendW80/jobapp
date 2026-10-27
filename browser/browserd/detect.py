@@ -26,7 +26,10 @@ aria-labelledby, title, alt, value of a button input, the visible text, the labe
 attributes of the element's descendants (a "Submit" hidden in an image's alt or an icon's
 aria-label). They are folded (NFKC, format characters dropped, accents stripped, case folded) and
 cut into words; a word matches a stem when it starts with it, so glued forms (`SubmitApplication`,
-`ApplyNow`) match too. Fail closed: an invalid selector of the lease refuses the click
+`ApplyNow`) match too. A name is read with its camel case split and again with its case folded
+first (`match_words`), so a mixed case spelling reads as the word it spells (`SubMit`, `AppLy`,
+`ApPly`): what is refused in lower case is refused in every case spelling (the case tables of
+tests/browser/test_b5_unit.py). Fail closed: an invalid selector of the lease refuses the click
 (`bad_selector`), and so does a page that cannot be read (`unreadable`).
 
 A click is judged on the element the ref names and on the element at the point the click lands on
@@ -42,7 +45,9 @@ root is not entered (its host is judged); a page script that moves or inserts a 
 the click point between the facts read and the click, or moves the focus between a typing and
 its Enter. A credential input is read from its own attributes: a password box drawn as a plain
 text box with no autocomplete is not one (the app's label rule reads it), nor is a user name box
-whose form keeps its password box inside a shadow root, nor a page's plain user name box.
+whose form keeps its password box inside a shadow root, nor a page's plain user name box. A glued
+verb and noun written in one case is one word, so the rules that need both do not see it
+(`contacterlerecruteur`, `confirmapplication`; `ContacterLeRecruteur` is read).
 """
 
 import re
@@ -265,17 +270,29 @@ FACTS_JS = r"""
 """.replace("/*credential*/", CREDENTIAL_FN)  # noqa: E501  JS source run in the page, kept as written
 
 
-def words(text: str) -> list[str]:
+def words(text: str, *, camel: bool = True) -> list[str]:
     """The text folded as SPEC-browser's detector reads it: NFKC (full width letters), format
     characters dropped (a zero width space inside "Sub\u200bmit"), accents stripped, case folded,
-    camel case split off as a word of its own too, then cut on anything not a letter or a digit."""
+    camel case split off as a word of its own too (unless `camel` is False), then cut on anything
+    not a letter or a digit."""
     text = unicodedata.normalize("NFKC", text)
     text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
     text = "".join(
         ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
     )
-    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    if camel:
+        text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
     return [w for w in re.split(r"[^0-9a-z]+", text.casefold()) if w]
+
+
+def match_words(text: str) -> list[str]:
+    """The words a stem is matched against: the camel case split (`ApplyNow`: apply, now), and,
+    when that split cut a word, the words of the text with its case folded first, so a mixed case
+    spelling reads as the word it spells (`SubMit`: sub, mit, submit). Whatever is refused in
+    lower case is refused in every case spelling. A text in one case is read as before."""
+    split = words(text)
+    whole = words(text, camel=False)
+    return split if whole == split else [*split, *whole]
 
 
 def _starts(tokens: list[str], stems: tuple[str, ...]) -> bool:
@@ -288,12 +305,13 @@ def _phrase(tokens: list[str], phrase: tuple[str, ...]) -> bool:
 
 
 def _glued(names: list[str]) -> list[str]:
-    """Every name as words, plus the words of the name with no split (`submitapplication`)."""
+    """Every name as words, plus the words of the name with no split (`submitapplication`), each
+    also with its case folded first (match_words: `SubMit`, `AppLy`)."""
     tokens: list[str] = []
     for name in names[:NAMES_MAX]:
         name = name[:NAME_MAX]
-        tokens.extend(words(name))
-        tokens.extend(words(name.replace(" ", "").replace("_", "").replace("-", "")))
+        tokens.extend(match_words(name))
+        tokens.extend(match_words(name.replace(" ", "").replace("_", "").replace("-", "")))
     return tokens
 
 

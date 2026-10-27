@@ -18,7 +18,11 @@ once), the documents within the frozen search scope.
 Declared open points: a delete or payment word in the query only (`?action=delete`), the save
 and update words in the query only (`?action=save`), and a query value that is the person's own
 search words, whatever its key (a search for "apply" lets `?action=apply` leave), are not
-refused.
+refused. A subresource whose path still holds a `%` after one decode (`/static/img/100%25.png`)
+is refused; a document with a `%` in its path already was. A word is read with its case folded
+first too (`/jobs/42/AppLy`, detect.match_words), but a glued confirm verb and application noun
+written in one case is one word, so the path rule lets `/jobs/42/confirmapplication` leave (the
+query rule reads the noun inside a word).
 """
 
 from dataclasses import dataclass
@@ -185,7 +189,7 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
         if (parts.scheme, parts.hostname, parts.port) != (here.scheme, here.hostname, here.port):
             return False
         segments = parts.path.strip("/").split("/")
-        tokens = [word for segment in segments for word in detect.words(segment)]
+        tokens = [word for segment in segments for word in detect.match_words(segment)]
         pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
         keys = [k for k, _ in pairs]
         destructive = (
@@ -233,11 +237,12 @@ def _applies(texts: list[str]) -> bool:
     their words, or a word starting with a submit stem, or a confirm verb with an application
     noun anywhere in the query (detect.says_submit's rule without its caps on names, so a 61st
     field or a value past 500 characters is read too). Each text is read split and glued
-    (`easyApply`, `easy_apply`, `EASYAPPLY`)."""
+    (`easyApply`, `easy_apply`, `EASYAPPLY`), each also with its case folded first (`AppLy`,
+    detect.match_words)."""
     tokens = []
     for text in texts:
-        tokens.extend(detect.words(text))
-        tokens.extend(detect.words(text.replace(" ", "").replace("_", "").replace("-", "")))
+        tokens.extend(detect.match_words(text))
+        tokens.extend(detect.match_words(text.replace(" ", "").replace("_", "").replace("-", "")))
     return (
         any(t.startswith(detect.SUBMIT_STEMS) for t in tokens)
         or any(part in t for t in tokens for part in APPLY_PARTS)
@@ -294,7 +299,7 @@ def destructive(url: str, scope: Scope | None = None) -> bool:
     if "%" in path:
         return True
     segments = path.strip("/").split("/")
-    tokens = [word for segment in segments for word in detect.words(segment)]
+    tokens = [word for segment in segments for word in detect.match_words(segment)]
     return (
         detect.says_submit(segments, profile_edit=True)
         or detect.says_danger(segments)
