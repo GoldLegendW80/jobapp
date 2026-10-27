@@ -18,7 +18,7 @@ from tests.browser.test_b5_actions import Page, call, facts, tab_of
 
 
 def bind_native(tab, filters=()):
-    scope = discovery.Scope("http://pages/", "robot", tuple(sorted(filters)))
+    scope = discovery.Scope("http://pages/", ("robot",), (), tuple(sorted(filters)))
     tab.state.scope = scope
     tab.state.discovery = True
     tab.state.native_context = tab.browser.browser.contexts[0]
@@ -26,7 +26,8 @@ def bind_native(tab, filters=()):
         "_discovery": "native_get",
         "_discovery_scope": {
             "start": scope.start,
-            "query": scope.query,
+            "titles": list(scope.titles),
+            "places": list(scope.places),
             "filters": dict(scope.filters),
         },
     }
@@ -272,7 +273,7 @@ def test_scope_binds_values_to_observed_control(name, args):
         '- heading "Jobs"',
         "e2e-scope",
         interactive=finder.InteractiveScope(
-            "http://pages/", "robot", (("remote", "1"), ("contract", "permanent"))
+            "http://pages/", ("robot",), (), (("remote", "1"), ("contract", "permanent"))
         ),
     )
     _, error = asyncio.run(one.interact(name, args))
@@ -315,7 +316,7 @@ def test_scope_preserves_supported_query_and_corresponding_filters(name, args, p
 )
 def test_successful_controls_cannot_change_effective_scope(fields):
     fields = [{"tag": "input", "type": "hidden", **f} for f in fields]
-    scope = discovery.Scope("https://jobs.example.test/", "robot", (("remote", "1"),))
+    scope = discovery.Scope("https://jobs.example.test/", ("robot",), (), (("remote", "1"),))
     assert discovery.verdict(search(fields=fields), "browser_click", scope.start, scope=scope)
 
 
@@ -347,7 +348,7 @@ def test_duplicate_parameters_refuse_even_when_values_agree(key):
     ],
 )
 def test_outgoing_request_criteria_independently_match_scope(query, allowed):
-    scope = discovery.Scope("https://jobs.example.test/", "robot", (("remote", "1"),))
+    scope = discovery.Scope("https://jobs.example.test/", ("robot",), (), (("remote", "1"),))
     assert discovery.read_url(scope.start + "search?" + query, scope.start, scope=scope) is allowed
 
 

@@ -1,9 +1,13 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
-import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +30,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { linkedinKey } from "@/features/browser/linkedin-api";
+import { SiteSignIn } from "@/features/browser/site-signin";
 import {
   CONTRACT_TYPES,
   REMOTE_STANCES,
@@ -40,15 +46,32 @@ import {
   type Search,
 } from "@/features/profile/api";
 import {
-  BROWSER_SOURCES_MAX,
   fromSearchForm,
   searchSchema,
   toSearchForm,
   type SearchForm,
 } from "@/features/profile/editor-forms";
+import { SearchLists } from "@/features/profile/search-lists";
 import { TargetFields } from "@/features/profile/target-fields";
-import { TermChips } from "@/features/profile/term-chips";
-import { describeError, isApiError, request } from "@/lib/api";
+import { describeError, errorDetail, isApiError } from "@/lib/api";
+
+import { formatDateTime } from "./format";
+import {
+  PROTECTED,
+  READERS,
+  getPermission,
+  permissionKey,
+  permissionPlan,
+  platformOf,
+  putPermission,
+  readerWords,
+  tickedOf,
+  withdraws,
+  type Permission,
+  type PermissionChange,
+  type Protected,
+} from "./site-permissions";
+import { listSweeps, sweepsKey, type SweepList } from "./sweeps-api";
 import type { SweepRunner } from "./use-sweep-runner";
 
 const PRESETS = [
@@ -66,12 +89,24 @@ const PRESETS = [
   },
 ] as const;
 
-const PERMISSION_PRESETS = PRESETS.filter(
-  (preset) =>
-    preset.platform === "indeed" || preset.platform === "welcome_to_the_jungle",
-);
+const LABELS: Record<Protected, string> = {
+  linkedin: "LinkedIn",
+  welcome_to_the_jungle: "Welcome to the Jungle",
+  indeed: "Indeed",
+  freework: "Free-Work",
+};
 
-function ordinarySearch(search: Search) {
+/** A consent write of a Save that failed; `conflict` when current settings must be loaded. */
+class PermissionFailure extends Error {
+  readonly conflict: boolean;
+  constructor(message: string, conflict: boolean) {
+    super(message);
+    this.conflict = conflict;
+  }
+}
+
+/** The search as the setup reviewed it, without what a consent write of `except` changes. */
+function ordinarySearch(search: Search, except?: Protected) {
   const { browser_sources: sources = [], ...settings } = fromSearchForm(
     toSearchForm(search),
   );
@@ -85,6 +120,7 @@ function ordinarySearch(search: Search) {
       .filter(
         (source) =>
           protectedKinds.includes(source.kind) &&
+          source.kind !== except &&
           !search.browser_sources?.some(
             (row) => row.kind === source.kind && row.interactive_only === true,
           ),
@@ -94,6 +130,18 @@ function ordinarySearch(search: Search) {
     interactive_sites: search.interactive_sites ?? [],
     interactive_instructions: search.interactive_instructions ?? "",
   };
+}
+
+/** LinkedIn and Free-Work rows whose permission serves the websites' search only. */
+function websitesOnlyRows(search: Search): Set<Protected> {
+  const found = new Set<Protected>();
+  for (const row of search.browser_sources ?? [])
+    if (
+      row.interactive_only === true &&
+      (row.kind === "linkedin" || row.kind === "freework")
+    )
+      found.add(row.kind);
+  return found;
 }
 
 function stable(value: unknown): string {
@@ -114,6 +162,12 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** The choice of the last search started by hand, so a reopened setup keeps it. */
+function lastWebsitesOnly(sweeps: SweepList | undefined): boolean {
+  const last = sweeps?.items.find((sweep) => sweep.trigger === "manual");
+  return last?.search_scope?.websites_only === true;
+}
+
 export function SearchSetup({
   runner,
   onClose,
@@ -123,6 +177,7 @@ export function SearchSetup({
   onClose: () => void;
   onReturnFocus: () => void;
 }) {
+  const client = useQueryClient();
   const profile = useQuery({
     queryKey: profileKey,
     queryFn: ({ signal }) => getProfile(signal),
@@ -171,6 +226,10 @@ export function SearchSetup({
             onClose={onClose}
             onBusyChange={setBusy}
             onReload={async () => {
+              for (const platform of PROTECTED)
+                void client.invalidateQueries({
+                  queryKey: permissionKey(platform),
+                });
               const current = await profile.refetch();
               if (current.isSuccess) setGeneration((value) => value + 1);
             }}
@@ -203,17 +262,26 @@ function SetupForm({
   const [sites, setSites] = useState<InteractiveSite[]>(() =>
     structuredClone(profile.sections.search.interactive_sites ?? []),
   );
+  // The platforms ticked when the setup opened: unticking one takes its permission back.
+  const [opened] = useState(() =>
+    tickedOf(profile.sections.search.interactive_sites ?? []),
+  );
   const [instructions, setInstructions] = useState(
     profile.sections.search.interactive_instructions ?? "",
   );
+  // Websites only: the person's choice here, else the one of the last search started by hand.
+  const sweeps = useQuery({
+    queryKey: sweepsKey,
+    queryFn: ({ signal }) => listSweeps(signal),
+  });
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  const websitesOnly = chosen ?? lastWebsitesOnly(sweeps.data);
   const [custom, setCustom] = useState("");
   const [revision, setRevision] = useState(profile.revision);
   const [reviewed, setReviewed] = useState(() =>
     structuredClone(profile.sections.search),
   );
   const [saving, setSaving] = useState(false);
-  const [permissionsOpen, setPermissionsOpen] = useState(false);
-  const [permissionBusy, setPermissionBusy] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busy = useRef(false);
@@ -225,6 +293,22 @@ function SetupForm({
       mounted.current = false;
     };
   }, []);
+  const permissions = useQueries({
+    queries: PROTECTED.map((platform) => ({
+      queryKey: permissionKey(platform),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getPermission(platform, signal),
+      retry: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    })),
+  });
+  const permissionOf = (platform: Protected) => {
+    const state = permissions[PROTECTED.indexOf(platform)];
+    if (!state) throw new Error(`No permission query for ${platform}.`);
+    return state;
+  };
+  const ticked = tickedOf(sites);
   const isCurrent = (current: Profile) =>
     current.revision >=
     Math.max(
@@ -232,10 +316,87 @@ function SetupForm({
       client.getQueryData<Profile>(profileKey)?.revision ?? revision,
     );
   useEffect(() => {
-    onBusyChange(saving || permissionBusy);
-  }, [saving, permissionBusy, onBusyChange]);
+    onBusyChange(saving);
+  }, [saving, onBusyChange]);
+  // The current profile becomes the reviewed one: its LinkedIn and Free-Work rows, which a
+  // consent write may have added, join the draft's other sources.
+  const adopt = (current: Profile) => {
+    const ordinary = form
+      .getValues("browser_sources")
+      .filter((source) => !READERS.has(source.kind as Protected));
+    const readers = toSearchForm(
+      current.sections.search,
+    ).browser_sources.filter((source) => READERS.has(source.kind as Protected));
+    form.setValue("browser_sources", [...ordinary, ...readers]);
+    client.setQueryData(profileKey, current);
+    setRevision(current.revision);
+    setReviewed(structuredClone(current.sections.search));
+  };
+  // One consent write on top of the reviewed profile `base`, then the profile it made, checked
+  // to differ from `base` by that permission only (a change from another tab is a conflict).
+  const record = async (
+    change: PermissionChange,
+    base: Profile,
+  ): Promise<Profile | null> => {
+    const label = LABELS[change.platform];
+    const key = permissionKey(change.platform);
+    let answer: Permission;
+    try {
+      answer = await putPermission(change.platform, {
+        ...change.body,
+        base_revision: base.revision,
+      });
+    } catch (failure) {
+      void client.invalidateQueries({ queryKey: key });
+      if (isApiError(failure) && failure.status === 409)
+        throw new PermissionFailure(
+          `The ${label} permission or its risk sentence changed in another tab. Your draft is still here. Load current settings and review them before starting.`,
+          true,
+        );
+      if (
+        isApiError(failure) &&
+        failure.kind === "http" &&
+        (failure.status ?? 500) < 500
+      )
+        throw new PermissionFailure(
+          `The ${label} permission was not saved. ${errorDetail(failure) ?? describeError(failure)}`,
+          false,
+        );
+      throw new PermissionFailure(
+        `The ${label} permission was not confirmed. Your draft is still here. Load current settings and review them before starting. ${describeError(failure)}`,
+        true,
+      );
+    }
+    client.setQueryData(key, answer);
+    if (change.platform === "linkedin")
+      void client.invalidateQueries({ queryKey: linkedinKey });
+    if (!isMounted()) return null;
+    let current: Profile;
+    try {
+      current = await getProfile();
+    } catch (failure) {
+      throw new PermissionFailure(
+        `The ${label} permission was not confirmed. Your draft is still here. Load current settings and review them before starting. ${describeError(failure)}`,
+        true,
+      );
+    }
+    if (!isMounted()) return null;
+    if (
+      !isCurrent(current) ||
+      stable(ordinarySearch(current.sections.search, change.platform)) !==
+        stable(ordinarySearch(base.sections.search, change.platform))
+    ) {
+      if (isCurrent(current)) client.setQueryData(profileKey, current);
+      throw new PermissionFailure(
+        "Your search settings changed in another tab while a website permission was saved. Your draft is still here. Load current settings and review them before starting.",
+        true,
+      );
+    }
+    adopt(current);
+    return current;
+  };
   const submit = async (values: SearchForm) => {
-    if (busy.current || conflict || permissionBusy) return;
+    if (busy.current || conflict) return;
     const settings = interactiveSettingsSchema.safeParse({
       interactive_sites: sites,
       interactive_instructions: instructions,
@@ -251,24 +412,86 @@ function SetupForm({
       setError("Add the custom website or clear its address before starting.");
       return;
     }
+    if (
+      websitesOnly &&
+      !settings.data.interactive_sites.some((site) => site.enabled)
+    ) {
+      setError("Tick at least one website to search websites only.");
+      return;
+    }
     busy.current = true;
     setSaving(true);
     setError(null);
     try {
+      const draft = fromSearchForm(values);
+      const draftTicked = tickedOf(settings.data.interactive_sites);
+      // Decide on the server's current state, against the sentence shown beside each box.
+      const shown = Object.fromEntries(
+        PROTECTED.map((platform) => [
+          platform,
+          permissionOf(platform).data?.text_version,
+        ]),
+      );
+      const read = await Promise.all(
+        PROTECTED.map((platform) =>
+          draftTicked.has(platform) ||
+          opened.has(platform) ||
+          permissionOf(platform).data?.enabled
+            ? client
+                .query({
+                  queryKey: permissionKey(platform),
+                  queryFn: ({ signal }) => getPermission(platform, signal),
+                  staleTime: 0,
+                  retry: false,
+                })
+                .catch(() => undefined)
+            : Promise.resolve(permissionOf(platform).data),
+        ),
+      );
+      if (!isMounted()) return;
+      const plan = permissionPlan({
+        ticked: draftTicked,
+        opened,
+        websitesOnly: websitesOnlyRows(reviewed),
+        states: Object.fromEntries(
+          PROTECTED.map((platform, index) => [platform, read[index]]),
+        ),
+        shown,
+        words: readerWords(draft.title_include.terms),
+      });
+      if ("refused" in plan) {
+        const label = LABELS[plan.refused];
+        setError(
+          plan.reason === "unloaded"
+            ? `The ${label} risk sentence could not be loaded, so its permission cannot be given. Untick ${label} or try again later.`
+            : plan.reason === "unread"
+              ? `The ${label} risk sentence beside its box is new. Read it, then Save and Start again.`
+              : `${label} needs words to search: add a title to include, then Save and Start again.`,
+        );
+        return;
+      }
       const saved = await saveSection("search", revision, {
-        ...fromSearchForm(values),
+        ...draft,
         ...settings.data,
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
         throw new Error("A newer profile was loaded. Review current settings.");
-      setRevision(saved.revision);
-      setReviewed(structuredClone(saved.sections.search));
-      client.setQueryData(profileKey, saved);
-      await runner.start(saved.revision);
+      adopt(saved);
+      let current = saved;
+      for (const change of plan.changes) {
+        const next = await record(change, current);
+        if (!next) return;
+        current = next;
+      }
+      await runner.start(current.revision, websitesOnly);
       onClose();
     } catch (failure) {
-      if (
+      if (!isMounted()) return;
+      if (failure instanceof PermissionFailure) {
+        if (failure.conflict) setConflict(true);
+        setError(failure.message);
+      } else if (
         conflictOf(failure) ||
         (isApiError(failure) && failure.status === 409)
       ) {
@@ -279,7 +502,7 @@ function SetupForm({
       } else setError(`The search did not start. ${describeError(failure)}`);
     } finally {
       busy.current = false;
-      setSaving(false);
+      if (isMounted()) setSaving(false);
     }
   };
   const addCustom = () => {
@@ -304,47 +527,71 @@ function SetupForm({
     setCustom("");
     setError(null);
   };
-  const permissionChanged = async () => {
-    if (!isMounted()) return false;
-    const current = await getProfile();
-    if (!isMounted()) return false;
-    if (!isCurrent(current))
-      throw new Error("A newer profile was loaded. Review current settings.");
-    if (
-      stable(ordinarySearch(current.sections.search)) !==
-      stable(ordinarySearch(reviewed))
-    ) {
-      setConflict(true);
-      setError(
-        "Your search settings changed in another tab while browser permission was saved. Your draft is still here. Load current settings and review them before starting.",
+  const tickPreset = (preset: (typeof PRESETS)[number], checked: boolean) => {
+    // The box shows whether any website at the platform's address is ticked, her own included,
+    // so unticking it unticks them all: the platform's permission is then taken back on save.
+    if (!checked) {
+      setSites(
+        sites
+          .filter((site) => site.platform !== preset.platform)
+          .map((site) =>
+            platformOf(site) === preset.platform
+              ? { ...site, enabled: false }
+              : site,
+          ),
       );
-      client.setQueryData(profileKey, current);
-      return false;
+      return;
     }
-    // Browser-owned rows may have been added by the permission endpoint. Retain the draft's
-    // other sources and criteria while carrying those authoritative rows into this save.
-    const ordinary = form
-      .getValues("browser_sources")
-      .filter((source) => !["linkedin", "freework"].includes(source.kind));
-    const protectedRows = toSearchForm(
-      current.sections.search,
-    ).browser_sources.filter((source) =>
-      ["linkedin", "freework"].includes(source.kind),
-    );
-    const merged = [...ordinary, ...protectedRows];
-    form.setValue("browser_sources", merged);
-    client.setQueryData(profileKey, current);
-    if (merged.length > BROWSER_SOURCES_MAX) {
-      setConflict(true);
-      setError(
-        `Your saved permission and draft exceed the limit of ${BROWSER_SOURCES_MAX} sources. Your draft is still here. Review your sources before starting.`,
+    if (sites.some((site) => site.platform === preset.platform))
+      setSites(
+        sites.map((site) =>
+          site.platform === preset.platform ? { ...site, enabled: true } : site,
+        ),
       );
-      return false;
-    }
-    setRevision(current.revision);
-    setReviewed(structuredClone(current.sections.search));
-    return true;
+    else if (sites.length < 10)
+      setSites([
+        ...sites,
+        {
+          platform: preset.platform,
+          url: preset.url,
+          enabled: true,
+          mode: "llm_browser",
+        },
+      ]);
+    else
+      setError("Choose at most 10 websites. Remove a website to add another.");
   };
+  // What saving does to a platform's permission, in words beside its risk sentence.
+  const noteOf = (platform: Protected): string | null => {
+    const state = permissionOf(platform).data;
+    if (!state) return null;
+    const on = state.enabled && state.accepted;
+    if (ticked.has(platform)) {
+      if (state.paused_until)
+        return `Paused until ${formatDateTime(state.paused_until)}: the website showed a security check. Ticking it does not lift the pause.`;
+      return on
+        ? "Permission given."
+        : "Saving with this box ticked gives this permission.";
+    }
+    if (
+      withdraws(platform, {
+        ticked,
+        opened,
+        websitesOnly: websitesOnlyRows(reviewed),
+        states: { [platform]: state },
+      })
+    )
+      return "Saving removes this permission.";
+    return on ? "Your permission given elsewhere stays on." : null;
+  };
+  // Every website but the first of each job website platform, which its named row shows.
+  const others = sites
+    .map((site, index) => ({ site, index }))
+    .filter(
+      ({ site, index }) =>
+        site.platform === "custom" ||
+        sites.findIndex((item) => item.platform === site.platform) !== index,
+    );
   return (
     <Form {...form}>
       <form
@@ -370,8 +617,8 @@ function SetupForm({
           </div>
         ) : null}
         <fieldset
-          disabled={saving || permissionBusy}
-          aria-busy={saving || permissionBusy}
+          disabled={saving}
+          aria-busy={saving}
           className="min-w-0 space-y-6"
         >
           <section className="space-y-3" aria-labelledby={`${id}-sites`}>
@@ -379,62 +626,102 @@ function SetupForm({
               Websites
             </h3>
             <p className="text-sm text-muted-foreground">
-              LLM with Playwright: the model browses your selected websites. Up
-              to 10 websites. Selecting a website does not grant browser
-              permission or accept its account risks.
+              LLM with Playwright: the model browses the websites you tick. Up
+              to 10 websites. Ticking a job website and saving gives the app
+              your permission to search it, with the risk written beside it.
+              Unticking it and saving takes the permission back.
             </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {PRESETS.map((preset) => (
-                <label
-                  key={preset.platform}
-                  className="flex items-center gap-2 rounded-md border p-3 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-primary"
-                    checked={sites.some(
-                      (site) =>
-                        site.platform === preset.platform && site.enabled,
-                    )}
-                    onChange={(event) => {
-                      if (!event.target.checked) {
-                        setSites(
-                          sites.filter(
-                            (site) => site.platform !== preset.platform,
-                          ),
-                        );
-                        return;
-                      }
-                      if (
-                        sites.some((site) => site.platform === preset.platform)
-                      )
-                        setSites(
-                          sites.map((site) =>
-                            site.platform === preset.platform
-                              ? { ...site, enabled: true }
-                              : site,
-                          ),
-                        );
-                      else if (sites.length < 10)
-                        setSites([
-                          ...sites,
-                          {
-                            platform: preset.platform,
-                            url: preset.url,
-                            enabled: true,
-                            mode: "llm_browser",
-                          },
-                        ]);
-                      else
-                        setError(
-                          "Choose at most 10 websites. Remove a website to add another.",
-                        );
-                    }}
-                  />
-                  {preset.label}
-                </label>
-              ))}
-            </div>
+            <ul
+              aria-label="Job websites"
+              className="divide-y rounded-md border"
+            >
+              {PRESETS.map((preset) => {
+                const site = sites.find(
+                  (item) => item.platform === preset.platform,
+                );
+                return (
+                  <li
+                    key={preset.platform}
+                    className="min-w-0 space-y-1 p-3 text-sm"
+                  >
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <label className="flex min-w-0 flex-1 items-center gap-2 font-medium">
+                        <input
+                          type="checkbox"
+                          className="size-4 shrink-0 accent-primary"
+                          aria-describedby={`${id}-${preset.platform}-risk`}
+                          checked={ticked.has(preset.platform)}
+                          onChange={(event) => {
+                            tickPreset(preset, event.target.checked);
+                          }}
+                        />
+                        {preset.label}
+                      </label>
+                      {/* B17: sign in to this website once, then searches read it signed in. */}
+                      {site ? <SiteSignIn url={site.url} /> : null}
+                    </div>
+                    <RiskSentence
+                      id={`${id}-${preset.platform}-risk`}
+                      platform={preset.platform}
+                      state={permissionOf(preset.platform)}
+                      note={noteOf(preset.platform)}
+                    />
+                  </li>
+                );
+              })}
+              {others.map(({ site, index }) => {
+                const platform = platformOf(site);
+                return (
+                  <li
+                    key={`${site.platform}:${index}`}
+                    className="min-w-0 space-y-1 p-3 text-sm"
+                  >
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <label className="flex min-w-0 flex-1 items-center gap-2 break-all">
+                        <input
+                          type="checkbox"
+                          className="size-4 shrink-0 accent-primary"
+                          aria-describedby={
+                            platform ? `${id}-${index}-risk` : undefined
+                          }
+                          checked={site.enabled}
+                          onChange={(event) => {
+                            const enabled = event.target.checked;
+                            setSites(
+                              sites.map((item, at) =>
+                                at === index ? { ...item, enabled } : item,
+                              ),
+                            );
+                          }}
+                        />
+                        {site.url}
+                      </label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Remove ${site.url}`}
+                        onClick={() => {
+                          setSites(sites.filter((_, at) => at !== index));
+                        }}
+                      >
+                        Remove
+                      </Button>
+                      {/* B17: sign in to this website once, then searches read it signed in. */}
+                      <SiteSignIn url={site.url} />
+                    </div>
+                    {platform ? (
+                      <RiskSentence
+                        id={`${id}-${index}-risk`}
+                        platform={platform}
+                        state={permissionOf(platform)}
+                        note={`This address is ${LABELS[platform]}'s: its search needs ${LABELS[platform]}'s permission. ${noteOf(platform) ?? ""}`.trim()}
+                      />
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
             <div className="space-y-2">
               <Label htmlFor={`${id}-custom`}>Custom website URL</Label>
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -453,89 +740,28 @@ function SetupForm({
                 </Button>
               </div>
             </div>
-            {sites.length ? (
-              <ul className="divide-y rounded-md border">
-                {sites.map((site, index) => (
-                  <li
-                    key={`${site.platform}:${index}`}
-                    className="flex min-w-0 items-center gap-2 p-2 text-sm"
-                  >
-                    <span className="min-w-0 flex-1 break-all">
-                      {site.url}
-                      {site.enabled ? "" : " (off)"}
-                    </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-label={`Remove ${site.url}`}
-                      onClick={() => {
-                        setSites(sites.filter((_, at) => at !== index));
-                      }}
-                    >
-                      Remove
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
-          <section aria-label="Website permissions" className="space-y-3">
-            <h3 className="font-medium">Website permissions</h3>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setPermissionsOpen((open) => !open);
-              }}
-              aria-expanded={permissionsOpen}
-            >
-              Review website permissions
-            </Button>
-            {permissionsOpen
-              ? PERMISSION_PRESETS.map((preset) => (
-                  <PermissionCard
-                    key={preset.platform}
-                    platform={preset.platform}
-                    label={preset.label}
-                    revision={revision}
-                    blocked={conflict}
-                    onChanged={permissionChanged}
-                    onBusyChange={(pending) => {
-                      if (pending && busy.current) return false;
-                      busy.current = pending;
-                      setPermissionBusy(pending);
-                      return true;
-                    }}
-                    onUnconfirmed={(failure) => {
-                      setConflict(true);
-                      setError(
-                        `Browser permission was not confirmed. Your draft is still here. Load current settings and review them before starting. ${describeError(failure)}`,
-                      );
-                    }}
-                    onStale={() => {
-                      setConflict(true);
-                      setError(
-                        "The browser permission changed. Load current settings and review the current risk text before starting.",
-                      );
-                    }}
-                  />
-                ))
-              : null}
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  className="size-4 shrink-0 accent-primary"
+                  aria-describedby={`${id}-only`}
+                  checked={websitesOnly}
+                  onChange={(event) => {
+                    setChosen(event.target.checked);
+                  }}
+                />
+                Websites only
+              </label>
+              <p id={`${id}-only`} className="text-xs text-muted-foreground">
+                Search only the websites ticked above. API boards, feeds and the
+                other readers below are skipped.
+              </p>
+            </div>
           </section>
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
-            <TermChips
-              form={form}
-              name="title_include"
-              label="Titles to include"
-            />
-            <TermChips
-              form={form}
-              name="title_exclude"
-              label="Titles to exclude"
-            />
-            <TermChips form={form} name="location" label="Locations" />
+            <SearchLists form={form} descriptions={false} />
             <CriteriaFields form={form} />
             <TargetFields form={form} />
           </section>
@@ -559,7 +785,8 @@ function SetupForm({
           </div>
           <OtherSources
             form={form}
-            consentOnly={(profile.sections.search.browser_sources ?? []).filter(
+            skipped={websitesOnly}
+            consentOnly={(reviewed.browser_sources ?? []).filter(
               (source) => source.interactive_only === true,
             )}
           />
@@ -567,10 +794,7 @@ function SetupForm({
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={conflict || saving || permissionBusy}
-            >
+            <Button type="submit" disabled={conflict || saving}>
               {saving ? "Saving and starting…" : "Save and Start"}
             </Button>
           </DialogFooter>
@@ -580,187 +804,45 @@ function SetupForm({
   );
 }
 
-const permissionSchema = z.object({
-  enabled: z.boolean(),
-  accepted: z.boolean(),
-  allowed: z.boolean(),
-  text: z.string().max(20000),
-  text_version: z.number().int().positive(),
-});
+// LinkedIn keeps one switch for its search, its reader and Easy Apply (owner, 2026-10-27), so
+// its box says what else the tick allows. The server's sentence and its version stay as they are.
+const ALSO_ALLOWS: Partial<Record<Protected, string>> = {
+  linkedin:
+    "Ticking LinkedIn also allows Easy Apply with your LinkedIn account. Each application still needs your approval before it is sent.",
+};
 
-function PermissionCard({
+/** A job website's risk sentence as the server words it now, what else its tick allows, and
+ * what saving does: all inside the element the box names as its description. */
+function RiskSentence({
+  id,
   platform,
-  label,
-  revision,
-  blocked,
-  onChanged,
-  onBusyChange,
-  onUnconfirmed,
-  onStale,
+  state,
+  note,
 }: {
-  platform: (typeof PERMISSION_PRESETS)[number]["platform"];
-  label: string;
-  revision: number;
-  blocked: boolean;
-  onChanged: () => Promise<boolean>;
-  onBusyChange: (busy: boolean) => boolean;
-  onUnconfirmed: (failure: unknown) => void;
-  onStale: () => void;
+  id: string;
+  platform: Protected;
+  state: UseQueryResult<Permission>;
+  note: string | null;
 }) {
-  const client = useQueryClient();
-  const path = `/opportunities/platforms/${platform}`;
-  const key = ["search-permission", platform];
-  const state = useQuery({
-    queryKey: key,
-    queryFn: ({ signal }) =>
-      request(path, {
-        signal,
-        validate: (value) => permissionSchema.parse(value),
-      }),
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-  const [acceptedVersion, setAcceptedVersion] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [stale, setStale] = useState(false);
-  const mounted = useRef(true);
-  const isMounted = () => mounted.current;
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  const change = async (enabled: boolean) => {
-    if (!state.data || state.isFetching || stale || blocked) return;
-    if (!onBusyChange(true)) return;
-    setError(null);
-    let committed = false;
-    try {
-      await request(path, {
-        method: "PUT",
-        body: enabled
-          ? {
-              enabled: true,
-              base_revision: revision,
-              accept_version: state.data.text_version,
-            }
-          : { enabled: false, base_revision: revision },
-        validate: (value) => permissionSchema.parse(value),
-      });
-      committed = true;
-      if (!isMounted()) return;
-      if (!(await onChanged())) return;
-      const profileState = client.getQueryState(profileKey);
-      const permissionState = client.getQueryState(key);
-      const data = await request(path, {
-        validate: (value) => permissionSchema.parse(value),
-      });
-      if (!isMounted()) return;
-      if (
-        !profileState ||
-        !permissionState ||
-        client.getQueryState(profileKey) !== profileState ||
-        client.getQueryState(key) !== permissionState
-      ) {
-        setStale(true);
-        onStale();
-        return;
-      }
-      client.setQueryData(key, data);
-      setAcceptedVersion(null);
-    } catch (failure) {
-      if (!isMounted()) return;
-      if (isApiError(failure) && failure.status === 409) {
-        setStale(true);
-        onStale();
-        return;
-      }
-      if (
-        committed ||
-        !isApiError(failure) ||
-        failure.kind !== "http" ||
-        (failure.status ?? 500) >= 500
-      ) {
-        setStale(true);
-        onUnconfirmed(failure);
-        return;
-      }
-      setError(
-        `Browser permission was not confirmed. ${describeError(failure)}`,
-      );
-    } finally {
-      onBusyChange(false);
-    }
-  };
+  const label = LABELS[platform];
+  const also = ALSO_ALLOWS[platform];
   return (
-    <section
-      aria-label={`${label} browser permission`}
-      className="space-y-2 rounded-md border p-3 text-sm"
-    >
-      <h4 className="font-medium">{label} browser permission</h4>
+    <div id={id} className="space-y-1 text-xs">
       {state.isPending ? (
-        <p role="status">Loading permission…</p>
+        <p className="text-muted-foreground">
+          Loading the {label} risk sentence…
+        </p>
       ) : state.isError ? (
-        <p role="alert">
-          Permission could not be loaded. Browsing remains subject to the server
-          permission check.
+        <p className="text-destructive">
+          The {label} risk sentence could not be loaded, so its permission
+          cannot be given now.
         </p>
       ) : (
-        <>
-          <p>{state.data.text}</p>
-          <p role="status">
-            {state.data.allowed
-              ? "Browsing allowed"
-              : "Browsing is currently blocked. Review permission or site access."}
-          </p>
-          {state.data.enabled ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-auto max-w-full whitespace-normal"
-              disabled={blocked || stale || state.isFetching}
-              onClick={() => void change(false)}
-            >
-              Disable {label} browsing
-            </Button>
-          ) : null}
-          {!state.data.allowed ? (
-            <>
-              <label className="flex items-start gap-2">
-                <input
-                  type="checkbox"
-                  className="mt-1 size-4 accent-primary"
-                  checked={acceptedVersion === state.data.text_version}
-                  onChange={(event) => {
-                    setAcceptedVersion(
-                      event.target.checked ? state.data.text_version : null,
-                    );
-                  }}
-                />
-                I accept the {label} risk above
-              </label>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-auto max-w-full whitespace-normal"
-                disabled={
-                  acceptedVersion !== state.data.text_version ||
-                  stale ||
-                  blocked ||
-                  state.isFetching
-                }
-                onClick={() => void change(true)}
-              >
-                Enable {label} browsing
-              </Button>
-            </>
-          ) : null}
-        </>
+        <p className="text-muted-foreground">{state.data.text}</p>
       )}
-      {error ? <p role="alert">{error}</p> : null}
-    </section>
+      {also ? <p>{also}</p> : null}
+      {note && state.isSuccess ? <p>{note}</p> : null}
+    </div>
   );
 }
 
@@ -834,9 +916,11 @@ function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
 
 function OtherSources({
   form,
+  skipped,
   consentOnly,
 }: {
   form: UseFormReturn<SearchForm>;
+  skipped: boolean;
   consentOnly: readonly BrowserSource[];
 }) {
   const values = form.getValues();
@@ -850,6 +934,11 @@ function OtherSources({
         These use their own API, feed or existing reader. They stay separate
         from LLM with Playwright.
       </p>
+      {skipped ? (
+        <p className="text-xs font-medium">
+          Websites only is ticked: this search skips them.
+        </p>
+      ) : null}
       {values.browser_sources.some((source) =>
         ["linkedin", "freework"].includes(source.kind),
       ) ? (

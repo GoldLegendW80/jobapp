@@ -21,6 +21,8 @@ from browserd import detect  # noqa: E402
 from browserd.leases import LeaseError, Request  # noqa: E402
 from browserd.tools import pacing, policy  # noqa: E402
 
+from tests.browser.case_support import case_spellings  # noqa: E402
+
 
 def facts(
     *names: str,
@@ -176,6 +178,75 @@ def test_card_fields_are_refused(field: str) -> None:
     assert detect.verdict(card, action="click") == "card_field"
     # A button in a form that holds a card field is refused too.
     assert detect.verdict(facts("Next", form_fields=("email", field))) == "card_field"
+
+
+# --- case spellings (B17 follow up 3) ----------------------------------------------------------
+
+# The detector is shared by every lease, the apply leases included: a name refused in lower case is
+# refused in each of its case spellings (case_support), so `SubMit`, `AppLy` or `DeLete` reads as
+# the word it spells (detect.match_words). Generated from the tables above. A glued verb and noun
+# written in one case is one word, so the names whose lower case is itself not refused rest on
+# their camel case split and are listed here (declared: `contacterlerecruteur` is not read).
+CAMEL_ONLY = ["ContacterLeRecruteur"]
+
+
+@pytest.mark.parametrize("name", SUBMIT_NAMES)
+def test_every_case_spelling_of_a_submit_name_is_marked(name: str) -> None:
+    for spelling in case_spellings(name):
+        assert detect.verdict(facts(spelling)) == "submit", spelling
+
+
+@pytest.mark.parametrize("name", [n for n in DANGER_NAMES if n not in CAMEL_ONLY])
+def test_every_case_spelling_of_a_dangerous_name_is_refused(name: str) -> None:
+    for spelling in case_spellings(name):
+        assert detect.verdict(facts(spelling)) == "danger", spelling
+
+
+def test_every_case_spelling_of_save_and_update_is_marked_for_the_profile() -> None:
+    for name in ("Save", "Save changes", "Update profile", "Enregistrer", "Sauvegarder",
+                 "Mettre à jour", "Mise à jour du profil"):  # fmt: skip
+        for spelling in case_spellings(name):
+            assert detect.verdict(facts(spelling), profile_edit=True) == "submit", spelling
+
+
+def test_only_the_listed_names_rest_on_their_camel_case_split() -> None:
+    names = [*SUBMIT_NAMES, *DANGER_NAMES]
+    assert [n for n in names if detect.verdict(facts(n.lower())) is None] == CAMEL_ONLY
+
+
+# The reviewer's rows of B17 round 3, never deleted: False on cf91a8a0 and 4b547a0a.
+@pytest.mark.parametrize(
+    ("name", "submit"),
+    [("SubMit", True), ("sUbmit", True), ("AppLy", True), ("ApPly", True), ("Submit", True),
+     ("SUBMIT", True), ("Apply now", True), ("Applied AI Engineer", False)],
+)  # fmt: skip
+def test_round3_mixed_case_rows(name: str, submit: bool) -> None:
+    assert detect.says_submit([name]) is submit
+    assert (detect.verdict(facts(name)) == "submit") is submit
+
+
+def test_the_case_folded_words_only_add_to_the_split_reading() -> None:
+    """Fail closed: the split reading of every name comes first, whole and in order, so no
+    match of it (a phrase across two names included) is lost to the case folded words."""
+    assert detect.says_submit(["Jour-SUB_lyDU", "mise_Mise", "A.Jour"], profile_edit=True)
+    rng = random.Random(17)  # noqa: S311  seeded test names
+    pool = ["Mettre", "à", "jour", "mise", "SubMit", "AppLy", "x", "Delete", "jOUR", "_", "-", " "]
+    for _ in range(2_000):
+        names = ["".join(rng.choice(pool) for _ in range(rng.randint(1, 6))) for _ in range(3)]
+        split = [
+            word
+            for name in names
+            for text in (name, name.replace(" ", "").replace("_", "").replace("-", ""))
+            for word in detect.words(text)
+        ]
+        assert detect._glued(names)[: len(split)] == split, names
+
+
+@pytest.mark.parametrize("name", TRUE_BUTTONS)
+def test_an_ordinary_button_written_in_one_case_stays_ordinary(name: str) -> None:
+    for spelling in {name.lower(), name.upper(), name.title(), name.capitalize()}:
+        assert detect.verdict(facts(spelling)) is None, spelling
+        assert detect.match_words(spelling) == detect.words(spelling), spelling
 
 
 # --- keys, selectors, unreadable -------------------------------------------------------------

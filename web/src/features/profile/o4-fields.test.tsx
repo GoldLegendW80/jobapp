@@ -28,9 +28,13 @@ async function open(initial = haraldLike()) {
 }
 
 const searchForm = () => screen.getByRole("form", { name: "Search" });
-// The first Advanced of the tab is this one; the documents card has its own below.
+// The Advanced of "What you aim for"; the search lists and the documents card have their own.
 const advanced = () =>
-  within(searchForm()).getAllByRole("button", { name: "Advanced" })[0]!;
+  within(
+    screen
+      .getByRole("heading", { name: "What you aim for" })
+      .closest("section")!,
+  ).getByRole("button", { name: "Advanced" });
 const lastSave = (state: ReturnType<typeof fakeProfile>, section: string) =>
   state.saves.filter((s) => s.section === section).at(-1)?.body.data;
 

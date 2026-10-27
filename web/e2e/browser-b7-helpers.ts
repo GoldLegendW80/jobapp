@@ -114,7 +114,7 @@ const DEBUGGING = `
 import json, os, sys
 uid = sys.argv[1]
 listening = []
-for name in ("/proc/net/tcp", "/proc/net/tcp6"):
+for name in [n for n in ("/proc/net/tcp", "/proc/net/tcp6") if os.path.exists(n)]:
     for line in open(name).read().splitlines()[1:]:
         f = line.split()
         if f[3] == "0A" and f[7] == uid:

@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Browser B17's sign in page of the members only job website (web/e2e/browser-b17.spec.ts),
+     served as http://members.example-robotics.test:8080/j15/login?next=<path> (server.py). The
+     person types a name with the live view's keyboard (Tab, the name, Enter): the form sends it by
+     GET to /j15/session, which sets the member's cookie and goes back to `next`. No password: an
+     invented site of the tests. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Example Robotics members: sign in</title>
+</head>
+<body>
+<main>
+  <h1>Sign in</h1>
+  <p>The jobs of Example Robotics are for members only.</p>
+  <form method="get" action="/j15/session">
+    <label>Your name <input name="name" autocomplete="off"></label>
+    <input type="hidden" name="next" id="next" value="/j15/">
+    <button type="submit">Sign in</button>
+  </form>
+</main>
+<script>
+  const next = new URLSearchParams(location.search).get("next") || "/j15/";
+  if (next.startsWith("/j15/") && !next.startsWith("//")) document.getElementById("next").value = next;
+</script>
+</body>
+</html>

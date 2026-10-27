@@ -21,9 +21,10 @@ import {
  * - Person A opens Find jobs, chooses the four job websites by name (LinkedIn, Welcome to the
  *   Jungle, Indeed, Free-Work) and a website of her own, the invented job website of
  *   tests/browser_pages/j15/ (http://jobs.example-robotics.test:8080/j15/, the pages service's
- *   alias). She turns on browsing for Indeed and Welcome to the Jungle, one permission each,
- *   with the risk accepted; LinkedIn and Free-Work stay without one. She sets the criteria
- *   (engineer, Paris) and instructions, then Save and Start.
+ *   alias). Each job website shows its risk sentence beside its box: ticking it and saving is
+ *   her permission to search it (owner, 2026-10-27, jobs J17), so no permission prompt or card
+ *   follows, and the save records the four permissions. She sets the criteria (engineer,
+ *   Paris) and instructions, then Save and Start.
  * - The progress names the website being read. On her own website the interactive finder
  *   (app/agents/fake_streams/browser_discovery.json) types the search words, picks Paris,
  *   presses Search, opens the second page of results and the posting: the site answers that
@@ -31,18 +32,19 @@ import {
  *   to search other words, open an address and press its Send application button; the recorded
  *   model does all three: code refuses the words and the address, browserd refuses the click
  *   on the button of a POST form, and code records the source as `unsupported_interaction`.
+ *   The posting, verified on its page (title, employer and location read there), is saved to
+ *   her list as it is reported (jobs J11): found 1, new 1, and it is in the postings list.
  *   The site sees GET requests only, none for the address, the profile keeps its revision.
  * - The company careers page of browser B9 (tests/browser_pages/b9/) stays a source of its own
  *   and its posting is saved to the list.
- * - Pacing and caps: the site's requests are at least the pause apart (PAGE_PAUSE_S, 5 s) and
- *   fewer than the page cap (finder.PAGES_MAX, 20).
+ * - Pacing: the site's requests are at least the pause apart (PAGE_PAUSE_S, 5 s). The agent of a
+ *   website has no page cap of its own (owner, 2026-10-27, jobs J18): its one run reads the
+ *   pages its searches need. The summary names the search it ran, from its own tool calls.
  * - Reopened at 375 px in the dark, by keyboard, the setup holds her websites and criteria.
  *
- * What the stack does not do yet, so this journey asserts the current truth: the job websites
- * with a permission open the pages service instead of their real host and no fake of their
- * search exists yet (browser B14, #631, wires the permission check), and a posting read on a
- * website is counted but not saved (J11, #632 and #655).
- * When those land, the matching assertions flip (the PR of J15 lists them).
+ * What the stack does not do yet, so this journey asserts the current truth: the four job
+ * websites, each with its permission, pass the search's permission check (browser B14) and open
+ * the pages service instead of their real host; no fake of their search exists yet.
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
  */
@@ -56,9 +58,14 @@ const SITE_HOST = "jobs.example-robotics.test";
 const SITE = `http://${SITE_HOST}:8080/j15/`;
 const COMPANY = `${PAGES}/b9/careers.html`;
 const WEBSITES = ["LinkedIn", "Welcome to the Jungle", "Indeed", "Free-Work"];
-const ALLOWED = ["Indeed", "Welcome to the Jungle"];
+// The consent route of each job website (jobs J17 records the permission through it).
+const PERMISSIONS = {
+  linkedin: "/api/browser/linkedin",
+  welcome_to_the_jungle: "/api/opportunities/platforms/welcome_to_the_jungle",
+  indeed: "/api/opportunities/platforms/indeed",
+  freework: "/api/opportunities/platforms/freework",
+};
 const PAUSE_MIN_S = 5; // app/browser/sources PAGE_PAUSE_S, the shortest pause
-const PAGES_MAX = 20; // app/browser/finder.py PAGES_MAX
 const INSTRUCTIONS = "Prefer teams that build robots.";
 const shots = makeShots("jobs-j15");
 const tail = () => Math.random().toString(36).slice(2, 12).padEnd(10, "x");
@@ -74,6 +81,8 @@ type Source = {
   result_pages: number;
   error: string | null;
   outcome?: string | null;
+  searches?: number;
+  searched?: { title: string; place: string | null }[];
 };
 type Sweep = { id: string; status: string; new: number; sources: Source[] };
 type Seen = { method: string; path: string; at: number };
@@ -162,7 +171,7 @@ test.afterAll(async () => {
   await context.close();
 });
 
-test("A chooses websites, opts in per website, sets criteria and starts Find jobs", async () => {
+test("A ticks websites beside their risk sentences, sets criteria and starts Find jobs", async () => {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs setup" });
@@ -177,33 +186,37 @@ test("A chooses websites, opts in per website, sets criteria and starts Find job
   await setup.getByRole("button", { name: "Add website" }).click();
   await expect(setup).toContainText(SITE);
 
-  // Choosing a website is not a permission: each one is turned on by itself.
-  await setup
-    .getByRole("button", { name: "Review website permissions" })
-    .click();
-  for (const name of ALLOWED) {
-    const card = setup.getByRole("region", {
-      name: `${name} browser permission`,
-    });
-    await expect(card).toContainText("Browsing is currently blocked");
-    await card
-      .getByRole("checkbox", { name: `I accept the ${name} risk above` })
-      .check();
-    await card.getByRole("button", { name: `Enable ${name} browsing` }).click();
-    await expect(card.getByRole("status")).toHaveText("Browsing allowed");
+  // Each job website's risk sentence is beside its box, and the tick is the permission:
+  // no prompt, card or second step.
+  for (const name of WEBSITES) {
+    const box = setup.getByRole("checkbox", { name, exact: true });
+    await expect(box).toHaveAccessibleDescription(/risk/);
+    await expect(box).toHaveAccessibleDescription(
+      /Saving with this box ticked gives this permission\./,
+    );
   }
+  // LinkedIn's one switch also covers Easy Apply, and its box says so (owner, 2026-10-27).
+  await expect(
+    setup.getByRole("checkbox", { name: "LinkedIn", exact: true }),
+  ).toHaveAccessibleDescription(/also allows Easy Apply/);
+  await expect(
+    setup.getByRole("button", { name: "Review website permissions" }),
+  ).toHaveCount(0);
+  await expect(setup.getByRole("checkbox", { name: /I accept/ })).toHaveCount(
+    0,
+  );
 
   await expect(
-    setup.getByRole("list", { name: "Terms of Titles to include" }),
+    setup.getByRole("list", { name: "Terms of Job titles" }),
   ).toContainText("engineer");
   await setup
-    .getByRole("textbox", { name: "New term for Locations" })
+    .getByRole("textbox", { name: "New term for Places" })
     .fill("Paris");
   await setup
-    .getByRole("textbox", { name: "New term for Locations" })
+    .getByRole("textbox", { name: "New term for Places" })
     .press("Enter");
   await expect(
-    setup.getByRole("list", { name: "Terms of Locations" }),
+    setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
   await setup.getByLabel("Instructions for this search").fill(INSTRUCTIONS);
   await expect(
@@ -212,16 +225,27 @@ test("A chooses websites, opts in per website, sets criteria and starts Find job
   await shots(page, "setup");
   await setup.getByRole("button", { name: "Save and Start" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
+  // The save recorded each ticked website's permission through its consent route.
+  for (const [kind, path] of Object.entries(PERMISSIONS)) {
+    const permission = await page.request.get(path);
+    expect(permission.ok(), kind).toBe(true);
+    expect(
+      ((await permission.json()) as { allowed: boolean }).allowed,
+      kind,
+    ).toBe(true);
+  }
   revision = (
     (await (await page.request.get("/api/profile")).json()) as {
       revision: number;
     }
   ).revision;
 
-  // The progress names the website being read, never an internal id.
+  // The progress names the website being read, never an internal id. Her website comes after
+  // the four ticked job websites, one agent each (J17, J18): about 245 s measured, most of it
+  // LinkedIn's own 10 to 30 s page pause.
   const progress = page.getByRole("region", { name: "Sweep in progress" });
   await expect(progress).toContainText(`Reading ${SITE_HOST}`, {
-    timeout: 120_000,
+    timeout: 300_000,
   });
   await shots(page, "progress", false);
 });
@@ -234,17 +258,15 @@ test("the websites end in words, the company page's posting is saved, nothing is
   const sites = summary.getByRole("region", {
     name: "Job sites in your browser",
   });
-  // The search checks each website's permission (#631): the two without one are not opened.
+  // The search checks each website's permission (#631): the four ticked ones pass it.
   for (const name of WEBSITES) {
     const line = sites.getByRole("listitem").filter({ hasText: `${name}:` });
-    if (ALLOWED.includes(name))
-      await expect(line).not.toContainText("needs your permission");
-    else await expect(line).toContainText("needs your permission for it");
+    await expect(line).not.toContainText("needs your permission");
   }
   await expect(
     sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
   ).toContainText(
-    "1 posting found, 0 new. The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
+    "1 search ran: engineer in Paris. 1 posting found, 1 new. The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
   );
   await expect(summary).not.toContainText(/[–—]| - /);
   await shots(page, "summary");
@@ -265,38 +287,32 @@ test("the websites end in words, the company page's posting is saved, nothing is
   const sources = last?.sources ?? [];
   const detail = JSON.stringify(sources);
 
-  // The four job websites, chosen and named. The search reads each one's permission (#631):
-  // LinkedIn and Free-Work, chosen without one, are never opened; Indeed and Welcome to the
-  // Jungle, turned on, pass the check and open their first page. Under BROWSER_SOURCES_BASE_URL they open the pages service's /b8/<platform>/, never
-  // the real host; what that page holds is not asserted here (no fake of their search yet).
-  for (const kind of ["linkedin", "freework"]) {
-    const source = sources.find((item) => item.kind === kind);
-    expect(source, detail).toMatchObject({
-      mode: "llm_browser",
-      error: "permission_unavailable",
-      result_pages: 0,
-      found: 0,
-    });
-  }
-  for (const kind of ["welcome_to_the_jungle", "indeed"]) {
+  // The four job websites, ticked and named. The search reads each one's permission (#631),
+  // recorded by the save: each passes the check and opens its first page. Under
+  // BROWSER_SOURCES_BASE_URL they open the pages service's /b8/<platform>/, never the real
+  // host; what that page holds is not asserted here (no fake of their search yet).
+  for (const kind of Object.keys(PERMISSIONS)) {
     const source = sources.find((item) => item.kind === kind);
     expect(source, detail).toMatchObject({ mode: "llm_browser" });
     expect(source?.error ?? "", detail).not.toMatch(/^permission_/);
     expect(source?.result_pages ?? 0, detail).toBeGreaterThanOrEqual(1);
   }
-  // Her own website: searched through the finder's tools, the posting read and counted, not
-  // yet saved (J11). The click on the posting's Send application button was refused, and code
-  // records that refusal as the source's outcome.
+  // Her own website: searched through the finder's tools, the posting verified and saved
+  // (J11). The click on the posting's Send application button was refused, and code records
+  // that refusal as the source's outcome; the posting saved stays.
   const own = sources.find((item) => item.kind === "custom");
   expect(own, detail).toMatchObject({
     mode: "llm_browser",
     host: SITE_HOST,
     found: 1,
-    new: 0,
+    new: 1,
     error: "unsupported_interaction",
+    // One run for the website (jobs J18): the search its tool calls ran, a saved title typed
+    // and a saved place chosen.
+    searches: 1,
+    searched: [{ title: "engineer", place: "Paris" }],
   });
   expect(own?.result_pages ?? 0).toBeGreaterThanOrEqual(4);
-  expect(own?.result_pages ?? 0).toBeLessThanOrEqual(PAGES_MAX);
   // The company careers page (browser B9): its Paris posting is saved.
   const company = sources.find((item) => item.kind === "site");
   expect(company?.new ?? 0, detail).toBeGreaterThanOrEqual(1);
@@ -330,11 +346,31 @@ test("the websites end in words, the company page's posting is saved, nothing is
   };
   expect(after.revision).toBe(revision);
 
-  // The postings list, after the summary: the company page's posting, not the one read only.
+  // The postings list, after the summary: the company page's posting and the job website's,
+  // found, with the employer its page names and the website as its source.
   await page.goto("/jobs");
   const main = page.getByRole("main");
   await expect(main).toContainText("AI Engineer");
-  await expect(main).not.toContainText("Robot Engineer");
+  await expect(main).toContainText("Robot Engineer");
+  const listed = await page.request.get("/api/jobs?limit=200");
+  expect(listed.ok()).toBe(true);
+  const robot = (
+    (await listed.json()) as {
+      items: {
+        title: string;
+        company: string;
+        source: string | null;
+        status: string;
+        url: string | null;
+      }[];
+    }
+  ).items.find((item) => item.title === "Robot Engineer");
+  expect(robot).toMatchObject({
+    company: "Example Robotics",
+    source: SITE_HOST,
+    status: "found",
+    url: `${SITE}jobs/robot-engineer.html`,
+  });
   await expect(page.locator("body")).not.toContainText(/[–—]| - /);
   expect(errors).toEqual([]);
 });
@@ -354,7 +390,7 @@ test("reopened by keyboard at 375 px in the dark, the setup holds her choices", 
     ).toBeChecked();
   await expect(setup).toContainText(SITE);
   await expect(
-    setup.getByRole("list", { name: "Terms of Locations" }),
+    setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
   await expect(setup.getByLabel("Instructions for this search")).toHaveValue(
     INSTRUCTIONS,

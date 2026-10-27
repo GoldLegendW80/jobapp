@@ -349,6 +349,36 @@ describe("Find jobs", () => {
               phase: "done",
               outcome: "no_matches",
             }),
+            // One agent per website, its searches named (owner, 2026-10-27, jobs J18).
+            source("indeed", {
+              mode: "llm_browser",
+              query: "",
+              phase: "done",
+              outcome: "partial",
+              found: 2,
+              searches: 3,
+              searched: [
+                { title: "robot engineer", place: "Paris" },
+                { title: "robot engineer", place: "Lyon" },
+                { title: "drone pilot", place: null },
+              ],
+              error: "finding_persistence_pending",
+            }),
+            source("linkedin", {
+              mode: "llm_browser",
+              query: "",
+              phase: "done",
+              outcome: "partial",
+              found: 1,
+              searches: 2,
+              searched: [
+                { title: "robot engineer", place: "Paris" },
+                { title: "drone pilot", place: "Paris" },
+              ],
+              titles_left_out: 20,
+              places_left_out: 1,
+              error: "page_budget",
+            }),
             source("remoteok", { mode: "feed", query: "", found: 2, new: 1 }),
           ],
         }),
@@ -372,6 +402,8 @@ describe("Find jobs", () => {
       "LinkedIn, not attempted: not searched this time.",
       "LinkedIn, waiting: not searched this time.",
       "LinkedIn, searched: 0 postings found, 0 new.",
+      "Indeed: 3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
+      "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 20 saved titles and 1 saved place were left out: a website's search takes the first ones that fit. 1 posting found, 0 new. The app read as many pages of this website as it may today. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
@@ -709,5 +741,61 @@ describe("Sweep history", () => {
     const dialog = await screen.findByRole("dialog", { name: "Sweeps" });
     expect(dialog).toHaveTextContent("Automatic search: off.");
     expect(dialog).toHaveTextContent("No sweep yet.");
+  });
+});
+
+describe("Websites only (jobs J17)", () => {
+  const scope = {
+    version: 1,
+    profile_revision: 6,
+    created_at: "2026-10-09T08:00:00Z",
+    trigger: "manual",
+    source_count: 1,
+    criteria: {},
+    websites_only: true,
+  };
+
+  it("says the sweep searched the websites alone, in its summary and its history line", async () => {
+    const done = finished({
+      boards_total: 0,
+      boards_done: 0,
+      boards_ok: 0,
+      boards_failed: [],
+      search_scope: scope,
+    });
+    fakeSweeps({
+      list: [{ ...done, status: "done" }],
+      states: [done],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Sweep history" }));
+    const history = await screen.findByRole("dialog", { name: "Sweeps" });
+    const [item] = within(
+      within(history).getByRole("list", { name: "Last sweeps" }),
+    ).getAllByRole("button");
+    expect(item).toHaveTextContent(/By hand, websites only, Done/);
+    await user.click(item!);
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(summary).toHaveTextContent(
+      "Websites only, no board or feed searched, 120 postings seen, 4 matched your search, 2 new postings.",
+    );
+    expect(summary).not.toHaveTextContent("boards read");
+    expect(summary).not.toHaveTextContent(/[–—]| - /);
+  });
+
+  it("keeps the boards line of a sweep without the choice", async () => {
+    fakeSweeps({
+      states: [finished({ search_scope: { ...scope, websites_only: false } })],
+    });
+    await openJobs();
+    await startSearch();
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
+    expect(summary).not.toHaveTextContent("Websites only");
   });
 });

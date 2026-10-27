@@ -19,10 +19,11 @@ Sections and what they replace in the engine:
   at most FACTS_MAX_BYTES of UTF-8 in all (`profile/facts.md`).
 - skills: the scoring model (`profile/skills.json`): years_experience 0 to 60, categories
   have, adjacent, none (names unique across the three), gates with a penalty 0 to 100.
-- search: title include, title exclude and location terms, contract types, remote stance,
-  min_fit, posting age window, boards, never-apply rules (`engine/boards.json`, hard rule 11),
-  and what the person aims for (opportunities O4): seniority levels, industries, company types
-  (a small bonus to the fit, never a filter) and the pay sought (changes no score).
+- search: title include, title exclude, location and unwanted location terms, contract
+  types, remote stance, min_fit, posting age window, boards, never-apply rules
+  (`engine/boards.json`, hard rule 11), and what the person aims for (opportunities O4):
+  seniority levels, industries, company types (a small bonus to the fit, never a filter) and
+  the pay sought (changes no score).
 - preferences: the language and tone of the generated documents, and the dates of the first
   login wizard (written by its routes only).
 - answers: standard answers of application forms (`facts.md` PRACTICALITIES), and the optional
@@ -828,6 +829,8 @@ class PlatformConsent(_Section):
 
 InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
 INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
+# Search fields an older editor or import leaves out: the stored value is kept (service).
+KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude")
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -948,6 +951,9 @@ class SearchSection(_Section):
     title_include: TermList = Field(default_factory=TermList)
     title_exclude: TermList = Field(default_factory=TermList)
     location: TermList = Field(default_factory=TermList)
+    # Unwanted places (owner, 2026-10-27, #626): a posting whose location matches one is left
+    # out, as a title matching title_exclude is. A section saved before it reads it empty.
+    location_exclude: TermList = Field(default_factory=TermList)
     contract_types: Annotated[list[ContractType], Field(max_length=6)] = Field(default_factory=list)
     remote_stance: RemoteStance | None = None
     min_fit: Annotated[StrictInt, Field(ge=0, le=100)] = 70
@@ -1237,7 +1243,7 @@ def _stored_section(model: BaseModel) -> dict[str, Any]:
     if isinstance(model, SearchSection):
         # An older editor/import omits these keys. Preserve that distinction so the service
         # can retain saved intent; explicit [] / null still clears it.
-        for name in INTERACTIVE_FIELDS:
+        for name in KEPT_WHEN_OMITTED:
             if name not in model.model_fields_set:
                 data.pop(name)
         # Stored only once a dedicated writer records a decision: the release before this one

@@ -39,6 +39,16 @@ export const sweepSourceSchema = z.object({
   skipped_by_rule: z.number().int().nonnegative().default(0),
   // Parser exceptions only, absent from an older api.
   items_skipped: z.number().int().nonnegative().default(0),
+  // A website searched in the browser (jobs J18): how many searches its agent ran, and the
+  // first ones, each a saved title and the saved place chosen if any; absent from an older api.
+  searches: z.number().int().nonnegative().optional(),
+  searched: z
+    .array(z.object({ title: z.string(), place: z.string().nullable() }))
+    .optional(),
+  // Saved titles and places its search could not carry (more than 100 of one, or too long in
+  // all): the first ones that fit were searched. Absent from an older api.
+  titles_left_out: z.number().int().nonnegative().optional(),
+  places_left_out: z.number().int().nonnegative().optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;
@@ -63,6 +73,12 @@ export const sweepSchema = z.object({
   duration: z.number().nullable(),
   // Absent from an api older than browser B8.
   sources: z.array(sweepSourceSchema).default([]),
+  // The frozen scope's public part (jobs J9): absent from older sweeps. `websites_only` (jobs
+  // J17): the sweep searched the ticked websites and no board, feed or fixed reader.
+  search_scope: z
+    .object({ websites_only: z.boolean().default(false) })
+    .nullable()
+    .optional(),
 });
 export type Sweep = z.infer<typeof sweepSchema>;
 
@@ -100,12 +116,21 @@ export type SweepList = z.infer<typeof sweepListSchema>;
 
 export const sweepsKey = ["jobs", "sweeps"] as const;
 
-export function startSweep(profileRevision?: number): Promise<Sweep> {
+/** Start a sweep; `websitesOnly` (jobs J17) searches the ticked websites alone. */
+export function startSweep(
+  profileRevision?: number,
+  websitesOnly = false,
+): Promise<Sweep> {
   return request("/jobs/sweeps", {
     method: "POST",
     ...(profileRevision === undefined
       ? {}
-      : { body: { profile_revision: profileRevision } }),
+      : {
+          body: {
+            profile_revision: profileRevision,
+            ...(websitesOnly ? { websites_only: true } : {}),
+          },
+        }),
     timeoutMs: 15_000,
     validate: (data) => sweepSchema.parse(data),
   });

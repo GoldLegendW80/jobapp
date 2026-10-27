@@ -71,6 +71,15 @@ describe("wording", () => {
     expect(deckEmpty(70)).not.toMatch(DASHES);
   });
 
+  it("names the four plain lists of the search", () => {
+    expect([
+      WORDING.jobTitles,
+      WORDING.unwantedTitles,
+      WORDING.places,
+      WORDING.unwantedPlaces,
+    ]).toEqual(["Job titles", "Unwanted titles", "Places", "Unwanted places"]);
+  });
+
   it("names the three thresholds apart", () => {
     const names = [
       WORDING.showPostingsFrom,

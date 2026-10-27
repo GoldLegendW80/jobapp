@@ -172,7 +172,9 @@ def test_reader_updates_bind_to_frozen_entries_without_duplicate_or_counter_loss
     assert row.stats["boards_ok"] == row.stats["boards_done"] == 1
     assert final["api"]["outcome"] == final["feed"]["outcome"] == "no_matches"
     assert final["legacy_finder"]["reason"] == "no_credential"
-    assert final["llm_browser"]["reason"] == "unsupported_criteria"
+    # Several titles and places are one agent's to search now (owner, 2026-10-27, jobs J18), so
+    # the website reaches the model check, and this run has no model access.
+    assert final["llm_browser"]["reason"] == "no_credential"
     assert all(entry["phase"] == "done" for entry in final.values())
     assert any(any(entry["phase"] == "running" for entry in entries) for entries in snapshots)
 

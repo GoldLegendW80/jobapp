@@ -44,7 +44,8 @@ class InteractiveTools(Tools):
         assert args.pop("_discovery") == "native_get"
         assert args.pop("_discovery_scope") == {
             "start": BASE,
-            "query": "robot",
+            "titles": ["robot"],
+            "places": [],
             "filters": {"remote": "1"},
         }
         self.actions.append(name)
@@ -72,7 +73,7 @@ def session(tools, user):
         BASE,
         FIRST,
         str(user),
-        interactive=finder.InteractiveScope(BASE, "robot", (("remote", "1"),)),
+        interactive=finder.InteractiveScope(BASE, ("robot",), (), (("remote", "1"),)),
     )
 
 
@@ -98,10 +99,52 @@ def test_real_runtime_uses_interactive_registered_tools_and_code_read_text(runti
     assert not finder._SCOPES
 
 
+def test_a_website_s_run_has_no_turn_or_token_cap_and_is_told_its_time(
+    runtime: Runtime,  # noqa: F811
+    alice,  # noqa: F811
+):
+    """Jobs J18, owner 2026-10-27 "no limit": the runtime's max_turns of the agent of a website
+    is the raised ceiling, not the 40 of a careers page, its input carries no token budget (the
+    runner sets none), and its first message holds every saved title and place and the seconds
+    it has left."""
+    from tests.browser.test_b9_runtime import runs_of
+
+    runtime.give_key(alice)
+
+    class Counting(Recording):
+        max_turns: int | None = None
+        prompt = ""
+
+        async def stream(self, request):
+            self.max_turns, self.prompt = request.options.max_turns, request.prompt
+            async for message in super().stream(request):
+                yield message
+
+    backend = Counting()
+    context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
+    one = session(InteractiveTools(), alice)
+    result = asyncio.run(finder.RuntimeFinder(lambda: context)(one))
+    assert not result.stopped
+    assert backend.max_turns == finder.INTERACTIVE_MAX_TURNS == 10_000
+    assert finder.INTERACTIVE_FINDER.max_turns == finder.INTERACTIVE_MAX_TURNS
+    assert finder.INTERACTIVE_FINDER.wall_time_s == finder.INTERACTIVE_WALL_TIME_S == 900
+    assert finder.BROWSER_FINDER.max_turns == finder.MAX_TURNS == 40  # a careers page keeps it
+    first = json.loads(backend.prompt)["search_scope"]
+    assert (first["titles"], first["places"], first["filters"]) == (["robot"], [], {"remote": "1"})
+    assert first["seconds_left"] == 1000  # the session's deadline, read at the run's start
+    [made] = runs_of(runtime.factory, alice)
+    assert set(made.input) == {"request"}  # no token budget, no turn budget
+    with pytest.raises(ValueError, match="turn_budget"):
+        finder.FinderInput(request="a" * 32, turn_budget=3)
+    from app.agents import runner
+
+    assert {"apply_form"} == runner.TURN_BUDGETED  # no input lowers this agent's max_turns
+
+
 def test_scope_is_immutable_and_legacy_tools_and_model_schemas_stay_restricted():
-    scope = finder.InteractiveScope(BASE, "robot", (("remote", "1"),))
+    scope = finder.InteractiveScope(BASE, ("robot",), (), (("remote", "1"),))
     with pytest.raises(dataclasses.FrozenInstanceError):
-        scope.query = "different"
+        scope.titles = ("different",)
     assert "browser_click" not in finder.BROWSER_FINDER.tools
     for name in finder.INTERACTIVE_TOOLS:
         assert "_discovery" not in finder_tools.SCHEMAS[name]["properties"]
@@ -218,7 +261,7 @@ def test_a_page_addressing_the_assistant_gets_no_typing_filter_click_navigation_
         NATIVE,
         HOSTILE_PAGE,
         str(alice),
-        interactive=finder.InteractiveScope(NATIVE, "robot", (("contract", "permanent"),)),
+        interactive=finder.InteractiveScope(NATIVE, ("robot",), (), (("contract", "permanent"),)),
     )
     result = asyncio.run(finder.RuntimeFinder(lambda: context)(one))
 
@@ -227,8 +270,8 @@ def test_a_page_addressing_the_assistant_gets_no_typing_filter_click_navigation_
     assert [r["is_error"] for r in backend.results] == [False, True, True, True, True, True, False]
     # The hostile text reached the model as page data, never as an instruction.
     assert HOSTILE in json.loads(texts[0])["untrusted_page_snapshot"]
-    assert "outside this run's search scope" in texts[1]
-    assert json.loads(texts[2])["error"] == "unsupported_discovery"
+    assert texts[1] == finder.TITLE_BOX_REFUSED  # the "Query" box takes a saved title
+    assert texts[2] == finder.CHOICE_REFUSED  # "any" is no saved value (jobs J18 follow up 2)
     assert json.loads(texts[3])["error"] in {"unsupported_discovery", "submit"}
     assert "observed link" in texts[4]
     assert "own pages" in texts[5]
@@ -237,11 +280,14 @@ def test_a_page_addressing_the_assistant_gets_no_typing_filter_click_navigation_
         "refused": [{"index": 0, "reason": "detail_not_opened"}],
         "kept_in_all": 0,
     }
-    # The off scope typing never left the API; the filter and the click were refused by browserd
-    # before reaching the page; neither navigation was asked of browserd.
-    assert tools.calls == ["browser_select_option", "browser_click"]
+    # The off scope typing and filter never left the API, counted as the model's own slips; the
+    # click was refused by browserd before reaching the page; neither navigation was asked of
+    # browserd.
+    assert tools.calls == ["browser_click"]
     assert acted(tools.page) == []
     assert one.found == []
+    assert one.refused[finder.MODEL_VALUE] == 2
+    assert one.refused["unsupported_interaction"] == 1
     assert one.refused["other_host"] == 1
     assert one.refused["detail_not_opened"] == 1
     assert NATIVE + "b13/jobs/lure" in one.seen

@@ -37,6 +37,11 @@ Restoring it must still satisfy the Search rules, including the ten-source limit
 is written.
 The separate `platform_consents` map belongs to the browser: generic saves and imports keep it,
 and a dedicated platform writer can update only its own entry under the same revision lock.
+Two kinds of search field are kept when a save or an import leaves the key out
+(`schemas.KEPT_WHEN_OMITTED`: the interactive website fields and the unwanted places,
+`location_exclude`): a page loaded before the field existed, an export made before it, or a
+History revision restored from before it keeps the stored value, and a key sent with a list,
+the empty list included, replaces it.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -54,6 +59,7 @@ from sqlalchemy.orm import Session
 from app.profile.models import Profile, ProfileRevision
 from app.profile.photo import Photo
 from app.profile.schemas import (
+    KEPT_WHEN_OMITTED,
     PLATFORM_CONSENT_KINDS,
     SECTION_MODELS,
     SECTIONS,
@@ -137,11 +143,12 @@ def _keep_consent(
     consents = dict((stored or {}).get("platform_consents") or {})
     if trusted in PLATFORM_CONSENT_KINDS and trusted in data.get("platform_consents", {}):
         consents[trusted] = data["platform_consents"][trusted]
-    # Old editors and imports cannot accidentally erase the new saved search fields.
+    # Old editors and imports cannot accidentally erase the saved search fields they do not know
+    # (KEPT_WHEN_OMITTED): a key left out keeps its stored value, a key sent replaces it.
     data = {
         **{
             name: (stored or {})[name]
-            for name in ("interactive_sites", "interactive_instructions")
+            for name in KEPT_WHEN_OMITTED
             if name not in data and name in (stored or {})
         },
         **data,

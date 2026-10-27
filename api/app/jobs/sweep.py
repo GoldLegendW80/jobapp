@@ -8,12 +8,17 @@ One sweep, `run_sweep(sweep_id)`:
    message. New runs use the search and skills frozen under the profile row lock at creation;
    pre-v1 rows without `stats.search_scope` explicitly retain claim-time profile reads.
    Without an enabled source the sweep fails with a clear message. Selected interactive sites
-   run through the bounded interactive finder. Verified persistence is supplied by J11.
+   run through the bounded interactive finder; each batch of findings it verified is stored
+   as it is reported (`Commits`, jobs J11 and J11b, below). A "Websites only" start (jobs
+   J17, `websites_only`, a hand start of Find jobs only) freezes the ticked websites alone:
+   no board, feed or fixed reader is in its scope or its plan, and its public scope says so.
 2. Fetch. Boards are read through ats.AtsClient, CONCURRENCY at a time, each failure recorded
    with its code; the others go on.
 3. Keep. For each posting, in the engine's order: the title matches `title_include` (an empty
    list keeps every title), matches neither `title_exclude` nor the board's `extra_exclude`, the
-   location matches `location` (empty: any), and the published date is within `days` of today
+   location matches `location` (empty: any) and not `location_exclude` (the unwanted places,
+   which win over a wanted one: "Remote, United States" is left out by an unwanted "United
+   States"), and the published date is within `days` of today
    (Europe/Paris; a posting without a date is left out, as the engine's string comparison did).
    Then one step the engine did not have: the contract type read from the title, location and
    URL (engine `kind`, app/jobs/importer.py) must be one of `contract_types` (empty: any).
@@ -140,6 +145,7 @@ TIMED_OUT = "The sweep took too long and was stopped."
 INTERRUPTED = "The sweep was interrupted (the worker restarted). Start it again."
 INTERNAL = "The sweep failed because of an internal error."
 NO_BOARDS = "No board is enabled in the search section of your profile."
+NO_WEBSITES = "Tick at least one website to search websites only."
 SEARCH_INVALID = (
     "The search section of your profile no longer passes the checks. "
     "Open the Search tab of your profile and save it again."
@@ -176,6 +182,7 @@ class SearchFilter:
     include: Matcher | None
     exclude: Matcher | None
     location: Matcher | None
+    location_exclude: Matcher | None  # the unwanted places
     contract_types: frozenset[str]
     days: int
 
@@ -188,6 +195,7 @@ class SearchFilter:
             include=compile_list(search.title_include),
             exclude=compile_list(search.title_exclude),
             location=compile_list(search.location),
+            location_exclude=compile_list(search.location_exclude),
             contract_types=frozenset(search.contract_types),
             days=search.days,
         )
@@ -213,6 +221,8 @@ class SearchFilter:
             return "board_excluded"
         if self.location is not None and not self.location.search(location):
             return "location"
+        if self.location_exclude is not None and self.location_exclude.search(location):
+            return "location_excluded"
         if not published >= since:
             return "too_old"
         return None
@@ -295,12 +305,18 @@ def enabled_feeds(search: SearchSection | None) -> list[Feed]:
     return [feed for feed in search.feeds if feed.enabled] if search else []
 
 
-def has_sources(search: SearchSection | None) -> bool:
+def has_websites(search: SearchSection | None) -> bool:
+    return bool(search and any(site.enabled for site in search.interactive_sites))
+
+
+def has_sources(search: SearchSection | None, websites_only: bool = False) -> bool:
+    if websites_only:
+        return has_websites(search)
     return bool(
         enabled_boards(search)
         or enabled_sources(search)
         or enabled_feeds(search)
-        or (search and any(site.enabled for site in search.interactive_sites))
+        or has_websites(search)
     )
 
 
@@ -309,11 +325,14 @@ def _source_id(mode: str, *key: str) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
-def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) -> dict[str, Any]:
+def freeze_scope(
+    profile: Profile | None, trigger: SweepTrigger, now: datetime, websites_only: bool = False
+) -> dict[str, Any]:
     """Private v1 intent, captured under the profile lock before the queue can see the run.
 
     Permissions are not frozen authority. Browser guards still read current server state.
     Old rows without search_scope retain the explicit claim-time legacy path below.
+    `websites_only` (jobs J17) leaves the boards, feeds and fixed readers out of the sources.
     """
     sections = copy.deepcopy(profile.sections or {}) if profile else {}
     raw = sections.get("search")
@@ -324,6 +343,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+    if search is not None and not websites_only:
         sources.extend(
             {
                 "source_id": _source_id("api", board.ats, board.org),
@@ -347,6 +367,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             }
             for s in enabled_sources(search)
         )
+    if search is not None:
         sources.extend(
             {
                 **site.model_dump(mode="json"),
@@ -362,6 +383,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         "profile_revision": profile.revision if profile else 0,
         "created_at": now.isoformat(),
         "trigger": trigger.value,
+        "websites_only": websites_only,
         "search": raw,
         "skills": sections.get("skills"),
         "sources": sources,
@@ -448,12 +470,19 @@ def finish_source(entry: dict[str, Any]) -> None:
 # location, so neither the company, title and location rule nor the loose rule (company and
 # title) matches on it: only its address makes one a duplicate.
 UNNAMED_CLIENT = "Client on Hacker News"
-_UNNAMED_KEY = slugs.PostingKey.of(UNNAMED_CLIENT, "", "", None).identity[0]
+# The company of a posting a job website showed without naming its employer (jobs J11): stated
+# as unknown, never the website's name, and like an unnamed client only its address makes it a
+# duplicate (two such postings with the same title are two employers).
+UNKNOWN_EMPLOYER = "Employer not stated"
+_UNNAMED_KEYS = frozenset(
+    slugs.PostingKey.of(name, "", "", None).identity[0]
+    for name in (UNNAMED_CLIENT, UNKNOWN_EMPLOYER)
+)
 
 
 def _identity(key: slugs.PostingKey) -> tuple[str, str, str] | None:
-    """The company, title and location rule's key, None for an unnamed client."""
-    return None if key.identity[0] == _UNNAMED_KEY else key.identity
+    """The company, title and location rule's key, None for an unnamed client or employer."""
+    return None if key.identity[0] in _UNNAMED_KEYS else key.identity
 
 
 def _pair(key: slugs.PostingKey) -> tuple[str, str] | None:
@@ -508,6 +537,14 @@ class Known:
             if identity is not None:
                 self.jobs.setdefault(identity, job_id)
             self.sources[job_id] = source or ""
+
+    def copy(self) -> "Known":
+        """An independent copy: a commit stages its keys there and publishes them after it."""
+        other = Known.__new__(Known)
+        other.urls, other.identities = set(self.urls), set(self.identities)
+        other.slugs, other.jobs = set(self.slugs), dict(self.jobs)
+        other.sources, other.pairs = dict(self.sources), dict(self.pairs)
+        return other
 
     def job_of(self, key: slugs.PostingKey, loose: bool = False) -> uuid.UUID | None:
         """The job a duplicate is: by URL first, else by identity, else (`loose`) by company and
@@ -570,6 +607,8 @@ class Plan:
     search: SearchSection | None = None  # for the score's bonus (scoring.bonus)
     feeds: list[Feed] = field(default_factory=list)  # opportunities O7
     search_scope: dict[str, Any] | None = None
+    # The run's commits of verified findings (jobs J11b), set by run_sweep.
+    commits: "Commits | None" = None
 
 
 INSERT_CHUNK = 500
@@ -837,9 +876,12 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             error = NO_BOARDS
         except (ValueError, KeyError, re.error):
             search, search_filter, error = None, None, SEARCH_INVALID
-        boards = enabled_boards(search)
-        sources = enabled_sources(search)
-        feeds = enabled_feeds(search)
+        websites_only = isinstance(scope, dict) and scope.get("websites_only") is True
+        boards = [] if websites_only else enabled_boards(search)
+        sources = [] if websites_only else enabled_sources(search)
+        feeds = [] if websites_only else enabled_feeds(search)
+        if websites_only:
+            error = NO_WEBSITES if error == NO_BOARDS else error
         slot = sweep.stats.get("schedule_slot")
         stats = Stats(
             boards_total=len(boards),
@@ -848,7 +890,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=slot if isinstance(slot, str) else None,
         )
         sweep.stats = _stats_json(sweep, stats)
-        if search is None or search_filter is None or not has_sources(search):
+        if search is None or search_filter is None or not has_sources(search, websites_only):
             if error == SEARCH_INVALID:
                 logger.warning(
                     "sweep failed: the stored search section does not validate",
@@ -942,11 +984,12 @@ async def run_sweep(
         schedule_slot=plan.schedule_slot,
         sources=initial_sources(plan.search_scope),
     )
-    lock = asyncio.Lock()
+    commits = plan.commits = Commits(sessions, plan, stats, clock)
 
     async def progress() -> None:
-        async with lock:
-            await asyncio.to_thread(save_progress, sessions, sweep_id, stats, clock())
+        await commits.progress(
+            lambda: asyncio.to_thread(save_progress, sessions, sweep_id, stats, clock())
+        )
 
     try:
         async with asyncio.timeout(timeout_s):
@@ -1056,24 +1099,47 @@ async def run_sweep(
                 for task in tasks:
                     task.cancel()
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.to_thread(finish_done, sessions, sweep_id, stats, clock())
-        logger.info(
-            "sweep done",
-            extra={"sweep_id": str(sweep_id), **_summary(stats)},
-        )
+        if await _settled(commits, sweep_id):
+            await asyncio.to_thread(finish_done, sessions, sweep_id, stats, clock())
+            logger.info(
+                "sweep done",
+                extra={"sweep_id": str(sweep_id), **_summary(stats)},
+            )
     except TimeoutError:
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.to_thread(fail_sweep, sessions, sweep_id, TIMED_OUT, clock(), stats)
+        if await _settled(commits, sweep_id):
+            await asyncio.to_thread(fail_sweep, sessions, sweep_id, TIMED_OUT, clock(), stats)
     except asyncio.CancelledError:
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.shield(
-            asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERRUPTED, clock(), stats)
-        )
+        try:
+            settled = await asyncio.shield(_settled(commits, sweep_id))
+        except asyncio.CancelledError:
+            # A second cancellation: the run lets go of the row at once (no publication, no
+            # end written over a commit still running), and reap_stale ends it.
+            commits.abandon()
+            raise
+        if settled:
+            await asyncio.shield(
+                asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERRUPTED, clock(), stats)
+            )
         raise
     except Exception:
         logger.exception("sweep failed", extra={"sweep_id": str(sweep_id)})
         stats.duration = round(time.monotonic() - started, 2)
-        await asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERNAL, clock(), stats)
+        if await _settled(commits, sweep_id):
+            await asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERNAL, clock(), stats)
+
+
+async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
+    """Close the run's commits; False (logged) when one outlived the wait: the sweep row then
+    keeps its committed counts, running, until reap_stale ends it."""
+    if await commits.settle(close=True):
+        return True
+    logger.warning(
+        "sweep left to recovery: a commit of verified findings did not settle",
+        extra={"sweep_id": str(sweep_id)},
+    )
+    return False
 
 
 def _summary(stats: Stats) -> dict[str, Any]:
@@ -1153,6 +1219,288 @@ def _store_found(
         plan.known.urls, plan.known.identities, plan.known.slugs = known
         plan.known.jobs, plan.known.sources, plan.known.pairs = noted
         raise
+
+
+# --- verified findings of the job websites (jobs J11 and J11b) ----------------------------------
+#
+# The interactive finder (app/browser/finder.py) reports postings it verified on their detail
+# page in batches (finder.VerifiedBatch). Each batch is stored before the finder is told it was
+# kept, in ONE transaction that also writes its counters into the locked sweep row, so the
+# row's counts are those of the jobs stored, whatever happens to the worker next:
+# - the job: the same row as a board's (`_new_job`: scored, status `found`, or `skipped` with the
+#   rule as its note when a never apply rule of the person or the app's own rule against
+#   cybersecurity matches), the website's host as its source, the text code read on the detail
+#   page, the employer and the published date only when the page states them (UNKNOWN_EMPLOYER
+#   and no date otherwise, never the website's name or today), `legacy` empty;
+# - what was observed: in the `sweep` event's `discovery` (the source, when the detail page was
+#   read, the lines of the page that state the title, employer, date and location, and which of
+#   those were unknown); never a page snapshot, the model's words, criteria or instructions;
+# - duplicates: same address, or same employer, title and location (never the loose rule of the
+#   feeds), against the person's list and this sweep's earlier postings. A row another request
+#   stored meanwhile (the insert's conflict) is looked up, the person's own rows only, and is
+#   the duplicate this posting is;
+# - the search's include, exclude, location and days filters are not applied again: the
+#   criteria guided the browsing, and an unknown date or location is not a mismatch.
+#
+# `Commits` is the run's one path to that transaction. A batch is admitted only while its
+# source is the one running; it then runs as a task of its own, so a cancelled caller (the
+# model's tool call torn down, the source's time limit) does not abandon a commit half way:
+# the commit runs to its end and its counters are published to the run's Stats and Known on the
+# event loop, after it. Commits and the run's progress writes run one at a time, so a progress
+# write never carries counts older than a commit it follows. Before the next source, and before
+# the end of the sweep, `settle` closes admission and waits up to DRAIN_S for what was admitted.
+# A commit still running then leaves the sweep row as it is (running, with the counts committed
+# so far) for `reap_stale`: no progress, no end is written that the commit could contradict.
+# A commit that fails may still have landed (its COMMIT reached the database, the answer was
+# lost): it is never retried, and `recover_verified` reads the row and the person's list again,
+# so the run's counts and duplicates are those stored.
+
+DRAIN_S = 5.0
+VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule")
+SOURCE_COUNTERS = ("found", "postings", "duplicates", "skipped_by_rule")
+
+
+class StoreRefusedError(Exception):
+    """The batch was not stored: its source no longer admits batches, or the sweep row is no
+    longer this run's (ended, reaped, gone)."""
+
+
+def _counted(stats: Stats, source_id: str, delta: Stats, found: int) -> None:
+    for name in VERIFIED_COUNTERS:
+        setattr(stats, name, getattr(stats, name) + getattr(delta, name))
+    for entry in stats.sources:
+        if entry.get("source_id") == source_id:
+            entry["found"] = entry.get("found", 0) + found
+            entry["postings"] = entry.get("postings", 0) + delta.new
+            entry["duplicates"] = entry.get("duplicates", 0) + delta.duplicates
+            entry["skipped_by_rule"] = entry.get("skipped_by_rule", 0) + delta.skipped_by_rule
+
+
+def commit_verified(
+    sessions: sessionmaker[Session],
+    plan: Plan,
+    known: Known,
+    snapshot: Stats,
+    source_id: str,
+    source: str,
+    findings: Sequence[Any],
+    now: datetime,
+) -> Stats | None:
+    """Store one verified batch (above) with `known`, a copy of the plan's, and `snapshot`, a
+    copy of the run's stats, both updated in place. Returns the counters the batch added, or
+    None when the row is not this run's any more: then nothing is written."""
+    from app.opportunities.starter import CYBER_RULE
+
+    staged = replace(plan, known=known, rules=[*plan.rules, CYBER_RULE])
+    delta = Stats()
+    with sessions() as db:
+        row = db.get(Sweep, plan.sweep_id, with_for_update=True, populate_existing=True)
+        if row is None or row.user_id != plan.user_id or row.status is not SweepStatus.running:
+            return None
+        for finding in findings:
+            _store_finding(db, staged, source_id, source, finding, delta, now)
+        _counted(snapshot, source_id, delta, len(findings))
+        snapshot.heartbeat_at = now.isoformat()
+        row.stats = _stats_json(row, snapshot)
+        db.commit()
+    return delta
+
+
+def recover_verified(
+    sessions: sessionmaker[Session], plan: Plan, source_id: str
+) -> tuple[dict[str, int], dict[str, int], Known]:
+    """After a failed commit: the locked row's verified counters (the run's and its source's)
+    and a fresh Known of the person's own rows. The row's counters were written in the same
+    transaction as the jobs, and every other write of the run carries the run's counts, which
+    only grow: the larger of the row's and the run's is what is stored."""
+    with sessions() as db:
+        row = db.get(Sweep, plan.sweep_id, with_for_update=True, populate_existing=True)
+        mine = row is not None and row.user_id == plan.user_id
+        stored = (row.stats or {}) if mine else {}
+        entry = next((s for s in stored.get("sources", []) if s.get("source_id") == source_id), {})
+
+        def ints(data: dict[str, Any], names: Sequence[str]) -> dict[str, int]:
+            return {n: data[n] for n in names if type(data.get(n)) is int}
+
+        found = ints(stored, VERIFIED_COUNTERS), ints(entry, SOURCE_COUNTERS)
+        known = Known(db, plan.user_id)
+        db.rollback()
+    return *found, known
+
+
+def _store_finding(
+    db: Session, plan: Plan, source_id: str, source: str, finding: Any, delta: Stats,
+    now: datetime,
+) -> None:  # fmt: skip
+    company = finding.company or UNKNOWN_EMPLOYER
+    posting = ats.Posting(
+        finding.title, finding.location, finding.url, finding.published_on or "", finding.text,
+        False,
+    )  # fmt: skip
+    delta.seen += 1
+    delta.matched += 1
+    key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
+    for _ in range(2):
+        if plan.known.has(key):
+            break
+        new = _new_job(plan, company, posting, source, now)
+        new.events[1]["data"]["discovery"] = {
+            "source_id": source_id,
+            "detail_read_at": finding.detail_read_at,
+            "evidence": dict(finding.evidence),
+            "unknown": [
+                name
+                for name, value in (
+                    ("company", finding.company),
+                    ("published_on", finding.published_on),
+                    ("location", finding.location),
+                )
+                if not value
+            ],
+        }
+        inserted = db.execute(
+            pg_insert(Job).values(new.row).on_conflict_do_nothing().returning(Job.id)
+        ).scalar_one_or_none()
+        if inserted is not None:
+            db.execute(sa.insert(JobEvent), new.events)
+            plan.known.add(key, new.row["slug"], new.row["id"], source)
+            delta.new += 1
+            delta.skipped_by_rule += new.rule is not None
+            return
+        # Another request stored this address or took this slug meanwhile: learn the person's
+        # rows in the way, then decide again (a duplicate, or a free slug).
+        rows = db.execute(
+            sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source)
+            .where(Job.user_id == plan.user_id)
+            .where(sa.or_(Job.url == new.row["url"], Job.slug == new.row["slug"]))
+        )
+        for company_, title, location, url, slug, job_id, noted in rows:
+            plan.known.add(slugs.PostingKey.of(company_, title, location, url), slug, job_id, noted)
+    delta.duplicates += 1
+    job_id = plan.known.job_of(key)
+    joined = plan.known.note(job_id, source) if job_id is not None else None
+    if joined is not None:
+        db.execute(
+            sa.update(Job)
+            .where(Job.id == job_id, Job.user_id == plan.user_id)
+            .values(source=joined, updated_at=Job.updated_at)
+        )
+
+
+class Commits:
+    """The run's commits of verified batches (above): admitted per source, one at a time, each
+    finished and published even when its caller is cancelled."""
+
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        plan: Plan,
+        stats: Stats,
+        clock: Clock,
+        drain_s: float | None = None,
+    ) -> None:
+        self.sessions, self.plan, self.stats, self.clock = sessions, plan, stats, clock
+        self.drain_s = DRAIN_S if drain_s is None else drain_s
+        self._lock = asyncio.Lock()
+        self._admitted: str | None = None
+        self._closed = False
+        self._running: set[asyncio.Task[None]] = set()
+        self.unsettled = False  # a commit outlived `settle`: the row is left to reap_stale
+
+    def admit(self, source_id: str) -> None:
+        if not self._closed:
+            self._admitted = source_id
+
+    async def save(self, source_id: str, source: str, batch: Any) -> None:
+        """Store `batch` for the running source `source_id`; StoreRefusedError when it is not
+        admitted or the row refused it. A cancelled caller leaves the commit running."""
+        if self._closed or source_id != self._admitted:
+            raise StoreRefusedError
+        task = asyncio.get_running_loop().create_task(self._commit(source_id, source, batch))
+        self._running.add(task)
+        task.add_done_callback(self._running.discard)
+        task.add_done_callback(_retrieved)  # a caller cancelled meanwhile never reads it
+        await asyncio.shield(task)
+
+    async def _commit(self, source_id: str, source: str, batch: Any) -> None:
+        async with self._lock:
+            snapshot = Stats(**copy.deepcopy(self.stats.as_json()))
+            known = self.plan.known.copy()
+            try:
+                delta = await asyncio.to_thread(
+                    commit_verified, self.sessions, self.plan, known, snapshot, source_id,
+                    source, batch.findings, self.clock(),
+                )  # fmt: skip
+            except Exception:
+                await self._recover(source_id)
+                raise
+            if delta is None:
+                raise StoreRefusedError
+            if self.unsettled:
+                return  # the run let go of the row: nothing more is published
+            vars(self.plan.known).update(vars(known))
+            _counted(self.stats, source_id, delta, len(batch.findings))
+
+    async def _recover(self, source_id: str) -> None:
+        """The failed commit may have landed: take the row's counts and the person's list as
+        they are stored (`recover_verified`). When even that read fails, the run lets go of
+        the row, whose counters are those of its jobs, for reap_stale."""
+        try:
+            counters, entry_counters, known = await asyncio.to_thread(
+                recover_verified, self.sessions, self.plan, source_id
+            )
+        except Exception:
+            logger.exception("reading a sweep again after a failed commit failed")
+            self.abandon()
+            return
+        if self.unsettled:
+            return
+        for name, value in counters.items():
+            setattr(self.stats, name, max(getattr(self.stats, name), value))
+        for entry in self.stats.sources:
+            if entry.get("source_id") == source_id:
+                for name, value in entry_counters.items():
+                    entry[name] = max(entry.get(name, 0), value)
+        vars(self.plan.known).update(vars(known))
+
+    def abandon(self) -> None:
+        """Let go of the row: no batch is admitted, nothing is published or written again."""
+        self._admitted = None
+        self._closed = self.unsettled = True
+
+    async def progress(self, write: Callable[[], Awaitable[None]]) -> None:
+        """A progress write of the run: never beside a commit (it would write counts without
+        the commit's), held to its end even when its caller is cancelled, and none once the run
+        let go of the row."""
+        if self.unsettled:
+            return
+        async with self._lock:
+            if self.unsettled:
+                return
+            task = asyncio.ensure_future(write())
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await asyncio.wait([task])  # its thread ends before another write starts
+                raise
+
+    async def settle(self, *, close: bool = False) -> bool:
+        """Stop admitting (for good with `close`) and wait up to drain_s for the commits
+        admitted. False when one is still running: the run must not write the row's end."""
+        self._admitted = None
+        self._closed = self._closed or close
+        pending = set(self._running)
+        if pending:
+            _, left = await asyncio.wait(pending, timeout=self.drain_s)
+            if left:
+                self.abandon()
+        return not self.unsettled
+
+
+def _retrieved(task: asyncio.Task[None]) -> None:
+    """A refused or failed commit was told to its caller, when it still had one."""
+    if not task.cancelled():
+        task.exception()
 
 
 # --- maintenance --------------------------------------------------------------------------------
@@ -1286,7 +1634,13 @@ def schedule_of(search: SearchSection | None) -> SweepSchedule:
     return search.sweep_schedule if search is not None else SweepSchedule()
 
 
-def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime) -> Sweep:
+def start(
+    db: Session,
+    user_id: uuid.UUID,
+    trigger: SweepTrigger,
+    now: datetime,
+    websites_only: bool = False,
+) -> Sweep:
     """A new running sweep for the user, after failing a stale one of theirs. Raises
     service.SweepRunningError when one is running; the caller commits."""
     profile = db.execute(
@@ -1294,14 +1648,20 @@ def start(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: datetime)
     ).scalar_one_or_none()
     reap_stale(db, now, user_id)
     row = service.start_sweep(db, user_id, trigger, now)
-    scope = freeze_scope(profile, trigger, now)
+    scope = freeze_scope(profile, trigger, now, websites_only)
     row.stats = {**row.stats, "search_scope": scope, "sources": initial_sources(scope)}
     db.flush()
     return row
 
 
 BeginOutcome = Literal[
-    "started", "running", "no_boards", "search_invalid", "queue_down", "revision_conflict"
+    "started",
+    "running",
+    "no_boards",
+    "no_websites",
+    "search_invalid",
+    "queue_down",
+    "revision_conflict",
 ]
 
 
@@ -1322,6 +1682,7 @@ def _insert[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
+    websites_only: bool = False,
 ) -> Begun[T]:
     with sessions() as db:
         profile = db.execute(
@@ -1335,17 +1696,17 @@ def _insert[T](
             search = load_search(db, user_id)
         except InvalidSearchError:
             return Begun("search_invalid")
-        if not has_sources(search):
-            return Begun("no_boards")
+        if not has_sources(search, websites_only):
+            return Begun("no_websites" if websites_only else "no_boards")
         try:
-            row = start(db, user_id, SweepTrigger.manual, now)
+            row = start(db, user_id, SweepTrigger.manual, now, websites_only)
             begun = Begun("started", row.id, view(row))
             db.commit()
         except service.SweepRunningError:
             db.rollback()
             running = service.running_sweep(db, user_id)
             if running is None:  # finished between the insert and this read
-                return _insert(sessions, user_id, now, view, profile_revision)
+                return _insert(sessions, user_id, now, view, profile_revision, websites_only)
             return Begun("running", running.id)
     return begun
 
@@ -1357,12 +1718,16 @@ async def begin[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
+    websites_only: bool = False,
 ) -> Begun[T]:
     """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
     and of the first login wizard's Start (opportunities O5). No sweep without an enabled board
-    or source, or with a search section that no longer validates; the running one when the user
-    has one; a queue that is down fails the new sweep at once, so it never blocks the next try."""
-    begun = await asyncio.to_thread(_insert, sessions, user_id, now, view, profile_revision)
+    or source (with `websites_only`, jobs J17: without an enabled website), or with a search
+    section that no longer validates; the running one when the user has one; a queue that is
+    down fails the new sweep at once, so it never blocks the next try."""
+    begun = await asyncio.to_thread(
+        _insert, sessions, user_id, now, view, profile_revision, websites_only
+    )
     if begun.outcome != "started" or begun.sweep_id is None:
         return begun
     try:

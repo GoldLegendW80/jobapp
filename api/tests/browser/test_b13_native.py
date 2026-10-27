@@ -146,7 +146,7 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
             assert got.capability is None
             tools = LeaseTools(store, client, str(alice), got.lease.lease_id, got.token)
             try:
-                scope = finder.InteractiveScope(START, "robot", (("remote", "1"),))
+                scope = finder.InteractiveScope(START, ("robot",), (), (("remote", "1"),))
                 opened = await tools.call(
                     "browser_navigate",
                     {
@@ -259,7 +259,7 @@ def test_native_hostile_controls_and_redirects(native):
         ):
             lease = Lease(native, "sweep")
             native.redactions.append(lease.token)
-            scope = {"start": START + path, "query": "robot", "filters": {}}
+            scope = {"start": START + path, "titles": ["robot"], "places": [], "filters": {}}
             marker = {"_discovery": "native_get", "_discovery_scope": scope}
             try:
                 assert lease.capability is None
@@ -319,7 +319,7 @@ def test_native_detail_ownership_and_prose(native, tmp_path, case, suffix, compa
 
         tools = NativeTools()
         start = START + "details"
-        scope = finder.InteractiveScope(start, "robot")
+        scope = finder.InteractiveScope(start, ("robot",))
         opened = await tools.call(
             "browser_navigate",
             {"url": start, "_discovery": "native_get", "_discovery_scope": scope.tool_scope()},

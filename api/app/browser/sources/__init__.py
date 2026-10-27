@@ -4,7 +4,8 @@ API, read by the legacy extractors/finder or explicitly selected native interact
 Selected `search.interactive_sites` run separately after legacy readers. A selected interactive
 protected platform suppresses its matching legacy reader, including a row enabled by consent:
 that row reports `interactive_selected`, rather than consuming the allowance or becoming a
-fallback. The interactive runtime's findings await J11's truthful incremental persistence.
+fallback. The interactive runtime stores its verified findings through the run's commits
+(sweep.Commits, jobs J11), never through the store below.
 
 After the boards, `run_sources` (the hook of app/jobs/sweep.py's `run_sweep`) takes each enabled
 source of the person's `search.browser_sources` in turn:
@@ -538,6 +539,7 @@ class Runner:
         finder: Any = None,
         add_board: AddBoard | None = None,
         interactive_policy: "InteractivePolicy | None" = None,
+        site_logins: Any = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         self.checks = checks or {}
@@ -545,6 +547,7 @@ class Runner:
         self.finder = finder  # B9: the finder agent of `site` sources (finder.FinderAgent)
         self.add_board = add_board  # B9: adds a board found to the person's (site.add_board)
         self.interactive_policy = interactive_policy
+        self.site_logins = site_logins  # B17: the websites the person signed in to (site_logins)
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
@@ -815,6 +818,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         max_table=lease_max_table(settings.browser_lease_max_s),
     )
     from app.browser import linkedin_guard, platform_policy
+    from app.browser.site_logins import SiteLogins
 
     return Runner(
         leases,
@@ -826,6 +830,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         finder=None if agent_context is None else _finder(agent_context),
         add_board=_add_board(sessions),
         interactive_policy=platform_policy.runtime_policy(settings, sessions),
+        site_logins=SiteLogins(sessions),
     )
 
 

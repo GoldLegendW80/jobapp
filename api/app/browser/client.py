@@ -7,6 +7,7 @@ network, behind BROWSER_CONTROL_SECRET. Nothing else of the application speaks t
     end(id)     DELETE /leases/{id}     Ended (its reason, the profile's size), or None when
                                         it is no longer the current lease
     remove_profile(id, uid)  DELETE /profiles/{id}   the profile's directory removed (B7)
+    site_session(id, uid, host)  POST /profiles/{id}/site-session   a website's login saved (B17)
     current()   GET /leases/current     {lease: {...} | None, last_end: {...} | None}
     live_input(id, viewer)  POST /leases/{id}/live/input   who holds the live view's input (B4)
     tool(...)   POST /leases/{id}/tools/{name}   a tool's result (browser B5)
@@ -328,6 +329,19 @@ class BrowserdClient:
             return BrowserError("refused")
         return BrowserError("unavailable")
 
+    async def site_session(self, profile_id: str, uid: int, host: str) -> bool | None:
+        """Whether the profile holds an unexpired cookie of `host` (B17), None when browserd could
+        not tell (the profile in use, not that uid's, not read). Raises BrowserError when browserd
+        did not answer."""
+        body = {"uid": uid, "host": host}
+        path = f"/profiles/{profile_id}/site-session"
+        status, payload = await self._call("POST", path, END_TIMEOUT_S, body)
+        if status == 200 and isinstance(payload, dict) and type(payload.get("present")) is bool:
+            return payload["present"]
+        if status == 401 or (status >= 500 and status != 503):
+            raise self._failure(status, payload)
+        return None
+
     async def _call(
         self,
         method: str,
@@ -343,7 +357,7 @@ class BrowserdClient:
         # The route without the lease id nor a file's name; a tool's name is kept.
         route = re.sub(r"^/leases/(?!current$)[^/]+", "/leases/{id}", path)
         route = re.sub(r"/files/[^/]+$", "/files/{name}", route)
-        route = re.sub(r"^/profiles/[^/]+$", "/profiles/{id}", route)
+        route = re.sub(r"^/profiles/[^/]+", "/profiles/{id}", route)
         began = time.monotonic()
         try:
             async with httpx.AsyncClient(

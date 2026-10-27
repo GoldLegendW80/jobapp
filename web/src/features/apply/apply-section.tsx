@@ -491,7 +491,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 {linkedinBlocked ? (
                   <p className="text-sm text-muted-foreground">
                     Turn on LinkedIn in Account and accept its current sentence
-                    to use Easy Apply. You can also apply yourself.
+                    to use Easy Apply, or tick LinkedIn in Find jobs and save.
+                    You can also apply yourself.
                   </p>
                 ) : (
                   <Button

@@ -21,7 +21,12 @@ function compose(...args: string[]): string {
       "browser",
       ...args,
     ],
-    { cwd: root, encoding: "utf8", timeout: 120_000 },
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 120_000,
+      maxBuffer: 64 * 1024 * 1024,
+    },
   );
 }
 

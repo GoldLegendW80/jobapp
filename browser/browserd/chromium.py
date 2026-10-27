@@ -42,7 +42,10 @@ def switches(
     own session, browserd/signin.py), and no --disable-blink-features=AutomationControlled
     either: nothing automates that session. The address comes last, after `--`, so Chromium
     never reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
-    (/usr/bin/chromium), which would otherwise drop the second one."""
+    (/usr/bin/chromium), which would otherwise drop the second one. A sweep lease, and no other,
+    also disables IsolateSandboxedIframes (B17): a search, signed in or not, runs only in a sweep
+    lease, and its purpose is known at launch while a signed in scope arrives later, so every
+    sweep lease carries it and every other lease keeps Chromium's default."""
     debugging = (
         []
         if port is None
@@ -52,6 +55,7 @@ def switches(
             "--disable-blink-features=AutomationControlled",
         ]
     )
+    sandboxed = ",IsolateSandboxedIframes" if request.purpose == "sweep" else ""
     return [
         "chromium",
         "--",
@@ -66,8 +70,12 @@ def switches(
         "--password-store=basic",
         # WebRtcHideLocalIpsWithMdns: no mDNS responder (UDP 224.0.0.251:5353, review of PR
         # #267); with no UDP outside the proxy there is no local candidate for it to hide.
+        # IsolateSandboxedIframes (sweep leases only, B17): an inline sandboxed frame
+        # (`<iframe sandbox srcdoc>`) runs in its embedder's process again, so the signed in
+        # search's init script and route reach it; isolated, its script ran before them and its
+        # POST and sockets left (measured in Chromium 153).
         # One --disable-features carries every feature: a repeated switch may replace it.
-        "--disable-features=Translate,WebRtcHideLocalIpsWithMdns",
+        f"--disable-features=Translate,WebRtcHideLocalIpsWithMdns{sandboxed}",
         # No traffic of Chromium's own (component updates, GCM, variations): what leaves is
         # what a page asks for.
         "--disable-background-networking",

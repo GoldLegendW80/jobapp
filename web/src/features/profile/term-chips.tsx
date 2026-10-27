@@ -5,6 +5,10 @@
  * server's rules) and refused with a message under the input; a duplicate (ignoring case) is
  * refused too. A chip that breaks a rule after the switch changes, or that the server refused
  * on save (a regex error with its position, errors.ts), shows its message under the chip.
+ *
+ * A list whose switch sits elsewhere (`regexSwitch={false}`: the search lists keep theirs under
+ * Advanced, search-lists.tsx) renders `TermListRegexSwitch` there, and says under its chips when
+ * it holds regular expressions.
  */
 import { CircleAlert, Plus, X } from "lucide-react";
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -19,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { WORDING } from "@/lib/wording";
 
 import { TERMS_MAX } from "./editor-forms";
 import { listProblems, termProblem } from "./matching";
@@ -27,7 +32,7 @@ interface TermChipsProps<F extends FieldValues> {
   form: UseFormReturn<F>;
   /** path of the term list object (`{advanced_regex, terms}`) */
   name: string;
-  /** what the list is, for headings and screen readers ("Titles to include") */
+  /** what the list is, for headings and screen readers ("Job titles") */
   label: string;
   /** shown as the heading; defaults to `label` */
   title?: ReactNode;
@@ -35,6 +40,8 @@ interface TermChipsProps<F extends FieldValues> {
   placeholder?: string;
   /** smaller heading, for lists nested in a card */
   compact?: boolean;
+  /** false: the list's regular expression switch is rendered elsewhere (TermListRegexSwitch) */
+  regexSwitch?: boolean;
 }
 
 export function TermChips<F extends FieldValues>({
@@ -45,6 +52,7 @@ export function TermChips<F extends FieldValues>({
   description,
   placeholder,
   compact = false,
+  regexSwitch = true,
 }: TermChipsProps<F>) {
   const id = useId();
   const terms = useController({
@@ -59,6 +67,12 @@ export function TermChips<F extends FieldValues>({
   const isAdvanced = advanced.field.value === true;
   const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState<string>();
+  // A switch elsewhere changes the mode too: what was said about the draft no longer holds.
+  const [modeSeen, setModeSeen] = useState(isAdvanced);
+  if (modeSeen !== isAdvanced) {
+    setModeSeen(isAdvanced);
+    setProblem(undefined);
+  }
   const errors = get(form.formState.errors, `${name}.terms`) as
     | (Record<number, { message?: string } | undefined> & {
         message?: string;
@@ -119,25 +133,32 @@ export function TermChips<F extends FieldValues>({
         >
           {title ?? label}
         </Heading>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            role="switch"
-            aria-checked={isAdvanced}
-            aria-label={`Advanced (regular expressions) for ${label}`}
-            className="size-4 accent-primary"
-            checked={isAdvanced}
-            onChange={(event) => {
-              advanced.field.onChange(event.target.checked);
-              setProblem(undefined);
-              revalidate();
-            }}
-          />
-          Advanced (regular expressions)
-        </label>
+        {regexSwitch ? (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              role="switch"
+              aria-checked={isAdvanced}
+              aria-label={`Advanced (regular expressions) for ${label}`}
+              className="size-4 accent-primary"
+              checked={isAdvanced}
+              onChange={(event) => {
+                advanced.field.onChange(event.target.checked);
+                setProblem(undefined);
+                revalidate();
+              }}
+            />
+            Advanced (regular expressions)
+          </label>
+        ) : null}
       </div>
       {description ? (
         <p className="text-xs text-muted-foreground">{description}</p>
+      ) : null}
+      {!regexSwitch && isAdvanced ? (
+        <p className="text-xs text-muted-foreground">
+          {WORDING.listUsesRegularExpressions}
+        </p>
       ) : null}
       {values.length === 0 ? (
         <p className="text-sm text-muted-foreground">No term yet.</p>
@@ -237,5 +258,44 @@ export function TermChips<F extends FieldValues>({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The regular expression switch of the term list `name`, for a list rendered with
+ * `regexSwitch={false}`: on, its terms are regular expressions searched as written; off, plain
+ * words. Its accessible name is "Regular expressions for <label>".
+ */
+export function TermListRegexSwitch<F extends FieldValues>({
+  form,
+  name,
+  label,
+}: {
+  form: UseFormReturn<F>;
+  name: string;
+  label: string;
+}) {
+  const advanced = useController({
+    control: form.control,
+    name: `${name}.advanced_regex` as Path<F>,
+  });
+  const on = advanced.field.value === true;
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        role="switch"
+        aria-checked={on}
+        aria-label={`${WORDING.regularExpressionsFor} ${label}`}
+        className="size-4 accent-primary"
+        checked={on}
+        onChange={(event) => {
+          advanced.field.onChange(event.target.checked);
+          if (form.formState.isSubmitted)
+            void form.trigger(`${name}.terms` as Path<F>);
+        }}
+      />
+      {label}
+    </label>
   );
 }

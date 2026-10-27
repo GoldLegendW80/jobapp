@@ -152,13 +152,18 @@ describe("flattenSection", () => {
     const rows = flattenSection("search", haraldLike().search);
     expect(rows).toContainEqual({
       path: "title_include.terms",
-      label: "Title include terms",
+      label: "Job titles",
       value: "applied ai, llm (regular expressions)",
     });
     expect(rows).toContainEqual({
       path: "location.terms",
       label: "Location",
       value: "Paris, Remote",
+    });
+    expect(rows).toContainEqual({
+      path: "location_exclude.terms",
+      label: "Unwanted places",
+      value: "United States",
     });
     expect(rows).toContainEqual({
       path: "contract_types",

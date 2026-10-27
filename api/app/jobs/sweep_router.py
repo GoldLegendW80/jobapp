@@ -7,7 +7,9 @@
   once, so it never blocks the next try.
   An optional `{profile_revision}` body refuses a stale reviewed revision with 409. No-body
   callers remain supported. Scope is frozen before enqueue; its public projection omits
-  instructions and source addresses.
+  instructions and source addresses. `{websites_only: true}` (jobs J17) searches the enabled
+  websites alone, no board, feed or fixed reader, and its scope says so; 422 when no website
+  is enabled.
 - GET /api/jobs/sweeps?limit=N: the caller's newest sweeps (default 20, at most 100) and their
   automatic schedule (`search.sweep_schedule`, off by default) with its next run. The schedule
   itself is changed through PUT /api/profile/search.
@@ -37,8 +39,10 @@ from app.identity.schemas import ErrorOut
 from app.jobs import schedule, service, sweep
 from app.jobs.models import Sweep, SweepStatus
 from app.jobs.schemas import (
+    SEARCHES_LISTED,
     BoardFailureOut,
     ScheduleOut,
+    SearchRanOut,
     SearchScopeOut,
     SourceOut,
     SweepConflictOut,
@@ -99,6 +103,19 @@ def sweep_out(row: Sweep) -> SweepOut:
         value = item.get(name)
         return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
+    def searched(value: Any) -> list[SearchRanOut]:
+        """The searches a website's agent ran (jobs J18), read defensively: a stored row is
+        data, so anything but a list of {title, place} with text is left out."""
+        if not isinstance(value, list):
+            return []
+        return [
+            SearchRanOut(title=one["title"], place=one.get("place"))
+            for one in value[:SEARCHES_LISTED]
+            if isinstance(one, dict)
+            and isinstance(one.get("title"), str)
+            and isinstance(one.get("place"), str | None)
+        ]
+
     sources = [
         SourceOut(
             kind=str(item.get("kind", "")),
@@ -109,6 +126,10 @@ def sweep_out(row: Sweep) -> SweepOut:
             new=count(item, "postings"),
             skipped_by_rule=count(item, "skipped_by_rule"),
             items_skipped=max(0, count(item, "items_skipped")),
+            searches=max(0, count(item, "searches")),
+            searched=searched(item.get("searched")),
+            titles_left_out=max(0, count(item, "titles_left_out")),
+            places_left_out=max(0, count(item, "places_left_out")),
             error=item["error"] if isinstance(item.get("error"), str) else None,
             **{
                 name: item.get(name) if isinstance(item.get(name), str) else None
@@ -130,12 +151,14 @@ def sweep_out(row: Sweep) -> SweepOut:
             created_at=scope["created_at"],
             trigger=scope["trigger"],
             source_count=len(scope["sources"]),
+            websites_only=scope.get("websites_only") is True,
             criteria={
                 name: criteria[name]
                 for name in (
                     "title_include",
                     "title_exclude",
                     "location",
+                    "location_exclude",
                     "remote_stance",
                     "contract_types",
                     "seniority",
@@ -213,7 +236,8 @@ def _sweep_id(value: str) -> uuid.UUID:
         },
         422: {
             "model": ErrorOut,
-            "description": "No enabled board, or a search section to save again",
+            "description": "No enabled board (or website, for websites only), or a search "
+            "section to save again",
         },
         503: {"model": ErrorOut, "description": "The queue is unavailable"},
     },
@@ -229,6 +253,7 @@ async def start_sweep(user: CurrentUser, request: Request, body: SweepStartIn | 
         deps.clock(request),
         sweep_out,
         profile_revision=body.profile_revision if body else None,
+        websites_only=body.websites_only if body else False,
     )
     if begun.outcome == "running" and begun.sweep_id is not None:
         body = SweepConflictOut(detail=RUNNING, sweep_id=begun.sweep_id).model_dump(mode="json")
@@ -243,6 +268,8 @@ async def start_sweep(user: CurrentUser, request: Request, body: SweepStartIn | 
         )
     if begun.outcome == "search_invalid":
         raise HTTPException(status_code=422, detail=sweep.SEARCH_INVALID)
+    if begun.outcome == "no_websites":
+        raise HTTPException(status_code=422, detail=sweep.NO_WEBSITES)
     if begun.outcome == "no_boards" or begun.view is None:
         raise HTTPException(status_code=422, detail=sweep.NO_BOARDS)
     return begun.view

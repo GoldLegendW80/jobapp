@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { SOURCE_PROBLEMS, sourceLabel, sourceName } from "./labels";
+import {
+  SOURCE_PROBLEMS,
+  leftOutSentence,
+  searchesSentence,
+  sourceLabel,
+  sourceName,
+} from "./labels";
 
 describe("sourceLabel", () => {
   it("names one browser source in words", () => {
@@ -73,10 +79,96 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "no_credential",
       "agent_failed",
       "page_budget",
+      "token_budget",
     ]) {
       const sentence = SOURCE_PROBLEMS[code] ?? "";
       expect(sentence).not.toBe("");
       expect(sentence).not.toMatch(/[–—]| - /);
     }
+  });
+
+  it("names no budget of a website's own agent (owner, 2026-10-27, jobs J18)", () => {
+    // The agent of a website has no turn cap: the code is gone, and the page and token
+    // sentences speak of the platform's day and a careers page's run.
+    expect(SOURCE_PROBLEMS.turn_limit).toBeUndefined();
+    expect(SOURCE_PROBLEMS.page_budget).toBe(
+      "The app read as many pages of this website as it may today. What was read is kept.",
+    );
+    for (const code of ["page_budget", "token_budget"]) {
+      const sentence = SOURCE_PROBLEMS[code] ?? "";
+      expect(sentence).not.toContain("searches");
+      expect(sentence).toMatch(/What was read is kept\.$/);
+    }
+  });
+});
+
+describe("searchesSentence (one agent per website, owner 2026-10-27)", () => {
+  it("stays silent when the agent ran no search or the api is older", () => {
+    expect(searchesSentence({})).toBe("");
+    expect(searchesSentence({ searches: 0, searched: [] })).toBe("");
+  });
+
+  it("names each search the agent ran, a title in a place or a title alone", () => {
+    expect(
+      searchesSentence({
+        searches: 1,
+        searched: [{ title: "engineer", place: "Paris" }],
+      }),
+    ).toBe("1 search ran: engineer in Paris.");
+    const sentence = searchesSentence({
+      searches: 3,
+      searched: [
+        { title: "robot engineer", place: "Paris" },
+        { title: "robot engineer", place: "Lyon" },
+        { title: "drone pilot", place: null },
+      ],
+    });
+    expect(sentence).toBe(
+      "3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot.",
+    );
+    expect(sentence).not.toMatch(/[–—]| - /);
+  });
+
+  it("counts the searches it does not name, and says only the count from an older row", () => {
+    const searched = Array.from({ length: 50 }, (_, n) => ({
+      title: `t${n}`,
+      place: null,
+    }));
+    expect(searchesSentence({ searches: 60, searched })).toMatch(
+      /^60 searches ran: t0; t1; .*; t49, and 10 more\.$/,
+    );
+    expect(searchesSentence({ searches: 2 })).toBe("2 searches ran.");
+    expect(searchesSentence({ searches: 1_234, searched: [] })).toBe(
+      "1,234 searches ran.",
+    );
+  });
+});
+
+describe("leftOutSentence (more saved values than a website's search takes)", () => {
+  it("stays silent when nothing was left out or the api is older", () => {
+    expect(leftOutSentence({})).toBe("");
+    expect(leftOutSentence({ titles_left_out: 0, places_left_out: 0 })).toBe(
+      "",
+    );
+  });
+
+  it("says how many saved titles and places were left out", () => {
+    expect(leftOutSentence({ titles_left_out: 1 })).toBe(
+      "1 saved title was left out: a website's search takes the first ones that fit.",
+    );
+    expect(leftOutSentence({ places_left_out: 3 })).toBe(
+      "3 saved places were left out: a website's search takes the first ones that fit.",
+    );
+    expect(leftOutSentence({ titles_left_out: 1, places_left_out: 1 })).toBe(
+      "1 saved title and 1 saved place were left out: a website's search takes the first ones that fit.",
+    );
+    const sentence = leftOutSentence({
+      titles_left_out: 1_200,
+      places_left_out: 20,
+    });
+    expect(sentence).toBe(
+      "1,200 saved titles and 20 saved places were left out: a website's search takes the first ones that fit.",
+    );
+    expect(sentence).not.toMatch(/[–—]| - /);
   });
 });

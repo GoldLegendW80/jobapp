@@ -700,6 +700,17 @@ class BoardFailureOut(BaseModel):
     message: str
 
 
+SEARCHES_LISTED = 50  # the searches a website's summary names (all are counted, jobs J18)
+
+
+class SearchRanOut(BaseModel):
+    """One search the agent of a job website ran (jobs J18): a saved title it typed and the saved
+    place it typed or chose, if any."""
+
+    title: str
+    place: str | None = None
+
+
 class SourceOut(BaseModel):
     """One selected source of the sweep: API boards, feeds and browser readers. The postings it read
     completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
@@ -719,6 +730,14 @@ class SourceOut(BaseModel):
     new: int = 0
     skipped_by_rule: int = 0
     items_skipped: int = Field(default=0, ge=0)
+    # A website searched in the person's browser (jobs J18): how many searches its agent ran,
+    # and the first SEARCHES_LISTED of them.
+    searches: int = Field(default=0, ge=0)
+    searched: list[SearchRanOut] = Field(default_factory=list)
+    # Saved titles and places its frozen scope could not carry (more than 100 of one, or more
+    # than 32 KiB in all): the first ones that fit were searched, these were left out.
+    titles_left_out: int = Field(default=0, ge=0)
+    places_left_out: int = Field(default=0, ge=0)
     error: str | None = None
     source_id: str | None = None
     mode: str | None = None
@@ -733,6 +752,9 @@ class SweepStartIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     profile_revision: Annotated[int, Field(ge=0, le=2_147_483_647)] | None = None
+    # Jobs J17, "Websites only" of Find jobs: search the ticked websites and no board, feed or
+    # fixed reader, for this sweep only (the schedule always searches every source).
+    websites_only: bool = False
 
 
 class SearchScopeOut(BaseModel):
@@ -744,6 +766,7 @@ class SearchScopeOut(BaseModel):
     trigger: str
     source_count: int
     criteria: dict[str, Any]
+    websites_only: bool = False
 
 
 class SweepOut(BaseModel):

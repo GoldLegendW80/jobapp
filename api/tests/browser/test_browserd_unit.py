@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 sys.path.insert(0, str(ROOT / "browser"))
 
 from browserd import app, chromium, prep, proxy  # noqa: E402
-from browserd.config import Config, lease_max_table  # noqa: E402
+from browserd.config import PURPOSES, Config, lease_max_table  # noqa: E402
 from browserd.leases import LeaseEnded, LeaseError, Manager, Request  # noqa: E402
 
 PROFILE = "6f1c2a52-6c55-4a0a-9a3f-0d6c1f6d2b11"
@@ -581,6 +581,18 @@ def test_switches_keep_the_sandbox_the_proxy_and_the_real_user_agent() -> None:
     assert "--disable-quic" in switches
     assert f"--user-data-dir=/profiles/{PROFILE}/data" in switches
     assert "--remote-debugging-address=127.0.0.1" in switches
+    # One --disable-features switch (a repeated one may replace it); B17: a sweep lease, where a
+    # signed in search runs, also keeps inline sandboxed frames in their embedder's process.
+    for purpose in PURPOSES:
+        features = [
+            s
+            for s in chromium.switches(request(purpose), "/leases/x", 9333)
+            if s.startswith("--disable-features")
+        ]
+        names = ["Translate", "WebRtcHideLocalIpsWithMdns"]
+        if purpose == "sweep":
+            names.append("IsolateSandboxedIframes")
+        assert features == ["--disable-features=" + ",".join(names)], purpose
 
 
 def test_the_image_installs_the_managed_webrtc_policy() -> None:

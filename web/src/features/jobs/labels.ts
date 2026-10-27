@@ -155,7 +155,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   lease_budget:
     "The browser's time for this site ran out. What was read is kept, the rest comes at the next search.",
   store_failed:
-    "What this site found could not be saved, so nothing was kept from it.",
+    "What this site found could not be saved, so it stopped there. Postings saved before are kept.",
   page_failed: "A page did not load. What was read before is kept.",
   browser_unavailable: "The browser could not be reached.",
   not_started: "not read this time, it comes at the next search.",
@@ -171,7 +171,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "LinkedIn showed a security check, so all LinkedIn work is paused for a week.",
   // The job websites searched in the person's browser (jobs J10, app/browser/sources/interactive.py).
   permission_unavailable:
-    "Searching this website needs your permission for it, so it was not opened. Turn it on in the website permissions of Find jobs.",
+    "Searching this website needs your permission for it, so it was not opened. Tick it in Find jobs and save to give it.",
   permission_revoked:
     "Your permission for this website was turned off during the search, so it stopped. What was read is kept.",
   permission_checkpoint:
@@ -179,19 +179,67 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   platform_daily:
     "This website was already searched today. It is searched again tomorrow.",
   platform_signin:
-    "This website needs you to sign in. Nothing else was opened on it.",
+    "This website needs you to sign in. Use Sign in beside it in Find jobs, then search again. Nothing else was opened on it.",
+  // Sweeps before jobs J11 (#632) counted the postings of a website without saving them.
   finding_persistence_pending:
-    "Postings were read on this website, but saving them comes with a later update.",
+    "Postings were read on this website, but saving them came with a later update.",
   unsupported_interaction:
-    "The website asked for something the app does not do, so the app refused it and saved no posting from this website.",
+    "The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
   unsupported_criteria:
     "Your search uses settings this website search does not take yet, so it was not opened.",
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
-    "The assistant stopped before the end. Nothing was kept from it.",
+    "The assistant stopped before the end. Postings saved before are kept.",
+  // A platform's own cap (LinkedIn's pages a day, app/browser/platform_policy.py); the agent of
+  // a website has no cap of its own (owner, 2026-10-27, jobs J18). What was saved is kept.
   page_budget:
-    "The search read as many pages as it may. What was read is kept.",
+    "The app read as many pages of this website as it may today. What was read is kept.",
+  // A company careers page's run (browser B9).
+  token_budget:
+    "The assistant used all it may read on this site this time. What was read is kept.",
 };
+
+/** The searches the agent of a website ran (jobs J18, owner 2026-10-27), from its own tool
+ * calls: how many, and which, each a saved title, in the saved place it chose if any. Empty
+ * when it ran none or the api is older. */
+export function searchesSentence(source: {
+  searches?: number;
+  searched?: { title: string; place: string | null }[];
+}): string {
+  const ran = source.searches ?? 0;
+  if (ran <= 0) return "";
+  const head = `${ran.toLocaleString("en-GB")} ${ran === 1 ? "search" : "searches"} ran`;
+  const named = (source.searched ?? []).map((one) =>
+    one.place ? `${one.title} in ${one.place}` : one.title,
+  );
+  if (!named.length) return `${head}.`;
+  const more = ran - named.length;
+  const rest = more > 0 ? `, and ${more.toLocaleString("en-GB")} more` : "";
+  return `${head}: ${named.join("; ")}${rest}.`;
+}
+
+/** The saved titles and places a website's search could not carry (jobs J18): its scope takes
+ * 100 of each and 32 KiB in all, so a longer list is searched by its first ones, in saved order,
+ * and the rest is told here. Empty when none was left out or the api is older. */
+export function leftOutSentence(source: {
+  titles_left_out?: number;
+  places_left_out?: number;
+}): string {
+  const count = (n: number, one: string, many: string) =>
+    `${n.toLocaleString("en-GB")} ${n === 1 ? one : many}`;
+  const parts = [
+    source.titles_left_out
+      ? count(source.titles_left_out, "saved title", "saved titles")
+      : "",
+    source.places_left_out
+      ? count(source.places_left_out, "saved place", "saved places")
+      : "",
+  ].filter((part) => part !== "");
+  if (!parts.length) return "";
+  const total = (source.titles_left_out ?? 0) + (source.places_left_out ?? 0);
+  const verb = total === 1 ? "was" : "were";
+  return `${parts.join(" and ")} ${verb} left out: a website's search takes the first ones that fit.`;
+}
 
 export function sourceName(source: {
   kind: string;
