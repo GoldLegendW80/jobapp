@@ -126,6 +126,69 @@ TYPE_REFUSED = (
     "Refused: type only one of the saved titles or places of your search scope, exactly as "
     "written there, or nothing to clear a field."
 )
+# The model's own slips, told to it before the browser so it can correct them (jobs J18): a
+# typed value that is not one this box takes, a choice that is no saved value. Counted apart
+# (`refused["model_value"]`): they never end the website, its share of the sweep's time does.
+TITLE_BOX_REFUSED = (
+    "Refused: this box takes a title. Type only one of the saved titles of your search scope, "
+    "exactly as written there, or nothing to clear it."
+)
+PLACE_BOX_REFUSED = (
+    "Refused: this box takes a place. Type only one of the saved places of your search scope, "
+    "exactly as written there, or nothing to clear it."
+)
+CHOICE_REFUSED = (
+    "Refused: choose one value only, a saved place or the saved value of a filter of your "
+    "search scope, exactly as written there."
+)
+MODEL_VALUE = "model_value"
+# Which saved values a text entry of a page takes, as far as the api can tell from the snapshot
+# (`box_of`): its role, and the words of its accessible name (the label, aria-label or
+# placeholder the site gave it). browserd reads the field's own name and is the authority.
+ENTRY_ROLES = frozenset({"searchbox", "textbox", "combobox"})
+PLACE_WORDS = frozenset(
+    {"location", "locations", "localisation", "localization", "lieu", "lieux", "ville", "villes",
+     "city", "cities", "town", "where", "region", "regions", "departement", "departements",
+     "postcode", "zip", "zipcode", "postal", "country", "pays", "commune", "address", "adresse",
+     "place", "standort", "ort", "stadt"}
+)  # fmt: skip
+TITLE_WORDS = frozenset(
+    {"job", "jobs", "title", "titles", "keyword", "keywords", "motcle", "motscles", "motcles",
+     "poste", "postes", "metier", "metiers", "emploi", "emplois", "intitule", "what", "quoi",
+     "role", "roles", "skill", "skills", "competence", "competences", "company", "entreprise",
+     "query", "search", "recherche", "rechercher", "stelle", "stellen", "beruf"}
+)  # fmt: skip
+BOX_NAME_MAX = 500  # characters of an accessible name read
+
+
+def box_of(role: object, name: object) -> str | None:
+    """ "place" when a text entry's accessible name holds a place word and no title word ("Where",
+    "City, state or zip code", "Où ?", "Ville, département"), "title" the other way ("Keywords",
+    "Job title, keywords, or company", "Quoi ?", "Métier, mot-clé"), None when it holds both,
+    neither, or the element is no text entry: then the pre-check takes any saved value, as
+    browserd's own rule does in some field. Words are NFKC, case folded and accents stripped,
+    a hyphenated word also read glued (`mot-clé`); "où" is read with its accent, since "ou" is
+    the French "or"."""
+    if role not in ENTRY_ROLES or not isinstance(name, str):
+        return None
+    folded = unicodedata.normalize("NFKC", name[:BOX_NAME_MAX]).casefold()
+    raw = re.findall(r"[^\W_]+(?:-[^\W_]+)*", folded)
+    words: set[str] = set()
+    for token in raw:
+        plain = "".join(
+            ch for ch in unicodedata.normalize("NFKD", token) if not unicodedata.combining(ch)
+        )
+        words.update(plain.split("-"))
+        words.add(plain.replace("-", ""))
+    place = "où" in {part for token in raw for part in token.split("-")} or bool(
+        words & PLACE_WORDS
+    )
+    title = bool(words & TITLE_WORDS)
+    if place == title:
+        return None
+    return "place" if place else "title"
+
+
 INTERACTIVE_PROMPT = """You search one job website for a person, the way the person would,
 with all the criteria in the search scope of your first message. Start with browser_snapshot.
 Decide which searches to run and in which order: usually one per wanted title, and per wanted
@@ -586,6 +649,8 @@ class FinderSession:
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     typed_title: str | None = None
     typed_place: str | None = None
+    # The text entries of the page last read that `box_of` tells apart: ref, "title" or "place".
+    boxes: dict[str, str] = field(default_factory=dict)
     _report_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def __post_init__(self) -> None:
@@ -609,7 +674,11 @@ class FinderSession:
         from app.browser import sources
 
         root = sources.parse_snapshot(text[:SNAPSHOT_MAX] if self.interactive else text)
+        if self.interactive:
+            self.boxes = {}
         for node in root.walk():
+            if self.interactive and node.ref and (box := box_of(node.role, node.name)):
+                self.boxes[node.ref] = box
             if node.url:
                 link = canonical(urljoin(url, node.url))
                 if link and (
@@ -708,18 +777,59 @@ class FinderSession:
         self._read(opened, self.pages.last_text)
         return self._view(opened, self.pages.last_text), False
 
+    def _slip(self, name: str, args: dict[str, Any]) -> str | None:
+        """The model's own slip, refused before the browser (jobs J18): a typed text that is no
+        saved value of the box it goes in (a saved place in a title box, a value never saved), or
+        a choice that is no saved place or filter value. The box is the one `box_of` tells from
+        the page last read; when it cannot tell, any saved title or place goes on. None lets the
+        call go to browserd, which judges it by the field's own name (defence in depth): a
+        refusal there, or the website's, still ends the website."""
+        scope = self.interactive
+        if scope is None:
+            return None
+        if name == "browser_type":
+            ref, text = args.get("ref"), args.get("text")
+            box = self.boxes.get(ref) if isinstance(ref, str) else None
+            if box == "title":
+                allowed, refusal = {*scope.titles, ""}, TITLE_BOX_REFUSED
+            elif box == "place":
+                allowed, refusal = {*scope.places, ""}, PLACE_BOX_REFUSED
+            else:
+                allowed, refusal = {*scope.titles, *scope.places, ""}, TYPE_REFUSED
+            return None if isinstance(text, str) and text in allowed else refusal
+        if name == "browser_select_option":
+            values = args.get("values")
+            choices = {*scope.places, *(value for _, value in scope.filters)}
+            chosen = (
+                isinstance(values, list)
+                and len(values) == 1
+                and isinstance(values[0], str)
+                and values[0] in choices
+            )
+            return None if chosen else CHOICE_REFUSED
+        return None
+
+    def _out_of_time(self) -> str:
+        """Pages._act's own bounds, read before a refusal that asks nothing of the browser, so a
+        model that only slips still ends at the website's share of the sweep's time."""
+        from app.browser.sources import PAGE_BUDGET_S, PAGE_LOAD_S
+
+        now = self.pages.monotonic()
+        if now + PAGE_BUDGET_S >= self.pages.deadline:
+            return "time_budget"
+        return "lease_budget" if now + PAGE_LOAD_S > self.pages.lease_until else ""
+
     async def interact(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Only trusted interactive sessions can add browserd's discovery discriminator."""
         if self.interactive is None:
             return "Refused: this run has no interactive search permission.", True
         if self.stopped:
             return self._stop(self.stopped)
-        text = args.get("text")
-        if name == "browser_type" and not (
-            isinstance(text, str)
-            and text in {*self.interactive.titles, *self.interactive.places, ""}
-        ):
-            return TYPE_REFUSED, True
+        slip = self._slip(name, args)
+        if slip is not None:
+            self.refused[MODEL_VALUE] += 1
+            ended = self._out_of_time()
+            return self._stop(ended) if ended else (slip, True)
         from app.browser.sources import SourceError
 
         result: dict[str, Any] = {}

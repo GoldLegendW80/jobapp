@@ -270,8 +270,8 @@ def test_a_page_addressing_the_assistant_gets_no_typing_filter_click_navigation_
     assert [r["is_error"] for r in backend.results] == [False, True, True, True, True, True, False]
     # The hostile text reached the model as page data, never as an instruction.
     assert HOSTILE in json.loads(texts[0])["untrusted_page_snapshot"]
-    assert texts[1] == finder.TYPE_REFUSED
-    assert json.loads(texts[2])["error"] == "unsupported_discovery"
+    assert texts[1] == finder.TITLE_BOX_REFUSED  # the "Query" box takes a saved title
+    assert texts[2] == finder.CHOICE_REFUSED  # "any" is no saved value (jobs J18 follow up 2)
     assert json.loads(texts[3])["error"] in {"unsupported_discovery", "submit"}
     assert "observed link" in texts[4]
     assert "own pages" in texts[5]
@@ -280,11 +280,14 @@ def test_a_page_addressing_the_assistant_gets_no_typing_filter_click_navigation_
         "refused": [{"index": 0, "reason": "detail_not_opened"}],
         "kept_in_all": 0,
     }
-    # The off scope typing never left the API; the filter and the click were refused by browserd
-    # before reaching the page; neither navigation was asked of browserd.
-    assert tools.calls == ["browser_select_option", "browser_click"]
+    # The off scope typing and filter never left the API, counted as the model's own slips; the
+    # click was refused by browserd before reaching the page; neither navigation was asked of
+    # browserd.
+    assert tools.calls == ["browser_click"]
     assert acted(tools.page) == []
     assert one.found == []
+    assert one.refused[finder.MODEL_VALUE] == 2
+    assert one.refused["unsupported_interaction"] == 1
     assert one.refused["other_host"] == 1
     assert one.refused["detail_not_opened"] == 1
     assert NATIVE + "b13/jobs/lure" in one.seen

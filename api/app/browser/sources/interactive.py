@@ -543,8 +543,10 @@ async def _search(
             if ran.stopped:
                 return "no_credential" if ran.stopped == "no_credential" else "agent_failed"
             # A posting the agent reported again (another of its searches listed it) is merged,
-            # not refused by the website: it is no reason to say the website was unsupported.
-            if set(session.refused) - {"duplicate"} or not all(
+            # and a value the model typed or chose that its box does not take was told to it to
+            # correct (FinderSession._slip): neither was refused by the website, so neither is a
+            # reason to say the website was unsupported.
+            if set(session.refused) - {"duplicate", finder.MODEL_VALUE} or not all(
                 session.interactions[name] for name in ("browser_type", "browser_click")
             ):
                 return "unsupported_interaction"

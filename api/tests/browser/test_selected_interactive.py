@@ -131,7 +131,6 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
     subscription,
 ):
     runtime.give_key(alice)
-    backend = Recording()
     from tests.browser import b13_runtime as backend_steps
 
     if subscription:
@@ -154,6 +153,7 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
             for name, args in original
         ],
     )
+    backend = Recording()  # after the monkeypatch: the model chooses the saved value
     context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
     entries, stored, leases, tools, progress = asyncio.run(
         execute(selected(), alice, finder.RuntimeFinder(lambda: context))
@@ -201,7 +201,6 @@ def test_the_registered_report_tool_stores_its_finding_through_the_run_commits(
     """Jobs J11: the finding the real runtime's report tool verified is a job in the person's
     list, counted as new, its employer unknown as the page names none."""
     runtime.give_key(alice)
-    backend = Recording()
     from tests.browser import b13_runtime as backend_steps
 
     monkeypatch.setattr(
@@ -212,6 +211,7 @@ def test_the_registered_report_tool_stores_its_finding_through_the_run_commits(
             for name, args in backend_steps.STEPS
         ],
     )
+    backend = Recording()  # after the monkeypatch: the model chooses the saved value
     context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
     with runtime.factory() as database:
         row = Sweep(user_id=alice, trigger=SweepTrigger.manual, stats={})

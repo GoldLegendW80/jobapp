@@ -30,9 +30,10 @@ STEPS = [
 class Recording(FakeBackend):
     """Plays `steps`; `obeys_page` is a hostile model whose calls are expected to be refused."""
 
-    def __init__(self, steps=STEPS, obeys_page=False):
+    def __init__(self, steps=None, obeys_page=False):
         super().__init__(speed=0)
-        self.steps, self.obeys_page = steps, obeys_page
+        # STEPS read now, not when the class was made, so a test's monkeypatch of it holds.
+        self.steps, self.obeys_page = STEPS if steps is None else steps, obeys_page
         self.results = []
 
     async def stream(self, request):

@@ -253,7 +253,9 @@ def test_a_value_the_person_did_not_save_is_refused_before_the_browser(typed):
         site,
         ScriptedFinder(script),
     )
-    assert answers == [(finder.TYPE_REFUSED, True)]
+    # e1 is the page's "Query" box (test_b13_runtime.FIRST), a title box (finder.box_of).
+    assert answers == [(finder.TITLE_BOX_REFUSED, True)]
+    assert entry["refused"] == {finder.MODEL_VALUE: 1}  # the model's slip, counted apart
     assert site.typed == "robot"  # the refused text never reached the browser
     # The agent goes on with its saved values: the refusal ends nothing.
     assert site.actions == [
@@ -270,8 +272,10 @@ def test_a_saved_value_or_nothing_is_typed_and_only_a_submitted_search_is_listed
     site = SearchSite(results={"robot": ["Robot Engineer"]})
 
     async def script(session: finder.FinderSession) -> finder.Ran:
-        for text in ("drone", "", "Paris", "robot"):
-            assert not (await session.interact("browser_type", {"ref": "e1", "text": text}))[1]
+        # e1 is the "Query" box, a title box; e2 ("Remote") is not told apart, so any saved
+        # value goes on there (finder.box_of).
+        for ref, text in (("e1", "drone"), ("e1", ""), ("e2", "Paris"), ("e1", "robot")):
+            assert not (await session.interact("browser_type", {"ref": ref, "text": text}))[1]
         assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
         # Typed, never submitted: not a search that ran.
         assert not (await session.interact("browser_type", {"ref": "e1", "text": "drone"}))[1]
