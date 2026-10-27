@@ -152,8 +152,8 @@ test("a new account fills its profile from empty to 100% in the browser", async 
 
   // Search, with a board checked against the real Ashby API by the api
   await openTab(page, "Search");
-  await addTerm(page, "Titles to include", "ai engineer");
-  await addTerm(page, "Locations", "Paris");
+  await addTerm(page, "Job titles", "ai engineer");
+  await addTerm(page, "Places", "Paris");
   await page.getByRole("button", { name: "CDI (permanent)" }).click();
   await page
     .getByLabel("Remote stance", { exact: true })
