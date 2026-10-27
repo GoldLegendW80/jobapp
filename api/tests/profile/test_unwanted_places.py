@@ -15,6 +15,7 @@ from tests.profile.conftest import FULL, full, signed_in
 from tests.profile.test_api import read, save, save_ok
 
 EMPTY = {"terms": [], "advanced_regex": False}
+PLACES = {"terms": ["United States"], "advanced_regex": False}
 
 
 def search_with(**fields: Any) -> dict[str, Any]:
@@ -23,15 +24,24 @@ def search_with(**fields: Any) -> dict[str, Any]:
     return data
 
 
+def old_editor(data: dict[str, Any]) -> dict[str, Any]:
+    """What a page or an export from before the field sends: the search without the key."""
+    return {k: v for k, v in data.items() if k != "location_exclude"}
+
+
 # --- the field ----------------------------------------------------------------------------------
 
 
 def test_a_search_section_saved_before_the_field_reads_it_empty() -> None:
-    old = {k: v for k, v in full("search").items() if k != "location_exclude"}
+    old = old_editor(full("search"))
     stored = validate_section("search", old)
-    assert stored["location_exclude"] == EMPTY
+    # The key stays out of the stored form (the service then keeps the stored list), and the
+    # section reads it as empty.
+    assert "location_exclude" not in stored
+    assert SearchSection.model_validate(stored).location_exclude.terms == []
     assert SearchSection.model_validate(old).location_exclude.terms == []
-    assert validate_section("search", {})["location_exclude"] == EMPTY
+    assert "location_exclude" not in validate_section("search", {})
+    assert validate_section("search", {"location_exclude": EMPTY})["location_exclude"] == EMPTY
 
 
 def test_the_field_follows_location_in_the_stored_order() -> None:
@@ -132,17 +142,55 @@ def test_an_export_with_unwanted_places_round_trips(api: Api, ana: str) -> None:
     ]
 
 
-def test_an_old_export_without_the_field_imports_it_empty(api: Api, ana: str) -> None:
+def old_export(search: dict[str, Any]) -> dict[str, Any]:
     sections = {name: full(name) for name in FULL}
-    sections["search"].pop("location_exclude")
-    document = {
+    sections["search"] = old_editor(search)
+    return {
         "format": "jobapp-profile",
         "version": 1,
         "exported_at": "2026-10-01T00:00:00Z",
         "sections": sections,
     }
+
+
+def test_an_old_export_without_the_field_imports_it_empty(api: Api, ana: str) -> None:
+    response = api.post("/api/profile/import", token=ana, json=old_export(full("search")))
+    assert response.status_code == 200, response.text
+    stored = read(api, ana)["sections"]["search"]
+    assert "location_exclude" not in stored
+    assert SearchSection.model_validate(stored).location_exclude.terms == []
+
+
+def test_an_old_export_keeps_the_unwanted_places_already_stored(api: Api, ana: str) -> None:
+    for revision, name in enumerate(FULL):
+        data = search_with(location_exclude=PLACES) if name == "search" else full(name)
+        save_ok(api, ana, name, data, revision)
+    response = api.post("/api/profile/import", token=ana, json=old_export(full("search")))
+    assert response.status_code == 200, response.text
+    assert read(api, ana)["sections"]["search"]["location_exclude"] == PLACES
+
+
+def test_an_export_with_an_empty_list_clears_the_stored_one(api: Api, ana: str) -> None:
+    for revision, name in enumerate(FULL):
+        data = search_with(location_exclude=PLACES) if name == "search" else full(name)
+        save_ok(api, ana, name, data, revision)
+    document = old_export(full("search"))
+    document["sections"]["search"]["location_exclude"] = EMPTY
     response = api.post("/api/profile/import", token=ana, json=document)
     assert response.status_code == 200, response.text
+    assert read(api, ana)["sections"]["search"]["location_exclude"] == EMPTY
+
+
+def test_a_save_from_an_old_tab_keeps_the_stored_list_and_a_sent_empty_list_clears_it(
+    api: Api, ana: str
+) -> None:
+    save_ok(api, ana, "search", search_with(location_exclude=PLACES), 0)
+    stored = read(api, ana)["sections"]["search"]
+    save_ok(api, ana, "search", old_editor(stored) | {"min_fit": 55}, 1)
+    after = read(api, ana)["sections"]["search"]
+    assert after["min_fit"] == 55
+    assert after["location_exclude"] == PLACES
+    save_ok(api, ana, "search", stored | {"location_exclude": EMPTY}, 2)
     assert read(api, ana)["sections"]["search"]["location_exclude"] == EMPTY
 
 

@@ -880,7 +880,13 @@ def _validated(slot: Slot, value: Any) -> Any:
 def canonical(section: str, data: Mapping[str, Any] | None) -> dict[str, Any]:
     """A stored section in its canonical form (a section never saved is its empty form).
     Raises pydantic.ValidationError when what is stored no longer fits the model."""
-    return schemas.validate_section(section, dict(data) if data is not None else {})
+    stored = schemas.validate_section(section, dict(data) if data is not None else {})
+    if section == "search":
+        # validate_section leaves out a key the data omits, for the service to keep the stored
+        # value (schemas.KEPT_WHEN_OMITTED). An item reads and writes every list, so the unwanted
+        # places read as an empty list here, as they do in the model.
+        stored.setdefault("location_exclude", schemas.TermList().model_dump(mode="json"))
+    return stored
 
 
 def _sorted_words(value: Any) -> Any:
