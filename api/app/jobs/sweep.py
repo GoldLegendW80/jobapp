@@ -1087,8 +1087,14 @@ async def run_sweep(
             await asyncio.to_thread(fail_sweep, sessions, sweep_id, TIMED_OUT, clock(), stats)
     except asyncio.CancelledError:
         stats.duration = round(time.monotonic() - started, 2)
-        # A second cancellation ends the waits below: the row is then left to reap_stale.
-        if await asyncio.shield(_settled(commits, sweep_id)):
+        try:
+            settled = await asyncio.shield(_settled(commits, sweep_id))
+        except asyncio.CancelledError:
+            # A second cancellation: the run lets go of the row at once (no publication, no
+            # end written over a commit still running), and reap_stale ends it.
+            commits.abandon()
+            raise
+        if settled:
             await asyncio.shield(
                 asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERRUPTED, clock(), stats)
             )
@@ -1221,9 +1227,13 @@ def _store_found(
 # the end of the sweep, `settle` closes admission and waits up to DRAIN_S for what was admitted.
 # A commit still running then leaves the sweep row as it is (running, with the counts committed
 # so far) for `reap_stale`: no progress, no end is written that the commit could contradict.
+# A commit that fails may still have landed (its COMMIT reached the database, the answer was
+# lost): it is never retried, and `recover_verified` reads the row and the person's list again,
+# so the run's counts and duplicates are those stored.
 
 DRAIN_S = 5.0
 VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule")
+SOURCE_COUNTERS = ("found", "postings", "duplicates", "skipped_by_rule")
 
 
 class StoreRefusedError(Exception):
@@ -1270,6 +1280,28 @@ def commit_verified(
         row.stats = _stats_json(row, snapshot)
         db.commit()
     return delta
+
+
+def recover_verified(
+    sessions: sessionmaker[Session], plan: Plan, source_id: str
+) -> tuple[dict[str, int], dict[str, int], Known]:
+    """After a failed commit: the locked row's verified counters (the run's and its source's)
+    and a fresh Known of the person's own rows. The row's counters were written in the same
+    transaction as the jobs, and every other write of the run carries the run's counts, which
+    only grow: the larger of the row's and the run's is what is stored."""
+    with sessions() as db:
+        row = db.get(Sweep, plan.sweep_id, with_for_update=True, populate_existing=True)
+        mine = row is not None and row.user_id == plan.user_id
+        stored = (row.stats or {}) if mine else {}
+        entry = next((s for s in stored.get("sources", []) if s.get("source_id") == source_id), {})
+
+        def ints(data: dict[str, Any], names: Sequence[str]) -> dict[str, int]:
+            return {n: data[n] for n in names if type(data.get(n)) is int}
+
+        found = ints(stored, VERIFIED_COUNTERS), ints(entry, SOURCE_COUNTERS)
+        known = Known(db, plan.user_id)
+        db.rollback()
+    return *found, known
 
 
 def _store_finding(
@@ -1363,22 +1395,54 @@ class Commits:
         task = asyncio.get_running_loop().create_task(self._commit(source_id, source, batch))
         self._running.add(task)
         task.add_done_callback(self._running.discard)
+        task.add_done_callback(_retrieved)  # a caller cancelled meanwhile never reads it
         await asyncio.shield(task)
 
     async def _commit(self, source_id: str, source: str, batch: Any) -> None:
         async with self._lock:
             snapshot = Stats(**copy.deepcopy(self.stats.as_json()))
             known = self.plan.known.copy()
-            delta = await asyncio.to_thread(
-                commit_verified, self.sessions, self.plan, known, snapshot, source_id, source,
-                batch.findings, self.clock(),
-            )  # fmt: skip
+            try:
+                delta = await asyncio.to_thread(
+                    commit_verified, self.sessions, self.plan, known, snapshot, source_id,
+                    source, batch.findings, self.clock(),
+                )  # fmt: skip
+            except Exception:
+                await self._recover(source_id)
+                raise
             if delta is None:
                 raise StoreRefusedError
             if self.unsettled:
                 return  # the run let go of the row: nothing more is published
             vars(self.plan.known).update(vars(known))
             _counted(self.stats, source_id, delta, len(batch.findings))
+
+    async def _recover(self, source_id: str) -> None:
+        """The failed commit may have landed: take the row's counts and the person's list as
+        they are stored (`recover_verified`). When even that read fails, the run lets go of
+        the row, whose counters are those of its jobs, for reap_stale."""
+        try:
+            counters, entry_counters, known = await asyncio.to_thread(
+                recover_verified, self.sessions, self.plan, source_id
+            )
+        except Exception:
+            logger.exception("reading a sweep again after a failed commit failed")
+            self.abandon()
+            return
+        if self.unsettled:
+            return
+        for name, value in counters.items():
+            setattr(self.stats, name, max(getattr(self.stats, name), value))
+        for entry in self.stats.sources:
+            if entry.get("source_id") == source_id:
+                for name, value in entry_counters.items():
+                    entry[name] = max(entry.get(name, 0), value)
+        vars(self.plan.known).update(vars(known))
+
+    def abandon(self) -> None:
+        """Let go of the row: no batch is admitted, nothing is published or written again."""
+        self._admitted = None
+        self._closed = self.unsettled = True
 
     async def progress(self, write: Callable[[], Awaitable[None]]) -> None:
         """A progress write of the run: never beside a commit (it would write counts without
@@ -1403,13 +1467,16 @@ class Commits:
         self._closed = self._closed or close
         pending = set(self._running)
         if pending:
-            done, left = await asyncio.wait(pending, timeout=self.drain_s)
-            for task in done:
-                if not task.cancelled():
-                    task.exception()  # retrieved: a refused or failed commit was told its caller
+            _, left = await asyncio.wait(pending, timeout=self.drain_s)
             if left:
-                self._closed = self.unsettled = True
+                self.abandon()
         return not self.unsettled
+
+
+def _retrieved(task: asyncio.Task[None]) -> None:
+    """A refused or failed commit was told to its caller, when it still had one."""
+    if not task.cancelled():
+        task.exception()
 
 
 # --- maintenance --------------------------------------------------------------------------------

@@ -644,3 +644,193 @@ def test_a_batch_after_its_source_settled_starts_no_commit(
             await commits.save("source-a", HOST, batch)  # the run closed
 
     asyncio.run(scenario())
+
+
+def report_held(session: finder.FinderSession) -> "asyncio.Task[tuple[str, bool]]":
+    return asyncio.create_task(
+        session.report_verified(
+            [{"title": "Robot Engineer", "url": "/jobs/robot", "text": MODEL_WORDS}]
+        )
+    )
+
+
+def test_a_commit_whose_answer_was_lost_is_read_again_never_stored_twice(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The COMMIT landed and its answer was lost: the batch is not retried, the source stops,
+    and the run takes the row's counts and the person's list as stored, so the counts written
+    after (progress, the end) still agree with the jobs."""
+    profile(factory, alice)
+    original = sweep.commit_verified
+    calls: list[int] = []
+
+    def lost(*args: Any) -> Any:
+        calls.append(1)
+        original(*args)
+        raise RuntimeError("the answer of COMMIT was lost")
+
+    monkeypatch.setattr(sweep, "commit_verified", lost)
+    original_settle = sweep.Commits.settle
+    known: list[set[str]] = []
+
+    async def settle(self: sweep.Commits, *, close: bool = False) -> bool:
+        known.append(set(self.plan.known.urls))
+        return await original_settle(self, close=close)
+
+    monkeypatch.setattr(sweep.Commits, "settle", settle)
+    row = run(factory, new_sweep(factory, alice), runner(reports("jobs/robot", "jobs/arm")))
+    assert calls == [1]  # never retried, and the source stopped there
+    entry = entry_of(row)
+    assert (entry["found"], entry["postings"], entry["error"]) == (1, 1, "store_failed")
+    assert (row.status, row.stats["new"]) == (SweepStatus.done, 1)
+    assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
+    # A later source finds it a duplicate (Known holds its addresses in their key form).
+    assert [url for url in known[0] if url.endswith("//jobs.example.test/jobs/robot")]
+    assert_counts_agree(factory, row, alice)
+
+
+def test_a_finalizer_waiting_on_a_held_commit_ends_the_row_with_its_counts(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Storage first: another finalizer asks for the row while a commit holds its lock. It ends
+    the row after the COMMIT, with the counts of the jobs stored, and the run writes no end."""
+    profile(factory, alice)
+    held = Held(monkeypatch)
+    sweep_id = new_sweep(factory, alice)
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        assert not (await session.navigate("/jobs/robot"))[1]
+        call = report_held(session)
+        await asyncio.to_thread(held.inside.wait, 30)
+        ender = asyncio.create_task(
+            asyncio.to_thread(sweep.fail_sweep, factory, sweep_id, sweep.CRASHED, now())
+        )
+        held.release.set()
+        text, error = await call
+        await ender
+        assert (json.loads(text)["kept"], error) == (1, False)
+        return finder.Ran()
+
+    try:
+        row = run(factory, sweep_id, runner(script))
+    finally:
+        held.release.set()
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.CRASHED)
+    assert (row.stats["new"], entry_of(row)["postings"], entry_of(row)["found"]) == (1, 1, 1)
+    assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
+    assert_counts_agree(factory, row, alice)
+
+
+def test_a_second_cancellation_during_the_drain_leaves_the_row_to_recovery(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile(factory, alice)
+    held = Held(monkeypatch)
+    sweep_id = new_sweep(factory, alice)
+    never = asyncio.Event()
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await searched(session)
+        assert not (await session.navigate("/jobs/robot"))[1]
+        await report_held(session)
+        await never.wait()
+        raise AssertionError("cancelled before")
+
+    original_settle = sweep.Commits.settle
+    runs: list[sweep.Commits] = []
+    draining = asyncio.Event()
+
+    async def settle(self: sweep.Commits, *, close: bool = False) -> bool:
+        runs.append(self)
+        draining.set()
+        return await original_settle(self, close=close)
+
+    monkeypatch.setattr(sweep.Commits, "settle", settle)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=runner(script))  # type: ignore[arg-type]
+        )
+        try:
+            await asyncio.to_thread(held.inside.wait, 30)
+            task.cancel()  # the worker stops: the run waits for the commit
+            await draining.wait()
+            task.cancel()  # and is stopped again while it waits
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert read_sweep(factory, sweep_id).status is SweepStatus.running
+        finally:
+            held.release.set()
+        left = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*left, return_exceptions=True)
+
+    asyncio.run(scenario())
+    [commits] = runs
+    assert commits.unsettled
+    assert commits.stats.new == 0  # nothing published to the run it let go of
+    row = read_sweep(factory, sweep_id)
+    assert (row.status, row.stats["new"]) == (SweepStatus.running, 1)
+    with factory() as db:
+        assert sweep.reap_stale(db, now() + timedelta(minutes=5)) == 1
+        db.commit()
+    row = read_sweep(factory, sweep_id)
+    assert (row.status, row.error, row.stats["new"]) == (SweepStatus.failed, sweep.CRASHED, 1)
+    assert_counts_agree(factory, row, alice)
+
+
+def test_a_progress_write_and_a_commit_never_overlap(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A progress write's thread holds the database; a batch reported meanwhile waits for that
+    thread to end, even when the progress write's caller is cancelled."""
+    profile(factory, alice)
+    sweep_id = new_sweep(factory, alice)
+    plan = sweep.claim(factory, sweep_id, now())
+    assert plan is not None
+    stats = sweep.Stats(sources=sweep.initial_sources(plan.search_scope))
+    commits = sweep.Commits(factory, plan, stats, now)
+    order: list[str] = []
+    inside, release = threading.Event(), threading.Event()
+    original = sweep.commit_verified
+
+    def committing(*args: Any) -> Any:
+        order.append("commit")
+        return original(*args)
+
+    monkeypatch.setattr(sweep, "commit_verified", committing)
+
+    def write() -> None:
+        inside.set()
+        assert release.wait(30), "the test never released the progress write"
+        sweep.save_progress(factory, sweep_id, stats, now())
+        order.append("progress")
+
+    found = finder.VerifiedFinding(
+        "Robot Engineer", "", BASE + "jobs/robot", "Build robots.", None, None,
+        {"title": "Robot Engineer"}, now().isoformat(),
+    )  # fmt: skip
+    source_id = stats.sources[0]["source_id"]
+
+    async def scenario() -> None:
+        writing = asyncio.create_task(commits.progress(lambda: asyncio.to_thread(write)))
+        try:
+            await asyncio.to_thread(inside.wait, 30)
+            commits.admit(source_id)
+            saving = asyncio.create_task(
+                commits.save(source_id, HOST, finder.VerifiedBatch((found,)))
+            )
+            writing.cancel()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert order == []  # the batch waits for the progress thread
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await writing
+        await saving
+        assert await commits.settle(close=True)
+
+    asyncio.run(scenario())
+    assert order == ["progress", "commit"]
+    assert (stats.new, read_sweep(factory, sweep_id).stats["new"]) == (1, 1)
