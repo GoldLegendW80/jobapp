@@ -128,7 +128,8 @@ TYPE_REFUSED = (
 )
 # The model's own slips, told to it before the browser so it can correct them (jobs J18): a
 # typed value that is not one this box takes, a choice that is no saved value. Counted apart
-# (`refused["model_value"]`): they never end the website, its share of the sweep's time does.
+# (`refused["model_value"]`): no reason to end the website unsupported; its share of the
+# sweep's time ends a model that only slips.
 TITLE_BOX_REFUSED = (
     "Refused: this box takes a title. Type only one of the saved titles of your search scope, "
     "exactly as written there, or nothing to clear it."
@@ -145,6 +146,11 @@ MODEL_VALUE = "model_value"
 # Which saved values a text entry of a page takes, as far as the api can tell from the snapshot
 # (`box_of`): its role, and the words of its accessible name (the label, aria-label or
 # placeholder the site gave it). browserd reads the field's own name and is the authority.
+# Declared open points: a name in another language than English, French or these few German
+# words is not told apart (any saved value goes on, as before); the name is the site's, so a
+# search box named with a place word (or the reverse) has the right value refused here, and the
+# model told the box takes the other kind; refs are read on the page last read, so a ref the
+# model kept from an earlier page is judged by what that ref is now.
 ENTRY_ROLES = frozenset({"searchbox", "textbox", "combobox"})
 PLACE_WORDS = frozenset(
     {"location", "locations", "localisation", "localization", "lieu", "lieux", "ville", "villes",

@@ -85,6 +85,9 @@ def test_the_summary_answer_names_the_counter() -> None:
         # A website searched in the browser (jobs J18): the searches its agent ran.
         "searches",
         "searched",
+        # And the saved titles and places its search could not carry (jobs J18).
+        "titles_left_out",
+        "places_left_out",
         "error",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
@@ -162,6 +165,8 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "items_skipped": 2,
         "searches": 0,
         "searched": [],
+        "titles_left_out": 0,
+        "places_left_out": 0,
         "error": "store_failed",
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,

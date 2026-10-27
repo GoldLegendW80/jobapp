@@ -17,9 +17,10 @@ which searches to run, in which order, and when the website is covered, and brow
 type only one saved title in a search box or one saved place in the place box (or nothing, to
 clear one), and set a native filter only to its saved value (browser/browserd/tools/
 discovery.py). A value the model types that its box does not take, or a choice that is no saved
-value, is its own slip: told to it before the browser and counted apart, it never ends the
-website (finder.FinderSession._slip). Its budget a website is "no limit" (owner): no cap on its
-turns, pages, tokens or verified postings. What bounds it is not its budget: its share of the
+value, is its own slip: told to it before the browser and counted apart, it is no reason to say
+the website unsupported (finder.FinderSession._slip). Its budget a website is "no limit"
+(owner): no cap on its turns, pages, tokens or verified postings. What bounds it is not its
+budget: its share of the
 sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
 never starves the next), which it is told; the lease's own maximum; the platform policy's caps
 (LinkedIn's pages a sweep and one sweep a day), pacing per platform and the 7 day pause.
