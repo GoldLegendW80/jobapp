@@ -829,6 +829,8 @@ class PlatformConsent(_Section):
 
 InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
 INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
+# Search fields an older editor or import leaves out: the stored value is kept (service).
+KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude")
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -1241,7 +1243,7 @@ def _stored_section(model: BaseModel) -> dict[str, Any]:
     if isinstance(model, SearchSection):
         # An older editor/import omits these keys. Preserve that distinction so the service
         # can retain saved intent; explicit [] / null still clears it.
-        for name in INTERACTIVE_FIELDS:
+        for name in KEPT_WHEN_OMITTED:
             if name not in model.model_fields_set:
                 data.pop(name)
         # Stored only once a dedicated writer records a decision: the release before this one

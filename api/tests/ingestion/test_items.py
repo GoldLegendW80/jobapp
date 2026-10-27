@@ -787,6 +787,22 @@ def test_restore_is_the_inverse_of_apply(which: str) -> None:
             assert json.loads(json.dumps(record)) == record  # it is stored as JSON
 
 
+def test_a_search_saved_without_the_unwanted_places_takes_an_item_for_them_and_gives_it_back() -> (
+    None
+):
+    """A search an older page saved has no `location_exclude` key (the service keeps the stored
+    one only when there is one): the list reads as empty for an item, both ways."""
+    stored = {k: v for k, v in full("search").items() if k != "location_exclude"}
+    assert items.canonical("search", stored)["location_exclude"]["terms"] == []
+    step = build("search", "location_exclude", {"terms": ["Paris"]})
+    after = items.apply("search", stored, step)
+    assert after["location_exclude"]["terms"] == ["Paris"]
+    record = items.held("search", items.canonical("search", stored), "location_exclude")
+    assert record is not None
+    back = items.restore("search", after, "location_exclude", record)
+    assert back["location_exclude"]["terms"] == []
+
+
 def test_an_entry_removed_returns_to_its_place_or_to_the_end() -> None:
     identity = full("identity")
     record = items.held("identity", identity, "languages:french")
