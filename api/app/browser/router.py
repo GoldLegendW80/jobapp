@@ -55,6 +55,12 @@ from app.identity.models import User
 from app.identity.schemas import ErrorOut
 
 UNAVAILABLE = "The browser is not available right now."
+# browserd's control secret is empty on this server: no session can start until whoever runs the
+# app sets it (BROWSER_CONTROL_SECRET, .env.example). The log names the setting, never a value.
+NOT_SET_UP = (
+    "The browser is not set up on this server yet. Ask the person who runs the app to finish its "
+    "setup, then try again."
+)
 NO_SESSION = "You have no browser session."
 BAD_ADDRESS = "Type the address of the site, starting with https:// or http://."
 
@@ -259,7 +265,11 @@ async def start_session(
         got = await store.acquire(
             str(user.id), PERSON_PURPOSES[body.purpose], automation=False, address=address
         )
-    except (BrowserError, StoreUnavailableError):
+    except BrowserError:
+        if not store.client.configured:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NOT_SET_UP) from None
+        raise _unavailable() from None
+    except StoreUnavailableError:
         raise _unavailable() from None
     if got.lease is not None:
         return SessionOut(lease=_lease_out(got.lease, store.clock()), queue=None)

@@ -23,7 +23,9 @@
 # browser   off when it has no container (its profile is not on), else its state: healthy, or the
 #           state and health docker reports. A running browser that is not healthy is a failure;
 #           an exited one is not (it stays down after a reboot until the next deploy, owner decision
-#           of 2026-10-14)
+#           of 2026-10-14). unconfigured: healthy, but the api's BROWSER_CONTROL_SECRET is empty, so
+#           every session answers 503 without asking browserd; a failure (asked as set or empty,
+#           never the value; an answer that cannot be read keeps healthy)
 # commit    the first 12 characters of .deployed-commit
 # result    ok, or fail when any figure above is wrong or unread
 # Only these figures: no log line, no environment value, no host name. With GITHUB_STEP_SUMMARY
@@ -52,6 +54,9 @@ esac
   exit 64
 }
 DIR="${1:-${JOBAPP_DIR:-$HOME/jobapp}}"
+
+# The api's check of browserd's control secret: prints set or empty, never the value.
+SECRET_SET='import os; print("set" if os.environ.get("BROWSER_CONTROL_SECRET", "").strip() else "empty")'
 
 # word <text>: the text as one token of the line: letters, digits and . _ : - only, else `-`.
 word() { if [[ "$1" =~ ^[A-Za-z0-9._:-]+$ ]]; then printf '%s' "$1"; else printf -- '-'; fi; }
@@ -96,6 +101,13 @@ else
     IFS=$'\t' read -r _ state health <<<"$row"
     if [[ "$state" == running && "$health" == healthy ]]; then
       browser=healthy
+      # Production on 2026-10-27: browserd healthy, the api without the secret, and Sign in
+      # answered "not available" with no log line. Only "set" or "empty" comes back, never a value.
+      secret="$(compose exec -T api python -c "$SECRET_SET" 2>/dev/null)"
+      if [[ "$secret" == empty ]]; then
+        browser=unconfigured
+        problems=1
+      fi
     elif [[ "$state" == running ]]; then
       browser="$(word "running:${health:-none}")"
       problems=1

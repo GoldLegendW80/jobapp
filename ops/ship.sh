@@ -997,6 +997,7 @@ check_jetson() {
     problems+=("$errors error lines in 10 minutes")
   fi
   [[ "$browser" != running:* ]] || problems+=("browser ${browser/:/ }")
+  [[ "$browser" != unconfigured ]] || problems+=("browser unconfigured: BROWSER_CONTROL_SECRET is empty in the Jetson's .env")
   [[ "$(figure result "$line")" == ok || ${#problems[@]} -gt 0 ]] || problems+=("the check on the Jetson failed")
   note jetson "$services services, $healthy healthy, $missing missing; alembic $rev; memory $mem_used of $mem_total MB used; $errors error lines in 10 minutes; browser $browser"
   ((${#problems[@]} == 0)) || die "the Jetson after the deploy: $(joined "${problems[@]}")"

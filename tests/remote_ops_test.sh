@@ -45,7 +45,8 @@ export STATE="$WORK/state"
 # --- the fake docker of the Jetson ------------------------------------------------------------------
 # Only the deploy's compose command (-f compose.yml --profile tunnel) is answered; anything else is
 # recorded in $STATE/unexpected and fails. Files of $STATE: services, ps, alembic, logs (absent:
-# the command fails), apply (the state the admin command prints).
+# the command fails), apply (the state the admin command prints), secret (what the api's check of
+# BROWSER_CONTROL_SECRET prints: set or empty; absent: the command fails).
 cat >"$WORK/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STATE/docker.log"
@@ -60,6 +61,10 @@ case "$*" in
   answer alembic
   ;;
 "$C logs --no-color --since 10m") answer logs ;;
+"$C exec -T api python -c "*)
+  printf 'reading %s\n' "$CANARY" >&2
+  answer secret
+  ;;
 "$C exec -T api python -m app.apply.admin "*)
   printf 'apply %s\n' "${@: -1}" >>"$STATE/apply.log"
   printf 'connecting with %s\n' "$CANARY" >&2
@@ -89,6 +94,7 @@ fresh() { # a deployed tree in $APP with a well stack, and a fresh $STATE
   } >"$STATE/logs"
   printf 'MemTotal:        7802880 kB\nMemFree:          512000 kB\nMemAvailable:    5447680 kB\n' >"$STATE/meminfo"
   echo paused >"$STATE/apply"
+  echo set >"$STATE/secret"
 }
 export JETSON_MEMINFO="$STATE/meminfo"
 WELL="JOBAPP-VERIFY services=8 healthy=8 missing=0 unhealthy=0 alembic=0018 head=1 mem_used=2300 mem_total=7620 errors=0 browser=off commit=0123456789ab unwell=- absent=- result=ok"
@@ -146,6 +152,27 @@ run 1 ops/jetson-verify.sh "$APP"
 out_has " browser=running:starting "
 out_has " services=8 healthy=8 "
 ok "the browser: off without a container, healthy, exited (down after a reboot, by decision) passes, running and not healthy fails; never counted with the 8"
+
+# Production on 2026-10-27: browserd healthy, the api's BROWSER_CONTROL_SECRET empty, and every
+# Sign in answered "The browser is not available right now." while the deploy said healthy.
+fresh
+printf 'browser\trunning\thealthy\n' >>"$STATE/ps"
+echo empty >"$STATE/secret"
+run 1 ops/jetson-verify.sh "$APP"
+out_has " browser=unconfigured "
+out_has " result=fail"
+out_lacks "$CANARY"
+grep -q -- "exec -T api python -c " "$STATE/docker.log" || fail "the api was not asked: $(cat "$STATE/docker.log")"
+fresh
+printf 'browser\trunning\thealthy\n' >>"$STATE/ps"
+rm "$STATE/secret"
+run 0 ops/jetson-verify.sh "$APP"
+out_has " browser=healthy "
+fresh
+run 0 ops/jetson-verify.sh "$APP"
+out_has " browser=off "
+! grep -q -- "exec -T api python -c " "$STATE/docker.log" || fail "the api was asked without a browser"
+ok "the browser: healthy with the api's control secret empty is unconfigured and fails (set or empty only, never a value); unread stays healthy; no browser, no question"
 
 fresh
 rm "$STATE/services" "$STATE/ps" "$STATE/alembic" "$STATE/logs" "$STATE/meminfo"

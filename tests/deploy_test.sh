@@ -2083,7 +2083,8 @@ step "generate_env: a new .env.jetson gets a CREDENTIALS_KEY, an existing one is
 gen_env() {
   (
     eval "$(sed -n -e '/^info() {/p' -e '/^warn() {/p' -e '/^die() {/,/^}/p' -e '/^envval() {/,/^}/p' \
-      -e '/^generate_env() {/,/^}/p' -e '/^warn_missing_credentials_key() {/,/^}/p' deploy.sh)"
+      -e '/^generate_env() {/,/^}/p' -e '/^warn_missing_credentials_key() {/,/^}/p' \
+      -e '/^warn_missing_browser_secret() {/,/^}/p' deploy.sh)"
     # shellcheck disable=SC2034 # read by the evaluated functions
     HOST=jetson RDIR=jobapp LOCAL_ENV="$1"
     "$2"
@@ -2096,6 +2097,11 @@ key="$(sed -n 's/^CREDENTIALS_KEY=//p' "$genv")"
 [[ "$(printf '%s' "$key" | openssl base64 -d -A | wc -c | tr -d ' ')" == 32 ]] ||
   fail "CREDENTIALS_KEY is not 32 bytes of base64: $(grep -c CREDENTIALS_KEY "$genv") line(s)"
 grep -q '^APP_ENV=production$' "$genv" || fail "generated .env lacks APP_ENV=production"
+# Production on 2026-10-27: the generated .env had no BROWSER_CONTROL_SECRET, so browserd ran
+# healthy and every browser session answered 503 without a log line.
+browser_secret="$(sed -n 's/^BROWSER_CONTROL_SECRET=//p' "$genv")"
+[[ "$browser_secret" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "BROWSER_CONTROL_SECRET is not 32 random bytes in hex: $(grep -c BROWSER_CONTROL_SECRET "$genv") line(s)"
 [[ "$(stat -c %a "$genv" 2>/dev/null || stat -f %Lp "$genv")" == 600 ]] || fail "generated .env is not mode 600"
 before="$(cat "$genv")"
 run 1 gen_env "$genv" generate_env
@@ -2106,11 +2112,17 @@ run 0 gen_env "$genv" warn_missing_credentials_key
 printf 'APP_ENV=production\nSECRET_KEY=x\n' >"$WORK/gen/old.env"
 run 0 gen_env "$WORK/gen/old.env" warn_missing_credentials_key
 out_has "has no CREDENTIALS_KEY"
+run 0 gen_env "$genv" warn_missing_browser_secret
+[[ ! -s "$WORK/out" ]] || fail "warned although BROWSER_CONTROL_SECRET is set: $(cat "$WORK/out")"
+run 0 gen_env "$WORK/gen/old.env" warn_missing_browser_secret
+out_has "has no BROWSER_CONTROL_SECRET"
+out_has "BROWSER_CONTROL_SECRET=\$(openssl rand -hex 32)"
 [[ "$(cat "$WORK/gen/old.env")" == $'APP_ENV=production\nSECRET_KEY=x' ]] || fail "the warning changed the old .env"
 other="$WORK/gen/second.env"
 run 0 gen_env "$other" generate_env
 [[ "$(sed -n 's/^CREDENTIALS_KEY=//p' "$other")" != "$key" ]] || fail "two generated keys are equal"
-ok "new .env.jetson: random 32 byte CREDENTIALS_KEY, mode 600; an existing file is never rewritten, only warned about when it lacks the key"
+[[ "$(sed -n 's/^BROWSER_CONTROL_SECRET=//p' "$other")" != "$browser_secret" ]] || fail "two generated browser secrets are equal"
+ok "new .env.jetson: random 32 byte CREDENTIALS_KEY and BROWSER_CONTROL_SECRET, mode 600; an existing file is never rewritten, only warned about when it lacks either"
 
 step "ops/previous.sh: :previous from the running containers, the deployed tree saved and restored"
 mkdir -p "$WORK/bin4"

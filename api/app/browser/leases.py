@@ -440,7 +440,9 @@ class Leases:
                 # The other call of this member claimed and then lost its turn before this one
                 # read the holder: ask once more, as that call's caller will.
             return Acquired(waiting=await self._place(r, user_id, purpose, now))
-        except (RedisError, OSError, TimeoutError):
+        except (RedisError, OSError, TimeoutError) as exc:
+            # The kind of failure only: a Redis error's text may hold its address.
+            logger.warning("browser lease store unavailable: %s", type(exc).__name__)
             raise StoreUnavailableError from None
 
     async def release(

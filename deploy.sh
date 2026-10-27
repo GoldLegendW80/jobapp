@@ -90,7 +90,7 @@
 # one deploy may take before they are stopped and rolled back).
 #
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
-# random POSTGRES_PASSWORD, SECRET_KEY and CREDENTIALS_KEY, and copied to the Jetson only when the remote .env is
+# random POSTGRES_PASSWORD, SECRET_KEY, CREDENTIALS_KEY and BROWSER_CONTROL_SECRET, and copied to the Jetson only when the remote .env is
 # missing or with --env. rsync never deletes the remote .env, and nothing here touches volumes.
 # Both .env files are syntax checked by ops/env_check.sh before anything changes (preflight), and
 # a TS_AUTHKEY left in either once the node is logged in is warned about at the end of a deploy.
@@ -356,12 +356,13 @@ warn_leftover_authkey() {
 }
 
 generate_env() {
-  local pg_password secret credentials_key
+  local pg_password secret credentials_key browser_secret
   # Only ever a new file: an existing one holds keys that data already depends on.
   [[ ! -e "$LOCAL_ENV" ]] || die "$LOCAL_ENV exists; generate_env never overwrites it"
   pg_password="$(openssl rand -hex 32)"
   secret="$(openssl rand -hex 48)"
   credentials_key="$(openssl rand -base64 32)"
+  browser_secret="$(openssl rand -hex 32)"
   (
     umask 077
     cat >"$LOCAL_ENV" <<EOF
@@ -383,6 +384,11 @@ REDIS_URL=redis://redis:6379/0
 # a lost or changed key makes every stored credential unreadable (rotation: .env.example).
 CREDENTIALS_KEY=$credentials_key
 
+# browserd's control secret (browser B3), shared by the api, the worker and the browser container.
+# Empty, browserd runs healthy and every browser session is refused (the deploy's check says
+# browser=unconfigured). Any new random value works: no data depends on it.
+BROWSER_CONTROL_SECRET=$browser_secret
+
 # Loopback only: reached with ssh or through Tailscale Funnel, never from the LAN.
 HTTP_BIND=127.0.0.1
 HTTP_PORT=${JETSON_HTTP_PORT:-80}
@@ -398,6 +404,7 @@ EOF
 ensure_local_env() {
   if [[ -f "$LOCAL_ENV" ]]; then
     warn_missing_credentials_key
+    warn_missing_browser_secret
     return 0
   fi
   if remote "test -f $RDIR_Q/.env"; then
@@ -408,9 +415,10 @@ ensure_local_env() {
     )
     info "copied the existing $HOST:$RDIR/.env to .env.jetson"
     warn_missing_credentials_key
+    warn_missing_browser_secret
   else
     generate_env
-    info "generated .env.jetson with a random POSTGRES_PASSWORD, SECRET_KEY and CREDENTIALS_KEY"
+    info "generated .env.jetson with a random POSTGRES_PASSWORD, SECRET_KEY, CREDENTIALS_KEY and BROWSER_CONTROL_SECRET"
   fi
 }
 
@@ -420,6 +428,14 @@ warn_missing_credentials_key() {
   [[ -n "$(envval "$LOCAL_ENV" CREDENTIALS_KEY)" ]] && return 0
   warn ".env.jetson has no CREDENTIALS_KEY: the api and worker refuse to start in production." \
     "Add one line, CREDENTIALS_KEY=\$(openssl rand -base64 32), to .env.jetson and to the Jetson's .env"
+}
+
+# The same for BROWSER_CONTROL_SECRET, which .env files generated before 2026-10-27 lack: the
+# browser then runs healthy and refuses every session (production, 2026-10-27).
+warn_missing_browser_secret() {
+  [[ -n "$(envval "$LOCAL_ENV" BROWSER_CONTROL_SECRET)" ]] && return 0
+  warn ".env.jetson has no BROWSER_CONTROL_SECRET: the browser refuses every session (Sign in, Find jobs on websites, Apply)." \
+    "Add one line, BROWSER_CONTROL_SECRET=\$(openssl rand -hex 32), to .env.jetson and to the Jetson's .env, then deploy"
 }
 
 push_env() { # push_env <force 0|1>
