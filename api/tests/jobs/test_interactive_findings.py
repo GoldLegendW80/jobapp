@@ -220,6 +220,9 @@ def test_verified_findings_become_scored_found_jobs_with_their_observed_facts_on
     assert arm.company == sweep.UNKNOWN_EMPLOYER
     assert arm.published_on is None
     assert arm.location == ""
+    # No pay and no work mode stated: none is made up.
+    assert (arm.pay_min, arm.pay_max, arm.pay_currency, arm.pay_period) == (None,) * 4
+    assert arm.work_mode is None
     for job in (robot, arm):
         assert job.status is JobStatus.found
         assert job.source == HOST
@@ -536,7 +539,10 @@ def test_a_commit_whose_tool_call_is_cancelled_finishes_before_the_next_source(
     monkeypatch.setattr(sweep.Commits, "settle", settle)
     tools = SiteTools()
     tools.pages[second] = FIRST
-    row = run(factory, new_sweep(factory, alice), runner(script, tools))
+    try:
+        row = run(factory, new_sweep(factory, alice), runner(script, tools))
+    finally:
+        held.release.set()
     assert row.status is SweepStatus.done
     assert seen_at_second_start == [(1, 0)]  # counted before the second website began
     first, _ = (s for s in row.stats["sources"] if s.get("mode") == "llm_browser")
@@ -581,7 +587,10 @@ def test_a_commit_that_outlives_the_wait_leaves_the_row_to_recovery_with_its_cou
         await asyncio.gather(*left, return_exceptions=True)
         published.append(len(left))
 
-    asyncio.run(scenario())
+    try:
+        asyncio.run(scenario())
+    finally:
+        held.release.set()
     assert published == [1]  # the commit's own task, nothing else
     row = read_sweep(factory, sweep_id)
     assert row.status is SweepStatus.running
