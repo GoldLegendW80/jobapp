@@ -240,10 +240,12 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
     }
   ).revision;
 
-  // The progress names the website being read, never an internal id.
+  // The progress names the website being read, never an internal id. Her website comes after
+  // the four ticked job websites, one agent each (J17, J18): about 245 s measured, most of it
+  // LinkedIn's own 10 to 30 s page pause.
   const progress = page.getByRole("region", { name: "Sweep in progress" });
   await expect(progress).toContainText(`Reading ${SITE_HOST}`, {
-    timeout: 120_000,
+    timeout: 300_000,
   });
   await shots(page, "progress", false);
 });
