@@ -293,6 +293,52 @@ def test_native_hostile_controls_and_redirects(native):
     native.completed = True
 
 
+def test_native_start_page_redirect_on_its_own_host_is_followed(native):
+    """Jobs J18 (issue 716): the start page's own redirect to its locale path is followed and
+    its search runs; a start page redirected to another host or a write address is not."""
+    answers = {}
+    for path in ("locale", "locale-off", "locale-write"):
+        lease = Lease(native, "sweep")
+        native.redactions.append(lease.token)
+        scope = {
+            "start": START + path,
+            "titles": ["robot"],
+            "places": [],
+            "filters": {"remote": "0"},
+        }
+        marker = {"_discovery": "native_get", "_discovery_scope": scope}
+        try:
+            opened = lease.tool("browser_navigate", url=scope["start"], **marker)
+            answers[path] = opened
+            if path == "locale":
+                assert opened["ok"], opened
+                shot = lease.tool("browser_snapshot")
+                assert shot["url"] == START + "en/", shot
+                text = shot["snapshot"]
+                box = ref(text, "searchbox", "Query")
+                assert lease.tool("browser_type", ref=box, text="robot", **marker)["ok"]
+                found = lease.tool("browser_click", ref=ref(text, "button", "Search"), **marker)
+                assert found["ok"], found
+        finally:
+            lease.end()
+    assert not answers["locale-off"]["ok"]
+    assert not answers["locale-write"]["ok"]
+    observed = json.loads(
+        native.execute(
+            "browser",
+            "python",
+            "-I",
+            "-c",
+            "import urllib.request; print(urllib.request.urlopen('http://pages:8080/observed').read().decode())",
+        )
+    )
+    assert not any(p["path"] in {"/escape", "/remove"} for p in observed)
+    assert {"path": "/b13/search", "query": {"q": ["robot"], "remote": ["0"]}} in [
+        {"path": p["path"], "query": p.get("query")} for p in observed
+    ]
+    native.completed = True
+
+
 @pytest.mark.parametrize(
     ("case", "suffix", "company"),
     [

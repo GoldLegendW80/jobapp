@@ -16,13 +16,16 @@ could refuse a host off the lease's list, while B6's host rule drops private ran
 page is never read nor acted on.
 
 Discovery instead uses an anonymous context with JavaScript disabled before any navigation.
-CDP Fetch holds requests before sending and responses before receiving their bodies. Redirect
-responses are refused before Chromium follows them. A signed in discovery (B17: a website the
+CDP Fetch holds requests before sending and responses before receiving their bodies. A redirect
+response is refused before Chromium follows it unless its target keeps to the frozen scope
+(discovery.redirect_target: a start page's locale path, jobs J18); the request it leads to is
+judged again. A signed in discovery (B17: a website the
 person signed in to, `Scope.signed_in`) runs in the person's own persisted context instead, with
 the site's JavaScript on: a route on that context lets only GET and HEAD requests leave, never to
 an address whose path applies, submits, deletes or pays, nor one whose path or query applies,
 submits or signs the person out, and a frame's navigation only within the frozen scope
-(discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`). Service
+(discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`, which
+holds a discovery's hop to that same rule). Service
 workers are bypassed and out of the page's reach (SIGNED_IN_JS removes
 `navigator.serviceWorker`), and the page's frames, an inline sandboxed one included (a sweep
 lease disables IsolateSandboxedIframes, chromium.switches), get the same script and route.
@@ -324,13 +327,22 @@ class Tab:
                 client, scope = self.state.native_cdp, self.state.scope
                 request, request_id = event["request"], event["requestId"]
                 status = event.get("responseStatusCode")
+                redirect = status is not None and 300 <= status < 400
+                if redirect and scope is not None and status in discovery.REDIRECTS:
+                    # A redirect on the scope's own host (a locale path, a trailing slash) is
+                    # followed: its target is held to the rule of a navigation, and the request
+                    # Chromium then makes is paused and judged again at the Request stage.
+                    target = discovery.redirect_target(
+                        request["url"], discovery.location_of(event.get("responseHeaders")), scope
+                    )
+                    redirect = target is None or not self.allowed(target)
                 if (
                     self.state.native_failed
                     or scope is None
                     or request["method"] not in {"GET", "HEAD"}
                     or not self.allowed(request["url"])
                     or not discovery.read_url(request["url"], scope.start, scope=scope)
-                    or (status is not None and 300 <= status < 400)
+                    or redirect
                     or event.get("responseErrorReason")
                 ):
                     if not self.state.blocked:
@@ -339,6 +351,8 @@ class Tab:
                         "Fetch.failRequest",
                         {"requestId": request_id, "errorReason": "BlockedByClient"},
                     )
+                elif status is not None and 300 <= status < 400:
+                    await client.send("Fetch.continueRequest", {"requestId": request_id})
                 elif status is not None:
                     # A separate CSP restricts scripts and child targets while retaining
                     # every original header, including multiple original CSP headers.
@@ -383,7 +397,7 @@ class Tab:
                 return
             frame = request.frame
             safe = self.allowed(request.url) and (
-                not self.state.discovery or discovery.read_url(request.url, self.state.page.url)
+                not self.state.discovery or self._hop_in_scope(request.url, request.method)
             )
             if frame.parent_frame is not None or safe:
                 return
@@ -393,6 +407,18 @@ class Tab:
         if self.state.signed_in and discovery.signin_url(request.url):
             self.state.signin_seen = True
         asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
+
+    def _hop_in_scope(self, url: str, method: str) -> bool:
+        """A discovery's redirect hop is held to the rule of the navigation it replaces, within
+        the frozen scope (jobs J18): the start page's own redirect (`/` to `/en`) is followed
+        while the tab's address is still `about:blank`, never one to another host, an apply,
+        account or sign out address, or a query beyond the saved criteria."""
+        scope = self.state.scope
+        if scope is None or self.state.native_failed:
+            return False
+        if scope.signed_in:
+            return discovery.signed_request(url, method, True, scope)
+        return discovery.read_url(url, scope.start, scope=scope)
 
     async def guard(self) -> Any:
         """The context the lease's tabs live in, with the navigation guard installed on it once

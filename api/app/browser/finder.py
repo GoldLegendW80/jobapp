@@ -373,6 +373,13 @@ def origin(url: str) -> tuple[str, str] | None:
     return (parts.scheme, parts.netloc) if parts.scheme and parts.netloc else None
 
 
+def same_origin(url: str, other: str) -> bool:
+    """Same scheme, host and port, exactly (no `www.` twin): what browserd's discovery scope
+    accepts as the start's own website (discovery.read_url)."""
+    first, second = origin(canonical(url)), origin(canonical(other))
+    return first is not None and first == second
+
+
 def host_pair(host: str) -> list[str]:
     """The hosts a site's lease opens: its own and its `www.` twin (apex to www and back is the
     one redirect of the same site that real sites make), nothing wider. A single label has no
@@ -658,12 +665,19 @@ class FinderSession:
     # The text entries of the page last read that `box_of` tells apart: ref, "title" or "place".
     boxes: dict[str, str] = field(default_factory=dict)
     _report_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    # Where the start page landed, when its website redirected it on its own origin (a locale
+    # path, `/` to `/en`, jobs J18): its links are read from there.
+    landed: str = ""
 
     def __post_init__(self) -> None:
         if self.interactive and canonical(self.interactive.start) != self.start:
             raise ValueError("discovery scope does not match the opened site")
-        self.current = self.start
-        self._read(self.start, self.first)
+        if self.landed and (
+            canonical(self.landed) != self.landed or not same_origin(self.landed, self.start)
+        ):
+            raise ValueError("the start page landed on another origin")
+        self.current = self.landed or self.start
+        self._read(self.current, self.first)
         if self.interactive:
             self.first = ""
 
@@ -853,7 +867,7 @@ class FinderSession:
             return result
 
         try:
-            await self.pages._act(act)
+            await self.pages._act(act, name)
         except SourceError as exc:
             if exc.code == "page_failed":
                 self.refused["unsupported_interaction"] += 1

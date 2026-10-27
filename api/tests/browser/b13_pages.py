@@ -92,6 +92,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 target = "off" if path.path.endswith("off") else "write"
                 body = body.replace('action="/b13/search"', f'action="/b13/{target}/search"')
+        elif path.path in {"/b13/locale", "/b13/locale-off", "/b13/locale-write"}:
+            # A start page that answers on another address, as Welcome to the Jungle answers
+            # `/` on `/en` (jobs J18): its own locale path, another host, a write address.
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                {
+                    "/b13/locale": "/b13/en/",
+                    "/b13/locale-off": "http://elsewhere:8080/escape",
+                    "/b13/locale-write": "/remove",
+                }[path.path],
+            )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif path.path in {"/b13/off/search", "/b13/write/search"}:
             self.send_response(302)
             self.send_header(

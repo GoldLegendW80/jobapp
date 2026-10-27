@@ -26,7 +26,7 @@ query rule reads the noun inside a word).
 """
 
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
 from browserd import detect
 
@@ -213,6 +213,39 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
         )
     except (ValueError, TypeError):
         return False
+
+
+# The redirect statuses a browser follows by itself (304 is no redirect: it is never followed).
+REDIRECTS = frozenset({301, 302, 303, 307, 308})
+
+
+def redirect_target(url: str, location: object, scope: Scope) -> str | None:
+    """Where a redirect response of a discovery request goes, when it may be followed (jobs J18:
+    a website's start page that answers on a locale path, `/` to `/en`): its Location resolved
+    against the request's address, held to the rule of the navigation it replaces, read_url
+    within the frozen scope (same scheme, host and port as the start, nothing that applies,
+    submits, reaches an account or signs out, only the saved criteria in its query). None for
+    anything else, a missing or blank Location included: the redirect is refused."""
+    if not isinstance(location, str) or not location or len(location) > 2000:
+        return None
+    try:
+        target = urljoin(url, location)
+    except ValueError:
+        return None
+    return target if read_url(target, scope.start, scope=scope) else None
+
+
+def location_of(headers: object) -> str | None:
+    """The one Location header of a CDP response (names in any case); None when there is none or
+    more than one (ambiguous: refused)."""
+    if not isinstance(headers, list):
+        return None
+    found = [
+        h.get("value")
+        for h in headers
+        if isinstance(h, dict) and str(h.get("name", "")).lower() == "location"
+    ]
+    return found[0] if len(found) == 1 and isinstance(found[0], str) else None
 
 
 # Read inside every glued path segment, query key and query value of a signed in page's request:

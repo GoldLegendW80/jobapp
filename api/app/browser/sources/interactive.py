@@ -572,7 +572,10 @@ async def _search(
                 if exc.code == "page_failed" and result.get("error") == "unsupported_discovery":
                     return "unsupported_interaction"
                 return exc.code
-            if finder.canonical(pages.last_url) != scope.start:
+            # The start page may land on another address of its own origin (Welcome to the
+            # Jungle answers `/` on `/en`); browserd held that redirect to the frozen scope.
+            landed = finder.canonical(pages.last_url)
+            if not landed or not finder.same_origin(landed, scope.start):
                 return "unsupported_interaction"
             site.started = True
             session = finder.FinderSession(
@@ -582,6 +585,7 @@ async def _search(
                 user_id=user,
                 interactive=scope,
                 on_verified=None if site.commits is None else site.verified,
+                landed="" if landed == scope.start else landed,
             )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens
