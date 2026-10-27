@@ -18,6 +18,7 @@ ROUTER_MODULES: tuple[str, ...] = (
     "linkedin_router",  # B10: the LinkedIn switch
     "handoff_router",  # B12: the sign in hand off
     "later_router",  # B12b: registered work resumed after a later sign in
+    "site_router",  # B17: the job websites the person signed in to
 )
 
 

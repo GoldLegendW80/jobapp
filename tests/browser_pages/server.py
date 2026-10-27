@@ -17,6 +17,14 @@ through the service's alias): GET /j15/search answers results only for the words
 Paris, the relevant posting on their second page alone; every request under /j15/ is logged with
 its method and time, and GET /j15/log answers that log (read from inside the container by the
 journey: what the site saw, a POST included, which it refuses with 405).
+
+Browser B17 (web/e2e/browser-b17.spec.ts): the same website under the name
+members.example-robotics.test is for members only. Every page under /j15/ there answers only to
+a member's cookie, else a 302 to /j15/login?next=<path>; its sign in page (b17/login.html) sends
+a name by GET to /j15/session, which sets the cookie (30 days, HttpOnly) and goes back to `next`.
+GET /b17/log answers what that website saw (method, path, time, whether a member's cookie came
+with it), and GET /b17/expire ends every login made so far (the cookie names an epoch), so the
+next search meets the sign in page again.
 """
 
 import http.server
@@ -35,6 +43,10 @@ DATAGRAMS = {"count": 0}
 COUNTS = {}
 J15_LOG = []
 J15_LOCK = threading.Lock()
+MEMBERS_HOST = "members.example-robotics.test"
+MEMBER_NAME = re.compile(r"[a-z0-9@._-]{1,64}")
+MEMBERS = {"epoch": 1}
+B17_LOG = []
 J15_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title></head>'
     "<body><main><h1>{title}</h1>{body}</main></body></html>"
@@ -88,7 +100,68 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def members(self) -> bool:
+        """The request is for the members only website (B17)."""
+        return self.headers.get("Host", "").split(":")[0].lower() == MEMBERS_HOST
+
+    def member(self) -> bool:
+        """A member's cookie of the current epoch came with the request."""
+        jar = {}
+        for part in self.headers.get("Cookie", "").split(";"):
+            name, _, value = part.strip().partition("=")
+            jar[name] = value
+        who, _, epoch = jar.get("b17_member", "").rpartition(".")
+        return bool(MEMBER_NAME.fullmatch(who)) and epoch == str(MEMBERS["epoch"])
+
+    def b17(self, url) -> bool:
+        """The members only website: answered here (True), or served as J15's for a member."""
+        signed = self.member()
+        with J15_LOCK:
+            B17_LOG.append(
+                {
+                    "method": self.command,
+                    "path": self.path,
+                    "at": time.time(),
+                    "member": signed,
+                }
+            )
+        query = urllib.parse.parse_qs(url.query)
+        back = query.get("next", ["/j15/"])[0]
+        if not back.startswith("/j15/") or back.startswith("//"):
+            back = "/j15/"
+        if url.path == "/j15/login":
+            self.path = "/b17/login.html"
+            super().do_GET()
+            return True
+        if url.path == "/j15/session":
+            who = query.get("name", [""])[0].strip()
+            if not MEMBER_NAME.fullmatch(who):
+                self.redirect("/j15/login?next=" + urllib.parse.quote(back, safe="/"))
+                return True
+            cookie = f"b17_member={who}.{MEMBERS['epoch']}; Max-Age=2592000; Path=/; HttpOnly"
+            self.redirect(back, cookie)
+            return True
+        if not signed:
+            self.redirect("/j15/login?next=" + urllib.parse.quote(self.path, safe="/"))
+            return True
+        return False
+
+    def redirect(self, to: str, cookie: str | None = None) -> None:
+        self.send_response(302)
+        self.send_header("Location", to)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def j15_note(self, path: str) -> None:
+        if self.members():
+            if path.startswith("/j15/"):
+                with J15_LOCK:
+                    B17_LOG.append(
+                        {"method": self.command, "path": self.path, "at": time.time()}
+                    )
+            return
         if path.startswith("/j15/") and path != "/j15/log":
             with J15_LOCK:
                 J15_LOG.append(
@@ -106,7 +179,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(url.query)
-        self.j15_note(url.path)
+        if url.path == "/b17/log":
+            with J15_LOCK:
+                return self.send(json.dumps(B17_LOG))
+        if url.path == "/b17/expire":
+            MEMBERS["epoch"] += 1
+            return self.send(json.dumps(MEMBERS))
+        if self.members() and url.path.startswith("/j15/") and self.b17(url):
+            return None
+        if not self.members():
+            self.j15_note(url.path)
         if url.path == "/j15/log":
             with J15_LOCK:
                 return self.send(json.dumps(J15_LOG))

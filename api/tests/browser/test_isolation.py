@@ -14,6 +14,8 @@ transport (b3_support.FakeBrowserd).
   each route), no cookie, ticket, lease token, typed address or page text is in the logs, in
   Redis, in any table, or in any answer but the one that hands it out.
 - A deleted person's directory goes, and only theirs.
+- B17: B's list of signed in job websites is B's own, and B's Done reads B's profile only (none
+  is made): A's website login is never shown to B nor changed by B.
 
 What runs in containers is proved beside this file: two uids that cannot read each other's
 directory (test_browser_container.py, test_two_profiles_b_cannot_read_a), Caddy's masked log
@@ -26,6 +28,7 @@ import logging
 import secrets
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +41,7 @@ from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.browser import later_handoff, linkedin_guard, removals
+from app.browser import later_handoff, linkedin_guard, removals, site_logins
 from app.browser.client import BrowserError
 from app.browser.handoff import request_signin
 from app.browser.leases import DbProfiles, Leases
@@ -81,7 +84,10 @@ ROUTES: dict[tuple[str, str], dict[str, Any] | None] = {
     ("POST", "/api/browser/handoff/later"): {"module": MODULE, "ref": REF},
     ("POST", "/api/browser/handoff/later/done"): {"module": MODULE, "ref": REF},
     ("POST", "/api/browser/handoff/later/cancel"): {"module": MODULE, "ref": REF},
+    ("GET", "/api/browser/sites"): None,
+    ("POST", "/api/browser/sites/done"): {"address": f"https://{SITE_HOST}/jobs"},
 }
+A_WEBSITE = "members-a.example.test"  # B17: a job website A signed in to, never B's
 
 
 @pytest.fixture
@@ -309,6 +315,7 @@ def test_b_gets_403_or_404_on_every_route_while_a_holds_a_session(
         for _ in range(2)
     ]
     a_profile = row(factory, a_id)
+    assert site_logins.record(factory, a_id, A_WEBSITE, datetime.now(UTC))
     secret_values = {
         "A's user id": str(a_id),
         "A's lease id": lease["id"],
@@ -318,6 +325,7 @@ def test_b_gets_403_or_404_on_every_route_while_a_holds_a_session(
         "A's other ticket": tickets[1],
         "A's profile": str(a_profile.profile_id),
         "A's search": "Example robotics",
+        "A's website": A_WEBSITE,
     }
 
     answers: dict[tuple[str, str], httpx.Response] = {}
@@ -340,12 +348,17 @@ def test_b_gets_403_or_404_on_every_route_while_a_holds_a_session(
         ("POST", "/api/browser/handoff/later"): 404,
         ("POST", "/api/browser/handoff/later/done"): 404,
         ("POST", "/api/browser/handoff/later/cancel"): 404,
+        ("GET", "/api/browser/sites"): 200,  # B's own websites: none
+        ("POST", "/api/browser/sites/done"): 200,  # B has no profile: not signed in, none made
     }
     # The reads are B's own: nothing of A's.
     mine = answers[("GET", "/api/browser")].json()
     assert (mine["lease"], mine["holder"], mine["profile"]["exists"]) == (None, "other", False)
     card = answers[("GET", "/api/browser/linkedin")].json()
     assert (card["enabled"], card["accepted"], card["query"]) == (False, False, None)
+    assert answers[("GET", "/api/browser/sites")].json() == {"sites": []}
+    assert answers[("POST", "/api/browser/sites/done")].json()["state"] == "not_signed_in"
+    assert not site_logins.signed_in(factory, b_id, A_WEBSITE)
     # B's DELETE of the session went again: no place left, and still nothing of A's.
     gone = api.request("DELETE", "/api/browser/sessions/current", token=b)
     assert gone.status_code == 404
@@ -358,6 +371,8 @@ def test_b_gets_403_or_404_on_every_route_while_a_holds_a_session(
     assert row(factory, b_id) is None
     assert api.get("/api/browser/linkedin", token=a).json()["query"] == "Example robotics"
     assert api.get("/api/browser", token=a).json()["lease"]["id"] == lease["id"]
+    [kept] = api.get("/api/browser/sites", token=a).json()["sites"]
+    assert (kept["host"], kept["state"]) == (A_WEBSITE, "signed_in")
     assert owned == []
     # B's try burnt that ticket (one use, whoever shows it); A's other ticket still opens it.
     assert auth(api, a, tickets[0]).status_code == 403  # type: ignore[attr-defined]

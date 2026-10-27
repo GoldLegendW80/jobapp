@@ -24,6 +24,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
+import { JobWebsitesSignIn } from "@/features/browser/site-signin";
 import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
 import { starterKey } from "@/features/onboarding/starter-api";
 import { FreelanceSourcesCard } from "@/features/opportunities/sources/freelance-sources-card";
@@ -283,6 +284,12 @@ function SearchForms({
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           <BoardsTable form={form} />
           <BrowserSourcesCard form={form} />
+          {/* B17: sign in to a job website of Find jobs, then searches read it signed in. */}
+          <JobWebsitesSignIn
+            urls={(profile.sections.search.interactive_sites ?? []).map(
+              (site) => site.url,
+            )}
+          />
           <FreelanceSourcesCard form={form} />
           <NeverApply form={form} />
           <DocumentsSearchOptions form={form} />
