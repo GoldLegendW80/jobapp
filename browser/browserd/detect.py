@@ -305,14 +305,18 @@ def _phrase(tokens: list[str], phrase: tuple[str, ...]) -> bool:
 
 
 def _glued(names: list[str]) -> list[str]:
-    """Every name as words, plus the words of the name with no split (`submitapplication`), each
-    also with its case folded first (match_words: `SubMit`, `AppLy`)."""
+    """Every name as words, plus the words of the name with no split (`submitapplication`), then
+    the words each of them adds with its case folded first (match_words: `SubMit`, `AppLy`),
+    after them all, so every phrase the split reading holds is still read (fail closed)."""
     tokens: list[str] = []
+    folded: list[str] = []
     for name in names[:NAMES_MAX]:
         name = name[:NAME_MAX]
-        tokens.extend(match_words(name))
-        tokens.extend(match_words(name.replace(" ", "").replace("_", "").replace("-", "")))
-    return tokens
+        for text in (name, name.replace(" ", "").replace("_", "").replace("-", "")):
+            split = words(text)
+            tokens.extend(split)
+            folded.extend(match_words(text)[len(split) :])
+    return [*tokens, *folded]
 
 
 def says_submit(names: list[str], profile_edit: bool = False) -> bool:

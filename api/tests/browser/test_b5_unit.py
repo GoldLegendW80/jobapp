@@ -225,6 +225,23 @@ def test_round3_mixed_case_rows(name: str, submit: bool) -> None:
     assert (detect.verdict(facts(name)) == "submit") is submit
 
 
+def test_the_case_folded_words_only_add_to_the_split_reading() -> None:
+    """Fail closed: the split reading of every name comes first, whole and in order, so no
+    match of it (a phrase across two names included) is lost to the case folded words."""
+    assert detect.says_submit(["Jour-SUB_lyDU", "mise_Mise", "A.Jour"], profile_edit=True)
+    rng = random.Random(17)  # noqa: S311  seeded test names
+    pool = ["Mettre", "à", "jour", "mise", "SubMit", "AppLy", "x", "Delete", "jOUR", "_", "-", " "]
+    for _ in range(2_000):
+        names = ["".join(rng.choice(pool) for _ in range(rng.randint(1, 6))) for _ in range(3)]
+        split = [
+            word
+            for name in names
+            for text in (name, name.replace(" ", "").replace("_", "").replace("-", ""))
+            for word in detect.words(text)
+        ]
+        assert detect._glued(names)[: len(split)] == split, names
+
+
 @pytest.mark.parametrize("name", TRUE_BUTTONS)
 def test_an_ordinary_button_written_in_one_case_stays_ordinary(name: str) -> None:
     for spelling in {name.lower(), name.upper(), name.title(), name.capitalize()}:
