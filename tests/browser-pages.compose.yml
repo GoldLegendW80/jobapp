@@ -29,8 +29,9 @@ services:
       egress:
         # Jobs J15: the invented job website of tests/browser_pages/j15/ under a name with a dot,
         # as a saved website needs. `.test` is reserved (RFC 2606): no public DNS answers it, so
-        # outside this network the name leads nowhere.
-        aliases: [jobs.example-robotics.test]
+        # outside this network the name leads nowhere. Browser B17: the same website for
+        # members only, behind its sign in page (server.py).
+        aliases: [jobs.example-robotics.test, members.example-robotics.test]
     healthcheck:
       test:
         - CMD
@@ -46,7 +47,7 @@ services:
 
   browser:
     environment:
-      BROWSER_PROXY_ALLOW_PRIVATE: pages,jobs.example-robotics.test
+      BROWSER_PROXY_ALLOW_PRIVATE: pages,jobs.example-robotics.test,members.example-robotics.test
 
   api:
     environment:
