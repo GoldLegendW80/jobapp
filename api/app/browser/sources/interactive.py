@@ -7,14 +7,31 @@ store: a source admits batches only while it runs, and its admitted commits sett
 next source starts. A source's `found` counts the findings stored or found duplicate, `postings`
 the new jobs. Without the run's commits (a caller that is not a sweep) findings are only
 counted, as `finding_persistence_pending`.
+
+One search per combination (owner, 2026-10-26): a website runs one native search per pair of a
+title term and a location term, in the order saved (titles first, then places), at most
+SEARCHES_MAX a sweep. Each search is its own lease with its own frozen scope (browserd binds one
+scope to a lease), so only that search's exact words and filters can be typed in it. The
+searches of a website share its limits: the finder's PAGES_MAX pages, its TOKEN_BUDGET, the
+platform's pace key and the platform policy's caps (LinkedIn's pages and its one sweep a day).
+Their postings merge into the website's one result, counted once per canonical address. One
+contract type is the website's own filter; several are checked on what was read (the engine's
+`kind` of the title, location and address), as a native filter takes one value. Places are
+typed as the person wrote them, never mapped to a website's own codes. Unwanted titles and
+unwanted places reach the agent as plain context (`criteria`) and are dropped after reading.
+With the run's commits, each search's verified batches go through its website's `_Site.verified`
+on their way to the store: a posting an earlier search of the website gave, an unwanted one and
+one of another contract are counted there and never stored, so the searches of a website store
+a posting once.
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
-from dataclasses import dataclass
+import re
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
 
@@ -23,7 +40,9 @@ from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.browser.sources import ERRORS, PAGE_BUDGET_S, STOPS_SWEEP, Pages, SourceError
 from app.jobs import sweep
-from app.profile.schemas import InteractiveSite, SearchSection
+from app.jobs.importer import kind
+from app.profile import matching
+from app.profile.schemas import InteractiveSite, SearchSection, TermList
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -35,6 +54,7 @@ CRITERIA = frozenset(
         "title_include",
         "title_exclude",
         "location",
+        "location_exclude",  # unwanted places, once the plain lists land (read defensively)
         "remote_stance",
         "contract_types",
         "seniority",
@@ -42,6 +62,10 @@ CRITERIA = frozenset(
         "compensation",
     }
 )
+SEARCHES_MAX = 6  # native searches per website per sweep (owner, 2026-10-26)
+# A saved regular expression is read as a plain term only when it is one: words of letters or
+# digits joined by single spaces, hyphens or apostrophes, with no character a pattern reads.
+PLAIN = re.compile(r"[^\W_]+(?:[ '-][^\W_]+)*")
 
 
 @dataclass(frozen=True)
@@ -117,34 +141,138 @@ class GuardedTools:
         return await self.tools.wait_for(**args)
 
 
-def scope_for(search: SearchSection, start: str = "") -> finder.InteractiveScope:
+def _plain(terms: TermList) -> list[str]:
+    """The saved terms as typed words; a regular expression only when it is a plain word."""
+    if terms.advanced_regex and not all(PLAIN.fullmatch(term) for term in terms.terms):
+        raise ValueError("unsupported_criteria")
+    return list(terms.terms)
+
+
+@dataclass(frozen=True)
+class Searches:
+    """The native searches of one website, frozen from the sweep's frozen criteria."""
+
+    scopes: tuple[finder.InteractiveScope, ...]
+    total: int  # combinations before the SEARCHES_MAX cap
+    contracts: frozenset[str] = frozenset()  # checked after reading, empty when native
+    unwanted_titles: re.Pattern[str] | None = None
+    unwanted_places: re.Pattern[str] | None = None
+
+
+def _unwanted(terms: Any) -> re.Pattern[str] | None:
+    """A term list read defensively: a TermList, a plain list of words, or absent."""
+    if isinstance(terms, list):
+        return matching.compile_terms([t for t in terms if isinstance(t, str) and t], False)
+    words = getattr(terms, "terms", None)
+    if not isinstance(words, list):
+        return None
+    return matching.compile_terms(words, getattr(terms, "advanced_regex", False) is True)
+
+
+def searches_for(search: SearchSection, start: str = "") -> Searches:
     """Use exact saved values, with no inferred website-specific filter encoding.
 
-    Multi-value and regular-expression native controls are not yet supported. Other
-    preferences remain private context, not permission to vary the native request.
+    Other preferences remain private context, not permission to vary the native request.
     """
-    if search.title_include.advanced_regex or len(search.title_include.terms) != 1:
+    titles = _plain(search.title_include)
+    places: list[str | None] = [*_plain(search.location)] or [None]
+    if not titles:
         raise ValueError("unsupported_criteria")
-    if (
-        search.location.advanced_regex
-        or len(search.location.terms) > 1
-        or len(search.contract_types) > 1
-    ):
-        raise ValueError("unsupported_criteria")
-    filters: list[tuple[str, str]] = []
-    if search.location.terms:
-        filters.append(("location", search.location.terms[0]))
+    shared: list[tuple[str, str]] = []
     if search.remote_stance not in (None, "any"):
-        filters.append(("remote", search.remote_stance))
-    if search.contract_types:
-        filters.append(("contract", search.contract_types[0]))
-    return finder.InteractiveScope(
-        start or search.interactive_sites[0].url,
-        search.title_include.terms[0],
-        tuple(filters),
-        criteria=json.dumps(search.model_dump(mode="json", include=CRITERIA)),
-        instructions=search.interactive_instructions or "",
+        shared.append(("remote", search.remote_stance))
+    contracts = list(search.contract_types)
+    if len(contracts) == 1:
+        shared.append(("contract", contracts[0]))
+    criteria = json.dumps(search.model_dump(mode="json", include=CRITERIA))
+    pairs = [(title, place) for title in titles for place in places]
+    return Searches(
+        tuple(
+            finder.InteractiveScope(
+                start or search.interactive_sites[0].url,
+                title,
+                (*((("location", place),) if place else ()), *shared),
+                criteria=criteria,
+                instructions=search.interactive_instructions or "",
+            )
+            for title, place in pairs[:SEARCHES_MAX]
+        ),
+        len(pairs),
+        frozenset(contracts) if len(contracts) > 1 else frozenset(),
+        _unwanted(search.title_exclude),
+        _unwanted(getattr(search, "location_exclude", None)),
     )
+
+
+@dataclass
+class _Site:
+    """What the searches of one website read together: their shared budgets and postings."""
+
+    planned: Searches
+    pages: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    searches: int = 0
+    found: set[str] = field(default_factory=set)
+    other_contract: set[str] = field(default_factory=set)
+    unwanted: set[str] = field(default_factory=set)
+    refused: Counter[str] = field(default_factory=Counter)
+    tokens_seen: bool = False
+    # With the run's commits (sweep.Commits): the website's source, and the addresses given to
+    # the store (once each; `found` then stays empty, the commits count the source's postings).
+    commits: Any = None
+    source_id: str = ""
+    host: str = ""
+    sent: set[str] = field(default_factory=set)
+
+    def _sort(self, title: str, location: str, url: str) -> set[str]:
+        """Where a posting read goes: unwanted, of another contract, or kept."""
+        titles, places = self.planned.unwanted_titles, self.planned.unwanted_places
+        if (titles and titles.search(title)) or (places and places.search(location)):
+            return self.unwanted
+        if (
+            self.planned.contracts
+            and kind(title, location, url).value not in self.planned.contracts
+        ):
+            return self.other_contract
+        return self.found
+
+    def keep(self, session: finder.FinderSession) -> None:
+        for posting in session.found:
+            url = finder.canonical(posting.url) or posting.url
+            self._sort(posting.title, posting.location, url).add(url)
+        self.refused.update(session.refused)
+
+    async def verified(self, batch: finder.VerifiedBatch) -> None:
+        """One search's verified batch on its way to the store (module docstring)."""
+        kept: list[finder.VerifiedFinding] = []
+        for finding in batch.findings:
+            url = finding.url  # canonical (finder.FinderSession._verified)
+            if url in self.sent or url in self.unwanted or url in self.other_contract:
+                continue
+            place = self._sort(finding.title, finding.location, url)
+            if place is self.found:
+                kept.append(finding)
+            else:
+                place.add(url)
+        if kept:
+            # Marked before the commit: a commit whose caller is cancelled still lands.
+            self.sent.update(finding.url for finding in kept)
+            await self.commits.save(self.source_id, self.host, finder.VerifiedBatch(tuple(kept)))
+
+    def write(self, entry: dict[str, Any]) -> None:
+        entry["result_pages"] = self.pages
+        entry["searches"] = self.searches
+        if self.tokens_seen:
+            entry["tokens"] = {"input": self.input_tokens, "output": self.output_tokens}
+        if self.searches:
+            if self.commits is None:
+                entry["found"] = len(self.found)
+            entry["refused"] = dict(self.refused)
+        if self.planned.contracts:
+            entry["other_contract"] = len(self.other_contract)
+        if self.unwanted:
+            entry["unwanted"] = len(self.unwanted)
 
 
 async def run_selected(
@@ -228,11 +356,53 @@ async def _one(
     except SourceError as exc:
         return exc.code
     try:
-        scope = scope_for(search, start)
+        planned = searches_for(search, start)
     except ValueError:
         return "unsupported_criteria"
     if runner.finder is None or not await runner.finder.available(str(plan.user_id)):
         return "no_credential"
+    entry.update(searches_planned=len(planned.scopes), searches_total=planned.total)
+    site = _Site(
+        planned,
+        commits=getattr(plan, "commits", None),
+        source_id=entry["source_id"],
+        host=entry.get("host") or "",
+    )
+    code: str | None = None
+    try:
+        for index, scope in enumerate(planned.scopes):
+            if site.pages >= finder.PAGES_MAX:
+                code = "page_budget"
+            elif site.input_tokens >= finder.TOKEN_BUDGET:
+                code = "token_budget"
+            else:
+                code = await _combination(runner, plan, context, scope, site, deadline, index)
+            site.write(entry)
+            if code is not None:
+                break
+    finally:
+        site.write(entry)
+    return code or ("finding_persistence_pending" if site.found else None)
+
+
+async def _combination(
+    runner: Runner,
+    plan: Any,
+    context: SourceContext,
+    scope: finder.InteractiveScope,
+    site: _Site,
+    deadline: float,
+    index: int,
+) -> str | None:
+    """One native search on its own lease, inside what the website's earlier searches left."""
+    from app.browser import platform_policy
+
+    if index:
+        # The first search's permission was read just before; a later one reads it again.
+        try:
+            await _permit(runner.interactive_policy, context)
+        except SourceError as exc:
+            return exc.code
     asked = runner.monotonic()
     if asked + PAGE_BUDGET_S >= deadline:
         return "time_budget"
@@ -260,7 +430,8 @@ async def _one(
             lease_until=asked + min(got.lease.max_s, 900),
             pause=platform_policy.pause_for(paced),
         )
-        return await _search(runner.finder, pages, scope, plan, entry)
+        pages.count = site.pages  # the website's searches share its page cap
+        return await _search(runner.finder, pages, scope, str(plan.user_id), site)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
 
@@ -269,10 +440,10 @@ async def _search(
     agent: finder.FinderAgent,
     pages: Pages,
     scope: finder.InteractiveScope,
-    plan: Any,
-    entry: dict[str, Any],
+    user: str,
+    site: _Site,
 ) -> str | None:
-    """Bound the complete source, including the first navigation, by all outer deadlines."""
+    """Bound the complete search, including the first navigation, by all outer deadlines."""
     remaining = min(
         finder.WALL_TIME_S,
         pages.deadline - pages.monotonic(),
@@ -304,19 +475,20 @@ async def _search(
                 return exc.code
             if finder.canonical(pages.last_url) != scope.start:
                 return "unsupported_interaction"
-            commits = getattr(plan, "commits", None)
+            site.searches += 1
             session = finder.FinderSession(
                 pages,
                 scope.start,
                 pages.last_text,
-                user_id=str(plan.user_id),
+                user_id=user,
+                token_budget=finder.TOKEN_BUDGET - site.input_tokens,
                 interactive=scope,
-                on_verified=None
-                if commits is None
-                else functools.partial(commits.save, entry["source_id"], entry.get("host") or ""),
+                on_verified=None if site.commits is None else site.verified,
             )
             ran = await agent(session)
-            entry["tokens"] = {"input": ran.input_tokens, "output": ran.output_tokens}
+            site.input_tokens += ran.input_tokens
+            site.output_tokens += ran.output_tokens
+            site.tokens_seen = True
             if session.stopped:
                 return session.stopped
             if ran.stopped:
@@ -329,14 +501,12 @@ async def _search(
                 session.interactions[name] for name in ("browser_type", "browser_click")
             ):
                 return "unsupported_interaction"
-            return "finding_persistence_pending" if session.found else None
+            return None
     except TimeoutError:
         return "time_budget" if cap.expired() else "agent_failed"
     except SourceError as exc:
         return exc.code
     finally:
-        entry["result_pages"] = pages.count
+        site.pages = pages.count
         if session:
-            if session.on_verified is None:
-                entry["found"] = len(session.found)  # else the commits counted them
-            entry["refused"] = dict(session.refused)
+            site.keep(session)

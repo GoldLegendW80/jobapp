@@ -128,6 +128,9 @@ def profile(factory: sessionmaker[Session], user: uuid.UUID, **changes: Any) -> 
             **{
                 "title_include": {"terms": ["robot"], "advanced_regex": False},
                 "location": {"terms": [], "advanced_regex": False},
+                # Not "sales": an unwanted title is dropped before the store (pull request
+                # 715), and the sales posting here tests the never apply rule.
+                "title_exclude": {"terms": ["account executive"], "advanced_regex": False},
                 "never_apply": ["No sales roles: sales (test rule)"],
                 "interactive_sites": [
                     {"platform": "custom", "url": BASE, "enabled": True, "mode": "llm_browser"}
@@ -834,3 +837,52 @@ def test_a_progress_write_and_a_commit_never_overlap(
     asyncio.run(scenario())
     assert order == ["progress", "commit"]
     assert (stats.new, read_sweep(factory, sweep_id).stats["new"]) == (1, 1)
+
+
+def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_them(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """One search per title (pull request 715): each search's verified batches reach the store
+    as they come, a posting both searches give is stored once, an unwanted title is dropped
+    before the store, and the refusal in the second search keeps what both saved."""
+    profile(
+        factory,
+        alice,
+        title_include={"terms": ["robot", "arm"], "advanced_regex": False},
+        title_exclude={"terms": ["sales"], "advanced_regex": False},
+    )
+    queries: list[str] = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        assert session.interactive is not None
+        query = session.interactive.query
+        queries.append(query)
+        assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
+        assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
+        if query == "robot":
+            assert await report(session, "jobs/robot", "jobs/arm") == ""
+        else:
+            assert await report(session, "jobs/arm", "jobs/arm-2", "jobs/sales") == ""
+            # The posting's Send application button: browserd refuses the click (a POST form).
+            assert (await session.interact("browser_click", {"ref": "e99"}))[1]
+        return finder.Ran()
+
+    class Refusing(SiteTools):
+        async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+            if args.get("ref") == "e99":
+                return {"ok": False, "error": "unsupported_discovery"}
+            return await super().call(name, args)
+
+    row = run(factory, new_sweep(factory, alice), runner(script, Refusing()))
+    assert queries == ["robot", "arm"]
+    entry = entry_of(row)
+    assert (entry["searches"], entry["found"], entry["postings"]) == (2, 3, 3)
+    assert (entry["unwanted"], entry.get("duplicates", 0)) == (1, 0)
+    assert (entry["error"], entry["outcome"]) == ("unsupported_interaction", "partial")
+    assert (row.stats["new"], row.stats["duplicates"]) == (3, 0)
+    assert sorted(job.title for job in jobs_of(factory, alice)) == [
+        "Arm Engineer",
+        "Arm Engineer",
+        "Robot Engineer",
+    ]
+    assert_counts_agree(factory, row, alice)

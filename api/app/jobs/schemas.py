@@ -719,6 +719,11 @@ class SourceOut(BaseModel):
     new: int = 0
     skipped_by_rule: int = 0
     items_skipped: int = Field(default=0, ge=0)
+    # A website searched in the person's browser (jobs J10): the native searches that ran, and
+    # the title and place combinations planned (at most interactive.SEARCHES_MAX) of all saved.
+    searches: int = Field(default=0, ge=0)
+    searches_planned: int = Field(default=0, ge=0)
+    searches_total: int = Field(default=0, ge=0)
     error: str | None = None
     source_id: str | None = None
     mode: str | None = None

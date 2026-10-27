@@ -155,7 +155,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   lease_budget:
     "The browser's time for this site ran out. What was read is kept, the rest comes at the next search.",
   store_failed:
-    "What this site found could not be saved, so nothing was kept from it.",
+    "What this site found could not be saved, so it stopped there. Postings saved before are kept.",
   page_failed: "A page did not load. What was read before is kept.",
   browser_unavailable: "The browser could not be reached.",
   not_started: "not read this time, it comes at the next search.",
@@ -189,10 +189,35 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "Your search uses settings this website search does not take yet, so it was not opened.",
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
-    "The assistant stopped before the end. Nothing was kept from it.",
+    "The assistant stopped before the end. Postings saved before are kept.",
   page_budget:
     "The search read as many pages as it may. What was read is kept.",
+  token_budget:
+    "The assistant used all it may read for this website in one search. What was read is kept.",
 };
+
+/** How many native searches a website ran, one per title and place combination (owner,
+ * 2026-10-26), and a plain sentence when the cap left combinations out. Empty for a website
+ * with a single combination, so its summary reads as before. */
+export function searchesSentence(source: {
+  searches?: number;
+  searches_planned?: number;
+  searches_total?: number;
+}): string {
+  const ran = source.searches ?? 0;
+  const planned = source.searches_planned ?? 0;
+  const total = source.searches_total ?? 0;
+  if (total <= 1) return "";
+  const parts = [
+    `${ran.toLocaleString("en-GB")} ${ran === 1 ? "search" : "searches"} ran.`,
+  ];
+  if (total > planned) {
+    parts.push(
+      `Only the first ${planned.toLocaleString("en-GB")} of your ${total.toLocaleString("en-GB")} title and place combinations were searched, the most relevant first.`,
+    );
+  }
+  return parts.join(" ");
+}
 
 export function sourceName(source: {
   kind: string;

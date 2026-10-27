@@ -361,9 +361,9 @@ def test_elapsed_sweep_budget_does_not_open_a_source():
 
 
 def test_private_criteria_and_instructions_cannot_change_native_scope():
-    from app.browser.sources.interactive import scope_for
+    from app.browser.sources.interactive import searches_for
 
-    scope = scope_for(selected(location={"terms": ["Paris"]}, contract_types=["CDI"]))
+    [scope] = searches_for(selected(location={"terms": ["Paris"]}, contract_types=["CDI"])).scopes
     assert scope.tool_scope()["filters"] == {
         "location": "Paris",
         "remote": "remote",
