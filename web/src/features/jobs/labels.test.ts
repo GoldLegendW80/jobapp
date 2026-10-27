@@ -79,10 +79,20 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "agent_failed",
       "page_budget",
       "token_budget",
+      "turn_limit",
     ]) {
       const sentence = SOURCE_PROBLEMS[code] ?? "";
       expect(sentence).not.toBe("");
       expect(sentence).not.toMatch(/[–—]| - /);
+    }
+  });
+
+  it("says a website's limits hold for all its searches, not one (review of 715)", () => {
+    for (const code of ["page_budget", "token_budget", "turn_limit"]) {
+      const sentence = SOURCE_PROBLEMS[code] ?? "";
+      expect(sentence).toContain("shared by all its searches");
+      expect(sentence).not.toContain("in one search");
+      expect(sentence).toMatch(/What was read is kept\.$/);
     }
   });
 });

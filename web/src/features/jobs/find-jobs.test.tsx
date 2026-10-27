@@ -396,7 +396,7 @@ describe("Find jobs", () => {
       "LinkedIn, waiting: not searched this time.",
       "LinkedIn, searched: 0 postings found, 0 new.",
       "Indeed: 3 searches ran. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
-      "Welcome to the Jungle: 6 searches ran. At most 6 of your 9 title and place combinations are searched on a website, in the order you saved them. 1 posting found, 0 new. The search read as many pages as it may. What was read is kept.",
+      "Welcome to the Jungle: 6 searches ran. At most 6 of your 9 title and place combinations are searched on a website, in the order you saved them. 1 posting found, 0 new. The app read as many pages of this website as it may this time, shared by all its searches. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,

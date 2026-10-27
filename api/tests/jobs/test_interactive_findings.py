@@ -21,6 +21,7 @@ from app.browser import finder
 from app.browser.sources import MemoryPacer, Runner
 from app.jobs import ats, sweep
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
+from app.profile.schemas import SearchSection
 from tests.browser.test_b8_sources import FakeLeases
 from tests.browser.test_b9_site import ScriptedFinder
 from tests.jobs.sweep_helpers import jobs_of, new_sweep, now, read_sweep, search, set_profile
@@ -884,5 +885,81 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
         "Arm Engineer",
         "Arm Engineer",
         "Robot Engineer",
+    ]
+    assert_counts_agree(factory, row, alice)
+
+
+def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reach_the_store(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of pull request 715, follow ups 2: the unwanted titles and places and the several
+    contracts are applied to each verified batch before it is saved, not only in the counts; an
+    address one search reads as unwanted and the next as wanted is never saved and counts once
+    (unwanted wins, fail closed)."""
+    # The plain place lists of another task (field location_exclude), read defensively.
+    monkeypatch.setattr(
+        SearchSection, "location_exclude", property(lambda self: ["Lyon"]), raising=False
+    )
+    profile(
+        factory,
+        alice,
+        title_include={"terms": ["robot", "arm"], "advanced_regex": False},
+        title_exclude={"terms": ["sales"], "advanced_regex": False},
+        contract_types=["CDI", "Stage"],
+    )
+    paths = ("jobs/robot", "jobs/lyon", "jobs/cdd", "jobs/flip")
+    read: list[str] = []
+
+    class TwoWays(SiteTools):
+        """jobs/flip is a sales role the first time it is read, an engineer's the next."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.pages[BASE + "search"] = "\n".join(
+                f'- link "{path}" [ref=e{index + 5}]\n  - /url: /{path}'
+                for index, path in enumerate(paths)
+            )
+            self.pages[BASE + "jobs/lyon"] = detail("Robot Engineer", "Location: Lyon, France")
+            self.pages[BASE + "jobs/cdd"] = detail("Robot Engineer CDD", "Build robot fleets.")
+            self.pages[BASE + "jobs/flip"] = ""  # written when it is read
+
+        async def snapshot(self) -> dict[str, Any]:
+            if self.current == BASE + "jobs/flip":
+                read.append("flip")
+                title = "Arm Sales Lead" if len(read) == 1 else "Arm Engineer"
+                self.pages[self.current] = detail(title, "Arms for robots.")
+            return await super().snapshot()
+
+    async def verified(session: finder.FinderSession, path: str, title: str) -> None:
+        assert not (await session.navigate("/" + path))[1]
+        text, error = await session.report_verified(
+            [{"title": title, "url": "/" + path, "text": MODEL_WORDS}]
+        )
+        assert not error, text
+        assert json.loads(text)["kept"] == 1, text
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        assert session.interactive is not None
+        query = session.interactive.query
+        assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
+        assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
+        if query == "robot":
+            await verified(session, "jobs/robot", "Robot Engineer")
+            await verified(session, "jobs/lyon", "Robot Engineer")
+            await verified(session, "jobs/cdd", "Robot Engineer CDD")
+            await verified(session, "jobs/flip", "Arm Sales Lead")
+        else:
+            await verified(session, "jobs/flip", "Arm Engineer")
+            await verified(session, "jobs/robot", "Robot Engineer")
+        return finder.Ran()
+
+    row = run(factory, new_sweep(factory, alice), runner(script, TwoWays()))
+    entry = entry_of(row)
+    assert read == ["flip", "flip"]
+    assert (entry["searches"], entry["error"], entry["outcome"]) == (2, None, "complete")
+    assert (entry["found"], entry["postings"], row.stats["new"]) == (1, 1, 1)
+    assert (entry["unwanted"], entry["other_contract"]) == (2, 1)
+    assert [(job.title, job.url) for job in jobs_of(factory, alice)] == [
+        ("Robot Engineer", BASE + "jobs/robot")
     ]
     assert_counts_agree(factory, row, alice)

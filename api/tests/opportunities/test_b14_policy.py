@@ -445,3 +445,56 @@ def test_a_failed_write_stops_the_source(
     assert run(policy.check(ctx)) == "permission_unavailable"
     assert run(policy.reserve(ctx)) == "permission_unavailable"
     assert run(policy.observe(ctx, URLS["indeed"], CHECKPOINT)) == "permission_unavailable"
+
+
+def test_one_linkedin_sweep_a_day_holds_across_the_searches_of_the_website(
+    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
+) -> None:
+    """Review of pull request 715, follow up 5: each native search of the website reserves
+    LinkedIn for its sweep through the real guard; the second passes because the sweep that
+    opened LinkedIn today is its own, and another sweep the same day is refused before any
+    lease."""
+    from tests.browser.test_b9_site import ScriptedFinder
+    from tests.browser.test_multi_search import LINKEDIN, SearchSite, searching
+    from tests.browser.test_selected_interactive import execute, selected
+
+    accept(api, person_a, "linkedin")
+    policy = PlatformPolicy(factory, clock)
+    search = selected(LINKEDIN, title_include={"terms": ["a1", "b2"]})
+
+    def sweep_of(sweep_id: uuid.UUID) -> tuple[dict[str, Any], Any]:
+        site = SearchSite(base=LINKEDIN, results={"a1": ["a1 Engineer"]})
+        found, _, leases, _, _ = run(
+            execute(
+                search,
+                str(person_a.user_id),
+                ScriptedFinder(searching(site)),
+                tools=site,
+                deadline=100_000,
+                policy=policy,
+                sweep_id=str(sweep_id),
+            )
+        )
+        [entry] = found
+        return entry, leases
+
+    first = running(factory, person_a, clock(), [LINKEDIN])
+    entry, leases = sweep_of(first)
+    # Both searches opened LinkedIn (no commits here: found is counted, not saved).
+    assert (entry["searches"], entry["error"], entry["found"]) == (
+        2,
+        "finding_persistence_pending",
+        1,
+    )
+    assert len(leases.acquired) == 2
+    assert entries(factory, first)[0]["opened_at"] == clock().isoformat()
+    with factory() as db, db.begin():
+        row = db.get(Sweep, first)
+        assert row is not None
+        row.status, row.finished_at = SweepStatus.done, clock()
+
+    second = running(factory, person_a, clock(), [LINKEDIN])
+    entry, leases = sweep_of(second)
+    assert (entry.get("searches", 0), entry["error"]) == (0, "linkedin_daily")
+    assert not leases.acquired
+    assert "opened_at" not in entries(factory, second)[0]

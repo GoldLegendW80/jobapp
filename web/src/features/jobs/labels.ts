@@ -190,10 +190,14 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
     "The assistant stopped before the end. Postings saved before are kept.",
+  // The limits of a website, shared by all its searches of the run (SPEC-browser, owner
+  // 2026-10-26): what its searches saved before the stop is kept (jobs J11).
   page_budget:
-    "The search read as many pages as it may. What was read is kept.",
+    "The app read as many pages of this website as it may this time, shared by all its searches. What was read is kept.",
   token_budget:
-    "The assistant used all it may read for this website in one search. What was read is kept.",
+    "The assistant used all it may read on this website this time, shared by all its searches. What was read is kept.",
+  turn_limit:
+    "The assistant took as many steps on this website as it may this time, shared by all its searches. What was read is kept.",
 };
 
 /** How many native searches a website ran, one per title and place combination (owner,

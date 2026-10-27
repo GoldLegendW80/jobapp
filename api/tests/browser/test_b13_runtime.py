@@ -8,7 +8,7 @@ import random
 import pytest
 
 from app.browser import finder, finder_tools, sources
-from tests.browser.b13_runtime import Recording
+from tests.browser.b13_runtime import STEPS, Recording
 from tests.browser.test_b9_runtime import (  # noqa: F401
     Runtime,
     alice,
@@ -96,6 +96,38 @@ def test_real_runtime_uses_interactive_registered_tools_and_code_read_text(runti
     assert one.found[0].text == "Robot Engineer\nObserved employer and duties"
     assert "Invented" not in one.found[0].text
     assert not finder._SCOPES
+
+
+def test_a_search_s_run_gets_only_the_turns_its_website_has_left(runtime: Runtime, alice):  # noqa: F811
+    """The runtime lowers the run's max_turns to the session's budget (never raises it) and
+    gives back the turns the run took, so the website's searches hold 40 turns in all."""
+    runtime.give_key(alice)
+
+    class Counting(Recording):
+        max_turns: int | None = None
+
+        async def stream(self, request):
+            self.max_turns = request.options.max_turns
+            async for message in super().stream(request):
+                yield message
+
+    backend = Counting()
+    context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
+    one = session(InteractiveTools(), alice)
+    one.turn_budget = 9
+    result = asyncio.run(finder.RuntimeFinder(lambda: context)(one))
+    assert not result.stopped
+    assert backend.max_turns == 9
+    assert one.turns == len(STEPS) == 7  # code's count: one per tool call
+    assert result.turns == 8  # the runtime's: the closing answer is a turn too
+
+    def no_runtime():
+        raise AssertionError("a website with no turn left starts no model")
+
+    spent = dataclasses.replace(session(InteractiveTools(), alice), turn_budget=0)
+    assert asyncio.run(finder.RuntimeFinder(no_runtime)(spent)).stopped == "turn_limit"
+    with pytest.raises(ValueError, match="turn_budget"):
+        finder.FinderInput(request="a" * 32, token_budget=1, turn_budget=finder.MAX_TURNS + 1)
 
 
 def test_scope_is_immutable_and_legacy_tools_and_model_schemas_stay_restricted():

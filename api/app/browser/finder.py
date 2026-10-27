@@ -6,7 +6,11 @@ lists. It asks of the runner (app/agents/runner.py):
   `RuntimeFinder`; never listed or started through the api;
 - `private_io`, `live_text=False`: the run's events hold tool names and sizes, never a page;
 - at most MAX_TURNS turns and `token_budget` (TOKEN_BUDGET) in the run's input; a run that
-  reaches either is stopped by the runner, and the postings validated before stay;
+  reaches either is stopped by the runner, and the postings validated before stay. An
+  interactive search also has `turn_budget`, the turns its website has left (its searches share
+  MAX_TURNS, app/browser/sources/interactive.py): the runner lowers the run's max_turns to it,
+  and code counts each tool call of the model as one turn (`FinderSession.turns`) and refuses any
+  call past it, `turn_limit`;
 - four tools (app/browser/finder_tools.py), bound to the run (`Scope.run_id`) and through it to
   the source's lease, held here in `_SESSIONS` while the run lasts. Three read the browser,
   `browser_navigate`, `browser_snapshot`, `browser_wait_for`: there is no click, no typing, no
@@ -55,7 +59,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import credentials, definitions, runs
 from app.agents.failures import TOKEN_LIMIT, TURN_LIMIT
-from app.agents.models import CredentialKind, RunStatus
+from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.browser.client import BrowserError
 
 if TYPE_CHECKING:
@@ -156,6 +160,8 @@ class FinderInput(BaseModel):
 
     request: str = Field(pattern=r"^[0-9a-f]{32}$")
     token_budget: int = Field(ge=0)
+    # An interactive search's turns left (browser_discovery): it lowers max_turns, never raises.
+    turn_budget: int | None = Field(default=None, ge=1, le=MAX_TURNS)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
 
@@ -497,6 +503,11 @@ class FinderSession:
     first: str  # its snapshot
     user_id: str
     token_budget: int = TOKEN_BUDGET
+    # The model turns the source has left, None for a company careers page (one run a source:
+    # the runner's MAX_TURNS alone). Each tool call is one turn (`turns`): a turn of several
+    # calls counts more, never fewer.
+    turn_budget: int | None = None
+    turns: int = 0
     found: list[Found] = field(default_factory=list)
     refused: Counter[str] = field(default_factory=Counter)
     stopped: str = ""  # a sources.ERRORS code that ended the pages
@@ -564,7 +575,16 @@ class FinderSession:
         self.stopped = self.stopped or code
         return f"Stopped: {code}. Report what you found, then stop.", True
 
+    def _turn(self) -> tuple[str, bool] | None:
+        """Count the model's tool call as a turn; past the budget nothing runs (fail closed)."""
+        if self.turn_budget is not None and self.turns >= self.turn_budget:
+            return self._stop("turn_limit")
+        self.turns += 1
+        return None
+
     async def navigate(self, raw: str) -> tuple[str, bool]:
+        if over := self._turn():
+            return over
         if self.stopped:
             return self._stop(self.stopped)
         url = canonical(urljoin(self.current, raw))
@@ -614,6 +634,8 @@ class FinderSession:
         """Only trusted interactive sessions can add browserd's discovery discriminator."""
         if self.interactive is None:
             return "Refused: this run has no interactive search permission.", True
+        if over := self._turn():
+            return over
         if self.stopped:
             return self._stop(self.stopped)
         if name == "browser_type" and args.get("text") != self.interactive.query:
@@ -654,6 +676,8 @@ class FinderSession:
     async def snapshot(self) -> tuple[str, bool]:
         from app.browser.sources import SourceError
 
+        if over := self._turn():
+            return over
         if self.stopped:
             return self._stop(self.stopped)
         try:
@@ -678,6 +702,8 @@ class FinderSession:
     async def wait_for(self, text: str | None, seconds: float | None) -> tuple[str, bool]:
         from app.browser.sources import SourceError
 
+        if over := self._turn():
+            return over
         if self.stopped:
             return self._stop(self.stopped)
         try:
@@ -698,6 +724,8 @@ class FinderSession:
     def report(self, items: Any) -> tuple[str, bool]:
         """Validate and keep the postings (module docstring); answer what was kept and why the
         rest was refused, by index."""
+        if over := self._turn():
+            return over
         if not isinstance(items, list):
             return "postings must be a list.", True
         kept = 0
@@ -716,6 +744,8 @@ class FinderSession:
         """Commit bounded code-read observations before acknowledging any saved finding."""
         if not self.interactive or self.on_verified is None:
             return self.report(items)
+        if over := self._turn():
+            return over
         async with self._report_lock:
             return await self._report_verified(items)
 
@@ -860,6 +890,7 @@ class Ran:
     input_tokens: int = 0
     output_tokens: int = 0
     stopped: str = ""  # "", no_credential, busy, token_budget, turn_limit, cancelled, error
+    turns: int = 0  # the runtime's count of the run's model turns (0: not counted)
 
 
 class FinderAgent:
@@ -983,6 +1014,8 @@ class RuntimeFinder(FinderAgent):
         )
 
     async def __call__(self, session: FinderSession) -> Ran:
+        if session.turn_budget is not None and session.turn_budget <= 0:
+            return Ran(stopped="turn_limit")  # the website's turns are spent: no model starts
         from app.agents import runner  # the SDK: the worker's image only
         from app.apply.agents import _ended, _release
 
@@ -990,7 +1023,10 @@ class RuntimeFinder(FinderAgent):
         key = secrets.token_hex(16)
         user_id = uuid.UUID(session.user_id)
         data = FinderInput(
-            request=key, token_budget=session.token_budget, script=self.script
+            request=key,
+            token_budget=session.token_budget,
+            turn_budget=session.turn_budget if session.interactive else None,
+            script=self.script,
         ).model_dump(exclude_none=True)
 
         def create(db: Session) -> uuid.UUID | str:
@@ -1029,8 +1065,20 @@ class RuntimeFinder(FinderAgent):
                 _KEYS.discard(key)
                 _SCOPES.pop(key, None)
                 _SESSIONS.pop(created, None)
-        ended = await asyncio.to_thread(_in_db, context.sessions, lambda db: _ended(db, created))
-        return Ran(ended.input_tokens, ended.output_tokens, _stopped(ended.status, ended.error))
+        ended, turns = await asyncio.to_thread(
+            _in_db, context.sessions, lambda db: (_ended(db, created), _turns(db, created))
+        )
+        return Ran(
+            ended.input_tokens, ended.output_tokens, _stopped(ended.status, ended.error), turns
+        )
+
+
+def _turns(db: Session, run_id: uuid.UUID) -> int:
+    """The model turns the runner counted (a private run's output holds its counts only)."""
+    run = db.get(AgentRun, run_id)
+    output = run.output if run is not None else None
+    turns = output.get("turns") if isinstance(output, dict) else None
+    return turns if type(turns) is int and turns >= 0 else 0
 
 
 Agent = Callable[[FinderSession], Awaitable[Ran]]
