@@ -45,6 +45,9 @@ from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
 GATE_PURPOSES = ("apply_submit", "profile_edit")
+# What Playwright's error says when another element would take the click or the hover (its
+# actionability log): told to the agent as `element_covered` (a cookie banner, 2026-10-28).
+COVERED = "intercepts pointer events"
 LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 LOCKS: dict[str, asyncio.Lock] = {}
 PACER = pacing.Pacer()
@@ -171,6 +174,12 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 raise
             except Exception as exc:
                 log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
+                if COVERED in str(exc):  # Playwright's actionability log: a banner over it
+                    return actions.failure(
+                        "element_covered",
+                        "Another element covers this one, such as a cookie banner: close it "
+                        "first, then try again.",
+                    )
                 return actions.failure("page_error", "The page did not let this action finish.")
 
     passive = name == "browser_snapshot" and args.get("passive") is True

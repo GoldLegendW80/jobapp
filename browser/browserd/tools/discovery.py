@@ -9,7 +9,10 @@ the person would, and a website may want "GenAI Engineer" for the saved "genai e
 same letters in the same order, no control character, nothing else; any other value, a
 translation included, is refused (fail closed). A search request carries one search key holding
 a saved title, a saved place or nothing in `location` (or no `location` at all: the place box
-left empty is always allowed), and every saved filter (`Scope.criteria`).
+left empty is always allowed), and every saved filter (`Scope.criteria`); the search page itself,
+its address with no query, opens as any page (2026-10-28). One click besides: a cookie banner's
+decline button (`decline`), so a banner that covers the page is closed as a person would, never
+by accepting.
 
 A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
 the site's JavaScript on, for a website the person signed in to: the same controls are refused
@@ -84,6 +87,35 @@ APPLY_PARTS = (
     "sollicit",
 )
 CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
+# A cookie banner's decline button (2026-10-28, issue 716): the one click a discovery takes
+# outside a native search, so a banner that covers the page can be closed as a person would,
+# never by accepting. One of its names is one of these phrases, read as folded words (case,
+# accents and punctuation aside, detect.words); none of its other names holds an ACCEPT_STEMS
+# or ACCOUNT_STEMS word (a sign in, glued too) or OK, yes or oui; it is a button (never a link,
+# never a form's submit button, nothing that holds one), and the click lands on it (`decline`).
+DECLINES = frozenset(
+    tuple(phrase.split())
+    for phrase in (
+        "no thanks", "no thank you", "reject", "reject all", "reject cookies",
+        "reject all cookies", "reject optional cookies", "reject non essential cookies",
+        "decline", "decline all", "decline cookies", "decline all cookies",
+        "decline optional cookies", "refuse", "refuse all", "refuse cookies", "refuse all cookies",
+        "deny", "deny all", "disagree", "i disagree", "only necessary", "only necessary cookies",
+        "necessary only", "necessary cookies only", "use necessary cookies only",
+        "only essential", "only essential cookies", "essential only", "essential cookies only",
+        "continue without accepting", "non merci", "refuser", "tout refuser", "refuser tout",
+        "je refuse", "refuser les cookies", "refuser tous les cookies", "refuser et fermer",
+        "continuer sans accepter", "cookies necessaires uniquement",
+        "uniquement les cookies necessaires", "seulement les cookies necessaires", "ablehnen",
+        "alle ablehnen", "nur notwendige", "nur notwendige cookies",
+    )
+)  # fmt: skip
+ACCEPT_STEMS = (
+    "accept", "agree", "allow", "autoris", "choose", "choisi", "custom", "personnali",
+    "parametr", "setting", "preferen", "akzept", "zustimm", "erlaub", "einstell", "connect",
+    "inscri", "anmeld",
+)  # fmt: skip
+ACCEPT_WORDS = frozenset({"ok", "okay", "yes", "oui", "ja", "accord", "daccord"})
 
 
 def _control(text: str) -> bool:
@@ -247,9 +279,9 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
             or any(t.startswith(ACCOUNT_STEMS) for t in tokens)
             or any(part in t for t in tokens for part in APPLY_PARTS)
         )
-        complete = bool(pairs) or (
-            url != (scope.start if scope else url) and segments[-1] in ENDPOINTS
-        )
+        # A search request carries its saved title; the search page itself, its address with
+        # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716).
+        complete = bool(pairs)
         return (
             not parts.fragment
             and not destructive
@@ -486,6 +518,51 @@ def signed_request(url: str, method: str, document: bool, scope: Scope) -> bool:
     return not destructive(url, scope)
 
 
+def _declines(facts: dict) -> bool:
+    """Whether these facts are of a cookie banner's decline button (DECLINES)."""
+    names = facts.get("names")
+    if not isinstance(names, list) or not names or len(names) > 60:
+        return False
+    said = [tuple(detect.words(n, camel=False)) for n in names if isinstance(n, str)]
+    if len(said) != len(names) or not any(words in DECLINES for words in said):
+        return False
+    for name, words in zip(names, said, strict=True):
+        if words in DECLINES:
+            continue
+        tokens = [*words, *detect.match_words(name), "".join(words)]
+        if any(t.startswith((*ACCEPT_STEMS, *ACCOUNT_STEMS)) or t in ACCEPT_WORDS for t in tokens):
+            return False
+    d = facts.get("discovery")
+    tag, kind = facts.get("tag"), facts.get("type")
+    button = (
+        tag == "button"
+        or (tag == "input" and kind in {"button", "submit"})
+        or (facts.get("role") == "button" and tag not in {"a", "input", "select", "textarea"})
+    )
+    return (
+        button
+        and isinstance(d, dict)
+        and not d.get("href")
+        and d.get("target") in {"", "_self"}
+        and not (facts.get("in_form") and kind in {"submit", "image"})
+        and not facts.get("holds_submit")
+        and not facts.get("selector_hit")
+        and not facts.get("selector_error")
+        and not facts.get("custom_submit")
+        and not facts.get("editable")
+        and not facts.get("credential")
+    )
+
+
+def decline(facts: object) -> bool:
+    """A click on a cookie banner's decline button, and only that (DECLINES), at its click point
+    too: the element there is the button or within it, and reads as the same decline."""
+    if not isinstance(facts, dict) or not _declines(facts):
+        return False
+    point = facts.get("point")
+    return isinstance(point, dict) and point.get("inside") is True and _declines(point)
+
+
 def verdict(
     facts: object, tool: str, current: str, *, scope: Scope | None = None, args: dict | None = None
 ) -> str | None:
@@ -503,6 +580,12 @@ def verdict(
         return original
     if detect.says_submit(facts.get("names", []), profile_edit=True):
         return "submit"
+    if tool == "browser_click" and decline(facts):
+        point = facts["point"]
+        refused = detect.verdict(point, action="click", profile_edit=True)
+        if refused and refused != "submit":
+            return refused
+        return "submit" if detect.says_submit(point.get("names", []), profile_edit=True) else None
     d = facts.get("discovery")
     # A signed in page runs its scripts by design (B17): its requests are held instead
     # (signed_request), so the script free proof is the anonymous discovery's alone.
