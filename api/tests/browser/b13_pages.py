@@ -67,6 +67,93 @@ COUNTRY = {
     "fr.indeed.test:8080": {},
 }
 
+# A website like Welcome to the Jungle (2026-10-28, issue 716), under /b13/jungle: its home is a
+# marketing page with no search box and a "Find a job" link; its search page /b13/jungle/fr/jobs
+# has a search box, and, with JavaScript on, a cookie banner over the whole page that takes every
+# click until "No, thanks" (or "OK for me") is clicked; its search runs in the page (the address
+# stays /b13/jungle/fr/jobs) through a GET of /b13/jungle/api/search, which lists the postings
+# only to a member (the `jungle_member` cookie, set by GET /b13/jungle/session) and otherwise
+# answers a count and a push to create a profile, as the real one does signed out. A search
+# submitted with no JavaScript reaches the page with its query and shows the same count.
+# A posting's page is /b13/jungle/fr/companies/<company>/jobs/<slug>.
+JUNGLE_JOBS = {
+    "genai engineer": [("example-robotics", "genai-engineer", "GenAI Engineer")],
+    "forward deployed engineer": [
+        ("example-robotics", "forward-deployed-engineer", "Forward Deployed Engineer")
+    ],
+}
+JUNGLE_COUNT = "<p>9756 jobs found. Yes, we counted.</p><p>Create your profile to see them.</p>"
+JUNGLE_HOME = """<!doctype html><title>Welcome to the Jungle</title>
+<nav><a href="/b13/jungle/fr/jobs">Find a job</a></nav>
+<main><h1>Find the job that fits you</h1><p>The best companies are hiring.</p></main>"""
+JUNGLE_SEARCH = """<!doctype html><title>Jobs</title>
+<main><h1>Jobs</h1>
+<form method="get" action="/b13/jungle/fr/jobs" id="search">
+<label>What job are you looking for? <input type="search" name="query"></label>
+<button type="submit">Search</button></form>
+<section id="results">{results}</section></main>
+<script>
+if (!document.cookie.includes("jungle_consent=")) {
+  const overlay = document.createElement("div");
+  overlay.id = "jungle_overlay";
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4)";
+  overlay.innerHTML = '<div role="dialog" aria-label="C is for COOKIE" style="background:#fff;' +
+    'margin:20vh auto;width:320px;padding:16px"><h2>C is for COOKIE</h2>' +
+    '<button type="button" id="jungle_btn_accept">OK for me</button>' +
+    '<button type="button" id="jungle_btn_choose">I choose</button>' +
+    '<button type="button" id="jungle_btn_dismiss">No, thanks</button></div>';
+  document.body.appendChild(overlay);
+  const close = choice => () => {
+    document.cookie = "jungle_consent=" + choice + "; path=/";
+    fetch("/b13/jungle/consent?choice=" + choice);
+    overlay.remove();
+  };
+  overlay.querySelector("#jungle_btn_accept").addEventListener("click", close("accepted"));
+  overlay.querySelector("#jungle_btn_dismiss").addEventListener("click", close("declined"));
+}
+document.querySelector("#search").addEventListener("submit", event => {
+  event.preventDefault();
+  const query = document.querySelector("input[name=query]").value;
+  fetch("/b13/jungle/api/search?query=" + encodeURIComponent(query))
+    .then(answer => answer.text())
+    .then(html => { document.querySelector("#results").innerHTML = html; });
+});
+</script>"""
+
+
+def jungle(path: str, query: dict, member: bool) -> tuple[int, dict, str]:
+    """The answer of the website like Welcome to the Jungle: status, headers and body."""
+    if path in {"/b13/jungle", "/b13/jungle/"}:
+        return 200, {}, JUNGLE_HOME
+    if path == "/b13/jungle/session":
+        cookie = "jungle_member=1; Max-Age=2592000; Path=/; HttpOnly"
+        return 302, {"Location": "/b13/jungle/fr/jobs", "Set-Cookie": cookie}, ""
+    if path == "/b13/jungle/consent":
+        return 204, {}, ""
+    words = " ".join(query.get("query", [""])[-1].casefold().split())
+    if path == "/b13/jungle/api/search":
+        if not member:
+            return 200, {}, JUNGLE_COUNT
+        found = JUNGLE_JOBS.get(words, [])
+        links = "".join(
+            f'<li><a href="/b13/jungle/fr/companies/{c}/jobs/{s}">{t}</a></li>' for c, s, t in found
+        )
+        return 200, {}, f"<ul>{links}</ul>" if links else "<p>No job matches your search.</p>"
+    if path == "/b13/jungle/fr/jobs":
+        return 200, {}, JUNGLE_SEARCH.replace("{results}", JUNGLE_COUNT if words else "")
+    for jobs in JUNGLE_JOBS.values():
+        for company, slug, title in jobs:
+            if path == f"/b13/jungle/fr/companies/{company}/jobs/{slug}":
+                return (
+                    200,
+                    {},
+                    (
+                        f"<main><article><h1>{title}</h1><p>Employer: Example Robotics</p>"
+                        "<p>Build agents with the customers who use them.</p></article></main>"
+                    ),
+                )
+    return 404, {}, "<main>Not found</main>"
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -78,6 +165,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         query = parse_qs(path.query)
         OBSERVED.append({"path": path.path, "query": query, "host": self.headers.get("Host")})
         body = FORM
+        if path.path.startswith("/b13/jungle"):
+            member = "jungle_member=1" in self.headers.get("Cookie", "")
+            OBSERVED[-1]["member"] = member
+            status, headers, body = jungle(path.path, query, member)
+            data = body.encode()
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path.path == "/observed":
             body = json.dumps(OBSERVED)
         elif path.path in {"/b13/handler", "/b13/shadow"}:
