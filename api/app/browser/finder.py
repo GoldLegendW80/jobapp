@@ -171,9 +171,18 @@ ACTION_FAILED = (
     "cookie banner, or the page changed. Read the page again with browser_snapshot, close a "
     "cookie banner by declining it, then try again or another way."
 )
-# A website's own job search page (browserd's discovery.ENDPOINTS): the agent may open it by its
-# address, with no query, even when no page read linked to it (`/jobs`, `/fr/jobs`, `/search`).
+# A website's own job search page (browserd's discovery.ENDPOINTS, LANGUAGES and search_path,
+# read the same way, case sensitive): the agent may open it by its address, with no query, even
+# when no page read linked to it, at `/<endpoint>` or `/<language>/<endpoint>` only (`/jobs`,
+# `/fr/jobs`, `/en-GB/search`), never at another depth (`/settings/jobs`, `/fr/compte/jobs`).
 SEARCH_PAGES = frozenset({"jobs", "search", "careers", "vacancies"})
+SEARCH_LANGUAGES = frozenset(
+    {"ar", "bg", "bn", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
+     "fr", "ga", "gl", "he", "hi", "hr", "hu", "hy", "id", "is", "it", "ja", "ka", "kk", "ko",
+     "lt", "lv", "mk", "ms", "mt", "nb", "nl", "nn", "no", "pl", "pt", "ro", "ru", "sk", "sl",
+     "sq", "sr", "sv", "sw", "ta", "th", "tr", "uk", "ur", "uz", "vi", "zh"}
+)  # fmt: skip
+SEARCH_REGION = re.compile(r"[-_][A-Za-z]{2}")
 QUERY_KEYS = frozenset({"q", "query", "search", "keyword", "keywords"})  # discovery.QUERY
 # Which saved values a text entry of a page takes, as far as the api can tell from the snapshot
 # (`box_of`): its role, and the words of its accessible name (the label, aria-label or
@@ -539,15 +548,26 @@ def site_of(url: str) -> tuple[str, str] | None:
 
 
 def search_page(url: str) -> bool:
-    """Whether a canonical address is a website's job search page itself: its last path segment
-    is one of SEARCH_PAGES (`/jobs`, `/fr/jobs`, `/search/`) and it has no query. A search by
-    address (`/jobs?q=...`) is opened only from a link a page showed."""
+    """Whether a canonical address is a website's job search page itself, with no query: its
+    path `/<endpoint>` or `/<language>/<endpoint>` (`/jobs`, `/fr/jobs`, `/search/`), as
+    browserd's discovery.search_path reads it. A search by address (`/jobs?q=...`) is opened
+    only from a link a page showed."""
     try:
         parts = urlsplit(url)
     except ValueError:
         return False
-    segments = [s for s in parts.path.split("/") if s]
-    return not parts.query and bool(segments) and segments[-1].casefold() in SEARCH_PAGES
+    if parts.query:
+        return False
+    segments = parts.path.strip("/").split("/")
+    if len(segments) == 1:
+        return segments[0] in SEARCH_PAGES
+    language, region = segments[0][:2], segments[0][2:]
+    return (
+        len(segments) == 2
+        and segments[1] in SEARCH_PAGES
+        and language in SEARCH_LANGUAGES
+        and (not region or SEARCH_REGION.fullmatch(region) is not None)
+    )
 
 
 @dataclass
@@ -928,7 +948,7 @@ class FinderSession:
         if self.interactive and url not in self.seen and not search_page(url):
             return (
                 "Refused: open only an observed link of this site, or its job search page "
-                "(an address ending in /jobs or /search, with no query).",
+                "at its root or under a language, such as /jobs or /fr/jobs, with no query.",
                 True,
             )
         if not self.interactive and self.pages.count >= PAGES_MAX:

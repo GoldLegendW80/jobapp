@@ -276,6 +276,13 @@ def test_a_refusal_with_nothing_read_stays_unsupported():
         ("/fr/jobs?query=genai+engineer", None),  # a search by address: from a link only
         ("/fr/companies", None),
         ("/fr/jobs/../account", None),
+        ("/settings/jobs", None),  # an endpoint at another depth (review of PR 720, round 2)
+        ("/me/jobs", None),
+        ("/admin/jobs", None),
+        ("/inbox/search", None),
+        ("/fr/mon-compte/jobs", None),
+        ("/oauth/authorize/jobs", None),
+        ("/JOBS", None),  # compared as written, as browserd does
         ("https://elsewhere.example.test/jobs", None),
     ],
 )

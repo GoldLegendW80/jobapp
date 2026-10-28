@@ -483,6 +483,7 @@ def test_native_detail_ownership_and_prose(native, tmp_path, case, suffix, compa
 
 
 JUNGLE = START + "jungle"
+PAGES = "http://pages:8080/"  # its search page sits at the root, /fr/jobs
 
 
 class Person(Lease):
@@ -528,7 +529,7 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         home = lease.tool("browser_snapshot")["snapshot"]
         assert "Find a job" in home
         assert "searchbox" not in home
-        assert lease.tool("browser_navigate", url=JUNGLE + "/fr/jobs", **signed)["ok"]
+        assert lease.tool("browser_navigate", url=PAGES + "fr/jobs", **signed)["ok"]
         page = lease.tool("browser_snapshot")["snapshot"]
         box = ref(page, "searchbox", "What job")
         covered = lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)
@@ -546,12 +547,12 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         assert searched["ok"], searched
         assert lease.tool("browser_wait_for", text="GenAI Engineer")["ok"]
         shot = lease.tool("browser_snapshot")
-        assert shot["url"] == JUNGLE + "/fr/jobs", shot["url"]  # the list updated in place
+        assert shot["url"] == PAGES + "fr/jobs", shot["url"]  # the list updated in place
         posting = ref(shot["snapshot"], "link", "GenAI Engineer")
         opened = lease.tool("browser_click", ref=posting, **signed)
         assert opened["ok"], opened
         shot = lease.tool("browser_snapshot")
-        assert shot["url"] == JUNGLE + "/fr/companies/example-robotics/jobs/genai-engineer"
+        assert shot["url"] == PAGES + "fr/companies/example-robotics/jobs/genai-engineer"
         assert "Build agents with the customers" in shot["snapshot"]
     finally:
         lease.end()
@@ -560,7 +561,7 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
     marker = {"_discovery": "native_get", "_discovery_scope": scope}
     try:
         assert anonymous.tool("browser_navigate", url=JUNGLE, **marker)["ok"]
-        assert anonymous.tool("browser_navigate", url=JUNGLE + "/fr/jobs", **marker)["ok"]
+        assert anonymous.tool("browser_navigate", url=PAGES + "fr/jobs", **marker)["ok"]
         page = anonymous.tool("browser_snapshot")["snapshot"]
         assert "No, thanks" not in page  # its banner needs JavaScript, off signed out
         box = ref(page, "searchbox", "What job")
@@ -568,7 +569,7 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         assert not typed["ok"], typed
         # A page with scripts takes no typing signed out (no script free proof); its search by
         # address does, and shows a count, no list.
-        searched = JUNGLE + "/fr/jobs?query=genai+engineer"
+        searched = PAGES + "fr/jobs?query=genai+engineer"
         assert anonymous.tool("browser_navigate", url=searched, **marker)["ok"]
         shot = anonymous.tool("browser_snapshot")
         assert "9756 jobs found" in shot["snapshot"]

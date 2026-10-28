@@ -12,6 +12,7 @@ import asyncio
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -245,6 +246,54 @@ def test_the_search_page_opens_and_a_search_still_carries_a_saved_title(url, all
     assert discovery.read_url(url, START, scope=SCOPE) is allowed
 
 
+# Paths whose last segment is an endpoint at another depth, probed in the review of PR 720
+# (round 2): an account, an admin, a sign in or a consent page is no search page.
+DEEP = [
+    "/settings/jobs", "/preferences/jobs", "/me/jobs", "/my/jobs", "/dashboard/jobs",
+    "/admin/jobs", "/inbox/search", "/notifications/jobs", "/billing/search",
+    "/fr/mon-compte/jobs", "/fr/profil/jobs", "/oauth/authorize/jobs", "/sso/jobs", "/auth/jobs",
+    "/session/new/search", "/consent/accept/jobs", "/cookies/accept/jobs", "/fr/me/jobs",
+    "/xx/jobs", "/FR/jobs", "/fr/JOBS", "/JOBS", "/fr-france/jobs", "/fr-/jobs", "/fr//jobs",
+    "/en-gb/jobs/", "/b13/jungle/fr/jobs",
+]  # fmt: skip
+SEARCH_PAGES = ["/jobs", "/search/", "/careers", "/vacancies", "/fr/jobs", "/en/search",
+                "/en-GB/jobs", "/pt_BR/careers", "/de-de/jobs/"]  # fmt: skip
+
+
+@pytest.mark.parametrize("path", DEEP)
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_an_endpoint_at_another_depth_is_no_search_page(path, signed_in):
+    """browserd and the api read the search page the same way, `/<endpoint>` or
+    `/<language>/<endpoint>`, case sensitive (discovery.search_path, finder.search_page)."""
+    from app.browser import finder
+
+    url = "https://www.example-jungle.test" + path
+    home = "https://www.example-jungle.test/"
+    scope = discovery.Scope(home, ("genai engineer",), signed_in=signed_in)
+    deep = path not in {"/en-gb/jobs/"}  # a trailing slash aside, that one is a search page
+    assert discovery.search_path(urlsplit(url).path) is not deep
+    assert finder.search_page(url) is not deep
+    if deep and path.rstrip("/").rsplit("/", 1)[-1] in discovery.ENDPOINTS:
+        # browserd reads an endpoint there as a search: it carries the saved criteria. Another
+        # last segment (`/JOBS`) is any page to it, opened only from a link the api saw.
+        assert not discovery.read_url(url, home, scope=scope)
+        assert not discovery.signed_request(url, "GET", True, scope)
+
+
+@pytest.mark.parametrize("path", SEARCH_PAGES)
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_the_search_page_at_its_root_or_under_a_language_opens(path, signed_in):
+    from app.browser import finder
+
+    url = "https://www.example-jungle.test" + path
+    home = "https://www.example-jungle.test/"
+    scope = discovery.Scope(home, ("genai engineer",), signed_in=signed_in)
+    assert discovery.search_path(urlsplit(url).path)
+    assert finder.search_page(url)
+    assert discovery.read_url(url, home, scope=scope)
+    assert finder.search_page(url + "?query=genai+engineer") is False
+
+
 @pytest.mark.parametrize(
     ("message", "code"),
     [
@@ -312,3 +361,11 @@ def test_a_redirect_hop_to_a_bare_search_page_stays_refused(url):
     signed = discovery.Scope(home.start, home.titles, signed_in=True)
     assert discovery.signed_request(url, "GET", True, signed)
     assert not discovery.signed_request(url, "GET", True, signed, hop=True)
+
+
+def test_the_api_and_browserd_read_the_search_page_from_the_same_lists():
+    from app.browser import finder
+
+    assert finder.SEARCH_PAGES == discovery.ENDPOINTS
+    assert finder.SEARCH_LANGUAGES == discovery.LANGUAGES
+    assert finder.SEARCH_REGION.pattern == discovery.REGION.pattern

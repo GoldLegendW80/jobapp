@@ -52,6 +52,16 @@ TOOLS = frozenset(
 QUERY = frozenset({"q", "query", "search", "keyword", "keywords"})
 FIELDS = QUERY | {"location", "remote", "contract", "category", "page", "sort"}
 ENDPOINTS = frozenset({"search", "jobs", "careers", "vacancies"})
+# The languages a website's search page may sit under (`/fr/jobs`, `/en-gb/jobs`, SEARCH_PATH):
+# ISO 639-1 codes of languages job websites use, never a word a path of the person's account
+# uses (`/me/jobs`, `/my/jobs`: "my" is left out on purpose).
+LANGUAGES = frozenset(
+    {"ar", "bg", "bn", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
+     "fr", "ga", "gl", "he", "hi", "hr", "hu", "hy", "id", "is", "it", "ja", "ka", "kk", "ko",
+     "lt", "lv", "mk", "ms", "mt", "nb", "nl", "nn", "no", "pl", "pt", "ro", "ru", "sk", "sl",
+     "sq", "sr", "sv", "sw", "ta", "th", "tr", "uk", "ur", "uz", "vi", "zh"}
+)  # fmt: skip
+REGION = re.compile(r"[-_][A-Za-z]{2}")
 UNSUPPORTED = "unsupported_discovery"
 VALUES_MAX = 100  # saved titles, or saved places, a scope carries
 VALUE_MAX = 300  # characters of one saved value
@@ -260,6 +270,24 @@ class Scope:
         return not complete or (sum(k in QUERY for k in keys) == 1 and expected.keys() <= set(keys))
 
 
+def search_path(path: str) -> bool:
+    """Whether an address's path is a website's own job search page (round 2, review of PR 720):
+    `/<endpoint>` or `/<language>/<endpoint>` only, a trailing slash aside, the language one of
+    LANGUAGES with a region or not (`/fr/jobs`, `/en-GB/search`), the endpoint one of ENDPOINTS,
+    compared as written (case sensitive). Never at any depth: `/settings/jobs`, `/admin/jobs` or
+    `/fr/mon-compte/jobs` are not. The api's finder.search_page reads it the same way."""
+    segments = path.strip("/").split("/")
+    if len(segments) == 1:
+        return segments[0] in ENDPOINTS
+    language, region = segments[0][:2], segments[0][2:]
+    return (
+        len(segments) == 2
+        and segments[1] in ENDPOINTS
+        and language in LANGUAGES
+        and (not region or REGION.fullmatch(region) is not None)
+    )
+
+
 def read_url(
     url: str, current: str, *, form: bool = False, scope: Scope | None = None, hop: bool = False
 ) -> bool:
@@ -291,8 +319,12 @@ def read_url(
         # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716). A
         # redirect hop (`hop`) is held to the rule reviewed with the start page's own redirect:
         # an endpoint there is a search, so it carries the saved criteria.
+        # The search page is `/<endpoint>` or `/<language>/<endpoint>` (search_path); an
+        # endpoint at any other depth (`/settings/jobs`) is a search, so it carries the criteria.
         complete = bool(pairs) or (
-            hop and url != (scope.start if scope else url) and segments[-1] in ENDPOINTS
+            url != (scope.start if scope else url)
+            and segments[-1] in ENDPOINTS
+            and (hop or not search_path(parts.path))
         )
         return (
             not parts.fragment
