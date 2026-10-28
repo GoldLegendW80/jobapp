@@ -6,11 +6,11 @@
  * the files that are plainly not a profile export, and describes the ones that are.
  */
 import {
-  EMPTY,
   EXPORT_FORMAT,
   EXPORT_VERSION,
   IMPORT_MAX_BYTES,
   SECTIONS,
+  readSection,
   type Profile,
   type SectionName,
 } from "./api";
@@ -95,11 +95,15 @@ export function describeSection(name: SectionName, data: unknown): string {
       return `${plural(categories, "category", "categories")}, ${plural(count(s.gates), "gate")}`;
     }
     case "search": {
-      const boards = Array.isArray(s.boards) ? s.boards : [];
-      const enabled = boards.filter(
-        (board) => isObject(board) && board.enabled === true,
+      // Every search runs the job websites ticked in Find jobs (owner, 2026-10-28): the file's
+      // saved boards are imported as they are, not described.
+      const sites = Array.isArray(s.interactive_sites)
+        ? s.interactive_sites
+        : [];
+      const ticked = sites.filter(
+        (site) => isObject(site) && site.enabled === true,
       ).length;
-      return `${plural(boards.length, "board")}, ${String(enabled)} enabled`;
+      return `${plural(sites.length, "job website")}, ${String(ticked)} ticked`;
     }
     case "answers":
       return plural(count(s.work_authorization), "country", "countries");
@@ -222,8 +226,10 @@ export function checkImportFile(
         : describeSection(name, sections[name]),
     changed: !sameData(
       {
-        ...EMPTY[name],
-        ...(sections[name] as object | undefined),
+        ...(readSection(
+          name,
+          (sections[name] as object | undefined) ?? {},
+        ) as object),
         // An import keeps the stored onboarding dates (O4): they never count as a change.
         ...(name === "preferences"
           ? { onboarding: profile.sections.preferences.onboarding }

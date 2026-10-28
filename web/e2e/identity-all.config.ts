@@ -12,7 +12,7 @@ import { defineConfig, devices } from "@playwright/test";
  *   model-access  Model access card: format error, save, subscription token, remove (the API
  *             key checks only with E2E_MODEL_STUB=1, so this run never calls Anthropic)
  *   profile   a made up profile through the CLI, every tab
- *   profile-editors  Facts, Skills and Search editors, the board check against a real ATS
+ *   profile-editors  Facts, Skills and Search editors, the saved boards kept and not shown
  *   profile-history  empty to 100% in the browser, History diff and restore, export, import
  *   profile-dates  a year alone as a date: typed, saved, reloaded, made a month, exported, imported
  *   throttle  five wrong passwords, then 429 with a countdown (last: it locks its admin)

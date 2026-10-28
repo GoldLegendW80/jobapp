@@ -146,6 +146,16 @@ function fakeExport() {
           },
         ],
         never_apply: ["No defence roles."],
+        // A job website ticked in Find jobs: what every search runs and what completeness
+        // counts (owner, 2026-10-28). An invented host, never opened by this journey.
+        interactive_sites: [
+          {
+            platform: "custom",
+            url: "https://jobs.example.org/",
+            enabled: true,
+            mode: "llm_browser",
+          },
+        ],
       },
       answers: {
         work_authorization: [
@@ -294,10 +304,13 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   ).toContainText("langgraph");
   await shots(page, "skills");
 
+  // Searches run the job websites ticked in Find jobs (owner, 2026-10-28): the tab shows no
+  // company boards, the saved one stays saved.
   await openTab(page, "Search");
   await expect(
-    page.getByLabel("Company of board 1", { exact: true }),
-  ).toHaveValue("Example AI");
+    page.getByText("Searches run the job websites ticked in Find jobs."),
+  ).toBeVisible();
+  await expect(page.getByRole("table", { name: "Boards" })).toHaveCount(0);
   await shots(page, "search");
 
   await openTab(page, "Answers");

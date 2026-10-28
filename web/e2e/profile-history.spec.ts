@@ -337,7 +337,7 @@ test("export, change, import the export back: data and completeness restored", a
     /^Experience: 1 employer, 1 schoolUnchanged$/,
     /^Facts: 1 blockUnchanged$/,
     /^Skills: 1 category, 0 gatesUnchanged$/,
-    /^Search: 0 boards, 0 enabledUnchanged$/,
+    /^Search: 1 job website, 1 tickedUnchanged$/,
     /^Answers: 1 countryReplaced$/,
     // Never touched by this journey: the defaults, exported and imported back unchanged.
     /^Preferences: Documents: language auto, tone plainUnchanged$/,

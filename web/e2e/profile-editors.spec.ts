@@ -163,6 +163,16 @@ function fakeExport() {
           extra_exclude: terms(index === 1 ? ["sales"] : []),
         })),
         never_apply: ["No cybersecurity roles."],
+        // A job website ticked in Find jobs: what every search runs and what completeness
+        // counts (owner, 2026-10-28). An invented host, never opened by this journey.
+        interactive_sites: [
+          {
+            platform: "custom",
+            url: "https://jobs.example.org/",
+            enabled: true,
+            mode: "llm_browser",
+          },
+        ],
       },
       answers: {
         work_authorization: [
