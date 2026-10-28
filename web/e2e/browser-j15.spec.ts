@@ -260,7 +260,7 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
   await shots(page, "progress", false);
 });
 
-test("the websites end in words, the company page's posting is saved, nothing is submitted", async () => {
+test("the websites end in words, the company page stays saved unsearched, nothing is submitted", async () => {
   // The summary the page opens when the search ends names every website and says why each
   // ended as it did.
   const summary = page.getByRole("dialog", { name: /new posting/ });
@@ -365,12 +365,13 @@ test("the websites end in words, the company page's posting is saved, nothing is
   };
   expect(after.revision).toBe(revision);
 
-  // The postings list, after the summary: the company page's posting and the job website's,
-  // found, with the employer its page names and the website as its source.
+  // The postings list, after the summary: the job website's posting, found, with the employer
+  // its page names and the website as its source. The company page was not searched, so its
+  // posting is not there.
   await page.goto("/jobs");
   const main = page.getByRole("main");
-  await expect(main).toContainText("AI Engineer");
   await expect(main).toContainText("Robot Engineer");
+  await expect(main).not.toContainText("AI Engineer");
   const listed = await page.request.get("/api/jobs?limit=200");
   expect(listed.ok()).toBe(true);
   const robot = (
