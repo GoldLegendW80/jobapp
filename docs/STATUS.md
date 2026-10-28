@@ -26,7 +26,7 @@ Built and merged, by module (task ids of `tasks/<module>/todo.md`):
 | platform | Compose stack, deploy, Tailscale Funnel URL, backups (7 days), the batch gate `ops/local-check.sh`, `ops/deploy-checked.sh`, `ops/ship.sh`, `ops/agent-test.sh`, request body limits, flaky test fixes (W1, W2, W3, first slice of W3b), the harness versioned (#325 for #324: CLAUDE.md, `docs/agents/`, `.claude/` config, `ops/card.sh`, `ops/dev-setup.sh`), the harness permissions (#326: `git -C` forms, `gh api` reads, `.env` shell denies) |
 | identity | invite only accounts, sessions, throttling, administration |
 | profile | profile editing, export and import, year only dates (P1 to P7) |
-| jobs | postings, board sweeps (Ashby, Greenhouse, Lever), scoring, map, edit, J8 lock guard; J7 and Checkpoint J wait on the owner: the Jetson runs of `tests/e2e_jobs_jetson.sh` (and its `view` journey) and `tests/e2e_jobs_sweep_jetson.sh`, then a schedule check in his browser ([tasks/jobs/todo.md](../tasks/jobs/todo.md), Checkpoint J) |
+| jobs | postings, the website search of the ticked job websites (the board sweeps were deleted, see below), scoring, map, edit, J8 lock guard; J7 and Checkpoint J wait on the owner: the Jetson runs of `tests/e2e_jobs_jetson.sh` (and its `view` journey), then a schedule check in his browser ([tasks/jobs/todo.md](../tasks/jobs/todo.md), Checkpoint J) |
 | agents | encrypted credentials, runtime and live stream, triage, chat, real runs (A1 to A5) |
 | ingestion | G0 to G16 (documents to profile proposals, parser service, transcription, review, deletion); Checkpoint G (#61) still open |
 | mail | M1 fake Gmail and Google client, M2 public pages, M3 parsing, M4 Gmail connection, M9 fact check rules; the rest is paused by the owner |
@@ -86,6 +86,22 @@ Workday, Google Careers and VIE #692, part 6c site profile API #690, part 6d sit
 the ledger and the evidence #712. Journey screenshots named in the evidence notes are not
 committed (the gate writes them again on every run); a few of the A18 and saved answers screens
 are kept.
+
+## The board and feed engine deleted (this PR)
+
+Branch `jobs/delete-board-engine`, PR not yet numbered (owner, 2026-10-28: "Delete it"). Every
+search, manual or scheduled, runs only the job websites ticked in Find jobs; its progress bar
+reads "Websites searched" and counts the websites. Deleted: the board readers (Ashby,
+Greenhouse, Lever posting APIs), the freelance feeds (Remote OK, We Work Remotely, Hacker News),
+the fixed readers (Google Careers, VIE, career pages, LinkedIn's own reader), the starter boards
+list, `POST /api/profile/boards/check`, `GET /api/opportunities/feeds`, the starter routes, the
+`ATS_BASE_URL` and `FEEDS_*` settings, the fake ATS and feeds servers, `tests/compose.j5-e2e.yml`
+and `tests/e2e_jobs_sweep_jetson.sh`. Kept: the website search, the LinkedIn and Free-Work consent
+rows, the Indeed and Welcome to the Jungle consents, Apply's adapters (its Google Careers and VIE
+forms included), the posting import, the scorer, and old sweep rows' board counts in the
+history. Stored `boards`, `feeds`, old reader rows and `onboarding.starter_handled` are ignored on
+read and dropped on the next save; no migration. `tests/ats-stub.compose.yml` keeps its name and
+now only holds the journey stack's fast start settings.
 
 ## Next steps, in order
 
