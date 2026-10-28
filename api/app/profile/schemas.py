@@ -50,7 +50,8 @@ Required fields, chosen as what search and CV generation cannot run without:
 - facts: blocks (at least one)
 - skills: years_experience, have (at least one category)
 - search: title_include (at least one term), location (at least one term), contract_types
-  (at least one), remote_stance, boards (at least one enabled)
+  (at least one), remote_stance, interactive_sites (at least one job website ticked in Find jobs:
+  every search runs them alone, owner 2026-10-28; saved boards no longer count)
 - answers: work_authorization (at least one country), notice_period, earliest_start,
   salary_policy, motivation
 Fields with a default (min_fit, days) always count as filled, so they are not listed.
@@ -1279,7 +1280,7 @@ REQUIRED: dict[str, dict[str, Callable[[Any], bool]]] = {
         "location": lambda s: bool(s.location.terms),
         "contract_types": lambda s: bool(s.contract_types),
         "remote_stance": lambda s: s.remote_stance is not None,
-        "boards": lambda s: any(board.enabled for board in s.boards),
+        "interactive_sites": lambda s: any(site.enabled for site in s.interactive_sites),
     },
     "answers": {
         "work_authorization": lambda s: bool(s.work_authorization),

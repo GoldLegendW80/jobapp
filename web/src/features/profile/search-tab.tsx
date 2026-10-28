@@ -1,16 +1,15 @@
 /**
- * Search: what the sweep looks for. The four plain lists, job titles, unwanted titles, places and
- * unwanted places, as chips (search-lists.tsx, their regular expression switches under Advanced),
- * contract types as toggles, the remote stance, the minimum fit to shortlist, the posting age
- * window, the company boards (boards-table.tsx), the job sites read in the browser
- * (browser-sources-card.tsx), the freelance and project sources
- * (opportunities/sources, O8) and the never-apply rules. Then what the person
- * aims for (target-fields.tsx, O4) and, as a card with its own Save, the preferences section
- * (preferences-card.tsx). On top, the starter list of boards and sites (starter-card.tsx, O5c).
+ * Search: what the search looks for. The four plain lists, job titles, unwanted titles, places and
+ * unwanted places, as chips (search-lists.tsx), contract types as toggles, the remote stance, the
+ * minimum fit to shortlist, the posting age window, the sign in to job websites (B17) and the
+ * never-apply rules. Then what the person aims for (target-fields.tsx, O4) and, as a card with
+ * its own Save, the preferences section (preferences-card.tsx). Searches run the job websites
+ * ticked in Find jobs alone (owner, 2026-10-28): the company boards, the starter list, the job
+ * sites read in the browser and the freelance feeds are no longer shown here, and what a profile
+ * holds of them stays saved, carried unchanged through every save.
  */
-import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
 
@@ -27,22 +26,16 @@ import {
 import { NativeSelect } from "@/components/ui/native-select";
 import { JobWebsitesSignIn } from "@/features/browser/site-signin";
 import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
-import { starterKey } from "@/features/onboarding/starter-api";
-import { FreelanceSourcesCard } from "@/features/opportunities/sources/freelance-sources-card";
 import { cn } from "@/lib/utils";
 
 import {
   CONTRACT_TYPES,
   REMOTE_STANCES,
   type Profile,
-  profileKey,
   type SweepSchedule,
 } from "./api";
-import { BoardsTable } from "./boards-table";
-import { BrowserSourcesCard } from "./browser-sources-card";
 import { PreferencesCard } from "./preferences-card";
 import { SearchLists } from "./search-lists";
-import { STARTER_BUSY, StarterCard } from "./starter-card";
 import { TargetFields } from "./target-fields";
 import { describeSchedule } from "./schedule";
 import {
@@ -85,67 +78,7 @@ export function SearchTab({
   profile: Profile;
   onDirtyChange: (dirty: boolean) => void;
 }) {
-  const client = useQueryClient();
-  const [dirty, setDirty] = useState(false);
-  // Bumped once the profile is read again after a starter choice: the forms below remount on
-  // it, so their values and the revision their next save is based on include what was added.
-  const [generation, setGeneration] = useState(0);
-  // From the click on a starter choice until the forms remount on its revision, the forms are
-  // read only: anything typed in that window would be dropped by the remount.
-  const [choosing, setChoosing] = useState(false);
-  const reloadForms = useRef(false);
-  const seen = useRef(profile.revision);
-  const onFormsDirty = useCallback(
-    (now: boolean) => {
-      setDirty(now);
-      onDirtyChange(now);
-    },
-    [onDirtyChange],
-  );
-  const onStarterChanged = useCallback(async () => {
-    reloadForms.current = true;
-    const before = seen.current;
-    await client.invalidateQueries({ queryKey: profileKey });
-    // No new revision (a remove the api had already kept, or a read that failed): nothing to
-    // reload, so the forms are editable again and a later revision does not remount them.
-    const now = client.getQueryData<Profile>(profileKey)?.revision;
-    if (seen.current === before && (now === undefined || now === before)) {
-      reloadForms.current = false;
-      setChoosing(false);
-    }
-  }, [client]);
-  // A new revision: after a starter choice the forms reload; after a save of the search the
-  // targets the list is built from may have changed, so the list is read again.
-  useEffect(() => {
-    if (seen.current === profile.revision) return;
-    seen.current = profile.revision;
-    if (reloadForms.current) {
-      reloadForms.current = false;
-      setGeneration((n) => n + 1);
-      setChoosing(false);
-    }
-    void client.invalidateQueries({ queryKey: starterKey });
-  }, [client, profile.revision]);
-  return (
-    <div className="flex flex-col gap-6">
-      <StarterCard
-        profile={profile}
-        dirty={dirty}
-        onChoosing={setChoosing}
-        onChanged={onStarterChanged}
-      />
-      <p role="status" className={choosing ? "text-sm font-medium" : "sr-only"}>
-        {choosing ? STARTER_BUSY : ""}
-      </p>
-      <fieldset disabled={choosing} aria-busy={choosing} className="min-w-0">
-        <SearchForms
-          key={generation}
-          profile={profile}
-          onDirtyChange={onFormsDirty}
-        />
-      </fieldset>
-    </div>
-  );
+  return <SearchForms profile={profile} onDirtyChange={onDirtyChange} />;
 }
 
 function SearchForms({
@@ -266,21 +199,18 @@ function SearchForms({
             />
           </Group>
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
-          {/* Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. */}
+          {/* Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. The
+              company boards, job sites and feeds a profile holds stay saved (the form carries
+              them through every save) and are no longer shown or searched. */}
           <p className="text-sm text-muted-foreground">
-            Searches now run only the job websites ticked in Find jobs. The
-            company boards, job sites and feeds below stay saved, and are no
-            longer searched.
+            Searches run the job websites ticked in Find jobs.
           </p>
-          <BoardsTable form={form} />
-          <BrowserSourcesCard form={form} />
           {/* B17: sign in to a job website of Find jobs, then searches read it signed in. */}
           <JobWebsitesSignIn
             urls={(profile.sections.search.interactive_sites ?? []).map(
               (site) => site.url,
             )}
           />
-          <FreelanceSourcesCard form={form} />
           <NeverApply form={form} />
           <DocumentsSearchOptions form={form} />
           <SaveBar

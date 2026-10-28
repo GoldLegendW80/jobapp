@@ -250,9 +250,9 @@ const REQUIRED: Record<SectionName, Rules> = {
     location: terms("location"),
     contract_types: field("contract_types"),
     remote_stance: field("remote_stance"),
-    boards: (s) =>
-      ((s.boards as { enabled: boolean }[] | undefined) ?? []).some(
-        (b) => b.enabled,
+    interactive_sites: (s) =>
+      ((s.interactive_sites as { enabled: boolean }[] | undefined) ?? []).some(
+        (site) => site.enabled,
       ),
   },
   answers: Object.fromEntries(

@@ -202,7 +202,12 @@ def test_minimal_sources_convert_to_a_complete_profile(tmp_path: Path) -> None:
     assert out["answers"]["travel"] == "Travel is fine."
     assert out["answers"]["salary_policy"] == "Never invent a number."
     assert out["answers"]["motivation"] == "She likes agents."
-    assert completeness(out).overall == 100
+    # Every section complete but Search: the engine files name boards and no job website, and
+    # only a job website ticked in Find jobs completes it (owner, 2026-10-28).
+    result = completeness(out)
+    assert result.sections["search"].missing == ["interactive_sites"]
+    assert all(not s.missing for name, s in result.sections.items() if name != "search")
+    assert result.overall == 97
 
 
 def test_skills_conversion(tmp_path: Path) -> None:
@@ -265,7 +270,7 @@ def test_missing_optional_files_give_empty_sections(tmp_path: Path) -> None:
     assert completeness(out["sections"]).sections["search"].missing == [
         "title_include",
         "location",
-        "boards",
+        "interactive_sites",
     ]
 
 

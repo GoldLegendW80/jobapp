@@ -139,7 +139,16 @@ FULL: dict[str, dict[str, Any]] = {
                 "text_version": None,
             }
         ],
-        "interactive_sites": [],
+        # A job website ticked in Find jobs: what every search runs and what completeness needs
+        # (owner, 2026-10-28).
+        "interactive_sites": [
+            {
+                "platform": "custom",
+                "url": "https://jobs.example.org/",
+                "enabled": True,
+                "mode": "llm_browser",
+            }
+        ],
         "interactive_instructions": None,
         "sweep_schedule": {
             "enabled": False,

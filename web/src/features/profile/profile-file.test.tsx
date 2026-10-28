@@ -238,7 +238,7 @@ describe("import dialog: a valid file", () => {
       "Photo: none in the fileKept",
     ]);
     expect(summary).toHaveTextContent(
-      "Completeness after the import: 100% (now 100%)",
+      "Completeness after the import: 97% (now 97%)",
     );
     expect(summary).toHaveTextContent(/Exported 9 Oct 2026/);
     await user.click(replaceButton(dialog));

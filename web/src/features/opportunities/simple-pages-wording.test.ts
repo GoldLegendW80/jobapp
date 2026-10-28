@@ -9,10 +9,8 @@ const pages = import.meta.glob<string>(
     "./deck/filter-row.tsx",
     "./deck/swipe-card.tsx",
     "./deck/posting-sheet.tsx",
-    "./sources/freelance-sources-card.tsx",
     "../onboarding/step-panels.tsx",
     "../onboarding/welcome-page.tsx",
-    "../onboarding/starter-boards.tsx",
   ],
   { eager: true, query: "?raw", import: "default" },
 );

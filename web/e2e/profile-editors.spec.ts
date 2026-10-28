@@ -23,9 +23,8 @@ async function shots(page: Page, name: string, fullPage = true) {
 /**
  * The Facts, Skills and Search editors against the real stack through Caddy, no mocks: a fresh
  * account gets a made up profile through the operator CLI (32 fake boards, never Harald's data),
- * then the journey edits each tab, saves, reloads and finds every change. The board check calls
- * the real ATS APIs from the api container: one real Ashby board (mistral.ai) and one that does
- * not exist.
+ * then the journey edits each tab, saves, reloads and finds every change. The Search tab shows
+ * no company boards (owner, 2026-10-28): the saved ones stay saved through a save.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8095 docker compose -p jobapp-p5 -f compose.yml -f compose.mac.yml up -d --build --wait
@@ -35,8 +34,7 @@ async function shots(page: Page, name: string, fullPage = true) {
  *   docker compose -p jobapp-p5 -f compose.yml down -v
  *
  * On the Jetson it runs inside web/e2e/identity-all.config.ts (tests/e2e_jetson.sh): the CLI goes
- * over ssh and the board check calls the ATS from the Jetson's api container. In CI the api asks the
- * ATS stub instead (tests/ats_stub.py knows mistral.ai on Ashby, 404 for every other org).
+ * over ssh.
  */
 test.describe.configure({ mode: "serial", timeout: 120_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -45,8 +43,6 @@ const run = Date.now().toString(36);
 const EMAIL = `e2e-editors-${run}@example.org`;
 const NAME = "Sam Example";
 const PASSWORD = `editors journey ${run} passphrase`;
-const REAL_ORG = "mistral.ai";
-const MISSING_ORG = `jobapp-no-such-board-${run}`;
 
 const FAKE_COMPANIES = [
   "Zephyr Labs",
@@ -340,69 +336,44 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
   expect(errors).toEqual([]);
 });
 
-test("Search: check a real board, refuse a missing one, add it, toggle contracts", async () => {
+test("Search: no boards shown, the saved boards kept, toggle contracts", async () => {
   await openTab(page, "Search");
-  await expect(page.getByText("32 boards, 25 enabled")).toBeVisible();
-
-  // Sorted by company and searched.
-  const header = page.getByRole("columnheader", { name: /Company/ });
-  await header.getByRole("button").click();
-  await expect(header).toHaveAttribute("aria-sort", "ascending");
-  await expect(
-    page.getByRole("table", { name: "Boards" }).getByRole("textbox").first(),
-  ).toHaveValue("Acme Robotics");
-  await page.getByRole("searchbox", { name: "Search boards" }).fill("lever");
-  await expect(page.getByText("10 of 32 boards shown")).toBeVisible();
-  await page.getByRole("searchbox", { name: "Search boards" }).fill("");
-
-  const status = page
-    .getByRole("region", { name: "Add company" })
-    .getByRole("status");
-  await page.getByLabel("New board ATS", { exact: true }).selectOption("ashby");
-  await page.getByLabel("New board org", { exact: true }).fill(MISSING_ORG);
-  await page.getByRole("button", { name: "Check", exact: true }).click();
-  await expect(status).toContainText(
-    `No board named “${MISSING_ORG}” on Ashby`,
-    {
-      timeout: 20_000,
-    },
+  // Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone, so the tab shows
+  // no company boards; the 32 saved boards stay saved.
+  await expect(page.getByRole("table", { name: "Boards" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Add company" })).toHaveCount(
+    0,
   );
   await expect(
-    page.getByRole("button", { name: /^Add (board|without a check)$/ }),
-  ).toHaveCount(0);
-
-  await page
-    .getByLabel("New board company", { exact: true })
-    .fill("Mistral AI");
-  await page.getByLabel("New board org", { exact: true }).fill(REAL_ORG);
-  await page.getByRole("button", { name: "Check", exact: true }).click();
-  await expect(status).toContainText(/^Found on Ashby: \d+ open postings?\.$/, {
-    timeout: 20_000,
-  });
-  const found = await status.textContent();
-  expect(Number(/(\d+) open/.exec(found ?? "")?.[1])).toBeGreaterThan(0);
-  await shots(page, "search-check-found", false);
-  await page.getByRole("button", { name: "Add board" }).click();
-  await expect(page.getByText("33 boards, 26 enabled")).toBeVisible();
-  await expect(
-    page.getByRole("switch", { name: "Sweep Mistral AI" }),
-  ).toBeChecked();
+    page.getByText("Searches run the job websites ticked in Find jobs."),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "VIE" }).click();
   await expect(page.getByRole("button", { name: "VIE" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await page
-    .getByRole("button", { name: "Exclude terms of Acme Robotics" })
-    .click();
-  await expect(
-    page.getByRole("list", { name: "Terms of Exclude terms of Acme Robotics" }),
-  ).toContainText("sales");
   await shots(page, "search");
   await save(page, "Search");
+  expect(await savedBoards(page)).toEqual({ count: 32, enabled: 25 });
   expect(errors).toEqual([]);
 });
+
+/** How many boards the profile holds, and how many of them are on. */
+async function savedBoards(
+  page: Page,
+): Promise<{ count: number; enabled: number }> {
+  const answer = await page.request.get("/api/profile");
+  expect(answer.ok()).toBe(true);
+  const body = (await answer.json()) as {
+    sections: { search: { boards: { enabled: boolean }[] } };
+  };
+  const boards = body.sections.search.boards;
+  return {
+    count: boards.length,
+    enabled: boards.filter((board) => board.enabled).length,
+  };
+}
 
 test("a reload shows every saved change", async () => {
   await page.goto("/profile?tab=facts");
@@ -422,16 +393,10 @@ test("a reload shows every saved change", async () => {
   ).not.toContainText("(?<n>a)");
 
   await openTab(page, "Search");
-  await expect(page.getByLabel("Org of board 33", { exact: true })).toHaveValue(
-    REAL_ORG,
-  );
-  await expect(
-    page.getByLabel("Company of board 33", { exact: true }),
-  ).toHaveValue("Mistral AI");
   await expect(page.getByRole("button", { name: "VIE" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await expect(page.getByText("33 boards, 26 enabled")).toBeVisible();
+  expect(await savedBoards(page)).toEqual({ count: 32, enabled: 25 });
   expect(errors).toEqual([]);
 });

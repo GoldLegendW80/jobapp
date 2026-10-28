@@ -198,7 +198,8 @@ describe("checkImportFile accepts an export", () => {
       "Documents: language auto, tone plain",
     ]);
     expect(result.summary.photo).toBe(false);
-    expect(result.summary.completeness.overall).toBe(100);
+    // Search needs a job website ticked in Find jobs, which the file does not hold.
+    expect(result.summary.completeness.overall).toBe(97);
   });
 
   it("says which sections an import replaces on an empty profile", () => {

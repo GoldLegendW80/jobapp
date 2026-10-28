@@ -110,7 +110,8 @@ def test_import_from_a_file(
     assert result.returncode == 0, result.stderr
     stdout = result.stdout.decode()
     assert stdout == (
-        f"Imported the profile of {ALICE}: revision 7, 100% complete, photo replaced.\n"
+        f"Imported the profile of {ALICE}: revision 7, 97% complete, photo replaced.\n"
+        "  search: 80%, missing interactive_sites\n"
     )
     assert history(factory) == ([len(SECTIONS)], list(SECTIONS))
     # Nothing of the profile itself is printed.
@@ -146,7 +147,7 @@ def test_import_lists_what_is_missing(
     assert lines[0].endswith("photo unchanged.")
     assert lines[1:] == [
         "  skills: 0%, missing years_experience, have",
-        "  search: 40%, missing title_include, location, boards",
+        "  search: 40%, missing title_include, location, interactive_sites",
     ]
 
 
