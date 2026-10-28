@@ -3,29 +3,25 @@
  * forms.ts, the schemas mirror api/app/profile/schemas.py so most mistakes are caught before a
  * save: unique fact titles and the 200 KB cap of the fact base, term rules (plain terms at most
  * 200 characters; advanced ones compiled, at most 500 characters, no nested quantifiers; see
- * matching.ts), category names unique across have, adjacent and none, gate penalties 0 to 100,
- * board orgs written as the ATS spells them and unique per ATS. The api stays the judge: its 422
+ * matching.ts), category names unique across have, adjacent and none, gate penalties 0 to 100.
+ * The api stays the judge: its 422
  * lands on the field, or the term, it names (errors.ts).
  */
 import { z } from "zod";
 
 import {
-  ATS,
   COMPANY_TYPES,
   CONTRACT_TYPES,
   CURRENCIES,
-  FEED_KINDS,
   INDUSTRIES_MAX,
   PAY_MAX,
   REMOTE_STANCES,
   SENIORITIES,
-  type Board,
   BROWSER_KINDS,
   type PayRange,
   type BrowserSource,
   type Category,
   type Facts,
-  type Feed,
   type Gate,
   type Search,
   type Skills,
@@ -40,15 +36,10 @@ export const FACT_BLOCKS_MAX = 200;
 export const TERMS_MAX = 300;
 export const CATEGORIES_MAX = 100;
 export const GATES_MAX = 50;
-export const BOARDS_MAX = 300;
 export const NEVER_APPLY_MAX = 50;
 export const NEVER_APPLY_LINE = 500;
 /** schemas.py SearchSection.browser_sources: at most 10 sources. */
 export const BROWSER_SOURCES_MAX = 10;
-/** The kinds the sweep reads today (browser B8); `site` (B9) and `linkedin` (B10) come later. */
-export const BROWSER_KINDS_RUNNABLE = ["google_careers", "vie"] as const;
-export const ORG_MAX = 100;
-export const ORG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const encoder = new TextEncoder();
 export const utf8Bytes = (value: string) => encoder.encode(value).length;
@@ -275,31 +266,6 @@ export const fromSkillsForm = (values: SkillsForm): Skills => ({
 
 // --- search ----------------------------------------------------------------------------------
 
-/** Why an org would be refused, or undefined (schemas.py ORG_PATTERN, boards.py). */
-export function orgProblem(value: string): string | undefined {
-  const org = value.trim();
-  if (org === "") return "Enter the org as it appears in the board address.";
-  if (org.length > ORG_MAX) return `Use at most ${ORG_MAX} characters.`;
-  if (!ORG_PATTERN.test(org) || org.includes("..")) {
-    return "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.";
-  }
-  return undefined;
-}
-
-const boardSchema = z.object({
-  company: text("the company", LINE_MAX, { required: true }),
-  ats: z.enum(ATS),
-  org: z.string().superRefine((value, ctx) => {
-    const problem = orgProblem(value);
-    if (problem) ctx.addIssue({ code: "custom", message: problem });
-  }),
-  enabled: z.boolean(),
-  extra_exclude: termListSchema,
-});
-
-export const boardKey = (b: { ats: string; org: string }) =>
-  `${b.ats}:${b.org.trim().toLowerCase()}`;
-
 const browserSourceSchema = z.object({
   kind: z.enum(BROWSER_KINDS),
   query: text("the search words", LINE_MAX, { required: true }),
@@ -358,94 +324,68 @@ const fromPayForm = (pay: PayForm): PayRange | null =>
         currency: pay.currency,
       };
 
-export const searchSchema = z
-  .object({
-    title_include: termListSchema,
-    title_exclude: termListSchema,
-    location: termListSchema,
-    location_exclude: termListSchema,
-    contract_types: z.array(z.enum(CONTRACT_TYPES)),
-    remote_stance: z.enum(["", ...REMOTE_STANCES]),
+export const searchSchema = z.object({
+  title_include: termListSchema,
+  title_exclude: termListSchema,
+  location: termListSchema,
+  location_exclude: termListSchema,
+  contract_types: z.array(z.enum(CONTRACT_TYPES)),
+  remote_stance: z.enum(["", ...REMOTE_STANCES]),
+  min_fit: z.number().int().min(0).max(100),
+  days: z
+    .string()
+    .refine(
+      (v) => YEAR_DAYS.test(v.trim()) && Number(v) >= 1 && Number(v) <= 365,
+      "Enter a number of days between 1 and 365.",
+    ),
+  never_apply: z
+    .array(
+      z.object({
+        value: text("a rule", NEVER_APPLY_LINE, { required: true }),
+      }),
+    )
+    .max(NEVER_APPLY_MAX, `Keep at most ${NEVER_APPLY_MAX} rules.`),
+  // Browser B8: edited by the browser sources card of this tab (browser-sources-card.tsx).
+  browser_sources: z
+    .array(browserSourceSchema)
+    .max(BROWSER_SOURCES_MAX, `Keep at most ${BROWSER_SOURCES_MAX} sources.`),
+  // Not edited here (Jobs owns it): carried through unchanged so a save never resets it.
+  sweep_schedule: z.object({
+    enabled: z.boolean(),
+    days: z.array(z.enum(WEEKDAYS)),
+    times: z.array(z.string()),
+    timezone: z.string(),
+  }),
+  // Edited by the documents card of this tab (documents/generation-settings-card.tsx).
+  documents: z.object({
+    auto: z.boolean(),
     min_fit: z.number().int().min(0).max(100),
-    days: z
+    daily_ceiling: z
       .string()
       .refine(
-        (v) => YEAR_DAYS.test(v.trim()) && Number(v) >= 1 && Number(v) <= 365,
-        "Enter a number of days between 1 and 365.",
+        (v) =>
+          CEILING.test(v.trim()) &&
+          Number(v) >= 1 &&
+          Number(v) <= DAILY_CEILING_MAX,
+        DAILY_CEILING_PROBLEM,
       ),
-    boards: z
-      .array(boardSchema)
-      .max(BOARDS_MAX, `Keep at most ${BOARDS_MAX} boards.`),
-    never_apply: z
-      .array(
-        z.object({
-          value: text("a rule", NEVER_APPLY_LINE, { required: true }),
-        }),
-      )
-      .max(NEVER_APPLY_MAX, `Keep at most ${NEVER_APPLY_MAX} rules.`),
-    // Browser B8: edited by the browser sources card of this tab (browser-sources-card.tsx).
-    browser_sources: z
-      .array(browserSourceSchema)
-      .max(BROWSER_SOURCES_MAX, `Keep at most ${BROWSER_SOURCES_MAX} sources.`),
-    // Not edited here (Jobs owns it): carried through unchanged so a save never resets it.
-    sweep_schedule: z.object({
-      enabled: z.boolean(),
-      days: z.array(z.enum(WEEKDAYS)),
-      times: z.array(z.string()),
-      timezone: z.string(),
+  }),
+  // O4: what the person aims for. A bonus to the fit, never a filter; the pay changes no score.
+  seniority: z.array(z.enum(SENIORITIES)),
+  industries: z
+    .object(termListShape)
+    .superRefine(checkTerms)
+    .refine((list) => list.terms.length <= INDUSTRIES_MAX, {
+      message: `Keep at most ${INDUSTRIES_MAX} industries.`,
+      path: ["terms"],
     }),
-    // Edited by the documents card of this tab (documents/generation-settings-card.tsx).
-    documents: z.object({
-      auto: z.boolean(),
-      min_fit: z.number().int().min(0).max(100),
-      daily_ceiling: z
-        .string()
-        .refine(
-          (v) =>
-            CEILING.test(v.trim()) &&
-            Number(v) >= 1 &&
-            Number(v) <= DAILY_CEILING_MAX,
-          DAILY_CEILING_PROBLEM,
-        ),
-    }),
-    // O4: what the person aims for. A bonus to the fit, never a filter; the pay changes no score.
-    seniority: z.array(z.enum(SENIORITIES)),
-    industries: z
-      .object(termListShape)
-      .superRefine(checkTerms)
-      .refine((list) => list.terms.length <= INDUSTRIES_MAX, {
-        message: `Keep at most ${INDUSTRIES_MAX} industries.`,
-        path: ["terms"],
-      }),
-    company_types: z.array(z.enum(COMPANY_TYPES)),
-    compensation: z.object({
-      salary: payFormSchema,
-      daily_rate: payFormSchema,
-    }),
-    // O7 and O8: the freelance and project feeds (the sources card). One entry per kind in the
-    // form, `stored` when the profile holds it; an entry the person never touched is left out on
-    // save, so a section saved before O7 round trips as it was.
-    feeds: z.array(
-      z.object({
-        kind: z.enum(FEED_KINDS),
-        terms: z.object(termListShape).superRefine(checkTerms),
-        enabled: z.boolean(),
-        stored: z.boolean(),
-      }),
-    ),
-  })
-  .superRefine((values, ctx) => {
-    uniqueBy(
-      values.boards,
-      (b) => (b.org.trim() === "" ? "" : boardKey(b)),
-      "org",
-      "This board is already listed (same ATS and org).",
-      ctx,
-      "boards",
-    );
-  });
+  company_types: z.array(z.enum(COMPANY_TYPES)),
+  compensation: z.object({
+    salary: payFormSchema,
+    daily_rate: payFormSchema,
+  }),
+});
 export type SearchForm = z.infer<typeof searchSchema>;
-export type BoardForm = SearchForm["boards"][number];
 export type BrowserSourceForm = SearchForm["browser_sources"][number];
 
 export const toSearchForm = (search: Search): SearchForm => ({
@@ -461,20 +401,16 @@ export const toSearchForm = (search: Search): SearchForm => ({
   remote_stance: search.remote_stance ?? "",
   min_fit: search.min_fit,
   days: String(search.days),
-  boards: search.boards.map((b) => ({
-    company: b.company,
-    ats: b.ats,
-    org: b.org,
-    enabled: b.enabled,
-    extra_exclude: toTermList(b.extra_exclude),
-  })),
   never_apply: search.never_apply.map((value) => ({ value })),
-  browser_sources: (search.browser_sources ?? []).map((s) => ({
-    kind: s.kind,
-    query: s.query,
-    location: s.location ?? "",
-    enabled: s.enabled,
-  })),
+  // Only the protected kinds stay (owner, 2026-10-28); the api drops any other kind it holds.
+  browser_sources: (search.browser_sources ?? [])
+    .filter((s) => (BROWSER_KINDS as readonly string[]).includes(s.kind))
+    .map((s) => ({
+      kind: s.kind,
+      query: s.query,
+      location: s.location ?? "",
+      enabled: s.enabled,
+    })),
   sweep_schedule: {
     ...search.sweep_schedule,
     days: [...search.sweep_schedule.days],
@@ -491,41 +427,7 @@ export const toSearchForm = (search: Search): SearchForm => ({
     salary: toPayForm(search.compensation.salary),
     daily_rate: toPayForm(search.compensation.daily_rate),
   },
-  feeds: toFeedsForm(search.feeds ?? []),
 });
-
-/** The saved feeds in their order, then every other kind, off and without terms. */
-function toFeedsForm(feeds: readonly Feed[]): SearchForm["feeds"] {
-  const saved = feeds.map((f) => ({
-    kind: f.kind,
-    terms: toTermList(f.terms),
-    enabled: f.enabled,
-    stored: true,
-  }));
-  const missing = FEED_KINDS.filter(
-    (kind) => !feeds.some((f) => f.kind === kind),
-  );
-  return [
-    ...saved,
-    ...missing.map((kind) => ({
-      kind,
-      terms: { advanced_regex: false, terms: [] },
-      enabled: false,
-      stored: false,
-    })),
-  ];
-}
-
-/** The feeds to save: every saved one, and a new one once it is on or has terms. */
-function fromFeedsForm(feeds: SearchForm["feeds"]): Feed[] {
-  return feeds
-    .filter((f) => f.stored || f.enabled || f.terms.terms.length > 0)
-    .map((f) => ({
-      kind: f.kind,
-      terms: fromTermList(f.terms),
-      enabled: f.enabled,
-    }));
-}
 
 export const fromSearchForm = (values: SearchForm): Search => ({
   title_include: fromTermList(values.title_include),
@@ -538,13 +440,6 @@ export const fromSearchForm = (values: SearchForm): Search => ({
   remote_stance: values.remote_stance === "" ? null : values.remote_stance,
   min_fit: values.min_fit,
   days: Number(values.days.trim()),
-  boards: values.boards.map((b): Board => ({
-    company: cleanLine(b.company),
-    ats: b.ats,
-    org: b.org.trim(),
-    enabled: b.enabled,
-    extra_exclude: fromTermList(b.extra_exclude),
-  })),
   never_apply: values.never_apply.map((r) => cleanLine(r.value)),
   // Left out when empty: the api's default, so a section saved before B8 round trips as it was.
   ...(values.browser_sources.length > 0
@@ -573,8 +468,4 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     salary: fromPayForm(values.compensation.salary),
     daily_rate: fromPayForm(values.compensation.daily_rate),
   },
-  // Left out when empty: the api's default, so a section saved before O7 round trips as it was.
-  ...(fromFeedsForm(values.feeds).length > 0
-    ? { feeds: fromFeedsForm(values.feeds) }
-    : {}),
 });

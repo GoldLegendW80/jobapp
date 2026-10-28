@@ -114,7 +114,7 @@ describe("search tab: terms and preferences", () => {
     expect(data.remote_stance).toBe("hybrid");
     expect(data.min_fit).toBe(82);
     expect(data.days).toBe(14);
-    expect(data.boards).toEqual(haraldLike().search.boards);
+    expect(data.never_apply).toEqual(haraldLike().search.never_apply);
   });
 
   it("refuses a days window outside 1 to 365 and accepts no stance", async () => {
@@ -219,7 +219,6 @@ describe("search tab: terms and preferences", () => {
       remote_stance: null,
       min_fit: 70,
       days: 30,
-      boards: [],
       never_apply: [],
       sweep_schedule: {
         enabled: false,
@@ -305,8 +304,9 @@ describe("search tab: automatic search", () => {
 });
 
 // Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. The company
-// boards, the starter list, the job sites read in the browser and the freelance feeds are no
-// longer shown here; what a profile holds of them stays saved, with no deletion.
+// boards, the starter list, the fixed browser readers and the freelance feeds are deleted: a
+// profile read before shows none of them here and a save sends none back. LinkedIn and Free-Work
+// rows stay, their permission set in Find jobs.
 describe("search tab: sources no search reads", () => {
   const stored = {
     boards: [
@@ -321,6 +321,12 @@ describe("search tab: sources no search reads", () => {
     browser_sources: [
       {
         kind: "google_careers" as const,
+        query: "ai engineer",
+        location: null,
+        enabled: true,
+      },
+      {
+        kind: "linkedin" as const,
         query: "ai engineer",
         location: null,
         enabled: true,
@@ -341,7 +347,7 @@ describe("search tab: sources no search reads", () => {
   it("shows no boards table, starter list, browser sites card nor feeds card", async () => {
     await openSearch({
       ...haraldLike(),
-      search: { ...haraldLike().search, ...stored },
+      search: { ...haraldLike().search, ...stored } as unknown as Search,
     });
     expect(screen.queryByRole("table", { name: "Boards" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Add company" })).toBeNull();
@@ -356,10 +362,10 @@ describe("search tab: sources no search reads", () => {
     ).toBeVisible();
   });
 
-  it("keeps the stored boards, browser sites and feeds through a save", async () => {
+  it("sends no boards, feeds nor fixed readers, and keeps the LinkedIn row", async () => {
     const { user, state } = await openSearch({
       ...haraldLike(),
-      search: { ...haraldLike().search, ...stored },
+      search: { ...haraldLike().search, ...stored } as unknown as Search,
     });
     const days = screen.getByLabelText("Posting age window (days)");
     await user.clear(days);
@@ -368,16 +374,16 @@ describe("search tab: sources no search reads", () => {
     await screen.findByText("Search saved.");
     const body = saved(state);
     expect(body.days).toBe(14);
-    expect(body.boards).toEqual(stored.boards);
+    expect(body).not.toHaveProperty("boards");
+    expect(body).not.toHaveProperty("feeds");
     // The fields the form carries (the api keeps LinkedIn's acceptance fields of its own).
     expect(body.browser_sources).toEqual([
       {
-        kind: "google_careers",
+        kind: "linkedin",
         query: "ai engineer",
         location: null,
         enabled: true,
       },
     ]);
-    expect(body.feeds).toEqual(stored.feeds);
   });
 });

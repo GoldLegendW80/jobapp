@@ -35,17 +35,15 @@ import {
  * Enter on the buttons) N uploads an invented CV (a PDF written by ./ingestion-pdf.ts from
  * api/tests/documents/fixtures/upload_morgan.txt) through the CV upload panel, agrees to what is
  * sent, sees it converted on the fake model backend, then fills the roles, the places and the
- * contracts; Back shows every value typed. N's account is then given one enabled board on the
- * fake ATS server (org fake-ok of api/tests/jobs/fake_ats.py, which the worker of this stack
- * reads for every org) and skills its postings match. A reload, a fresh visit of /welcome and a
+ * contracts; Back shows every value typed. N's account is then given skills. A reload, a fresh visit of /welcome and a
  * second device (a new browser context signed in as N) open the step left, since the steps
  * passed are kept in the profile. The pay is "Rather not say", Full auto shows as "Available
  * soon" and cannot be chosen, and "Start" on the summary opens Discover with the sentence that
  * asks to tick job websites in Find jobs, and starts no sweep: every search runs the ticked
- * websites alone (owner, 2026-10-28), and N has a board and no website. The profile holds the
+ * websites alone (owner, 2026-10-28), and N has no website. The profile holds the
  * answers and apply's mode is still Review first. Signing in again lands on the home page with
  * no card. Person B, beside N, still gets the wizard, puts it off with "Skip for now", and after
- * signing in again is not sent to it but sees the card; B has no board and no website, so B's
+ * signing in again is not sent to it but sees the card; B has no website either, so B's
  * Start ends the wizard the same way. No screen shows a dash.
  *
  * Locally, as opportunities-all.config.ts says (AGENTS_FAKE_BACKEND=1 on the worker), then:
@@ -80,7 +78,7 @@ type State = {
   passed: string[];
 };
 
-/** Skills the fake board's matching posting names ("Python, agents, LLM evaluation"). */
+/** The skills N is given ("Python, agents, LLM evaluation"). */
 const SKILLS = {
   years_experience: null,
   have: [
@@ -92,16 +90,8 @@ const SKILLS = {
   none: [],
   gates: [],
 };
-/** One enabled board on the fake ATS server: two of its postings are AI engineer roles. */
-const BOARD = {
-  company: "Example Robotics",
-  ats: "ashby",
-  org: "fake-ok",
-  enabled: true,
-  extra_exclude: { terms: [], advanced_regex: false },
-};
-// Every search runs the ticked job websites alone (owner, 2026-10-28): a board chosen in the
-// wizard is saved and not searched, so Start ends the wizard without a sweep and says why.
+// Every search runs the ticked job websites alone (owner, 2026-10-28): with none ticked, Start
+// ends the wizard without a sweep and says why.
 const NO_WEBSITES =
   "Tick the job websites to search in Find jobs, then find new postings.";
 
@@ -367,12 +357,8 @@ test("steps 2 to 4 by keyboard, and Back keeps every value", async () => {
 test("a reload, a fresh visit of /welcome and another device open the step left", async ({
   browser,
 }) => {
-  // The account's first board, on the fake ATS server, and skills its postings match.
+  // The account's skills.
   await putSection(pageN, "skills", () => SKILLS);
-  await putSection(pageN, "search", (stored) => ({
-    ...stored,
-    boards: [BOARD],
-  }));
   await pageN.reload();
   await step(pageN, 5);
   await pageN.goto("/welcome");
@@ -420,8 +406,8 @@ test("pay, how the app applies, the summary, and Start opens Discover", async ()
   await expect(summary).toContainText("Paris; Hybrid");
   await expect(summary).toContainText("Freelance mission, Permanent");
   await expect(summary).toContainText("Rather not say");
-  // Every search runs the job websites ticked in Find jobs alone (owner, 2026-10-28): N saved
-  // a board through the api earlier, and the first search covers no website.
+  // Every search runs the job websites ticked in Find jobs alone (owner, 2026-10-28): N ticked
+  // none, so the first search covers no website.
   await expect(
     pageN.getByText(/covers 0 job websites ticked in Find jobs/),
   ).toBeVisible();
@@ -503,7 +489,7 @@ test("person B still gets the wizard, puts it off, and then sees only the card",
   await expect(pageB.getByRole("button", { name: "Start" })).toHaveCount(0);
 });
 
-test("B, with roles and no board, ends the wizard without a sweep", async () => {
+test("B, with roles and no website, ends the wizard without a sweep", async () => {
   await putSection(pageB, "search", (stored) => ({
     ...stored,
     title_include: { terms: ["Analytics engineer"], advanced_regex: false },

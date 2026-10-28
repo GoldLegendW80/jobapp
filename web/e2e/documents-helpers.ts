@@ -224,7 +224,6 @@ export function invented(tag: string): Person {
           remote_stance: "hybrid",
           min_fit: 70,
           days: 30,
-          boards: [],
           never_apply: [],
         },
         answers: {

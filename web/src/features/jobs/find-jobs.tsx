@@ -29,7 +29,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { isFeedReading } from "@/features/opportunities/sources/source-words";
 import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
@@ -84,12 +83,16 @@ function readingName(sweep: Sweep): string {
   return source ? sourceName(source) : sourceLabel(current);
 }
 
-/** The live line under the header while a sweep runs. */
+/** The live line under the header while a sweep runs. A sweep searches the job websites ticked
+ * in Find jobs alone (owner, 2026-10-28), so it counts them: one source with a host each, done
+ * once its phase is. */
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
-  const total = sweep.boards_total;
-  const percent = total ? Math.round((100 * sweep.boards_done) / total) : 0;
+  const websites = sweep.sources.filter((source) => source.host);
+  const total = websites.length;
+  const done = websites.filter((source) => source.phase === "done").length;
+  const percent = total ? Math.round((100 * done) / total) : 0;
   return (
     <section
       aria-label="Sweep in progress"
@@ -102,11 +105,9 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
       >
         <span className="font-medium">
           {total
-            ? `${sweep.boards_done} of ${plural(total, "board")} read`
+            ? `${String(done)} of ${plural(total, "website")} searched`
             : sweep.current_board
-              ? isFeedReading(sweep.current_board)
-                ? "Reading freelance and project sources"
-                : "Reading job sites in your browser"
+              ? "Searching job websites"
               : "Waiting for the worker"}
         </span>
         {sweep.current_board ? (
@@ -116,17 +117,14 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
         ) : null}
         <span className="tabular-nums text-muted-foreground">
           {plural(sweep.new, "new posting")}
-          {sweep.boards_failed.length
-            ? `, ${plural(sweep.boards_failed.length, "board")} failed`
-            : ""}
         </span>
       </div>
       <div
         role="progressbar"
-        aria-label="Boards read"
+        aria-label="Websites searched"
         aria-valuemin={0}
         aria-valuemax={total || 1}
-        aria-valuenow={sweep.boards_done}
+        aria-valuenow={done}
         className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
       >
         <div

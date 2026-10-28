@@ -237,25 +237,6 @@ it("opens setup before any save or start and closes without saving", async () =>
 
 it("saves the reviewed sites and criteria before starting with the returned revision", async () => {
   const existing = structuredClone(EMPTY.search);
-  existing.boards = [
-    {
-      company: "Example Robotics",
-      ats: "lever",
-      org: "example",
-      enabled: true,
-      extra_exclude: { advanced_regex: false, terms: [] },
-    },
-  ];
-  existing.feeds = [
-    {
-      kind: "remoteok",
-      enabled: true,
-      terms: { advanced_regex: false, terms: ["engineering"] },
-    },
-  ];
-  existing.browser_sources = [
-    { kind: "vie", query: "engineer", location: "Paris", enabled: true },
-  ];
   existing.sweep_schedule.enabled = true;
   const { profile, starts, writes, user, dialog } = await open(existing);
   await user.click(within(dialog).getByRole("checkbox", { name: "Free-Work" }));
@@ -287,9 +268,6 @@ it("saves the reviewed sites and criteria before starting with the returned revi
   ]);
   expect(saved.data).not.toHaveProperty("platform_consents");
   expect(saved.data).toMatchObject({
-    boards: existing.boards,
-    feeds: existing.feeds,
-    browser_sources: existing.browser_sources,
     sweep_schedule: existing.sweep_schedule,
     interactive_sites: [
       {
@@ -1346,9 +1324,10 @@ it("turns a website of her own off and on with its box", async () => {
   });
 });
 
-// Owner, 2026-10-28: the setup is the websites and the criteria. Boards, feeds and readers are
-// neither shown nor searched, and stay saved as they are; there is no "Websites only" choice.
-it("shows no other search source, no Websites only and no link, and keeps them saved", async () => {
+// Owner, 2026-10-28: the setup is the websites and the criteria. Boards, feeds and fixed readers
+// are gone: a profile read before the deletion shows none and sends none back; there is no
+// "Websites only" choice.
+it("shows no other search source, no Websites only and no link, and sends none back", async () => {
   const board = {
     company: "Example Robotics",
     ats: "ashby" as const,
@@ -1373,7 +1352,7 @@ it("shows no other search source, no Websites only and no link, and keeps them s
     feeds: [feed],
     browser_sources: [reader],
     interactive_sites: [site("custom", "https://careers.example.org/")],
-  });
+  } as unknown as Search);
   expect(
     within(dialog).queryByRole("region", { name: "Other search sources" }),
   ).toBeNull();
@@ -1387,9 +1366,8 @@ it("shows no other search source, no Websites only and no link, and keeps them s
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
   });
-  expect(profile.saves[0]!.body.data).toMatchObject({
-    boards: [board],
-    feeds: [feed],
-    browser_sources: [reader],
-  });
+  const sent = profile.saves[0]!.body.data as Record<string, unknown>;
+  expect(sent).not.toHaveProperty("boards");
+  expect(sent).not.toHaveProperty("feeds");
+  expect(sent.browser_sources ?? []).toEqual([]);
 });

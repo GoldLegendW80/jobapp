@@ -168,13 +168,7 @@ describe("serverFieldError on term lists", () => {
     expect(serverFieldError(detail, skills)).toBeUndefined();
   });
 
-  it("maps a refused board org and a rule", () => {
-    expect(
-      serverFieldError(
-        "data.boards.1.org: String should match pattern '^[A-Za-z0-9][A-Za-z0-9._-]*$'",
-        search,
-      )?.name,
-    ).toBe("boards.1.org");
+  it("maps a refused rule", () => {
     expect(
       serverFieldError(
         "data.never_apply.0: control characters are not allowed",

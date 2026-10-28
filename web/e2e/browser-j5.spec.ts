@@ -106,7 +106,6 @@ async function prepare(
         remote_stance: "any",
         min_fit: 70,
         days: 365,
-        boards: [],
         never_apply: rules,
         interactive_sites: website ? [WEBSITE] : [],
       },

@@ -433,12 +433,11 @@ describe("diff rendering per section", () => {
       "search",
       (state) => {
         const data = haraldLike().search;
-        data.boards[1]!.enabled = true;
         data.min_fit = 80;
         pushSave(state, "search", data);
       },
-      "Board 2 › Enabled",
-      /^Board 2 › Enabled/,
+      "Minimum fit",
+      /^Minimum fit/,
       "changed",
     ],
     [

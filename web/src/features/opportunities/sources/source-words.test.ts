@@ -1,19 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { sourceLabel } from "@/features/jobs/labels";
-import { FEED_KINDS } from "@/features/profile/api";
-import { FEED_CATALOGUE } from "@/test/feeds";
 
 import {
-  FEED_NAMES,
   FEED_PROBLEM_UNKNOWN,
   FEED_PROBLEMS,
+  FEED_KINDS,
   FEED_SHORT_NAMES,
   feedLine,
   feedProblem,
   feedSourceName,
   isFeedKind,
-  isFeedReading,
   setAsideByRules,
   viaFeed,
 } from "./source-words";
@@ -50,11 +47,9 @@ describe("source words (O8)", () => {
     for (const value of [
       ...Object.values(FEED_PROBLEMS),
       FEED_PROBLEM_UNKNOWN,
-      ...Object.values(FEED_NAMES),
       ...Object.values(FEED_SHORT_NAMES),
       setAsideByRules(1),
       setAsideByRules(1200),
-      ...FEED_CATALOGUE.not_supported.map((p) => p.reason),
     ])
       expect(value, value).not.toMatch(DASHES);
   });
@@ -69,10 +64,10 @@ describe("source words (O8)", () => {
     );
   });
 
-  it("knows every feed kind of the profile", () => {
+  it("knows every feed kind of a stored sweep", () => {
     for (const kind of FEED_KINDS) {
       expect(isFeedKind(kind)).toBe(true);
-      expect(FEED_NAMES[kind]).toBeTruthy();
+      expect(FEED_SHORT_NAMES[kind]).toBeTruthy();
     }
     expect(isFeedKind("google_careers")).toBe(false);
   });
@@ -89,11 +84,6 @@ describe("source words (O8)", () => {
     );
     expect(viaFeed("greenhouse:acme, remoteok")).toBeNull();
     expect(viaFeed(null)).toBeNull();
-    expect(isFeedReading("Remote OK")).toBe(true);
-    expect(isFeedReading("Hacker News, Freelancer? Seeking freelancer?")).toBe(
-      true,
-    );
-    expect(isFeedReading("google_careers:ai")).toBe(false);
   });
 
   it("names feed sources on the posting page, alone or with others", () => {

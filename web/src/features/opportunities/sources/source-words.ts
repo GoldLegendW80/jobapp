@@ -1,18 +1,25 @@
 /**
- * The words of the freelance and project feeds (opportunities O7 and O8): their names when the
- * catalogue cannot be read, the name of the `source` their postings are recorded with, and what
- * each error code of a feed in a sweep's summary means for the person. Pure, so it is tested
- * alone. No dash is used as a separator in any of them.
+ * The words of the freelance and project feeds (opportunities O7 and O8), deleted on 2026-10-28
+ * and kept for what they left: the name of the `source` their stored postings carry, and what
+ * each error code of a feed in an old sweep's summary means for the person. Pure, so it is
+ * tested alone. No dash is used as a separator in any of them.
  */
-import { FEED_KINDS, type Feed } from "@/features/profile/api";
 
-export type FeedKind = Feed["kind"];
+/** The kinds of the freelance and project feeds, as old sweep rows and postings still name them. */
+export const FEED_KINDS = [
+  "remoteok",
+  "weworkremotely",
+  "hackernews_freelance",
+  "hackernews_hiring",
+] as const;
+
+export type FeedKind = (typeof FEED_KINDS)[number];
 
 export const isFeedKind = (kind: string): kind is FeedKind =>
   (FEED_KINDS as readonly string[]).includes(kind);
 
 import { FEED_SHORT_NAMES } from "@/lib/wording";
-export { FEED_NAMES, FEED_SHORT_NAMES } from "@/lib/wording";
+export { FEED_SHORT_NAMES } from "@/lib/wording";
 
 /** The `source` of a feed's postings (api sources.SOURCES), named as a person reads it. */
 const SOURCE_NAMES: Record<string, string> = {
@@ -26,17 +33,6 @@ const SOURCE_NAMES: Record<string, string> = {
 export function feedSourceName(source: string): string | null {
   return SOURCE_NAMES[source.trim()] ?? null;
 }
-
-/** What the sweep calls a feed while it reads it (api sources.NAMES, the `current_board`). */
-const READING_NAMES = new Set([
-  "Remote OK",
-  "We Work Remotely",
-  "Hacker News, Freelancer? Seeking freelancer?",
-  "Hacker News, Who is hiring?",
-]);
-
-export const isFeedReading = (current: string): boolean =>
-  READING_NAMES.has(current);
 
 /** "via Remote OK" when a posting's first source is a feed, else null. */
 export function viaFeed(source: string | null | undefined): string | null {
