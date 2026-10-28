@@ -117,7 +117,6 @@ def test_preferences_defaults_and_values() -> None:
             "completed_at": None,
             "dismissed_at": None,
             "steps_passed": [],
-            "starter_handled": [],
         },
         "documents_language": "auto",
         "documents_tone": "plain",
@@ -232,7 +231,6 @@ def test_the_dates_the_wizard_recorded_survive_a_save_and_an_import(
             "completed_at": None,
             "dismissed_at": None,
             "steps_passed": [],
-            "starter_handled": [],
         },
     }
     assert save(api, ana, "preferences", cleared, loaded["revision"] + 1).status_code == 422

@@ -1,4 +1,4 @@
-"""search.sweep_schedule: when the boards are swept automatically (jobs J5 schedules it and owns its
+"""search.sweep_schedule: when the search runs automatically (jobs J5 schedules it and owns its
 editor). Off by default, backward compatible (a section saved without it reads as off), validated
 strictly, kept by every save of the Search tab and by export then import."""
 

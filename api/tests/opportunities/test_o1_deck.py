@@ -20,8 +20,7 @@ from app.opportunities import passes
 from app.profile.models import Profile
 from tests.apply.test_a2_guardrails import KEPT_BY_OWNER, REFUSED_BY_OWNER
 from tests.identity.api_helpers import Api
-from tests.jobs.fake_ats import FakeAts
-from tests.jobs.sweep_helpers import set_profile
+from tests.jobs.sweep_helpers import finding, set_profile
 from tests.jobs.test_status_lock import join_all, run_in_thread, wait_until_blocked
 from tests.opportunities.conftest import (
     AT,
@@ -39,6 +38,13 @@ from tests.opportunities.conftest import (
     swept,
     undo,
     walk,
+)
+
+# The postings a sweep's website finds in the tests that run one.
+FOUND = (
+    finding("Applied AI Engineer"),
+    finding("Forward Deployed Engineer"),
+    finding("GenAI Engineer"),
 )
 
 # --- what is in the deck -------------------------------------------------------------------------
@@ -205,10 +211,10 @@ def test_rules_that_cannot_be_read_empty_the_deck(
 
 
 def test_the_sweep_s_skipped_rows_are_not_in_the_deck(
-    api: Api, person_a: Person, factory: sessionmaker[Session], fake_ats: FakeAts
+    api: Api, person_a: Person, factory: sessionmaker[Session]
 ) -> None:
     set_profile(factory, person_a.user_id, deck_search(min_fit=0))
-    postings = swept(factory, person_a, fake_ats)
+    postings = swept(factory, person_a, *FOUND)
     assert postings, "the fake sweep found nothing"
     with factory() as session, session.begin():
         first = jobs_service.lock_job(session, person_a.user_id, postings[0].id)
@@ -428,10 +434,10 @@ def test_a_pass_on_a_posting_moved_out_of_the_deck_is_refused(
 
 
 def test_a_passed_posting_found_again_by_the_sweep_stays_skipped(
-    api: Api, person_a: Person, factory: sessionmaker[Session], fake_ats: FakeAts
+    api: Api, person_a: Person, factory: sessionmaker[Session]
 ) -> None:
     set_profile(factory, person_a.user_id, deck_search(min_fit=0))
-    first = swept(factory, person_a, fake_ats)
+    first = swept(factory, person_a, *FOUND)
     by_url, by_name = first[0], first[1]
     assert pass_(api, person_a, by_url.id).status_code == 200
     assert pass_(api, person_a, by_name.id).status_code == 200
@@ -439,7 +445,7 @@ def test_a_passed_posting_found_again_by_the_sweep_stays_skipped(
         session.execute(
             sa.update(Job).where(Job.id == by_name.id).values(url="https://jobs.example.org/moved")
         )
-    again = swept(factory, person_a, fake_ats)
+    again = swept(factory, person_a, *FOUND)
     assert sorted(p.id for p in again) == sorted(p.id for p in first)
     assert status_of(factory, by_url.id) is JobStatus.skipped
     assert status_of(factory, by_name.id) is JobStatus.skipped

@@ -94,7 +94,7 @@ def test_unknown_top_level_field_is_refused(section: str) -> None:
         ("facts", "blocks.0"),
         ("skills", "have.0"),
         ("skills", "gates.0"),
-        ("search", "boards.0"),
+        ("search", "browser_sources.0"),
         ("search", "title_include"),
         ("answers", "work_authorization.0"),
     ],
@@ -183,7 +183,7 @@ def test_blank_optional_string_becomes_null() -> None:
         ("experience", "education.0.school"),
         ("facts", "blocks.0.title"),
         ("skills", "have.0.name"),
-        ("search", "boards.0.company"),
+        ("search", "browser_sources.0.query"),
         ("answers", "work_authorization.0.country"),
     ],
 )
@@ -228,7 +228,7 @@ def test_oversize_strings_are_refused(section: str, path: str, limit: int) -> No
         ("skills", "have.0.terms", "agent", "have.0.terms"),
         ("search", "min_fit", "70", "min_fit"),
         ("search", "days", 7.0, "days"),
-        ("search", "boards.0.enabled", 1, "boards.0.enabled"),
+        ("search", "browser_sources.0.enabled", 1, "browser_sources.0.enabled"),
         ("search", "contract_types", "CDI", "contract_types"),
         (
             "answers",
@@ -260,9 +260,8 @@ def test_wrong_types_are_refused_not_coerced(section: str, path: str, value: Any
         ("facts", "blocks.0.body"),
         ("skills", "have.0.name"),
         ("skills", "gates.0.name"),
-        ("search", "boards.0.company"),
-        ("search", "boards.0.ats"),
-        ("search", "boards.0.org"),
+        ("search", "browser_sources.0.kind"),
+        ("search", "browser_sources.0.query"),
         ("answers", "work_authorization.0.country"),
         ("answers", "work_authorization.0.answer"),
     ],
@@ -274,9 +273,9 @@ def test_missing_required_field(section: str, path: str) -> None:
 
 
 def test_optional_item_fields_have_defaults() -> None:
-    stored = validate_section("search", {"boards": [{"company": "X", "ats": "lever", "org": "x"}]})
-    assert stored["boards"][0]["enabled"] is True
-    assert stored["boards"][0]["extra_exclude"] == {"terms": [], "advanced_regex": False}
+    stored = validate_section("search", {"browser_sources": [{"kind": "freework", "query": "x"}]})
+    assert stored["browser_sources"][0]["enabled"] is False
+    assert stored["browser_sources"][0]["interactive_only"] is False
     stored = validate_section("skills", {"gates": [{"name": "g"}]})
     assert stored["gates"][0] == {"name": "g", "terms": [], "advanced_regex": False, "penalty": 25}
 
@@ -859,10 +858,8 @@ def test_term_cannot_be_blank_or_multiline() -> None:
         ("remote_stance", "Remote"),
         ("contract_types", ["CDI", "Permanent"]),
         ("contract_types", ["cdi"]),
-        ("boards.0.ats", "workday"),
-        ("boards.0.org", "has space"),
-        ("boards.0.org", ".starts-with-dot"),
-        ("boards.0.org", "a/b"),
+        ("browser_sources.0.kind", "indeed"),
+        ("browser_sources.0.query", "a\nb"),
         ("never_apply", ["x"] * 51),
     ],
 )
@@ -885,27 +882,51 @@ def test_search_duplicate_contract_type() -> None:
     assert "duplicate contract type" in first("search", {"contract_types": ["CDI", "CDI"]})[1]
 
 
-def test_search_duplicate_board() -> None:
+# The company job boards, the freelance feeds and the fixed browser readers were deleted (owner,
+# 2026-10-28). A section an older release stored with them still validates and loses them.
+OLD_BOARD = {
+    "company": "Example Robotics",
+    "ats": "ashby",
+    "org": "example-robotics",
+    "enabled": True,
+    "extra_exclude": {"terms": [], "advanced_regex": False},
+}
+OLD_FEED = {"kind": "remoteok", "terms": {"terms": ["python"], "advanced_regex": False}}
+OLD_READER = {"kind": "google_careers", "query": "ai engineer", "location": "Paris"}
+
+
+@pytest.mark.parametrize("kind", ["google_careers", "vie", "site"])
+def test_a_stored_search_with_deleted_sources_validates_without_them(kind: str) -> None:
     data = full("search")
-    data["boards"].append({**data["boards"][0], "company": "Mistral again", "org": "MISTRAL.AI"})
-    loc, msg = first("search", data)
-    assert loc == "boards"
-    assert "duplicate board" in msg
-    # The same org on another ATS is a different board.
-    data["boards"][-1]["ats"] = "lever"
-    assert len(validate_section("search", data)["boards"]) == 3
+    kept = data["browser_sources"][0]
+    data["boards"] = [OLD_BOARD]
+    data["feeds"] = [OLD_FEED]
+    data["browser_sources"] = [{**OLD_READER, "kind": kind}, kept]
+    stored = validate_section("search", data)
+    assert "boards" not in stored
+    assert "feeds" not in stored
+    assert stored["browser_sources"] == [kept]
+    assert stored == full("search")
 
 
-def test_search_board_extra_exclude_regex_checked() -> None:
-    data = with_("search", "boards.0.extra_exclude", {"terms": ["(x"], "advanced_regex": True})
-    assert first("search", data)[0] == "boards.0.extra_exclude.terms"
+def test_deleted_search_fields_are_dropped_even_when_malformed() -> None:
+    stored = validate_section("search", {"boards": "x", "feeds": [{"kind": 1}], "min_fit": 50})
+    assert stored == validate_section("search", {"min_fit": 50})
+
+
+def test_a_stored_starter_list_validates_without_it() -> None:
+    # The starter list of boards (opportunities O5b) was deleted with the boards (2026-10-28).
+    data = full("preferences")
+    data["onboarding"]["starter_handled"] = ["ashby:example-robotics"]
+    assert validate_section("preferences", data) == full("preferences")
 
 
 def test_search_defaults() -> None:
     stored = validate_section("search", {})
     assert stored["min_fit"] == 70
     assert stored["days"] == 30
-    assert stored["boards"] == []
+    assert "boards" not in stored
+    assert "feeds" not in stored
     assert stored["title_include"] == {"terms": [], "advanced_regex": False}
 
 

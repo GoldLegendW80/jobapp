@@ -1,21 +1,17 @@
-"""Opportunities O8: what the web reads of a sweep's freelance and project feeds, and the words of
-the catalogue it shows. The summary of a sweep carries, per feed, the postings the never apply
-rules set aside (`skipped_by_rule`), so the web can say so in plain words; a browser source and an
-older stats entry without the counter read 0. No text of the catalogue uses a dash as a
-separator, since the Search tab shows every one. No database: `sweep_out` reads a row's stats."""
+"""Opportunities O8: what the web reads of an older sweep's freelance feed entries. The feeds were
+deleted on 2026-10-28, but a sweep row stored before still reads through the sweep API: per feed,
+the postings the never apply rules set aside (`skipped_by_rule`), the parser skips, the error; a
+browser source and an older stats entry without the counter read 0. No database: `sweep_out`
+reads a row's stats."""
 
-import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from app.opportunities.sources import ERRORS, catalogue
 
 from app.jobs import sweep_router
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
-
-DASHES = re.compile(r"[‒–—―]|\s-\s")
 
 
 def row(sources: list[Any]) -> Sweep:
@@ -100,44 +96,6 @@ def test_the_summary_answer_names_the_counter() -> None:
     }
     metadata = ("source_id", "mode", "host", "phase", "action", "outcome", "reason")
     assert {key: body["sources"][0][key] for key in metadata} == dict.fromkeys(metadata)
-
-
-def test_the_web_has_words_for_every_feed_code() -> None:
-    # web/src/features/opportunities/sources/source-words.ts FEED_PROBLEMS pins the same list.
-    assert set(ERRORS) == {
-        "not_found",
-        "blocked",
-        "rate_limited",
-        "upstream_error",
-        "timeout",
-        "network",
-        "too_large",
-        "invalid_response",
-        "too_many",
-        "store_failed",
-        "time_budget",
-        "stub_missing",
-    }
-
-
-def test_no_catalogue_text_uses_a_dash_as_a_separator() -> None:
-    texts = [
-        value
-        for group in catalogue.as_json().values()
-        for entry in group
-        for key, value in entry.items()
-        if key not in ("terms_url", "kind", "checked_on")
-    ]
-    assert texts
-    for text in texts:
-        assert not DASHES.search(text), text
-
-
-def test_every_platform_has_a_one_line_reason_and_a_date() -> None:
-    for platform in catalogue.as_json()["not_supported"]:
-        assert platform["reason"].strip()
-        assert "\n" not in platform["reason"]
-        datetime.strptime(platform["checked_on"], "%Y-%m-%d")
 
 
 @pytest.mark.parametrize("value", [None, "2", True, False, -1.5, [1], -1])

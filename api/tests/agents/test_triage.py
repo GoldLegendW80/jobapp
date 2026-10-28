@@ -44,7 +44,8 @@ SKILLS = {
 SEARCH = {
     "never_apply": [RULE],
     "remote_stance": "hybrid",
-    "boards": [{"company": "Mistral", "ats": "ashby", "org": "mistral"}],
+    # A board an older release stored (the boards were deleted, 2026-10-28): never shown.
+    "boards": [{"company": "Example Robotics", "ats": "ashby", "org": "example-robotics"}],
 }
 IDENTITY = {
     "full_name": "Ada Example",
