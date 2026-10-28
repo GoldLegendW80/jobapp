@@ -94,9 +94,9 @@ export function useSweepRunner(): SweepRunner {
           // Setup owns its editable error state and must not disappear after a refusal.
           if (profileRevision !== undefined) throw error;
           if (isApiError(error) && error.status === 422) {
-            // No enabled board, or a stored search section to save again: both are fixed in
-            // the Search tab of the profile.
-            toast.error(errorDetail(error) ?? "No board to sweep.", {
+            // No ticked job website, or a stored search section to save again (the api's
+            // detail says which).
+            toast.error(errorDetail(error) ?? "No job website to search.", {
               action: {
                 label: "Open the profile",
                 onClick: () => {

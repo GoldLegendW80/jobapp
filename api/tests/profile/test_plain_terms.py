@@ -110,6 +110,10 @@ def test_a_huge_expression_is_refused_quickly() -> None:
     assert plain_words("ab" * 300 + ".*") is None
     assert plain_words("(" * 200 + "ai" + ")" * 200) is None
     assert plain_words("((ai))") == ["ai"]
+    # A separator doubles the words: many of them are refused before any word is built.
+    assert plain_words(".".join(["a"] * 200)) is None
+    assert plain_words("a.b.c.d") == [f"a{x}b{y}c{z}d" for x in " -" for y in " -" for z in " -"]
+    assert plain_words("a.b.c.d.e") is None
 
 
 def test_a_plain_list_is_typed_as_saved() -> None:

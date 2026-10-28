@@ -170,9 +170,9 @@ def test_no_extension_field_can_bring_a_secret_or_a_volume_to_the_parser() -> No
 
 @pytest.mark.parametrize("path", overlays(), ids=lambda path: path.name)
 def test_a_file_that_gives_the_worker_another_image_gives_the_parser_the_same(path: Path) -> None:
-    """compose.dev.yml, tests/compose.a2-e2e.yml and tests/compose.j5-e2e.yml run the worker from
-    a tag of their own. A parser left on jobapp-worker:latest there would run other code than
-    the worker beside it, or no image at all on a machine that never built that tag."""
+    """compose.dev.yml and tests/compose.a2-e2e.yml run the worker from a tag of their own. A
+    parser left on jobapp-worker:latest there would run other code than the worker beside it, or
+    no image at all on a machine that never built that tag."""
     services = yaml.safe_load(path.read_text(encoding="utf-8")).get("services", {})
     worker, parser = services.get("worker", {}), services.get("parser", {})
     assert parser.get("image") == worker.get("image"), path.name
@@ -193,13 +193,13 @@ def test_no_file_loosens_the_parser(path: Path) -> None:
         assert path.name == "compose.dev.yml"
 
 
-def test_the_overlays_with_another_worker_image_are_the_three_the_plan_names() -> None:
+def test_the_overlays_with_another_worker_image_are_the_two_the_plan_names() -> None:
     with_image = sorted(
         path.name
         for path in overlays()
         if "image" in yaml.safe_load(path.read_text(encoding="utf-8"))["services"].get("worker", {})
     )
-    assert with_image == ["compose.a2-e2e.yml", "compose.dev.yml", "compose.j5-e2e.yml"]
+    assert with_image == ["compose.a2-e2e.yml", "compose.dev.yml"]
 
 
 def test_the_mac_overlay_has_no_entry_for_the_parser() -> None:

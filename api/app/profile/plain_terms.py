@@ -31,6 +31,7 @@ from app.profile.schemas import TermList
 PLAIN = re.compile(r"[^\W_]+(?:[ '-][^\W_]+)*")
 VARIANTS_MAX = 8
 DEPTH_MAX = 8  # groups inside groups
+SEPARATORS_MAX = VARIANTS_MAX.bit_length() - 1  # 2 ** 3 words is VARIANTS_MAX
 _EDGE_START = re.compile(r"^(?:\^|\\b)+")
 _EDGE_END = re.compile(r"(?:\$|\\b)+$")
 _SEP = "\x00"  # a separator between two words that may be a space or a hyphen
@@ -141,6 +142,10 @@ def plain_words(pattern: str) -> list[str] | None:
     except (_UnsafeError, IndexError):
         return None
     if at != len(core):
+        return None
+    # Each separator doubles a variant's words (a space and a hyphen): past SEPARATORS_MAX the
+    # words are more than VARIANTS_MAX whatever follows, so refuse before building them.
+    if any(variant.count(_SEP) > SEPARATORS_MAX for variant in variants):
         return None
     words: list[str] = []
     seen: set[str] = set()

@@ -270,7 +270,7 @@ describe("Schedule", () => {
     expect(button).toHaveTextContent("On");
     expect(button).toHaveAttribute(
       "title",
-      "Automatic search: on, every day at 06:17 (Europe/Paris). No board is enabled in your profile, so nothing runs.",
+      "Automatic search: on, every day at 06:17 (Europe/Paris). No job website is ticked in Find jobs, so nothing runs.",
     );
     await user.click(
       within(dialog).getByRole("checkbox", { name: "Search automatically" }),
