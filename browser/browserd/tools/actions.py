@@ -470,8 +470,8 @@ class Tab:
         if scope is None or self.state.native_failed:
             return False
         if scope.signed_in:
-            return discovery.signed_request(url, method, True, scope)
-        return discovery.read_url(url, scope.start, scope=scope)
+            return discovery.signed_request(url, method, True, scope, hop=True)
+        return discovery.read_url(url, scope.start, scope=scope, hop=True)
 
     async def guard(self) -> Any:
         """The context the lease's tabs live in, with the navigation guard installed on it once

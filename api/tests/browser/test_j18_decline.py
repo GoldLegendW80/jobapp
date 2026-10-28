@@ -254,3 +254,20 @@ def test_a_click_another_element_covers_is_told_as_covered(monkeypatch, message,
     if code == "element_covered":
         assert "cookie banner" in answer["message"]
         assert not any(dash in answer["message"] for dash in ("–", "—", " - "))
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://www.example-jungle.test/en/jobs", "https://www.example-jungle.test/fr/search"],
+)
+def test_a_redirect_hop_to_a_bare_search_page_stays_refused(url):
+    """The rule reviewed with the start page's redirect (test_j18_start_redirect): a hop the
+    website sends by itself to a search address carries the saved criteria; the agent's own
+    navigation to the search page does not need them."""
+    home = discovery.Scope("https://www.example-jungle.test/", ("genai engineer",))
+    assert discovery.read_url(url, home.start, scope=home)
+    assert not discovery.read_url(url, home.start, scope=home, hop=True)
+    assert discovery.redirect_target(home.start, url, home) is None
+    signed = discovery.Scope(home.start, home.titles, signed_in=True)
+    assert discovery.signed_request(url, "GET", True, signed)
+    assert not discovery.signed_request(url, "GET", True, signed, hop=True)

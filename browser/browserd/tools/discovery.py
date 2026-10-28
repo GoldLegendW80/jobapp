@@ -254,7 +254,9 @@ class Scope:
         return not complete or (sum(k in QUERY for k in keys) == 1 and expected.keys() <= set(keys))
 
 
-def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None = None) -> bool:
+def read_url(
+    url: str, current: str, *, form: bool = False, scope: Scope | None = None, hop: bool = False
+) -> bool:
     if not isinstance(url, str) or len(url) > 2000:
         return False
     try:
@@ -280,8 +282,12 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
             or any(part in t for t in tokens for part in APPLY_PARTS)
         )
         # A search request carries its saved title; the search page itself, its address with
-        # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716).
-        complete = bool(pairs)
+        # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716). A
+        # redirect hop (`hop`) is held to the rule reviewed with the start page's own redirect:
+        # an endpoint there is a search, so it carries the saved criteria.
+        complete = bool(pairs) or (
+            hop and url != (scope.start if scope else url) and segments[-1] in ENDPOINTS
+        )
         return (
             not parts.fragment
             and not destructive
@@ -328,7 +334,7 @@ def redirect_target(url: str, location: object, scope: Scope) -> str | None:
     its query). None for anything else, a missing or blank Location included: the redirect is
     refused."""
     target = _resolved(url, location)
-    return target if target and read_url(target, scope.start, scope=scope) else None
+    return target if target and read_url(target, scope.start, scope=scope, hop=True) else None
 
 
 # Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
@@ -506,14 +512,16 @@ def signin_url(url: str) -> bool:
     return any(f.startswith(SIGNIN_PATHS) for f in folded if f)
 
 
-def signed_request(url: str, method: str, document: bool, scope: Scope) -> bool:
+def signed_request(
+    url: str, method: str, document: bool, scope: Scope, *, hop: bool = False
+) -> bool:
     """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, never a
     destructive address on any host (a document's too: `/logoff` or `/fr/deconnexion` in a
     frame would sign the person out), and a document (a frame's navigation) only within the
     frozen scope, as read_url holds the anonymous discovery."""
     if method not in {"GET", "HEAD"} or not isinstance(url, str) or len(url) > 8000:
         return False
-    if document and not read_url(url, scope.start, scope=scope):
+    if document and not read_url(url, scope.start, scope=scope, hop=hop):
         return False
     return not destructive(url, scope)
 
