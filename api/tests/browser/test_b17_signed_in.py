@@ -275,6 +275,9 @@ def test_done_refuses_a_bad_address_and_needs_a_session(api: Api, user_a) -> Non
     for bad in ("javascript:alert(1)", "file:///etc/passwd", "members.example.test", ""):
         answer = done(api, user_a[1], bad)
         assert answer.status_code == 422
+    # The body is closed, like every other request schema: an unknown field is refused.
+    extra = {"address": SITE, "profile": "x" * 64}
+    assert api.post("/api/browser/sites/done", token=user_a[1], json=extra).status_code == 422
     assert api.post("/api/browser/sites/done", json={"address": SITE}).status_code in (401, 403)
 
 
