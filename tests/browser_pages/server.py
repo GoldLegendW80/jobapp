@@ -35,9 +35,10 @@ pages, on its own name, stay script free.
 Browser B10 on a job website (web/e2e/browser-b10.spec.ts): a LinkedIn search of the job websites
 opens LinkedIn's start page here (b8/linkedin/, BROWSER_SOURCES_BASE_URL). GET
 /b10/next?wall=checkpoint or ?wall=signin, asked from inside the container only (the browser's
-request is refused), makes the next request of that start page, and only that one, a 302 to
-LinkedIn's security check (b10/linkedin/checkpoint/challenge/) or to its sign in page; any other
-value clears it. Every other request of the start page answers as before.
+request is refused), makes the next request of that start page, and only that one, answer
+LinkedIn's security check (b10/linkedin/checkpoint/challenge/) or its sign in page in place (a
+website search refuses every redirect); any other value clears it. Every other request of the
+start page answers as before.
 """
 
 import http.server
@@ -61,8 +62,8 @@ MEMBER_NAME = re.compile(r"[a-z0-9@._-]{1,64}")
 MEMBERS = {"epoch": 1}
 # Browser B10 on a job website: the wall LinkedIn's start page shows next, once (see the doc).
 LINKEDIN_WALLS = {
-    "checkpoint": "/b8/linkedin/checkpoint/challenge/",
-    "signin": "/b8/linkedin/jobs/search/?keywords=signin",
+    "checkpoint": "b10/linkedin/checkpoint/challenge/index.html",
+    "signin": "b10/linkedin/jobs/search/signin.html",
 }
 LINKEDIN_NEXT = {"wall": None}
 LINKEDIN_STARTS = ("/b8/linkedin/", "/b10/linkedin/")
@@ -264,8 +265,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if url.path in LINKEDIN_STARTS:
             with J15_LOCK:
                 wall, LINKEDIN_NEXT["wall"] = LINKEDIN_NEXT["wall"], None
-            if wall is not None:
-                return self.redirect(LINKEDIN_WALLS[wall])
+            if wall is not None:  # in place: a website search refuses every redirect
+                with open(
+                    os.path.join(ROOT, LINKEDIN_WALLS[wall]), encoding="utf-8"
+                ) as page:
+                    return self.send(page.read(), "text/html; charset=utf-8")
         if self.members() and url.path.startswith("/j15/") and self.b17(url):
             return None
         if self.members() and url.path.startswith("/j15/"):

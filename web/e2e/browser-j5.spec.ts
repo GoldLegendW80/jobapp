@@ -248,9 +248,11 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
   page.off("request", onRequest);
   expect(polls).toEqual([]);
   await expect(dialog).toContainText("1 website searched");
-  await expect(
-    dialog.getByRole("region", { name: "New postings" }).getByRole("link"),
-  ).toHaveText([POSTING]);
+  const links = dialog
+    .getByRole("region", { name: "New postings" })
+    .getByRole("link");
+  await expect(links).toHaveCount(1);
+  await expect(links).toContainText(POSTING);
   await expect(dialog).not.toContainText(/board/i);
   await expect(dialog).not.toContainText(/[–—]| - /);
   await fitsInside(page, dialog);
