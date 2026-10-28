@@ -28,7 +28,7 @@ BANNER = (
     '  - button "OK for me" [ref=e21]\n'
     '  - button "No, thanks" [ref=e20]'
 )
-FORM = '- searchbox "What job are you looking for?" [ref=e1]\n- button "Search" [ref=e3]'
+FORM = '- searchbox "What job are you looking for?" [ref=e1]{typed}\n- button "Search" [ref=e3]'
 
 
 class Jungle:
@@ -37,8 +37,17 @@ class Jungle:
     answers it, `page_error`, until "No, thanks" is clicked), a search that lists the postings
     of the title typed on the same address, or only a count when `listed` is off."""
 
-    def __init__(self, results: dict[str, list[str]] | None = None, listed: bool = True):
+    def __init__(
+        self,
+        results: dict[str, list[str]] | None = None,
+        listed: bool = True,
+        covers: bool = True,
+        broken: dict[str, str] | None = None,
+    ):
         self.results, self.listed = results or {}, listed
+        # `covers` off: the banner covers the search button only, not the box; `broken`: refs
+        # whose click fails with that error whatever the banner.
+        self.covers, self.broken = covers, broken or {}
         self.current, self.typed, self.searched = "", "", None
         self.banner = True
         self.calls: list[tuple[str, Any]] = []
@@ -51,7 +60,7 @@ class Jungle:
             return HOME
         if url == JOBS:
             shown = [BANNER] if self.banner else []
-            shown.append(FORM)
+            shown.append(FORM.replace("{typed}", f": {self.typed}" if self.typed else ""))
             if self.searched is not None and not self.listed:
                 shown.append("- paragraph: 9756 jobs found. Yes, we counted.")
             elif self.searched is not None:
@@ -76,10 +85,14 @@ class Jungle:
                 return {"ok": False, "error": "navigation_failed"}
             self.current = args["url"]
             return {"ok": True}
-        if self.current == JOBS and self.banner and args.get("ref") != "e20":
+        if args.get("ref") in self.broken:
+            return {"ok": False, "error": self.broken[args["ref"]]}
+        covered = self.covers or args.get("ref") == "e3"
+        if self.current == JOBS and self.banner and covered and args.get("ref") != "e20":
             return {"ok": False, "error": "page_error"}
         if name == "browser_click" and args["ref"] == "e20":
             self.banner = False
+            return {"ok": True, "declined": True}  # as browserd says a decline
         elif name == "browser_click" and args["ref"] == "e3":
             self.searched = self.typed
         elif name == "browser_type":
@@ -193,6 +206,111 @@ def test_no_match_without_any_search_is_never_a_success():
 
     entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
     assert (entry["error"], entry["searches"]) == ("nothing_reported", 0)
+
+
+class Linked(Jungle):
+    """The same website, its search page with two links besides (round 2, review of PR 720):
+    "Home" (e31, the home, no saved title in its address) and "GenAI Engineer jobs" (e32, a
+    search by address carrying the saved title); `clears` empties the box when Search runs."""
+
+    SEARCHED = JOBS + "?query=genai+engineer"
+    LINKS = (
+        '\n- link "Home" [ref=e31]\n  - /url: /'
+        '\n- link "GenAI Engineer jobs" [ref=e32]\n  - /url: /fr/jobs?query=genai+engineer'
+    )
+
+    def __init__(self, clears: bool = False, **more: Any):
+        super().__init__(**more)
+        self.clears = clears
+
+    def page(self, url: str) -> str | None:
+        if url == self.SEARCHED:
+            return "- paragraph: No job matches your search."
+        shown = super().page(url)
+        return shown + self.LINKS if url == JOBS and shown else shown
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        ref = args.get("ref")
+        if name == "browser_click" and ref in {"e31", "e32"} and not self.banner:
+            args.pop("_discovery"), args.pop("_discovery_scope")
+            self.calls.append((name, ref))
+            self.current = BASE if ref == "e31" else self.SEARCHED
+            return {"ok": True}
+        answer = await super().call(name, args)
+        if name == "browser_click" and ref == "e3" and answer["ok"] and self.clears:
+            self.typed = ""
+        return answer
+
+
+def typed_then(steps: list[tuple[str, str]], answers: list):
+    """The model on the search page: the saved title typed in the box the banner leaves free,
+    then these clicks (`decline` first when listed), then "no match" said."""
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await session.navigate("/fr/jobs")
+        answers.append(
+            await session.interact("browser_type", {"ref": "e1", "text": "GenAI Engineer"})
+        )
+        for _, ref in steps:
+            answers.append(await session.interact("browser_click", {"ref": ref}))
+        answers.append(session.report_none("no_match"))
+        return finder.Ran()
+
+    return script
+
+
+@pytest.mark.parametrize("failure", ["page_error", "element_covered", "stale_ref"])
+@pytest.mark.parametrize("declined", [True, False])
+def test_a_decline_and_a_failed_search_click_are_no_search(failure, declined):
+    """Typed in a box the banner leaves free, the banner declined (its click went through), the
+    search button's click failed: no search ran, so "no match" is no success."""
+    site = Linked(covers=False, broken={"e3": failure})
+    answers: list = []
+    steps = [("decline", "e20")] if declined else []
+    script = typed_then([*steps, ("search", "e3")], answers)
+    entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
+    assert [error for _, error in answers] == [False, *([False] if declined else []), True, False]
+    assert answers[-2] == (finder.ACTION_FAILED, True)
+    assert (entry["error"], entry["searches"], entry["refused"]) == ("nothing_reported", 0, {})
+
+
+def test_a_decline_click_alone_is_no_search_even_with_the_title_in_the_box():
+    site = Linked(covers=False)
+    answers: list = []
+    script = typed_then([("decline", "e20")], answers)
+    entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
+    assert "GenAI Engineer" in site.page(JOBS)  # the box still shows it
+    assert (entry["error"], entry["searches"]) == ("nothing_reported", 0)
+
+
+@pytest.mark.parametrize(
+    ("ref", "searched"),
+    [
+        ("e31", False),  # a link to an address with no saved title
+        ("e32", True),  # a link whose address carries the saved title
+    ],
+)
+def test_a_link_click_counts_only_when_its_address_carries_a_saved_title(ref, searched):
+    site = Linked(covers=False)
+    answers: list = []
+    script = typed_then([("decline", "e20"), ("link", ref)], answers)
+    entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
+    assert [error for _, error in answers] == [False, False, False, False]
+    expected = (None, 1) if searched else ("nothing_reported", 0)
+    assert (entry["error"], entry["searches"]) == expected
+
+
+@pytest.mark.parametrize(("clears", "searched"), [(False, True), (True, False)])
+def test_a_button_click_counts_only_when_the_page_then_shows_the_typed_title(clears, searched):
+    """A search in place keeps the title in its box (counted); a button after which the box no
+    longer holds it, the address unchanged, ran no search the session can see."""
+    site = Linked(covers=False, clears=clears)
+    answers: list = []
+    script = typed_then([("decline", "e20"), ("search", "e3")], answers)
+    entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
+    assert [error for _, error in answers] == [False, False, False, False]
+    expected = (None, 1) if searched else ("nothing_reported", 0)
+    assert (entry["error"], entry["searches"]) == expected
 
 
 def test_a_page_that_shows_only_a_count_is_reported_as_no_list():

@@ -539,12 +539,14 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
             assert not refused["ok"], (name, refused)
         declined = lease.tool("browser_click", ref=ref(page, "button", "No, thanks"), **signed)
         assert declined["ok"], declined
+        assert declined.get("declined") is True, declined  # the api never counts it a search
         page = lease.tool("browser_snapshot")["snapshot"]
         assert "No, thanks" not in page
         box = ref(page, "searchbox", "What job")
         assert lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)["ok"]
         searched = lease.tool("browser_click", ref=ref(page, "button", "Search"), **signed)
         assert searched["ok"], searched
+        assert "declined" not in searched, searched
         assert lease.tool("browser_wait_for", text="GenAI Engineer")["ok"]
         shot = lease.tool("browser_snapshot")
         assert shot["url"] == PAGES + "fr/jobs", shot["url"]  # the list updated in place

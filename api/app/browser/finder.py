@@ -826,14 +826,19 @@ class FinderSession:
     detail_fields: dict[str, tuple[str, str]] = field(default_factory=dict)
     detail_read_at: str = ""
     clock: Callable[[], datetime] = _utcnow
-    # A job website's searches, as the model's own tool calls ran them (jobs J18): a successful
-    # browser_click after it typed a saved title, with the saved place it typed or chose, if
-    # any. Only saved values are ever kept (browserd and `interact` refuse any other).
+    # A job website's searches, as the model's own tool calls ran them (jobs J18): a page whose
+    # address carries a saved title, or a button click after it typed a saved title when the
+    # page that follows shows that title in a text entry (round 2, review of PR 720), with the
+    # saved place it typed or chose, if any. A cookie banner's decline is never a search. Only
+    # saved values are ever kept (browserd and `interact` refuse any other).
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     typed_title: str | None = None
     typed_place: str | None = None
     # The text entries of the page last read that `box_of` tells apart: ref, "title" or "place".
     boxes: dict[str, str] = field(default_factory=dict)
+    # The role of every ref of the page last read (`link`, `button`, ...), so a click is known
+    # by what the agent saw it press.
+    roles: dict[str, str] = field(default_factory=dict)
     _report_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # Where the start page landed, when its website redirected it on its own origin (a locale
     # path, `/` to `/en`, jobs J18): its links are read from there.
@@ -874,8 +879,10 @@ class FinderSession:
 
         root = sources.parse_snapshot(text[:SNAPSHOT_MAX] if self.interactive else text)
         if self.interactive:
-            self.boxes = {}
+            self.boxes, self.roles = {}, {}
         for node in root.walk():
+            if self.interactive and node.ref and len(self.roles) < SEEN_MAX:
+                self.roles[node.ref] = node.role
             if self.interactive and node.ref and (box := box_of(node.role, node.name)):
                 self.boxes[node.ref] = box
             if node.url:
@@ -912,8 +919,9 @@ class FinderSession:
         self.stopped = self.stopped or code
         return f"Stopped: {code}. Report what you found, then stop.", True
 
-    def _note(self, name: str, args: dict[str, Any]) -> None:
-        """What the model's successful action searched (`searches`)."""
+    def _note(self, name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+        """What the model's successful action searched (`searches`), read before the page that
+        follows it (`pages.last_url`, `pages.last_text`) replaces the one it acted on."""
         scope = self.interactive
         if scope is None:
             return
@@ -932,8 +940,41 @@ class FinderSession:
             if isinstance(values, list) and len(values) == 1:
                 place = saved_as(values[0], scope.places)
                 self.typed_place = place if place is not None else self.typed_place
-        elif name == "browser_click" and self.typed_title is not None:
-            self.searches.setdefault((self.typed_title, self.typed_place), None)
+        elif name == "browser_click" and result.get("declined") is not True:
+            # A cookie banner's decline (browserd says so) is no search. Any other click counts
+            # when the page that follows carries a saved title in its address (a link, a GET
+            # form); a button's click too when that page shows the title typed in a text entry,
+            # as a search that updates its list in place does. A link to an address with no
+            # saved title, or a click the page did not let finish, searched nothing.
+            url = canonical(self.pages.last_url)
+            ref = args.get("ref")
+            role = self.roles.get(ref) if isinstance(ref, str) else None
+            if role == "button" and self._shows_typed(url):
+                self.searches.setdefault((self.typed_title, self.typed_place), None)
+            else:
+                self._searched_at(url)
+
+    def _shows_typed(self, url: str) -> bool:
+        """The page that follows a click shows the saved title typed: in one of its text entries
+        (a searchbox, a textbox or a combobox holding it), or in its address's one search key,
+        case and accents aside."""
+        from app.browser import sources
+
+        title = self.typed_title
+        if title is None:
+            return False
+        try:
+            pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True, max_num_fields=100)
+        except ValueError:
+            pairs = []
+        keys = [v for k, v in pairs if k in QUERY_KEYS]
+        if len(keys) == 1 and saved_as(keys[0], (title,)) is not None:
+            return True
+        root = sources.parse_snapshot(self.pages.last_text[:SNAPSHOT_MAX])
+        return any(
+            node.role in ENTRY_ROLES and saved_as(node.text, (title,)) is not None
+            for node in root.walk()
+        )
 
     async def navigate(self, raw: str) -> tuple[str, bool]:
         if self.stopped:
@@ -1086,7 +1127,7 @@ class FinderSession:
             return "Refused: the page went to another site.", True
         self.current = url
         self.interactions[name] += 1
-        self._note(name, args)
+        self._note(name, args, result)
         self._read(url, self.pages.last_text)
         return self._view(url, self.pages.last_text), False
 

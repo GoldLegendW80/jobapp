@@ -743,7 +743,8 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if gone:
         return gone
     await tab.approach(locator)
-    no = tab.judge(await tab.facts(locator, point=True), "click", "browser_click")
+    facts = await tab.facts(locator, point=True)
+    no = tab.judge(facts, "click", "browser_click")
     if no:
         return no
     tab.require_input()
@@ -752,7 +753,11 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         click_count=2 if args.get("doubleClick") else 1,
         timeout=ACTION_S * 1000,
     )
-    return await tab.settle(await _here(tab))
+    result = await tab.settle(await _here(tab))
+    if tab.discovery and result.get("ok") and discovery.decline(facts):
+        # A cookie banner's decline (discovery.decline): the api never counts it as a search.
+        result = {**result, "declined": True}
+    return result
 
 
 EMPTY_ONLY_JS = """(element, text) => {

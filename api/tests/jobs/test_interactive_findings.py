@@ -67,6 +67,7 @@ class SiteTools:
             BASE + path: text for path, text in PAGES.items()
         }
         self.current = BASE
+        self.typed = ""
         self.actions: list[str] = []
 
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -77,12 +78,20 @@ class SiteTools:
             if args["url"] not in self.pages:
                 return {"ok": False, "error": "navigation_failed"}
             self.current = args["url"]
+        elif name == "browser_type":
+            self.typed = args["text"]
         elif name == "browser_click":
             self.current = BASE + "search"
         return {"ok": True}
 
     async def snapshot(self) -> dict[str, Any]:
-        return {"ok": True, "url": self.current, "snapshot": self.pages[self.current]}
+        text = self.pages[self.current]
+        if self.current == BASE + "search":
+            # The results keep the search box with the title typed (finder._note).
+            text = (
+                f'- searchbox "Query" [ref=e1]: {self.typed}\n- button "Search" [ref=e3]\n' + text
+            )
+        return {"ok": True, "url": self.current, "snapshot": text}
 
     async def wait_for(self, **_: Any) -> dict[str, Any]:
         return {"ok": True}
@@ -877,8 +886,10 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         assert session.interactive is not None
-        for query in session.interactive.titles:
+        for index, query in enumerate(session.interactive.titles):
             queries.append(query)
+            if index:  # back to the results, whose search box and button it then uses
+                assert not (await session.navigate("/search"))[1]
             assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
             assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
             if query == "robot":
@@ -963,7 +974,9 @@ def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reac
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         assert session.interactive is not None
-        for query in session.interactive.titles:
+        for index, query in enumerate(session.interactive.titles):
+            if index:  # back to the results, whose search box and button it then uses
+                assert not (await session.navigate("/search"))[1]
             assert not (await session.interact("browser_type", {"ref": "e1", "text": query}))[1]
             assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
             if query == "robot":
@@ -980,8 +993,8 @@ def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reac
 
     row = run(factory, new_sweep(factory, alice), runner(script, TwoWays()))
     entry = entry_of(row)
-    # Its detail page, the same page snapshotted after the next search's typing, then again.
-    assert read == ["flip", "flip", "flip"]
+    # Its detail page, then again after the next search (from the results page, round 2).
+    assert read == ["flip", "flip"]
     assert (entry["searches"], entry["error"], entry["outcome"]) == (2, None, "complete")
     assert (entry["found"], entry["postings"], row.stats["new"]) == (1, 1, 1)
     assert (entry["unwanted"], entry["other_contract"]) == (2, 1)
