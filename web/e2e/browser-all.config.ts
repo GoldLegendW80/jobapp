@@ -11,6 +11,9 @@ import { defineConfig, devices } from "@playwright/test";
  *   browser-b4   the live view of an assistant's lease: Take over and Give back (task B4)
  *   browser-b7   Sign in to a site, the profile kept across leases and a restart, Forget all
  *                logins (task B7)
+ *   browser-b10  LinkedIn as a job website: its security check pauses all LinkedIn work for a
+ *                week, a second search does not open it and an application is blocked; its
+ *                sign in page stops the search with no hand off (B10's guards, on a website)
  *   browser-b11  privacy and isolation: A's whole path (an assistant's run, its hand off, the live
  *                view, a sign in), B tries each of A's identifiers, and none of A's secrets in
  *                the stack's logs or Redis (task B11)
@@ -20,6 +23,9 @@ import { defineConfig, devices } from "@playwright/test";
  *                the invented one of tests/browser_pages/j15/, a permission per website, the
  *                interactive finder's search, the company page's posting, nothing submitted,
  *                pacing and the page cap (jobs J15)
+ *   browser-j5   Find jobs on a website: progress over the event stream, the summary, the
+ *                history, a second start refused, the schedule firing on the website, a never
+ *                apply rule's posting stored skipped and out of the deck (jobs J5, O7's rule)
  *
  * A task of the module adds its spec as browser-b<n>.spec.ts and it runs here: the local check
  * (ops/local-check.sh, group browser) names this config, not the specs, and

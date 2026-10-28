@@ -271,7 +271,6 @@ class LocalCheckGroupTest(unittest.TestCase):
         empty = 'const SPEC_PREFIX = "nothing-";\n'
         cases = {
             "apps-all.config.ts": "cannot be a journey group",
-            "sweep-all.config.ts": "cannot be a journey group",
             "Docs-all.config.ts": "cannot be a journey group",
             "mail_x-all.config.ts": "cannot be a journey group",
             "two words-all.config.ts": "cannot be a journey group",
@@ -343,7 +342,7 @@ class ThisRepositoryTest(unittest.TestCase):
         self.assertEqual(e2e_groups.check(self.ROOT), [])
 
     def test_the_real_groups_are_the_known_ones(self) -> None:
-        # The groups the workflow names one spec at a time (apps, sweep) and through a SPECS
+        # The group the workflow names one spec at a time (apps) and through a SPECS
         # array (identity) keep their anchors; their sizes are not written here, so a spec that
         # joins a group changes no test. The ingestion group takes every ingestion-*.spec.ts.
         ran = set(e2e_groups.specs_in_ci(self.ROOT))
@@ -352,7 +351,6 @@ class ThisRepositoryTest(unittest.TestCase):
                 "jobs.spec.ts",
                 "agents-runs.spec.ts",
                 "identity.spec.ts",
-                "jobs-sweep.spec.ts",
             },
             ran,
         )

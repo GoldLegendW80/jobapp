@@ -86,7 +86,6 @@ Left, all of it the owner's. On his Mac, in the app's checkout, where `ssh jetso
 
 ```bash
 OWNER=<the owner's account e-mail> tests/e2e_jobs_jetson.sh
-OWNER=<the owner's account e-mail> tests/e2e_jobs_sweep_jetson.sh
 OWNER=<the owner's account e-mail> tests/e2e_jobs_jetson.sh view
 ```
 

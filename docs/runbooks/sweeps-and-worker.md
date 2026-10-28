@@ -27,8 +27,9 @@ docker compose exec -T worker python -m app.worker --check                      
 A sweep whose worker died is failed after two minutes without a heartbeat, so the next one can
 start. `ATS_BASE_URL` (test stacks only, refused when `APP_ENV=production`) sends the board check
 and the sweeps to a stub of the three APIs; with `ATS_BASE_URL_ORG_PREFIX=fake-` only the orgs
-starting with it go there (`tests/compose.j5-e2e.yml`), the CI stack sends every org
-(`tests/ats-stub.compose.yml`).
+starting with it go there, the CI stack sends every org (`tests/ats-stub.compose.yml`). Since
+2026-10-28 every search runs the job websites ticked in Find jobs alone, so no search reads a
+board.
 
 LinkedIn's 7 day pause after a security check (browser B10) has no button to lift it. Only the
 owner can, by deleting the person's rows of `linkedin_checkpoints`:
