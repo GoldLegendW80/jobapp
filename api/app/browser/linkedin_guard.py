@@ -5,20 +5,21 @@ accepts once; the acceptance is recorded with its date and TEXT_VERSION in the p
 section (the `browser_sources` entry of kind `linkedin`: `enabled`, `accepted_at`,
 `text_version`; PUT /api/browser/linkedin writes it). `allowed(db, user_id)` is true only with
 the acceptance of the current version, the switch on and no pause active. Every LinkedIn path
-calls it before it opens a LinkedIn page: the sweep (`sweep_check`, through the sources' Runner),
-apply's Easy Apply (A16) and apply's profile work (A18a, A18b). A new version of the sentence
-(TEXT_VERSION raised) makes every earlier acceptance stale: nothing runs until the person
-accepts again.
+calls it before it opens a LinkedIn page: the job website search (`sweep_refusal`, through
+app/browser/platform_policy.py), apply's Easy Apply (A16) and apply's profile work (A18a,
+A18b). A new version of the sentence (TEXT_VERSION raised) makes every earlier acceptance
+stale: nothing runs until the person accepts again.
 
 The pause: a checkpoint or unusual activity page met on LinkedIn stops all LinkedIn work for
 PAUSE from the moment it was met. `record_checkpoint(db, user_id, at)` is the one way to start
 it: it adds a row to `linkedin_checkpoints` (app/browser/models.py), which no route writes or
 deletes, so the pause is kept in Postgres across any restart and no request of the person can
-lift it. The sweep records it through `sweep_wall` as soon as its reader meets the page (before
-the read returns its postings, so a kill after the checkpoint keeps the pause); apply's Easy
-Apply (A16) and apply's profile work (A18a) call `record_checkpoint` the same way, with their
-`origin`, in a transaction they commit before anything else. Nothing lifts it early: the owner
-may delete the person's rows of `linkedin_checkpoints` in SQL (docs/runbooks/sweeps-and-worker.md).
+lift it. The job website search records it through app/browser/platform_policy.py as soon as
+it reads the page (before the page reaches the model, so a kill after it keeps the pause);
+apply's Easy Apply (A16) and apply's profile work (A18a) call `record_checkpoint` the same
+way, with their `origin`, in a transaction they commit before anything else. Nothing lifts it
+early: the owner may delete the person's rows of `linkedin_checkpoints` in SQL
+(docs/runbooks/sweeps-and-worker.md).
 No daily limit (owner, 2026-10-28: "i don't want limit on search by day", LinkedIn too): the
 switch and the pause are what refuse a sweep; `linkedin_daily` stays readable in older sweeps.
 
@@ -26,16 +27,14 @@ Every query is by the person's own id: another person's switch, acceptance or pa
 read.
 """
 
-import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONPATH
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.browser.models import CHECKPOINT_ORIGINS, LinkedInCheckpoint
 from app.jobs import sweep as sweeps
@@ -162,37 +161,3 @@ def sweep_refusal(
     """A sweep's refusal: the switch or the pause (`refusal`); no daily limit (2026-10-28)."""
     del sweep_id  # every sweep is judged alike, whatever the person's sweeps of the day
     return refusal(db, user_id, now)
-
-
-def sweep_check(
-    sessions: sessionmaker[Session], clock: Callable[[], datetime] = lambda: datetime.now(UTC)
-) -> Callable[[Any], Awaitable[str | None]]:
-    """The sources' Runner check of a LinkedIn source (sources.Check): the guard, read in a
-    session of its own off the event loop."""
-
-    def run(user_id: uuid.UUID, sweep_id: uuid.UUID | None) -> str | None:
-        with sessions() as db:
-            return sweep_refusal(db, user_id, sweep_id, clock())
-
-    async def check(plan: Any) -> str | None:
-        return await asyncio.to_thread(run, plan.user_id, getattr(plan, "sweep_id", None))
-
-    return check
-
-
-def sweep_wall(
-    sessions: sessionmaker[Session], clock: Callable[[], datetime] = lambda: datetime.now(UTC)
-) -> Callable[[Any, str], Awaitable[None]]:
-    """The sources' Runner hook of a LinkedIn wall (sources.Wall): a checkpoint is recorded and
-    committed in a session of its own, off the event loop, the moment the reader meets it."""
-
-    def run(user_id: uuid.UUID) -> None:
-        with sessions() as db:
-            record_checkpoint(db, user_id, clock(), "sweep")
-            db.commit()
-
-    async def wall(plan: Any, code: str) -> None:
-        if code == "linkedin_checkpoint":
-            await asyncio.to_thread(run, plan.user_id)
-
-    return wall

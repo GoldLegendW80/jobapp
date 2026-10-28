@@ -80,3 +80,10 @@ def matching_rule(rules: Iterable[NeverApplyRule], *texts: str) -> NeverApplyRul
         if rule.pattern is not None and rule.pattern.search(folded) is not None:
             return rule
     return None
+
+
+# The app's own rule against cybersecurity (CLAUDE.md rule 2): added to the person's rules for
+# every posting a sweep stores.
+CYBER_RULE = NeverApplyRule.parse(
+    "Never cybersecurity: cyber, cybersecurity, security, pentest, pentesting, threat"
+)

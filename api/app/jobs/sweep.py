@@ -1,53 +1,31 @@
-"""Sweeps: read every enabled board of a user's search section and keep the new matching postings,
-as engine/jobs.py `cmd_find` does (SPEC-jobs.md, Sweep). Runs in the worker (app/worker.py).
+"""Sweeps: search the job websites a user ticked in Find jobs and keep the new postings
+(SPEC-jobs.md, Sweep). Runs in the worker (app/worker.py).
 
 One sweep, `run_sweep(sweep_id)`:
-1. Claim. The sweep row (made `running` by POST /api/jobs/sweeps or a scheduled tick) is locked
-   and checked: still running, never picked before (a row picked by a worker that then died is
-   failed at once instead of half run again). The user comes from the row, never from the queue
-   message. New runs use the search and skills frozen under the profile row lock at creation;
-   pre-v1 rows without `stats.search_scope` explicitly retain claim-time profile reads.
-   Without an enabled source the sweep fails with a clear message. Selected interactive sites
-   run through the bounded interactive finder; each batch of findings it verified is stored
-   as it is reported (`Commits`, jobs J11 and J11b, below). Every start, by hand, the first
-   login wizard's or the schedule's, searches the ticked websites alone (`websites_only`, owner
-   2026-10-28, replacing the "Websites only" choice of jobs J17): no board, feed or fixed
-   reader is in its scope or its plan, their saved settings stay in the profile untouched, and
-   the public scope says so. Only an internal start with `websites_only=False` (the tests of
-   the board engine below) and a sweep frozen before that decision still read boards.
-2. Fetch. Boards are read through ats.AtsClient, CONCURRENCY at a time, each failure recorded
-   with its code; the others go on.
-3. Keep. For each posting, in the engine's order: the title matches `title_include` (an empty
-   list keeps every title), matches neither `title_exclude` nor the board's `extra_exclude`, the
-   location matches `location` (empty: any) and not `location_exclude` (the unwanted places,
-   which win over a wanted one: "Remote, United States" is left out by an unwanted "United
-   States"), and the published date is within `days` of today
-   (Europe/Paris; a posting without a date is left out, as the engine's string comparison did).
-   Then one step the engine did not have: the contract type read from the title, location and
-   URL (engine `kind`, app/jobs/importer.py) must be one of `contract_types` (empty: any).
-   Term lists match through app/profile/matching.py, so the regexes converted from boards.json
-   decide exactly as the engine's (tests/jobs/test_sweep_parity.py).
-4. Store. A kept posting already in the user's list (slug.py: same URL once normalised, or same
-   company, title and location; postings of the same sweep included) is counted as a duplicate.
-   A new one becomes a `found` job: company = the board's name, source "<ats>:<org>",
-   description = the first 300 characters of the text, the posting text, its published date,
-   with `created` and `sweep` events. It is scored at once against the user's skills
-   (scoring.score on the text with the title, as `cmd_find` scored it), unless the profile has
-   none. A job matching a never_apply rule is then moved to `skipped`, the rule as its note.
-   Each board is one transaction.
-5. Progress. After each board (and when one starts) the sweep row's `stats` is rewritten, so
-   GET /api/jobs/sweeps/{id} and its event stream show it live; `heartbeat_at` moves with it.
-6. End. `done` with the duration, or `failed` with a short error (time limit, cancellation, a
+1. Claim. The sweep row (made `running` by POST /api/jobs/sweeps, the first login wizard or a
+   scheduled tick) is locked and checked: still running, never picked before (a row picked by
+   a worker that then died is failed at once instead of half run again). The user comes from
+   the row, never from the queue message. New runs use the search and skills frozen under the
+   profile row lock at creation; pre-v1 rows without `stats.search_scope` explicitly retain
+   claim-time profile reads. Without a ticked website, or with a search section that no longer
+   validates, the sweep fails with a clear message.
+2. Search. The browser hook (app/browser/sources, `Runner`) runs every ticked website through
+   the bounded interactive finder (app/browser/finder.py), one website after the other, within
+   the sweep's time limit.
+3. Store. Each batch of findings the finder verified on its detail page is stored as it is
+   reported (`Commits`, jobs J11 and J11b, below): scored against the user's skills, moved to
+   `skipped` when a never apply rule matches, counted as a duplicate when the user has it.
+4. Progress. The sweep row's `stats` is rewritten as the run goes, so GET /api/jobs/sweeps/{id}
+   and its event stream show it live; `heartbeat_at` moves with it.
+5. End. `done` with the duration, or `failed` with a short error (time limit, cancellation, a
    bug); the row is never left running by a sweep that returns.
 
-After the boards, the `feeds` hook reads the person's freelance and project feeds (opportunities
-O7, app/opportunities/sources), then the `browser` hook their browser sources (browser B8). Both
-store through `store_postings`; a feed's postings also count as duplicates of a posting with the
-same company and title (`loose`), whatever their locations say, so a mission on a board and on
-Remote OK is one row naming both sources; never when the company is UNNAMED_CLIENT, the
-placeholder of a client a feed does not name, which only its address makes a duplicate. A
-posting may state its contract (`contract_type`, a feed's freelance mission); else the title,
-location and URL say it, as before.
+Company boards (Ashby, Greenhouse, Lever), freelance feeds and the fixed browser readers were
+deleted (owner, 2026-10-28: "Delete it"). Their saved settings are dropped from the profile on
+the next read or save (app/profile/schemas.py). A sweep row they wrote keeps its stats as
+stored (`boards_*`, the feed and reader entries of `sources`), and the history reads them; new
+rows still write `boards_total` and the other board counters, at zero, so the release before
+this one reads every row.
 
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
@@ -55,9 +33,10 @@ security, pentest, threat (Harald, 2026-10-06)" has the terms cyber, security, p
 They use apply's shared matcher (`jobs.never_apply`) on the company and title: case, accents,
 compatibility forms, hidden characters and lookalike letters are folded, and terms match whole
 words, optional plurals and the start or end of a glued word. A rule without a colon has no
-terms and matches nothing.
+terms and matches nothing. The app's own rule against cybersecurity (`never_apply.CYBER_RULE`,
+CLAUDE.md rule 2) is always added.
 
-Stale sweeps: a running sweep beats every HEARTBEAT_S (`heartbeat_at`), whatever its boards do.
+Stale sweeps: a running sweep beats every HEARTBEAT_S (`heartbeat_at`), whatever its websites do.
 One picked by a worker whose heartbeat is older than STALE_AFTER (the worker died), or one never
 picked within NOT_PICKED_AFTER of its start (the worker is down, or the message was lost), is
 failed by `reap_stale`: the worker runs it every minute and at start, the api before it starts a
@@ -93,7 +72,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
 from app.identity.models import User
-from app.jobs import ats, schedule, scoring, service
+from app.jobs import schedule, scoring, service
 from app.jobs import slug as slugs
 from app.jobs.importer import kind
 from app.jobs.models import (
@@ -106,23 +85,15 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
 )
-from app.jobs.never_apply import NeverApplyRule
+from app.jobs.never_apply import CYBER_RULE, NeverApplyRule
 from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
-from app.profile.schemas import (
-    Board,
-    BrowserSource,
-    Feed,
-    SearchSection,
-    SkillsSection,
-    SweepSchedule,
-)
+from app.profile.schemas import SearchSection, SkillsSection, SweepSchedule
 
 logger = logging.getLogger("app.sweep")
 
 SWEEP_TZ = ZoneInfo("Europe/Paris")
-CONCURRENCY = 4
 HEARTBEAT_S = 15.0
 STALE_AFTER = timedelta(minutes=2)
 NOT_PICKED_AFTER = timedelta(minutes=20)
@@ -131,23 +102,11 @@ DESCRIPTION_CHARS = 300  # engine: description=text[:300]
 POSTING_TEXT_MAX = 200_000
 NEW_JOBS_LISTED = 200
 
-ERROR_MESSAGES = {
-    "not_found": "board not found",
-    "blocked": "the ATS refused this server",
-    "rate_limited": "rate limited by the ATS",
-    "upstream_error": "the ATS answered with an error",
-    "timeout": "no answer in time",
-    "network": "could not connect",
-    "too_large": "the board is too large",
-    "invalid_response": "unexpected answer from the ATS",
-    "store_failed": "its postings could not be saved",
-}
 CRASHED = "The worker stopped during this sweep. Start it again."
 NOT_PICKED = "The worker did not pick up this sweep. Start it again."
 TIMED_OUT = "The sweep took too long and was stopped."
 INTERRUPTED = "The sweep was interrupted (the worker restarted). Start it again."
 INTERNAL = "The sweep failed because of an internal error."
-NO_BOARDS = "No board is enabled in the search section of your profile."
 NO_WEBSITES = "Tick at least one job website in Find jobs, then start the search again."
 SEARCH_INVALID = (
     "The search section of your profile no longer passes the checks. "
@@ -163,93 +122,38 @@ def never_apply_rules(search: SearchSection) -> list[NeverApplyRule]:
     return [NeverApplyRule.parse(text) for text in search.never_apply]
 
 
-Matcher = re.Pattern[str]
+def check_terms(search: SearchSection) -> None:
+    """Raise re.error when a stored term list no longer compiles.
 
-
-def term_matcher(terms: Sequence[str], advanced_regex: bool) -> Matcher | None:
-    """The matcher of a stored term list, None for an empty one (no restriction).
-
-    There is no fallback for a list that does not compile: the profile refuses such lists
-    (schemas.check_joined compiles them exactly as matching.compile_terms does), and the claim
-    validates the whole section before it builds the filter, so a sweep never sees one. Should
-    one get through anyway (a regex engine that changed between the save and the sweep), re.error
-    reaches `claim`, which fails the sweep with SEARCH_INVALID: an exclude list is never weakened
-    by dropping its broken terms, and nothing is kept that the user asked to leave out."""
-    return matching.compile_terms(list(terms), advanced_regex)
+    The profile refuses such lists (schemas.check_joined compiles them exactly as
+    matching.compile_terms does), so a sweep never sees one. Should one get through anyway (a
+    regex engine that changed between the save and the sweep), `claim` fails the sweep with
+    SEARCH_INVALID rather than search with a weakened exclude list."""
+    for terms in (
+        search.title_include,
+        search.title_exclude,
+        search.location,
+        search.location_exclude,
+    ):
+        matching.compile_terms(list(terms.terms), terms.advanced_regex)
 
 
 @dataclass(frozen=True)
-class SearchFilter:
-    """The keep decision of step 3 for one user's search section."""
+class Posting:
+    """One posting a job website showed, as a new job row takes it."""
 
-    include: Matcher | None
-    exclude: Matcher | None
-    location: Matcher | None
-    location_exclude: Matcher | None  # the unwanted places
-    contract_types: frozenset[str]
-    days: int
+    title: str
+    location: str
+    url: str
+    published: str  # YYYY-MM-DD, "" when the page states no date
+    text: str
 
-    @classmethod
-    def of(cls, search: SearchSection) -> "SearchFilter":
-        def compile_list(terms: Any) -> Matcher | None:
-            return term_matcher(terms.terms, terms.advanced_regex)
 
-        return cls(
-            include=compile_list(search.title_include),
-            exclude=compile_list(search.title_exclude),
-            location=compile_list(search.location),
-            location_exclude=compile_list(search.location_exclude),
-            contract_types=frozenset(search.contract_types),
-            days=search.days,
-        )
-
-    @staticmethod
-    def board_exclude(board: Board) -> Matcher | None:
-        extra = board.extra_exclude
-        return term_matcher(extra.terms, extra.advanced_regex)
-
-    def since(self, today: date) -> str:
-        return (today - timedelta(days=self.days)).isoformat()
-
-    def terms_reason(
-        self, title: str, location: str, published: str, board_exclude: Matcher | None,
-        since: str,
-    ) -> str | None:  # fmt: skip
-        """Why the engine's filter leaves this posting out, or None when it keeps it."""
-        if self.include is not None and not self.include.search(title):
-            return "title"
-        if self.exclude is not None and self.exclude.search(title):
-            return "excluded"
-        if board_exclude is not None and board_exclude.search(title):
-            return "board_excluded"
-        if self.location is not None and not self.location.search(location):
-            return "location"
-        if self.location_exclude is not None and self.location_exclude.search(location):
-            return "location_excluded"
-        if not published >= since:
-            return "too_old"
+def published_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
         return None
-
-    def reason(self, posting: ats.Posting, board_exclude: Matcher | None, since: str) -> str | None:
-        found = self.terms_reason(
-            posting.title, posting.location, posting.published, board_exclude, since
-        )
-        if (
-            found is None
-            and self.contract_types
-            and contract_of(posting).value not in self.contract_types
-        ):
-            return "contract"
-        return found
-
-
-def contract_of(posting: ats.Posting) -> ContractType:
-    """The contract a source states (a feed's freelance mission, opportunities O7), else the one
-    the title, location and URL say (the engine's `kind`)."""
-    if posting.contract_type is not None:
-        with contextlib.suppress(ValueError):
-            return ContractType(posting.contract_type)
-    return kind(posting.title, posting.location, posting.url)
 
 
 # --- what a sweep reads -------------------------------------------------------------------------
@@ -282,48 +186,13 @@ def user_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
         return None
 
 
-def enabled_boards(search: SearchSection | None) -> list[Board]:
-    return [board for board in search.boards if board.enabled] if search else []
-
-
-def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
-    """Enabled legacy browser sources, excluding permission-only rows, of a kind read, once."""
-    found: dict[tuple[str, str, str], BrowserSource] = {}
-    for source in search.browser_sources if search else []:
-        # LinkedIn (browser B10) only once its sentence was accepted; its guard decides the rest.
-        accepted = source.kind != "linkedin" or source.accepted_at is not None
-        if (
-            source.enabled
-            and not source.interactive_only
-            and accepted
-            and source.kind in ("google_careers", "vie", "site", "linkedin")
-        ):
-            found.setdefault((source.kind, source.query, source.location or ""), source)
-    return list(found.values())
-
-
-def enabled_feeds(search: SearchSection | None) -> list[Feed]:
-    """The freelance and project feeds a sweep reads (opportunities O7): enabled, one per kind
-    (the profile refuses two)."""
-    return [feed for feed in search.feeds if feed.enabled] if search else []
-
-
 def has_websites(search: SearchSection | None) -> bool:
     return bool(search and any(site.enabled for site in search.interactive_sites))
 
 
-def has_sources(search: SearchSection | None, websites_only: bool = True) -> bool:
-    """Whether a sweep of `search` has something to read: an enabled website (every search
-    since the owner's decision of 2026-10-28), or with `websites_only=False` (the board engine's
-    internal start) any enabled source."""
-    if websites_only:
-        return has_websites(search)
-    return bool(
-        enabled_boards(search)
-        or enabled_sources(search)
-        or enabled_feeds(search)
-        or has_websites(search)
-    )
+def has_sources(search: SearchSection | None) -> bool:
+    """Whether a sweep of `search` has something to read: an enabled website."""
+    return has_websites(search)
 
 
 def _source_id(mode: str, *key: str) -> str:
@@ -331,15 +200,13 @@ def _source_id(mode: str, *key: str) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
-def freeze_scope(
-    profile: Profile | None, trigger: SweepTrigger, now: datetime, websites_only: bool = True
-) -> dict[str, Any]:
+def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) -> dict[str, Any]:
     """Private v1 intent, captured under the profile lock before the queue can see the run.
 
     Permissions are not frozen authority. Browser guards still read current server state.
     Old rows without search_scope retain the explicit claim-time legacy path below.
-    `websites_only` (every start since 2026-10-28) leaves the boards, feeds and fixed readers
-    out of the sources; their saved settings stay in the frozen search.
+    `websites_only` is always true: the release before the deletion of the boards (owner,
+    2026-10-28) reads it, and a row it claims after a rollback then reads no board either.
     """
     sections = copy.deepcopy(profile.sections or {}) if profile else {}
     raw = sections.get("search")
@@ -350,30 +217,6 @@ def freeze_scope(
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
-    if search is not None and not websites_only:
-        sources.extend(
-            {
-                "source_id": _source_id("api", board.ats, board.org),
-                "mode": "api",
-                "kind": board.ats,
-                "query": board.org,
-            }
-            for board in enabled_boards(search)
-        )
-        sources.extend(
-            {"source_id": _source_id("feed", feed.kind), "mode": "feed", "kind": feed.kind}
-            for feed in enabled_feeds(search)
-        )
-        sources.extend(
-            {
-                "source_id": _source_id("legacy_browser", s.kind, s.query, s.location or ""),
-                "mode": "legacy_finder" if s.kind == "site" else "fixed_reader",
-                "kind": s.kind,
-                "query": s.query,
-                "location": s.location,
-            }
-            for s in enabled_sources(search)
-        )
     if search is not None:
         sources.extend(
             {
@@ -390,7 +233,7 @@ def freeze_scope(
         "profile_revision": profile.revision if profile else 0,
         "created_at": now.isoformat(),
         "trigger": trigger.value,
-        "websites_only": websites_only,
+        "websites_only": True,
         "search": raw,
         "skills": sections.get("skills"),
         "sources": sources,
@@ -419,6 +262,8 @@ def initial_sources(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 @dataclass
 class Stats:
+    # The board counters stay, at zero: the release before the deletion of the boards (owner,
+    # 2026-10-28) and the history read them on every row.
     boards_total: int = 0
     boards_done: int = 0
     boards_ok: int = 0
@@ -472,30 +317,16 @@ def finish_source(entry: dict[str, Any]) -> None:
 
 # --- duplicates ---------------------------------------------------------------------------------
 
-# The company a feed gives a client it does not name (opportunities O7, a one part Hacker News
-# "SEEKING FREELANCER" post). Two such postings are two clients even with the same title and
-# location, so neither the company, title and location rule nor the loose rule (company and
-# title) matches on it: only its address makes one a duplicate.
-UNNAMED_CLIENT = "Client on Hacker News"
 # The company of a posting a job website showed without naming its employer (jobs J11): stated
-# as unknown, never the website's name, and like an unnamed client only its address makes it a
-# duplicate (two such postings with the same title are two employers).
+# as unknown, never the website's name, and only its address makes it a duplicate (two such
+# postings with the same title are two employers).
 UNKNOWN_EMPLOYER = "Employer not stated"
-_UNNAMED_KEYS = frozenset(
-    slugs.PostingKey.of(name, "", "", None).identity[0]
-    for name in (UNNAMED_CLIENT, UNKNOWN_EMPLOYER)
-)
+_UNNAMED_KEY = slugs.PostingKey.of(UNKNOWN_EMPLOYER, "", "", None).identity[0]
 
 
 def _identity(key: slugs.PostingKey) -> tuple[str, str, str] | None:
-    """The company, title and location rule's key, None for an unnamed client or employer."""
-    return None if key.identity[0] in _UNNAMED_KEYS else key.identity
-
-
-def _pair(key: slugs.PostingKey) -> tuple[str, str] | None:
-    """The company and title of the loose rule, None for an unnamed client."""
-    identity = _identity(key)
-    return None if identity is None else (identity[0], identity[1])
+    """The company, title and location rule's key, None for an unknown employer."""
+    return None if key.identity[0] == _UNNAMED_KEY else key.identity
 
 
 class Known:
@@ -510,9 +341,6 @@ class Known:
         # sources is one row naming both). Filled by the constructor and `add`.
         self.jobs: dict[str | tuple[str, str, str], uuid.UUID] = {}
         self.sources: dict[uuid.UUID, str] = {}
-        # Company and title alone (opportunities O7): a feed's posting is the same posting as a
-        # board's or another feed's with that company and title, whatever its location says.
-        self.pairs: dict[tuple[str, str], uuid.UUID | None] = {}
         rows = db.execute(
             sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source)
             .where(Job.user_id == user_id)
@@ -533,9 +361,6 @@ class Known:
         identity = _identity(key)
         if identity is not None:
             self.identities.add(identity)
-        pair = _pair(key)
-        if pair is not None and self.pairs.get(pair) is None:
-            self.pairs[pair] = job_id
         if slug:
             self.slugs.add(slug)
         if job_id is not None:
@@ -550,19 +375,15 @@ class Known:
         other = Known.__new__(Known)
         other.urls, other.identities = set(self.urls), set(self.identities)
         other.slugs, other.jobs = set(self.slugs), dict(self.jobs)
-        other.sources, other.pairs = dict(self.sources), dict(self.pairs)
+        other.sources = dict(self.sources)
         return other
 
-    def job_of(self, key: slugs.PostingKey, loose: bool = False) -> uuid.UUID | None:
-        """The job a duplicate is: by URL first, else by identity, else (`loose`) by company and
-        title."""
+    def job_of(self, key: slugs.PostingKey) -> uuid.UUID | None:
+        """The job a duplicate is: by URL first, else by identity."""
         found = self.jobs.get(key.url) if key.url is not None else None
         identity = _identity(key)
         if found is None and identity is not None:
             found = self.jobs.get(identity)
-        pair = _pair(key)
-        if found is None and loose and pair is not None:
-            found = self.pairs.get(pair)
         return found
 
     def note(self, job_id: uuid.UUID, source: str) -> str | None:
@@ -576,12 +397,8 @@ class Known:
         self.sources[job_id] = joined
         return joined
 
-    def has(self, key: slugs.PostingKey, loose: bool = False) -> bool:
-        return (
-            (key.url is not None and key.url in self.urls)
-            or _identity(key) in self.identities
-            or (loose and _pair(key) in self.pairs)
-        )
+    def has(self, key: slugs.PostingKey) -> bool:
+        return (key.url is not None and key.url in self.urls) or _identity(key) in self.identities
 
 
 # A job's `source` names every source that found it, the first one first, joined by SOURCES_SEP
@@ -595,7 +412,7 @@ def noted_sources(source: str | None) -> list[str]:
     return [name for name in (source or "").split(SOURCES_SEP) if name]
 
 
-# --- one board ----------------------------------------------------------------------------------
+# --- one new job ---------------------------------------------------------------------------------
 
 
 @dataclass
@@ -604,107 +421,14 @@ class Plan:
 
     sweep_id: uuid.UUID
     user_id: uuid.UUID
-    boards: list[Board]
-    filter: SearchFilter
     rules: list[NeverApplyRule]
     skills: SkillsSection | None
     known: Known
     schedule_slot: str | None = None
-    sources: list[BrowserSource] = field(default_factory=list)
     search: SearchSection | None = None  # for the score's bonus (scoring.bonus)
-    feeds: list[Feed] = field(default_factory=list)  # opportunities O7
     search_scope: dict[str, Any] | None = None
     # The run's commits of verified findings (jobs J11b), set by run_sweep.
     commits: "Commits | None" = None
-
-
-INSERT_CHUNK = 500
-
-
-def store_board(
-    db: Session,
-    plan: Plan,
-    board: Board,
-    result: ats.BoardResult,
-    stats: Stats,
-    now: datetime,
-) -> None:
-    """Keep, dedupe, score, rule-check and insert one board's postings; the caller commits.
-
-    New jobs go in with INSERT ... ON CONFLICT DO NOTHING, INSERT_CHUNK at a time: a posting
-    the database already holds (added meanwhile by another request, caught by the unique slug or
-    URL index) is not inserted and counts as a duplicate. Their events follow in one batch."""
-    stats.invalid += result.invalid
-    store_postings(
-        db,
-        plan,
-        f"{board.ats}:{board.org}",
-        [(board.company, posting) for posting in result.postings],
-        SearchFilter.board_exclude(board),
-        stats,
-        now,
-    )
-
-
-def store_postings(
-    db: Session,
-    plan: Plan,
-    source: str,
-    postings: Sequence[tuple[str, ats.Posting]],
-    board_exclude: Matcher | None,
-    stats: Stats,
-    now: datetime,
-    loose: bool = False,
-) -> None:
-    """store_board's steps for (company, posting) pairs of one source: a board, or a browser
-    source (browser B8), whose postings each name their company. `loose`: a feed's postings
-    (opportunities O7) are also duplicates of a posting with the same company and title."""
-    since = plan.filter.since(now.astimezone(SWEEP_TZ).date())
-    pending: list[_NewJob] = []
-    noted: dict[uuid.UUID, str] = {}
-    for company, posting in postings:
-        stats.seen += 1
-        if plan.filter.reason(posting, board_exclude, since) is not None:
-            continue
-        stats.matched += 1
-        key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
-        if plan.known.has(key, loose):
-            stats.duplicates += 1
-            job_id = plan.known.job_of(key, loose)
-            joined = plan.known.note(job_id, source) if job_id is not None else None
-            if joined is not None:
-                noted[job_id] = joined
-            continue
-        new = _new_job(plan, company, posting, source, now)
-        plan.known.add(key, new.row["slug"], new.row["id"], source)
-        pending.append(new)
-    for job_id, joined in noted.items():
-        db.execute(
-            sa.update(Job)
-            .where(Job.id == job_id, Job.user_id == plan.user_id)
-            # Noting a source is not an edit: `updated_at` (PATCH's version) stays, so an edit the
-            # person has in flight is not refused as stale.
-            .values(source=joined, updated_at=Job.updated_at)
-        )
-    for first in range(0, len(pending), INSERT_CHUNK):
-        chunk = pending[first : first + INSERT_CHUNK]
-        inserted = set(
-            db.execute(
-                pg_insert(Job)
-                .values([new.row for new in chunk])
-                .on_conflict_do_nothing()
-                .returning(Job.id)
-            ).scalars()
-        )
-        events = [event for new in chunk if new.row["id"] in inserted for event in new.events]
-        if events:
-            db.execute(sa.insert(JobEvent), events)
-        for new in chunk:
-            if new.row["id"] in inserted:
-                stats.new += 1
-                stats.skipped_by_rule += new.rule is not None
-            else:
-                stats.duplicates += 1
 
 
 @dataclass
@@ -714,7 +438,7 @@ class _NewJob:
     rule: NeverApplyRule | None
 
 
-def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: datetime) -> _NewJob:
+def _new_job(plan: Plan, company: str, posting: Posting, source: str, now: datetime) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
     then the ones service.apply_score, set_status and set_notes would have written."""
     text = posting.text[:POSTING_TEXT_MAX]
@@ -726,11 +450,11 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
     )
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
-    contract = contract_of(posting)
-    # Pay and work mode (opportunities O3): what the ATS states, else what the text and the
-    # location state in an accepted shape, else nothing.
-    pay = posting.pay or pays.pay_of(text, freelance=contract is ContractType.Freelance)
-    work_mode = posting.work_mode or pays.work_mode_of(posting.location)
+    contract = kind(posting.title, posting.location, posting.url)
+    # Pay and work mode (opportunities O3): what the text and the location state in an accepted
+    # shape, else nothing.
+    pay = pays.pay_of(text, freelance=contract is ContractType.Freelance)
+    work_mode = pays.work_mode_of(posting.location)
     row = {
         "id": job_id,
         "user_id": plan.user_id,
@@ -748,7 +472,7 @@ def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: d
         "gaps": list(score.gaps) if score is not None else [],
         "description": text[:DESCRIPTION_CHARS] or None,
         "posting_text": text or None,
-        "published_on": ats.published_date(posting.published),
+        "published_on": published_date(posting.published),
         "pay_min": pay.min if pay else None,
         "pay_max": pay.max if pay else None,
         "pay_currency": pay.currency if pay else None,
@@ -857,7 +581,7 @@ def fail_sweep(
 
 def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -> Plan | None:
     """Lock the sweep and turn it into a Plan, or None when there is nothing to run (gone, not
-    running, picked before by a worker that died, or no enabled board: failed then)."""
+    running, picked before by a worker that died, or no ticked website: failed then)."""
     with sessions() as db:
         sweep = db.get(Sweep, sweep_id, with_for_update=True)
         if sweep is None or sweep.status is not SweepStatus.running:
@@ -879,25 +603,19 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
                     if scope["search"] is not None
                     else None
                 )
-            search_filter = SearchFilter.of(search) if search is not None else None
-            error = NO_BOARDS
+            if search is not None:
+                check_terms(search)
+            error = NO_WEBSITES
         except (ValueError, KeyError, re.error):
-            search, search_filter, error = None, None, SEARCH_INVALID
-        websites_only = isinstance(scope, dict) and scope.get("websites_only") is True
-        boards = [] if websites_only else enabled_boards(search)
-        sources = [] if websites_only else enabled_sources(search)
-        feeds = [] if websites_only else enabled_feeds(search)
-        if websites_only:
-            error = NO_WEBSITES if error == NO_BOARDS else error
+            search, error = None, SEARCH_INVALID
         slot = sweep.stats.get("schedule_slot")
         stats = Stats(
-            boards_total=len(boards),
             picked_at=now.isoformat(),
             heartbeat_at=now.isoformat(),
             schedule_slot=slot if isinstance(slot, str) else None,
         )
         sweep.stats = _stats_json(sweep, stats)
-        if search is None or search_filter is None or not has_sources(search, websites_only):
+        if search is None or not has_sources(search):
             if error == SEARCH_INVALID:
                 logger.warning(
                     "sweep failed: the stored search section does not validate",
@@ -913,15 +631,11 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
         plan = Plan(
             sweep_id=sweep.id,
             user_id=sweep.user_id,
-            boards=boards,
-            filter=search_filter,
             rules=never_apply_rules(search),
             skills=skills,
             known=Known(db, sweep.user_id),
             schedule_slot=stats.schedule_slot,
-            sources=sources,
             search=search,
-            feeds=feeds,
             search_scope=copy.deepcopy(scope),
         )
         db.commit()
@@ -958,35 +672,27 @@ def finish_done(
 
 
 Clock = Callable[[], datetime]
-# The browser sources' run (app/browser/sources, `run_sources`): given the plan, the stats, the
-# store of one source's postings and the progress save, after the boards and within the
-# sweep's time limit, whose monotonic deadline it is given last.
-StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
-BrowserHook = Callable[
-    [Plan, Stats, StoreFound, Callable[[], Awaitable[None]], float], Awaitable[None]
-]
+# The job websites' run (app/browser/sources, `Runner`): given the plan, the stats, the progress
+# save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`.
+BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
 
 
 async def run_sweep(
     sessions: sessionmaker[Session],
     sweep_id: uuid.UUID,
-    client: ats.AtsClient,
     clock: Clock,
     *,
-    concurrency: int = CONCURRENCY,
     timeout_s: float = SWEEP_TIMEOUT_S,
     heartbeat_s: float = HEARTBEAT_S,
     browser: BrowserHook | None = None,
-    feeds: BrowserHook | None = None,
 ) -> None:
-    """Run one sweep to its end (module docstring). Never raises for a board's failure; any other
-    error fails the sweep and is re-raised only for cancellation."""
+    """Run one sweep to its end (module docstring). Never raises for a website's failure; any
+    other error fails the sweep and is re-raised only for cancellation."""
     plan = await asyncio.to_thread(claim, sessions, sweep_id, clock())
     if plan is None:
         return
     started = time.monotonic()
     stats = Stats(
-        boards_total=len(plan.boards),
         picked_at=clock().isoformat(),
         schedule_slot=plan.schedule_slot,
         sources=initial_sources(plan.search_scope),
@@ -1000,111 +706,18 @@ async def run_sweep(
 
     try:
         async with asyncio.timeout(timeout_s):
-            # One slot per board in memory (module docstring, step 2): taken before the fetch,
-            # given back by the loop below once the board is stored. The queue never holds more
-            # than `concurrency` boards, and a fetched board never waits holding a second copy.
-            slots = asyncio.Semaphore(concurrency)
-            done: asyncio.Queue[tuple[Board, ats.BoardResult | ats.BoardError]] = asyncio.Queue()
-
-            async def fetch(board: Board) -> None:
-                await slots.acquire()
-                try:
-                    stats.current_board = board.company
-                    if plan.search_scope is not None:
-                        bind_source(stats, "api", (board.ats, board.org), {"kind": board.ats})
-                    await progress()
-                    try:
-                        outcome: ats.BoardResult | ats.BoardError = await client.fetch_board(
-                            board.ats, board.org
-                        )
-                    except ats.BoardError as exc:
-                        outcome = exc
-                except BaseException:
-                    slots.release()
-                    raise
-                done.put_nowait((board, outcome))
 
             async def beat() -> None:
                 while True:
                     await asyncio.sleep(heartbeat_s)
                     await progress()
 
-            tasks = [asyncio.create_task(fetch(board)) for board in plan.boards]
-            tasks.append(asyncio.create_task(beat()))
+            beating = asyncio.create_task(beat())
             try:
-                for _ in plan.boards:
-                    board, outcome = await done.get()
-                    entry = next(
-                        (
-                            s
-                            for s in stats.sources
-                            if s.get("source_id") == _source_id("api", board.ats, board.org)
-                        ),
-                        None,
-                    )
-                    before = stats.new, stats.skipped_by_rule
-                    if isinstance(outcome, ats.BoardError):
-                        stats.boards_failed.append(_failure(board, outcome.code))
-                    else:
-                        try:
-                            await asyncio.to_thread(
-                                _store, sessions, plan, board, outcome, stats, clock()
-                            )
-                            stats.boards_ok += 1
-                        except Exception:
-                            logger.exception(
-                                "storing a board failed",
-                                extra={"sweep_id": str(sweep_id), "board": board.org},
-                            )
-                            stats.boards_failed.append(_failure(board, "store_failed"))
-                    if entry is not None:
-                        entry.update(
-                            found=len(outcome.postings)
-                            if isinstance(outcome, ats.BoardResult)
-                            else 0,
-                            postings=stats.new - before[0],
-                            skipped_by_rule=stats.skipped_by_rule - before[1],
-                            error=next(
-                                (
-                                    failure["error"]
-                                    for failure in stats.boards_failed
-                                    if failure["ats"] == board.ats and failure["org"] == board.org
-                                ),
-                                None,
-                            ),
-                        )
-                        finish_source(entry)
-                    stats.boards_done += 1
-                    del outcome
-                    slots.release()
-                    await progress()
-                if plan.feeds and feeds is not None:
-                    # Opportunities O7: the person's freelance and project feeds, after the
-                    # boards (app/opportunities/sources).
-
-                    async def store_feed(
-                        source: str, found: Sequence[tuple[str, ats.Posting]]
-                    ) -> None:
-                        await asyncio.to_thread(
-                            _store_found, sessions, plan, source, found, stats, clock(), True
-                        )
-
-                    await feeds(plan, stats, store_feed, progress, started + timeout_s)
-                interactive = plan.search and any(s.enabled for s in plan.search.interactive_sites)
-                if (plan.sources or interactive) and browser is not None:
-                    # Browser B8: the person's browser sources, after the boards.
-
-                    async def store_found(
-                        source: str, found: Sequence[tuple[str, ats.Posting]]
-                    ) -> None:
-                        await asyncio.to_thread(
-                            _store_found, sessions, plan, source, found, stats, clock()
-                        )
-
-                    await browser(plan, stats, store_found, progress, started + timeout_s)
+                if browser is not None:
+                    await browser(plan, stats, progress, started + timeout_s)
             finally:
-                for task in tasks:
-                    task.cancel()
+                beating.cancel()
         stats.duration = round(time.monotonic() - started, 2)
         if await _settled(commits, sweep_id):
             await asyncio.to_thread(finish_done, sessions, sweep_id, stats, clock())
@@ -1151,8 +764,7 @@ async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
 
 def _summary(stats: Stats) -> dict[str, Any]:
     return {
-        "boards_ok": stats.boards_ok,
-        "boards_failed": len(stats.boards_failed),
+        "websites": sum(1 for source in stats.sources if source.get("host")),
         "seen": stats.seen,
         "matched": stats.matched,
         "new": stats.new,
@@ -1161,80 +773,13 @@ def _summary(stats: Stats) -> dict[str, Any]:
     }
 
 
-def _failure(board: Board, code: str) -> dict[str, str]:
-    return {
-        "company": board.company,
-        "ats": board.ats,
-        "org": board.org,
-        "error": code,
-        "message": ERROR_MESSAGES.get(code, code),
-    }
-
-
-COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule", "invalid")
-
-
-def _store(
-    sessions: sessionmaker[Session],
-    plan: Plan,
-    board: Board,
-    result: ats.BoardResult,
-    stats: Stats,
-    now: datetime,
-) -> None:
-    """One board in one transaction. When it fails nothing of the board is kept, and the
-    counters and the duplicate keys are put back, so the stats count only what was stored."""
-    counters = {name: getattr(stats, name) for name in COUNTERS}
-    known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
-    noted = (dict(plan.known.jobs), dict(plan.known.sources), dict(plan.known.pairs))
-    try:
-        with sessions() as db:
-            store_board(db, plan, board, result, stats, now)
-            db.commit()
-    except Exception:
-        for name, value in counters.items():
-            setattr(stats, name, value)
-        plan.known.urls, plan.known.identities, plan.known.slugs = known
-        plan.known.jobs, plan.known.sources, plan.known.pairs = noted
-        raise
-
-
-def _store_found(
-    sessions: sessionmaker[Session],
-    plan: Plan,
-    source: str,
-    found: Sequence[tuple[str, ats.Posting]],
-    stats: Stats,
-    now: datetime,
-    loose: bool = False,
-) -> None:
-    """One browser source's postings in one transaction, put back as `_store` does. A posting
-    the site gives no date counts as published the day it was found (Google Careers shows none).
-    `loose` for a feed's postings (store_postings)."""
-    today = now.astimezone(SWEEP_TZ).date().isoformat()
-    found = [(company, replace(p, published=p.published or today)) for company, p in found]
-    counters = {name: getattr(stats, name) for name in COUNTERS}
-    known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
-    noted = (dict(plan.known.jobs), dict(plan.known.sources), dict(plan.known.pairs))
-    try:
-        with sessions() as db:
-            store_postings(db, plan, source, found, None, stats, now, loose)
-            db.commit()
-    except Exception:
-        for name, value in counters.items():
-            setattr(stats, name, value)
-        plan.known.urls, plan.known.identities, plan.known.slugs = known
-        plan.known.jobs, plan.known.sources, plan.known.pairs = noted
-        raise
-
-
 # --- verified findings of the job websites (jobs J11 and J11b) ----------------------------------
 #
 # The interactive finder (app/browser/finder.py) reports postings it verified on their detail
 # page in batches (finder.VerifiedBatch). Each batch is stored before the finder is told it was
 # kept, in ONE transaction that also writes its counters into the locked sweep row, so the
 # row's counts are those of the jobs stored, whatever happens to the worker next:
-# - the job: the same row as a board's (`_new_job`: scored, status `found`, or `skipped` with the
+# - the job: `_new_job`: scored, status `found`, or `skipped` with the
 #   rule as its note when a never apply rule of the person or the app's own rule against
 #   cybersecurity matches), the website's host as its source, the text code read on the detail
 #   page, the employer and the published date only when the page states them (UNKNOWN_EMPLOYER
@@ -1242,10 +787,9 @@ def _store_found(
 # - what was observed: in the `sweep` event's `discovery` (the source, when the detail page was
 #   read, the lines of the page that state the title, employer, date and location, and which of
 #   those were unknown); never a page snapshot, the model's words, criteria or instructions;
-# - duplicates: same address, or same employer, title and location (never the loose rule of the
-#   feeds), against the person's list and this sweep's earlier postings. A row another request
-#   stored meanwhile (the insert's conflict) is looked up, the person's own rows only, and is
-#   the duplicate this posting is;
+# - duplicates: same address, or same employer, title and location, against the person's list
+#   and this sweep's earlier postings. A row another request stored meanwhile (the insert's
+#   conflict) is looked up, the person's own rows only, and is the duplicate this posting is;
 # - the search's include, exclude, location and days filters are not applied again: the
 #   criteria guided the browsing, and an unknown date or location is not a mismatch.
 #
@@ -1296,8 +840,6 @@ def commit_verified(
     """Store one verified batch (above) with `known`, a copy of the plan's, and `snapshot`, a
     copy of the run's stats, both updated in place. Returns the counters the batch added, or
     None when the row is not this run's any more: then nothing is written."""
-    from app.opportunities.starter import CYBER_RULE
-
     staged = replace(plan, known=known, rules=[*plan.rules, CYBER_RULE])
     delta = Stats()
     with sessions() as db:
@@ -1340,10 +882,9 @@ def _store_finding(
     now: datetime,
 ) -> None:  # fmt: skip
     company = finding.company or UNKNOWN_EMPLOYER
-    posting = ats.Posting(
-        finding.title, finding.location, finding.url, finding.published_on or "", finding.text,
-        False,
-    )  # fmt: skip
+    posting = Posting(
+        finding.title, finding.location, finding.url, finding.published_on or "", finding.text
+    )
     delta.seen += 1
     delta.matched += 1
     key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
@@ -1582,12 +1123,12 @@ def scheduled_due(
     db: Session, now: datetime, window: timedelta = schedule.WINDOW
 ) -> list[DueSweep]:
     """Every (user, slot) the tick at `now` must start (module docstring), oldest slot first:
-    active users whose schedule is enabled, with an enabled board, for slots in the window
+    active users whose schedule is enabled, with a ticked website, for slots in the window
     that have no sweep yet. A disabled schedule, a section that does not validate, an inactive
-    user or a user without boards never appears; a section that does not validate while its
-    stored schedule is on is logged (the user id, never the contents) at most once per user per
-    INVALID_LOG_EVERY in this process, since the user expects sweeps that cannot run until the
-    Search tab is saved again."""
+    user or a user without a ticked website never appears; a section that does not validate
+    while its stored schedule is on is logged (the user id, never the contents) at most once
+    per user per INVALID_LOG_EVERY in this process, since the user expects sweeps that cannot
+    run until the Search tab is saved again."""
     rows = db.execute(
         sa.select(Profile.user_id, Profile.sections)
         .join(User, User.id == Profile.user_id)
@@ -1646,7 +1187,6 @@ def start(
     user_id: uuid.UUID,
     trigger: SweepTrigger,
     now: datetime,
-    websites_only: bool = True,
 ) -> Sweep:
     """A new running sweep for the user, after failing a stale one of theirs. Raises
     service.SweepRunningError when one is running; the caller commits."""
@@ -1655,7 +1195,7 @@ def start(
     ).scalar_one_or_none()
     reap_stale(db, now, user_id)
     row = service.start_sweep(db, user_id, trigger, now)
-    scope = freeze_scope(profile, trigger, now, websites_only)
+    scope = freeze_scope(profile, trigger, now)
     row.stats = {**row.stats, "search_scope": scope, "sources": initial_sources(scope)}
     db.flush()
     return row
@@ -1664,7 +1204,6 @@ def start(
 BeginOutcome = Literal[
     "started",
     "running",
-    "no_boards",
     "no_websites",
     "search_invalid",
     "queue_down",
@@ -1689,7 +1228,6 @@ def _insert[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
-    websites_only: bool = True,
 ) -> Begun[T]:
     with sessions() as db:
         profile = db.execute(
@@ -1703,17 +1241,17 @@ def _insert[T](
             search = load_search(db, user_id)
         except InvalidSearchError:
             return Begun("search_invalid")
-        if not has_sources(search, websites_only):
-            return Begun("no_websites" if websites_only else "no_boards")
+        if not has_sources(search):
+            return Begun("no_websites")
         try:
-            row = start(db, user_id, SweepTrigger.manual, now, websites_only)
+            row = start(db, user_id, SweepTrigger.manual, now)
             begun = Begun("started", row.id, view(row))
             db.commit()
         except service.SweepRunningError:
             db.rollback()
             running = service.running_sweep(db, user_id)
             if running is None:  # finished between the insert and this read
-                return _insert(sessions, user_id, now, view, profile_revision, websites_only)
+                return _insert(sessions, user_id, now, view, profile_revision)
             return Begun("running", running.id)
     return begun
 
@@ -1725,16 +1263,13 @@ async def begin[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
-    websites_only: bool = True,
 ) -> Begun[T]:
     """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
     and of the first login wizard's Start (opportunities O5). No sweep without an enabled
-    website (`no_websites`: every search runs the websites alone, owner 2026-10-28), or with a
+    website (`no_websites`), or with a
     search section that no longer validates; the running one when the user has one; a queue
     that is down fails the new sweep at once, so it never blocks the next try."""
-    begun = await asyncio.to_thread(
-        _insert, sessions, user_id, now, view, profile_revision, websites_only
-    )
+    begun = await asyncio.to_thread(_insert, sessions, user_id, now, view, profile_revision)
     if begun.outcome != "started" or begun.sweep_id is None:
         return begun
     try:

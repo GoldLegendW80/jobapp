@@ -19,7 +19,8 @@ Sources and where they go:
   matching bullet, cut into sentences where one bullet answers several fields (notice, start
   and travel) or countries, with its first letter capitalised.
 - profile/skills.json (optional): the scoring model -> skills.
-- engine/boards.json (optional): title, exclude and location regexes and the boards -> search.
+- engine/boards.json (optional): title, exclude and location regexes -> search. Its company
+  boards are not imported: the boards were deleted from the app (owner, 2026-10-28).
 - engine/photo.b64 (optional): the photo, a data URL or bare base64 of a PNG or JPEG, re-encoded
   exactly as the app stores an upload (photo.normalize: metadata stripped, at most 1024 px).
 A missing optional file gives the empty section (or no photo).
@@ -645,16 +646,6 @@ def _search(data: Any) -> dict[str, Any]:
     for name in ("min_fit", "days"):
         if isinstance(data.get(name), int):
             search[name] = data[name]
-    search["boards"] = [
-        {
-            "company": board["company"],
-            "ats": board["ats"],
-            "org": board["org"],
-            "enabled": board.get("enabled", True),
-            "extra_exclude": _term_list(board.get("exclude_re")),
-        }
-        for board in data.get("boards", [])
-    ]
     return search
 
 

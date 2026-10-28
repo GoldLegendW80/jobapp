@@ -26,7 +26,7 @@ code from the cleaned value, never typed by the model:
                 education:<school>:<year of start, or nothing>
     facts       blocks:<title>
     skills      have:<name>  adjacent:<name>  none:<name>  gates:<name>
-    search      boards:<ats>:<org>        never_apply:<hash of the text>
+    search      never_apply:<hash of the text>
     answers     work_authorization:<country>
 
 A name is folded for its key (NFKC, case fold, invisible characters removed, spaces collapsed), so
@@ -64,7 +64,7 @@ expand under NFKC, a very long address) is held as `~` and a hash, and "www.www.
   it), and words (terms, contract types, lines to leave blank) are joined to the stored ones.
 - `replace`: the key holds exactly the value afterwards: null fields clear the stored ones and
   words replace the stored ones. Settings of the stored entry that the value does not name
-  (a gate's penalty, a board's switch) are kept. On a missing key it inserts.
+  (a gate's penalty) are kept. On a missing key it inserts.
 - `remove`: nothing is at the key afterwards: the entry with that key is removed, a single
   value is cleared, a list is emptied. On a missing key it changes nothing.
 Applying an item twice gives what applying it once gives.
@@ -86,13 +86,12 @@ employer without an end (present) above every dated end, a school without an end
 start, and a school with no date at all last. Every other list appends.
 
 **Never proposable.** A setting is the user's choice about how the app behaves, not a claim a
-document supports: a gate's `penalty`, a board's `enabled` and `extra_exclude`, every
-`advanced_regex`, `search.min_fit`, `search.days`, `search.browser_sources`,
-`search.sweep_schedule`, `search.documents`, `search.feeds`, `search.interactive_sites`,
-`search.interactive_instructions`, `search.company_types` and `search.compensation` (wishes
-and pay a document does not state for the person), the whole `preferences` section (how the
-app behaves, and the wizard's dates), and the apply fields of `answers` (EEO, salary stance and
-ranges, consents, preferred name and the like). They are typed
+document supports: a gate's `penalty`, every `advanced_regex`, `search.min_fit`,
+`search.days`, `search.browser_sources`, `search.sweep_schedule`, `search.documents`,
+`search.interactive_sites`, `search.interactive_instructions`, `search.company_types` and
+`search.compensation` (wishes and pay a document does not state for the person), the whole
+`preferences` section (how the app behaves, and the wizard's dates), and the apply fields of
+`answers` (EEO, salary stance and ranges, consents, preferred name and the like). They are typed
 `setting` in `FIELD_TYPES`, and `build` refuses them for an agent whatever is cited.
 `search.seniority` (a CV shows the levels held) and `search.industries` (a CV names the sectors
 worked in) may be proposed. The photo is not a section and has no key. `skills.years_experience` is
@@ -324,11 +323,6 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.remote_stance": _T.ENUM,
         "search.min_fit": _T.SETTING,
         "search.days": _T.SETTING,
-        "search.boards[].company": _T.NAME,
-        "search.boards[].ats": _T.ENUM,
-        "search.boards[].org": _T.NAME,
-        "search.boards[].enabled": _T.SETTING,
-        **_terms("search.boards[].extra_exclude", _T.SETTING),
         "search.never_apply[]": _T.TEXT,
         # The browser sources (browser B8) are the person's own choice of sites and words to search
         # with, never a claim a document supports: ingestion can never write one.
@@ -356,11 +350,6 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
             for pay in ("salary", "daily_rate")
             for part in ("min", "max", "currency")
         },
-        # Opportunities O7: the freelance feeds swept are the person's choice, never read from a
-        # document.
-        "search.feeds[].kind": _T.SETTING,
-        "search.feeds[].enabled": _T.SETTING,
-        **_terms("search.feeds[].terms", _T.SETTING),
         # Jobs J9: the websites an interactive search visits and the instructions it follows are
         # the person's saved intent, never read from a document.
         "search.interactive_sites[].platform": _T.SETTING,
@@ -373,7 +362,6 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "preferences.onboarding.completed_at": _T.SETTING,
         "preferences.onboarding.dismissed_at": _T.SETTING,
         "preferences.onboarding.steps_passed[]": _T.SETTING,
-        "preferences.onboarding.starter_handled[]": _T.SETTING,
         "preferences.documents_language": _T.SETTING,
         "preferences.documents_tone": _T.SETTING,
         "answers.work_authorization[].country": _T.TEXT,
@@ -514,7 +502,6 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             remote_stance=_K.scalar,
             min_fit=_K.setting,
             days=_K.setting,
-            boards=_K.entries,
             never_apply=_K.lines,
             browser_sources=_K.setting,
             sweep_schedule=_K.setting,
@@ -523,7 +510,6 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             industries=_K.terms,
             company_types=_K.setting,
             compensation=_K.setting,
-            feeds=_K.setting,
             interactive_sites=_K.setting,
             interactive_instructions=_K.setting,
         ),
@@ -728,8 +714,6 @@ def _identity(slot: Slot, value: Any) -> str:
         return f"{slug(value['organisation'])}-{_year(value['start'])}"
     if where == ("experience", "education"):
         return f"{_name(value['school'])}:{_year(value.get('start'))}"
-    if where == ("search", "boards"):
-        return _name(f"{value['ats']}:{value['org'].lower()}")
     if where == ("facts", "blocks"):
         return _name(value["title"])
     if where == ("answers", "work_authorization"):

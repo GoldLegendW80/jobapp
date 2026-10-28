@@ -695,7 +695,8 @@ class BoardFailureOut(BaseModel):
     ats: str
     org: str
     # not_found, blocked, rate_limited, upstream_error, timeout, network, too_large,
-    # invalid_response, store_failed (app/jobs/ats.py, app/jobs/sweep.py)
+    # invalid_response, store_failed: written by the company boards, deleted on 2026-10-28; a
+    # sweep row of before keeps them and the history shows them.
     error: str
     message: str
 
@@ -712,15 +713,13 @@ class SearchRanOut(BaseModel):
 
 
 class SourceOut(BaseModel):
-    """One selected source of the sweep: API boards, feeds and browser readers. The postings it read
-    completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
-    layout_changed, store_failed, lease_budget, lease_ended, time_budget, page_failed,
-    browser_busy, browser_unavailable, or not_started for a source after one that stopped the
-    sweep's sources). A freelance and project feed (opportunities O7) is listed here too, its
-    `kind` the feed's, with its own codes (app/opportunities/sources ERRORS) and the postings the
-    never apply rules set aside (`skipped_by_rule`, opportunities O8), plus items whose parser
-    raised (`items_skipped`, opportunities O7). Unread Hacker News comments beyond its read
-    cap and ordinary filtering are not parser failures."""
+    """One selected source of the sweep: a job website (`host` set). The postings it found
+    (`found`), the new ones among them, the postings the never apply rules set aside
+    (`skipped_by_rule`), and why it stopped early (`error`: None, or one of
+    app/browser/sources ERRORS, or not_started for a source after one that stopped the sweep's
+    sources). A sweep row written before the deletion of the boards, feeds and fixed readers
+    (owner, 2026-10-28) also lists those, with their own codes and `items_skipped` (a feed's
+    items whose parser raised): the history reads them as stored."""
 
     kind: str
     query: str
@@ -770,7 +769,9 @@ class SearchScopeOut(BaseModel):
 
 
 class SweepOut(BaseModel):
-    """A sweep and its progress: while it runs the counters grow board by board."""
+    """A sweep and its progress: while it runs the counters grow website by website. The
+    `boards_*` fields are those of a row written before the boards were deleted (2026-10-28),
+    zero on every newer one."""
 
     id: uuid.UUID
     trigger: str
@@ -809,7 +810,7 @@ class SweepDetail(SweepOut):
 
 class ScheduleOut(BaseModel):
     """The caller's `search.sweep_schedule` and when it fires next. `active` is false when it
-    is off or no board is enabled (then nothing runs whatever the schedule says)."""
+    is off or no website is ticked (then nothing runs whatever the schedule says)."""
 
     enabled: bool
     days: list[str]

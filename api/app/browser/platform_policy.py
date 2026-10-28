@@ -147,10 +147,10 @@ def pause_for(platform: str) -> tuple[float, float]:
 def pace_key(platform: str, host: str, base_url: str | None = None) -> str:
     """The pacer's key of a source's pages. Every address of a protected platform shares one,
     whatever its host (`www.linkedin.com`, `fr.linkedin.com`), so two addresses of the platform
-    in one sweep keep its pause between them; LinkedIn's is the legacy reader's own
-    (sources/linkedin.py), so both readers share LinkedIn's slot. Any other website: its host."""
+    in one sweep keep its pause between them; LinkedIn's is its host (sources/linkedin.py,
+    `host`), as the deleted fixed reader's was. Any other website: its host."""
     if platform == "linkedin":
-        return linkedin.READER.host(base_url)
+        return linkedin.host(base_url)
     if platform in PLATFORMS:
         return f"platform:{platform}"
     return host

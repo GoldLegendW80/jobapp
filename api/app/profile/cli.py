@@ -4,8 +4,8 @@
     python -m app.profile.cli import --email <email> --file <file.json | ->
 
 convert reads the engine's files below the job folder (profile/facts.md, profile/skills.json,
-engine/boards.json, engine/assemble.py, engine/photo.b64; see importer.py) and writes the profile
-export document. It needs no database, so it runs on the Mac:
+engine/boards.json (its regexes), engine/assemble.py, engine/photo.b64; see importer.py) and
+writes the profile export document. It needs no database, so it runs on the Mac:
 
     uv run --native-tls --directory api python -m app.profile.cli convert \\
         --source-dir /Users/<me>/Desktop/job --out /tmp/profile.json
@@ -95,7 +95,6 @@ def run_convert(source_dir: Path, out: str) -> int:
         f"Wrote {out}: {len(sections.facts.blocks)} fact blocks, "
         f"{len(sections.experience.employers)} employers, "
         f"{len(sections.experience.education)} schools, "
-        f"{len(sections.search.boards)} boards, "
         f"photo {'included' if document.photo else 'absent'}."
     )
     return 0

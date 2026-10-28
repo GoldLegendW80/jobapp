@@ -123,23 +123,17 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import ats, service, sweep
+from app.jobs import service, sweep
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app.worker")
 
 MAX_SWEEPS = 2
-# Board bodies downloaded and decoded at once, across every sweep of the process: with
-# ats.MAX_BODY (25 MB) and their decoded JSON, the worst case stays far under the 1536m limit.
-BODIES_IN_FLIGHT = 4
 SCHEDULE_MINUTES = set(range(0, 60, 5))  # schedule.TICK
-# TEST_FAST_TIMERS (tests only, refused in production): every minute, and a short board timeout
-# with a single attempt. The slots are idempotent, so a faster tick never fires one twice.
-# A stack running with it (the CI e2e one) therefore proves neither the retry and backoff path
-# nor the five minute tick: the unit tests of tests/jobs do. If a large board starts timing out
-# on a slow runner, raise FAST_ATS_TIMEOUT_S first.
+# TEST_FAST_TIMERS (tests only, refused in production): every minute. The slots are idempotent,
+# so a faster tick never fires one twice. A stack running with it (the CI e2e one) therefore
+# does not prove the five minute tick: the unit tests of tests/jobs do.
 FAST_SCHEDULE_MINUTES = set(range(60))
-FAST_ATS_TIMEOUT_S = 2.0
 HEALTH_INTERVAL_S = 10
 SWEEP_JOB_TIMEOUT_S = sweep.SWEEP_TIMEOUT_S + 60
 MAX_AGENT_RUNS = 2
@@ -234,44 +228,17 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
     return found
 
 
-def ats_client(ctx: dict[str, Any]) -> ats.AtsClient:
-    """A fresh client per sweep (tests put a factory with a fake transport in the context)."""
-    factory = ctx.get("ats_client")
-    if factory is not None:
-        client: ats.AtsClient = factory()
-        return client
-    settings: Settings = ctx["settings"]
-    fast: dict[str, Any] = (
-        {"timeout_s": FAST_ATS_TIMEOUT_S, "attempts": 1, "backoff_s": 0.1}
-        if settings.test_fast_timers
-        else {}
-    )
-    return ats.AtsClient(
-        tz=sweep.SWEEP_TZ,
-        stub_base_url=settings.ats_base_url,
-        stub_org_prefix=settings.ats_base_url_org_prefix,
-        body_gate=ctx.get("body_gate"),
-        **fast,
-    )
-
-
 # --- sweeps queue -----------------------------------------------------------------------------
 
 
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
-    async with ats_client(ctx) as client:
-        await sweep.run_sweep(
-            sessions_of(ctx),
-            uuid.UUID(sweep_id),
-            client,
-            clock_of(ctx),
-            browser=browser_sources(ctx),
-            feeds=feed_sources(ctx),
-        )
+    await sweep.run_sweep(
+        sessions_of(ctx), uuid.UUID(sweep_id), clock_of(ctx), browser=browser_sources(ctx)
+    )
 
 
 def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
-    """The browser sources' run (browser B8): tests put theirs in the context."""
+    """The job websites' run (app/browser/sources): tests put theirs in the context."""
     if "browser_sources" in ctx:
         hook: sweep.BrowserHook | None = ctx["browser_sources"]
         return hook
@@ -282,16 +249,6 @@ def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
     return sources.runner_for(
         ctx["settings"], ctx["redis"], sessions_of(ctx), lambda: agent_context(ctx)
     )
-
-
-def feed_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
-    """The freelance and project feeds' run (opportunities O7): tests put theirs in the context."""
-    if "feed_sources" in ctx:
-        hook: sweep.BrowserHook | None = ctx["feed_sources"]
-        return hook
-    from app.opportunities import sources
-
-    return sources.runner_for(ctx["settings"])
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
@@ -448,7 +405,7 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
             cron(reap_sweeps, name="cron:reap_sweeps", second=30, timeout=60),
             cron(browser_removals.drain, name="cron:browser_removals", second=20, timeout=60),
         ],
-        # Two users' sweeps at once (each reads CONCURRENCY boards), plus room for the cron jobs.
+        # Two users' sweeps at once, plus room for the cron jobs.
         max_jobs=MAX_SWEEPS + 2,
         job_timeout_s=SWEEP_JOB_TIMEOUT_S,
         on_start=reap_sweeps,
@@ -1171,7 +1128,6 @@ async def serve(
     finds nothing stuck."""
     skip_sdk_version_probe()
     ctx = ctx if ctx is not None else make_context(settings)
-    ctx.setdefault("body_gate", asyncio.Semaphore(BODIES_IN_FLIGHT))
     stop = stop or asyncio.Event()
     loop = asyncio.get_running_loop()
     # Every asyncio.to_thread of every job, in every module, runs on this executor from here.
