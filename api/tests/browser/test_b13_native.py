@@ -293,11 +293,23 @@ def test_native_hostile_controls_and_redirects(native):
     native.completed = True
 
 
+def fetched(native, url: str) -> str:
+    """`url` as the browser container reads it with plain Python, outside Chromium."""
+    return native.execute(
+        "browser",
+        "python",
+        "-I",
+        "-c",
+        f"import urllib.request; print(urllib.request.urlopen({url!r}).read().decode())",
+    )
+
+
 def test_native_start_page_redirect_on_its_own_host_is_followed(native):
     """Jobs J18 (issue 716): the start page's own redirect to its locale path is followed and
-    its search runs; a start page redirected to another host or a write address is not."""
+    its search runs; a start page redirected to another host or a write address is not, nor one
+    whose Location Python's urljoin keeps on the host while Chromium goes to `elsewhere`."""
     answers = {}
-    for path in ("locale", "locale-off", "locale-write"):
+    for path in ("locale", "locale-off", "locale-write", "locale-slash", "locale-slashes"):
         lease = Lease(native, "sweep")
         native.redactions.append(lease.token)
         scope = {
@@ -321,18 +333,23 @@ def test_native_start_page_redirect_on_its_own_host_is_followed(native):
                 assert found["ok"], found
         finally:
             lease.end()
-    assert not answers["locale-off"]["ok"]
-    assert not answers["locale-write"]["ok"]
-    observed = json.loads(
-        native.execute(
-            "browser",
-            "python",
-            "-I",
-            "-c",
-            "import urllib.request; print(urllib.request.urlopen('http://pages:8080/observed').read().decode())",
-        )
+    for path in ("locale-off", "locale-write", "locale-slash", "locale-slashes"):
+        assert not answers[path]["ok"], (path, answers[path])
+    # `elsewhere` is this same fixture server under its other name, and its log records the
+    # Host of each request: one request sent there by the test shows the log sees that host,
+    # so no request of Chromium's to it means none was made.
+    fetched(native, "http://elsewhere:8080/b13/seen-elsewhere")
+    observed = json.loads(fetched(native, "http://pages:8080/observed"))
+    assert {"path": "/b13/seen-elsewhere", "host": "elsewhere:8080"} in [
+        {"path": p["path"], "host": p.get("host")} for p in observed
+    ]
+    chromium = [p for p in observed if p["path"] not in {"/observed", "/b13/seen-elsewhere"}]
+    assert not any(str(p.get("host")).startswith("elsewhere") for p in chromium), chromium
+    assert not any(
+        p["path"] in {"/escape", "/remove", "/b13/escape-slash", "/b13/escape-slashes"}
+        or "\\" in p["path"]
+        for p in chromium
     )
-    assert not any(p["path"] in {"/escape", "/remove"} for p in observed)
     assert {"path": "/b13/search", "query": {"q": ["robot"], "remote": ["0"]}} in [
         {"path": p["path"], "query": p.get("query")} for p in observed
     ]

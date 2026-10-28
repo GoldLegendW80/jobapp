@@ -95,6 +95,28 @@ def test_a_redirect_on_the_scope_s_own_host_is_followed(status, location):
         (302, "data:text/html,x"),
         (302, "/" + "a" * 2100),
         (304, "/en"),  # not a redirect the browser follows
+        # urljoin keeps these on the host; Chromium reads a backslash as a slash and leaves
+        (302, "/\\elsewhere/en"),
+        (302, "\\\\elsewhere/en"),
+        (302, "/\\pages:8080/en"),
+        (302, "/en\\"),
+        (302, "/%5Celsewhere/en"),  # percent encoded
+        (302, "/%5celsewhere/en"),
+        # Chromium strips a tab or a newline and keeps a space; none is read alike by urljoin
+        (302, "/\t/elsewhere/en"),
+        (302, "/\n/elsewhere/en"),
+        (302, "/\r\n/elsewhere/en"),
+        (302, " /en"),
+        (302, "/en "),
+        (302, "/e n"),
+        (302, "/\x00en"),
+        (302, "/en\x7f"),
+        (302, "/en\u0085"),
+        (302, "/%09/elsewhere/en"),  # percent encoded
+        (302, "/%0a/elsewhere/en"),
+        (302, "/en%20x"),
+        (302, "/en?q=robot%20engineer"),
+        (302, "/en%C2%85"),
     ],
 )
 def test_a_redirect_anywhere_else_is_still_refused(status, location):

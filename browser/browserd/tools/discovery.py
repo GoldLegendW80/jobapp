@@ -269,8 +269,17 @@ def redirect_target(url: str, location: object, scope: Scope) -> str | None:
     against the request's address, held to the rule of the navigation it replaces, read_url
     within the frozen scope (same scheme, host and port as the start, nothing that applies,
     submits, reaches an account or signs out, only the saved criteria in its query). None for
-    anything else, a missing or blank Location included: the redirect is refused."""
+    anything else, a missing or blank Location included: the redirect is refused.
+    A Location Chromium may read otherwise than Python's urljoin is refused before it is
+    resolved: a backslash (a slash to Chromium, so `/\\elsewhere/en` leaves the host), a space
+    or a control character (Chromium strips tab and newline), raw or percent decoded."""
     if not isinstance(location, str) or not location or len(location) > 2000:
+        return None
+    if any(
+        ch == "\\" or ord(ch) <= 32 or 127 <= ord(ch) <= 159
+        for text in (location, unquote(location))
+        for ch in text
+    ):
         return None
     try:
         target = urljoin(url, location)
