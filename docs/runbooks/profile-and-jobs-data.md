@@ -1,11 +1,10 @@
 # Profile and jobs data
 
-Profile export and import, the company board check, and the import of the owner's job list and files.
+Profile export and import, and the import of the owner's job list and files.
 
 ## Contents
 
 - [Profile export and import](#profile-export-and-import)
-- [Board check](#board-check)
 - [Jobs import, list and files](#jobs-import-list-and-files)
 
 ## Profile export and import
@@ -13,8 +12,11 @@ Profile export and import, the company board check, and the import of the owner'
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;
 `POST /api/profile/import` takes that file back (2 MB at most) and replaces all seven sections in
 one transaction, one revision each (a file written before `preferences` existed reads its
-defaults, and the onboarding dates stored for the account are kept). Harald's engine files convert into the same format on the
-Mac, then load into one account inside the api container:
+defaults, and the onboarding dates stored for the account are kept). Keys of the board engine
+deleted on 2026-10-28 (`search.boards`, `search.feeds`, browser source rows other than LinkedIn
+and Free-Work, `onboarding.starter_handled`) are ignored on read and dropped on the next save.
+Harald's engine files convert into the same format on the Mac (the title and location regexes
+of `engine/boards.json`, no boards), then load into one account inside the api container:
 
 ```bash
 uv run --native-tls --directory api python -m app.profile.cli convert --source-dir "$PWD/.." --out /tmp/profile.json
@@ -24,16 +26,6 @@ docker compose exec -T api python -m app.profile.cli import --email you@example.
 The import prints the new revision and the completeness, never the profile itself. Exit codes:
 0 imported, 2 invalid arguments or file, 1 no such account or a database error.
 `./deploy.sh profile import <email>` does both, the import on the Jetson.
-
-## Board check
-
-The Search tab checks a company board before adding it: `POST /api/profile/boards/check` with
-`{"ats": "ashby" | "greenhouse" | "lever", "org": "<slug>"}` answers
-`{exists, postings, company_name, error}`, `error` being null, `not_found`, `timeout`, `blocked`
-(the ATS refused this server) or `upstream_error`. The api calls the ATS public posting API itself
-(fixed hosts, org checked against the slug pattern first, no redirect off the host, 5 s for the
-whole exchange, one retry on a connection error), caches found and not found answers for 10
-minutes in the process, and allows 10 checks per user per minute (429 with Retry-After).
 
 ## Jobs import, list and files
 

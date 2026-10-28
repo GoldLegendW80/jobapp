@@ -7,7 +7,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 - Optimistic concurrency with `base_revision`; 409 returns current data.
 - Photo in Postgres (bytea), so backups cover it; type sniffed from magic bytes, re-encoded server-side with Pillow to strip metadata.
 - Importer is a pure function `files -> export JSON`, CLI posts it; golden fixture from the real `../profile` and `../engine` files.
-- The board check calls the ATS public posting API from the backend with a 5s timeout (httpx), never from the browser.
+- The board check calls the ATS public posting API from the backend with a 5s timeout (httpx), never from the browser. (Deleted 2026-10-28 with the boards, owner: `POST /api/profile/boards/check` is gone.)
 
 ## P1: Profile schema, section models, read and save with revisions (done 2026-10-08, 737 api tests)
 
@@ -34,6 +34,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 **Files:** `web/src/features/profile/*`. **Scope:** M
 
 ## P5: Editors for facts, skills and search, with the board check (done 2026-10-09)
+Note, 2026-10-28: the board table and the board check (`api/app/profile/boards.py`) were deleted (owner, "Delete it"); a stored `search.boards` is ignored on read and dropped on the next save. The importer reads only the regexes of `boards.json`.
 
 **Acceptance:** Markdown editor with preview and blocks; skills category and term chips; search terms chips, contract toggles, regex advanced mode with server error shown; board table with enable switches and add company verified through `POST /api/profile/boards/check`.
 **Verify:** pytest for the board check (mocked ATS: exists, 404, timeout); Vitest; Playwright.
