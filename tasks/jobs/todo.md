@@ -56,6 +56,8 @@ Spec: [SPEC-jobs.md](../../SPEC-jobs.md). Depends on profile (matching rules in 
 **Acceptance:** `worker` service in compose (mem 1536m reserved), queue on Redis; ATS fetch and parse ported with recorded fixtures; sweep against a fake ATS server with every failure mode; one sweep per user; progress and summary in the UI; nightly run; never_apply rules.
 **Files:** `api/app/{worker.py,jobs/sweep.py,jobs/ats.py}`, `compose.yml`, `deploy.sh`, `web/src/features/jobs/*`. **Scope:** L, split if needed
 
+Note, 2026-10-28: the ATS reader (`jobs/ats.py`), its fixtures and the fake ATS server were deleted with the board engine (owner, "Delete it"); every sweep now runs the ticked job websites. The worker, the one sweep per user, progress, summary, schedule and never apply rules stay.
+
 ## J6: Map view (done 2026-10-09, PR #8)
 **Acceptance:** `/jobs/map` with pins per city or country from the ported gazetteer, unplaced list, filters shared with the list.
 **Files:** `api/app/jobs/{places.json,world.json}`, `web/src/features/jobs/map*`. **Scope:** M
@@ -68,7 +70,7 @@ State on 2026-10-21, one line per step (the triage of #42, then the pull request
 - Harald's data on the Jetson, counts equal to the CSV: done 2026-10-09 (J2). `tasks/evidence/jobs-j4-jetson/run.log` reads jobs=433: found 158, shortlisted 146, cv_ready 3, staged 29, applied 29, interview 2, closed 6, skipped 60.
 - The import is idempotent: done in tests, `api/tests/jobs/test_import.py`, `test_importer.py`, `test_importer_real.py`.
 - One real sweep for an e2e user: done 2026-10-09 (PR #6). `tasks/evidence/jobs-j5-jetson/run.log`: two real boards, 138 new, 11 skipped by rule, PASS.
-- The journey through the public URL with screenshots, for editing (J4) and the sweep (J5): done 2026-10-09 by `tests/e2e_jobs_jetson.sh` and `tests/e2e_jobs_sweep_jetson.sh`, PASS, evidence in `tasks/evidence/jobs-j4-jetson/` (36 screenshots) and `tasks/evidence/jobs-j5-jetson/`.
+- The journey through the public URL with screenshots, for editing (J4) and the sweep (J5): done 2026-10-09 by `tests/e2e_jobs_jetson.sh` and `tests/e2e_jobs_sweep_jetson.sh`, PASS, evidence in `tasks/evidence/jobs-j4-jetson/` (36 screenshots) and `tasks/evidence/jobs-j5-jetson/`. Note, 2026-10-28: `tests/e2e_jobs_sweep_jetson.sh` was deleted with the board sweeps; it cannot be run again.
 - The same for the list, the detail with its PDF preview and the map: ready, not run on the Jetson yet. `tests/e2e_jobs_jetson.sh view` runs `web/e2e/jobs.spec.ts` in its E2E_SYNTHETIC mode (433 made-up rows with the CSV counts, posting texts and files, loaded over HTTP) and `web/e2e/jobs-map.spec.ts`, evidence in `tasks/evidence/jobs-j7-jetson/`. Both passed on a local scratch stack on 2026-10-21, 12 tests of 12. Left: the owner's run below.
 - The Jetson journeys again on today's `main`: not done. The scripts reach the Jetson over ssh, so they run on the owner's Mac.
 
@@ -78,7 +80,7 @@ State on 2026-10-21, one line per step (the triage of #42, then the pull request
 One line per criterion, 2026-10-21:
 1. Harald's 433 rows, texts and files on the Jetson, counts equal to the CSV, an idempotent import: done 2026-10-09 (the J7 lines above). The owner's runs below print the live counts again.
 2. The scoring port matches the engine on every scorable row: done, `api/tests/jobs/test_scoring_golden.py` (395 of 395, J1).
-3. Find jobs sweeps the boards from the Jetson and adds only new matching postings, scored: done, `tasks/evidence/jobs-j5-jetson/`, `api/tests/jobs/test_sweep_api.py`, `test_sweep_parity.py`. A schedule, once on, runs by itself: proven locally (`api/tests/jobs/test_schedule.py`, `test_worker.py`, the journey "Schedule: off by default, turned on, fires at its time, turned off" of `web/e2e/jobs-sweep.spec.ts`), not yet checked on the Jetson. Left: the owner's schedule check below.
+3. Find jobs sweeps the boards from the Jetson and adds only new matching postings, scored: done, `tasks/evidence/jobs-j5-jetson/`, `api/tests/jobs/test_sweep_api.py`, `test_sweep_parity.py`. A schedule, once on, runs by itself: proven locally (`api/tests/jobs/test_schedule.py`, `test_worker.py`, the journey "Schedule: off by default, turned on, fires at its time, turned off" of `web/e2e/jobs-sweep.spec.ts`), not yet checked on the Jetson. Left: the owner's schedule check below. Note, 2026-10-28: the board sweeps were deleted; a sweep now searches the ticked job websites, so this criterion's evidence is history and the schedule check runs a website search.
 4. Filters, bulk actions, detail and map on desktop and phone: done locally with 375 px screenshots (`tasks/evidence/jobs-j3/`, `jobs-j4/`, `jobs-j6/`), and on the Jetson for editing and the sweep (`jobs-j4-jetson/`, `jobs-j5-jetson/`). Left: the view run below.
 5. No user can see another user's jobs, files or sweeps: done, `api/tests/jobs/test_api.py::test_isolation`, `api/tests/jobs/test_sweep_api.py`.
 
@@ -130,7 +132,7 @@ Task [#641](https://github.com/GoldLegendW80/jobapp/issues/641). Small client co
 
 ### J17: a ticked website is its permission, and Websites only
 
-Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing #651's separate permission cards. Find jobs shows each job website's risk sentence beside its box; Save records the consent of every ticked website through the platform's consent route on the reviewed revision and takes back the one of a website unticked; "Websites only" searches the ticked websites alone (`POST /api/jobs/sweeps {websites_only}`). The search's permission checks, pause, caps and pacing are unchanged. Status: built on the combined branch, journeys run by the orchestrator. The "Websites only" part is replaced on 2026-10-28: every search runs the websites alone, the setup shows no board, feed, reader or regular expression switch (branch `jobs/websites-only-setup`).
+Owner decision of 2026-10-27 ([decisions](../../docs/decisions.md)), replacing #651's separate permission cards. Find jobs shows each job website's risk sentence beside its box; Save records the consent of every ticked website through the platform's consent route on the reviewed revision and takes back the one of a website unticked; "Websites only" searches the ticked websites alone (`POST /api/jobs/sweeps {websites_only}`). The search's permission checks, pause, caps and pacing are unchanged. Status: built on the combined branch, journeys run by the orchestrator. The "Websites only" part is replaced on 2026-10-28: every search runs the websites alone, the setup shows no board, feed, reader or regular expression switch (branch `jobs/websites-only-setup`). The same day the board, feed and fixed reader code itself was deleted (owner, "Delete it", branch `jobs/delete-board-engine`), and `websites_only` went from the API.
 
 ### J18: one agent per job website, with all the saved criteria
 

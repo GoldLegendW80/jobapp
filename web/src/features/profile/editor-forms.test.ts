@@ -4,14 +4,12 @@ import { haraldLike } from "@/test/profile";
 
 import { EMPTY } from "./api";
 import {
-  boardKey,
   factBytes,
   factsSchema,
   formatBytes,
   fromFactsForm,
   fromSearchForm,
   fromSkillsForm,
-  orgProblem,
   searchSchema,
   sizeText,
   skillsSchema,
@@ -34,25 +32,18 @@ describe("round trips", () => {
     expect(fromSearchForm(toSearchForm(data.search))).toEqual(data.search);
   });
 
-  it("keeps the freelance feeds (O7) a save of this tab does not edit", () => {
+  // Owner, 2026-10-28: boards and feeds are gone; a section read before carries none on.
+  it("sends no boards nor feeds a section stored before the deletion held", () => {
     const data = haraldLike();
-    const search = {
+    const older = {
       ...data.search,
-      feeds: [
-        {
-          kind: "remoteok" as const,
-          terms: { terms: ["python"], advanced_regex: false },
-          enabled: true,
-        },
-        {
-          kind: "hackernews_freelance" as const,
-          terms: { terms: [], advanced_regex: false },
-          enabled: false,
-        },
-      ],
+      boards: [{ company: "Example Labs", ats: "ashby", org: "example-labs" }],
+      feeds: [{ kind: "remoteok", terms: [], enabled: true }],
     };
-    expect(fromSearchForm(toSearchForm(search))).toEqual(search);
-    expect("feeds" in fromSearchForm(toSearchForm(data.search))).toBe(false);
+    const sent = fromSearchForm(toSearchForm(older));
+    expect(sent).not.toHaveProperty("boards");
+    expect(sent).not.toHaveProperty("feeds");
+    expect(sent).toEqual(data.search);
   });
 
   it("handles empty sections", () => {
@@ -73,13 +64,11 @@ describe("round trips", () => {
     search.location.terms = [" Paris ", "paris", "Lyon", ""];
     search.contract_types = ["VIE", "CDI"];
     search.days = " 7 ";
-    search.boards[0]!.org = " mistral.ai ";
     search.never_apply = [{ value: "  No defence. " }];
     const sent = fromSearchForm(search);
     expect(sent.location.terms).toEqual(["Paris", "Lyon"]);
     expect(sent.contract_types).toEqual(["CDI", "VIE"]);
     expect(sent.days).toBe(7);
-    expect(sent.boards[0]!.org).toBe("mistral.ai");
     expect(sent.never_apply).toEqual(["No defence."]);
   });
 
@@ -217,72 +206,13 @@ describe("skills schema", () => {
 describe("search schema", () => {
   const base = () => toSearchForm(haraldLike().search);
 
-  it.each(["mistral.ai", "Anthropic", "a", "a_b-c.d", "x".repeat(100)])(
-    "accepts the org %j",
-    (org) => {
-      expect(orgProblem(org)).toBeUndefined();
-    },
-  );
-
-  it.each([
-    ["", "Enter the org as it appears in the board address."],
-    ["x".repeat(101), "Use at most 100 characters."],
-    [
-      "../etc",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      "a..b",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      ".hidden",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      "a/b",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      "évian",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      "a%2f",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-  ])("refuses the org %j", (org, message) => {
-    expect(orgProblem(org)).toBe(message);
-  });
-
-  it("keys boards by ATS and org, ignoring case and spaces", () => {
-    expect(boardKey({ ats: "ashby", org: " Mistral.AI " })).toBe(
-      "ashby:mistral.ai",
-    );
+  it("refuses an over long rule and days out of range", () => {
     const form = base();
-    form.boards[1] = { ...form.boards[1]!, ats: "ashby", org: "MISTRAL.ai" };
-    expect(issues(searchSchema.safeParse(form))).toEqual([
-      ["boards.1.org", "This board is already listed (same ATS and org)."],
-    ]);
-  });
-
-  it("refuses an empty company, an over long rule and days out of range", () => {
-    const form = base();
-    form.boards[0]!.company = "  ";
     form.never_apply = [{ value: "x".repeat(501) }];
     form.days = "0";
     expect(issues(searchSchema.safeParse(form)).map(([p]) => p)).toEqual([
       "days",
-      "boards.0.company",
       "never_apply.0.value",
-    ]);
-  });
-
-  it("checks extra exclude terms of a board", () => {
-    const form = base();
-    form.boards[0]!.extra_exclude = { advanced_regex: true, terms: ["(x+)*"] };
-    expect(issues(searchSchema.safeParse(form)).map(([p]) => p)).toEqual([
-      "boards.0.extra_exclude.terms.0",
     ]);
   });
 });
@@ -310,18 +240,16 @@ describe("browser sources (browser B8)", () => {
       ...profile.search,
       browser_sources: [
         {
-          kind: "google_careers" as const,
+          kind: "linkedin" as const,
           query: "ai engineer",
           location: "Paris",
           enabled: true,
         },
-        { kind: "vie" as const, query: "data", location: null, enabled: false },
-        // B9's kind, saved by another client: kept as it is.
         {
-          kind: "site" as const,
-          query: "agents",
+          kind: "freework" as const,
+          query: "data",
           location: null,
-          enabled: true,
+          enabled: false,
         },
       ],
     };
@@ -330,6 +258,22 @@ describe("browser sources (browser B8)", () => {
   it("keeps every source through a save of the Search tab", () => {
     const search = withSources();
     expect(fromSearchForm(toSearchForm(search)).browser_sources).toEqual(
+      search.browser_sources,
+    );
+  });
+
+  // Owner, 2026-10-28: the fixed readers are gone; only LinkedIn and Free-Work rows stay.
+  it("sends no row of a fixed reader the profile still held", () => {
+    const search = withSources();
+    const older = {
+      ...search,
+      browser_sources: [
+        { kind: "google_careers", query: "ai", location: null, enabled: true },
+        ...search.browser_sources,
+        { kind: "vie", query: "data", location: null, enabled: false },
+      ],
+    } as unknown as typeof search;
+    expect(fromSearchForm(toSearchForm(older)).browser_sources).toEqual(
       search.browser_sources,
     );
   });
@@ -354,7 +298,7 @@ describe("browser sources (browser B8)", () => {
       location: "   ",
     };
     expect(fromSearchForm(form).browser_sources?.[0]).toEqual({
-      kind: "google_careers",
+      kind: "linkedin",
       query: "ai engineer",
       location: null,
       enabled: true,
@@ -369,7 +313,7 @@ describe("browser sources (browser B8)", () => {
     ]);
     const full = toSearchForm(withSources());
     full.browser_sources = Array.from({ length: 11 }, (_, n) => ({
-      kind: "vie" as const,
+      kind: "freework" as const,
       query: `words ${n}`,
       location: "",
       enabled: true,

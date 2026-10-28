@@ -191,8 +191,8 @@ services:
       start_period: 10s
 
   # --- worker (jobs J5, agents A2) -----------------------------------------------------------
-  # Queue consumer (app/worker.py): board sweeps and the users' sweep schedules, and Claude agent
-  # runs (SPEC-agents.md, at most 2 at a time). Its own image: the `worker` target of
+  # Queue consumer (app/worker.py): job website sweeps and the users' sweep schedules, and Claude
+  # agent runs (SPEC-agents.md, at most 2 at a time). Its own image: the `worker` target of
   # api/Dockerfile, the api's code plus the Claude Agent SDK and the Claude Code CLI it bundles,
   # so the api image stays small. No port, no tunnel.
   worker:

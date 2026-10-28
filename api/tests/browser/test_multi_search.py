@@ -10,6 +10,7 @@ import json
 import random
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -18,9 +19,10 @@ import pytest
 from app.browser import finder, platform_policy
 from app.browser.sources import interactive
 from app.browser.sources.interactive import searches_for
+from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from app.profile.plain_terms import PLAIN
 from app.profile.schemas import SearchSection
-from tests.browser.test_b9_site import ScriptedFinder
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_b13_runtime import BASE, FIRST
 from tests.browser.test_selected_interactive import CANARY, execute, selected
 
@@ -126,11 +128,25 @@ class NoPause:
 
 
 def run(search: SearchSection, site: SearchSite, agent: Any, **kw: Any):
-    entries, stored, leases, _, _ = asyncio.run(
+    entries, plan, leases, _, _ = asyncio.run(
         execute(search, "e2e-person", agent, tools=site, deadline=100_000, **kw)
     )
     [entry] = entries
-    return entry, stored, leases
+    return entry, plan, leases
+
+
+def row(sources: list[Any]) -> Sweep:
+    """A finished sweep row whose stats hold `sources`, as the sweep API reads it."""
+    return Sweep(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        trigger=SweepTrigger.manual,
+        status=SweepStatus.done,
+        started_at=datetime(2026, 10, 21, 8, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 10, 21, 8, 1, tzinfo=UTC),
+        error=None,
+        stats={"sources": sources, "skipped_by_rule": 3},
+    )
 
 
 # --- one agent, one lease, every saved title and place ----------------------------------------
@@ -142,7 +158,7 @@ def test_one_agent_runs_every_saved_search_in_one_session_on_one_lease():
     search = selected(
         title_include={"terms": ["robot", "drone"]}, location={"terms": ["Paris", "Lyon"]}
     )
-    entry, stored, leases = run(search, site, ScriptedFinder(searching(site, log=seen)))
+    entry, _, leases = run(search, site, ScriptedFinder(searching(site, log=seen)))
     [session] = seen  # one run for the website, whatever the number of titles and places
     assert (session.interactive.titles, session.interactive.places) == (
         ("robot", "drone"),
@@ -174,7 +190,6 @@ def test_one_agent_runs_every_saved_search_in_one_session_on_one_lease():
     )
     assert entry["refused"] == {"duplicate": 2}
     assert entry["tokens"] == {"input": 1000, "output": 10}
-    assert stored == []
 
 
 def test_the_agent_gets_all_the_person_s_criteria_as_context_never_to_type():
@@ -830,7 +845,6 @@ def test_a_scope_that_fits_is_carried_whole_and_says_nothing():
 )
 def test_the_summary_says_how_many_saved_values_were_left_out(stored, shown):
     from app.jobs import sweep_router
-    from tests.opportunities.test_o8_summary import row
 
     entry = {"kind": "indeed", "query": "", "mode": "llm_browser", "found": 1, **stored}
     [source] = sweep_router.sweep_out(row([entry])).sources
@@ -860,7 +874,6 @@ def test_no_place_means_no_place_to_type_and_a_search_by_title():
 )
 def test_the_summary_names_the_searches_that_ran_and_counts_them(stored, shown):
     from app.jobs import sweep_router
-    from tests.opportunities.test_o8_summary import row
 
     entry = {"kind": "indeed", "query": "", "mode": "llm_browser", "found": 1, **stored}
     [source] = sweep_router.sweep_out(row([entry])).sources

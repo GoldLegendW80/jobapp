@@ -548,8 +548,8 @@ jobs:
         if: ${{ !cancelled() && (steps.images.outcome == 'success' || steps.images_hosted.outcome == 'success') }}
         working-directory: web
         run: pnpm exec playwright install --with-deps chromium
-      # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py) and the worker
-      # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
+      # tests/ats-stub.compose.yml: the journey stack's fast start settings (health checks and
+      # TEST_FAST_TIMERS); its board and feed stubs were deleted on 2026-10-28.
       # CI_COMPOSE_OVERLAY comes from the runner's own environment, never from this file: the
       # Mac runners set it to compose.mac.yml (ops/ci-runner/Dockerfile), GitHub's machines and
       # the Jetson do not have it. Only `run` and `up` need the overlay (compose.mac.yml).

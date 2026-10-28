@@ -36,8 +36,7 @@ async function shots(page: Page, name: string, fullPage = true) {
  *     pnpm --dir web exec playwright test profile-history.spec.ts
  *   docker compose -p jobapp-p6 -f compose.yml down -v
  *
- * On the Jetson it runs inside web/e2e/identity-all.config.ts (tests/e2e_jetson.sh). In CI the api
- * asks the ATS stub (tests/ats_stub.py, tests/ats-stub.compose.yml) instead of the real Ashby.
+ * On the Jetson it runs inside web/e2e/identity-all.config.ts (tests/e2e_jetson.sh).
  */
 test.describe.configure({ mode: "serial", timeout: 180_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");

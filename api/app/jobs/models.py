@@ -11,8 +11,8 @@
 - job_events: append-only history of a job (created, status, fit, note, edit, import, sweep).
 - job_files: files attached to a job, stored in the row (`bytes`), with their size and SHA-256
   checked by the database (size = octet_length(bytes), sha256 is 32 bytes).
-- sweeps: one board sweep of one user; at most one `running` sweep per user (partial unique
-  index), and `finished_at` is set exactly when the sweep is no longer running.
+- sweeps: one search of the job websites of one user; at most one `running` sweep per user
+  (partial unique index), and `finished_at` is set exactly when the sweep is no longer running.
 
 Large columns (`posting_text`, `bytes`, `search`) are deferred so list queries never load them.
 Migration: alembic/versions/0004_jobs.py, which must stay in step with this file
@@ -193,7 +193,8 @@ class Job(Base):
         server_default=ContractType.CDI.value,
     )
     url: Mapped[str | None] = mapped_column(sa.Text)
-    # Where the posting came from: a board ("ashby:mistral"), "manual", "import", ...
+    # Where the posting came from: a job website's host, "manual", "import", or a board
+    # ("ashby:mistral") or feed of before 2026-10-28, ...
     source: Mapped[str | None] = mapped_column(sa.Text)
     status: Mapped[JobStatus] = mapped_column(
         JOB_STATUS_ENUM,

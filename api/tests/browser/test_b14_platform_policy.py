@@ -6,11 +6,10 @@ import itertools
 
 import pytest
 
-from app.browser import finder, platform_policy, sources
+from app.browser import finder, platform_policy
 from app.browser.platform_policy import CUSTOM, platform_of, wall
 from app.browser.sources import ERRORS, PAGE_PAUSE_S, linkedin
 from app.browser.sources.interactive import SourceContext
-from app.jobs import sweep
 from tests.browser.test_selected_interactive import execute, selected
 
 PLATFORM_HOSTS = [
@@ -294,7 +293,7 @@ def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
     """The preset LinkedIn address and a custom one of another spelling are paced as one
     platform: no page of the sweep follows another LinkedIn page sooner than LinkedIn's
     shortest pause, across the two sources too."""
-    from tests.browser.test_b9_site import ScriptedFinder
+    from tests.browser.fakes import ScriptedFinder
 
     now = [0.0]  # the runner's clock: its sleep, its pacer and the tools read the same time
     tools = Paged(now)
@@ -357,44 +356,3 @@ def test_a_policy_without_a_sweep_refuses_every_platform_and_lets_custom_sites_t
     assert asyncio.run(policy.check(custom)) is None
     assert asyncio.run(policy.reserve(custom)) is None
     assert asyncio.run(policy.observe(custom, "https://careers.example.org/login", "")) is None
-
-
-@pytest.mark.parametrize("selection", ["indeed", "none", "custom"])
-def test_a_careers_page_at_a_protected_address_never_runs_the_generic_finder(
-    selection, monkeypatch
-):
-    address = (
-        "https://www.indeed.fr/emplois" if selection != "custom" else "https://careers.example.org/"
-    )
-    legacy = {"kind": "site", "query": address, "enabled": True}
-    search = selected(
-        "https://fr.indeed.com/" if selection == "indeed" else "https://careers.example.org/jobs",
-        browser_sources=[legacy],
-    )
-    if selection == "none":
-        search.interactive_sites = []
-    calls = []
-
-    async def legacy_one(self, plan, stats, source, entry, store, deadline, progress):
-        calls.append(source.kind)
-        return None, None
-
-    async def interactive(*_args):
-        return None
-
-    monkeypatch.setattr(sources.Runner, "_one", legacy_one)
-    monkeypatch.setattr("app.browser.sources.interactive.run_selected", interactive)
-    entries, stored, leases, _, _ = asyncio.run(execute(search, "e2e-person", None))
-    entry = next(e for e in entries if e["mode"] == "legacy_finder")
-    assert entry["source_id"] == sweep._source_id("legacy_browser", "site", address, "")
-    if selection == "indeed":
-        assert calls == []
-        assert entry["reason"] == "interactive_selected"
-    elif selection == "none":
-        assert calls == []
-        assert entry["error"] == "permission_unavailable"
-        assert entry["outcome"] == "failed"
-    else:
-        assert calls == ["site"]
-    assert not stored
-    assert not leases.acquired

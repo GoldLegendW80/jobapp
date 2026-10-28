@@ -77,15 +77,7 @@ export const WIZARD_STEP_WORDS = {
   summary: "Summary",
 } as const;
 
-/** The feeds by kind, as the catalogue names them; used when the catalogue cannot be read. */
-export const FEED_NAMES = {
-  remoteok: "Remote OK",
-  weworkremotely: "We Work Remotely",
-  hackernews_freelance: "Hacker News: Freelancer? Seeking freelancer?",
-  hackernews_hiring: "Hacker News: Who is hiring?",
-} as const;
-
-/** The short name of a feed, in a sentence or a list ("Hacker News, freelance thread"). */
+/** The short name of a feed of an old sweep or posting ("Hacker News, freelance thread"). */
 export const FEED_SHORT_NAMES = {
   remoteok: "Remote OK",
   weworkremotely: "We Work Remotely",
@@ -140,12 +132,10 @@ export const WORDING = {
   readProfile: "Read them into your profile",
   reviewProposals: "Review the proposals",
   importOtherProfile: "Or add a LinkedIn data export (ZIP), or paste a text",
-  boardsAndSites: "Boards and sites to search",
   added: "Added",
   remove: "Remove",
   addAll: "Add all",
   addTicked: "Add the ticked ones",
-  freelanceSourceList: "Freelance sources",
   findInDiscover: "Find it in Discover",
   read: "Read",
   wordsFor: "Words for",
@@ -180,12 +170,9 @@ export const WORDING = {
   payTo: "To",
   payCurrency: "Currency",
   payPer: "Per",
-  // Opportunities O8: the freelance and project sources.
+  // Opportunities O8: the freelance and project feeds of an old sweep's summary.
   freelanceSources: "Freelance and project sources",
-  readOnlyWithOptIn: "Read only with your opt in",
   addMissionByHand: "Add a mission by hand",
-  noFreelanceSource:
-    "No freelance source is read. Turn one on and it is read at the next search.",
   payInvalid:
     "The pay needs whole numbers from 1 to 10,000,000, the lowest first, a currency and a period. Leave both figures empty for none.",
   // The four plain lists of the search (owner, 2026-10-27); "places" above is the third.

@@ -21,8 +21,8 @@ import pytest
 
 from app.browser import finder
 from tests.browser import test_b17_browserd as b17
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_b5_actions import Page, tab_of
-from tests.browser.test_b9_site import ScriptedFinder
 from tests.browser.test_j18_scope import discovery
 from tests.browser.test_multi_search import SearchSite, run, searching
 from tests.browser.test_selected_interactive import Policy, selected
@@ -366,7 +366,7 @@ def test_an_indeed_search_landing_anywhere_else_never_starts_the_agent(landing):
         started.append(session)
         return finder.Ran()
 
-    entry, stored, _ = run(
+    entry, _, _ = run(
         selected(url=HOME, title_include={"terms": ["robot"]}),
         site,
         ScriptedFinder(agent),
@@ -375,7 +375,6 @@ def test_an_indeed_search_landing_anywhere_else_never_starts_the_agent(landing):
     )
     assert entry["error"] in {"page_failed", "unsupported_interaction"}
     assert not started
-    assert not stored
 
 
 def test_another_platform_landing_on_a_country_like_host_never_starts_the_agent():

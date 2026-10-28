@@ -1,7 +1,7 @@
 """J16 with jobs J18: a real Unwanted places list reaches the agent of a website."""
 
 from app.browser.sources.interactive import searches_for
-from tests.browser.test_b9_site import ScriptedFinder
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_multi_search import SearchSite, run, searching
 from tests.browser.test_selected_interactive import selected
 

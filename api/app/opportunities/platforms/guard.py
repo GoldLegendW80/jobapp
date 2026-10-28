@@ -12,21 +12,19 @@ pauses the platform for PAUSE from the moment it was met; no profile save, impor
 removes it, because it lives in the sweep history and not in the profile.
 """
 
-import asyncio
 import copy
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.jobs import sweep
 from app.jobs.models import Sweep, SweepStatus
-from app.opportunities.sources.catalogue import NOT_SUPPORTED
 from app.profile.schemas import BrowserSource, PlatformConsent
 
 TEXT = (
@@ -50,10 +48,11 @@ RISK_TEXT = (
     "Automated browsing may result in account restrictions or closure. "
     "Enable it only if you accept this risk."
 )
-_FREEWORK = next(item for item in NOT_SUPPORTED if item.kind == "freework")
 PLATFORMS = {
+    # Its terms allow personal browsing only and forbid extracting its offers (checked on
+    # 2026-10-20).
     "freework": Platform(
-        _FREEWORK.name, TEXT, TEXT_VERSION, _FREEWORK.terms_url, _FREEWORK.checked_on
+        "Free-Work", TEXT, TEXT_VERSION, "https://www.free-work.com/fr/terms", "2026-10-20"
     ),
     "indeed": Platform("Indeed", RISK_TEXT, 1),
     "welcome_to_the_jungle": Platform("Welcome to the Jungle", RISK_TEXT, 1),
@@ -178,21 +177,6 @@ def sweep_refusal(
     sweeps only."""
     del sweep_id  # every sweep is judged alike, whatever the person's sweeps of the day
     return refusal(db, user_id, kind, now)
-
-
-def sweep_check(
-    sessions: sessionmaker[Session],
-    kind: str,
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> Callable[[Any], Awaitable[str | None]]:
-    def run(plan: Any) -> str | None:
-        with sessions() as db:
-            return sweep_refusal(db, plan.user_id, kind, getattr(plan, "sweep_id", None), clock())
-
-    async def check(plan: Any) -> str | None:
-        return await asyncio.to_thread(run, plan)
-
-    return check
 
 
 # --- the B14 writers ------------------------------------------------------------------------------

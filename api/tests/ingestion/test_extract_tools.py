@@ -549,8 +549,8 @@ def test_a_proposed_skills_years_experience_search_sweep_schedule_and_penalty_ar
             "already_stored": 0,
             "refused": [refusal(0, "setting", "key", sentence)],
         }
-    # The photo is no key an agent may name, under either of its names, and a board is never
-    # switched on by a document.
+    # The photo is no key an agent may name, under either of its names, nor the deleted boards
+    # (owner, 2026-10-28).
     for name, value in (("photo", "data:image/png;base64,AAAA"), ("photo_b64", "AAAA")):
         answer, _ = call(
             step_tools, PROPOSE, section="identity", items=[item(name, value, FACT_LINE)]
@@ -561,7 +561,7 @@ def test_a_proposed_skills_years_experience_search_sweep_schedule_and_penalty_ar
         )
     board = item("boards", {"ats": "ashby", "org": "example", "enabled": True}, FACT_LINE)
     answer, _ = call(step_tools, PROPOSE, section="search", items=[board])
-    assert answer["refused"] == [refusal(0, "setting", "value.enabled", sentence)]
+    assert (answer["stored"], [one["rule"] for one in answer["refused"]]) == (0, ["unknown_key"])
     assert all_items(factory) == 0
 
 

@@ -18,13 +18,10 @@ from app.profile.models import Profile
 from app.profile.schemas import COMPANY_TYPES, SENIORITIES, SearchSection
 from tests.identity.api_helpers import Api
 from tests.jobs.conftest import NOW
-from tests.jobs.fake_ats import FakeAts
-from tests.jobs.sweep_helpers import board, fake_ats, jobs_of, new_sweep, run, set_profile
+from tests.jobs.sweep_helpers import finding, jobs_of, new_sweep, run, set_profile
 from tests.jobs.sweep_helpers import search as sweep_search
 from tests.jobs.test_api import Signed, seed, sign_in
 from tests.jobs.test_scoring import skills as make_skills
-
-__all__ = ["fake_ats"]
 
 SKILLS = make_skills()
 POSTING = "About the role\n\nBuild an agent with tool use in Python. Some RAG.\n"
@@ -504,14 +501,20 @@ SENIOR = search(seniority=["senior"])
 
 
 def test_a_swept_new_posting_earns_the_bonus(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     industries = {"terms": ["agents"], "advanced_regex": False}
-    # A gate keeps the fake postings below 100, so the bonus shows in the fit.
+    # A gate keeps the postings below 100, so the bonus shows in the fit.
     skills = make_skills(gates=[{"name": "python", "terms": ["python"], "penalty": 20}])
-    swept = sweep_search(board("fake-ok", "ashby"), industries=industries)
+    swept = sweep_search(industries=industries)
     set_profile(factory, alice, swept, skills=skills.model_dump(mode="json"))
-    run(factory, new_sweep(factory, alice), fake_ats)
+    text = "Requirements: Python, agents, LLM evaluation."
+    run(
+        factory,
+        new_sweep(factory, alice),
+        finding("AI Engineer", text=text),
+        finding("Applied AI Engineer, Agents", text=f"Agents team. {text}"),
+    )
     jobs = jobs_of(factory, alice)
     assert len(jobs) == 2
     wanted = search(industries=["agents"])

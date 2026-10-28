@@ -148,7 +148,7 @@ describe("flattenSection", () => {
     );
   });
 
-  it("flattens search: terms, booleans, string lists, boards", () => {
+  it("flattens search: terms, booleans, string lists", () => {
     const rows = flattenSection("search", haraldLike().search);
     expect(rows).toContainEqual({
       path: "title_include.terms",
@@ -169,16 +169,6 @@ describe("flattenSection", () => {
       path: "contract_types",
       label: "Contract types",
       value: "CDI, Freelance",
-    });
-    expect(rows).toContainEqual({
-      path: "boards.1.enabled",
-      label: "Board 2 › Enabled",
-      value: "No",
-    });
-    expect(rows).toContainEqual({
-      path: "boards.0.extra_exclude.terms",
-      label: "Board 1 › Extra exclude terms",
-      value: "",
     });
   });
 

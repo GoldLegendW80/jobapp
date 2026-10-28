@@ -16,15 +16,11 @@ from tests.opportunities.test_o7b_api import accept, entry, profile, put, search
 from tests.profile.test_cli import run_cli
 
 
-def test_accepted_platform_is_not_selected_for_a_browser_read(api: Api, person_a: Person) -> None:
-    from app.browser.sources import readers
-    from app.jobs.sweep import enabled_sources
-
+def test_accepted_platform_is_stored_enabled(api: Api, person_a: Person) -> None:
+    # No fixed reader runs it (they were deleted, owner 2026-10-28): it serves the job websites.
     assert accept(api, person_a)["allowed"] is True
     search = SearchSection.model_validate(profile(api, person_a)["sections"]["search"])
     assert search.browser_sources[0].enabled is True
-    assert enabled_sources(search) == []
-    assert "freework" not in readers()
 
 
 def snapshot(factory: Any, who: Person) -> tuple[Any, ...]:
@@ -89,10 +85,11 @@ def test_omission_keeps_current_freework_and_intentional_linkedin_removal(
 def sources(count: int, canary: str) -> list[dict[str, Any]]:
     return [
         {
-            "kind": "vie",
+            # A LinkedIn row, off: the fixed readers' kinds were deleted (2026-10-28).
+            "kind": "linkedin",
             "query": f"{canary} {n}",
             "location": None,
-            "enabled": True,
+            "enabled": False,
             "interactive_only": False,
             "accepted_at": None,
             "text_version": None,
@@ -103,7 +100,10 @@ def sources(count: int, canary: str) -> list[dict[str, Any]]:
 
 @pytest.mark.parametrize("method", ["save", "import"])
 @pytest.mark.parametrize(
-    ("others", "included", "status"), [(9, False, 200), (9, True, 200), (10, False, 422)]
+    # Since the fixed readers went (2026-10-28) only LinkedIn and Free-Work rows exist, one each:
+    # the one row per kind check, not the cap of 10, is what a write can now exceed.
+    ("others", "included", "status"),
+    [(1, False, 200), (1, True, 200), (2, False, 422)],
 )
 def test_capacity_is_checked_after_preservation_without_partial_writes(
     api: Api,
@@ -136,7 +136,7 @@ def test_capacity_is_checked_after_preservation_without_partial_writes(
         assert after == before
     else:
         saved = after[0]["search"]
-        assert len(saved["browser_sources"]) == 10
+        assert len(saved["browser_sources"]) == 2
         assert saved["browser_sources"] == search["browser_sources"] + (
             [] if included else [expected]
         )
@@ -176,7 +176,7 @@ def test_generic_write_preserves_enabled_only_for_stored_true(
 
 
 @pytest.mark.parametrize(
-    ("others", "included", "code"), [(0, False, 0), (9, False, 0), (9, True, 0), (10, False, 2)]
+    ("others", "included", "code"), [(0, False, 0), (1, False, 0), (1, True, 0), (2, False, 2)]
 )
 def test_cli_import_keeps_off_platform_and_capacity_is_atomic(
     api: Api,
@@ -313,7 +313,9 @@ def test_rollback_query_names_exactly_the_people_holding_a_freework_entry(
     accept(api, person_a)
     other = profile(api, person_b)
     saved = search_save(
-        api, person_b, {**(other["sections"]["search"] or {}), "browser_sources": sources(1, "vie")}
+        api,
+        person_b,
+        {**(other["sections"]["search"] or {}), "browser_sources": sources(1, "other")},
     )
     assert saved.status_code == 200, saved.text
     with factory() as db:

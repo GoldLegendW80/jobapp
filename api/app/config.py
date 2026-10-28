@@ -40,16 +40,8 @@ class Settings(BaseSettings):
     db_statement_timeout_ms: int = Field(default=15_000, ge=100, le=600_000)
     # Hard ceiling on the whole health check, in seconds, whatever the database does.
     health_timeout_s: float = Field(default=2.5, gt=0, le=30)
-    # Tests only: the base address of a stub serving the Ashby, Greenhouse and Lever posting APIs
-    # under /ashby, /greenhouse and /lever (the CI e2e job's tests/ats_stub.py, the sweep tests'
-    # api/tests/jobs/fake_ats.py), used by the board check and the sweeps alike. With
-    # ATS_BASE_URL_ORG_PREFIX only the orgs starting with it go there (a scratch stack sweeping a
-    # fake board and real boards side by side). Both refused in production.
-    ats_base_url: str | None = None
-    ats_base_url_org_prefix: str | None = None
-    # Tests only (CI e2e): the worker's schedule tick every minute instead of every 5, and the
-    # ATS client's timeout short with a single attempt, so the browser journeys do not sit
-    # through production waits. Refused in production.
+    # Tests only (CI e2e): the worker's schedule tick every minute instead of every 5, so the
+    # browser journeys do not sit through production waits. Refused in production.
     test_fast_timers: bool = False
     # Queue between the api and the worker (jobs J5): arq on Redis.
     redis_url: SecretStr = SecretStr("redis://redis:6379/0")
@@ -121,8 +113,9 @@ class Settings(BaseSettings):
     browser_session_max_s: int = Field(default=1800, ge=60, le=7200)
     # Past this share of the browser container's memory limit, browserd closes the newest tab.
     browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
-    # Tests only: the browser sources of the sweep (B8, app/browser/sources) read the fixture
-    # pages under this address instead of Google Careers and mon-vie-via. Refused in production.
+    # Tests only: the job websites of the sweep (app/browser/sources) and their platform pages
+    # are read from the fixture pages under this address instead of the real hosts. Refused in
+    # production.
     browser_sources_base_url: str | None = None
     # Documents (SPEC-documents.md, app/documents/). Every setting of the module, added at once
     # by task D2 so that no later task edits this file. A render: its wall time in seconds, the
@@ -181,13 +174,6 @@ class Settings(BaseSettings):
     # address under it is read as the Ashby, Greenhouse or Lever form its path names. Refused in
     # production.
     apply_stub_base_url: str | None = None
-    # Opportunities O7 (app/opportunities/sources): the freelance and project feeds the sweep
-    # reads. A request's timeout in seconds; the top level comments read of a Hacker News thread
-    # (one request each). Tests only: the fake feeds server (tests/feeds_stub.py) answers every
-    # feed under this address. Refused in production.
-    feeds_timeout_s: float = Field(default=20.0, ge=1.0, le=120.0)
-    feeds_hn_max_comments: int = Field(default=500, ge=1, le=1_000)  # ITEMS_MAX of the feeds
-    feeds_stub_base_url: str | None = None
     # Tests only: the floor of Full auto's hold on a stack of the fake forms server, in place of
     # APPLY_HOLD_S. Refused in production and without APPLY_STUB_BASE_URL.
     test_apply_hold_s: int | None = Field(default=None, ge=60, le=899)
@@ -239,10 +225,8 @@ class Settings(BaseSettings):
         return SecretStr(value.get_secret_value().strip())
 
     @field_validator(
-        "ats_base_url",
         "apply_stub_base_url",
         "browser_sources_base_url",
-        "feeds_stub_base_url",
         "model_api_base_url",
         "google_auth_url",
         "google_token_base_url",
@@ -287,11 +271,6 @@ class Settings(BaseSettings):
             raise ValueError("APPLY_RETRY_DELAYS_S values must be between 60 and 86400 seconds")
         return ",".join(str(delay) for delay in delays)
 
-    @field_validator("ats_base_url_org_prefix", mode="after")
-    @classmethod
-    def _org_prefix(cls, value: str | None) -> str | None:
-        return value.strip() if value and value.strip() else None
-
     @field_validator("redis_url", mode="after")
     @classmethod
     def _redis(cls, value: SecretStr) -> SecretStr:
@@ -310,11 +289,6 @@ class Settings(BaseSettings):
             raise ValueError(
                 "TEST_APPLY_LINKEDIN_MIN_INTERVAL_S needs a nonproduction fake forms stack: "
                 "TEST_FAST_TIMERS and APPLY_STUB_BASE_URL"
-            )
-        if self.app_env == "production" and self.ats_base_url is not None:
-            raise ValueError(
-                "ATS_BASE_URL points the board check at a test stub and must not be set "
-                "in production"
             )
         if self.app_env == "production" and self.apply_stub_base_url is not None:
             raise ValueError(
@@ -350,11 +324,6 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BROWSER_SOURCES_BASE_URL points the browser sources at test pages and must not "
                 "be set in production"
-            )
-        if self.app_env == "production" and self.feeds_stub_base_url is not None:
-            raise ValueError(
-                "FEEDS_STUB_BASE_URL points the freelance feeds at a test server and must not be "
-                "set in production"
             )
         for name in ("google_auth_url", "google_token_base_url", "google_api_base_url"):
             if self.app_env == "production" and getattr(self, name) is not None:
@@ -478,14 +447,3 @@ def refuse_send_key(settings: Settings) -> None:
             "Invalid configuration: MAIL_SEND_KEY is refused in the worker, "
             "only the api and gmailmcp load .env.mailsend"
         )
-
-
-def ats_stub_for(settings: Settings, org: str) -> str | None:
-    """The test stub's base address when this org's ATS calls go to it (ATS_BASE_URL, filtered
-    by ATS_BASE_URL_ORG_PREFIX), else None: the real ATS."""
-    if settings.ats_base_url is None:
-        return None
-    prefix = settings.ats_base_url_org_prefix
-    if prefix is not None and not org.startswith(prefix):
-        return None
-    return settings.ats_base_url

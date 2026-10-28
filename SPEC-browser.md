@@ -1,6 +1,6 @@
 # Spec: browser
 
-Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on `platform`; used by `apply` and by the jobs sweep for boards without an API. Umbrella issue: #67. Plan: [tasks/browser/todo.md](tasks/browser/todo.md). The owner's decisions of 2026-10-14 are taken (below); nothing is built.
+Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on `platform`; used by `apply` and by the jobs sweep's website search. Umbrella issue: #67. Plan: [tasks/browser/todo.md](tasks/browser/todo.md). The owner's decisions of 2026-10-14 are taken (below); nothing is built.
 
 ## Objective
 
@@ -95,7 +95,7 @@ browser container (image jobapp-browser, arm64, Debian slim)
 
 ## The second use: finding jobs where there is no API
 
-The source modes below describe the existing narrow readers. The owner's broader model-driven search is specified separately in [interactive discovery](#interactive-discovery-626) and [SPEC-jobs](SPEC-jobs.md#interactive-search-626); selecting that mode must not silently use one of these readers instead.
+The source modes below describe the narrow readers of B8 to B10. Since 2026-10-28 (owner: "Delete it") the fixed readers (Google Careers, Business France VIE, company career pages, LinkedIn's own reader, `api/app/browser/sources/google_careers.py`, `vie.py`, `site.py` and LinkedIn's reader class) are deleted, and every search runs the job websites ticked in Find jobs; what stays is LinkedIn's address and wall helpers, the LinkedIn and Free-Work consent rows of `search.browser_sources` (kinds `linkedin` and `freework` only, older rows of other kinds are ignored on read and dropped on the next save) and Apply's own Google Careers and VIE form adapters. The list is kept as history. The owner's broader model-driven search is specified separately in [interactive discovery](#interactive-discovery-626) and [SPEC-jobs](SPEC-jobs.md#interactive-search-626); selecting that mode must not silently use one of these readers instead.
 
 The jobs sweep (SPEC-jobs) covers Ashby, Greenhouse and Lever by API. Sources that need a browser become **browser sources**, declared in the person's `search` section beside the boards, swept in `sweep` leases at night or when the browser is idle, results upserted through the jobs module's own `add` path (status `found`, scored, never apply rules applied) with the posting text saved:
 - **Google Careers** and **Business France VIE** (mon-vie-via): public result pages read by deterministic extractors, no model.

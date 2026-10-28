@@ -1,10 +1,11 @@
 """Opportunities O3: the pay and the work mode of a posting (tasks/opportunities/todo.md, O3).
 
 The accept and refuse table of app/opportunities/pay.py (30 to 40 neighbours around each shape of
-the allow list), the work mode of a location, what Ashby and Lever state, the sweep filling the
-columns, the migration's check, PATCH keeping the person's value through a rescore and a new
-sweep, the deck's card and the posting's detail, and isolation between two people. Everything is
-invented: no real company, person or site.
+the allow list), the work mode of a location, the sweep filling the columns from what a website
+found (the ATS APIs and the pay they stated are gone, owner 2026-10-28), the migration's check,
+PATCH keeping the person's value through a rescore and a new sweep, the deck's card and the
+posting's detail, and isolation between two people. Everything is invented: no real company,
+person or site.
 """
 
 from __future__ import annotations
@@ -12,24 +13,20 @@ from __future__ import annotations
 import time
 import uuid
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.jobs import ats
 from app.jobs.models import ContractType, Job, SweepStatus
 from app.opportunities.pay import Pay, pay_of, pay_text, pays, stated_pay, work_mode_of
 from tests.identity.api_helpers import Api
-from tests.jobs.fake_ats import FakeAts
-from tests.jobs.sweep_helpers import board, new_sweep, run, set_profile
+from tests.jobs.sweep_helpers import finding, new_sweep, run, set_profile
 from tests.opportunities.conftest import Person, add_posting, deck_search, get_deck
 
 NBSP, NNBSP, THIN = " ", " ", " "
 CSRF = {"X-Requested-With": "jobapp"}
-TZ = ZoneInfo("Europe/Paris")
 
 
 def y(low: int, high: int, currency: str = "EUR", period: str = "year") -> Pay:
@@ -864,203 +861,6 @@ def test_stated_pay(
     assert stated_pay(low, high, currency, period) == expected
 
 
-# --- what the ATS states ------------------------------------------------------------------------
-
-
-def _ashby_job(**extra: Any) -> dict[str, Any]:
-    return {
-        "title": "AI Engineer",
-        "location": "Paris",
-        "jobUrl": "https://jobs.example.org/a/1",
-        "publishedAt": "2026-10-01T08:00:00Z",
-        "descriptionPlain": "TJM 600 €",
-        **extra,
-    }
-
-
-def _salary(low: Any, high: Any, currency: str = "EUR", interval: str = "1 YEAR") -> dict:
-    return {
-        "compensationType": "Salary",
-        "interval": interval,
-        "currencyCode": currency,
-        "minValue": low,
-        "maxValue": high,
-    }
-
-
-@pytest.mark.parametrize(
-    ("extra", "pay", "mode"),
-    [
-        ({}, None, None),
-        ({"compensation": None, "workplaceType": None}, None, None),
-        (
-            {"compensation": {"summaryComponents": [_salary(60000, 70000)]}},
-            y(60000, 70000),
-            None,
-        ),
-        (
-            {
-                "compensation": {
-                    "summaryComponents": [
-                        {"compensationType": "EquityPercentage", "minValue": 0.1, "maxValue": 1},
-                        _salary(60000, 70000),
-                    ]
-                },
-                "workplaceType": "Hybrid",
-            },
-            y(60000, 70000),
-            "hybrid",
-        ),
-        (
-            {"compensation": {"summaryComponents": [_salary(80, 95, "USD", "1 HOUR")]}},
-            y(80, 95, "USD", "hour"),
-            None,
-        ),
-        (
-            {
-                "compensation": {
-                    "compensationTiers": [
-                        {"components": [_salary(60000, 70000)]},
-                        {"components": [_salary(60000, 70000)]},
-                    ]
-                }
-            },
-            y(60000, 70000),
-            None,
-        ),
-        (
-            {
-                "compensation": {
-                    "compensationTiers": [
-                        {"components": [_salary(60000, 70000)]},
-                        {"components": [_salary(50000, 60000, "GBP")]},
-                    ]
-                }
-            },
-            None,  # tiers that disagree: no pay rather than a guess
-            None,
-        ),
-        (
-            {"compensation": {"summaryComponents": [_salary(60000, 70000, "EUR", "1 WEEK")]}},
-            None,
-            None,
-        ),
-        ({"compensation": {"summaryComponents": [_salary(None, 70000)]}}, None, None),
-        ({"compensation": "€60K"}, None, None),
-        ({"compensation": {"summaryComponents": [_salary(60000, 70000, 5)]}}, None, None),
-        ({"compensation": {"compensationTiers": [None, 7, {"components": "x"}]}}, None, None),
-        ({"workplaceType": "Remote"}, None, "remote"),
-        ({"workplaceType": "OnSite"}, None, "office"),
-        ({"workplaceType": "Mars"}, None, None),
-    ],
-)
-def test_ashby_states_pay_and_work_mode(extra: dict, pay: Pay | None, mode: str | None) -> None:
-    posting = ats.parse("ashby", {"jobs": [_ashby_job(**extra)]}, TZ).postings[0]
-    assert (posting.pay, posting.work_mode) == (pay, mode)
-
-
-def test_ashby_board_is_asked_for_its_compensation() -> None:
-    assert ats.api_path("ashby", "acme").endswith("?includeCompensation=true")
-
-
-@pytest.mark.parametrize(
-    ("extra", "pay", "mode"),
-    [
-        ({}, None, None),
-        (
-            {"salaryRange": {"min": 50000, "max": 60000, "currency": "GBP",
-                             "interval": "per-year-salary"}, "workplaceType": "hybrid"},
-            y(50000, 60000, "GBP"),
-            "hybrid",
-        ),
-        (
-            {"salaryRange": {"min": 90000, "max": 110000, "currency": "CAD",
-                             "interval": "per-year-salary"}, "workplaceType": "remote"},
-            y(90000, 110000, "CAD"),
-            "remote",
-        ),
-        (
-            {"salaryRange": {"min": 40, "max": 55, "currency": "USD",
-                             "interval": "per-hour-wage"}, "workplaceType": "onsite"},
-            y(40, 55, "USD", "hour"),
-            "office",
-        ),
-        (
-            {"salaryRange": {"min": 500, "max": 700, "currency": "EUR",
-                             "interval": "one-time"}, "workplaceType": "unspecified"},
-            None,
-            None,
-        ),
-        ({"salaryRange": {"min": 60000, "max": 50000, "currency": "EUR",
-                          "interval": "per-year-salary"}}, None, None),
-        ({"salaryRange": {"min": 60000, "max": 70000, "currency": "ZZZ",
-                          "interval": "per-year-salary"}}, None, None),
-        ({"salaryRange": []}, None, None),
-        ({"workplaceType": "on-site"}, None, "office"),  # Lever's docs spell it so
-        ({"salaryRange": {"min": 50000, "max": 60000, "currency": 7,
-                          "interval": "per-year-salary"}}, None, None),
-    ],
-)  # fmt: skip
-def test_lever_states_pay_and_work_mode(extra: dict, pay: Pay | None, mode: str | None) -> None:
-    job = {
-        "text": "AI Engineer",
-        "categories": {"location": "Paris"},
-        "hostedUrl": "https://jobs.example.org/l/1",
-        "createdAt": 1_790_000_000_000,
-        "descriptionPlain": "Agents.",
-        **extra,
-    }
-    posting = ats.parse("lever", [job], TZ).postings[0]
-    assert (posting.pay, posting.work_mode) == (pay, mode)
-
-
-BAD_FIGURES = ("NaN", "Infinity", "-Infinity", "1e400")
-
-
-@pytest.mark.parametrize("figure", BAD_FIGURES)
-@pytest.mark.parametrize("side", ["min", "max"])
-def test_ashby_bad_figures_are_no_pay(figure: str, side: str) -> None:
-    low, high = (figure, "70000") if side == "min" else ("60000", figure)
-    raw = (
-        '{"jobs":[{"title":"AI Engineer","jobUrl":"https://jobs.example.org/a/1",'
-        '"workplaceType":"Remote","compensation":{"summaryComponents":[{"compensationType":'
-        f'"Salary","interval":"1 YEAR","currencyCode":"EUR","minValue":{low},"maxValue":{high}}}'
-        ']}},{"title":"AI Engineer 2","jobUrl":"https://jobs.example.org/a/2"}]}'
-    ).encode()
-    result = ats.decode("ashby", raw, TZ)
-    assert [(p.title, p.pay, p.work_mode) for p in result.postings] == [
-        ("AI Engineer", None, "remote"),
-        ("AI Engineer 2", None, None),
-    ]
-    assert result.invalid == 0
-
-
-@pytest.mark.parametrize("figure", BAD_FIGURES)
-@pytest.mark.parametrize("side", ["min", "max"])
-def test_lever_bad_figures_are_no_pay(figure: str, side: str) -> None:
-    low, high = (figure, "60000") if side == "min" else ("50000", figure)
-    raw = (
-        '[{"text":"AI Engineer","hostedUrl":"https://jobs.example.org/l/1",'
-        '"workplaceType":"hybrid","salaryRange":{"min":' + low + ',"max":' + high + ","
-        '"currency":"EUR","interval":"per-year-salary"}}]'
-    ).encode()
-    result = ats.decode("lever", raw, TZ)
-    assert [(p.title, p.pay, p.work_mode) for p in result.postings] == [
-        ("AI Engineer", None, "hybrid")
-    ]
-
-
-def test_greenhouse_states_neither() -> None:
-    job = {
-        "title": "AI Engineer",
-        "location": {"name": "Remote"},
-        "absolute_url": "https://jobs.example.org/g/1",
-        "content": "&lt;p&gt;$120,000 a year&lt;/p&gt;",
-    }
-    posting = ats.parse("greenhouse", {"jobs": [job]}, TZ).postings[0]
-    assert (posting.pay, posting.work_mode) == (None, None)
-
-
 # --- the sweep, the database, the API -----------------------------------------------------------
 
 
@@ -1074,61 +874,50 @@ def _postings(factory: sessionmaker[Session], owner: Person) -> dict[str, Job]:
         return {row.title: row for row in rows}
 
 
-def _sweep(factory: sessionmaker[Session], owner: Person, fake: FakeAts, ats_name: str) -> None:
-    set_profile(factory, owner.user_id, deck_search(boards=[board("fake-pay", ats_name)]))
-    run(factory, new_sweep(factory, owner.user_id), fake)
-
-
-@pytest.mark.parametrize(
-    ("ats_name", "stated", "unstated_mode"),
-    [
-        ("ashby", (60000, 70000, "EUR", "year", "hybrid"), None),
-        # The fake Lever states "onsite" for a posting that says nothing else.
-        ("lever", (50000, 60000, "GBP", "year", "hybrid"), "office"),
-        ("greenhouse", (None, None, None, None, None), None),
-    ],
+# What a sweep's website finds (owner, 2026-10-28: the ATS APIs and the pay they stated are gone;
+# pay comes from the text, the work mode from the location).
+PAY_FOUND = (
+    finding(
+        "AI Engineer, Pay Stated",
+        location="Paris, France (hybrid)",
+        text="Build agents with Python and LLM evaluation. 60,000 to 70,000 EUR a year.",
+    ),
+    finding(
+        "GenAI Engineer, Freelance",
+        location="Paris, Télétravail",
+        text="Mission freelance de 6 mois. TJM 600 € HT. Agents et Python.",
+    ),
+    finding(
+        "AI Engineer, Pay Not Stated",
+        location="Paris",
+        text="Competitive salary, selon profil. Agents.",
+    ),
+    finding(
+        "AI Engineer, Meal Vouchers",
+        location="Paris, on-site",
+        text="CDI. Tickets restaurant 9 € par jour. Agents et Python.",
+    ),
 )
-def test_the_sweep_stores_what_is_stated(
-    factory: sessionmaker[Session],
-    person_a: Person,
-    fake_ats: FakeAts,
-    ats_name: str,
-    stated: tuple[Any, ...],
-    unstated_mode: str | None,
-) -> None:
-    _sweep(factory, person_a, fake_ats, ats_name)
-    found = _postings(factory, person_a)
-    assert _pay_columns(found["AI Engineer, Pay Stated"]) == stated
-    # No pay from the ATS: the text's daily rate, the location's work mode.
-    assert _pay_columns(found["GenAI Engineer, Freelance"]) == (600, 600, "EUR", "day", "remote")
-    assert _pay_columns(found["AI Engineer, Pay Not Stated"]) == (None,) * 4 + (unstated_mode,)
 
 
-@pytest.mark.parametrize(("ats_name", "broken_mode"), [("ashby", "hybrid"), ("lever", "office")])
-def test_a_board_with_bad_pay_never_stalls_the_sweep(
-    factory: sessionmaker[Session],
-    person_a: Person,
-    fake_ats: FakeAts,
-    ats_name: str,
-    broken_mode: str,
-) -> None:
-    # NaN and Infinity in the ATS's pay (review of PR #498): that posting is stored without a
-    # pay, the board is done, the good board beside it too, and the sweep ends done, not
-    # timed out. The meal voucher is no pay.
-    boards = [board("fake-pay-bad", ats_name), board("fake-ok", ats_name)]
-    set_profile(factory, person_a.user_id, deck_search(boards=boards))
-    row = run(factory, new_sweep(factory, person_a.user_id), fake_ats, timeout_s=30)
+def _sweep(factory: sessionmaker[Session], owner: Person) -> None:
+    set_profile(factory, owner.user_id, deck_search())
+    row = run(factory, new_sweep(factory, owner.user_id), *PAY_FOUND)
     assert row.status is SweepStatus.done, row.error
-    s = row.stats
-    assert (s["boards_total"], s["boards_done"], s["boards_ok"], s["boards_failed"]) == (
-        2, 2, 2, [],
-    )  # fmt: skip
+
+
+def test_the_sweep_stores_what_the_text_and_location_state(
+    factory: sessionmaker[Session], person_a: Person
+) -> None:
+    _sweep(factory, person_a)
     found = _postings(factory, person_a)
-    assert {"AI Engineer", "Applied AI Engineer, Agents"} <= set(found)  # the good board
-    assert _pay_columns(found["AI Engineer, Pay Broken"]) == (None,) * 4 + (broken_mode,)
+    assert _pay_columns(found["AI Engineer, Pay Stated"]) == (60000, 70000, "EUR", "year", "hybrid")
+    assert _pay_columns(found["GenAI Engineer, Freelance"]) == (600, 600, "EUR", "day", "remote")
+    assert _pay_columns(found["AI Engineer, Pay Not Stated"]) == (None,) * 5
+    # The meal voucher is no pay.
     meal = found["AI Engineer, Meal Vouchers"]
     assert meal.contract_type is ContractType.CDI
-    assert _pay_columns(meal)[:4] == (None,) * 4
+    assert _pay_columns(meal) == (None,) * 4 + ("office",)
 
 
 def test_a_row_without_pay_and_the_check(
@@ -1155,9 +944,9 @@ def _patch(api: Api, who: Person, posting: uuid.UUID | str, **data: Any) -> Any:
 
 
 def test_a_manual_value_is_kept_through_a_rescore_and_a_new_sweep(
-    factory: sessionmaker[Session], person_a: Person, api: Api, fake_ats: FakeAts
+    factory: sessionmaker[Session], person_a: Person, api: Api
 ) -> None:
-    _sweep(factory, person_a, fake_ats, "ashby")
+    _sweep(factory, person_a)
     posting = _postings(factory, person_a)["AI Engineer, Pay Stated"]
     edited = _patch(
         api,
@@ -1180,7 +969,7 @@ def test_a_manual_value_is_kept_through_a_rescore_and_a_new_sweep(
 
     rescored = api.post("/api/jobs/rescore", token=person_a.token, json={}, headers=CSRF)
     assert rescored.status_code in (200, 202), rescored.text
-    run(factory, new_sweep(factory, person_a.user_id), fake_ats)
+    run(factory, new_sweep(factory, person_a.user_id), *PAY_FOUND)
     after = _postings(factory, person_a)["AI Engineer, Pay Stated"]
     assert _pay_columns(after) == (65000, 75000, "EUR", "year", "remote")
 
@@ -1190,7 +979,7 @@ def test_a_manual_value_is_kept_through_a_rescore_and_a_new_sweep(
     # Removed by hand: null, and nothing comes back.
     cleared = _patch(api, person_a, posting.id, pay=None, work_mode=None)
     assert cleared.status_code == 200, cleared.text
-    run(factory, new_sweep(factory, person_a.user_id), fake_ats)
+    run(factory, new_sweep(factory, person_a.user_id), *PAY_FOUND)
     assert _pay_columns(_postings(factory, person_a)["AI Engineer, Pay Stated"]) == (None,) * 5
 
 

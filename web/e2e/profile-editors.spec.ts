@@ -22,9 +22,9 @@ async function shots(page: Page, name: string, fullPage = true) {
 
 /**
  * The Facts, Skills and Search editors against the real stack through Caddy, no mocks: a fresh
- * account gets a made up profile through the operator CLI (32 fake boards, never Harald's data),
- * then the journey edits each tab, saves, reloads and finds every change. The Search tab shows
- * no company boards (owner, 2026-10-28): the saved ones stay saved through a save.
+ * account gets a made up profile through the operator CLI (never Harald's data), then the
+ * journey edits each tab, saves, reloads and finds every change. The Search tab shows no company
+ * boards and the profile holds none (owner, 2026-10-28: the board engine is deleted).
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8095 docker compose -p jobapp-p5 -f compose.yml -f compose.mac.yml up -d --build --wait
@@ -43,41 +43,6 @@ const run = Date.now().toString(36);
 const EMAIL = `e2e-editors-${run}@example.org`;
 const NAME = "Sam Example";
 const PASSWORD = `editors journey ${run} passphrase`;
-
-const FAKE_COMPANIES = [
-  "Zephyr Labs",
-  "Acme Robotics",
-  "Northwind AI",
-  "Globex",
-  "Initech",
-  "Umbrella Data",
-  "Hooli",
-  "Vandelay Systems",
-  "Stark Analytics",
-  "Wayne Compute",
-  "Tyrell Models",
-  "Cyberdyne Tools",
-  "Soylent Search",
-  "Wonka Vision",
-  "Gringotts Ledger",
-  "Oscorp Agents",
-  "Aperture Eval",
-  "Black Mesa Ops",
-  "Monarch Retail",
-  "Pied Piper",
-  "Massive Dynamic",
-  "Nakatomi Cloud",
-  "Duff Insights",
-  "Prestige Worldwide",
-  "Sirius Cyber",
-  "Bluth Logistics",
-  "Dunder Paper AI",
-  "Kramerica",
-  "Los Pollos Data",
-  "Rekall Memory",
-  "Spacely Sprockets",
-  "Weyland Yutani",
-];
 
 function fakeExport() {
   const terms = (list: string[], advanced = false) => ({
@@ -155,13 +120,6 @@ function fakeExport() {
         remote_stance: "hybrid",
         min_fit: 70,
         days: 30,
-        boards: FAKE_COMPANIES.map((company, index) => ({
-          company,
-          ats: (["ashby", "greenhouse", "lever"] as const)[index % 3],
-          org: company.toLowerCase().replaceAll(" ", "-"),
-          enabled: index % 5 !== 0,
-          extra_exclude: terms(index === 1 ? ["sales"] : []),
-        })),
         never_apply: ["No cybersecurity roles."],
         // A job website ticked in Find jobs: what every search runs and what completeness
         // counts (owner, 2026-10-28). An invented host, never opened by this journey.
@@ -346,10 +304,10 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
   expect(errors).toEqual([]);
 });
 
-test("Search: no boards shown, the saved boards kept, toggle contracts", async () => {
+test("Search: no boards shown nor held, toggle contracts", async () => {
   await openTab(page, "Search");
   // Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone, so the tab shows
-  // no company boards; the 32 saved boards stay saved.
+  // no company boards and the profile holds none.
   await expect(page.getByRole("table", { name: "Boards" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Add company" })).toHaveCount(
     0,
@@ -365,24 +323,18 @@ test("Search: no boards shown, the saved boards kept, toggle contracts", async (
   );
   await shots(page, "search");
   await save(page, "Search");
-  expect(await savedBoards(page)).toEqual({ count: 32, enabled: 25 });
+  expect(await holdsBoards(page)).toBe(false);
   expect(errors).toEqual([]);
 });
 
-/** How many boards the profile holds, and how many of them are on. */
-async function savedBoards(
-  page: Page,
-): Promise<{ count: number; enabled: number }> {
+/** Whether the search section the api returns still names boards or feeds. */
+async function holdsBoards(page: Page): Promise<boolean> {
   const answer = await page.request.get("/api/profile");
   expect(answer.ok()).toBe(true);
   const body = (await answer.json()) as {
-    sections: { search: { boards: { enabled: boolean }[] } };
+    sections: { search: Record<string, unknown> };
   };
-  const boards = body.sections.search.boards;
-  return {
-    count: boards.length,
-    enabled: boards.filter((board) => board.enabled).length,
-  };
+  return "boards" in body.sections.search || "feeds" in body.sections.search;
 }
 
 test("a reload shows every saved change", async () => {
@@ -407,6 +359,6 @@ test("a reload shows every saved change", async () => {
     "aria-pressed",
     "true",
   );
-  expect(await savedBoards(page)).toEqual({ count: 32, enabled: 25 });
+  expect(await holdsBoards(page)).toBe(false);
   expect(errors).toEqual([]);
 });

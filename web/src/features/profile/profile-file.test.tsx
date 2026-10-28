@@ -260,7 +260,6 @@ describe("import dialog: a valid file", () => {
     const { user, dialog } = await openImport();
     const sections = haraldLike();
     sections.answers.motivation = null;
-    sections.search.boards = [];
     await user.upload(
       within(dialog).getByLabelText("Profile file"),
       exportFile({

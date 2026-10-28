@@ -17,7 +17,7 @@ The runbooks are in `docs/runbooks/`, one file per topic. Pick the file by the l
 | [ci-runners-mac.md](docs/runbooks/ci-runners-mac.md) | The optional CI runners on the Mac (`ops/ci-runners.sh`) | Starting, updating or debugging the runners |
 | [public-url.md](docs/runbooks/public-url.md) | Tailscale Funnel, headers, request limits, the quick tunnel fallback | Anything about the public URL, Caddy or request limits |
 | [accounts.md](docs/runbooks/accounts.md) | First admin, invites, managing accounts, sign in throttling | Creating, inviting or removing a user |
-| [profile-and-jobs-data.md](docs/runbooks/profile-and-jobs-data.md) | Profile export and import, board check, jobs import and files | Moving a profile or the owner's job list in or out |
+| [profile-and-jobs-data.md](docs/runbooks/profile-and-jobs-data.md) | Profile export and import, jobs import and files | Moving a profile or the owner's job list in or out |
 | [sweeps-and-worker.md](docs/runbooks/sweeps-and-worker.md) | Find jobs sweeps and the worker | Working on sweeps or the worker |
 | [agent-runs.md](docs/runbooks/agent-runs.md) | Claude agents in the worker, image and credential | Working on agent runs |
 | [profile-documents.md](docs/runbooks/profile-documents.md) | Fill my profile with an agent, the documents step | Working on the profile fill page |

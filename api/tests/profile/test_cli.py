@@ -67,9 +67,7 @@ def test_convert_writes_the_document(tmp_path: Path, capsys: pytest.CaptureFixtu
     converted = tmp_path / "out.json"
     assert main(["convert", "--source-dir", str(tmp_path / "job"), "--out", str(converted)]) == 0
     out = capsys.readouterr().out
-    assert out == (
-        f"Wrote {converted}: 5 fact blocks, 1 employers, 1 schools, 2 boards, photo included.\n"
-    )
+    assert out == (f"Wrote {converted}: 5 fact blocks, 1 employers, 1 schools, photo included.\n")
     body = json.loads(converted.read_text(encoding="utf-8"))
     assert body["format"] == "jobapp-profile"
     assert list(body["sections"]) == list(SECTIONS)

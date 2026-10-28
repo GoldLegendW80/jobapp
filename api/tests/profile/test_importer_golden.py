@@ -27,7 +27,7 @@ import pytest
 from PIL import ImageChops, ImageStat
 
 from app.profile import matching
-from app.profile.importer import SourcePaths, convert, regex_terms, wrap_skill_term
+from app.profile.importer import SourcePaths, convert, wrap_skill_term
 from app.profile.schemas import ExportDocument
 from tests.profile import images
 
@@ -78,7 +78,19 @@ def test_golden(out: dict[str, Any]) -> None:
         GOLDEN.write_text(text, encoding="utf-8")
     if not GOLDEN.is_file():
         pytest.skip(f"no golden output yet: run with UPDATE_GOLDEN=1 to write {GOLDEN}")
-    assert GOLDEN.read_text(encoding="utf-8") == text
+    golden = GOLDEN.read_text(encoding="utf-8")
+    stored = json.loads(golden)
+    sections = stored.get("sections") or {}
+    search = sections.get("search") or {}
+    onboarding = (sections.get("preferences") or {}).get("onboarding") or {}
+    if "boards" in search or "starter_handled" in onboarding:
+        # A golden written before the boards and the starter list were deleted (2026-10-28)
+        # still holds what the importer no longer writes: compared without it until it is
+        # written again.
+        search.pop("boards", None)
+        onboarding.pop("starter_handled", None)
+        golden = json.dumps(stored, ensure_ascii=False, indent=2) + "\n"
+    assert golden == text
 
 
 # --- everything in the sources is in the output -------------------------------------------------
@@ -186,19 +198,11 @@ def test_every_skills_category_term_and_gate(out: dict[str, Any], root: Path) ->
         }
 
 
-def test_every_board_and_search_setting(out: dict[str, Any], root: Path) -> None:
+def test_every_search_setting(out: dict[str, Any], root: Path) -> None:
     source = json.loads((root / "engine" / "boards.json").read_text(encoding="utf-8"))
     search = out["sections"]["search"]
-    assert [(b["company"], b["ats"], b["org"]) for b in search["boards"]] == [
-        (b["company"], b["ats"], b["org"]) for b in source["boards"]
-    ]
-    assert all(b["enabled"] for b in search["boards"])
-    for board, original in zip(search["boards"], source["boards"], strict=True):
-        if "exclude_re" in original:
-            assert board["extra_exclude"]["advanced_regex"] is True
-            assert board["extra_exclude"]["terms"] == regex_terms(original["exclude_re"])
-        else:
-            assert board["extra_exclude"] == {"advanced_regex": False, "terms": []}
+    # The regexes only: the company boards were deleted (owner, 2026-10-28).
+    assert "boards" not in search
     assert len(source["exclude_re"]) > 500  # the reason it had to be split
     for name in ("title_include", "title_exclude", "location"):
         assert search[name]["advanced_regex"] is True
@@ -330,19 +334,6 @@ def test_search_terms_decide_like_the_regex(
         assert matching.matches(terms["terms"], terms["advanced_regex"], text) is expected, text
         hits += expected
     assert 0 < hits < len(texts)  # the samples exercise both outcomes
-
-
-def test_board_extra_excludes_decide_like_the_regex(
-    root: Path, out: dict[str, Any], postings: list[dict[str, str]]
-) -> None:
-    source = json.loads((root / "engine" / "boards.json").read_text(encoding="utf-8"))
-    for board, original in zip(out["sections"]["search"]["boards"], source["boards"], strict=True):
-        if "exclude_re" not in original:
-            continue
-        old = re.compile(original["exclude_re"], re.I)
-        terms = board["extra_exclude"]
-        for text in [*samples(postings, "title"), *probe_words(original["exclude_re"])]:
-            assert matching.matches(terms["terms"], True, text) is (old.search(text) is not None)
 
 
 def test_the_whole_title_filter_decides_like_find(

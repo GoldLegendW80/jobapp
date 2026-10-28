@@ -10,7 +10,7 @@ from app.opportunities.platforms_router import PlatformIn
 from app.profile.schemas import BrowserSource, SearchSection
 
 
-@pytest.mark.parametrize("kind", ["linkedin", "freework", "site", "vie", "google_careers"])
+@pytest.mark.parametrize("kind", ["linkedin", "freework"])
 def test_old_source_rows_default_to_legacy_intent(kind: str) -> None:
     source = BrowserSource.model_validate({"kind": kind, "query": "Robotics"})
     assert source.interactive_only is False
@@ -31,9 +31,13 @@ def test_protected_intent_does_not_grant_permission(kind: str, flag: bool) -> No
 
 
 @pytest.mark.parametrize("kind", ["site", "vie", "google_careers"])
-def test_unprotected_kinds_cannot_carry_permission_only_intent(kind: str) -> None:
+def test_rows_of_the_deleted_readers_are_dropped_not_refused(kind: str) -> None:
+    # The fixed readers were deleted (owner, 2026-10-28): a stored row of theirs, even one that
+    # carries the intent flag, is dropped by the section; the kind alone is no longer a row.
+    row = {"kind": kind, "query": "Robotics", "interactive_only": True}
+    assert SearchSection.model_validate({"browser_sources": [row]}).browser_sources == []
     with pytest.raises(ValidationError):
-        BrowserSource.model_validate({"kind": kind, "query": "Robotics", "interactive_only": True})
+        BrowserSource.model_validate(row)
 
 
 @pytest.mark.parametrize("value", [None, "true", "false", 0, 1, [], {}])

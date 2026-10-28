@@ -1,8 +1,5 @@
-"""Every frozen source has one durable identity throughout the sweep lifecycle.
-
-Every search runs the websites alone since the owner's decision of 2026-10-28; these tests
-start the sweep engine with every kind of source (`websites_only=False`, its internal start),
-so the identities of boards, feeds and readers stay pinned while the engine keeps them."""
+"""Every frozen source (a ticked job website) has one durable identity throughout the sweep
+lifecycle: start, reopened views, progress, and every end."""
 
 import asyncio
 import copy
@@ -13,65 +10,66 @@ from datetime import timedelta
 import pytest
 import sqlalchemy as sa
 
-from app.jobs import ats, sweep
+from app.jobs import sweep
 from app.jobs.models import Sweep
 from app.jobs.sweep_router import sweep_out
-from app.opportunities.sources import FeedClient, FeedRunner
 from app.profile import schemas
 from app.profile import service as profile_service
-from tests.browser.test_b8_sources import FakeTools
-from tests.jobs.sweep_helpers import board, read_sweep, search, set_profile
+from tests.browser.fakes import FakeTools
+from tests.jobs.sweep_helpers import (
+    each_website,
+    finding,
+    read_sweep,
+    search,
+    set_profile,
+    website_runner,
+)
 from tests.jobs.test_frozen_search_scope import CANARY, alice, fake_queue, site
-from tests.jobs.test_sweep_browser_sources import offer, runner
-from tests.jobs.test_sweep_browser_sources import site as browser_pages
 
 __all__ = ["alice", "fake_queue"]
 
-
-def start_everything(factory, alice, clock, queue):
-    """The engine's start with every enabled source, through the shared `begin`."""
-    return asyncio.run(
-        sweep.begin(factory, queue, alice.id, clock(), sweep_out, websites_only=False)
-    )
+SECOND, OFF = "https://second.example.org/jobs", "https://off.example.org/"
+BEFORE, AFTER = "https://before.example.org/", "https://after.example.org/"
 
 
-def mixed_search():
+def start(factory, alice, clock, queue):
+    """The start of POST /api/jobs/sweeps, through the shared `begin`."""
+    return asyncio.run(sweep.begin(factory, queue, alice.id, clock(), sweep_out))
+
+
+def two_websites(**overrides):
     return search(
-        board("fake-api"),
-        feeds=[{"kind": "remoteok", "enabled": True}],
         browser_sources=[
-            {"kind": "google_careers", "query": "ai", "enabled": True},
-            {"kind": "site", "query": "https://legacy.example.org/", "enabled": True},
-        ],
-        interactive_sites=[site()],
+            {
+                "kind": "linkedin", "query": "AI", "enabled": True,
+                "accepted_at": "2026-10-08T09:30:00+00:00", "text_version": 1,
+            },
+        ],  # a consent row: never a source of its own
+        interactive_sites=[site(), site(url=SECOND), site(url=OFF, enabled=False)],
         interactive_instructions=CANARY,
-    )
+        **overrides,
+    )  # fmt: skip
 
 
 @pytest.mark.parametrize("ending", ["done", "fail", "reap", "crash", "queue"])
 def test_all_selected_sources_survive_start_reopened_and_terminal_views(
     ending, factory, clock, api, alice, fake_queue
 ):
-    set_profile(factory, alice.id, mixed_search())
+    set_profile(factory, alice.id, two_websites())
     fake_queue.down = ending == "queue"
-    begun = start_everything(factory, alice, clock, fake_queue)
+    begun = start(factory, alice, clock, fake_queue)
     assert begun.outcome == ("queue_down" if ending == "queue" else "started")
     with factory() as db:
         row = db.query(Sweep).filter_by(user_id=alice.id).one()
         sweep_id = row.id
     body = sweep_out(row).model_dump(mode="json")
-    assert body["search_scope"]["source_count"] == 5
+    assert body["search_scope"]["source_count"] == 2
     entries = body["sources"]
-    assert len(entries) == 5
+    assert len(entries) == 2
     expected = {(entry["source_id"], entry["mode"]) for entry in entries}
-    assert len(expected) == 5
-    assert {mode for _, mode in expected} == {
-        "api",
-        "feed",
-        "fixed_reader",
-        "legacy_finder",
-        "llm_browser",
-    }
+    assert len(expected) == 2
+    assert {mode for _, mode in expected} == {"llm_browser"}
+    assert [entry["host"] for entry in entries] == ["jobs.example.org", "second.example.org"]
     if ending != "queue":
         assert begun.view.model_dump(mode="json")["sources"] == entries
         assert {entry["phase"] for entry in entries} == {"pending"}
@@ -101,7 +99,7 @@ def test_all_selected_sources_survive_start_reopened_and_terminal_views(
         out = reopened.json()
         actual = out["items"][0] if "items" in out else out
         assert {(entry["source_id"], entry["mode"]) for entry in actual["sources"]} == expected
-        assert len(actual["sources"]) == 5
+        assert len(actual["sources"]) == 2
         assert {entry["phase"] for entry in actual["sources"]} == {"done"}
     events = api.request("GET", f"/api/jobs/sweeps/{sweep_id}/events", token=alice.token)
     assert CANARY not in events.text
@@ -111,42 +109,27 @@ def test_all_selected_sources_survive_start_reopened_and_terminal_views(
 
 def test_colon_neighbors_have_distinct_stable_source_identities(factory, clock, alice):
     selected = search(
-        browser_sources=[
-            {
-                "kind": "site",
-                "query": "https://careers.example.org/a:b",
-                "location": "c",
-                "enabled": True,
-            },
-            {
-                "kind": "site",
-                "query": "https://careers.example.org/a",
-                "location": "b:c",
-                "enabled": True,
-            },
-            {
-                "kind": "site",
-                "query": "https://careers.example.org/a:b",
-                "location": "c",
-                "enabled": True,
-            },
+        interactive_sites=[
+            site(url="https://careers.example.org/a:b"),
+            site(url="https://careers.example.org/a"),
         ]
     )
     set_profile(factory, alice.id, selected)
-    begun = sweep._insert(factory, alice.id, clock(), sweep_out, websites_only=False)
+    begun = sweep._insert(factory, alice.id, clock(), sweep_out)
+    assert begun.outcome == "started"
     first = read_sweep(factory, begun.sweep_id).stats["search_scope"]["sources"]
-    assert len(first) == 2
     assert len({entry["source_id"] for entry in first}) == 2
     sweep.finish_done(factory, begun.sweep_id, sweep.Stats(), clock())
-    again = sweep._insert(factory, alice.id, clock(), sweep_out, websites_only=False)
+    again = sweep._insert(factory, alice.id, clock(), sweep_out)
     assert read_sweep(factory, again.sweep_id).stats["search_scope"]["sources"] == first
 
 
-def test_reader_updates_bind_to_frozen_entries_without_duplicate_or_counter_loss(
-    factory, clock, api, alice, fake_queue, monkeypatch
+@pytest.mark.parametrize("runner", ["fake", "real"])
+def test_website_updates_bind_to_frozen_entries_without_duplicate_or_counter_loss(
+    factory, clock, api, alice, fake_queue, monkeypatch, runner
 ):
-    set_profile(factory, alice.id, mixed_search())
-    sweep_id = start_everything(factory, alice, clock, fake_queue).sweep_id
+    set_profile(factory, alice.id, two_websites())
+    sweep_id = start(factory, alice, clock, fake_queue).sweep_id
     initial = read_sweep(factory, sweep_id).stats["sources"]
     snapshots = []
     original = sweep.save_progress
@@ -156,41 +139,32 @@ def test_reader_updates_bind_to_frozen_entries_without_duplicate_or_counter_loss
         snapshots.append(copy.deepcopy(read_sweep(factory, row_id).stats["sources"]))
 
     monkeypatch.setattr(sweep, "save_progress", record)
-
-    class EmptyAts:
-        async def fetch_board(self, *args):
-            return ats.BoardResult()
-
-    async def feed(client, config):
-        return []
-
-    feeds = FeedRunner(
-        lambda: FeedClient(stub_base_url="http://feeds.invalid"), read={"remoteok": feed}
+    browser = (
+        each_website([finding("AI Engineer")], [])
+        if runner == "fake"
+        else website_runner(FakeTools({}))
     )
-    browser = runner(FakeTools(browser_pages(offer("AI Engineer"))))
-    asyncio.run(sweep.run_sweep(factory, sweep_id, EmptyAts(), clock, feeds=feeds, browser=browser))
+    asyncio.run(sweep.run_sweep(factory, sweep_id, clock, browser=browser))
     row = read_sweep(factory, sweep_id)
     assert sweep._stats_json(row, sweep.Stats())["sources"] == row.stats["sources"]
-    expected_ids = {entry["source_id"] for entry in initial}
+    expected_ids = [entry["source_id"] for entry in initial]
     for entries in [*snapshots, row.stats["sources"]]:
-        assert len(entries) == 5
-        assert {entry["source_id"] for entry in entries} == expected_ids
-        assert all(entry["mode"] for entry in entries)
-    final = {entry["mode"]: entry for entry in row.stats["sources"]}
-    assert final["fixed_reader"]["postings"] == row.stats["new"] == 1
-    assert final["fixed_reader"]["found"] == 1
-    assert row.stats["boards_ok"] == row.stats["boards_done"] == 1
-    assert final["api"]["outcome"] == final["feed"]["outcome"] == "no_matches"
-    assert final["legacy_finder"]["reason"] == "no_credential"
-    # Several titles and places are one agent's to search now (owner, 2026-10-27, jobs J18), so
-    # the website reaches the model check, and this run has no model access.
-    assert final["llm_browser"]["reason"] == "no_credential"
-    assert all(entry["phase"] == "done" for entry in final.values())
-    assert any(any(entry["phase"] == "running" for entry in entries) for entries in snapshots)
+        assert [entry["source_id"] for entry in entries] == expected_ids
+        assert all(entry["mode"] == "llm_browser" for entry in entries)
+    first, second = row.stats["sources"]
+    assert all(entry["phase"] == "done" for entry in (first, second))
+    if runner == "fake":
+        assert first["postings"] == first["found"] == row.stats["new"] == 1
+        assert (first["outcome"], second["outcome"]) == ("complete", "no_matches")
+        assert any(any(entry["phase"] == "running" for entry in entries) for entries in snapshots)
+    else:
+        # No model access in this run: each website says so, and no page is opened.
+        assert first["reason"] == "no_credential"
+        assert row.stats["new"] == 0
 
 
 def test_held_edit_wins_before_start_and_returns_revision_conflict(factory, clock, alice):
-    set_profile(factory, alice.id, search(board("fake-before")))
+    set_profile(factory, alice.id, search(interactive_sites=[site(url=BEFORE)]))
     attempted = threading.Event()
     main_thread = threading.get_ident()
     engine = factory.kw["bind"]
@@ -206,7 +180,7 @@ def test_held_edit_wins_before_start_and_returns_revision_conflict(factory, cloc
                 editor,
                 alice.id,
                 "search",
-                schemas.validate_section("search", search(board("fake-after"))),
+                schemas.validate_section("search", search(interactive_sites=[site(url=AFTER)])),
                 1,
                 clock(),
             )
@@ -223,7 +197,7 @@ def test_held_edit_wins_before_start_and_returns_revision_conflict(factory, cloc
 
 
 def test_held_start_wins_and_later_edit_cannot_change_frozen_scope(factory, clock, alice):
-    set_profile(factory, alice.id, search(board("fake-before")))
+    set_profile(factory, alice.id, search(interactive_sites=[site(url=BEFORE)]))
     viewed, release, edit_attempted = threading.Event(), threading.Event(), threading.Event()
     engine = factory.kw["bind"]
 
@@ -239,7 +213,7 @@ def test_held_start_wins_and_later_edit_cannot_change_frozen_scope(factory, cloc
                 db,
                 alice.id,
                 "search",
-                schemas.validate_section("search", search(board("fake-after"))),
+                schemas.validate_section("search", search(interactive_sites=[site(url=AFTER)])),
                 1,
                 clock(),
             )
@@ -252,7 +226,7 @@ def test_held_start_wins_and_later_edit_cannot_change_frozen_scope(factory, cloc
     sa.event.listen(engine, "before_cursor_execute", observe)
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            started = pool.submit(sweep._insert, factory, alice.id, clock(), view, 1, False)
+            started = pool.submit(sweep._insert, factory, alice.id, clock(), view, 1)
             try:
                 assert viewed.wait(30)
                 edited = pool.submit(edit)
@@ -264,8 +238,9 @@ def test_held_start_wins_and_later_edit_cannot_change_frozen_scope(factory, cloc
         assert begun.outcome == "started"
         row = read_sweep(factory, begun.sweep_id)
         assert row.stats["search_scope"]["profile_revision"] == 1
-        assert row.stats["search_scope"]["search"]["boards"][0]["org"] == "fake-before"
+        frozen = row.stats["search_scope"]["search"]["interactive_sites"]
+        assert [entry["url"] for entry in frozen] == [BEFORE]
         claimed = sweep.claim(factory, begun.sweep_id, clock())
-        assert claimed.boards[0].org == "fake-before"
+        assert [entry.url for entry in claimed.search.interactive_sites] == [BEFORE]
     finally:
         sa.event.remove(engine, "before_cursor_execute", observe)

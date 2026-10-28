@@ -83,7 +83,8 @@ def test_default_off_current_acceptance_server_time_and_person_isolation(
         kind: {"enabled": True, "accepted_at": clock().isoformat(), "text_version": 1}
     }
     assert search["browser_sources"] == []
-    assert search.get("interactive_sites", []) == []
+    # The consent ticks no website: the person's sites are what the seeded search holds.
+    assert all(site["platform"] == "custom" for site in search.get("interactive_sites", []))
 
 
 @pytest.mark.parametrize("kind", KINDS)

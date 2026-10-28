@@ -109,8 +109,6 @@ export interface Skills {
   gates: Gate[];
 }
 
-export const ATS = ["ashby", "greenhouse", "lever"] as const;
-export type AtsName = (typeof ATS)[number];
 export const CONTRACT_TYPES = [
   "CDI",
   "CDD",
@@ -187,20 +185,9 @@ export interface DocumentsGeneration {
   daily_ceiling: number;
 }
 
-export interface Board {
-  company: string;
-  ats: AtsName;
-  org: string;
-  enabled: boolean;
-  extra_exclude: TermList;
-}
-export const BROWSER_KINDS = [
-  "google_careers",
-  "vie",
-  "site",
-  "linkedin",
-  "freework",
-] as const;
+/** The protected kinds of a browser source, consent rows owned by the browser api; any other
+ * kind is dropped by the api on read and save (owner, 2026-10-28). */
+export const BROWSER_KINDS = ["linkedin", "freework"] as const;
 export interface BrowserSource {
   kind: (typeof BROWSER_KINDS)[number];
   query: string;
@@ -302,14 +289,13 @@ export interface Search {
   remote_stance: (typeof REMOTE_STANCES)[number] | null;
   min_fit: number;
   days: number;
-  boards: Board[];
   never_apply: string[];
-  /** browser B8: job sites read in the person's browser (browser-sources-card.tsx) */
+  /** the protected LinkedIn and Free-Work consent rows, set in Find jobs */
   browser_sources?: BrowserSource[];
   /** Saved intent; browser consent remains owned by the browser API. */
   interactive_sites?: InteractiveSite[];
   interactive_instructions?: string | null;
-  /** when the boards are swept automatically; edited in Jobs (J5), kept as is by this tab */
+  /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */
   documents: DocumentsGeneration;
@@ -319,20 +305,6 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
-  /** O7: the freelance and project feeds the sweep reads; O8's sources card edits them */
-  feeds?: Feed[];
-}
-
-export const FEED_KINDS = [
-  "remoteok",
-  "weworkremotely",
-  "hackernews_freelance",
-  "hackernews_hiring",
-] as const;
-export interface Feed {
-  kind: (typeof FEED_KINDS)[number];
-  terms: TermList;
-  enabled: boolean;
 }
 
 export interface PayRange {
@@ -348,8 +320,6 @@ export interface Preferences {
     dismissed_at: string | null;
     /** the wizard's steps passed (Next or Skip), so another device resumes there */
     steps_passed: string[];
-    /** the starter list's boards and sites added or removed (O5b), never proposed again */
-    starter_handled?: string[];
   };
   documents_language: (typeof DOCUMENTS_LANGUAGES)[number];
   documents_tone: (typeof DOCUMENTS_TONES)[number];
@@ -437,7 +407,6 @@ export const EMPTY: SectionData = {
     remote_stance: null,
     min_fit: 70,
     days: 30,
-    boards: [],
     never_apply: [],
     sweep_schedule: {
       enabled: false,
@@ -635,37 +604,6 @@ export async function deletePhoto(): Promise<void> {
 /** The stored photo's address; the ETag in the query busts the browser cache when it changes. */
 export function photoUrl(etag: string): string {
   return `/api/profile/photo?v=${encodeURIComponent(etag.replaceAll('"', ""))}`;
-}
-
-// --- board check -----------------------------------------------------------------------------
-
-export const boardCheckSchema = z.object({
-  exists: z.boolean(),
-  postings: z.number().int().nonnegative().nullable(),
-  company_name: z.string().nullable().optional(),
-  error: z
-    .enum(["not_found", "timeout", "upstream_error", "blocked"])
-    .nullable()
-    .optional(),
-});
-export type BoardCheck = z.infer<typeof boardCheckSchema>;
-
-/**
- * Ask the api whether a board exists on its ATS (POST /api/profile/boards/check). The api waits
- * up to 5 seconds for the ATS and retries a failed connection once, so the browser waits longer.
- */
-export function checkBoard(
-  ats: AtsName,
-  org: string,
-  signal?: AbortSignal,
-): Promise<BoardCheck> {
-  return request("/profile/boards/check", {
-    method: "POST",
-    body: { ats, org },
-    signal,
-    timeoutMs: 15_000,
-    validate: (body) => boardCheckSchema.parse(body),
-  });
 }
 
 // --- history ---------------------------------------------------------------------------------

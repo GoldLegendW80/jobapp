@@ -24,7 +24,7 @@ from app.logging_config import JsonFormatter
 from app.opportunities import onboarding
 from app.profile.models import Profile
 from tests.identity.api_helpers import Api, Clock, make_user
-from tests.jobs.sweep_helpers import SITE, board, search, set_profile
+from tests.jobs.sweep_helpers import search, set_profile
 from tests.jobs.test_sweep_api import FakeQueue
 
 BASE = "/api/opportunities/onboarding"
@@ -425,11 +425,13 @@ def _ignored_events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]
             0,
             422,
         ),
+        # The starter list was deleted (2026-10-28): an older tab still sending its entries is
+        # not refused, they are dropped.
         (
             "preferences",
-            {"onboarding": {"steps_passed": ["pay"], "starter_handled": ["ashby:fake-ok"]}},
+            {"onboarding": {"steps_passed": ["looking"], "starter_handled": ["ashby:fake-ok"]}},
             0,
-            422,
+            200,
         ),
         ("identity", {"full_name": "Example Person"}, 0, 200),
     ],
@@ -580,7 +582,7 @@ def test_b_never_sees_a_s_steps(api: Api, new_a: Who, new_b: Who) -> None:
 def test_complete_records_and_starts_the_first_sweep(
     factory: sessionmaker[Session], api: Api, queue: FakeQueue, new_a: Who
 ) -> None:
-    set_profile(factory, new_a.user_id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, new_a.user_id, search())
     response = api.post(f"{BASE}/complete", token=new_a.token)
     assert response.status_code == 200, response.text
     body = response.json()
@@ -598,7 +600,7 @@ def test_complete_records_and_starts_the_first_sweep(
 def test_complete_while_a_sweep_runs_ends_the_wizard_with_409(
     factory: sessionmaker[Session], api: Api, queue: FakeQueue, new_a: Who
 ) -> None:
-    set_profile(factory, new_a.user_id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, new_a.user_id, search())
     running = api.post("/api/jobs/sweeps", token=new_a.token)
     assert running.status_code == 202, running.text
     response = api.post(f"{BASE}/complete", token=new_a.token)
@@ -614,8 +616,10 @@ def test_complete_while_a_sweep_runs_ends_the_wizard_with_409(
 def test_complete_without_websites_still_finishes(
     factory: sessionmaker[Session], api: Api, queue: FakeQueue, new_a: Who
 ) -> None:
-    # An enabled board is no longer a search (owner, 2026-10-28): the wizard ends, no sweep.
-    set_profile(factory, new_a.user_id, search(board("fake-ok")))
+    # A board an older release stored is no longer a search (owner, 2026-10-28): the wizard
+    # ends, no sweep.
+    old_board = {"ats": "ashby", "org": "example-robotics", "enabled": True}
+    set_profile(factory, new_a.user_id, search(interactive_sites=[], boards=[old_board]))
     response = api.post(f"{BASE}/complete", token=new_a.token)
     assert response.status_code == 200
     assert response.json()["sweep"] == "no_websites"
@@ -628,7 +632,7 @@ def test_complete_without_websites_still_finishes(
 def test_complete_with_the_queue_down_fails_the_sweep_at_once(
     factory: sessionmaker[Session], api: Api, queue: FakeQueue, new_a: Who
 ) -> None:
-    set_profile(factory, new_a.user_id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, new_a.user_id, search())
     queue.down = True
     body = api.post(f"{BASE}/complete", token=new_a.token).json()
     assert body["sweep"] == "queue_down"

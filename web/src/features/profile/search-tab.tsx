@@ -4,9 +4,8 @@
  * minimum fit to shortlist, the posting age window, the sign in to job websites (B17) and the
  * never-apply rules. Then what the person aims for (target-fields.tsx, O4) and, as a card with
  * its own Save, the preferences section (preferences-card.tsx). Searches run the job websites
- * ticked in Find jobs alone (owner, 2026-10-28): the company boards, the starter list, the job
- * sites read in the browser and the freelance feeds are no longer shown here, and what a profile
- * holds of them stays saved, carried unchanged through every save.
+ * ticked in Find jobs alone (owner, 2026-10-28): the company boards, the starter list, the fixed
+ * browser readers and the freelance feeds are deleted, and the api drops any it still holds.
  */
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -107,7 +106,7 @@ function SearchForms({
       schema: searchSchema,
       toForm: toSearchForm,
       fromForm: fromSearchForm,
-      rules: { unique: { boards: "org" }, wrapped: ["never_apply"] },
+      rules: { wrapped: ["never_apply"] },
       onDirtyChange: onSearchDirty,
     });
   const { control } = form;
@@ -200,8 +199,7 @@ function SearchForms({
           </Group>
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           {/* Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. The
-              company boards, job sites and feeds a profile holds stay saved (the form carries
-              them through every save) and are no longer shown or searched. */}
+              company boards, fixed readers and feeds are deleted; the api drops any it holds. */}
           <p className="text-sm text-muted-foreground">
             Searches run the job websites ticked in Find jobs.
           </p>

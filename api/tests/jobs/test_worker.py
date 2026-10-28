@@ -1,7 +1,8 @@
 """The worker on a real Redis 7 (TEST_REDIS_URL or REDIS_URL, else a throwaway container) and a
 real Postgres: a sweep queued by the api's Queue runs to its end, the healthcheck, the schedule
 cron enqueueing each due slot once (frozen clock), job ids deduplicating, stale sweeps reaped at
-start, a stop interrupting a running sweep cleanly, and a Redis that is down."""
+start, a stop interrupting a running sweep cleanly, and a Redis that is down. The sweeps run a
+fake of the website Runner (tests/jobs/sweep_helpers.py) put in the worker's context."""
 
 import asyncio
 import gc
@@ -30,21 +31,16 @@ from app.jobs import sweep
 from app.jobs.models import Job, Sweep, SweepStatus, SweepTrigger
 from app.logging_config import JsonFormatter
 from tests.conftest import make_settings
-from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import (
-    SITE,
-    board,
-    client,
-    fake_ats,
+    finding,
     new_sweep,
     now,
     search,
     set_profile,
+    websites,
 )
 from tests.pg import docker_available
 from tests.redis_server import start_redis
-
-__all__ = ["fake_ats"]
 
 # How long the write of a job's end is held open for a stop to land in it.
 END_WRITE_PAUSE_S = 0.3
@@ -91,19 +87,16 @@ def flush_redis(url: str) -> None:
 
 
 @pytest.fixture
-def settings(migrated_url: str, redis_url: str, fake_ats: FakeAts) -> Iterator[Settings]:
+def settings(migrated_url: str, redis_url: str) -> Iterator[Settings]:
     flush_redis(redis_url)
-    return make_settings(
-        migrated_url,
-        redis_url=redis_url,
-        ats_base_url=fake_ats.url,
-        ats_base_url_org_prefix="fake-",
-    )
+    return make_settings(migrated_url, redis_url=redis_url)
 
 
-def context(settings: Settings, fake: FakeAts, **options: Any) -> dict[str, Any]:
+def context(settings: Settings, browser: sweep.BrowserHook | None = None) -> dict[str, Any]:
+    """The worker's context with a fake of the website Runner (by default one whose websites
+    find nothing): the real one needs browserd."""
     ctx = worker.make_context(settings)
-    ctx["ats_client"] = lambda: client(fake, **options)
+    ctx["browser_sources"] = browser if browser is not None else websites()
     return ctx
 
 
@@ -160,10 +153,11 @@ def status_of(factory: sessionmaker[Session], sweep_id: uuid.UUID) -> SweepStatu
 
 
 def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
-    settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), board("fake-ok2", "lever")))
+    set_profile(factory, alice, search())
     sweep_id = new_sweep(factory, alice)
+    found = [finding("AI Engineer"), finding("GenAI Engineer"), finding("Forward Deployed")]
     api_queue = queues.Queue(settings.redis_url.get_secret_value())
 
     async def scenario(workers: list[Worker]) -> None:
@@ -193,7 +187,7 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
             assert time.monotonic() < deadline, "no health record"
             await asyncio.sleep(0.5)
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings, websites(*found)), scenario)
     with factory() as db:
         count = db.execute(
             sa.select(sa.func.count()).select_from(Job).where(Job.user_id == alice)
@@ -204,7 +198,7 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
 
 
 def test_every_queue_is_healthy_right_at_start_and_unchanged_after_an_interval(
-    settings: Settings, factory: sessionmaker[Session], fake_ats: FakeAts
+    settings: Settings, factory: sessionmaker[Session]
 ) -> None:
     """No interval has elapsed when the workers are ready, yet `--check` passes; a second record
     inside the interval changes nothing, one after it refreshes the same key."""
@@ -231,7 +225,7 @@ def test_every_queue_is_healthy_right_at_start_and_unchanged_after_an_interval(
             await client.aclose()
         assert await worker.check(settings) == 0
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings), scenario)
     assert "first" in seen
 
 
@@ -239,7 +233,6 @@ def test_every_queue_is_healthy_right_at_start_and_unchanged_after_an_interval(
 def test_a_redis_error_in_the_startup_record_does_not_abort_the_start(
     settings: Settings,
     factory: sessionmaker[Session],
-    fake_ats: FakeAts,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     error_type: type[Exception],
@@ -278,7 +271,7 @@ def test_a_redis_error_in_the_startup_record_does_not_abort_the_start(
         finally:
             await client.aclose()
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings), scenario)
     warnings = [r for r in caplog.records if "startup health record failed" in r.getMessage()]
     assert len(warnings) == 1
     assert vars(warnings[0])["error_type"] == error_type.__name__
@@ -288,7 +281,7 @@ def test_a_redis_error_in_the_startup_record_does_not_abort_the_start(
 
 
 def test_check_fails_for_a_queue_whose_worker_did_not_start(
-    settings: Settings, factory: sessionmaker[Session], fake_ats: FakeAts
+    settings: Settings, factory: sessionmaker[Session]
 ) -> None:
     ghost = worker.QueueSpec(name="ghost", functions=())
 
@@ -296,14 +289,19 @@ def test_check_fails_for_a_queue_whose_worker_did_not_start(
         assert await worker.check(settings) == 0
         assert await worker.check(settings, [*worker.queues(settings), ghost]) == 1
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings), scenario)
 
 
 def test_stop_interrupts_a_running_sweep_cleanly(
-    settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-timeout")))
+    set_profile(factory, alice, search())
     sweep_id = new_sweep(factory, alice)
+    entered = threading.Event()
+
+    async def slow_website(*_: Any) -> None:
+        entered.set()
+        await asyncio.sleep(60)  # a website still being read when the worker stops
 
     async def scenario(workers: list[Worker]) -> None:
         pool = workers[0].pool
@@ -319,27 +317,17 @@ def test_stop_interrupts_a_running_sweep_cleanly(
                 row = db.get(Sweep, sweep_id)
                 return bool(row and row.stats.get("picked_at"))
 
-        def asked() -> bool:
-            with fake_ats.state.lock:
-                return any(path.endswith("/fake-timeout") for path in fake_ats.state.counts)
-
         await wait_for(picked)
-        # Stop once the request is at the server, not while it is still connecting: a connect
-        # cancelled half way leaves a socket that nobody owns, which surfaced as a ResourceWarning
-        # in a later test (the flake of #104). The client owns the connection once it is made,
-        # and closes it with the sweep.
-        await wait_for(asked)
+        await wait_for(entered.is_set)
 
-    serve_until(settings, context(settings, fake_ats, timeout_s=20.0), scenario)
+    serve_until(settings, context(settings, slow_website), scenario)
     with factory() as db:
         row = db.get(Sweep, sweep_id)
         assert row is not None
         assert (row.status, row.error) == (SweepStatus.failed, sweep.INTERRUPTED)
 
 
-def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
-    settings: Settings, fake_ats: FakeAts
-) -> None:
+def test_stop_while_a_job_is_being_picked_up_closes_every_worker(settings: Settings) -> None:
     """A stop that cancels a job outside its function (arq's run_job still reading the job from
     Redis, the CI failure of 2026-10-10) used to make arq's Worker.close() raise CancelledError
     from its gather: serve() failed, and the next workers' Redis pools were never closed."""
@@ -354,7 +342,7 @@ def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
                 asyncio.sleep(60)
             )
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings), scenario)
     assert len(workers_seen) == 5  # sweeps, agents, ingestion, documents, apply
     for item in workers_seen:
         assert item._pool is None  # closed, health key deleted
@@ -366,7 +354,7 @@ def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
 
 
 def test_stop_while_a_job_writes_its_end_waits_for_the_write(
-    settings: Settings, fake_ats: FakeAts, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """arq shields the write of a job's end (its result, its in progress key, its place in the
     queue) from the job's cancellation. A stop landing during that write used to end the job's
@@ -395,7 +383,7 @@ def test_stop_while_a_job_writes_its_end_waits_for_the_write(
         await workers[0].pool.enqueue_job("reap_sweeps", _job_id=job_id, _queue_name=queues.SWEEPS)
         await asyncio.wait_for(writing.wait(), 30)
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings), scenario)
     assert written == [job_id]
 
     async def left_in_redis() -> tuple[int, int, float | None]:
@@ -414,7 +402,7 @@ def test_stop_while_a_job_writes_its_end_waits_for_the_write(
 
 @pytest.mark.parametrize("job", ["reap_sweeps", "reap_documents"])
 def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engine_goes(
-    job: str, settings: Settings, fake_ats: FakeAts, monkeypatch: pytest.MonkeyPatch
+    job: str, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job that is cancelled stops waiting for its thread (asyncio.to_thread), and the thread
     goes on with its session. serve() used to dispose of the engine while that thread still
@@ -425,7 +413,7 @@ def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engi
     ingestion/jobs.py, the cron every worker runs when it starts and four times a minute (PR
     #156, B1). The pause below bounds nothing of the fixed code, which waits for the thread:
     it only gives the code without the fix the time to dispose of the engine too early."""
-    ctx = context(settings, fake_ats)
+    ctx = context(settings)
     engine = ctx["engine"]
     made: list[Any] = []
     sa.event.listen(engine, "connect", lambda connection, _record: made.append(connection))
@@ -485,7 +473,6 @@ def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engi
 
 def test_a_stop_is_bounded_when_a_thread_never_returns(
     settings: Settings,
-    fake_ats: FakeAts,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -496,7 +483,7 @@ def test_a_stop_is_bounded_when_a_thread_never_returns(
     thread would hold thirty: the margin is what a loaded machine adds, not part of the rule."""
     bound, margin = 0.5, 10.0
     monkeypatch.setattr(worker, "STOP_WAIT_S", bound)
-    ctx = context(settings, fake_ats)
+    ctx = context(settings)
     holding, release, ended = threading.Event(), threading.Event(), threading.Event()
     disposed: list[bool] = []
     stopped_at: list[float] = []
@@ -540,7 +527,7 @@ def test_a_stop_is_bounded_when_a_thread_never_returns(
 
 
 def test_a_clean_stop_leaves_the_loop_an_executor_and_names_nothing(
-    settings: Settings, fake_ats: FakeAts, caplog: pytest.LogCaptureFixture
+    settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     """serve() gives asyncio.to_thread an executor of its own and joins it at the stop. The
     loop that called it goes on afterwards (the tests, a caller that serves twice): it must
@@ -553,7 +540,7 @@ def test_a_clean_stop_leaves_the_loop_an_executor_and_names_nothing(
             assert await asyncio.to_thread(lambda: 1) == 1
             stop.set()
 
-        ctx = context(settings, fake_ats)
+        ctx = context(settings)
         left = await asyncio.wait_for(
             worker.serve(settings, stop=stop, ctx=ctx, on_ready=ready), 60
         )
@@ -593,7 +580,7 @@ def test_main_exits_at_once_when_the_stop_left_threads(
 
 
 def test_stale_sweeps_are_reaped_when_the_worker_starts(
-    settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     long_ago = datetime(2026, 1, 1, tzinfo=UTC)
     with factory() as db:
@@ -609,7 +596,7 @@ def test_stale_sweeps_are_reaped_when_the_worker_starts(
     async def scenario(_: list[Worker]) -> None:
         assert status_of(factory, row.id) is SweepStatus.failed
 
-    serve_until(settings, context(settings, fake_ats), scenario)
+    serve_until(settings, context(settings), scenario)
 
 
 # --- schedules ----------------------------------------------------------------------------------
@@ -623,25 +610,14 @@ def test_the_schedule_cron_enqueues_each_due_slot_once(
     factory: sessionmaker[Session],
     alice: uuid.UUID,
     bob: uuid.UUID,
-    fake_ats: FakeAts,
 ) -> None:
     from tests.jobs.conftest import new_user
 
     carol = new_user(factory, "carol@example.org")
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
-    set_profile(
-        factory,
-        bob,
-        search(
-            board("fake-ok2", "lever"),
-            interactive_sites=[SITE],
-            sweep_schedule={**DAILY, "times": ["06:15"]},
-        ),
-    )
-    set_profile(factory, carol, search(board("fake-ok")))  # schedule off: never enqueued
-    ctx = context(settings, fake_ats)
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
+    set_profile(factory, bob, search(sweep_schedule={**DAILY, "times": ["06:15"]}))
+    set_profile(factory, carol, search())  # schedule off: never enqueued
+    ctx = context(settings)
     ctx["clock"] = lambda: TICK
 
     async def scenario(workers: list[Worker]) -> None:
@@ -704,14 +680,9 @@ def test_the_schedule_tick_skips_a_user_already_sweeping_and_fails_what_it_canno
     factory: sessionmaker[Session],
     alice: uuid.UUID,
     bob: uuid.UUID,
-    fake_ats: FakeAts,
 ) -> None:
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
-    set_profile(
-        factory, bob, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
+    set_profile(factory, bob, search(sweep_schedule=DAILY))
     with factory() as db:
         manual = sweep.start(db, alice, SweepTrigger.manual, TICK).id
         db.commit()
@@ -720,7 +691,7 @@ def test_the_schedule_tick_skips_a_user_already_sweeping_and_fails_what_it_canno
         async def enqueue_job(self, *_: Any, **__: Any) -> None:
             raise ConnectionError("redis gone")
 
-    ctx = context(settings, fake_ats)
+    ctx = context(settings)
     ctx["clock"] = lambda: TICK
     try:
         assert asyncio.run(worker.scheduled_sweeps(ctx | {"redis": Broken()})) == 1
@@ -773,25 +744,30 @@ def test_main_check_uses_the_environment(
     assert worker.main(["--check"]) == 1
 
 
-def test_production_refuses_the_ats_stub(migrated_url: str) -> None:
-    from app.config import ats_stub_for
-
-    with pytest.raises(ValueError, match="must not be set in production"):
-        Settings(
-            database_url=migrated_url,  # type: ignore[arg-type]
-            app_env="production",
-            secret_key="x" * 40,  # type: ignore[arg-type]
-            ats_base_url="http://fakeats:8099",
-        )
+def test_the_deleted_ats_settings_are_ignored_and_redis_is_checked(migrated_url: str) -> None:
+    """ATS_BASE_URL and ATS_BASE_URL_ORG_PREFIX went with the boards (owner, 2026-10-28): an old
+    environment that still sets them starts as before, and they reach nothing."""
+    old = make_settings(
+        migrated_url, ats_base_url="http://fakeats:8099", ats_base_url_org_prefix="fake-"
+    )
+    assert not hasattr(old, "ats_base_url")
+    assert not hasattr(old, "ats_base_url_org_prefix")
     with pytest.raises(ValueError, match="REDIS_URL"):
         make_settings(migrated_url, redis_url="http://redis:6379")
-    every = make_settings(migrated_url, ats_base_url="http://stub:8099/")
-    some = make_settings(
-        migrated_url, ats_base_url="http://stub:8099", ats_base_url_org_prefix=" fake- "
-    )
-    none = make_settings(migrated_url, ats_base_url_org_prefix="fake-")
-    assert ats_stub_for(every, "mistral.ai") == "http://stub:8099"
-    assert ats_stub_for(some, "fake-ok") == "http://stub:8099"
-    assert ats_stub_for(some, "mistral.ai") is None
-    assert ats_stub_for(none, "fake-ok") is None
     assert now().tzinfo is not None
+
+
+def test_the_sweep_runs_the_job_websites_of_the_context_or_of_browserd(
+    settings: Settings,
+) -> None:
+    hook = websites()
+    assert worker.browser_sources({"browser_sources": hook}) is hook
+    assert worker.browser_sources({}) is None  # no Redis: nothing to lease a browser with
+    from app.browser import sources
+
+    ctx = worker.make_context(settings)
+    try:
+        runner = worker.browser_sources(ctx | {"redis": object()})
+        assert isinstance(runner, sources.Runner)
+    finally:
+        ctx["engine"].dispose()

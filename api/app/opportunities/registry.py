@@ -14,8 +14,6 @@ from fastapi import APIRouter, FastAPI
 ROUTER_MODULES: tuple[str, ...] = (
     "router",  # O1: the deck, the Pass and its undo
     "onboarding_router",  # O5: the first login wizard
-    "starter_router",  # O5b: the starter list of boards and sources
-    "feeds_router",  # O7: the freelance and project feeds catalogue
     "platforms_router",  # O7b: the platforms read with the person's opt in
 )
 

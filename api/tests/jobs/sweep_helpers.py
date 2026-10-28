@@ -1,19 +1,21 @@
-"""Helpers of the sweep tests: a search section over fake boards, profiles, running a sweep."""
+"""Helpers of the sweep tests: a search section with one ticked job website, profiles, running a
+sweep whose website "finds" the given postings (`websites`: a fake of the website Runner that
+stores them through the run's commits, as the interactive finder does)."""
 
 import asyncio
+import random
 import uuid
-from collections.abc import Iterator
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.jobs import ats, sweep
+from app.browser import finder
+from app.jobs import sweep
 from app.jobs.models import Job, Sweep, SweepTrigger
 from app.profile.models import Profile
-from tests.jobs.fake_ats import FakeAts
 from tests.jobs.test_scoring import skills as make_skills
 
 SKILLS = make_skills().model_dump(mode="json")
@@ -26,20 +28,17 @@ SITE = {
     "enabled": True,
     "mode": "llm_browser",
 }
+# A second one, for what two websites do together (duplicates, source notes, failures).
+SITE_2 = {
+    "platform": "custom",
+    "url": "https://careers.example-labs.test/",
+    "enabled": True,
+    "mode": "llm_browser",
+}
+HOST, HOST_2 = "jobs.example-robotics.test", "careers.example-labs.test"
 
 
-def board(org: str, ats_name: str = "ashby", company: str | None = None, **extra: Any) -> dict:
-    return {
-        "company": company or org.removeprefix("fake-").title(),
-        "ats": ats_name,
-        "org": org,
-        "enabled": True,
-        "extra_exclude": {"terms": [], "advanced_regex": False},
-        **extra,
-    }
-
-
-def search(*boards: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+def search(**overrides: Any) -> dict[str, Any]:
     data: dict[str, Any] = {
         "title_include": {
             "terms": ["ai engineer", "forward deployed", "genai", "مهندس"],
@@ -49,7 +48,7 @@ def search(*boards: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         "location": {"terms": ["paris", "london", "europe", "remote"], "advanced_regex": False},
         "contract_types": [],
         "days": 30,
-        "boards": list(boards),
+        "interactive_sites": [SITE],
         "never_apply": ["No security roles: security, cyber (test rule)"],
     }
     data.update(overrides)
@@ -84,37 +83,117 @@ def new_sweep(
     user_id: uuid.UUID,
     trigger: SweepTrigger = SweepTrigger.manual,
 ) -> uuid.UUID:
-    """A running sweep of every enabled source, boards included: the board engine's internal
-    start, which no search uses since the owner's decision of 2026-10-28 (websites only)."""
+    """A running sweep of the person's ticked websites, as POST /api/jobs/sweeps starts it."""
     with factory() as db:
-        row = sweep.start(db, user_id, trigger, now(), websites_only=False)
+        row = sweep.start(db, user_id, trigger, now())
         db.commit()
         return row.id
 
 
-def client(fake: FakeAts, **options: Any) -> ats.AtsClient:
-    async def no_sleep(_: float) -> None:
-        return None
+def finding(
+    title: str,
+    company: str | None = "Acme Robotics",
+    location: str = "Paris, France",
+    url: str | None = None,
+    text: str | None = None,
+    published_on: str | None = None,
+) -> finder.VerifiedFinding:
+    """A posting a website's agent verified on its detail page."""
+    slug = "-".join(title.lower().split())
+    return finder.VerifiedFinding(
+        title=title,
+        location=location,
+        url=url or f"https://jobs.example-robotics.test/jobs/{slug}",
+        text=text if text is not None else f"{title}. We build agents with Python and LLMs.",
+        company=company,
+        published_on=published_on,
+        evidence={"title": title},
+        detail_read_at=now().isoformat(),
+    )
 
-    settings: dict[str, Any] = {"timeout_s": 1.0, "sleep": no_sleep}
-    settings.update(options)
-    return ats.AtsClient(
-        tz=sweep.SWEEP_TZ, stub_base_url=fake.url, stub_org_prefix="fake-", **settings
+
+def websites(*findings: finder.VerifiedFinding) -> sweep.BrowserHook:
+    """A fake of the website Runner: the first ticked website "finds" `findings`, stored through
+    the run's commits in batches, as the interactive finder reports them."""
+    return each_website(findings)
+
+
+def each_website(
+    *found: Sequence[finder.VerifiedFinding],
+    hang_s: float = 0.0,
+    hang_at: int = -1,
+    errors: dict[int, str] | None = None,
+) -> sweep.BrowserHook:
+    """A fake of the website Runner over every ticked website in order: website `i` "finds"
+    `found[i]` (nothing past the list), stored through the run's commits in batches. `errors`
+    ends website `i` with that error code, after what it stored; `hang_s` keeps website `hang_at`
+    (the last by default) running that long after its findings are stored (a slow website: the
+    time limit, a cancellation, the heartbeat and the progress)."""
+
+    async def hook(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float) -> None:
+        del deadline
+        sites = [entry for entry in stats.sources if entry.get("host")]
+        for index, entry in enumerate(sites):
+            entry.update(phase="running", outcome=None, reason=None)
+            stats.current_board = entry["source_id"]
+            assert plan.commits is not None
+            plan.commits.admit(entry["source_id"])
+            mine = list(found[index]) if index < len(found) else []
+            size = finder.VERIFIED_BATCH_MAX
+            for first in range(0, len(mine), size):
+                batch = finder.VerifiedBatch(tuple(mine[first : first + size]))
+                await plan.commits.save(entry["source_id"], entry["host"], batch)
+            await plan.commits.settle()
+            await progress()
+            if hang_s and index == range(len(sites))[hang_at]:
+                await asyncio.sleep(hang_s)
+            if errors and index in errors:
+                entry["error"] = errors[index]
+            sweep.finish_source(entry)
+            await progress()
+
+    return hook
+
+
+def website_runner(tools: Any, leases: Any = None, **options: Any) -> Any:
+    """The real website Runner (app/browser/sources) over the browser tests' fakes: `tools` for
+    browserd, a recording lease store, a paced clock that never waits."""
+    from app.browser.sources import MemoryPacer, Runner
+    from tests.browser.fakes import FakeLeases
+
+    clock = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    return Runner(
+        leases or FakeLeases(),
+        lambda user, lease, token: tools,
+        sleep=sleep,
+        rng=random.Random(1),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
+        **options,
     )
 
 
 async def run_async(
-    factory: sessionmaker[Session], sweep_id: uuid.UUID, fake: FakeAts, **options: Any
+    factory: sessionmaker[Session],
+    sweep_id: uuid.UUID,
+    *findings: finder.VerifiedFinding,
+    **options: Any,
 ) -> None:
-    client_options = options.pop("client_options", {})
-    async with client(fake, **client_options) as c:
-        await sweep.run_sweep(factory, sweep_id, c, now, **options)
+    options.setdefault("browser", websites(*findings))
+    await sweep.run_sweep(factory, sweep_id, now, **options)
 
 
 def run(
-    factory: sessionmaker[Session], sweep_id: uuid.UUID, fake: FakeAts, **options: Any
+    factory: sessionmaker[Session],
+    sweep_id: uuid.UUID,
+    *findings: finder.VerifiedFinding,
+    **options: Any,
 ) -> Sweep:
-    asyncio.run(run_async(factory, sweep_id, fake, **options))
+    asyncio.run(run_async(factory, sweep_id, *findings, **options))
     return read_sweep(factory, sweep_id)
 
 
@@ -135,9 +214,3 @@ def jobs_of(factory: sessionmaker[Session], user_id: uuid.UUID) -> list[Job]:
                 .order_by(Job.company, Job.title)
             ).scalars()
         )
-
-
-@pytest.fixture
-def fake_ats() -> Iterator[FakeAts]:
-    with FakeAts(slow_s=2.5) as server:
-        yield server

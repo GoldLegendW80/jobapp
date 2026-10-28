@@ -9,7 +9,8 @@ import pytest
 
 from app.browser import finder, finder_tools, sources
 from tests.browser.b13_runtime import Recording
-from tests.browser.test_b9_runtime import (  # noqa: F401
+from tests.browser.fakes import Tools
+from tests.browser.runtime_support import (  # noqa: F401
     Runtime,
     alice,
     bob,
@@ -21,7 +22,6 @@ from tests.browser.test_b9_runtime import (  # noqa: F401
     one_connection,
     runtime,
 )
-from tests.browser.test_b9_site import Tools
 
 BASE = "https://jobs.example.test/"
 FIRST = '- searchbox "Query" [ref=e1]\n- combobox "Remote" [ref=e2]\n- button "Search" [ref=e3]'
@@ -88,7 +88,7 @@ def test_real_runtime_uses_interactive_registered_tools_and_code_read_text(runti
     tools = InteractiveTools()
     one = session(tools, alice)
     result = asyncio.run(finder.RuntimeFinder(lambda: context)(one))
-    from tests.browser.test_b9_runtime import runs_of
+    from tests.browser.runtime_support import runs_of
 
     assert not result.stopped, ([r.error for r in runs_of(runtime.factory, alice)], backend.results)
     assert tools.actions == [
@@ -111,7 +111,7 @@ def test_a_website_s_run_has_no_turn_or_token_cap_and_is_told_its_time(
     is the raised ceiling, not the 40 of a careers page, its input carries no token budget (the
     runner sets none), and its first message holds every saved title and place and the seconds
     it has left."""
-    from tests.browser.test_b9_runtime import runs_of
+    from tests.browser.runtime_support import runs_of
 
     runtime.give_key(alice)
 
@@ -246,8 +246,8 @@ def test_a_page_addressing_the_assistant_gets_no_typing_filter_click_navigation_
     runtime: Runtime,  # noqa: F811
     alice,  # noqa: F811
 ):
+    from tests.browser.runtime_support import runs_of
     from tests.browser.test_b5_actions import acted
-    from tests.browser.test_b9_runtime import runs_of
 
     runtime.give_key(alice)
     backend = Recording(OBEYS, obeys_page=True)

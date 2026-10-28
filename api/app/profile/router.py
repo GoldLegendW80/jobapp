@@ -38,8 +38,8 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.profile import boards, service
 from app.profile import photo as photos
+from app.profile import service
 from app.profile.models import Profile
 from app.profile.schemas import (
     IMPORT_MAX_BYTES,
@@ -72,8 +72,6 @@ def _no_store(response: Response) -> None:
 
 
 router = APIRouter(prefix="/api/profile", tags=["profile"], dependencies=[Depends(_no_store)])
-# POST /api/profile/boards/check (boards.py).
-router.include_router(boards.router)
 
 UNKNOWN_SECTION = "Unknown profile section."
 ONBOARDING_RESERVED = "The onboarding dates are set by the welcome steps, not by a save."

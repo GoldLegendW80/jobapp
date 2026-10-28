@@ -1,19 +1,21 @@
 # Sweeps and the worker
 
-How Find jobs sweeps the boards and how the worker runs it.
+How Find jobs searches the ticked job websites and how the worker runs it.
 
-"Find jobs" on `/jobs` sweeps the enabled boards of the profile's search section (Ashby,
-Greenhouse and Lever public APIs, four boards at a time), keeps the postings the search terms
-match (title include and exclude, the board's own exclude, location, days window, contract
-types), skips the ones already in the list, stores the new ones as `found` and scores them; a
-posting matching a never apply rule ("Label: term, term") is stored as `skipped` with the rule as
-its note. The work happens in the `worker` service (`python -m app.worker`, arq on Redis; its
-own image `jobapp-worker`, see agent-runs.md), one sweep per user at a time. The page follows it live (server-sent
-events, polling as the fallback) and shows a summary: the new postings and the boards that could
-not be read (not found, blocked, rate limited, timeout...). Automatic search is off by default:
-"Schedule" next to Find jobs (or the Search tab of the profile) turns it on for weekdays, one to
-four local times and a time zone (`search.sweep_schedule`), and shows when it runs next. The
-worker ticks every 5 minutes and starts each due slot once; a time skipped by daylight saving
+"Find jobs" on `/jobs` searches the job websites ticked in its setup, one model run per website
+in the person's own browser (SPEC-jobs, interactive search), skips the postings already in the
+list, stores the new ones as `found` and scores them; a posting matching a never apply rule
+("Label: term, term") is stored as `skipped` with the rule as its note. The board readers
+(Ashby, Greenhouse, Lever), the freelance feeds, the fixed readers (Google Careers, VIE, career
+pages, LinkedIn's own reader) and the starter boards list were deleted (owner, 2026-10-28). The
+work happens in the `worker` service (`python -m app.worker`, arq on Redis; its own image
+`jobapp-worker`, see agent-runs.md), one sweep per user at a time. The page follows it live
+(server-sent events, polling as the fallback): the progress bar "Websites searched" counts the
+websites, each done once its phase is done, and the summary shows the new postings and each
+website's outcome. Old sweep rows keep their board counts, readable in the history.
+Automatic search is off by default: "Schedule" next to Find jobs (or the Search tab of the
+profile) turns it on for weekdays, one to four local times and a time zone
+(`search.sweep_schedule`), and shows when it runs next. The worker ticks every 5 minutes and starts each due slot once; a time skipped by daylight saving
 time runs when the clock jumps, a repeated one runs once.
 
 ```bash
@@ -25,11 +27,7 @@ docker compose exec -T worker python -m app.worker --check                      
 ```
 
 A sweep whose worker died is failed after two minutes without a heartbeat, so the next one can
-start. `ATS_BASE_URL` (test stacks only, refused when `APP_ENV=production`) sends the board check
-and the sweeps to a stub of the three APIs; with `ATS_BASE_URL_ORG_PREFIX=fake-` only the orgs
-starting with it go there, the CI stack sends every org (`tests/ats-stub.compose.yml`). Since
-2026-10-28 every search runs the job websites ticked in Find jobs alone, so no search reads a
-board.
+start.
 
 LinkedIn's 7 day pause after a security check (browser B10) has no button to lift it. Only the
 owner can, by deleting the person's rows of `linkedin_checkpoints`:

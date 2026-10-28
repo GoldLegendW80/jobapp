@@ -20,8 +20,8 @@ Sections and what they replace in the engine:
 - skills: the scoring model (`profile/skills.json`): years_experience 0 to 60, categories
   have, adjacent, none (names unique across the three), gates with a penalty 0 to 100.
 - search: title include, title exclude, location and unwanted location terms, contract
-  types, remote stance, min_fit, posting age window, boards, never-apply rules
-  (`engine/boards.json`, hard rule 11), and what the person aims for (opportunities O4):
+  types, remote stance, min_fit, posting age window, never-apply rules (`engine/boards.json`,
+  hard rule 11), the job websites searched, and what the person aims for (opportunities O4):
   seniority levels, industries, company types (a small bonus to the fit, never a filter) and
   the pay sought (changes no score).
 - preferences: the language and tone of the generated documents, and the dates of the first
@@ -275,9 +275,6 @@ OptPeriod = Annotated[
 
 SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 Slug = Text(40, pattern=SLUG_PATTERN)
-# Board org as the ATS spells it in its URL: letters, digits, dot, dash, underscore.
-ORG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-OrgSlug = Text(100, pattern=ORG_PATTERN)
 
 
 def _email(value: str | None) -> str | None:
@@ -677,7 +674,6 @@ class SkillsSection(_Section):
 
 ContractType = Literal["CDI", "CDD", "VIE", "Stage", "Alternance", "Freelance"]
 RemoteStance = Literal["remote", "hybrid", "office", "any"]
-Ats = Literal["ashby", "greenhouse", "lever"]
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -688,7 +684,7 @@ _IANA = "must be an IANA time zone name such as Europe/Paris"
 
 
 class SweepSchedule(_Section):
-    """When the boards are swept automatically (jobs J5): on these weekdays, at these local
+    """When the job websites are searched automatically (jobs J5): on these weekdays, at these local
     times (24 hour HH:MM, 1 to 4), in this IANA time zone. Off by default. Days are stored
     deduplicated in week order (Monday first), times deduplicated and sorted, so the same choice
     always stores the same value. Time zones are region names (Europe/Paris) or UTC: legacy
@@ -755,26 +751,18 @@ class DocumentsGeneration(_Section):
     )
 
 
-class Board(_Section):
-    company: Line
-    ats: Ats
-    org: OrgSlug
-    enabled: bool = True
-    extra_exclude: TermList = Field(default_factory=TermList)
-
-
 class BrowserSource(_Section):
-    """A job source read through the person's browser (browser B8, app/browser/sources): the
-    words typed in the site's search box, and its location box when the site has one. B8 runs
-    `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
-    finder agent), B10 `linkedin`. The `freework` entry stores O7b consent; its reader is a
-    separate slice. Off until the person turns it on.
+    """The consent row of a protected platform (`linkedin`, browser B10; `freework`, O7b): the
+    words and place it was saved with, whether it is on, and whether it serves only the job
+    website search (`interactive_only`). Off until the person turns it on. The fixed readers
+    (`google_careers`, `vie`, `site`, and LinkedIn's own reader) were deleted (owner,
+    2026-10-28): a row of those kinds is dropped on read (SearchSection).
 
     A protected source (`linkedin`, `freework`) records the risk sentence's acceptance: when
     (`accepted_at`, ISO 8601 with its offset) and which version (`text_version`), written by
     its dedicated consent route; the other kinds have neither."""
 
-    kind: Literal["google_careers", "vie", "site", "linkedin", "freework"]
+    kind: Literal["linkedin", "freework"]
     query: Line
     location: OptLine = None
     enabled: bool = False
@@ -784,13 +772,6 @@ class BrowserSource(_Section):
 
     @model_validator(mode="after")
     def _acceptance(self) -> "BrowserSource":
-        if self.interactive_only and self.kind not in ("linkedin", "freework"):
-            raise ValueError("only a protected browser source has interactive-only intent")
-        if self.kind not in ("linkedin", "freework") and (self.accepted_at, self.text_version) != (
-            None,
-            None,
-        ):
-            raise ValueError("only a protected browser source records an acceptance")
         if (self.accepted_at is None) != (self.text_version is None):
             raise ValueError("accepted_at and text_version go together")
         if self.accepted_at is not None:
@@ -886,21 +867,6 @@ class InteractiveSite(_Section):
         return self
 
 
-FeedKind = Literal["remoteok", "weworkremotely", "hackernews_freelance", "hackernews_hiring"]
-FEEDS_MAX = 10
-
-
-class Feed(_Section):
-    """A freelance and project feed the sweep reads after the boards (opportunities O7,
-    app/opportunities/sources): a public API or feed whose terms allow it. `terms` are optional
-    include terms on top of the person's title terms: when set, a title must also match one.
-    Off until the person turns it on."""
-
-    kind: FeedKind
-    terms: TermList = Field(default_factory=TermList)
-    enabled: bool = False
-
-
 # What the person aims for (opportunities O4). Seniority, industries and company types add a
 # small bonus to the fit (app.jobs.scoring.bonus) and never filter anything; compensation is
 # stored for the person and the forms, and changes no score.
@@ -948,6 +914,40 @@ class Compensation(_Section):
     daily_rate: PayRange | None = None
 
 
+# What a search section saved before 2026-10-28 may hold that no code reads any more: the
+# company boards, the freelance feeds and the fixed browser readers were deleted (owner,
+# 2026-10-28: "Delete it").
+DELETED_SEARCH_FIELDS = frozenset({"boards", "feeds"})
+DELETED_SOURCE_KINDS = frozenset({"google_careers", "vie", "site"})
+
+
+def without_deleted_sources(data: Any) -> Any:
+    """A stored or sent search section without what was deleted. A section saved before keeps
+    those keys until its next save: they are ignored on read (and left out of what the API
+    shows), and a save, or an older tab sending them, stores the section without them. The
+    release before reads such a section as having no board, feed or reader."""
+    if not isinstance(data, dict):
+        return data
+    data = {k: v for k, v in data.items() if k not in DELETED_SEARCH_FIELDS}
+    sources = data.get("browser_sources")
+    if isinstance(sources, list):
+        data["browser_sources"] = [
+            source
+            for source in sources
+            if not (isinstance(source, dict) and source.get("kind") in DELETED_SOURCE_KINDS)
+        ]
+    return data
+
+
+def without_starter(data: Any) -> Any:
+    """A stored or sent preferences section without the starter list's entries handled
+    (opportunities O5b, deleted with the boards)."""
+    if not isinstance(data, dict) or not isinstance(data.get("onboarding"), dict):
+        return data
+    onboarding = {k: v for k, v in data["onboarding"].items() if k != "starter_handled"}
+    return {**data, "onboarding": onboarding}
+
+
 class SearchSection(_Section):
     title_include: TermList = Field(default_factory=TermList)
     title_exclude: TermList = Field(default_factory=TermList)
@@ -959,7 +959,6 @@ class SearchSection(_Section):
     remote_stance: RemoteStance | None = None
     min_fit: Annotated[StrictInt, Field(ge=0, le=100)] = 70
     days: Annotated[StrictInt, Field(ge=1, le=365)] = 30
-    boards: Annotated[list[Board], Field(max_length=300)] = Field(default_factory=list)
     never_apply: Annotated[list[Text(500)], Field(max_length=50)] = Field(default_factory=list)
     browser_sources: Annotated[list[BrowserSource], Field(max_length=10)] = Field(
         default_factory=list
@@ -971,9 +970,9 @@ class SearchSection(_Section):
         default_factory=list
     )
     interactive_instructions: OptText(2000, multiline=True) = None
-    # When the boards are swept automatically (jobs J5 schedules it and edits it next to Find
-    # jobs). Off unless the user turns it on; a section saved before this field existed reads as
-    # off.
+    # When the job websites are searched automatically (jobs J5 schedules it and edits it next
+    # to Find jobs). Off unless the user turns it on; a section saved before this field existed
+    # reads as off.
     sweep_schedule: SweepSchedule = Field(default_factory=lambda: SweepSchedule())
     # The automatic generation of documents (documents D10), defaulted when absent.
     documents: DocumentsGeneration = Field(default_factory=lambda: DocumentsGeneration())
@@ -986,8 +985,6 @@ class SearchSection(_Section):
         default_factory=list
     )
     compensation: Compensation = Field(default_factory=lambda: Compensation())
-    # Opportunities O7: the freelance and project feeds, one entry per kind.
-    feeds: Annotated[list[Feed], Field(max_length=FEEDS_MAX)] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -997,6 +994,11 @@ class SearchSection(_Section):
         if isinstance(data, dict) and "sweep_nightly" in data:
             data = {k: v for k, v in data.items() if k != "sweep_nightly"}
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_deleted_sources(cls, data: Any) -> Any:
+        return without_deleted_sources(data)
 
     @field_validator("contract_types")
     @classmethod
@@ -1020,11 +1022,6 @@ class SearchSection(_Section):
             raise ValueError(f"at most {INDUSTRIES_MAX} industries")
         return value
 
-    @field_validator("boards")
-    @classmethod
-    def _unique_boards(cls, value: list[Board]) -> list[Board]:
-        return _unique(value, lambda b: f"{b.ats}:{b.org.lower()}", "board (same ATS and org)")
-
     @field_validator("browser_sources")
     @classmethod
     def _one_protected_source(cls, value: list[BrowserSource]) -> list[BrowserSource]:
@@ -1038,11 +1035,6 @@ class SearchSection(_Section):
     @classmethod
     def _unique_sites(cls, value: list[InteractiveSite]) -> list[InteractiveSite]:
         return _unique(value, lambda site: site.url, "interactive source address")
-
-    @field_validator("feeds")
-    @classmethod
-    def _one_feed_per_kind(cls, value: list[Feed]) -> list[Feed]:
-        return _unique(value, lambda feed: feed.kind, "feed (same kind)")
 
 
 # --- answers ------------------------------------------------------------------------------------
@@ -1174,20 +1166,6 @@ def _steps(value: list[str]) -> list[str]:
     return [step for step in WIZARD_STEPS if step in value]
 
 
-# A starter list entry (opportunities O5b): an ATS board `<ats>:<org in lower case>` or a browser
-# source `source:<kind>`.
-STARTER_KEY_PATTERN = (
-    r"^(?:(?:ashby|greenhouse|lever):[a-z0-9][a-z0-9._-]{0,99}|source:(?:google_careers|vie))$"
-)
-StarterKey = Text(120, pattern=STARTER_KEY_PATTERN)
-STARTER_HANDLED_MAX = 400
-
-
-def _once(value: list[str]) -> list[str]:
-    """Each key once, in the order first given."""
-    return list(dict.fromkeys(value))
-
-
 class Onboarding(_Section):
     """When the first login wizard was finished or put off, and the steps passed in it (Next or
     "Skip this step"), so another device resumes at the same step (opportunities O5). Only the
@@ -1199,11 +1177,13 @@ class Onboarding(_Section):
     steps_passed: Annotated[
         list[WizardStep], Field(max_length=2 * len(WIZARD_STEPS)), AfterValidator(_steps)
     ] = Field(default_factory=list)
-    # The starter list's entries the person added or removed (opportunities O5b,
-    # app/opportunities/starter.py): never proposed again once gone from the search section.
-    starter_handled: Annotated[
-        list[StarterKey], Field(max_length=STARTER_HANDLED_MAX), AfterValidator(_once)
-    ] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_starter(cls, data: Any) -> Any:
+        # The starter list of boards (opportunities O5b) was deleted with the boards (owner,
+        # 2026-10-28): the entries it recorded are ignored on read and no longer stored.
+        return without_starter({"onboarding": data}).get("onboarding")
 
 
 class PreferencesSection(_Section):

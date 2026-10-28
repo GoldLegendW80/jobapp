@@ -7,9 +7,10 @@
   at once, so it never blocks the next try.
   An optional `{profile_revision}` body refuses a stale reviewed revision with 409. No-body
   callers remain supported. Scope is frozen before enqueue; its public projection omits
-  instructions and source addresses. Every start searches the enabled websites alone, no
-  board, feed or fixed reader (owner, 2026-10-28), and its scope says `websites_only`; the
-  `{websites_only}` of jobs J17 is still accepted from an older tab and changes nothing.
+  instructions and source addresses. Every start searches the enabled websites: the boards,
+  feeds and fixed readers were deleted (owner, 2026-10-28), and its scope still says
+  `websites_only` for the release before; the `{websites_only}` of jobs J17 is still accepted
+  from an older tab and changes nothing.
 - GET /api/jobs/sweeps?limit=N: the caller's newest sweeps (default 20, at most 100) and their
   automatic schedule (`search.sweep_schedule`, off by default) with its next run. The schedule
   itself is changed through PUT /api/profile/search.
@@ -267,10 +268,8 @@ async def start_sweep(user: CurrentUser, request: Request, body: SweepStartIn | 
         )
     if begun.outcome == "search_invalid":
         raise HTTPException(status_code=422, detail=sweep.SEARCH_INVALID)
-    if begun.outcome == "no_websites":
+    if begun.outcome == "no_websites" or begun.view is None:
         raise HTTPException(status_code=422, detail=sweep.NO_WEBSITES)
-    if begun.outcome == "no_boards" or begun.view is None:
-        raise HTTPException(status_code=422, detail=sweep.NO_BOARDS)
     return begun.view
 
 

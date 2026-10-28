@@ -1,4 +1,5 @@
-"""The sweep and apply must read the person's exclusion rules alike (#580)."""
+"""The sweep and apply must read the person's exclusion rules alike (#580), and the app's own
+rule against cybersecurity (never_apply.CYBER_RULE) holds without any rule of the person's."""
 
 import uuid
 
@@ -7,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 
 from app.apply import guardrails
-from app.jobs import sweep
+from app.jobs import never_apply, sweep
 from app.jobs.models import JobEvent, JobStatus
 from tests.apply.test_a2_guardrails import (
     HIDDEN_FROM_THE_RULE,
@@ -17,19 +18,7 @@ from tests.apply.test_a2_guardrails import (
     REVIEWER_INPUTS,
     TRUE_TITLES,
 )
-from tests.jobs import fake_ats as fake_server
-from tests.jobs.fake_ats import FakeAts
-from tests.jobs.sweep_helpers import (
-    board,
-    fake_ats,
-    jobs_of,
-    new_sweep,
-    run,
-    search,
-    set_profile,
-)
-
-__all__ = ["fake_ats"]
+from tests.jobs.sweep_helpers import finding, jobs_of, new_sweep, run, search, set_profile
 
 
 @pytest.mark.parametrize("title", REFUSED_BY_OWNER + HIDDEN_FROM_THE_RULE)
@@ -56,13 +45,8 @@ def test_the_sweep_also_folds_the_company(company: str) -> None:
     assert OWNER.matches(company, "Applied AI Engineer")
 
 
-@pytest.mark.parametrize("ats", ["ashby", "greenhouse", "lever"])
 def test_hidden_exclusions_are_stored_skipped_with_the_rule_and_its_events(
-    factory: sessionmaker,
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    monkeypatch: pytest.MonkeyPatch,
-    ats: str,
+    factory: sessionmaker, alice: uuid.UUID
 ) -> None:
     titles = [
         "AI Engineer, Secu\u00adrity",
@@ -73,29 +57,18 @@ def test_hidden_exclusions_are_stored_skipped_with_the_rule_and_its_events(
         "AI Engineer, Cybersecurity",
         "AI Engineer, Securities Trading",
     ]
-    original = fake_server.postings
-
-    def postings(org: str) -> list[dict]:
-        if org != "fake-security":
-            return original(org)
-        return [
-            {
-                "title": title,
-                "location": "Paris",
-                "url": f"https://jobs.example.org/fake-security/{i}",
-                "published": fake_server._day(1),
-                "text": "Build agents with Python.",
-            }
-            for i, title in enumerate(titles)
-        ]
-
-    monkeypatch.setattr(fake_server, "postings", postings)
-    set_profile(
-        factory,
-        alice,
-        search(board("fake-security", ats, "Example Robotics"), never_apply=[OWNER.text]),
-    )
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    found = [
+        finding(
+            title,
+            company="Example Robotics",
+            location="Paris",
+            url=f"https://jobs.example-robotics.test/jobs/{i}",
+            text="Build agents with Python.",
+        )
+        for i, title in enumerate(titles)
+    ]
+    set_profile(factory, alice, search(never_apply=[OWNER.text]))
+    row = run(factory, new_sweep(factory, alice), *found)
     assert (row.stats["new"], row.stats["skipped_by_rule"]) == (7, 6)
     by_title = {posting.title: posting for posting in jobs_of(factory, alice)}
     assert by_title[titles[-1]].status is JobStatus.found
@@ -115,3 +88,26 @@ def test_hidden_exclusions_are_stored_skipped_with_the_rule_and_its_events(
                 for event in events
             )
             assert guardrails.swept_never_apply(db, alice, posting.id)
+
+
+def test_the_apps_cyber_rule_skips_without_a_rule_of_the_persons(
+    factory: sessionmaker, alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, search(never_apply=[]))
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        finding("Pentest Engineer", company="Example Robotics"),
+        finding(
+            "AI Engineer",
+            company="Northwind Cyber Labs",
+            url="https://jobs.example-robotics.test/northwind/ai-engineer",
+        ),
+        finding("AI Engineer", company="Example Robotics"),
+    )
+    assert (row.stats["new"], row.stats["skipped_by_rule"]) == (3, 2)
+    by_key = {(job.company, job.title): job for job in jobs_of(factory, alice)}
+    for key in (("Example Robotics", "Pentest Engineer"), ("Northwind Cyber Labs", "AI Engineer")):
+        assert by_key[key].status is JobStatus.skipped
+        assert by_key[key].notes == never_apply.CYBER_RULE.text
+    assert by_key[("Example Robotics", "AI Engineer")].status is JobStatus.found

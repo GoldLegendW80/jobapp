@@ -132,12 +132,9 @@ function ordinarySearch(search: Search, except?: Protected) {
 /** LinkedIn and Free-Work rows whose permission serves the websites' search only. */
 function websitesOnlyRows(search: Search): Set<Protected> {
   const found = new Set<Protected>();
+  // Every row is LinkedIn or Free-Work: the api keeps no other kind (owner, 2026-10-28).
   for (const row of search.browser_sources ?? [])
-    if (
-      row.interactive_only === true &&
-      (row.kind === "linkedin" || row.kind === "freework")
-    )
-      found.add(row.kind);
+    if (row.interactive_only === true) found.add(row.kind);
   return found;
 }
 

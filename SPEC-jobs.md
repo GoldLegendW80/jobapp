@@ -11,7 +11,7 @@ User stories:
 - As a user, I see a dashboard: counts per status, a fit histogram, and a list I can search, filter (status, contract type, company, fit range, location, found date) and sort; one row opens a detail view with the posting text and everything attached.
 - As a user, I select one or many rows and change their status or add a note in one action; the history of every change is kept.
 - As a user, I add a posting by hand (URL, company, title, location, text) when it comes from a site with no API.
-- As a user, I press "Find jobs" and choose my websites and criteria for [interactive search](#interactive-search-626). Explicit API boards and feeds remain available beside that mode. Existing board sweeps (Ashby, Greenhouse, Lever public APIs) keep their matching, scoring and opt in schedule (days, times, time zone), off until enabled.
+- As a user, I press "Find jobs" and choose my websites and criteria for [interactive search](#interactive-search-626). Every search, manual or scheduled, runs the ticked websites; the automatic schedule (days, times, time zone) stays opt in, off until enabled. The API board sweeps (Ashby, Greenhouse, Lever) and the freelance feeds were deleted (owner, 2026-10-28).
 - As a user, I see my postings on a map, as the current dashboard does.
 
 ## Data model
@@ -40,23 +40,22 @@ Port of `engine/jobs.py score_row` against the user's `skills` section, using `a
 
 ## Sweep
 
-These are the existing API sweep rules; model-driven discovery has the separate approved contract below. Selecting that mode does not silently fall back to this sweep or to a fixed browser reader.
+A sweep runs the ticked job websites of [interactive search](#interactive-search-626) and nothing else. The API board reader (Ashby, Greenhouse, Lever posting APIs, `api/app/jobs/ats.py`), the freelance feeds, the fixed browser readers (Google Careers, Business France VIE, company career pages, LinkedIn's own reader) and the starter boards list were deleted (owner, 2026-10-28: "Delete it"). Old sweep rows keep their board counts, readable in the history; a profile that still stores `search.boards` or `search.feeds` is read without them and saved without them.
 
-- Backend fetches each enabled board of the user's `search.boards` with httpx (timeouts, retries with backoff, polite concurrency of 4, a User-Agent naming the app), parses Ashby, Greenhouse and Lever exactly as `engine/jobs.py fetch` does, filters with the user's include, exclude, per-board exclude, location and unwanted place terms and the days window, dedupes against existing rows, stores new ones as `found` with the posting text, scores them.
-- Runs in the `worker` container (first use of Redis as a queue, with RQ or arq; the choice is recorded in the plan), one sweep per user at a time, progress visible in the UI, a summary at the end (boards ok and failed, postings seen, matches, new).
+- Each website's findings are deduped against existing rows, stored as `found` with the posting text and scored.
+- Runs in the `worker` container (first use of Redis as a queue, with RQ or arq; the choice is recorded in the plan), one sweep per user at a time, progress visible in the UI ("Websites searched": a website counts once its phase is done), a summary at the end.
 - Automatic sweeps per user, off by default: the user turns them on and picks weekdays, one to four local times and a time zone (`search.sweep_schedule`); a worker tick every 5 minutes starts each due slot once, daylight saving time handled.
 - `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note (hard rule 11 generalised). Sweeps and apply share `jobs/never_apply.py`: accents, case, compatibility forms, hidden characters and lookalike letters are folded, and a term at the start or end of a glued word also matches. The original title, company and rule note stay unchanged.
-- If an ATS blocks plain HTTP from the Jetson, that board is reported as failed; browser-based fetching comes with the `browser` module.
 
 ## Interactive search (#626)
 
 **Owner intent, 2026-10-24:** Find jobs should reproduce the owner's Claude Code workflow: the person chooses websites and search parameters, then an actual LLM uses Playwright to search those websites. The owner confirmed LinkedIn, Welcome to the Jungle, Indeed and Free-Work as the first targets, plus adding custom URLs. This is a changed product contract, not a claim that the deployed app implements it. Issue [#626](https://github.com/GoldLegendW80/jobapp/issues/626) records the request.
 
-**Verified source baseline:** at deployed commit `8ca71e67c3a2f205bb347bf7affa00e25af1d5bb`, `api/app/browser/finder.py` runs an internal model with navigate, snapshot, wait and report tools only. `api/app/browser/sources/site.py` supplies no search criteria. Google Careers, VIE and LinkedIn use fixed readers; the generic Search editor enables only Google Careers and VIE (`web/src/features/profile/editor-forms.ts`). This source audit does not explain any particular empty search.
+**Verified source baseline** (history: the fixed readers and `site.py` were deleted on 2026-10-28): at deployed commit `8ca71e67c3a2f205bb347bf7affa00e25af1d5bb`, `api/app/browser/finder.py` runs an internal model with navigate, snapshot, wait and report tools only. `api/app/browser/sources/site.py` supplies no search criteria. Google Careers, VIE and LinkedIn use fixed readers; the generic Search editor enables only Google Careers and VIE (`web/src/features/profile/editor-forms.ts`). This source audit does not explain any particular empty search.
 
 **Approved behavior (owner, 2026-10-24):**
 
-- Find jobs opens setup from Jobs before starting. The person selects websites or enters their URLs, sees which use model-driven browsing, and saves the selection per person. Every search runs the ticked websites alone (owner, 2026-10-28): the setup shows no API board, feed or fixed reader, and no search reads them; their saved settings stay in the profile. The summary counts the websites searched.
+- Find jobs opens setup from Jobs before starting. The person selects websites or enters their URLs, sees which use model-driven browsing, and saves the selection per person. Every search runs the ticked websites alone (owner, 2026-10-28): the board, feed and fixed reader code was deleted, and their old saved settings are ignored on read and dropped on the next save. The summary counts the websites searched.
 - Ticking a job website and saving is the person's permission to search it (owner, 2026-10-27, jobs J17): its risk sentence shows beside its box, the save records the consent through the platform's consent route at that sentence's version and the reviewed revision, and unticking it and saving takes it back. Its "Websites only" choice is replaced: every search, the automatic schedule included, runs the websites alone (2026-10-28).
 - The person types the titles and places she wants and does not want as words, never as regular expressions (owner, 2026-10-28). A list saved as regular expressions before keeps filtering as it is; a website search types the plain words of each expression that converts safely (`api/app/profile/plain_terms.py`) and counts the others as left out.
 - Setup reuses saved role or keyword terms, locations and remote preference, contract types, seniority, recency, optional pay and custom instructions. The person can review and edit them there. Criteria guide the model's queries, filters and reading, rather than merely filtering rows after browsing. Existing seniority scoring and pay rules remain those of [opportunities](SPEC-opportunities.md#owner-decisions-never-decide-them-again); no new hard exclusion is implied.
@@ -112,7 +111,7 @@ As before, plus `./deploy.sh jobs import <email>`.
 ## Project structure
 
 ```
-api/app/jobs/  models.py schemas.py router.py service.py scoring.py sweep.py ats.py importer.py places.json world.json
+api/app/jobs/  models.py schemas.py router.py service.py scoring.py sweep.py importer.py places.json world.json
 api/app/worker.py            queue worker entry point (new `worker` service in compose.yml, 1536m budget already reserved)
 api/alembic/versions/0004_jobs.py
 api/tests/jobs/
@@ -122,13 +121,13 @@ web/e2e/jobs.spec.ts
 
 ## Testing strategy
 
-- Unit: slug and duplicate rules; scoring port golden test against the engine on the real CSV; ATS parsers against recorded fixtures of each API (captured once, checked in, personal data free); filter terms; never_apply rules; importer mapping of every CSV column and every file type.
-- Integration (real Postgres and Redis): every endpoint, isolation (user B sees none of A's rows, files, sweeps), bulk in one transaction, concurrent edits, sweep against a fake ATS server (ok, 404, 429, timeout, malformed JSON, 5000 postings), one sweep per user at a time, idempotent import, applied files immutable, a scheduled slot enqueues once (daylight saving time included).
-- End to end (Playwright, locally and on the Jetson): Harald's import shows 433 rows with the same status counts as the CSV; filters and URL state; bulk status change; detail with PDF preview; add by hand; a sweep against the fake ATS locally and one real sweep on the Jetson for an e2e user with two boards; map pins; screenshots light and dark, desktop and 375px.
+- Unit: slug and duplicate rules; scoring port golden test against the engine on the real CSV; filter terms; never_apply rules; importer mapping of every CSV column and every file type.
+- Integration (real Postgres and Redis): every endpoint, isolation (user B sees none of A's rows, files, sweeps), bulk in one transaction, concurrent edits, sweep against a fake website search (`api/tests/jobs/sweep_helpers.py`), one sweep per user at a time, idempotent import, applied files immutable, a scheduled slot enqueues once (daylight saving time included).
+- End to end (Playwright, locally and on the Jetson): Harald's import shows 433 rows with the same status counts as the CSV; filters and URL state; bulk status change; detail with PDF preview; add by hand; a website search against fake pages locally; map pins; screenshots light and dark, desktop and 375px.
 
 ## Boundaries
 
-- **Always:** user scoping on every query; keep privacy-safe events; respect ATS rate limits for public API sweeps and browser pacing, consent and checkpoint controls for interactive search.
+- **Always:** user scoping on every query; keep privacy-safe events; respect browser pacing, consent and checkpoint controls for interactive search.
 - **Ask first:** source-specific capabilities beyond this approved interactive contract; non-API support comes through the `browser` and `agents` modules.
 - **Never:** change or delete a file of an `applied` row; read or collect site passwords or bypass per-person consent; log posting texts or files. A person's existing signed in browser is used only through the browser module's guarded profile and handoff path.
 

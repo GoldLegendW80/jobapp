@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 import pytest
 
 from app.browser import finder
-from tests.browser.test_b9_site import ScriptedFinder
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_multi_search import SearchSite, run
 from tests.browser.test_selected_interactive import execute, selected
 

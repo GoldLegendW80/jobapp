@@ -43,6 +43,22 @@ function makeSweep(overrides: Partial<Sweep> = {}): Sweep {
   };
 }
 
+/** A job website of a running sweep (jobs J10): searched in the browser, named by its host. */
+const searching = (host: string, phase: string): SweepSource => ({
+  kind: "custom",
+  query: "",
+  location: null,
+  mode: "llm_browser",
+  host,
+  phase,
+  result_pages: 0,
+  found: 0,
+  new: 0,
+  skipped_by_rule: 0,
+  items_skipped: 0,
+  error: null,
+});
+
 function finished(overrides: Partial<SweepDetail> = {}): SweepDetail {
   return {
     ...makeSweep({
@@ -156,9 +172,38 @@ describe("Find jobs", () => {
     sweepTiming.pollMs = 300;
     const calls = fakeSweeps({
       states: [
-        makeSweep({ boards_done: 1, current_board: "Mistral AI", new: 1 }),
-        makeSweep({ boards_done: 2, current_board: "Anthropic", new: 2 }),
-        finished(),
+        makeSweep({
+          boards_total: 0,
+          current_board: "Mistral AI",
+          new: 1,
+          sources: [
+            searching("jobs.example.org", "done"),
+            searching("careers.example.org", "running"),
+            searching("jobs.example.net", "pending"),
+          ],
+        }),
+        makeSweep({
+          boards_total: 0,
+          current_board: "Anthropic",
+          new: 2,
+          sources: [
+            searching("jobs.example.org", "done"),
+            searching("careers.example.org", "done"),
+            searching("jobs.example.net", "running"),
+          ],
+        }),
+        // Every sweep since the owner's decision of 2026-10-28 searches the ticked websites alone.
+        finished({
+          boards_total: 0,
+          boards_done: 0,
+          boards_ok: 0,
+          boards_failed: [],
+          sources: [
+            searching("jobs.example.org", "done"),
+            searching("careers.example.org", "done"),
+            searching("jobs.example.net", "done"),
+          ],
+        }),
       ],
     });
     const { jobs } = await openJobs();
@@ -172,17 +217,16 @@ describe("Find jobs", () => {
     await waitFor(() => {
       expect(progress).toHaveTextContent(/Reading (Mistral AI|Anthropic)/);
     });
-    expect(within(progress).getByRole("progressbar")).toHaveAttribute(
-      "aria-valuemax",
-      "3",
-    );
+    expect(
+      within(progress).getByRole("progressbar", { name: "Websites searched" }),
+    ).toHaveAttribute("aria-valuemax", "3");
     expect(screen.getByRole("button", { name: "Finding jobs" })).toBeDisabled();
 
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
     expect(dialog).toHaveTextContent(
-      "2 boards read, 120 postings seen, 4 matched your search, 2 new postings.",
+      "3 websites searched, 120 postings seen, 4 matched your search, 2 new postings.",
     );
     expect(dialog).toHaveTextContent("2 matches already in your list.");
     const links = within(
@@ -195,13 +239,9 @@ describe("Find jobs", () => {
     expect(links[0]).toHaveTextContent("Applied AI Engineer");
     expect(within(links[0]!).getByLabelText("Fit 82 out of 100")).toBeTruthy();
     expect(within(links[1]!).getByLabelText("Unscored")).toBeTruthy();
-    const failed = within(dialog).getByRole("region", {
-      name: "Failed boards",
-    });
-    expect(failed).toHaveTextContent("1 board could not be read");
-    expect(failed).toHaveTextContent(
-      "Gone Corp (lever, gone): board not found",
-    );
+    expect(
+      within(dialog).queryByRole("region", { name: "Failed boards" }),
+    ).not.toBeInTheDocument();
 
     expect(calls.start).toBe(1);
     await waitFor(() => {
@@ -279,7 +319,7 @@ describe("Find jobs", () => {
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
     });
-    expect(progress).toHaveTextContent("Reading job sites in your browser");
+    expect(progress).toHaveTextContent("Searching job websites");
     expect(progress).toHaveTextContent(
       "Reading Google Careers, ai engineer, Paris",
     );
@@ -409,33 +449,18 @@ describe("Find jobs", () => {
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
     );
     expect(dialog).toHaveTextContent("2 boards read, 120 postings seen");
-    expect(
-      within(dialog).getByRole("region", { name: "Failed boards" }),
-    ).toHaveTextContent("Gone Corp (lever, gone): board not found");
+    const failed = within(dialog).getByRole("region", {
+      name: "Failed boards",
+    });
+    expect(failed).toHaveTextContent("1 board could not be read");
+    expect(failed).toHaveTextContent(
+      "Gone Corp (lever, gone): board not found",
+    );
     expect(
       within(dialog).getByRole("region", {
         name: "Freelance and project sources",
       }),
     ).toHaveTextContent("Remote OK: 2 postings found, 1 new.");
-  });
-
-  it("says it reads the freelance and project sources while it does (O8)", async () => {
-    fakeSweeps({
-      states: [makeSweep({ boards_total: 0, current_board: "Remote OK" })],
-    });
-    await openJobs();
-    const user = userEvent.setup();
-    await startSearch(user);
-    const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
-    });
-    await waitFor(() => {
-      expect(progress).toHaveTextContent(
-        "Reading freelance and project sources",
-      );
-    });
-    expect(progress).toHaveTextContent("Reading Remote OK");
-    expect(progress).not.toHaveTextContent("job sites in your browser");
   });
 
   it.each([0, 1, 2])(
@@ -602,19 +627,32 @@ describe("Find jobs", () => {
     ).toBeEnabled();
   });
 
-  it("follows a sweep already running when the page opens", async () => {
+  it("follows a sweep already running when the page opens, counting its websites", async () => {
     const running = makeSweep({
       trigger: "schedule",
-      boards_done: 2,
-      current_board: "Datadog",
+      boards_total: 0,
+      current_board: "jobs.example.net",
       new: 4,
+      sources: [
+        searching("jobs.example.org", "done"),
+        searching("careers.example.org", "done"),
+        searching("jobs.example.net", "running"),
+        // A source with no host is no website and is not counted.
+        { ...searching("", "done"), host: null },
+      ],
     });
     fakeSweeps({ list: [running], states: [running, finished()] });
     await openJobs();
     const progress = await screen.findByRole("region", {
       name: "Sweep in progress",
     });
-    expect(progress).toHaveTextContent(/2 of 3 boards read/);
+    expect(progress).toHaveTextContent(/2 of 3 websites searched/);
+    const bar = within(progress).getByRole("progressbar", {
+      name: "Websites searched",
+    });
+    expect(bar).toHaveAttribute("aria-valuenow", "2");
+    expect(bar).toHaveAttribute("aria-valuemax", "3");
+    expect(progress).not.toHaveTextContent(/board/i);
     expect(
       await screen.findByRole("dialog", { name: "2 new postings found" }),
     ).toBeInTheDocument();

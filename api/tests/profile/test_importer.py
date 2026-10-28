@@ -1,5 +1,6 @@
 """The importer on synthetic sources (runs everywhere, CI included): assemble.py parsing, facts.md
-blocks and answers, skills and boards conversion, regex splitting, missing and broken files."""
+blocks and answers, skills and search conversion (regexes only), regex splitting, missing and
+broken files."""
 
 import base64
 import dataclasses
@@ -235,8 +236,8 @@ def test_search_conversion(tmp_path: Path) -> None:
     }
     assert search["title_exclude"]["terms"] == [r"\bstaff\b", r"\blead\b"]
     assert search["location"]["terms"] == ["paris", r"\bfrance\b"]
-    assert search["boards"][0]["extra_exclude"] == {"advanced_regex": False, "terms": []}
-    assert search["boards"][1]["extra_exclude"]["terms"] == ["senior", r"\bsr\b"]
+    # The company boards are not imported: they were deleted (owner, 2026-10-28).
+    assert "boards" not in search
     assert search["contract_types"] == ["CDI", "CDD", "VIE", "Freelance"]
     assert search["remote_stance"] == "any"
     assert (search["min_fit"], search["days"]) == (70, 30)
@@ -263,7 +264,7 @@ def test_missing_optional_files_give_empty_sections(tmp_path: Path) -> None:
         "gates": [],
     }
     search = out["sections"]["search"]
-    assert search["boards"] == []
+    assert "boards" not in search
     assert search["never_apply"] == [
         "No cybersecurity roles: cyber, security, pentest, threat (Harald, 2026-10-06)"
     ]

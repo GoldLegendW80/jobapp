@@ -136,10 +136,7 @@ const FIELD_TITLES: Record<string, string> = {
   min_fit: "Minimum fit",
   days: "Posting age (days)",
   company: "Company",
-  ats: "ATS",
-  org: "Org",
   enabled: "Enabled",
-  extra_exclude: "Extra exclude terms",
   never_apply: "Never apply",
   answer: "Answer",
   needs_sponsorship: "Needs sponsorship",
@@ -183,6 +180,7 @@ const ITEM_TITLES: Record<string, string> = {
   adjacent: "Adjacent",
   none: "Lacks",
   gates: "Gate",
+  // Company boards were deleted on 2026-10-28; older revisions in the history still hold them.
   boards: "Board",
   work_authorization: "Work authorisation",
   eeo_answers: "Equal opportunity answer",

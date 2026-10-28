@@ -18,7 +18,7 @@ def test_fake_forms_stack_has_all_required_timer_guards(
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://x:y@db/z")
     for name in ("ats-stub.compose.yml", "ats-forms-stub.compose.yml"):
         stack = yaml.safe_load((ROOT / "tests" / name).read_text(encoding="utf-8"))
-        for key, value in stack["services"][service]["environment"].items():
+        for key, value in stack["services"][service].get("environment", {}).items():
             monkeypatch.setenv(key, value)
 
     settings = Settings()

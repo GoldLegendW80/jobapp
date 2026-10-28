@@ -93,7 +93,7 @@ const rate = (page: Page, which: "From" | "To" | "Currency") =>
   page.getByLabel(`${which} ${RATE}`, { exact: true });
 const industries = (page: Page) =>
   page.getByRole("list", { name: "Terms of Industries" });
-/** Opens the Advanced of "What you aim for" by keyboard (the boards table has one of its own). */
+/** Opens the Advanced of "What you aim for" by keyboard. */
 async function openAdvanced(page: Page) {
   const advanced = page
     .locator("section")
