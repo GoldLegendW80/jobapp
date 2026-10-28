@@ -32,7 +32,7 @@ export function scheduleLine(state: ScheduleState | undefined): string {
   const line = `Automatic search: ${describeSchedule(scheduleOf(state))}.`;
   if (!state.enabled) return line;
   if (!state.active)
-    return `${line} No board is enabled in your profile, so nothing runs.`;
+    return `${line} No job website is ticked in Find jobs, so nothing runs.`;
   return state.next_run
     ? `${line} Next: ${formatInZone(new Date(state.next_run), state.timezone)}.`
     : line;

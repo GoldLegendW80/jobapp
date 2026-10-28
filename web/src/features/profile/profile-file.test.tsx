@@ -232,13 +232,13 @@ describe("import dialog: a valid file", () => {
       "Experience: 3 employers, 2 schoolsUnchanged",
       "Facts: 3 blocksReplaced",
       "Skills: 4 categories, 1 gateUnchanged",
-      "Search: 2 boards, 1 enabledUnchanged",
+      "Search: 0 job websites, 0 tickedUnchanged",
       "Answers: 2 countriesUnchanged",
       "Preferences: Documents: language auto, tone plainUnchanged",
       "Photo: none in the fileKept",
     ]);
     expect(summary).toHaveTextContent(
-      "Completeness after the import: 100% (now 100%)",
+      "Completeness after the import: 97% (now 97%)",
     );
     expect(summary).toHaveTextContent(/Exported 9 Oct 2026/);
     await user.click(replaceButton(dialog));

@@ -11,7 +11,9 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.jobs import sweep
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
+from app.jobs.sweep_router import sweep_out
 from app.logging_config import JsonFormatter
 from app.opportunities import sources
 from app.opportunities.sources import FeedError, remoteok
@@ -137,10 +139,14 @@ def test_feed_only_start_and_stored_counts_are_private_in_every_sweep_response(
     # One immediate snapshot is enough to inspect the real running stream without waiting.
     app.state.sse_settings = {"max_s": 0}
     set_profile(factory, person_a.user_id, feeds_search(feed("remoteok")))
-    response = api.request("POST", "/api/jobs/sweeps", token=person_a.token)
-    assert response.status_code == 202, response.text
-    assert response.headers["cache-control"] == "no-store"
-    started = response.json()
+    # No search reads a feed since the owner's decision of 2026-10-28 (websites only): the
+    # engine's internal start, through the shared `begin`, still freezes and shows one.
+    begun = asyncio.run(
+        sweep.begin(factory, queue, person_a.user_id, now(), sweep_out, websites_only=False)
+    )
+    assert begun.outcome == "started"
+    assert begun.view is not None
+    started = begun.view.model_dump(mode="json")
     # The start lists the frozen sources (jobs J9) as pending, with no count of any kind yet.
     [pending] = started["sources"]
     assert (pending["kind"], pending["phase"], pending["outcome"]) == (

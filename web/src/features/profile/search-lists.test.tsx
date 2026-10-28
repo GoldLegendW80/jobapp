@@ -50,24 +50,23 @@ const lists = () =>
       .getByRole("heading", { name: "Titles and places" })
       .closest("section")!,
   );
-const advanced = () => lists().getByRole("button", { name: "Advanced" });
-const regexSwitch = (label: string) =>
-  screen.getByRole("switch", { name: `Regular expressions for ${label}` });
 const save = () => screen.getByRole("button", { name: "Save search" });
 const saved = (state: ReturnType<typeof fakeProfile>) =>
   state.saves.at(-1)!.body.data as Search;
+const noSwitch = () => {
+  // Words only (owner, 2026-10-28): no switch, folded or not, and no Advanced for the lists.
+  expect(
+    screen.queryByRole("switch", { name: /regular expressions/i }),
+  ).toBeNull();
+  expect(lists().queryByRole("button", { name: "Advanced" })).toBeNull();
+};
 
 describe("the four plain lists of the search", () => {
-  it("shows the lists as words, with their switches folded under Advanced", async () => {
-    const { user } = await openSearch(plain());
+  it("shows the lists as words, with no regular expression switch", async () => {
+    await openSearch(plain());
     for (const label of LABELS) {
       expect(lists().getByRole("heading", { name: label })).toBeVisible();
       expect(screen.getByLabelText(`New term for ${label}`)).toBeVisible();
-      expect(
-        screen.queryByRole("switch", {
-          name: `Advanced (regular expressions) for ${label}`,
-        }),
-      ).toBeNull();
     }
     expect(
       screen.getByRole("list", { name: "Terms of Job titles" }),
@@ -75,32 +74,20 @@ describe("the four plain lists of the search", () => {
     expect(
       screen.getByRole("list", { name: "Terms of Unwanted places" }),
     ).toHaveTextContent("United States");
-    expect(advanced()).toHaveAttribute("aria-expanded", "false");
-    expect(
-      screen.queryByRole("switch", { name: /^Regular expressions for/ }),
-    ).toBeNull();
+    noSwitch();
     expect(screen.queryByText(WORDING.listUsesRegularExpressions)).toBeNull();
-
-    await user.click(advanced());
-    for (const label of LABELS) expect(regexSwitch(label)).not.toBeChecked();
   });
 
-  it("opens Advanced by itself for a saved regular expression and keeps it working", async () => {
+  it("keeps a list saved as regular expressions working, says so, and saves it as it was", async () => {
     const { user, state } = await openSearch(haraldLike());
-    expect(advanced()).toHaveAttribute("aria-expanded", "true");
-    expect(regexSwitch(WORDING.jobTitles)).toBeChecked();
-    expect(regexSwitch(WORDING.unwantedTitles)).toBeChecked();
-    expect(regexSwitch(WORDING.places)).not.toBeChecked();
-    expect(regexSwitch(WORDING.unwantedPlaces)).not.toBeChecked();
-    // Folded, the lists still say they hold regular expressions.
-    await user.click(advanced());
-    expect(advanced()).toHaveAttribute("aria-expanded", "false");
+    noSwitch();
     expect(
       screen.getAllByText(WORDING.listUsesRegularExpressions),
     ).toHaveLength(2);
+    expect(WORDING.listUsesRegularExpressions).not.toMatch(/[–—]| - /);
     await user.type(
       screen.getByLabelText("New term for Unwanted titles"),
-      "\\bintern{enter}",
+      "intern{enter}",
     );
     await user.click(save());
     await screen.findByText("Search saved.");
@@ -110,32 +97,21 @@ describe("the four plain lists of the search", () => {
     });
     expect(saved(state).title_exclude).toEqual({
       advanced_regex: true,
-      terms: ["\\bcyber\\b", "\\bintern"],
+      terms: ["\\bcyber\\b", "intern"],
     });
   });
 
-  it("turns a list to regular expressions under Advanced, checks its terms that way, and saves it", async () => {
+  it("saves what the person types in a plain list as words", async () => {
     const { user, state } = await openSearch(plain());
-    await user.click(advanced());
-    const input = screen.getByLabelText("New term for Unwanted places");
-    await user.click(regexSwitch(WORDING.unwantedPlaces));
-    expect(regexSwitch(WORDING.unwantedPlaces)).toBeChecked();
-    expect(
-      screen.getAllByText(WORDING.listUsesRegularExpressions),
-    ).toHaveLength(1);
-    await user.type(input, "(us{enter}");
-    expect(await screen.findByText(/Invalid regular expression/)).toBeVisible();
-    // Back to plain words: what was said about the draft no longer holds, and it is a word.
-    await user.click(regexSwitch(WORDING.unwantedPlaces));
-    expect(screen.queryByText(/Invalid regular expression/)).toBeNull();
-    await user.click(regexSwitch(WORDING.unwantedPlaces));
-    await user.clear(input);
-    await user.type(input, "\\bUSA?\\b{enter}");
+    await user.type(
+      screen.getByLabelText("New term for Unwanted places"),
+      "Remote (US){enter}",
+    );
     await user.click(save());
     await screen.findByText("Search saved.");
     expect(saved(state).location_exclude).toEqual({
-      advanced_regex: true,
-      terms: ["United States", "\\bUSA?\\b"],
+      advanced_regex: false,
+      terms: ["United States", "Remote (US)"],
     });
     expect(saved(state).title_include.advanced_regex).toBe(false);
   });
@@ -163,8 +139,8 @@ describe("the four plain lists of the search", () => {
   });
 });
 
-describe("the lists' Advanced", () => {
-  it("opens again when a reload brings a list of regular expressions", async () => {
+describe("a reload of the lists", () => {
+  it("shows the note of a list of regular expressions it brings, with no switch", () => {
     let form: UseFormReturn<SearchForm> | undefined;
     function Harness() {
       form = useForm<SearchForm>({
@@ -173,8 +149,7 @@ describe("the lists' Advanced", () => {
       return <SearchLists form={form} />;
     }
     render(<Harness />);
-    const button = screen.getByRole("button", { name: "Advanced" });
-    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(WORDING.listUsesRegularExpressions)).toBeNull();
     act(() => {
       form!.reset(
         toSearchForm({
@@ -183,11 +158,8 @@ describe("the lists' Advanced", () => {
         }),
       );
     });
-    expect(button).toHaveAttribute("aria-expanded", "true");
-    expect(regexSwitch(WORDING.unwantedPlaces)).toBeChecked();
-    // Folded by the person, it stays folded while the list keeps its expressions.
-    await userEvent.setup().click(button);
-    expect(button).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText(WORDING.listUsesRegularExpressions)).toBeVisible();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Advanced" })).toBeNull();
   });
 });

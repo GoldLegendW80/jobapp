@@ -17,7 +17,7 @@ This check reads the workflow and fails when a web/e2e/*.spec.ts file is neither
 
 It also fails on a spec the workflow runs twice, on a spec that is both run and excluded, on a
 name (run or excluded) that has no file any more, on a group config that runs no spec, and on a
-group config whose name the local check cannot use as a group (apps and sweep are taken, and a
+group config whose name the local check cannot use as a group (apps is taken, and a
 name is lower case letters, digits and hyphens). Exit status 0 when all is in order, 1 otherwise.
 Run by the shell unit of CI (job checks) and by pre-commit; tested by e2e_groups_test.py.
 """
@@ -55,7 +55,7 @@ NOT_IN_CI: dict[str, str] = {
 GROUP_CONFIG = "-all.config.ts"
 GROUP_NAME = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 # The groups of ops/local-check.sh that name their specs one by one: no config may take them.
-NAMED_GROUPS = ("apps", "sweep")
+NAMED_GROUPS = ("apps",)
 
 WORKFLOW = Path(".github/workflows/ci.yml")
 LOCAL_CHECK = Path("ops/local-check.sh")

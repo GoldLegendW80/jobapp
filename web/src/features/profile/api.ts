@@ -533,19 +533,27 @@ export function readSections(raw: z.infer<typeof sectionsSchema>): {
       continue;
     }
     // The api validated it on save; the merge only fills keys a newer model added.
-    (sections as Record<SectionName, unknown>)[name] = {
-      ...EMPTY[name],
-      ...value,
-      ...(name === "search" &&
-      ("interactive_sites" in value || "interactive_instructions" in value)
-        ? interactiveSettingsSchema.parse({
-            interactive_sites: value.interactive_sites ?? [],
-            interactive_instructions: value.interactive_instructions ?? "",
-          })
-        : {}),
-    };
+    (sections as Record<SectionName, unknown>)[name] = readSection(name, value);
   }
   return { sections, unsaved };
+}
+
+/** One stored section as the app reads it: merged over its empty form, and the search's job
+ * websites and instructions in their parsed form (a null instruction reads as ""). The Import
+ * dialog reads a file's sections the same way, so an export imported back reads as unchanged. */
+export function readSection(name: SectionName, value: object): unknown {
+  const read: Record<string, unknown> = { ...EMPTY[name], ...value };
+  if (
+    name === "search" &&
+    ("interactive_sites" in value || "interactive_instructions" in value)
+  ) {
+    const parsed = interactiveSettingsSchema.safeParse({
+      interactive_sites: read.interactive_sites ?? [],
+      interactive_instructions: read.interactive_instructions ?? "",
+    });
+    if (parsed.success) Object.assign(read, parsed.data);
+  }
+  return read;
 }
 
 export function toProfile(raw: RawProfile): Profile {

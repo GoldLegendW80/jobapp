@@ -115,12 +115,19 @@ def test_edits_before_claim_and_during_work_only_change_later_sweeps(
     set_profile(factory, alice.id, original)
     sweep_id = uuid.UUID(start(api, alice).json()["id"])
     frozen = copy.deepcopy(read_sweep(factory, sweep_id).stats["search_scope"])
-    set_profile(factory, alice.id, search(board("fake-before-claim"), days=2))
+    set_profile(
+        factory, alice.id, search(board("fake-before-claim"), days=2, interactive_sites=[site()])
+    )
     claimed = sweep.claim(factory, sweep_id, clock())
     assert claimed is not None
-    assert [b.org for b in claimed.boards] == ["fake-original"]
+    # Every search runs the websites alone (owner, 2026-10-28): the board is frozen as saved,
+    # never read.
+    assert claimed.boards == []
+    assert [b.org for b in claimed.search.boards] == ["fake-original"]
     assert claimed.search.interactive_instructions == CANARY
-    set_profile(factory, alice.id, search(board("fake-during-run"), days=7))
+    set_profile(
+        factory, alice.id, search(board("fake-during-run"), days=7, interactive_sites=[site()])
+    )
     sweep.save_progress(factory, sweep_id, sweep.Stats(seen=3), clock())
     assert read_sweep(factory, sweep_id).stats["search_scope"] == frozen
     sweep.finish_done(factory, sweep_id, sweep.Stats(seen=3), clock())
@@ -128,7 +135,7 @@ def test_edits_before_claim_and_during_work_only_change_later_sweeps(
     later = uuid.UUID(start(api, alice).json()["id"])
     next_plan = sweep.claim(factory, later, clock())
     assert next_plan is not None
-    assert [b.org for b in next_plan.boards] == ["fake-during-run"]
+    assert [b.org for b in next_plan.search.boards] == ["fake-during-run"]
     assert next_plan.filter.days == 7
 
 
@@ -206,8 +213,9 @@ def test_interactive_only_run_explains_unsupported_criteria_without_legacy_fallb
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Several titles and places are one agent's to search now (owner, 2026-10-27, jobs J18); a
-    # regular expression that is not a plain word still cannot be typed into a website's search.
-    title = {"terms": ["(ai|ml) engineer"], "advanced_regex": True}
+    # saved regular expression with no plain words (app/profile/plain_terms.py) still cannot be
+    # typed into a website's search.
+    title = {"terms": [r"\w+ engineer"], "advanced_regex": True}
     set_profile(
         factory,
         alice.id,

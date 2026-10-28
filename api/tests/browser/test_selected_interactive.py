@@ -98,6 +98,7 @@ async def execute(
         SimpleNamespace(sections={"search": search.model_dump(mode="json")}, revision=3),
         sweep.SweepTrigger.manual,
         datetime.fromisoformat("2026-10-24T00:00:00+00:00"),
+        websites_only=False,  # the runner beside fixed readers, as the engine still keeps them
     )
     stats = sweep.Stats(sources=sweep.initial_sources(scope))
     plan = SimpleNamespace(

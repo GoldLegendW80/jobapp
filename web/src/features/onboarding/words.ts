@@ -66,14 +66,10 @@ export function summaryRows(
   };
 }
 
+/** What the first search reads: the job websites ticked in Find jobs, alone (owner, 2026-10-28). */
 export function sweepCoverage(search: Search): string {
-  const boards = search.boards.filter((board) => board.enabled).length;
-  const sources = (search.browser_sources ?? []).filter(
-    (source) => source.enabled,
+  const websites = (search.interactive_sites ?? []).filter(
+    (site) => site.enabled,
   ).length;
-  const parts = [
-    `${boards} ${boards === 1 ? "board" : "boards"}`,
-    ...(sources ? [`${sources} ${sources === 1 ? "site" : "sites"}`] : []),
-  ];
-  return parts.join(" and ");
+  return `${websites} ${websites === 1 ? "job website" : "job websites"}`;
 }

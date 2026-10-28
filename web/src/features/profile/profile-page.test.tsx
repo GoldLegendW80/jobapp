@@ -49,8 +49,10 @@ describe("profile page", () => {
     const bar = screen.getByRole("progressbar", {
       name: "Profile completeness",
     });
-    expect(bar).toHaveAttribute("aria-valuenow", "100");
-    expect(screen.getByText("100%")).toBeVisible();
+    // Search needs a job website ticked in Find jobs (owner, 2026-10-28), which the
+    // imported profile does not hold.
+    expect(bar).toHaveAttribute("aria-valuenow", "97");
+    expect(screen.getByText("97%")).toBeVisible();
     // The CV tab (documents D11) comes first, then the six sections.
     expect(screen.getAllByRole("tab")).toHaveLength(7);
     expect(screen.getAllByRole("tab")[0]).toHaveTextContent("CV");
@@ -59,11 +61,11 @@ describe("profile page", () => {
       "Experience",
       "Facts",
       "Skills",
-      "Search",
       "Answers",
     ]) {
       expect(tab(new RegExp(`^${name}, 100% complete$`))).toBeInTheDocument();
     }
+    expect(tab(/^Search, 80% complete$/)).toBeInTheDocument();
     expect(tab(/Identity/)).toHaveAttribute("aria-selected", "true");
     expect(screen.getByLabelText("Full name")).toHaveValue("Harald Example");
     expect(screen.getByLabelText("Email")).toHaveValue("harald@example.org");
@@ -92,7 +94,7 @@ describe("profile page", () => {
     await user.click(tab(/Facts/));
     expect(await screen.findByText("No fact block yet.")).toBeVisible();
     await user.click(tab(/Search/));
-    expect(await screen.findByText("No board yet.")).toBeVisible();
+    expect(await screen.findByText("No rule yet.")).toBeVisible();
   });
 
   it("reports a failed load and retries", async () => {

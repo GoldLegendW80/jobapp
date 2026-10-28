@@ -4,7 +4,7 @@
   `profile_empty`, `done` (the steps the profile already answers), `steps_left`, `open_wizard`
   (the app opens /welcome by itself) and `show_card` ("Finish setting up" on the home page).
 - POST /api/opportunities/onboarding/complete: records `completed_at` and starts the first sweep.
-  200 `{state, sweep: started|no_boards|search_invalid|queue_down, sweep_id}`; 409
+  200 `{state, sweep: started|no_websites|search_invalid|queue_down, sweep_id}`; 409
   `{detail, code: "sweep_running", sweep_id, state}` when a sweep already runs: the wizard is
   finished all the same and that sweep is the first one.
 - POST /api/opportunities/onboarding/dismiss: "Skip for now", records `dismissed_at`. 200 with the
@@ -68,7 +68,7 @@ class StepIn(BaseModel):
 
 class CompleteOut(BaseModel):
     state: StateOut
-    sweep: Literal["started", "no_boards", "search_invalid", "queue_down"]
+    sweep: Literal["started", "no_websites", "search_invalid", "queue_down"]
     sweep_id: uuid.UUID | None
 
 
@@ -132,5 +132,5 @@ async def complete(user: CurrentUser, request: Request) -> Any:
             detail=RUNNING, code="sweep_running", sweep_id=begun.sweep_id, state=finished
         )
         return JSONResponse(status_code=409, content=body.model_dump(mode="json"), headers=NO_STORE)
-    # started (with its id), or why no sweep started: no_boards, search_invalid, queue_down
+    # started (with its id), or why no sweep started: no_websites, search_invalid, queue_down
     return CompleteOut(state=finished, sweep=begun.outcome, sweep_id=begun.sweep_id)

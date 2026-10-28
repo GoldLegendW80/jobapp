@@ -193,11 +193,38 @@ describe("checkImportFile accepts an export", () => {
       "3 employers, 2 schools",
       "2 blocks",
       "4 categories, 1 gate",
-      "2 boards, 1 enabled",
+      "0 job websites, 0 ticked",
       "2 countries",
       "Documents: language auto, tone plain",
     ]);
     expect(result.summary.photo).toBe(false);
+    // Search needs a job website ticked in Find jobs, which the file does not hold.
+    expect(result.summary.completeness.overall).toBe(97);
+  });
+
+  it("reads an export with a ticked job website and no instructions as unchanged", () => {
+    // The api stores and exports no instructions as null; the page reads them as "". The file
+    // is read the same way, so the export imported back changes nothing.
+    const sections = haraldLike();
+    sections.search = {
+      ...sections.search,
+      interactive_sites: [
+        {
+          platform: "custom",
+          url: "https://jobs.example.org/",
+          enabled: true,
+          mode: "llm_browser",
+        },
+      ],
+      interactive_instructions: null,
+    };
+    const result = check(exported({ sections }), profileOf(sections));
+    if (!result.ok) throw new Error(result.error);
+    const search = result.summary.sections.find((s) => s.name === "search");
+    expect(search).toMatchObject({
+      detail: "1 job website, 1 ticked",
+      changed: false,
+    });
     expect(result.summary.completeness.overall).toBe(100);
   });
 
@@ -300,7 +327,7 @@ describe("checkImportFile accepts an export", () => {
       "0 employers, 0 schools",
       "0 blocks",
       "0 categories, 0 gates",
-      "0 boards, 0 enabled",
+      "0 job websites, 0 ticked",
       "0 countries",
       OLDER_FILE_PREFERENCES, // no preferences in this file
     ]);

@@ -1,4 +1,5 @@
-"""O8 integration with main's shared manual and wizard sweep start, without a live database."""
+"""The shared manual and wizard sweep start, without a live database: a feed alone, even
+enabled, is no longer a search (owner, 2026-10-28: every search runs the websites alone)."""
 
 import asyncio
 import uuid
@@ -12,9 +13,7 @@ from app.profile.schemas import SearchSection
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_feed_only_begin_queues_only_an_enabled_feed(
-    monkeypatch: pytest.MonkeyPatch, enabled: bool
-) -> None:
+def test_a_feed_only_search_queues_nothing(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
     search = SearchSection.model_validate({"feeds": [{"kind": "remoteok", "enabled": enabled}]})
     monkeypatch.setattr(sweep, "load_search", lambda *_: search)
     row = MagicMock(id=uuid.uuid4())
@@ -34,7 +33,7 @@ def test_feed_only_begin_queues_only_an_enabled_feed(
             sessions, Queue(), uuid.uuid4(), datetime(2026, 10, 21, tzinfo=UTC), lambda r: r.id
         )
     )
-    assert result.outcome == ("started" if enabled else "no_boards")
-    assert result.sweep_id == (row.id if enabled else None)
-    assert queued == (["run_sweep"] if enabled else [])
-    assert start.call_count == int(enabled)
+    assert result.outcome == "no_websites"
+    assert result.sweep_id is None
+    assert queued == []
+    assert start.call_count == 0

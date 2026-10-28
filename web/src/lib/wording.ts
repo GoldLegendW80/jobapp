@@ -192,12 +192,10 @@ export const WORDING = {
   jobTitles: "Job titles",
   unwantedTitles: "Unwanted titles",
   unwantedPlaces: "Unwanted places",
-  regularExpressions: "Regular expressions",
-  regularExpressionsFor: "Regular expressions for",
-  regularExpressionsNote:
-    "Write a list as regular expressions instead of plain words. Most people leave these off.",
+  // A search list saved as regular expressions before the setup asked for words only
+  // (owner, 2026-10-28): its terms keep working as they are.
   listUsesRegularExpressions:
-    "This list holds regular expressions. Switch it back to plain words under Advanced.",
+    "This list was saved as patterns by an earlier version. They keep working as they are, and the search reads the words in each.",
 } as const;
 
 /** The empty deck line; it names the fit threshold in force so the number is never a mystery. */

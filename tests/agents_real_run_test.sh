@@ -184,7 +184,7 @@ case "$cmd" in
       *jsonb_build_object*)
         if [[ "${STUB_METRICS:-ok}" == bad ]]; then echo 'not JSON'; else printf '{"run_id": "%s", "status": "done", "events": 13}\n' "$STUB_RUN"; fi
         ;;
-      # The SQL of tests/e2e_jetson.sh, e2e_jobs_jetson.sh and e2e_jobs_sweep_jetson.sh.
+      # The SQL of tests/e2e_jetson.sh and e2e_jobs_jetson.sh.
       *"'mac_ips='"*) echo 'email=0|mac_ips=0|all=0' ;;
       *"not success"*) echo 0 ;;
       *"e2e-%@example.org"*) labels "$sql" | sed 's/$/0/' | paste -s -d '|' - ;;
@@ -290,7 +290,7 @@ step "B0b: an OWNER that is not an e-mail address stops every Jetson script that
 OWNER_FORM='^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$'
 OWNER_CHECK=" =~ $OWNER_FORM ]] || die \"OWNER is not an email address\""
 OWNER_SCRIPTS=(tests/agents_real_run_jetson.sh tests/ingestion_transcribe_jetson.sh tests/e2e_jetson.sh
-  tests/e2e_jobs_jetson.sh tests/e2e_jobs_sweep_jetson.sh)
+  tests/e2e_jobs_jetson.sh)
 for s in "${OWNER_SCRIPTS[@]}"; do
   grep -q -F -- "$OWNER_CHECK" "$s" || fail "$s does not check the form of OWNER with $OWNER_FORM"
 done
@@ -393,9 +393,8 @@ for mode in plain traced; do
   owner_run "$mode" tests/e2e_jetson.sh 1 "screenshots, index in" "$TROOT/tasks/evidence/identity/run.log"
   owner_run "$mode" tests/e2e_jobs_jetson.sh 0 PASS "$TROOT/tasks/evidence/jobs-j4-jetson/run.log" --
   owner_run "$mode" tests/e2e_jobs_jetson.sh 0 PASS "$TROOT/tasks/evidence/jobs-j7-jetson/run.log" -- view
-  owner_run "$mode" tests/e2e_jobs_sweep_jetson.sh 0 PASS "$TROOT/tasks/evidence/jobs-j5-jetson/run.log"
 done
-ok "a real run of each of the 5 scripts to its end, both journeys of e2e_jobs_jetson.sh: the address in no output and no file; under bash -x, in no file"
+ok "a real run of each of the 4 scripts to its end, both journeys of e2e_jobs_jetson.sh: the address in no output and no file; under bash -x, in no file"
 owner_run plain tests/agents_real_run_jetson.sh 0 PASS -
 owner_run plain tests/ingestion_transcribe_jetson.sh 0 "every check passed" - POLL_S=1
 ok "the dry runs of tests/agents_real_run_jetson.sh and tests/ingestion_transcribe_jetson.sh: not printed"
@@ -417,9 +416,7 @@ owner_run plain tests/e2e_jetson.sh 1 "the owner's account is not on jetson.inva
   STUB_ACCOUNT=missing
 owner_run plain tests/e2e_jobs_jetson.sh 1 "no jobs in the owner's account on jetson.invalid" \
   "$TROOT/tasks/evidence/jobs-j4-jetson/run.log" STUB_ACCOUNT=missing --
-owner_run plain tests/e2e_jobs_sweep_jetson.sh 1 "no jobs in the owner's account on jetson.invalid" \
-  "$TROOT/tasks/evidence/jobs-j5-jetson/run.log" STUB_ACCOUNT=missing
-ok "the 9 refusals that named the account after the log started now say \"the owner's account\""
+ok "the 8 refusals that named the account after the log started now say \"the owner's account\""
 
 step "B0d: tests/e2e_jobs_jetson.sh runs the specs of its journey; any other argument is refused before any call"
 pnpm_call_has() { # pnpm_call_has <piece>...: the recorded pnpm call holds every piece

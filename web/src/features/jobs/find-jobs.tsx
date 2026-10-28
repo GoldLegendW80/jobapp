@@ -1,7 +1,8 @@
 /**
- * "Find jobs" on /jobs: start a sweep of the profile's boards, follow it live (boards done, the
- * board being read, new postings so far), then a summary of what it found and which boards
- * failed. The history of the last sweeps, with the automatic schedule and its next run, is one
+ * "Find jobs" on /jobs: start a search of the job websites ticked in its setup (every search
+ * runs the websites alone, owner 2026-10-28), follow it live (the website being read, new
+ * postings so far), then a summary of what it found. An older sweep that read boards still
+ * shows them. The history of the last sweeps, with the automatic schedule and its next run, is one
  * click away. A sweep already running when the page opens (started elsewhere, or an automatic
  * one) is followed the same way.
  */
@@ -139,10 +140,11 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
 
 function summaryLine(sweep: Sweep): string {
   const parts = [
-    // Jobs J17: a websites only sweep read no board, so it says what it searched instead.
-    sweep.search_scope?.websites_only
-      ? "Websites only, no board or feed searched"
-      : `${plural(sweep.boards_ok, "board")} read`,
+    // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
+    // searches the ticked websites alone) counts the websites it searched instead.
+    sweep.boards_total > 0
+      ? `${plural(sweep.boards_ok, "board")} read`
+      : `${plural(sweep.sources.filter((source) => source.host).length, "website")} searched`,
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),
@@ -347,7 +349,7 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
             </Alert>
           ) : history.data.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No sweep yet. Find jobs sweeps the boards of your profile.
+              No sweep yet. Find jobs searches the websites ticked in its setup.
             </p>
           ) : (
             <ul
@@ -370,9 +372,6 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {sweep.trigger === "schedule" ? "Automatic" : "By hand"}
-                        {sweep.search_scope?.websites_only
-                          ? ", websites only"
-                          : ""}
                         , {STATUS_TEXT[sweep.status] ?? sweep.status}
                         {sweep.boards_failed.length
                           ? `, ${plural(sweep.boards_failed.length, "board")} failed`

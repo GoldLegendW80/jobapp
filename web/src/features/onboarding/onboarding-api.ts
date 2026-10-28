@@ -17,7 +17,7 @@ export type OnboardingState = z.infer<typeof stateSchema>;
 
 const completeSchema = z.object({
   state: stateSchema,
-  sweep: z.enum(["started", "no_boards", "search_invalid", "queue_down"]),
+  sweep: z.enum(["started", "no_websites", "search_invalid", "queue_down"]),
   sweep_id: z.string().nullable(),
 });
 export type CompleteAnswer = z.infer<typeof completeSchema>;

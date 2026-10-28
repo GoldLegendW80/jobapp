@@ -36,7 +36,7 @@ const ALL_MISSING = {
     "location",
     "contract_types",
     "remote_stance",
-    "boards",
+    "interactive_sites",
   ],
   answers: [
     "work_authorization",
@@ -65,12 +65,16 @@ describe("roundHalfEven, as Python's round", () => {
 });
 
 describe("completenessOf matches the api", () => {
-  it("Harald's real import is 100% everywhere", () => {
+  it("Harald's real import is 100% everywhere but Search, which needs a ticked job website", () => {
     const result = completenessOf(owner.sections);
-    expect(result.overall).toBe(100);
-    for (const section of Object.values(result.sections)) {
-      expect(section).toEqual({ percent: 100, missing: [] });
-    }
+    // The engine files hold boards and no job website: searches run the websites alone.
+    expect(result.overall).toBe(97);
+    for (const [name, section] of Object.entries(result.sections))
+      expect(section).toEqual(
+        name === "search"
+          ? { percent: 80, missing: ["interactive_sites"] }
+          : { percent: 100, missing: [] },
+      );
   });
 
   it("an empty profile is 0% with every required field missing", () => {
@@ -120,20 +124,29 @@ describe("completenessOf matches the api", () => {
     expect(result.overall).toBe(16);
   });
 
-  it("needs an enabled board, and counts 0 years as filled", () => {
+  it("needs a ticked job website, never a board, and counts 0 years as filled", () => {
     const result = completenessOf({
       search: {
         title_include: { terms: ["x"] },
         location: { terms: ["Paris"] },
         contract_types: ["CDI"],
         remote_stance: "any",
-        boards: [{ company: "A", ats: "ashby", org: "a", enabled: false }],
+        // A saved board, even on, no longer counts: searches run the websites alone.
+        boards: [{ company: "A", ats: "ashby", org: "a", enabled: true }],
+        interactive_sites: [
+          {
+            platform: "custom",
+            url: "https://jobs.example.org/",
+            enabled: false,
+            mode: "llm_browser",
+          },
+        ],
       },
       skills: { years_experience: 0 },
     });
     expect(result.sections.search).toEqual({
       percent: 80,
-      missing: ["boards"],
+      missing: ["interactive_sites"],
     });
     expect(result.sections.skills).toEqual({ percent: 50, missing: ["have"] });
     expect(result.overall).toBe(22);
