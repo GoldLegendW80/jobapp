@@ -104,7 +104,9 @@ SEARCH = {"title_include": {"terms": ["robot", "drone"]}, "location": {"terms": 
 # (tool, args, the answer): each a slip of the model, refused by the api before the browser.
 SLIPS = [
     ("browser_type", {"ref": "e1", "text": "Paris"}, finder.TITLE_BOX_REFUSED),  # a place
-    ("browser_type", {"ref": "e1", "text": "Robot"}, finder.TITLE_BOX_REFUSED),  # not as saved
+    ("browser_type", {"ref": "e1", "text": "Robots"}, finder.TITLE_BOX_REFUSED),  # not as saved
+    ("browser_type", {"ref": "e1", "text": "ROBOT\n"}, finder.TITLE_BOX_REFUSED),  # a control
+    ("browser_type", {"ref": "e1", "text": "r0bot"}, finder.TITLE_BOX_REFUSED),
     ("browser_type", {"ref": "e1", "text": "sales"}, finder.TITLE_BOX_REFUSED),
     ("browser_type", {"ref": "e4", "text": "robot"}, finder.PLACE_BOX_REFUSED),  # a title
     ("browser_type", {"ref": "e4", "text": "Lyon"}, finder.PLACE_BOX_REFUSED),
@@ -397,3 +399,85 @@ def test_every_word_of_the_rule_tells_its_box_alone_and_nothing_with_one_of_the_
 def test_a_huge_name_is_read_in_its_first_characters_only():
     assert finder.box_of("textbox", "Location " + "x" * 1_000_000) == "place"
     assert finder.box_of("textbox", "x" * finder.BOX_NAME_MAX + " Location") is None
+
+
+# --- the person's words read as the person meant them (owner, 2026-10-28) ----------------------
+
+
+class FoldingSite(FormSite):
+    """FormSite whose boxes take a saved value with its case or accents aside, as browserd's
+    discovery.saved_as does; `sent` keeps the text the model typed, as it reached the page."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.sent: list[str] = []
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        scope = args["_discovery_scope"]
+        if name == "browser_type" and args["text"]:
+            self.sent.append(args["text"])
+            saved = {"e1": scope["titles"], "e4": scope["places"]}.get(args.get("ref"), [])
+            args = {**args, "text": finder.saved_as(args["text"], tuple(saved)) or "?"}
+        return await super().call(name, args)
+
+
+def test_a_case_or_accent_variant_is_typed_and_its_search_named_by_the_saved_value():
+    site = FoldingSite(results={"genai engineer": ["GenAI Engineer"]})
+    answers: list[tuple[str, bool]] = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await session.snapshot()
+        for ref, text in (("e1", "GenAI Engineer"), ("e4", "ILE-DE-FRANCE")):
+            answers.append(await session.interact("browser_type", {"ref": ref, "text": text}))
+        answers.append(await session.interact("browser_click", {"ref": "e3"}))
+        return finder.Ran()
+
+    search = {
+        "title_include": {"terms": ["genai engineer"]},
+        "location": {"terms": ["Île-de-France"]},
+    }
+    entry, _, _ = run(selected(**search), site, ScriptedFinder(script))
+    assert [error for _, error in answers] == [False, False, False], answers
+    assert site.sent == ["GenAI Engineer", "ILE-DE-FRANCE"]
+    assert entry["searched"] == [{"title": "genai engineer", "place": "Île-de-France"}]
+    assert "refused" not in entry or not entry["refused"]
+
+
+@pytest.mark.parametrize("place", ["everywhere", "Anywhere", "worldwide", "partout"])
+def test_a_place_read_as_no_place_leaves_the_box_empty_and_still_searches(place):
+    """Places "everywhere": the agent leaves the place box empty (the prompt says so); the empty
+    box is allowed and the search is named with no place."""
+    site = FoldingSite(results={"robot": ["Robot Engineer"]})
+    answers: list[tuple[str, bool]] = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await session.snapshot()
+        for ref, text in (("e1", "robot"), ("e4", "")):
+            answers.append(await session.interact("browser_type", {"ref": ref, "text": text}))
+        answers.append(await session.interact("browser_click", {"ref": "e3"}))
+        return finder.Ran()
+
+    search = {"title_include": {"terms": ["robot"]}, "location": {"terms": [place]}}
+    entry, _, _ = run(selected(**search), site, ScriptedFinder(script))
+    assert [error for _, error in answers] == [False, False, False], answers
+    assert entry["searched"] == [{"title": "robot", "place": None}]
+
+
+def test_the_prompt_states_every_criterion_and_asks_to_interpret_them():
+    prompt = finder.INTERACTIVE_PROMPT
+    for words in (
+        "`titles`",
+        "`places`",
+        "`filters`",
+        "`criteria`",
+        "untrusted_person_instructions",
+        "as the person meant",
+        "everywhere",
+        "partout",
+        "leave the place box empty",
+        "Leaving a box empty is always allowed",
+        "case or accents",
+        "translation",
+    ):
+        assert words in prompt, words
+    assert not any(dash in prompt for dash in ("\u2013", "\u2014", " - "))

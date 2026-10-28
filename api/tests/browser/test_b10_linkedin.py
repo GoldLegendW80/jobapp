@@ -469,15 +469,23 @@ def test_the_pace_is_shared_per_host_with_another_lease() -> None:
     assert all(s >= 10.0 for s in slept)
 
 
-def test_at_most_5_result_pages() -> None:
-    made = pages.offers(25 * 7)
-    tools = FakeTools(site(made, per_page=25) | {pages.search_url(7): pages.results(made[150:])})
+def test_no_result_page_cap_the_reader_reads_to_the_last_page() -> None:
+    """Owner, 2026-10-28: no page cap for LinkedIn either. The reader goes on until a page
+    brings no new card or fewer than a full page; pacing and the sweep's time bound it."""
+    made = pages.offers(25 * 7 + 10)
+    tools = FakeTools(
+        site(made, per_page=25)
+        | {
+            pages.search_url(7): pages.results(made[150:175]),
+            pages.search_url(8): pages.results(made[175:]),
+        }
+    )
     # Every posting is known already: only result pages are opened.
     plan = Plan([src()], known=Known({pages.view(o) for o in made}))
     stats, _, _, _ = run(tools, plan=plan)
     opened = [c for c in tools.calls if "/jobs/search/" in c]
-    assert len(opened) == 5
-    assert stats.sources[0]["result_pages"] == 5
+    assert len(opened) == 8
+    assert stats.sources[0]["result_pages"] == 8
 
 
 def test_the_sign_in_wall_skips_the_source_and_starts_no_hand_off() -> None:
@@ -485,7 +493,7 @@ def test_the_sign_in_wall_skips_the_source_and_starts_no_hand_off() -> None:
     tools = RedirectTools({url: pages.SIGNIN}, {url: "https://www.linkedin.com/login?x=1"})
     stats, stored, _, leases = run(tools)
     assert stats.sources[0]["error"] == "linkedin_signin"
-    assert stats.sources[0]["result_pages"] == 1  # counted as the sweep of the day
+    assert stats.sources[0]["result_pages"] == 1  # the page it met
     assert stored == []
     assert tools.calls == [url]  # no click, no other page: nothing asks for a sign in
     assert leases.released  # the lease is given back

@@ -19,9 +19,8 @@ the read returns its postings, so a kill after the checkpoint keeps the pause); 
 Apply (A16) and apply's profile work (A18a) call `record_checkpoint` the same way, with their
 `origin`, in a transaction they commit before anything else. Nothing lifts it early: the owner
 may delete the person's rows of `linkedin_checkpoints` in SQL (docs/runbooks/sweeps-and-worker.md).
-One sweep a day at most: a sweep of the same day (SWEEP_TZ) that opened a LinkedIn page
-(`result_pages` at least 1, a sign in wall or a checkpoint included, saved with the sweep's
-progress as soon as the page is met) refuses the next one with `linkedin_daily`.
+No daily limit (owner, 2026-10-28: "i don't want limit on search by day", LinkedIn too): the
+switch and the pause are what refuse a sweep; `linkedin_daily` stays readable in older sweeps.
 
 Every query is by the person's own id: another person's switch, acceptance or pause is never
 read.
@@ -31,7 +30,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -157,36 +156,19 @@ def refusal(db: Session, user_id: uuid.UUID, now: datetime | None = None) -> str
     return None
 
 
-def swept_today(
-    db: Session, user_id: uuid.UUID, now: datetime, but: uuid.UUID | None = None
-) -> bool:
-    """Whether a sweep of the person's day (SWEEP_TZ), other than `but`, opened a LinkedIn page."""
-    day = now.astimezone(sweeps.SWEEP_TZ).date()
-    start = datetime.combine(day, time(), sweeps.SWEEP_TZ)
-    query = sa.select(Sweep.id).where(
-        Sweep.user_id == user_id,
-        Sweep.started_at >= start,
-        Sweep.started_at < start + timedelta(days=1),
-        _has(_OPENED),
-    )
-    if but is not None:
-        query = query.where(Sweep.id != but)
-    return db.execute(query.limit(1)).first() is not None
-
-
 def sweep_refusal(
     db: Session, user_id: uuid.UUID, sweep_id: uuid.UUID | None, now: datetime
 ) -> str | None:
-    return refusal(db, user_id, now) or (
-        "linkedin_daily" if swept_today(db, user_id, now, sweep_id) else None
-    )
+    """A sweep's refusal: the switch or the pause (`refusal`); no daily limit (2026-10-28)."""
+    del sweep_id  # every sweep is judged alike, whatever the person's sweeps of the day
+    return refusal(db, user_id, now)
 
 
 def sweep_check(
     sessions: sessionmaker[Session], clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 ) -> Callable[[Any], Awaitable[str | None]]:
-    """The sources' Runner check of a LinkedIn source (sources.Check): the guard, then the one
-    sweep a day, read in a session of its own off the event loop."""
+    """The sources' Runner check of a LinkedIn source (sources.Check): the guard, read in a
+    session of its own off the event loop."""
 
     def run(user_id: uuid.UUID, sweep_id: uuid.UUID | None) -> str | None:
         with sessions() as db:

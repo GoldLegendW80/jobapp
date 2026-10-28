@@ -426,7 +426,9 @@ class Pages:
         # The last page's snapshot text and address (the finder agent of B9 reads them).
         self.last_text, self.last_url = "", ""
 
-    async def _act(self, action: Callable[[], Awaitable[dict[str, Any]]]) -> tuple[Node, str]:
+    async def _act(
+        self, action: Callable[[], Awaitable[dict[str, Any]]], tool: str = "browser_navigate"
+    ) -> tuple[Node, str]:
         if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
             raise SourceError("time_budget")
         wait = await self.pacer.reserve(self.host, self.rng.uniform(*self.pause))
@@ -439,11 +441,13 @@ class Pages:
         try:
             done = await action()
             if not done.get("ok"):
+                logger.warning("browser %s failed: error=%s", tool, failure_code(done))
                 raise SourceError("page_failed")
             shot = await self.tools.snapshot()
         except BrowserError as exc:
             raise SourceError("lease_ended" if exc.code == "ended" else "page_failed") from None
         if not shot.get("ok") or not isinstance(shot.get("snapshot"), str):
+            logger.warning("browser browser_snapshot failed: error=%s", failure_code(shot))
             raise SourceError("page_failed")
         self.last_text, self.last_url = shot["snapshot"], str(shot.get("url") or "")
         return parse_snapshot(shot["snapshot"]), str(shot.get("url") or "")
@@ -452,7 +456,17 @@ class Pages:
         return await self._act(lambda: self.tools.navigate(url))
 
     async def click(self, ref: str, element: str) -> tuple[Node, str]:
-        return await self._act(lambda: self.tools.click(ref, element))
+        return await self._act(lambda: self.tools.click(ref, element), "browser_click")
+
+
+_CODE = re.compile(r"[a-z][a-z_]{0,39}")
+
+
+def failure_code(result: object) -> str:
+    """A browserd failure's code as a log may hold it (`host_not_allowed`, `navigation_failed`):
+    a short lower case word, else "other". Never its message, its page text nor an address."""
+    code = result.get("error") if isinstance(result, dict) else None
+    return code if isinstance(code, str) and _CODE.fullmatch(code) else "other"
 
 
 Wanted = Callable[[Card], bool]

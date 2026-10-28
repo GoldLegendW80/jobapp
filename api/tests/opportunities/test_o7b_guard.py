@@ -208,52 +208,32 @@ def test_unimplemented_kind_fails_closed_in_guard(
 
 
 @pytest.mark.parametrize(
-    ("opened", "now", "same_day"),
+    ("opened", "now"),
     [
-        ("2026-01-02T22:59:59+00:00", "2026-01-02T23:00:00+00:00", False),
-        ("2026-06-01T21:59:59+00:00", "2026-06-01T22:00:00+00:00", False),
-        ("2026-03-28T23:00:00+00:00", "2026-03-29T21:59:59+00:00", True),
-        ("2026-03-28T23:00:00+00:00", "2026-03-29T22:00:00+00:00", False),
-        ("2026-10-24T22:00:00+00:00", "2026-10-25T22:59:59+00:00", True),
-        ("2026-10-24T22:00:00+00:00", "2026-10-25T23:00:00+00:00", False),
+        ("2026-01-02T22:59:59+00:00", "2026-01-02T23:00:00+00:00"),
+        ("2026-03-28T23:00:00+00:00", "2026-03-29T21:59:59+00:00"),
+        ("2026-10-24T22:00:00+00:00", "2026-10-25T22:59:59+00:00"),
+        ("2026-10-28T08:00:00+00:00", "2026-10-28T08:05:00+00:00"),
     ],
 )
-def test_daily_reservation_uses_paris_open_day_including_dst(
-    api: Api,
-    person_a: Person,
-    factory: sessionmaker[Session],
-    opened: str,
-    now: str,
-    same_day: bool,
-) -> None:
-    accept(api, person_a)
-    at, checked_at = datetime.fromisoformat(opened), datetime.fromisoformat(now)
-    reserved = history(
-        factory, person_a, at - timedelta(days=1), opened_at=opened, error="page_failed"
-    )
-    with factory() as db:
-        assert guard.swept_today(db, person_a.user_id, "freework", checked_at) is same_day
-        assert guard.swept_today(db, person_a.user_id, "freework", checked_at, reserved) is False
-        expected = "freework_daily" if same_day else None
-        assert guard.sweep_refusal(db, person_a.user_id, "freework", None, checked_at) == expected
-
-
-def test_busy_browser_does_not_reserve_a_day_and_other_person_has_own_day(
+def test_a_sweep_that_opened_the_platform_today_refuses_no_other(
     api: Api,
     person_a: Person,
     person_b: Person,
     factory: sessionmaker[Session],
-    clock: Any,
+    opened: str,
+    now: str,
 ) -> None:
+    """Owner, 2026-10-28: no daily limit on any website. Consent and the 7 day pause are what
+    refuse a sweep; a sweep of the same day that opened the platform does not."""
     accept(api, person_a)
-    accept(api, person_b)
-    history(factory, person_a, clock(), error="browser_busy")
+    at, checked_at = datetime.fromisoformat(opened), datetime.fromisoformat(now)
+    history(factory, person_a, at, opened_at=opened, error="page_failed")
     with factory() as db:
-        assert guard.swept_today(db, person_a.user_id, "freework", clock()) is False
-    history(factory, person_a, clock(), opened_at=clock().isoformat(), error="page_failed")
-    with factory() as db:
-        assert guard.swept_today(db, person_a.user_id, "freework", clock()) is True
-        assert guard.swept_today(db, person_b.user_id, "freework", clock()) is False
+        assert guard.sweep_refusal(db, person_a.user_id, "freework", None, checked_at) is None
+        assert guard.sweep_refusal(db, person_b.user_id, "freework", None, checked_at) == (
+            "freework_off"
+        )
 
 
 def test_guard_state_does_not_return_or_log_unrecognized_snapshot_metadata(

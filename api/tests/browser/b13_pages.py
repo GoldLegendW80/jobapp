@@ -50,6 +50,24 @@ DETAILS = {
 }
 
 
+LOCALES = {
+    "/b13/locale": "/b13/en/",
+    "/b13/locale-off": "http://elsewhere:8080/escape",
+    "/b13/locale-write": "/remove",
+    "/b13/locale-slash": "/\\elsewhere:8080/b13/escape-slash",
+    "/b13/locale-slashes": "\\\\elsewhere:8080/b13/escape-slashes",
+}
+
+
+COUNTRY = {
+    "www.indeed.test:8080": {
+        "/b13/indeed": "http://fr.indeed.test:8080/b13/indeed",
+        "/b13/indeed-off": "http://elsewhere:8080/b13/indeed-off",
+    },
+    "fr.indeed.test:8080": {},
+}
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -92,6 +110,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 target = "off" if path.path.endswith("off") else "write"
                 body = body.replace('action="/b13/search"', f'action="/b13/{target}/search"')
+        elif path.path.startswith("/b13/indeed") and self.headers.get("Host") in COUNTRY:
+            # Indeed's home sends the start page to the person's country site (owner,
+            # 2026-10-28), and `-off` to another domain; the country site is the form itself.
+            target = COUNTRY[self.headers.get("Host")].get(path.path)
+            if target is not None:
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        elif path.path in LOCALES:
+            # A start page that answers on another address, as Welcome to the Jungle answers
+            # `/` on `/en` (jobs J18): its own locale path, another host, a write address, and
+            # two Locations Python's urljoin keeps on this host while Chromium reads the
+            # backslash as a slash and goes to `elsewhere` (this server's other name).
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                LOCALES[path.path],
+            )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif path.path in {"/b13/off/search", "/b13/write/search"}:
             self.send_response(302)
             self.send_header(

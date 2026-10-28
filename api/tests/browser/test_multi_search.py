@@ -221,7 +221,8 @@ def test_postings_merge_once_per_address_across_the_agent_s_searches():
     "typed",
     [
         "drone",  # a saved title of another person's search
-        "Robot",
+        "Robotics",  # "Robot" is the saved title, its case aside (owner, 2026-10-28)
+        "ROBOT\t",
         "robot ",
         " robot",
         "robots",
@@ -473,9 +474,9 @@ class NoDatabasePolicy(platform_policy.PlatformPolicy):
         return None
 
 
-def test_linkedin_pages_of_the_sweep_still_hold_for_its_agent():
-    """LinkedIn's account safety cap stays (5 pages a sweep, one sweep a day, test_b14_policy):
-    the agent's sixth page is refused there, whatever its own lack of a cap."""
+def test_linkedin_s_agent_has_no_page_cap():
+    """Owner, 2026-10-28: no page cap and no daily limit, LinkedIn too (test_b14_policy): its
+    agent runs every search; its pace and the sweep's time bound it."""
     site = SearchSite(base=LINKEDIN, results={t: [f"{t} Engineer"] for t in ("a1", "b2", "c3")})
     policy = NoDatabasePolicy()
     entry, _, leases = run(
@@ -485,11 +486,8 @@ def test_linkedin_pages_of_the_sweep_still_hold_for_its_agent():
         policy=policy,
         sweep_id=str(uuid.uuid4()),
     )
-    [pages] = [run.pages for run in policy._runs.values()]
-    assert pages == {"linkedin": platform_policy.PAGES["linkedin"]} == {"linkedin": 5}
-    assert entry["error"] == "page_budget"
-    # The second search's posting was the fifth page: the third search's typing is refused.
-    assert (entry["searches"], entry["found"]) == (2, 2)
+    assert entry["error"] == "finding_persistence_pending"
+    assert (entry["searches"], entry["found"]) == (3, 3)
     assert len(leases.acquired) == 1
     assert len(policy.reserved) == 1
 
@@ -506,7 +504,6 @@ def test_another_platform_has_no_page_cap_of_the_policy():
         policy=NoDatabasePolicy(),
         sweep_id=str(uuid.uuid4()),
     )
-    assert platform_policy.PAGES == {"linkedin": 5}
     assert (entry["error"], entry["found"]) == ("finding_persistence_pending", 30)
     assert entry["result_pages"] == 33 > finder.PAGES_MAX  # the start, typed, results, 30 postings
 
