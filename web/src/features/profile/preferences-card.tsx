@@ -43,7 +43,6 @@ const preferencesSchema = z.object({
     completed_at: z.string().nullable(),
     dismissed_at: z.string().nullable(),
     steps_passed: z.array(z.string()),
-    starter_handled: z.array(z.string()).optional(),
   }),
   documents_language: z.enum(DOCUMENTS_LANGUAGES),
   documents_tone: z.enum(DOCUMENTS_TONES),
@@ -56,7 +55,6 @@ const copyOnboarding = (
 ): Preferences["onboarding"] => ({
   ...o,
   steps_passed: [...o.steps_passed],
-  ...(o.starter_handled ? { starter_handled: [...o.starter_handled] } : {}),
 });
 const toForm = (p: Preferences): PreferencesForm => ({
   ...p,

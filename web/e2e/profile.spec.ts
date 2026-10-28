@@ -136,15 +136,6 @@ function fakeExport() {
         remote_stance: "hybrid",
         min_fit: 70,
         days: 30,
-        boards: [
-          {
-            company: "Example AI",
-            ats: "ashby",
-            org: "example-ai",
-            enabled: true,
-            extra_exclude: terms([]),
-          },
-        ],
         never_apply: ["No defence roles."],
         // A job website ticked in Find jobs: what every search runs and what completeness
         // counts (owner, 2026-10-28). An invented host, never opened by this journey.
@@ -305,7 +296,7 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   await shots(page, "skills");
 
   // Searches run the job websites ticked in Find jobs (owner, 2026-10-28): the tab shows no
-  // company boards, the saved one stays saved.
+  // company boards.
   await openTab(page, "Search");
   await expect(
     page.getByText("Searches run the job websites ticked in Find jobs."),

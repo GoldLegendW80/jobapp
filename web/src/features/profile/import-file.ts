@@ -95,8 +95,8 @@ export function describeSection(name: SectionName, data: unknown): string {
       return `${plural(categories, "category", "categories")}, ${plural(count(s.gates), "gate")}`;
     }
     case "search": {
-      // Every search runs the job websites ticked in Find jobs (owner, 2026-10-28): the file's
-      // saved boards are imported as they are, not described.
+      // Every search runs the job websites ticked in Find jobs (owner, 2026-10-28): boards or
+      // feeds an older file holds are dropped by the api on import, so they are not described.
       const sites = Array.isArray(s.interactive_sites)
         ? s.interactive_sites
         : [];

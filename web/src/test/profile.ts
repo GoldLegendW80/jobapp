@@ -129,22 +129,6 @@ export function haraldLike(): SectionData {
       remote_stance: "any",
       min_fit: 70,
       days: 30,
-      boards: [
-        {
-          company: "Mistral AI",
-          ats: "ashby",
-          org: "mistral.ai",
-          enabled: true,
-          extra_exclude: { advanced_regex: false, terms: [] },
-        },
-        {
-          company: "Datadog",
-          ats: "greenhouse",
-          org: "datadog",
-          enabled: false,
-          extra_exclude: { advanced_regex: false, terms: [] },
-        },
-      ],
       never_apply: ["No cybersecurity roles."],
       sweep_schedule: {
         enabled: false,
@@ -553,7 +537,6 @@ const EMPTY_SECTIONS: Record<SectionName, unknown> = {
     remote_stance: null,
     min_fit: 70,
     days: 30,
-    boards: [],
     never_apply: [],
     sweep_schedule: {
       enabled: false,

@@ -11,7 +11,6 @@ import {
   LANGUAGE_WORDS,
   TONE_WORDS,
   WIZARD_STEP_WORDS,
-  FEED_NAMES,
   FEED_SHORT_NAMES,
   contractWord,
   deckEmpty,
@@ -32,7 +31,6 @@ describe("wording", () => {
         LANGUAGE_WORDS,
         TONE_WORDS,
         WIZARD_STEP_WORDS,
-        FEED_NAMES,
         FEED_SHORT_NAMES,
       ].flatMap((table) => Object.values(table)),
     ]) {

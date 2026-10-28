@@ -121,15 +121,7 @@ describe("searchWith", () => {
   const stored: Search = {
     ...EMPTY.search,
     min_fit: 55,
-    boards: [
-      {
-        company: "Example Robotics",
-        ats: "ashby",
-        org: "example-robotics",
-        enabled: true,
-        extra_exclude: { terms: [], advanced_regex: false },
-      },
-    ],
+    never_apply: ["No defence roles."],
   };
   it("writes this step's answers and keeps everything else", () => {
     const saved = searchWith(
@@ -143,7 +135,7 @@ describe("searchWith", () => {
     });
     expect(saved.seniority).toEqual(["senior"]);
     expect(saved.min_fit).toBe(55);
-    expect(saved.boards).toEqual(stored.boards);
+    expect(saved.never_apply).toEqual(stored.never_apply);
   });
   it("never rewrites a list kept as patterns", () => {
     const patterns = { terms: ["^data (eng|sci)"], advanced_regex: true };

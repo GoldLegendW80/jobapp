@@ -194,7 +194,6 @@ test.beforeAll(async ({ browser }) => {
         remote_stance: "any",
         min_fit: 70,
         days: 365,
-        boards: [],
         never_apply: [],
         browser_sources: [],
       },
