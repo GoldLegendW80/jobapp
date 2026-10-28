@@ -166,6 +166,10 @@ NO_POSTINGS = {
 # `element_covered`: browserd saw another element over it; `stale_ref`: the element is gone):
 # told to the agent as a page it can recover on, never a refusal of the website.
 RECOVERABLE = frozenset({"page_error", "element_covered", "stale_ref"})
+# browserd could not close a tab off the website's list or take the page back from an address
+# off it (routes.call_tool's `guard_failed`): never told as recoverable, it ends the website
+# with that code (labels.ts says it to the person).
+GUARD_FAILED = "guard_failed"
 ACTION_FAILED = (
     "The page did not let this action finish: something may cover the element, such as a "
     "cookie banner, or the page changed. Read the page again with browser_snapshot, close a "
@@ -1116,8 +1120,13 @@ class FinderSession:
         try:
             await self.pages._act(act, name)
         except SourceError as exc:
+            if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
+                return self._stop(GUARD_FAILED)  # no page to recover on (round 2 of PR 720)
             if exc.code == "page_failed" and result.get("error") in RECOVERABLE:
-                return ACTION_FAILED, True  # the page's, not a refusal (2026-10-28)
+                # The page's, not a refusal (2026-10-28); a model that keeps failing still ends
+                # at the website's share of the sweep's time, as one that slips does.
+                ended = self._out_of_time()
+                return self._stop(ended) if ended else (ACTION_FAILED, True)
             if exc.code == "page_failed":
                 self.refused["unsupported_interaction"] += 1
                 return json.dumps({"error": result.get("error", "page_failed")}), True

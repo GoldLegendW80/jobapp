@@ -652,8 +652,8 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
         except PersonInput:
             return failure("person_input", "Refused: the person holds the input.")
         return await tab.settle(result) if result.get("ok") else result
-    except RefusalRecoveryError as exc:
-        raise exc.original from None
+    except RefusalRecoveryError:
+        raise  # routes.call_tool answers guard_failed, never the catch all's page_error
     except Exception as exc:
         if name != "browser_navigate":
             raise

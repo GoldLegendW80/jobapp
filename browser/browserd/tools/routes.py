@@ -172,6 +172,16 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 return actions.failure("bad_args", f"Bad argument: {exc}.")
             except asyncio.CancelledError:
                 raise
+            except actions.RefusalRecoveryError as exc:
+                # A tab off the list could not be closed, or the page not taken back from an
+                # address off it (Tab.settle): no page the agent may recover on, so its own code,
+                # which the api counts and which ends the website (round 2 of PR 720).
+                kind = type(exc.original).__name__
+                log.warning("lease %s: %s guard failed: %s", lease_id[:8], name, kind)
+                return actions.failure(
+                    "guard_failed",
+                    "Refused: the browser could not take back a page outside the allow list.",
+                )
             except Exception as exc:
                 log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
                 if COVERED in str(exc):  # Playwright's actionability log: a banner over it

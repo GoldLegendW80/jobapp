@@ -59,6 +59,7 @@ DECLINED = [
     ("Je refuse",),
     ("Only necessary cookies",),
     ("Uniquement les cookies nécessaires",),
+    ("Ablehnen",),
     ("Alle ablehnen",),
     ("axeptio_btn_dismiss", "No, thanks"),
     ("didomi-notice-disagree-button", "Disagree"),
@@ -315,6 +316,29 @@ def test_a_click_another_element_covers_is_told_as_covered(monkeypatch, message,
     async def run(tab, name, args):
         raise PlaywrightLikeError(message)
 
+    answer = call_failing(monkeypatch, run)
+    assert answer["error"] == code
+    if code == "element_covered":
+        assert "cookie banner" in answer["message"]
+        assert not any(dash in answer["message"] for dash in ("–", "—", " - "))
+
+
+@pytest.mark.parametrize("message", ["Target closed", "intercepts pointer events"])
+def test_a_guard_that_could_not_be_restored_has_its_own_code(monkeypatch, message):
+    """Round 2 of PR 720: a RefusalRecoveryError (Tab.settle could not close a tab off the list
+    or take the page back) is `guard_failed`, never the catch all's recoverable `page_error`."""
+
+    async def run(tab, name, args):
+        raise routes.actions.RefusalRecoveryError(RuntimeError(message))
+
+    answer = call_failing(monkeypatch, run)
+    assert answer["error"] == "guard_failed"
+    assert not any(dash in answer["message"] for dash in ("–", "—", " - "))
+
+
+def call_failing(monkeypatch, run) -> dict:
+    """routes.call_tool's answer to a browser_click whose actions.run is `run`."""
+
     async def turn(*_):
         return None
 
@@ -340,10 +364,8 @@ def test_a_click_another_element_covers_is_told_as_covered(monkeypatch, message,
     request = type("Req", (), {"headers": {}, "json": lambda self: {"ref": "e1"}})()
     match = {"name": "browser_click", "lease_id": "0" * 36}
     status, answer = asyncio.run(routes.call_tool(svc, request, match))
-    assert (status, answer["error"]) == (200, code)
-    if code == "element_covered":
-        assert "cookie banner" in answer["message"]
-        assert not any(dash in answer["message"] for dash in ("–", "—", " - "))
+    assert status == 200
+    return answer
 
 
 @pytest.mark.parametrize(

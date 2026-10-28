@@ -187,6 +187,58 @@ def test_every_failure_of_the_page_is_recoverable(code):
     assert entry["refused"] == {}
 
 
+def test_a_failed_action_past_the_websites_time_ends_it_as_a_slip_does():
+    """Round 2 of PR 720: the recoverable path reads Pages._act's bounds after the failure, so a
+    model that only fails actions still ends at the website's share of the sweep's time."""
+    answers: list = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await session.navigate("/fr/jobs")
+        call = session.pages.tools.call
+
+        async def failing(name, args):
+            if name != "browser_click":
+                return await call(name, args)
+            session.pages.deadline = float("-inf")  # the click took the website's last second
+            return {"ok": False, "error": "element_covered"}
+
+        session.pages.tools.call = failing
+        answers.append(await session.interact("browser_click", {"ref": "e20"}))
+        answers.append(await session.interact("browser_click", {"ref": "e20"}))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(**SEARCH), Jungle(), ScriptedFinder(script))
+    stopped = ("Stopped: time_budget. Report what you found, then stop.", True)
+    assert answers == [stopped, stopped]
+    assert entry["refused"] == {}
+    assert entry["error"] == "time_budget"
+
+
+def test_a_guard_browserd_could_not_restore_ends_the_website_with_its_own_code():
+    """Round 2 of PR 720: browserd's `guard_failed` (a tab off the list it could not close, a
+    page it could not take back) is no page to recover on: the website ends there."""
+
+    class Unguarded(Jungle):
+        async def call(self, name, args):
+            if name == "browser_click":
+                return {"ok": False, "error": "guard_failed"}
+            return await super().call(name, args)
+
+    answers: list = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        await session.navigate("/fr/jobs")
+        answers.append(await session.interact("browser_click", {"ref": "e20"}))
+        answers.append(await session.navigate("/fr/jobs"))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(**SEARCH), Unguarded(), ScriptedFinder(script))
+    stopped = ("Stopped: guard_failed. Report what you found, then stop.", True)
+    assert answers == [stopped, stopped]
+    assert "guard_failed" not in finder.RECOVERABLE
+    assert entry["error"] == "guard_failed"
+
+
 def test_a_search_that_lists_no_matching_job_said_honestly_is_a_searched_website():
     site = Jungle(results={})
     answers: list = []
