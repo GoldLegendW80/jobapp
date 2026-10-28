@@ -1,9 +1,12 @@
 """What the agent of a job website may type and choose (jobs J18), browserd's rule as tables.
 
-The rule (discovery.Scope): a search box (q, query, search, keyword, keywords) takes exactly one
-saved title, the `location` box exactly one saved place, either of them nothing to clear it; a
-native filter select takes its one saved value, the `location` select one saved place. Exact
-string equality against an allow list: anything else, near as it may be, is refused.
+The rule (discovery.Scope): a search box (q, query, search, keyword, keywords) takes one saved
+title, the `location` box one saved place, either of them nothing to clear it; a native filter
+select takes its one saved value, the `location` select one saved place. A value is matched
+against the allow list with its case and accents aside (owner, 2026-10-28: the agent reads the
+person's words as the person would, so "GenAI Engineer" is the saved "genai engineer"): the same
+letters in the same order, nothing else; any other value, near as it may be, is refused. A
+search request carries a saved title; it may leave the place empty, or carry no place at all.
 """
 
 import random
@@ -18,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
 
 from browserd.tools import discovery
 
+from app.browser import finder
 from tests.browser.test_b5_actions import facts
 
 START = "https://jobs.example.test/"
@@ -63,9 +67,32 @@ def chosen(name: str, values: object, scope=SCOPE) -> bool:
 
 # --- the accept table: every saved value in its own field, and nothing to clear one ----------
 
+# The saved values with another case or accents (owner, 2026-10-28): the same letters.
+VARIANT_TITLES = [
+    "Robot engineer",
+    "ROBOT ENGINEER",
+    "robot Engineer",
+    "Ingenieur robotique",  # the accent dropped
+    unicodedata.normalize("NFD", "Ingénieur robotique"),  # the same letters, decomposed
+    "ingénieur robotique",
+    "INGÉNIEUR ROBOTIQUE",
+    "charge d'affaires",
+    "Chargé D'Affaires",
+    "C3PO",
+]
+VARIANT_PLACES = [
+    "paris",
+    "PARIS",
+    "lyon",
+    "Saint-Etienne",
+    "saint-étienne",
+    unicodedata.normalize("NFD", "Saint-Étienne"),
+    "Sao Paulo",
+    "SÃO PAULO",
+]
 ACCEPT_TYPED = [
-    *[(name, title) for title in TITLES for name in sorted(discovery.QUERY)],
-    *[("location", place) for place in PLACES],
+    *[(name, title) for title in TITLES + VARIANT_TITLES for name in sorted(discovery.QUERY)],
+    *[("location", place) for place in PLACES + VARIANT_PLACES],
     *[(name, "") for name in (*sorted(discovery.QUERY), "location")],
 ]
 
@@ -77,7 +104,13 @@ def test_a_saved_value_is_typed_in_its_own_field(name, text):
 
 @pytest.mark.parametrize(
     ("name", "values"),
-    [*[("location", [place]) for place in PLACES], ("remote", ["remote"]), ("contract", ["CDI"])],
+    [
+        *[("location", [place]) for place in PLACES + VARIANT_PLACES],
+        ("remote", ["remote"]),
+        ("remote", ["Remote"]),
+        ("contract", ["CDI"]),
+        ("contract", ["cdi"]),
+    ],
 )
 def test_a_saved_value_is_chosen_in_its_own_select(name, values):
     assert chosen(name, values)
@@ -86,9 +119,6 @@ def test_a_saved_value_is_chosen_in_its_own_select(name, values):
 # --- the refuse table: near misses on every axis ---------------------------------------------
 
 NEAR_TITLES = [
-    "Robot engineer",  # case
-    "ROBOT ENGINEER",
-    "robot Engineer",
     " robot engineer",  # spacing
     "robot engineer ",
     "robot  engineer",
@@ -108,11 +138,12 @@ NEAR_TITLES = [
     "rоbot engineer",  # a Cyrillic o
     "robot​engineer",  # a zero width space
     "robot engineer­",  # a soft hyphen
-    "Ingenieur robotique",  # the accent dropped
-    unicodedata.normalize("NFD", "Ingénieur robotique"),  # the same letters, decomposed
-    "ingénieur robotique",
-    "charge d'affaires",
+    "robot\u00a0engineer",  # a no break space
+    "ROBOT\tENGINEER",
+    "Ingenieur  robotique",
+    "Ingénieurs robotique",
     "chargé d’affaires",  # a typographic apostrophe
+    "robot engineer\u0085",  # a control character, folded or not
     "机器人",
     "c3p0",
     "c3po ",
@@ -124,6 +155,13 @@ NEAR_TITLES = [
     "Send my application",
     "postuler",
     "x" * 5000,
+    "r" + "\u0301" * 200 + "obot engineer",  # stacked marks on one letter
+    "\u0301robot engineer",  # a mark before the first letter
+    "robot \u0301engineer",  # a mark on the space
+    "ro\u05b0bot engineer",  # a Hebrew point
+    "ro\u064ebot engineer",  # an Arabic fatha
+    "ro\u094dbot engineer",  # a Devanagari virama
+    "robot engıneer",  # a dotless i
 ]
 
 
@@ -134,8 +172,6 @@ def test_a_near_title_is_refused_in_a_search_box(name, text):
 
 
 NEAR_PLACES = [
-    "paris",
-    "PARIS",
     "Paris ",
     " Paris",
     "Paris, France",
@@ -143,11 +179,10 @@ NEAR_PLACES = [
     "Pari",
     "Lyons",
     "Saint Etienne",
-    "Saint-Etienne",
     "St-Étienne",
-    unicodedata.normalize("NFD", "Saint-Étienne"),
-    "Sao Paulo",
+    "Sao  Paulo",
     "São  Paulo",
+    "PARIS\n",
     "Ｐａｒｉｓ",
     "Раris",  # a Cyrillic P and a
     "Paris​",
@@ -187,7 +222,6 @@ def test_a_typed_value_that_is_not_text_is_refused_and_never_raises(text):
 @pytest.mark.parametrize(
     ("name", "values"),
     [
-        ("location", ["paris"]),
         ("location", ["Paris "]),
         ("location", [""]),
         ("location", ["Paris", "Lyon"]),
@@ -197,11 +231,10 @@ def test_a_typed_value_that_is_not_text_is_refused_and_never_raises(text):
         ("location", [None]),
         ("location", ["robot engineer"]),
         ("remote", ["1"]),
-        ("remote", ["Remote"]),
+        ("remote", ["remotely"]),
         ("remote", [""]),
         ("remote", ["remote", "remote"]),
         ("contract", ["CDD"]),
-        ("contract", ["cdi"]),
         ("contract", ["CDI", "CDD"]),
         ("category", ["robotics"]),
         ("sort", ["date"]),
@@ -222,11 +255,101 @@ def test_a_scope_without_places_takes_no_place_but_clears_the_box():
     assert not chosen("location", [""], scope)
 
 
+# --- the same rule in browserd and in the api pre-check (finder.saved_as) --------------------
+
+# Case and accents aside means: in NFC, the same case folded text, or the same length with each
+# letter the saved one or a letter of the same base. A mark is never added, and a text whose
+# NFKC differs from its NFC is refused.
+# Declared residue: the Kelvin sign (U+212A) and the Ohm sign (U+2126) are canonical singletons,
+# NFC maps them to K and Ω, so "\u212aelvin" still matches "Kelvin" and "\u2126" matches "ω".
+# A letter may also be typed as any one precomposed letter of its base ("Montréal" for
+# "Montreal"), one code point per saved letter, as its case may.
+SAME = [
+    ("GenAI Engineer", "genai engineer"),
+    ("GENAI ENGINEER", "genai engineer"),
+    ("Ile-de-France", "Île-de-France"),
+    ("ILE-DE-FRANCE", "Île-de-France"),
+    ("Montreal", "Montréal"),
+    ("Montréal", "Montreal"),
+    (unicodedata.normalize("NFD", "Montréal"), "Montréal"),
+    ("STRASSE", "Straße"),  # case: ß folds to ss
+    ("straße", "STRASSE"),
+    ("İstanbul", "Istanbul"),
+    ("\u212aelvin", "Kelvin"),  # residue, above
+    ("\u2126", "ω"),  # residue, above
+]
+
+
+def grave_or_acute(value: str, payload: int) -> str:
+    """`value` with a grave or an acute after each character, one bit of `payload` each."""
+    return "".join(ch + ("\u0300" if payload >> i & 1 else "\u0301") for i, ch in enumerate(value))
+
+
+NOT_SAME = [
+    ("g" + "\u0301" * 200 + "enai engineer", "genai engineer"),  # 200 stacked marks
+    ("g" + "\u0301\u0300" + "enai engineer", "genai engineer"),  # two marks on one letter
+    *[(grave_or_acute("genai engineer", bits), "genai engineer") for bits in (0, 0x3FFF, 0x2A5B)],
+    ("genai \u0301engineer", "genai engineer"),  # a mark on the space
+    ("\u0301genai engineer", "genai engineer"),  # a mark before the first letter
+    ("ge\u05b0nai engineer", "genai engineer"),  # a Hebrew point
+    ("ge\u064enai engineer", "genai engineer"),  # an Arabic fatha
+    ("ge\u094dnai engineer", "genai engineer"),  # a Devanagari virama
+    ("gr\u0300enai engineer", "grenai engineer"),  # a grave on r: no such letter, one more
+    ("Straſſe", "Straße"),  # the long s: NFKC differs
+    ("Straſſe", "Strasse"),
+    ("ﬁnance", "finance"),  # a ligature: NFKC differs
+    ("ＧｅｎＡＩ", "genai"),  # full width
+    ("genaı engineer", "genai engineer"),  # a dotless i is another letter
+    ("gеnai engineer", "genai engineer"),  # a Cyrillic e
+    ("genai  engineer", "genai engineer"),
+    ("genai-engineer", "genai engineer"),
+    ("genai\u200bengineer", "genai engineer"),
+    ("genai engineer\u00ad", "genai engineer"),
+    ("Mont real", "Montreal"),
+    ("Montreal", "Montrea"),
+    ("", "genai engineer"),
+]
+
+
+@pytest.mark.parametrize(("text", "saved"), SAME)
+@pytest.mark.parametrize("module", [discovery, finder], ids=["browserd", "api"])
+def test_a_case_or_accent_variant_is_the_saved_value(module, text, saved):
+    assert module.saved_as(text, (saved,)) == saved
+
+
+@pytest.mark.parametrize(("text", "saved"), NOT_SAME)
+@pytest.mark.parametrize("module", [discovery, finder], ids=["browserd", "api"])
+def test_an_added_mark_or_a_compatibility_form_is_never_the_saved_value(module, text, saved):
+    assert module.saved_as(text, (saved,)) is None
+
+
+def test_the_two_copies_of_the_rule_are_identical():
+    import inspect
+
+    for name in ("_base", "same_value"):
+        browserd, api = (inspect.getsource(getattr(m, name)) for m in (discovery, finder))
+        code = [
+            "\n".join(line for line in src.split('"""')[2].splitlines() if line.strip())
+            for src in (browserd, api)
+        ]
+        assert code[0] == code[1], name
+
+
 # --- an independent generator: 200 neighbours of each saved value, all refused ---------------
 
 
+def fold(text: str) -> str:
+    """An independent reading of "case and accents aside": lower case, no combining mark."""
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text.lower()) if not unicodedata.combining(ch)
+    )
+
+
+SAVED = {fold(value) for value in [*TITLES, *PLACES]}
+
+
 def neighbours(value: str, rng: random.Random, count: int = 200) -> set[str]:
-    """Edits of one character or one fold, none equal to a saved value."""
+    """Edits of one character or one fold, none a saved value with its case or accents aside."""
     alphabet = "aeiouéèçàAEIOU -'.,_*0123456789 ​’ｒоа"
     found: set[str] = set()
     for _ in range(100 * count):  # bounded: an edit that gives a saved value is drawn again
@@ -250,7 +373,7 @@ def neighbours(value: str, rng: random.Random, count: int = 200) -> set[str]:
             near = rng.choice(["", " "]) + value + rng.choice(["s", " ", ".", "!", ""])
         else:
             near = value + " " + rng.choice([*TITLES, *PLACES])
-        if near not in TITLES and near not in PLACES and near != "":
+        if fold(near) not in SAVED and near != "":
             found.add(near)
     return found
 
@@ -280,11 +403,17 @@ def request(title: str, place: str | None, **more: str) -> list[tuple[str, str]]
             [("query", "c3po"), ("location", "Lyon"), *request("c3po", None)[1:], ("page", "2")],
             True,
         ),
-        (request("c3po", None), False),  # places are saved: one is needed
-        (request("c3po", ""), False),
-        (request("c3po", "Marseille"), False),
-        (request("c3po", "paris"), False),
+        # The place box left empty, or no place box at all, is always allowed (owner,
+        # 2026-10-28); a search still carries a saved title.
+        (request("c3po", None), True),
+        (request("c3po", ""), True),
         (request("", "Paris"), False),
+        (request("", ""), False),
+        (request("C3PO", "paris"), True),  # case and accents aside
+        (request("Ingenieur robotique", "SAO PAULO"), True),
+        (request("c3po", "Marseille"), False),
+        (request("c3po", "Paris "), False),
+        (request("c3p0", "Paris"), False),
         (request("drone", "Paris"), False),
         (request("Paris", "Paris"), False),
         (request("c3po", "c3po"), False),
@@ -292,6 +421,9 @@ def request(title: str, place: str | None, **more: str) -> list[tuple[str, str]]
         ([*request("c3po", "Paris")[:-1], ("contract", "CDD")], False),
         ([("query", "c3po"), *request("c3po", "Paris")], False),
         ([*request("c3po", "Paris"), ("location", "Lyon")], False),
+        ([*request("c3po", "Paris"), ("q", "")], False),
+        ([("location", "Paris"), ("remote", "remote"), ("contract", "CDI")], False),  # no title
+        (request("c3po", "Paris\x85"), False),
     ],
 )
 def test_a_search_request_carries_saved_values_only(pairs, allowed):

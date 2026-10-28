@@ -17,7 +17,7 @@ import copy
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -170,34 +170,14 @@ def refusal(db: Session, user_id: uuid.UUID, kind: str, now: datetime | None = N
     return f"{kind}_paused" if current.paused_until is not None else None
 
 
-def swept_today(
-    db: Session, user_id: uuid.UUID, kind: str, now: datetime, but: uuid.UUID | None = None
-) -> bool:
-    """Whether a sweep of the person's day (SWEEP_TZ), other than `but`, opened the platform."""
-    if kind not in HISTORY_KINDS:
-        return True
-    day = now.astimezone(sweep.SWEEP_TZ).date()
-    start = datetime.combine(day, time(), sweep.SWEEP_TZ)
-    end = datetime.combine(day + timedelta(days=1), time(), sweep.SWEEP_TZ)
-    found = _entries(kind)
-    opened = _at(found.c.value, "opened_at")
-    query = (
-        sa.select(Sweep.id)
-        .select_from(Sweep)
-        .join(found, sa.true())
-        .where(Sweep.user_id == user_id, opened >= start, opened < end)
-    )
-    if but is not None:
-        query = query.where(Sweep.id != but)
-    return db.execute(query.limit(1)).first() is not None
-
-
 def sweep_refusal(
     db: Session, user_id: uuid.UUID, kind: str, sweep_id: uuid.UUID | None, now: datetime
 ) -> str | None:
-    return refusal(db, user_id, kind, now) or (
-        f"{kind}_daily" if swept_today(db, user_id, kind, now, sweep_id) else None
-    )
+    """A sweep's refusal: consent or the 7 day pause (`refusal`). No daily limit (owner,
+    2026-10-28: "i don't want limit on search by day"); `<kind>_daily` stays readable in older
+    sweeps only."""
+    del sweep_id  # every sweep is judged alike, whatever the person's sweeps of the day
+    return refusal(db, user_id, kind, now)
 
 
 def sweep_check(
@@ -220,7 +200,7 @@ def sweep_check(
 
 def lock_platform(db: Session, user_id: uuid.UUID, kind: str) -> None:
     """Serialise the person's reservations of one platform across sweeps and workers, until the
-    transaction ends, so two sweeps of the same day cannot both pass the daily check."""
+    transaction ends, so a reservation reads consent and the pause with no other one between."""
     if kind not in HISTORY_KINDS:
         raise ValueError(kind)
     db.execute(
@@ -265,7 +245,7 @@ def reserve(
     refusal_of: Callable[[Session], str | None],
 ) -> str | None:
     """Record that the source is about to open its first page of `kind`, under the platform lock
-    and the sweep row's lock, after `refusal_of` (consent, pause, the day's sweep) read again
+    and the sweep row's lock, after `refusal_of` (consent, the pause) read again
     under them. The caller commits before the first navigation. A sweep that is not running, or
     has no entry of the source, refuses: nothing opens without its durable record."""
     lock_platform(db, user_id, kind)

@@ -1,12 +1,15 @@
 """Conservative native GET discovery. Labels alone never grant a search submission.
 
 The frozen scope (`Scope`, jobs J18) carries the person's own saved values, one agent searching
-a website with all of them: a search box (QUERY names) takes exactly one saved title, the
-`location` box exactly one saved place, either of them nothing to clear it; a native filter
-takes its one saved value (remote, contract), the `location` select one saved place. Any other
-value is refused (exact string match, no folding: an allow list, fail closed). A search request
-carries one saved title in one search key, one saved place when places are saved, and every
-saved filter (`Scope.criteria`).
+a website with all of them: a search box (QUERY names) takes one saved title, the `location` box
+one saved place, either of them nothing to clear it; a native filter takes its one saved value
+(remote, contract), the `location` select one saved place. A value is one of the allow list with
+its case and accents aside (`saved_as`, owner 2026-10-28: the agent reads the person's words as
+the person would, and a website may want "GenAI Engineer" for the saved "genai engineer"): the
+same letters in the same order, no control character, nothing else; any other value, a
+translation included, is refused (fail closed). A search request carries one search key holding
+a saved title, a saved place or nothing in `location` (or no `location` at all: the place box
+left empty is always allowed), and every saved filter (`Scope.criteria`).
 
 A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
 the site's JavaScript on, for a website the person signed in to: the same controls are refused
@@ -25,8 +28,10 @@ written in one case is one word, so the path rule lets `/jobs/42/confirmapplicat
 query rule reads the noun inside a word).
 """
 
-from dataclasses import dataclass
-from urllib.parse import parse_qsl, unquote, urlsplit
+import re
+import unicodedata
+from dataclasses import dataclass, replace
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit, urlunsplit
 
 from browserd import detect
 
@@ -81,6 +86,47 @@ APPLY_PARTS = (
 CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
 
 
+def _control(text: str) -> bool:
+    return any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text)
+
+
+def _base(letter: str) -> str:
+    """A letter with its accents and case aside: decomposed, combining marks dropped, case
+    folded."""
+    decomposed = unicodedata.normalize("NFD", letter)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).casefold()
+
+
+def same_value(text: str, value: str) -> bool:
+    """`text` is the saved `value` with its case and accents aside. Both are read in NFC; a text
+    whose NFKC differs from its NFC (a long s, a ligature, a full width form) is refused. Then
+    either the case folded forms are equal (STRASSE for Straße), or both have the same length in
+    code points and each pair is identical or two letters with the same base letter, case aside
+    (Montreal for Montréal). So a mark is never added: one stacked on a letter, on a space,
+    before the first letter, or of another script makes the text longer and is refused.
+    Declared residue: the Kelvin and Ohm signs are canonical singletons (NFC maps them to K and
+    Ω), and a letter may be typed as any one precomposed letter of the same base (è, é or ê for
+    e), at most one code point per letter of the saved value, as its case may."""
+    typed = unicodedata.normalize("NFC", text)
+    if unicodedata.normalize("NFKC", typed) != typed:
+        return False
+    saved = unicodedata.normalize("NFC", value)
+    if typed.casefold() == saved.casefold():
+        return True
+    return len(typed) == len(saved) and all(
+        a == b or (a.isalpha() and b.isalpha() and _base(a) == _base(b))
+        for a, b in zip(typed, saved, strict=True)
+    )
+
+
+def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
+    """The saved value `text` is, with its case and accents aside (`same_value`); None for
+    anything else: not text, longer than VALUE_MAX, a control character, or no such value."""
+    if not isinstance(text, str) or not text or len(text) > VALUE_MAX or _control(text):
+        return None
+    return next((value for value in saved if same_value(text, value)), None)
+
+
 def _values(raw: object, *, needed: bool) -> tuple[str, ...] | None:
     """A list of saved values as the api sends it: strings with a non blank character, no
     control character, at most VALUE_MAX characters each and VALUES_MAX in all, none twice."""
@@ -91,7 +137,7 @@ def _values(raw: object, *, needed: bool) -> tuple[str, ...] | None:
             not isinstance(value, str)
             or not value.strip()
             or len(value) > VALUE_MAX
-            or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value)
+            or _control(value)
         ):
             return None
     return tuple(raw) if len(set(raw)) == len(raw) else None
@@ -104,18 +150,22 @@ class Scope:
     places: tuple[str, ...] = ()  # what the location box or select takes, one at a time
     filters: tuple[tuple[str, str], ...] = ()  # one saved value per native filter
     signed_in: bool = False
+    # The Indeed platform (owner, 2026-10-28): its start page's first navigation may follow a
+    # redirect to one of its own country sites (`country_scope`), once.
+    country: bool = False
 
     @classmethod
     def parse(cls, raw: object) -> "Scope | None":
         keys = {"start", "titles", "places", "filters"}
-        if not isinstance(raw, dict) or set(raw) - {"signed_in"} != keys:
+        if not isinstance(raw, dict) or set(raw) - {"signed_in", "country"} != keys:
             return None
         start, filters = raw["start"], raw["filters"]
         titles = _values(raw["titles"], needed=True)
         places = _values(raw["places"], needed=False)
-        signed_in = raw.get("signed_in", False)
+        signed_in, country = raw.get("signed_in", False), raw.get("country", False)
         if (
             type(signed_in) is not bool
+            or type(country) is not bool
             or not isinstance(start, str)
             or not read_url(start, start)
             or titles is None
@@ -130,24 +180,25 @@ class Scope:
             )
         ):
             return None
-        return cls(start, titles, places, tuple(sorted(filters.items())), signed_in)
+        return cls(start, titles, places, tuple(sorted(filters.items())), signed_in, country)
 
-    def typable(self, name: object) -> frozenset[str]:
-        """What may be typed in a text field of this name: one saved title in a search box, one
-        saved place in the location box, nothing to clear either; in any other field, nothing."""
-        if name in QUERY:
-            return frozenset({*self.titles, ""})
-        if name == "location":
-            return frozenset({*self.places, ""})
-        return frozenset()
+    def takes(self, name: object, text: object) -> bool:
+        """Whether this text may be typed in a text field of this name: one saved title in a
+        search box, one saved place in the location box (`saved_as`), nothing to clear either;
+        in any other field, nothing."""
+        if name not in QUERY and name != "location":
+            return False
+        return (
+            text == "" or saved_as(text, self.titles if name in QUERY else self.places) is not None
+        )
 
-    def choices(self, name: object) -> frozenset[str]:
-        """What a native select of this name may be set to: one saved place, or the filter's one
-        saved value; nothing for any other select."""
+    def chooses(self, name: object, value: object) -> bool:
+        """Whether a native select of this name may be set to this value: one saved place, or
+        the filter's one saved value (`saved_as`); nothing for any other select."""
         if name == "location":
-            return frozenset(self.places)
-        value = dict(self.filters).get(name) if isinstance(name, str) else None
-        return frozenset() if value is None else frozenset({value})
+            return saved_as(value, self.places) is not None
+        saved = dict(self.filters).get(name) if isinstance(name, str) else None
+        return saved is not None and saved_as(value, (saved,)) is not None
 
     def criteria(self, pairs: list[tuple[str, str]], *, complete: bool) -> bool:
         keys = [k for k, _ in pairs]
@@ -155,22 +206,20 @@ class Scope:
             return False
         expected = dict(self.filters)
         for key, value in pairs:
-            if key in QUERY:
-                if value not in self.titles:
+            if key in QUERY:  # a search carries a saved title: the box is cleared only to type
+                if saved_as(value, self.titles) is None:
                     return False
             elif key == "page":
                 if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 1000:
                     return False
             elif key == "location":
-                if value not in self.places:
+                if not self.takes(key, value):
                     return False
-            elif key not in expected or value != expected[key]:
+            elif key not in expected or saved_as(value, (expected[key],)) is None:
                 return False
-        return not complete or (
-            sum(k in QUERY for k in keys) == 1
-            and expected.keys() <= set(keys)
-            and (not self.places or "location" in keys)
-        )
+        # The place box left empty, or no place box at all, is always allowed (owner,
+        # 2026-10-28).
+        return not complete or (sum(k in QUERY for k in keys) == 1 and expected.keys() <= set(keys))
 
 
 def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None = None) -> bool:
@@ -213,6 +262,108 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
         )
     except (ValueError, TypeError):
         return False
+
+
+# The redirect statuses a browser follows by itself (304 is no redirect: it is never followed).
+REDIRECTS = frozenset({301, 302, 303, 307, 308})
+
+
+def _resolved(url: str, location: object) -> str | None:
+    """A redirect's Location resolved against the request's address. None for a missing, blank
+    or overlong one, and for one Chromium may read otherwise than Python's urljoin, before it
+    is resolved: a backslash (a slash to Chromium, so `/\\elsewhere/en` leaves the host), a
+    space or a control character (Chromium strips tab and newline), raw or percent decoded."""
+    if not isinstance(location, str) or not location or len(location) > 2000:
+        return None
+    if any(
+        ch == "\\" or ord(ch) <= 32 or 127 <= ord(ch) <= 159
+        for text in (location, unquote(location))
+        for ch in text
+    ):
+        return None
+    try:
+        return urljoin(url, location)
+    except ValueError:
+        return None
+
+
+def redirect_target(url: str, location: object, scope: Scope) -> str | None:
+    """Where a redirect response of a discovery request goes, when it may be followed (jobs J18:
+    a website's start page that answers on a locale path, `/` to `/en`): its Location resolved
+    against the request's address (`_resolved`), held to the rule of the navigation it
+    replaces, read_url within the frozen scope (same scheme, host and port as the start,
+    nothing that applies, submits, reaches an account or signs out, only the saved criteria in
+    its query). None for anything else, a missing or blank Location included: the redirect is
+    refused."""
+    target = _resolved(url, location)
+    return target if target and read_url(target, scope.start, scope=scope) else None
+
+
+# Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
+# xx.indeed.com is followed, and the search continues there. Redirects to any other domain stay
+# refused." The home host of each platform that has country sites, and the scheme they keep.
+# `www.indeed.test:8080` is the fixture server's stand in for the tests, as the api's
+# platform_policy.test_start maps a platform there: `.test` is reserved (RFC 2606), no public
+# DNS answers it, and the production proxy refuses a private address.
+COUNTRY_HOMES = {"www.indeed.com": "https", "www.indeed.test:8080": "http"}
+COUNTRY_LABEL = re.compile(r"[a-z]{2}")
+
+
+def country_site(start: str, url: str) -> bool:
+    """Whether `url` is the start page on a country site of the home host `start` is on
+    (https://www.indeed.com/ to https://fr.indeed.com/): the home's own scheme, a host of
+    exactly two lowercase ASCII letters then the home's domain and port, no user info, the
+    start's own path and query, no fragment, as written. The home itself is no country site:
+    a redirect on its own host is a redirect_target."""
+    if not isinstance(start, str) or not isinstance(url, str):
+        return False
+    try:
+        home, there = urlsplit(start), urlsplit(url)
+    except ValueError:
+        return False
+    scheme = COUNTRY_HOMES.get(home.netloc)
+    label, dot, rest = there.netloc.partition(".")
+    return (
+        scheme is not None
+        and home.scheme == there.scheme == scheme
+        and bool(dot)
+        and rest == home.netloc[4:]
+        and COUNTRY_LABEL.fullmatch(label) is not None
+        and (there.path, there.query) == (home.path, home.query)
+        and not there.fragment
+        and url == urlunsplit((scheme, there.netloc, there.path, there.query, ""))
+    )
+
+
+def country_scope(scope: Scope, url: str) -> Scope | None:
+    """The frozen scope moved to the country site `url` is on (owner, 2026-10-28), for a
+    search of a platform with country sites (`Scope.country`) from its home host: `url` is
+    its new start, and every other rule holds there unchanged (read_url within the moved
+    scope). The moved scope follows no other country site. None when it may not move."""
+    if not scope.country or not country_site(scope.start, url):
+        return None
+    moved = replace(scope, start=url, country=False)
+    return moved if read_url(url, url, scope=moved) else None
+
+
+def country_redirect(url: str, location: object, scope: Scope) -> Scope | None:
+    """The scope a redirect response of the start page's first navigation moves to, when its
+    Location (`_resolved`) is a country site of the scope's home (`country_scope`)."""
+    target = _resolved(url, location)
+    return country_scope(scope, target) if target else None
+
+
+def location_of(headers: object) -> str | None:
+    """The one Location header of a CDP response (names in any case); None when there is none or
+    more than one (ambiguous: refused)."""
+    if not isinstance(headers, list):
+        return None
+    found = [
+        h.get("value")
+        for h in headers
+        if isinstance(h, dict) and str(h.get("name", "")).lower() == "location"
+    ]
+    return found[0] if len(found) == 1 and isinstance(found[0], str) else None
 
 
 # Read inside every glued path segment, query key and query value of a signed in page's request:
@@ -386,17 +537,13 @@ def verdict(
                     break
         if tool == "browser_type":
             # Without a scope only a search box, as before; the location box needs the scope's
-            # saved places. With one, the text is a saved value of that field, exactly.
+            # saved places. With one, the text is a saved value of that field (Scope.takes).
             text = (args or {}).get("text")
             allowed = (
                 allowed
                 and facts.get("tag") == "input"
                 and facts.get("type") in {"text", "search"}
-                and (
-                    d.get("name") in QUERY
-                    if scope is None
-                    else isinstance(text, str) and text in scope.typable(d.get("name"))
-                )
+                and (d.get("name") in QUERY if scope is None else scope.takes(d.get("name"), text))
             )
         elif tool == "browser_select_option":
             allowed = allowed and facts.get("tag") == "select" and d.get("name") in FIELDS - QUERY
@@ -406,8 +553,7 @@ def verdict(
                     allowed
                     and isinstance(values, list)
                     and len(values) == 1
-                    and isinstance(values[0], str)
-                    and values[0] in scope.choices(d.get("name"))
+                    and scope.chooses(d.get("name"), values[0])
                 )
         elif tool == "browser_click":
             allowed = (

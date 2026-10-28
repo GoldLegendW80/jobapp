@@ -204,8 +204,7 @@ def test_a_custom_label_on_a_platform_address_needs_that_platform(
     accept(api, person_a, "indeed")
     assert run(policy.reserve(ctx)) is None
     assert entries(factory, sweep_id)[0]["platform"] == "indeed"
-    with factory() as db:
-        assert guard.swept_today(db, person_a.user_id, "indeed", clock())
+    assert entries(factory, sweep_id)[0]["opened_at"] == clock().isoformat()
 
 
 def test_no_sweep_identity_or_foreign_sweep_never_reserves(
@@ -364,27 +363,29 @@ def test_checkpoint_in_the_second_entry_of_the_same_platform_pauses_it(
         )
 
 
-@pytest.mark.parametrize(
-    ("platform", "code"), [("linkedin", "linkedin_daily"), ("indeed", "platform_daily")]
-)
-def test_one_sweep_a_day_shared_by_every_address_of_the_platform(
-    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any, platform: str, code: str
+@pytest.mark.parametrize("platform", ["linkedin", "indeed", "freework", "welcome_to_the_jungle"])
+def test_no_daily_limit_a_second_sweep_of_the_day_opens_the_platform_again(
+    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any, platform: str
 ) -> None:
+    """Owner, 2026-10-28: no limit on a website's searches a day, LinkedIn too. A second sweep
+    the same day is checked and reserved like the first (consent, the 7 day pause, pacing)."""
     accept(api, person_a, platform)
     other = URLS[platform] + "search/"
     policy = PlatformPolicy(factory, clock)
     first = running(factory, person_a, clock(), [URLS[platform], other])
     assert run(policy.reserve(context(person_a, first, URLS[platform], platform))) is None
-    # The second address of the same platform in the same sweep is the same sweep of the day.
     assert run(policy.reserve(context(person_a, first, other, platform))) is None
     sweep.finish_done(factory, first, sweep.Stats(), clock())
-    second = running(factory, person_a, clock() + timedelta(minutes=5), [other])
-    assert run(policy.check(context(person_a, second, other, platform))) == code
-    assert run(policy.reserve(context(person_a, second, other, platform))) == code
-    assert "opened_at" not in entries(factory, second)[0]
+    for minutes in (5, 10):
+        later = clock() + timedelta(minutes=minutes)
+        second = running(factory, person_a, later, [other])
+        assert run(policy.check(context(person_a, second, other, platform))) is None
+        assert run(policy.reserve(context(person_a, second, other, platform))) is None
+        assert entries(factory, second)[0]["platform"] == platform
+        sweep.finish_done(factory, second, sweep.Stats(), later)
 
 
-def test_linkedin_pages_and_checkpoint_keep_its_own_caps_and_table(
+def test_linkedin_has_no_page_cap_and_keeps_its_checkpoint_table(
     api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
 ) -> None:
     accept(api, person_a, "linkedin")
@@ -396,12 +397,12 @@ def test_linkedin_pages_and_checkpoint_keep_its_own_caps_and_table(
         context(person_a, sweep_id, two, "linkedin"),
     )
     assert run(policy.reserve(first)) is None
-    for page in range(5):
+    for page in range(12):
         assert run(policy.check(first)) is None
         assert run(policy.observe(first, f"{one}?start={page * 25}", RESULTS)) is None
-    # Five pages a sweep for LinkedIn, whichever of its addresses opened them.
-    assert run(policy.check(first)) == "page_budget"
-    assert run(policy.check(second)) == "page_budget"
+    # No page cap for LinkedIn either (owner, 2026-10-28): its pace and pause bound it.
+    assert run(policy.check(first)) is None
+    assert run(policy.check(second)) is None
     other = PlatformPolicy(factory, clock)
     ctx = context(person_a, sweep_id, one, "linkedin")
     wall = "https://www.linkedin.com/checkpoint/challenge/"
@@ -447,12 +448,12 @@ def test_a_failed_write_stops_the_source(
     assert run(policy.observe(ctx, URLS["indeed"], CHECKPOINT)) == "permission_unavailable"
 
 
-def test_one_linkedin_sweep_a_day_holds_for_the_agent_of_the_website(
+def test_the_agent_of_linkedin_runs_again_in_a_second_sweep_of_the_day(
     api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
 ) -> None:
     """Jobs J18: the agent of the website reserves LinkedIn for its sweep once, through the real
-    guard, and runs both its searches there; another sweep the same day is refused before any
-    lease (LinkedIn's account safety cap, whatever the agent's own lack of a cap)."""
+    guard, and runs both its searches there; another sweep the same day runs them again (no
+    daily limit, owner 2026-10-28)."""
     from tests.browser.test_b9_site import ScriptedFinder
     from tests.browser.test_multi_search import LINKEDIN, SearchSite, searching
     from tests.browser.test_selected_interactive import execute, selected
@@ -494,6 +495,6 @@ def test_one_linkedin_sweep_a_day_holds_for_the_agent_of_the_website(
 
     second = running(factory, person_a, clock(), [LINKEDIN])
     entry, leases = sweep_of(second)
-    assert (entry.get("searches", 0), entry["error"]) == (0, "linkedin_daily")
-    assert not leases.acquired
-    assert "opened_at" not in entries(factory, second)[0]
+    assert (entry["searches"], entry["error"]) == (2, "finding_persistence_pending")
+    assert len(leases.acquired) == 1
+    assert entries(factory, second)[0]["opened_at"] == clock().isoformat()

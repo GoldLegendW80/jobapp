@@ -34,6 +34,10 @@ from tests.browser.test_browser_container import ROOT, Stack
 
 pytestmark = pytest.mark.docker
 START = "http://pages:8080/b13/"
+# The fixture server's names: `elsewhere`, and Indeed's home and a country site under `.test`
+# (discovery.COUNTRY_HOMES, owner 2026-10-28), so a request to any of them is in its log.
+PRIVATE = ["pages", "elsewhere", "www.indeed.test", "fr.indeed.test"]
+INDEED = "http://www.indeed.test:8080/b13/indeed"
 
 
 @pytest.fixture
@@ -49,12 +53,14 @@ def native(tmp_path):
                     "browser": {
                         "pull_policy": "never",
                         "volumes": [f"{ROOT}/browser/browserd:/opt/browserd/browserd:ro"],
+                        "environment": {"BROWSER_PROXY_ALLOW_PRIVATE": ",".join(PRIVATE)},
                     },
                     "client": {"pull_policy": "never"},
                     "pages": {
                         "pull_policy": "never",
                         "command": ["python", "-I", "/b13_pages.py"],
                         "volumes": [f"{Path(__file__).with_name('b13_pages.py')}:/b13_pages.py:ro"],
+                        "networks": {"egress": {"aliases": PRIVATE[1:]}},
                     },
                 }
             }
@@ -290,6 +296,110 @@ def test_native_hostile_controls_and_redirects(native):
         p["path"] for p in observed if p["path"] in {"/b13/off/search", "/b13/write/search"}
     ] == ["/b13/off/search", "/b13/write/search"]
     assert not any(p["path"] == "/b13/search" for p in observed)
+    native.completed = True
+
+
+def fetched(native, url: str) -> str:
+    """`url` as the browser container reads it with plain Python, outside Chromium."""
+    return native.execute(
+        "browser",
+        "python",
+        "-I",
+        "-c",
+        f"import urllib.request; print(urllib.request.urlopen({url!r}).read().decode())",
+    )
+
+
+def test_native_start_page_redirect_on_its_own_host_is_followed(native):
+    """Jobs J18 (issue 716): the start page's own redirect to its locale path is followed and
+    its search runs; a start page redirected to another host or a write address is not, nor one
+    whose Location Python's urljoin keeps on the host while Chromium goes to `elsewhere`."""
+    answers = {}
+    for path in ("locale", "locale-off", "locale-write", "locale-slash", "locale-slashes"):
+        lease = Lease(native, "sweep")
+        native.redactions.append(lease.token)
+        scope = {
+            "start": START + path,
+            "titles": ["robot"],
+            "places": [],
+            "filters": {"remote": "0"},
+        }
+        marker = {"_discovery": "native_get", "_discovery_scope": scope}
+        try:
+            opened = lease.tool("browser_navigate", url=scope["start"], **marker)
+            answers[path] = opened
+            if path == "locale":
+                assert opened["ok"], opened
+                shot = lease.tool("browser_snapshot")
+                assert shot["url"] == START + "en/", shot
+                text = shot["snapshot"]
+                box = ref(text, "searchbox", "Query")
+                assert lease.tool("browser_type", ref=box, text="robot", **marker)["ok"]
+                found = lease.tool("browser_click", ref=ref(text, "button", "Search"), **marker)
+                assert found["ok"], found
+        finally:
+            lease.end()
+    for path in ("locale-off", "locale-write", "locale-slash", "locale-slashes"):
+        assert not answers[path]["ok"], (path, answers[path])
+    # `elsewhere` is this same fixture server under its other name, and its log records the
+    # Host of each request: one request sent there by the test shows the log sees that host,
+    # so no request of Chromium's to it means none was made.
+    fetched(native, "http://elsewhere:8080/b13/seen-elsewhere")
+    observed = json.loads(fetched(native, "http://pages:8080/observed"))
+    assert {"path": "/b13/seen-elsewhere", "host": "elsewhere:8080"} in [
+        {"path": p["path"], "host": p.get("host")} for p in observed
+    ]
+    chromium = [p for p in observed if p["path"] not in {"/observed", "/b13/seen-elsewhere"}]
+    assert not any(str(p.get("host")).startswith("elsewhere") for p in chromium), chromium
+    assert not any(
+        p["path"] in {"/escape", "/remove", "/b13/escape-slash", "/b13/escape-slashes"}
+        or "\\" in p["path"]
+        for p in chromium
+    )
+    assert {"path": "/b13/search", "query": {"q": ["robot"], "remote": ["0"]}} in [
+        {"path": p["path"], "query": p.get("query")} for p in observed
+    ]
+    native.completed = True
+
+
+def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
+    """Owner, 2026-10-28: Indeed's home sends the start page to the person's country site, and
+    the search continues there. A redirect to another domain, or of another platform's search,
+    is refused and its target never requested (test_j18_country holds the rest)."""
+    answers = {}
+    for path, country in (("indeed", True), ("indeed-off", True), ("indeed", False)):
+        start = INDEED + path.removeprefix("indeed")
+        lease = Lease(native, "sweep", hosts=["www.indeed.test"])
+        native.redactions.append(lease.token)
+        scope = {"start": start, "titles": ["robot"], "places": [], "filters": {"remote": "0"}}
+        if country:
+            scope["country"] = True
+        marker = {"_discovery": "native_get", "_discovery_scope": scope}
+        try:
+            opened = lease.tool("browser_navigate", url=start, **marker)
+            answers[path, country] = opened
+            if (path, country) == ("indeed", True):
+                assert opened["ok"], opened
+                shot = lease.tool("browser_snapshot")
+                assert shot["url"] == "http://fr.indeed.test:8080/b13/indeed", shot
+                text = shot["snapshot"]
+                box = ref(text, "searchbox", "Query")
+                assert lease.tool("browser_type", ref=box, text="robot", **marker)["ok"]
+                found = lease.tool("browser_click", ref=ref(text, "button", "Search"), **marker)
+                assert found["ok"], found
+        finally:
+            lease.end()
+    assert not answers["indeed-off", True]["ok"]
+    assert not answers["indeed", False]["ok"]  # another platform's scope never moves
+    observed = json.loads(fetched(native, "http://pages:8080/observed"))
+    hosts = [(p.get("host"), p["path"], p.get("query")) for p in observed]
+    assert ("fr.indeed.test:8080", "/b13/search", {"q": ["robot"], "remote": ["0"]}) in hosts
+    # The redirect to another domain was made (its page was requested), its target never was
+    # (`elsewhere` is in this log, test_native_start_page_redirect_on_its_own_host_is_followed);
+    # the other platform's run never reached the country site (one request there, the first).
+    assert ("www.indeed.test:8080", "/b13/indeed-off") in [(h, p) for h, p, _ in hosts]
+    assert not any(host.startswith("elsewhere") for host, _, _ in hosts if host), hosts
+    assert [h for h, p, _ in hosts if p == "/b13/indeed"].count("fr.indeed.test:8080") == 1
     native.completed = True
 
 

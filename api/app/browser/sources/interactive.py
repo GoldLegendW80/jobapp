@@ -22,8 +22,8 @@ the website unsupported (finder.FinderSession._slip). Its budget a website is "n
 (owner): no cap on its turns, pages, tokens or verified postings. What bounds it is not its
 budget: its share of the
 sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
-never starves the next), which it is told; the lease's own maximum; the platform policy's caps
-(LinkedIn's pages a sweep and one sweep a day), pacing per platform and the 7 day pause.
+never starves the next), which it is told; the lease's own maximum; pacing per platform and the
+7 day pause (no daily limit and no page cap on any website, LinkedIn included, owner 2026-10-28).
 Its postings merge into the website's one result, counted once per canonical address, in one
 place only: an unwanted reading wins over another contract, which wins over a kept one
 (`_Site.place`). One contract type is the website's own filter; several are checked on what
@@ -137,6 +137,10 @@ class GuardedTools:
         self.tools, self.policy, self.context = tools, policy, context
         self.logins = logins  # B17: set only when the website is read signed in
         self.reserved = False
+        # The origin every page must show: the start's, or Indeed's country site its first
+        # page landed on (owner, 2026-10-28; browserd moved its scope there, once).
+        self.origin = finder.origin(context.url)
+        self.first_page = True
 
     async def _before(self, name: str) -> None:
         await _permit(self.policy, self.context)
@@ -159,12 +163,20 @@ class GuardedTools:
         shot = await self.tools.snapshot()
         if shot.get("ok"):
             url, text = shot.get("url"), shot.get("snapshot")
+            first, self.first_page = self.first_page, False
+            landed = finder.canonical(url) if isinstance(url, str) else ""
+            if (
+                first
+                and self.context.platform == "indeed"
+                and finder.country_site(self.context.url, landed)
+            ):
+                self.origin = finder.origin(landed)
             if (
                 not isinstance(url, str)
                 or len(url) > 2000
                 or not isinstance(text, str)
                 or len(text) > finder.SNAPSHOT_MAX
-                or finder.origin(finder.canonical(url)) != finder.origin(self.context.url)
+                or finder.origin(landed) != self.origin
             ):
                 raise SourceError("page_failed")
             code = await self.policy.observe(self.context, url, text) if self.policy else None
@@ -253,7 +265,8 @@ def _unwanted(terms: Any) -> re.Pattern[str] | None:
 
 
 def searches_for(search: SearchSection, start: str = "") -> Searches:
-    """Use exact saved values, with no inferred website-specific filter encoding: the saved
+    """Use the saved values (typed as saved, or with another case or accents, browserd's
+    discovery.saved_as), with no inferred website-specific filter encoding: the saved
     titles and places the scope carries (`_carried`: all of them, or the first ones that fit,
     the rest counted as left out), the agent typing one at a time (ValueError when one cannot
     be typed or no title fits, `unsupported_criteria` before a lease).
@@ -483,7 +496,10 @@ async def _one(
         host=entry.get("host") or "",
     )
     try:
-        code = await _website(runner, plan, context, planned.scope, site, deadline)
+        scope = planned.scope
+        if platform == "indeed":  # its home may send the search to a country site (owner)
+            scope = dataclasses.replace(scope, country=True)
+        code = await _website(runner, plan, context, scope, site, deadline)
     finally:
         site.write(entry)
     return code or ("finding_persistence_pending" if site.found else None)
@@ -572,7 +588,14 @@ async def _search(
                 if exc.code == "page_failed" and result.get("error") == "unsupported_discovery":
                     return "unsupported_interaction"
                 return exc.code
-            if finder.canonical(pages.last_url) != scope.start:
+            # The start page may land on another address of its own origin (Welcome to the
+            # Jungle answers `/` on `/en`), or Indeed's on the person's country site (owner,
+            # 2026-10-28); browserd held that redirect to the frozen scope.
+            landed = finder.canonical(pages.last_url)
+            if not landed or not (
+                finder.same_origin(landed, scope.start)
+                or (scope.country and finder.country_site(scope.start, landed))
+            ):
                 return "unsupported_interaction"
             site.started = True
             session = finder.FinderSession(
@@ -582,6 +605,7 @@ async def _search(
                 user_id=user,
                 interactive=scope,
                 on_verified=None if site.commits is None else site.verified,
+                landed="" if landed == scope.start else landed,
             )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens

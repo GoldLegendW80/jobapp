@@ -52,7 +52,13 @@ PDF_OF = "%PDF-1.7\n" + "0" * 2000
 
 
 class Lease:
-    def __init__(self, stack: Stack, purpose: str, selectors: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        stack: Stack,
+        purpose: str,
+        selectors: list[str] | None = None,
+        hosts: list[str] | None = None,
+    ) -> None:
         self.stack = stack
         profile = str(uuid.uuid4())
         body = {
@@ -60,7 +66,7 @@ class Lease:
             "profile_id": profile,
             "uid": 20000 + uuid.UUID(profile).int % 30000,
             "purpose": purpose,
-            "hosts": ["pages"],
+            "hosts": hosts or ["pages"],
             "submit_selectors": selectors or [],
         }
         answer = stack.call("POST", "/leases", body)

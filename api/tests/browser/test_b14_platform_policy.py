@@ -239,8 +239,6 @@ def test_a_huge_snapshot_is_read_in_linear_time():
         ("freework", "freework_paused", True, "permission_checkpoint"),
         ("linkedin", "linkedin_off", False, "permission_unavailable"),
         ("linkedin", "linkedin_paused", False, "permission_checkpoint"),
-        ("linkedin", "linkedin_daily", False, "linkedin_daily"),
-        ("welcome_to_the_jungle", "welcome_to_the_jungle_daily", False, "platform_daily"),
         ("indeed", "platform_off", False, "permission_unavailable"),
         ("indeed", "something_new", False, "permission_unavailable"),
     ],
@@ -330,10 +328,12 @@ def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
     )
 
 
-def test_linkedin_keeps_its_slower_pace_and_smaller_page_cap():
+def test_linkedin_keeps_its_slower_pace_and_has_no_page_cap():
+    """Owner, 2026-10-28: no page cap and no daily limit, LinkedIn too; its pace stays."""
     assert platform_policy.pause_for("linkedin") == linkedin.PAUSE_S == (10.0, 30.0)
-    assert platform_policy.PAGES["linkedin"] == linkedin.RESULT_PAGES == 5
     assert platform_policy.pause_for("indeed") == PAGE_PAUSE_S
+    assert not hasattr(platform_policy, "PAGES")
+    assert not hasattr(linkedin, "RESULT_PAGES")
 
 
 @pytest.mark.parametrize("platform", ["linkedin", "indeed", "freework", "welcome_to_the_jungle"])
