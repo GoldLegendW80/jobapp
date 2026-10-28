@@ -18,7 +18,7 @@ from app.browser.client import BrowserError
 from app.browser.finder import FinderSession, Ran, canonical
 from app.browser.sources import ERRORS, MemoryPacer, Pages, Runner, site
 from app.profile.schemas import BrowserSource
-from tests.browser.test_b8_sources import FakeLeases, FakeTools, Plan, Stats
+from tests.browser.fakes import FakeLeases, FakeTools, Plan, Stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
 from browserd.tools.policy import parse_hosts
@@ -437,7 +437,7 @@ def test_at_most_twenty_pages_the_careers_page_included() -> None:
 
 
 def test_a_redirect_off_the_site_is_not_read() -> None:
-    from tests.browser.test_b8_sources import RedirectTools
+    from tests.browser.fakes import RedirectTools
 
     target = "https://careers.example-robotics.test/jobs/moved"
     tools = RedirectTools(
@@ -874,7 +874,7 @@ def test_a_site_is_leased_by_its_ascii_host(query: str, hosts: list[str]) -> Non
 
 
 def redirected(start: str, end: str, titles: tuple[str, ...] = ("AI Engineer",)) -> Tools:
-    from tests.browser.test_b8_sources import RedirectTools as Base
+    from tests.browser.fakes import RedirectTools as Base
 
     base = end.rsplit("/", 1)[0]
     found = {start: listing(list(titles))}

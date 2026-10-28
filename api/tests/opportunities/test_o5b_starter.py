@@ -16,13 +16,13 @@ from typing import Any
 import httpx
 import pytest
 import sqlalchemy as sa
+from app.profile.boards import BoardChecker
 from fastapi import FastAPI
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.models import Role, User
 from app.opportunities import starter, starter_check
-from app.profile.boards import BoardChecker
 from app.profile.models import Profile
 from app.profile.schemas import SearchSection, validate_section
 from tests.identity.api_helpers import Api, make_user

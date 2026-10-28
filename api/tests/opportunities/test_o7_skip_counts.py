@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from app.opportunities.sources import FeedError, remoteok
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,7 +17,6 @@ from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from app.jobs.sweep_router import sweep_out
 from app.logging_config import JsonFormatter
 from app.opportunities import sources
-from app.opportunities.sources import FeedError, remoteok
 from app.profile.schemas import Feed
 from tests.identity.api_helpers import Api
 from tests.jobs.sweep_helpers import now, set_profile

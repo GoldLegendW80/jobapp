@@ -19,13 +19,6 @@ from xml.sax.saxutils import escape
 
 import httpx
 import pytest
-from pydantic import ValidationError
-from sqlalchemy.orm import Session, sessionmaker
-
-from app.config import Settings
-from app.jobs import sweep
-from app.jobs.models import JobStatus
-from app.opportunities import sources
 from app.opportunities.sources import (
     FeedClient,
     FeedError,
@@ -35,6 +28,13 @@ from app.opportunities.sources import (
     remoteok,
     weworkremotely,
 )
+from pydantic import ValidationError
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import Settings
+from app.jobs import sweep
+from app.jobs.models import JobStatus
+from app.opportunities import sources
 from app.profile.schemas import Feed
 from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import jobs_of, new_sweep, run, set_profile

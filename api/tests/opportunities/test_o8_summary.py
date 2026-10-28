@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from app.opportunities.sources import ERRORS, catalogue
 
 from app.jobs import sweep_router
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
-from app.opportunities.sources import ERRORS, catalogue
 
 DASHES = re.compile(r"[‒–—―]|\s-\s")
 

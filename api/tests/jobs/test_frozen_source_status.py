@@ -12,14 +12,14 @@ from datetime import timedelta
 
 import pytest
 import sqlalchemy as sa
+from app.opportunities.sources import FeedClient, FeedRunner
 
 from app.jobs import ats, sweep
 from app.jobs.models import Sweep
 from app.jobs.sweep_router import sweep_out
-from app.opportunities.sources import FeedClient, FeedRunner
 from app.profile import schemas
 from app.profile import service as profile_service
-from tests.browser.test_b8_sources import FakeTools
+from tests.browser.fakes import FakeTools
 from tests.jobs.sweep_helpers import board, read_sweep, search, set_profile
 from tests.jobs.test_frozen_search_scope import CANARY, alice, fake_queue, site
 from tests.jobs.test_sweep_browser_sources import offer, runner

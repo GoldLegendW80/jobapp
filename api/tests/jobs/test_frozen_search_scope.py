@@ -230,7 +230,7 @@ def test_interactive_only_run_explains_unsupported_criteria_without_legacy_fallb
     async def no_hook(*args: Any) -> None:
         pytest.fail("interactive intent reached a fixed source reader")
 
-    from tests.browser.test_b8_sources import FakeTools
+    from tests.browser.fakes import FakeTools
     from tests.jobs.test_sweep_browser_sources import runner
 
     asyncio.run(

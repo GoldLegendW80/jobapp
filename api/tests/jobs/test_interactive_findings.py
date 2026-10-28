@@ -21,8 +21,7 @@ from app.browser import finder
 from app.browser.sources import MemoryPacer, Runner
 from app.jobs import ats, sweep
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
-from tests.browser.test_b8_sources import FakeLeases
-from tests.browser.test_b9_site import ScriptedFinder
+from tests.browser.fakes import FakeLeases, ScriptedFinder
 from tests.jobs.sweep_helpers import jobs_of, new_sweep, now, read_sweep, search, set_profile
 
 BASE = "https://jobs.example.test/"

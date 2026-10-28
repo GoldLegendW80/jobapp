@@ -23,8 +23,8 @@ import pytest
 
 from app.browser import finder
 from tests.browser import test_b17_browserd as b17
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_b5_actions import Page, tab_of
-from tests.browser.test_b9_site import ScriptedFinder
 from tests.browser.test_b13_discovery import bind_native
 from tests.browser.test_multi_search import SearchSite, run, searching
 from tests.browser.test_selected_interactive import selected

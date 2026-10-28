@@ -15,14 +15,7 @@ from app.browser.sources import MemoryPacer, Runner, SourceError, parse_snapshot
 from app.browser.sources import linkedin as li
 from app.profile.schemas import BrowserSource, SearchSection
 from tests.browser import b10_pages as pages
-from tests.browser.test_b8_sources import (
-    FakeLeases,
-    FakeTools,
-    Known,
-    Plan,
-    RedirectTools,
-    Stats,
-)
+from tests.browser.fakes import FakeLeases, FakeTools, Known, Plan, RedirectTools, Stats
 
 EXTERNAL = "https://boards.example.org/acme/jobs/123?gh_src=li"
 

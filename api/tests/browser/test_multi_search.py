@@ -20,7 +20,7 @@ from app.browser.sources import interactive
 from app.browser.sources.interactive import searches_for
 from app.profile.plain_terms import PLAIN
 from app.profile.schemas import SearchSection
-from tests.browser.test_b9_site import ScriptedFinder
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_b13_runtime import BASE, FIRST
 from tests.browser.test_selected_interactive import CANARY, execute, selected
 

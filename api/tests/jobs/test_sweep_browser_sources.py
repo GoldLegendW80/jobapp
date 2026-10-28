@@ -17,7 +17,7 @@ from app.browser.sources import google_careers as gc
 from app.jobs import sweep, sweep_router
 from app.jobs.models import JobStatus, SweepStatus
 from tests.browser import b8_pages as pages
-from tests.browser.test_b8_sources import FakeLeases, FakeTools
+from tests.browser.fakes import FakeLeases, FakeTools
 from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import (
     board,

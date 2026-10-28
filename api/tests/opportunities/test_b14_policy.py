@@ -454,7 +454,7 @@ def test_the_agent_of_linkedin_runs_again_in_a_second_sweep_of_the_day(
     """Jobs J18: the agent of the website reserves LinkedIn for its sweep once, through the real
     guard, and runs both its searches there; another sweep the same day runs them again (no
     daily limit, owner 2026-10-28)."""
-    from tests.browser.test_b9_site import ScriptedFinder
+    from tests.browser.fakes import ScriptedFinder
     from tests.browser.test_multi_search import LINKEDIN, SearchSite, searching
     from tests.browser.test_selected_interactive import execute, selected
 

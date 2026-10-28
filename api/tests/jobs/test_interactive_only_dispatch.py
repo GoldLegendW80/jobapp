@@ -9,7 +9,7 @@ from app.browser import sources
 from app.jobs import ats, sweep
 from app.jobs.models import SweepStatus, SweepTrigger
 from app.profile.schemas import SearchSection
-from tests.browser.test_b8_sources import FakeLeases, FakeTools
+from tests.browser.fakes import FakeLeases, FakeTools
 from tests.identity.api_helpers import Api
 from tests.jobs.sweep_helpers import board, read_sweep, set_profile
 from tests.jobs.test_api import Signed, sign_in

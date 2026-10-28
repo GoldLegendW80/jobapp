@@ -26,7 +26,7 @@ from app.browser.site_router import NOT_SIGNED_IN  # noqa: E402
 from tests.browser import b3_support  # noqa: E402
 from tests.browser import test_b7_api as b7  # noqa: E402
 from tests.browser import test_selected_interactive as selected_module  # noqa: E402
-from tests.browser.test_b9_site import ScriptedFinder  # noqa: E402
+from tests.browser.fakes import ScriptedFinder  # noqa: E402
 from tests.browser.test_b13_runtime import BASE, InteractiveTools  # noqa: E402
 from tests.identity.api_helpers import Api  # noqa: E402
 

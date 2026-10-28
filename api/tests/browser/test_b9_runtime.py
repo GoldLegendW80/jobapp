@@ -20,7 +20,7 @@ from app.agents.runner import RunContext
 from app.browser import finder
 from tests.agents.conftest import API_KEY, new_key
 from tests.agents.run_helpers import Backends
-from tests.browser.test_b8_sources import Plan
+from tests.browser.fakes import Plan
 from tests.browser.test_b9_site import Tools, run, s
 from tests.conftest import make_settings
 from tests.jobs.conftest import (  # noqa: F401  (fixtures)

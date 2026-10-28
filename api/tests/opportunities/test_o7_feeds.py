@@ -19,13 +19,6 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from pydantic import ValidationError
-from sqlalchemy.orm import Session, sessionmaker
-
-from app.config import Settings
-from app.jobs import ats, sweep
-from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus, SweepStatus
-from app.opportunities import sources
 from app.opportunities.sources import (
     FeedClient,
     FeedError,
@@ -35,6 +28,13 @@ from app.opportunities.sources import (
     remoteok,
     weworkremotely,
 )
+from pydantic import ValidationError
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import Settings
+from app.jobs import ats, sweep
+from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus, SweepStatus
+from app.opportunities import sources
 from app.profile.schemas import Feed, SearchSection
 from tests.identity.api_helpers import Api
 from tests.jobs.fake_ats import FakeAts

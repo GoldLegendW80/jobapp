@@ -294,7 +294,7 @@ def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
     """The preset LinkedIn address and a custom one of another spelling are paced as one
     platform: no page of the sweep follows another LinkedIn page sooner than LinkedIn's
     shortest pause, across the two sources too."""
-    from tests.browser.test_b9_site import ScriptedFinder
+    from tests.browser.fakes import ScriptedFinder
 
     now = [0.0]  # the runner's clock: its sleep, its pacer and the tools read the same time
     tools = Paged(now)

@@ -18,7 +18,7 @@ from app.browser.sources import MemoryPacer, Runner
 from app.jobs import sweep
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from tests.browser import b10_pages as pages
-from tests.browser.test_b8_sources import FakeLeases, FakeTools
+from tests.browser.fakes import FakeLeases, FakeTools
 from tests.identity.api_helpers import Api, make_user
 from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import board, jobs_of, new_sweep, run, search, set_profile

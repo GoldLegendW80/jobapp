@@ -9,6 +9,7 @@ import pytest
 
 from app.browser import finder, finder_tools, sources
 from tests.browser.b13_runtime import Recording
+from tests.browser.fakes import Tools
 from tests.browser.test_b9_runtime import (  # noqa: F401
     Runtime,
     alice,
@@ -21,7 +22,6 @@ from tests.browser.test_b9_runtime import (  # noqa: F401
     one_connection,
     runtime,
 )
-from tests.browser.test_b9_site import Tools
 
 BASE = "https://jobs.example.test/"
 FIRST = '- searchbox "Query" [ref=e1]\n- combobox "Remote" [ref=e2]\n- button "Search" [ref=e3]'
