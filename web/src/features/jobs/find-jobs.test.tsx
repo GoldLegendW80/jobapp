@@ -192,7 +192,18 @@ describe("Find jobs", () => {
             searching("jobs.example.net", "running"),
           ],
         }),
-        finished(),
+        // Every sweep since the owner's decision of 2026-10-28 searches the ticked websites alone.
+        finished({
+          boards_total: 0,
+          boards_done: 0,
+          boards_ok: 0,
+          boards_failed: [],
+          sources: [
+            searching("jobs.example.org", "done"),
+            searching("careers.example.org", "done"),
+            searching("jobs.example.net", "done"),
+          ],
+        }),
       ],
     });
     const { jobs } = await openJobs();
@@ -215,7 +226,7 @@ describe("Find jobs", () => {
       name: "2 new postings found",
     });
     expect(dialog).toHaveTextContent(
-      "2 boards read, 120 postings seen, 4 matched your search, 2 new postings.",
+      "3 websites searched, 120 postings seen, 4 matched your search, 2 new postings.",
     );
     expect(dialog).toHaveTextContent("2 matches already in your list.");
     const links = within(
@@ -228,13 +239,9 @@ describe("Find jobs", () => {
     expect(links[0]).toHaveTextContent("Applied AI Engineer");
     expect(within(links[0]!).getByLabelText("Fit 82 out of 100")).toBeTruthy();
     expect(within(links[1]!).getByLabelText("Unscored")).toBeTruthy();
-    const failed = within(dialog).getByRole("region", {
-      name: "Failed boards",
-    });
-    expect(failed).toHaveTextContent("1 board could not be read");
-    expect(failed).toHaveTextContent(
-      "Gone Corp (lever, gone): board not found",
-    );
+    expect(
+      within(dialog).queryByRole("region", { name: "Failed boards" }),
+    ).not.toBeInTheDocument();
 
     expect(calls.start).toBe(1);
     await waitFor(() => {
@@ -442,9 +449,13 @@ describe("Find jobs", () => {
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
     );
     expect(dialog).toHaveTextContent("2 boards read, 120 postings seen");
-    expect(
-      within(dialog).getByRole("region", { name: "Failed boards" }),
-    ).toHaveTextContent("Gone Corp (lever, gone): board not found");
+    const failed = within(dialog).getByRole("region", {
+      name: "Failed boards",
+    });
+    expect(failed).toHaveTextContent("1 board could not be read");
+    expect(failed).toHaveTextContent(
+      "Gone Corp (lever, gone): board not found",
+    );
     expect(
       within(dialog).getByRole("region", {
         name: "Freelance and project sources",
