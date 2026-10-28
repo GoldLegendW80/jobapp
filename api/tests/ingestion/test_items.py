@@ -127,24 +127,27 @@ def test_settings_are_typed_setting() -> None:
     settings = [
         *schedule,
         *[path for path in types if path.endswith(".advanced_regex")],
-        *[path for path in types if path.startswith("search.boards[].extra_exclude")],
         "skills.gates[].penalty",
         "search.min_fit",
         "search.days",
-        "search.boards[].enabled",
         *[path for path in types if path.startswith("search.browser_sources")],
         "search.browser_sources[].accepted_at",
         "search.browser_sources[].text_version",
         "search.browser_sources[].interactive_only",
-        *[path for path in types if path.startswith("search.feeds")],
-        "search.feeds[].kind",
-        "search.feeds[].terms.terms[]",
         *[path for path in types if path.startswith("search.interactive_")],
         "search.interactive_sites[].url",
         "search.interactive_instructions",
         "experience.employers[].key",
     ]
     assert all(types[path] is FieldType.SETTING for path in settings)
+
+
+def test_the_deleted_slots_have_no_field_type() -> None:
+    # The boards, the feeds and the starter list were deleted (owner, 2026-10-28).
+    deleted = ("search.boards", "search.feeds", "preferences.onboarding.starter_handled")
+    assert not [path for path in items.FIELD_TYPES if path.startswith(deleted)]
+    assert "boards" not in items.SLOTS["search"]
+    assert "feeds" not in items.SLOTS["search"]
 
 
 def test_the_types_of_an_item_are_those_of_its_slot() -> None:
@@ -179,30 +182,25 @@ def test_the_citation_checker_reads_every_item_with_its_types() -> None:
 # --- never proposable -----------------------------------------------------------------------------
 
 GATE = {"name": "phd", "terms": ["phd"]}
-BOARD = {"company": "Acme", "ats": "ashby", "org": "acme"}
 
 
 @pytest.mark.parametrize(
     ("section", "key", "value"),
     [
         ("search", "sweep_schedule", {"enabled": True}),
-        ("search", "browser_sources", {"kind": "vie", "query": "data", "enabled": True}),
+        ("search", "browser_sources", {"kind": "freework", "query": "data", "enabled": True}),
         (
             "search",
             "browser_sources",
             {"kind": "linkedin", "accepted_at": "2026-10-20T09:00:00+02:00", "text_version": 1},
         ),
         ("search", "browser_sources", {"kind": "linkedin", "accepted_at": None}),
-        ("search", "feeds", {"kind": "remoteok", "enabled": True}),
-        ("search", "feeds", {"kind": "hackernews_freelance", "terms": {"terms": ["python"]}}),
         ("search", "min_fit", 80),
         ("search", "days", 3),
         ("skills", "years_experience", 4),
         ("skills", "gates", {**GATE, "penalty": 90}),
         ("skills", "have", {**GATE, "advanced_regex": True}),
         ("search", "title_include", {"terms": ["ai"], "advanced_regex": True}),
-        ("search", "boards", {**BOARD, "enabled": False}),
-        ("search", "boards", {**BOARD, "extra_exclude": {"terms": ["sales"]}}),
         ("experience", "employers", {**EMPLOYER, "key": "chosen"}),
     ],
 )
@@ -228,6 +226,9 @@ def test_a_setting_cannot_be_removed_either(key: str) -> None:
         ("identity", "", items.UNKNOWN_KEY),
         ("identity", 7, items.UNKNOWN_KEY),
         ("identity", "full_name" + "x" * items.KEY_MAX, items.UNKNOWN_KEY),
+        # The boards, the feeds and the starter list were deleted (owner, 2026-10-28).
+        ("search", "boards", items.UNKNOWN_KEY),
+        ("search", "feeds", items.UNKNOWN_KEY),
     ],
 )
 def test_the_photo_and_what_is_not_a_section_have_no_key(section: Any, key: Any, rule: str) -> None:
@@ -287,7 +288,6 @@ def test_a_proposed_gate_takes_the_default_penalty() -> None:
         ("search", "title_include", {"terms": ["ai engineer"]}, "title_include"),
         ("search", "contract_types", ["CDI"], "contract_types"),
         ("search", "remote_stance", "hybrid", "remote_stance"),
-        ("search", "boards", {**BOARD, "org": "Acme"}, "boards:ashby:acme"),
         (
             "answers",
             "work_authorization",
@@ -630,11 +630,6 @@ def test_a_setting_of_a_stored_entry_is_kept_by_an_item() -> None:
     for action in ("add", "replace"):
         gate = build("skills", "gates", {"name": "phd", "terms": ["doctorate"]}, action)
         assert items.apply("skills", skills, gate)["gates"][0]["penalty"] == 70
-    board = build("search", "boards", {"company": "Anthropic", "ats": "greenhouse", "org": "x"})
-    stored = full("search")
-    stored["boards"][1]["org"] = "x"
-    after = items.apply("search", stored, board)["boards"][1]
-    assert (after["enabled"], after["extra_exclude"]["terms"]) == (False, ["sales"])
 
 
 def test_a_section_that_cannot_take_the_item_is_a_conflict() -> None:
@@ -885,7 +880,6 @@ NAMED: dict[tuple[str, str], Any] = {
     ("skills", "adjacent"): lambda name: {"name": name, "terms": ["term"]},
     ("skills", "none"): lambda name: {"name": name, "terms": ["term"]},
     ("skills", "gates"): lambda name: {"name": name, "terms": ["phd"]},
-    ("search", "boards"): lambda name: {"company": "Acme", "ats": "ashby", "org": name},
     ("search", "never_apply"): lambda name: name,
     ("answers", "work_authorization"): lambda name: {
         "country": name,

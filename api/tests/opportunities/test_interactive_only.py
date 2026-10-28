@@ -387,7 +387,13 @@ def test_restoration_checks_source_cap_and_stale_revision_before_any_write(
     search = {
         **current["sections"]["search"],
         "browser_sources": [
-            {"kind": "vie", "query": f"Robotics {n}", "enabled": True} for n in range(10)
+            # Ten rows of the other protected kind: restoring the original one would make 11.
+            {
+                "kind": "freework" if kind == "linkedin" else "linkedin",
+                "query": f"Robotics {n}",
+                "enabled": False,
+            }
+            for n in range(10)
         ],
         "min_fit": 40,
     }

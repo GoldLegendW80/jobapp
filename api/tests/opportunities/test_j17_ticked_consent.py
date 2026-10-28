@@ -84,14 +84,15 @@ def take_back(api: Api, who: Person, platform: str, revision: int) -> Any:
 
 
 def websites_only(factory: sessionmaker[Session], who: Person, at: datetime) -> uuid.UUID:
-    """A running websites only sweep of the person's current search, frozen as the api does."""
+    """A running sweep of the person's current search (its websites alone, as every search runs
+    since 2026-10-28), frozen as the api does."""
     with factory() as db, db.begin():
         stored = sweep.load_search(db, who.user_id)
         assert stored is not None
         holder = type(
             "P", (), {"sections": {"search": stored.model_dump(mode="json")}, "revision": 1}
         )
-        scope = sweep.freeze_scope(holder, SweepTrigger.manual, at, websites_only=True)
+        scope = sweep.freeze_scope(holder, SweepTrigger.manual, at)
         assert [s["mode"] for s in scope["sources"]] == ["llm_browser"]
         row = Sweep(
             user_id=who.user_id,

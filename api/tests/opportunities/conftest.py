@@ -2,19 +2,16 @@
 their tests in `test_o<n>_*.py` and helpers in `o<n>_support.py`; they never edit this one.
 
 Everything here is invented: person A (e2e-deck-a@example.org) and person B
-(e2e-deck-b@example.org), both signed in, both with a profile whose search section holds the
-fake boards, "Show postings from" 70 and the owner's never apply rule (apply A2's), and the skills
-of the jobs tests. No real person, company or site.
+(e2e-deck-b@example.org), both signed in, both with a profile whose search section holds one
+ticked job website, "Show postings from" 70 and the owner's never apply rule (apply A2's), and
+the skills of the jobs tests. No real person, company or site.
 
 Fixtures a test gets by naming them:
 
 - `person_a`, `person_b`: `Person` (session token, user id, e-mail);
-- `fake_ats`: the jobs tests' fake ATS server, for postings found by a sweep (`swept`);
+- `swept`: postings found by a sweep whose fake website finds the given findings;
 - the identity fixtures: `api` (the app with a frozen clock, cookie explicit client), `clock`,
   `factory`, `db`, `engine`, `migrated_url` (a real Postgres at head).
-
-The fake feeds server of the freelance sources (`tests/feeds_stub.py`) is O7's: O7 adds its
-address in `o7_support.py`.
 """
 
 from __future__ import annotations
@@ -30,11 +27,12 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply.models import Application, Mode, State
+from app.browser.finder import VerifiedFinding
 from app.identity.models import User
 from app.jobs.models import Job, JobEvent, JobStatus
 from tests.identity import conftest as identity
 from tests.identity.api_helpers import Api, make_user
-from tests.jobs.sweep_helpers import board, fake_ats, new_sweep, run, search, set_profile
+from tests.jobs.sweep_helpers import new_sweep, run, search, set_profile
 
 migrated_url = identity.migrated_url
 engine = identity.engine
@@ -44,7 +42,7 @@ clock = identity.clock
 app = identity.app
 api = identity.api
 
-__all__ = ["api", "app", "clock", "db", "engine", "factory", "fake_ats", "migrated_url"]
+__all__ = ["api", "app", "clock", "db", "engine", "factory", "migrated_url"]
 
 USER_A = "e2e-deck-a@example.org"
 USER_B = "e2e-deck-b@example.org"
@@ -61,10 +59,10 @@ class Person:
 
 
 def deck_search(**overrides: Any) -> dict[str, Any]:
-    """The search section of A and B: the fake boards, min_fit 70, the owner's rule."""
+    """The search section of A and B: one ticked website, min_fit 70, the owner's rule."""
     values: dict[str, Any] = {"min_fit": 70, "never_apply": [OWNER_RULE]}
     values.update(overrides)
-    return search(board("fake-ok"), **values)
+    return search(**values)
 
 
 def _person(factory: sessionmaker[Session], api: Api, email: str) -> Person:
@@ -183,9 +181,9 @@ def status_events(factory: sessionmaker[Session], posting_id: uuid.UUID) -> list
         return list(rows)
 
 
-def swept(factory: sessionmaker[Session], owner: Person, fake: Any) -> list[Job]:
-    """Run one sweep of the owner's boards against the fake ATS; the owner's postings after it."""
-    run(factory, new_sweep(factory, owner.user_id), fake)
+def swept(factory: sessionmaker[Session], owner: Person, *findings: VerifiedFinding) -> list[Job]:
+    """Run one sweep whose website finds `findings`; the owner's postings after it."""
+    run(factory, new_sweep(factory, owner.user_id), *findings)
     with factory() as session:
         return list(
             session.execute(

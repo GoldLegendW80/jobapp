@@ -111,26 +111,10 @@ FULL: dict[str, dict[str, Any]] = {
         "remote_stance": "hybrid",
         "min_fit": 60,
         "days": 14,
-        "boards": [
-            {
-                "company": "Mistral AI",
-                "ats": "ashby",
-                "org": "mistral.ai",
-                "enabled": True,
-                "extra_exclude": {"terms": [], "advanced_regex": False},
-            },
-            {
-                "company": "Anthropic",
-                "ats": "greenhouse",
-                "org": "anthropic",
-                "enabled": False,
-                "extra_exclude": {"terms": ["sales"], "advanced_regex": False},
-            },
-        ],
         "never_apply": ["No cybersecurity roles."],
         "browser_sources": [
             {
-                "kind": "vie",
+                "kind": "freework",
                 "query": "data engineer",
                 "location": "Germany",
                 "enabled": False,
@@ -164,18 +148,6 @@ FULL: dict[str, dict[str, Any]] = {
             "salary": {"min": 55000, "max": 70000, "currency": "EUR"},
             "daily_rate": {"min": 500, "max": 650, "currency": "EUR"},
         },
-        "feeds": [
-            {
-                "kind": "remoteok",
-                "terms": {"terms": ["python"], "advanced_regex": False},
-                "enabled": True,
-            },
-            {
-                "kind": "hackernews_freelance",
-                "terms": {"terms": [], "advanced_regex": False},
-                "enabled": False,
-            },
-        ],
     },
     "answers": {
         "work_authorization": [
@@ -222,7 +194,6 @@ FULL: dict[str, dict[str, Any]] = {
             "completed_at": None,
             "dismissed_at": None,
             "steps_passed": [],
-            "starter_handled": [],
         },
         "documents_language": "fr",
         "documents_tone": "warm",
