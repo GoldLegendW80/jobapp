@@ -1,13 +1,9 @@
-# CI e2e only: stubs of the ATS posting APIs, so the board check of the profile journeys and the
-# worker's sweeps never call Ashby, Greenhouse or Lever from CI.
+# CI e2e and scratch stacks: the journey stack's fast start settings, the base overlay of every
+# journey stack (ops/local-check.sh, ci.yml, the e2e configs).
 #   docker compose -p jobapp-ci -f compose.yml -f tests/ats-stub.compose.yml up -d --build --wait
-# - atsstub (tests/ats_stub.py): the api's board check, every org.
-# - fakeats (api/tests/jobs/fake_ats.py): every ATS call of the worker (ATS_BASE_URL with no
-#   ATS_BASE_URL_ORG_PREFIX), so CI never reaches a real ATS by configuration. Since 2026-10-28
-#   every search runs the job websites alone and reads no board; its "fake-" orgs give every
-#   failure mode, any other org answers 404 ("board not found"). Local scratch stacks and the
-#   Jetson keep their own settings.
-# The api refuses ATS_BASE_URL when APP_ENV is production (app/config.py).
+# It used to also run stubs of the ATS posting APIs and of the freelance feeds; those stubs were
+# deleted on 2026-10-28 with the board and feed engine (every search runs the job websites ticked
+# in Find jobs alone). The file keeps its name because every journey stack names it.
 #
 # Health checks (issue #91): `up --wait` returns when every service is healthy, and Docker runs
 # the first probe of a service one whole interval after its start (5 s for db and redis, 15 s
@@ -23,22 +19,13 @@ x-fast-start: &fast-start
 
 services:
   api:
-    environment:
-      ATS_BASE_URL: http://atsstub:8080
-    depends_on:
-      atsstub:
-        condition: service_healthy
     healthcheck: *fast-start
 
   worker:
     environment:
-      ATS_BASE_URL: http://fakeats:8099
-      # Schedule tick every minute, 2 s board timeout, one attempt (tests only; refused in
-      # production): the sweep journeys do not wait through production timers.
+      # Schedule tick every minute (tests only; refused in production): the sweep journeys do
+      # not wait through production timers.
       TEST_FAST_TIMERS: "true"
-    depends_on:
-      fakeats:
-        condition: service_healthy
     # The probe is a new Python process that imports app.worker: under gate load (load average
     # about 35, four journey stacks and pytest -n 10) it took more than compose.yml's 8 s on
     # every try (issue #530, "Health check exceeded timeout (8s)" on each probe of a worker that
@@ -60,48 +47,3 @@ services:
 
   redis:
     healthcheck: *fast-start
-
-  fakeats:
-    # Standard library only: the same pinned base image as atsstub.
-    image: python:3.12.15-slim-trixie
-    # --slow 21: fake-timeout answers after 21 s, far past the worker's board timeout (2 s here
-    # with TEST_FAST_TIMERS, 20 s in production): a timeout either way.
-    command: ["python", "/fake/fake_ats.py", "--port", "8099", "--slow", "21"]
-    volumes:
-      - ./api/tests/jobs/fake_ats.py:/fake/fake_ats.py:ro
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/_health', timeout=2)"
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-      start_interval: 1s
-    mem_limit: 256m
-    expose:
-      - "8099"
-
-  atsstub:
-    # The api's own base image (api/Dockerfile PYTHON_IMAGE): pinned and already pulled.
-    image: python:3.12.15-slim-trixie
-    command: ["python", "/stub/ats_stub.py", "8080"]
-    volumes:
-      # Relative to the project directory, the folder of compose.yml.
-      - ./tests/ats_stub.py:/stub/ats_stub.py:ro
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-      start_interval: 1s
-    mem_limit: 64m
-    expose:
-      - "8080"

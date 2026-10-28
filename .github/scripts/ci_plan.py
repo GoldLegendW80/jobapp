@@ -435,8 +435,11 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     ),
     (".github/*", NO_GROUP, "CI configuration, no journey reads it"),
     ("ops/*", NO_GROUP, "an operations script, no journey runs it"),
-    ("tests/ats-stub.compose.yml", EVERY, "the fake ATS of every journey stack"),
-    ("tests/ats_stub.py", EVERY, "the fake ATS of every journey stack"),
+    (
+        "tests/ats-stub.compose.yml",
+        EVERY,
+        "the fast start settings of every journey stack",
+    ),
     (
         "tests/ats-forms-stub.compose.yml",
         frozenset({"apply", "opportunities"}),
@@ -451,16 +454,6 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
         "tests/ats_forms/*",
         frozenset({"apply", "opportunities"}),
         "the fake forms server",
-    ),
-    (
-        "tests/feeds-stub.compose.yml",
-        frozenset({"opportunities"}),
-        "the fake feeds server of the opportunities group",
-    ),
-    (
-        "tests/feeds_stub.py",
-        frozenset({"opportunities"}),
-        "the fake feeds server of the opportunities group",
     ),
     (
         "tests/gmail-stub.compose.yml",
@@ -479,7 +472,6 @@ JOURNEY_RULES: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     ),
     ("tests/*_test.sh", NO_GROUP, "a shell test, the gate runs them all"),
     ("tests/*jetson*", NO_GROUP, "a run on the Jetson, never in the gate"),
-    ("api/tests/jobs/fake_ats.py", EVERY, "the fake ATS of every journey stack"),
     ("api/tests/mail/*", frozenset({"mail"}), "the fake Google and its mailbox data"),
     ("api/tests/ingestion/*", EVERY, "input data and streams read by journeys"),
     ("api/tests/documents/fixtures/*", EVERY, "document input data read by journeys"),
@@ -526,20 +518,14 @@ AREA_GROUPS: dict[str, frozenset[str] | str] = {
 # credential (agents). Apply's routes are driven by the apply group, by the browser group (B10's
 # LinkedIn step lists applications) and by the opportunities group (a Like queues an application
 # and writes its documents); only the apply and browser stacks start the browser service
-# (COMPOSE_PROFILES=browser in ops/local-check.sh). The worker runs the browser sources and the
-# freelance feeds on every sweep (worker.py browser_sources, feed_sources): the browser and
-# opportunities groups sweep. The imports add the rest: a file of browser that apply
-# imports runs apply's groups too.
+# (COMPOSE_PROFILES=browser in ops/local-check.sh). The worker runs the browser sources on every
+# sweep (worker.py browser_sources): the browser and opportunities groups sweep. The imports add
+# the rest: a file of browser that apply imports runs apply's groups too.
 API_AREAS: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     (
         "api/app/browser/sources/*",
         frozenset({"apply", "browser", "opportunities"}),
         "a browser source, run by every sweep",
-    ),
-    (
-        "api/app/opportunities/sources/*",
-        frozenset({"browser", "opportunities"}),
-        "a freelance feed, run by every sweep",
     ),
     (
         "api/app/opportunities/onboarding*",
