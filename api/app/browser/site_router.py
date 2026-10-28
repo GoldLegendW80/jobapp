@@ -20,7 +20,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.browser import site_logins
 from app.browser.address import ADDRESS_MAX
@@ -46,6 +46,8 @@ class SitesOut(BaseModel):
 
 
 class DoneIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     address: str = Field(max_length=ADDRESS_MAX)
 
 
