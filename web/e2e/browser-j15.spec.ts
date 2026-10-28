@@ -264,11 +264,15 @@ test("the websites end in words, the company page's posting is saved, nothing is
     const line = sites.getByRole("listitem").filter({ hasText: `${name}:` });
     await expect(line).not.toContainText("needs your permission");
   }
-  await expect(
-    sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
-  ).toContainText(
-    "1 search ran: engineer in Paris. 1 posting found, 1 new. The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
+  // Searched: the refused click on the posting's button is counted, never the website's end
+  // (2026-10-28), so its line says what was found and nothing else.
+  const ownLine = sites
+    .getByRole("listitem")
+    .filter({ hasText: `${SITE_HOST}:` });
+  await expect(ownLine).toContainText(
+    "1 search ran: engineer in Paris. 1 posting found, 1 new.",
   );
+  await expect(ownLine).not.toContainText("The website asked for something");
   await expect(summary).not.toContainText(/[–—]| - /);
   await shots(page, "summary");
   await page.keyboard.press("Escape");

@@ -172,7 +172,7 @@ ACTION_FAILED = (
     "cookie banner by declining it, then try again or another way."
 )
 # A website's own job search page (browserd's discovery.ENDPOINTS): the agent may open it by its
-# address even when no page read linked to it (`/jobs`, `/fr/jobs`, `/search`).
+# address, with no query, even when no page read linked to it (`/jobs`, `/fr/jobs`, `/search`).
 SEARCH_PAGES = frozenset({"jobs", "search", "careers", "vacancies"})
 QUERY_KEYS = frozenset({"q", "query", "search", "keyword", "keywords"})  # discovery.QUERY
 # Which saved values a text entry of a page takes, as far as the api can tell from the snapshot
@@ -539,13 +539,15 @@ def site_of(url: str) -> tuple[str, str] | None:
 
 
 def search_page(url: str) -> bool:
-    """Whether a canonical address is a website's job search page by its path: its last segment
-    is one of SEARCH_PAGES (`/jobs`, `/fr/jobs`, `/search/`). browserd judges its query."""
+    """Whether a canonical address is a website's job search page itself: its last path segment
+    is one of SEARCH_PAGES (`/jobs`, `/fr/jobs`, `/search/`) and it has no query. A search by
+    address (`/jobs?q=...`) is opened only from a link a page showed."""
     try:
-        segments = [s for s in urlsplit(url).path.split("/") if s]
+        parts = urlsplit(url)
     except ValueError:
         return False
-    return bool(segments) and segments[-1].casefold() in SEARCH_PAGES
+    segments = [s for s in parts.path.split("/") if s]
+    return not parts.query and bool(segments) and segments[-1].casefold() in SEARCH_PAGES
 
 
 @dataclass
@@ -926,7 +928,7 @@ class FinderSession:
         if self.interactive and url not in self.seen and not search_page(url):
             return (
                 "Refused: open only an observed link of this site, or its job search page "
-                "(an address ending in /jobs or /search).",
+                "(an address ending in /jobs or /search, with no query).",
                 True,
             )
         if not self.interactive and self.pages.count >= PAGES_MAX:

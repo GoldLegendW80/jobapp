@@ -273,6 +273,7 @@ def test_a_refusal_with_nothing_read_stays_unsupported():
     [
         ("/fr/jobs", True),
         ("/jobs", False),  # allowed, but this website has no such page: did not load
+        ("/fr/jobs?query=genai+engineer", None),  # a search by address: from a link only
         ("/fr/companies", None),
         ("/fr/jobs/../account", None),
         ("https://elsewhere.example.test/jobs", None),
