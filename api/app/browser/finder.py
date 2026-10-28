@@ -227,11 +227,28 @@ stop when the website is covered or a tool tells you to stop.
 """
 
 
-def fold(text: str) -> str:
-    """A value with its case and accents aside, as browserd's discovery.fold reads it: case
-    folded, decomposed, combining marks dropped; nothing else."""
-    decomposed = unicodedata.normalize("NFD", text.casefold())
-    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+def _base(letter: str) -> str:
+    """A letter with its accents and case aside, as browserd's discovery._base reads it."""
+    decomposed = unicodedata.normalize("NFD", letter)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).casefold()
+
+
+def same_value(text: str, value: str) -> bool:
+    """`text` is the saved `value` with its case and accents aside, as browserd's
+    discovery.same_value: both in NFC, a text whose NFKC differs from its NFC refused, then
+    equal case folded forms, or the same length in code points with each pair identical or two
+    letters of the same base letter, case aside. A mark is never added. Declared residue: the
+    Kelvin and Ohm signs, and one precomposed letter of the same base per saved letter."""
+    typed = unicodedata.normalize("NFC", text)
+    if unicodedata.normalize("NFKC", typed) != typed:
+        return False
+    saved = unicodedata.normalize("NFC", value)
+    if typed.casefold() == saved.casefold():
+        return True
+    return len(typed) == len(saved) and all(
+        a == b or (a.isalpha() and b.isalpha() and _base(a) == _base(b))
+        for a, b in zip(typed, saved, strict=True)
+    )
 
 
 def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
@@ -245,8 +262,7 @@ def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
         or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text)
     ):
         return None
-    key = fold(text)
-    return next((value for value in saved if fold(value) == key), None)
+    return next((value for value in saved if same_value(text, value)), None)
 
 
 def _saved(values: Any, needed: bool) -> bool:

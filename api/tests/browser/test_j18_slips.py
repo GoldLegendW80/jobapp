@@ -417,8 +417,7 @@ class FoldingSite(FormSite):
         if name == "browser_type" and args["text"]:
             self.sent.append(args["text"])
             saved = {"e1": scope["titles"], "e4": scope["places"]}.get(args.get("ref"), [])
-            key = finder.fold(args["text"])
-            args = {**args, "text": next((v for v in saved if finder.fold(v) == key), "?")}
+            args = {**args, "text": finder.saved_as(args["text"], tuple(saved)) or "?"}
         return await super().call(name, args)
 
 

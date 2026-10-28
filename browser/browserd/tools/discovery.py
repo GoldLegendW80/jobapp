@@ -89,21 +89,41 @@ def _control(text: str) -> bool:
     return any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text)
 
 
-def fold(text: str) -> str:
-    """A value with its case and accents aside: case folded, decomposed, combining marks
-    dropped. Nothing else is folded: spacing, punctuation, full width forms, look alike letters
-    of another script and invisible characters stay as written."""
-    decomposed = unicodedata.normalize("NFD", text.casefold())
-    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+def _base(letter: str) -> str:
+    """A letter with its accents and case aside: decomposed, combining marks dropped, case
+    folded."""
+    decomposed = unicodedata.normalize("NFD", letter)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).casefold()
+
+
+def same_value(text: str, value: str) -> bool:
+    """`text` is the saved `value` with its case and accents aside. Both are read in NFC; a text
+    whose NFKC differs from its NFC (a long s, a ligature, a full width form) is refused. Then
+    either the case folded forms are equal (STRASSE for Straße), or both have the same length in
+    code points and each pair is identical or two letters with the same base letter, case aside
+    (Montreal for Montréal). So a mark is never added: one stacked on a letter, on a space,
+    before the first letter, or of another script makes the text longer and is refused.
+    Declared residue: the Kelvin and Ohm signs are canonical singletons (NFC maps them to K and
+    Ω), and a letter may be typed as any one precomposed letter of the same base (è, é or ê for
+    e), at most one code point per letter of the saved value, as its case may."""
+    typed = unicodedata.normalize("NFC", text)
+    if unicodedata.normalize("NFKC", typed) != typed:
+        return False
+    saved = unicodedata.normalize("NFC", value)
+    if typed.casefold() == saved.casefold():
+        return True
+    return len(typed) == len(saved) and all(
+        a == b or (a.isalpha() and b.isalpha() and _base(a) == _base(b))
+        for a, b in zip(typed, saved, strict=True)
+    )
 
 
 def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
-    """The saved value `text` is, with its case and accents aside (`fold`); None for anything
-    else: not text, longer than VALUE_MAX, a control character, or no saved value folds alike."""
+    """The saved value `text` is, with its case and accents aside (`same_value`); None for
+    anything else: not text, longer than VALUE_MAX, a control character, or no such value."""
     if not isinstance(text, str) or not text or len(text) > VALUE_MAX or _control(text):
         return None
-    key = fold(text)
-    return next((value for value in saved if fold(value) == key), None)
+    return next((value for value in saved if same_value(text, value)), None)
 
 
 def _values(raw: object, *, needed: bool) -> tuple[str, ...] | None:

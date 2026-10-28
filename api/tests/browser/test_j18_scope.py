@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
 
 from browserd.tools import discovery
 
+from app.browser import finder
 from tests.browser.test_b5_actions import facts
 
 START = "https://jobs.example.test/"
@@ -154,6 +155,13 @@ NEAR_TITLES = [
     "Send my application",
     "postuler",
     "x" * 5000,
+    "r" + "\u0301" * 200 + "obot engineer",  # stacked marks on one letter
+    "\u0301robot engineer",  # a mark before the first letter
+    "robot \u0301engineer",  # a mark on the space
+    "ro\u05b0bot engineer",  # a Hebrew point
+    "ro\u064ebot engineer",  # an Arabic fatha
+    "ro\u094dbot engineer",  # a Devanagari virama
+    "robot engıneer",  # a dotless i
 ]
 
 
@@ -245,6 +253,86 @@ def test_a_scope_without_places_takes_no_place_but_clears_the_box():
     assert not typed("location", "Paris", scope)
     assert not chosen("location", ["Paris"], scope)
     assert not chosen("location", [""], scope)
+
+
+# --- the same rule in browserd and in the api pre-check (finder.saved_as) --------------------
+
+# Case and accents aside means: in NFC, the same case folded text, or the same length with each
+# letter the saved one or a letter of the same base. A mark is never added, and a text whose
+# NFKC differs from its NFC is refused.
+# Declared residue: the Kelvin sign (U+212A) and the Ohm sign (U+2126) are canonical singletons,
+# NFC maps them to K and Ω, so "\u212aelvin" still matches "Kelvin" and "\u2126" matches "ω".
+# A letter may also be typed as any one precomposed letter of its base ("Montréal" for
+# "Montreal"), one code point per saved letter, as its case may.
+SAME = [
+    ("GenAI Engineer", "genai engineer"),
+    ("GENAI ENGINEER", "genai engineer"),
+    ("Ile-de-France", "Île-de-France"),
+    ("ILE-DE-FRANCE", "Île-de-France"),
+    ("Montreal", "Montréal"),
+    ("Montréal", "Montreal"),
+    (unicodedata.normalize("NFD", "Montréal"), "Montréal"),
+    ("STRASSE", "Straße"),  # case: ß folds to ss
+    ("straße", "STRASSE"),
+    ("İstanbul", "Istanbul"),
+    ("\u212aelvin", "Kelvin"),  # residue, above
+    ("\u2126", "ω"),  # residue, above
+]
+
+
+def grave_or_acute(value: str, payload: int) -> str:
+    """`value` with a grave or an acute after each character, one bit of `payload` each."""
+    return "".join(ch + ("\u0300" if payload >> i & 1 else "\u0301") for i, ch in enumerate(value))
+
+
+NOT_SAME = [
+    ("g" + "\u0301" * 200 + "enai engineer", "genai engineer"),  # 200 stacked marks
+    ("g" + "\u0301\u0300" + "enai engineer", "genai engineer"),  # two marks on one letter
+    *[(grave_or_acute("genai engineer", bits), "genai engineer") for bits in (0, 0x3FFF, 0x2A5B)],
+    ("genai \u0301engineer", "genai engineer"),  # a mark on the space
+    ("\u0301genai engineer", "genai engineer"),  # a mark before the first letter
+    ("ge\u05b0nai engineer", "genai engineer"),  # a Hebrew point
+    ("ge\u064enai engineer", "genai engineer"),  # an Arabic fatha
+    ("ge\u094dnai engineer", "genai engineer"),  # a Devanagari virama
+    ("gr\u0300enai engineer", "grenai engineer"),  # a grave on r: no such letter, one more
+    ("Straſſe", "Straße"),  # the long s: NFKC differs
+    ("Straſſe", "Strasse"),
+    ("ﬁnance", "finance"),  # a ligature: NFKC differs
+    ("ＧｅｎＡＩ", "genai"),  # full width
+    ("genaı engineer", "genai engineer"),  # a dotless i is another letter
+    ("gеnai engineer", "genai engineer"),  # a Cyrillic e
+    ("genai  engineer", "genai engineer"),
+    ("genai-engineer", "genai engineer"),
+    ("genai\u200bengineer", "genai engineer"),
+    ("genai engineer\u00ad", "genai engineer"),
+    ("Mont real", "Montreal"),
+    ("Montreal", "Montrea"),
+    ("", "genai engineer"),
+]
+
+
+@pytest.mark.parametrize(("text", "saved"), SAME)
+@pytest.mark.parametrize("module", [discovery, finder], ids=["browserd", "api"])
+def test_a_case_or_accent_variant_is_the_saved_value(module, text, saved):
+    assert module.saved_as(text, (saved,)) == saved
+
+
+@pytest.mark.parametrize(("text", "saved"), NOT_SAME)
+@pytest.mark.parametrize("module", [discovery, finder], ids=["browserd", "api"])
+def test_an_added_mark_or_a_compatibility_form_is_never_the_saved_value(module, text, saved):
+    assert module.saved_as(text, (saved,)) is None
+
+
+def test_the_two_copies_of_the_rule_are_identical():
+    import inspect
+
+    for name in ("_base", "same_value"):
+        browserd, api = (inspect.getsource(getattr(m, name)) for m in (discovery, finder))
+        code = [
+            "\n".join(line for line in src.split('"""')[2].splitlines() if line.strip())
+            for src in (browserd, api)
+        ]
+        assert code[0] == code[1], name
 
 
 # --- an independent generator: 200 neighbours of each saved value, all refused ---------------
