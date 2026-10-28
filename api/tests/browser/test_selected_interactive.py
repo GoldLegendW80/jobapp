@@ -596,6 +596,7 @@ def test_a_website_has_no_page_cap_and_a_careers_page_keeps_its_ceilings():
         assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
         assert not (await session.interact("browser_click", {"ref": "e4"}))[1]
         assert not (await session.navigate(BASE + "b13/jobs/robot"))[1]
+        session.report_none("no_match")
         return finder.Ran()
 
     entries, _, leases, tools, _ = asyncio.run(
@@ -631,7 +632,7 @@ def test_model_does_not_get_an_empty_success_without_executing_search():
         return finder.Ran()
 
     entries, _, _, _, _ = asyncio.run(execute(selected(), "e2e-person", ScriptedFinder(script)))
-    assert entries[0]["reason"] == "unsupported_interaction"
+    assert entries[0]["reason"] == "nothing_reported"  # nothing read is no success (2026-10-28)
 
 
 def test_a_preempted_browser_explains_every_remaining_selected_source():

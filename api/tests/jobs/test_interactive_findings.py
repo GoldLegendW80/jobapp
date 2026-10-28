@@ -902,7 +902,10 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
     assert (entry["searches"], entry["found"], entry["postings"]) == (2, 3, 3)
     assert entry["searched"] == [{"title": "robot", "place": None}, {"title": "arm", "place": None}]
     assert (entry["unwanted"], entry.get("duplicates", 0)) == (1, 0)
-    assert (entry["error"], entry["outcome"]) == ("unsupported_interaction", "partial")
+    # The refused click is counted, and the website, which gave verified postings, was searched
+    # (2026-10-28: how it ends is what was read, interactive.outcome).
+    assert (entry["error"], entry["outcome"]) == (None, "complete")
+    assert entry["refused"]["unsupported_interaction"] == 1
     assert (row.stats["new"], row.stats["duplicates"]) == (3, 0)
     assert sorted(job.title for job in jobs_of(factory, alice)) == [
         "Arm Engineer",

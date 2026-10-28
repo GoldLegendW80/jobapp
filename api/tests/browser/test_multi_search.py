@@ -405,6 +405,7 @@ def test_the_sweep_time_is_shared_fairly_between_the_websites(count, deadlines):
         seen.append(session.pages.deadline)
         await session.interact("browser_type", {"ref": "e1", "text": "robot"})
         await session.interact("browser_click", {"ref": "e3"})
+        session.report_none("no_match")  # searched, nothing listed: said so (2026-10-28)
         now[0] = 100.0 * len(seen)
         return finder.Ran()
 
@@ -438,6 +439,7 @@ def test_a_website_past_its_share_stops_there_and_the_next_one_gets_its_own():
                 "Stopped: time_budget. Report what you found, then stop.",
                 True,
             )
+        session.report_none("no_match")
         return finder.Ran()
 
     entries, _, leases, _, _ = asyncio.run(

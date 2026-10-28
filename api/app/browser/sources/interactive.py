@@ -18,7 +18,9 @@ type only one saved title in a search box or one saved place in the place box (o
 clear one), and set a native filter only to its saved value (browser/browserd/tools/
 discovery.py). A value the model types that its box does not take, or a choice that is no saved
 value, is its own slip: told to it before the browser and counted apart, it is no reason to say
-the website unsupported (finder.FinderSession._slip). Its budget a website is "no limit"
+the website unsupported (finder.FinderSession._slip). How the website ends is what the agent
+read and said, never which tools it used (`outcome`, 2026-10-28): a click the page did not let
+finish (a cookie banner over it) is told to it to recover from. Its budget a website is "no limit"
 (owner): no cap on its turns, pages, tokens or verified postings. What bounds it is not its
 budget: its share of the
 sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
@@ -554,6 +556,25 @@ async def _website(
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
 
 
+def outcome(session: finder.FinderSession) -> str | None:
+    """How a website the agent ran ends (2026-10-28, issue 716). It was searched when the agent
+    reported a posting code verified, or said after a search the session saw that the website
+    listed no matching job (`report_no_postings` no_match). Else the blocker it named (a cookie
+    wall, a sign in wall, no search control, a page with no list); else `unsupported_interaction`
+    when browserd or the website refused one of its actions; else `nothing_reported`. Opening a
+    search page by its address, pressing a link or a failed click that it recovered from are
+    how a person searches too: no kind of action is required, and nothing read is no success."""
+    if session.found or session.verified_count:
+        return None
+    if session.outcome:
+        code = finder.NO_POSTINGS[session.outcome]
+        if code is not None or session.searches:
+            return code
+    if session.refused["unsupported_interaction"]:
+        return "unsupported_interaction"
+    return "nothing_reported"
+
+
 async def _search(
     agent: finder.FinderAgent,
     pages: Pages,
@@ -615,15 +636,7 @@ async def _search(
                 return session.stopped
             if ran.stopped:
                 return "no_credential" if ran.stopped == "no_credential" else "agent_failed"
-            # A posting the agent reported again (another of its searches listed it) is merged,
-            # and a value the model typed or chose that its box does not take was told to it to
-            # correct (FinderSession._slip): neither was refused by the website, so neither is a
-            # reason to say the website was unsupported.
-            if set(session.refused) - {"duplicate", finder.MODEL_VALUE} or not all(
-                session.interactions[name] for name in ("browser_type", "browser_click")
-            ):
-                return "unsupported_interaction"
-            return None
+            return outcome(session)
     except TimeoutError:
         return "time_budget" if cap.expired() else "agent_failed"
     except SourceError as exc:
