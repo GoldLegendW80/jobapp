@@ -89,10 +89,13 @@ APPLY_PARTS = (
 CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
 # A cookie banner's decline button (2026-10-28, issue 716): the one click a discovery takes
 # outside a native search, so a banner that covers the page can be closed as a person would,
-# never by accepting. One of its names is one of these phrases, read as folded words (case,
-# accents and punctuation aside, detect.words); none of its other names holds an ACCEPT_STEMS
-# or ACCOUNT_STEMS word (a sign in, glued too) or OK, yes or oui; it is a button (never a link,
-# never a form's submit button, nothing that holds one), and the click lands on it (`decline`).
+# never by accepting. An allow list (round 2, review of PR 720): every name of the element (its
+# text, aria-label, title, value, id and the names within it) is read in NFKC with format
+# characters, accents and case aside, and is either one of these phrases or made only of
+# NEUTRAL words, and one of them is a phrase; a name holding a letter or a digit outside basic
+# Latin (another script, a homoglyph such as a Cyrillic small es) refuses. It is a button (never a
+# link, never a form's submit button, nothing that holds one), and the click lands on it and
+# reads the same (`decline`).
 DECLINES = frozenset(
     tuple(phrase.split())
     for phrase in (
@@ -110,12 +113,15 @@ DECLINES = frozenset(
         "alle ablehnen", "nur notwendige", "nur notwendige cookies",
     )
 )  # fmt: skip
-ACCEPT_STEMS = (
-    "accept", "agree", "allow", "autoris", "choose", "choisi", "custom", "personnali",
-    "parametr", "setting", "preferen", "akzept", "zustimm", "erlaub", "einstell", "connect",
-    "inscri", "anmeld",
+# Words a decline button's other names may hold: what the decline phrases say, what a banner
+# calls itself and the ids of common consent banners (Axeptio, Didomi, OneTrust, Cookiebot,
+# tarteaucitron). A number is neutral too. Any other word refuses (fail closed).
+NEUTRAL = frozenset(
+    {"no", "thanks", "non", "merci", "reject", "decline", "refuse", "refuser", "deny", "denied",
+     "disagree", "dismiss", "ablehnen", "all", "tout", "close", "fermer", "the", "cookie",
+     "cookies", "banner", "bandeau", "notice", "dialog", "popup", "modal", "button", "btn",
+     "handler", "axeptio", "didomi", "onetrust", "cybot", "cookiebot", "body", "tarteaucitron"}
 )  # fmt: skip
-ACCEPT_WORDS = frozenset({"ok", "okay", "yes", "oui", "ja", "accord", "daccord"})
 
 
 def _control(text: str) -> bool:
@@ -526,19 +532,29 @@ def signed_request(
     return not destructive(url, scope)
 
 
+def _latin(name: str) -> bool:
+    """Every letter and digit of the name, in NFKC with its accents aside, is basic Latin: no
+    other script, no homoglyph (a Cyrillic small es inside "Accept"), nothing a folded reading
+    drops."""
+    text = unicodedata.normalize("NFKC", name)
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return all(c.isascii() for c in text if unicodedata.category(c)[0] in "LN")
+
+
 def _declines(facts: dict) -> bool:
-    """Whether these facts are of a cookie banner's decline button (DECLINES)."""
+    """Whether these facts are of a cookie banner's decline button (DECLINES, NEUTRAL)."""
     names = facts.get("names")
     if not isinstance(names, list) or not names or len(names) > 60:
         return False
-    said = [tuple(detect.words(n, camel=False)) for n in names if isinstance(n, str)]
-    if len(said) != len(names) or not any(words in DECLINES for words in said):
+    if not all(isinstance(n, str) and _latin(n) for n in names):
         return False
-    for name, words in zip(names, said, strict=True):
-        if words in DECLINES:
-            continue
-        tokens = [*words, *detect.match_words(name), "".join(words)]
-        if any(t.startswith((*ACCEPT_STEMS, *ACCOUNT_STEMS)) or t in ACCEPT_WORDS for t in tokens):
+    phrases = [tuple(detect.words(n, camel=False)) in DECLINES for n in names]
+    if not any(phrases):
+        return False
+    for name, phrase in zip(names, phrases, strict=True):
+        # Its words with camel case split (`CybotCookiebotDialogBodyButtonDecline`): an allow
+        # list, so a split spelling of another word (`AccEpt`) is no neutral word either.
+        if not phrase and not all(w in NEUTRAL or w.isdigit() for w in detect.words(name)):
             return False
     d = facts.get("discovery")
     tag, kind = facts.get("tag"), facts.get("type")

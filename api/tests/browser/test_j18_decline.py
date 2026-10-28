@@ -1,11 +1,11 @@
 """A cookie banner is closed by declining it, and only that (2026-10-28, issue 716): Welcome to
 the Jungle's "C is for COOKIE" banner covered its search page, and browserd refused every click
 of a discovery that was no native search, so the agent could not close it. browserd now takes
-one more click in a discovery: a button whose name is a decline phrase (DECLINES), no other name
-of it accepting, allowing or opening settings, never a link nor a form's submit button, at its
-click point too. Accepting stays refused. The search page itself, its address with no query
-(`/fr/jobs`), opens; a search request still carries a saved title. A click Playwright could not
-make because another element covers it is told as `element_covered`.
+one more click in a discovery: a button whose name is a decline phrase (DECLINES), every other
+name of it made only of neutral words (NEUTRAL) in basic Latin letters, never a link nor a form's
+submit button, at its click point too. Accepting stays refused. The search page itself, its
+address with no query (`/fr/jobs`), opens; a search request still carries a saved title. A
+click Playwright could not make because another element covers it is told as `element_covered`.
 """
 
 import asyncio
@@ -119,6 +119,47 @@ ACCEPTED = [
 @pytest.mark.parametrize("names", ACCEPTED)
 def test_any_other_banner_button_stays_refused(names):
     assert click(button(*names)) is not None, names
+
+
+# Names probed beside "No, thanks" in the review of PR 720 (round 2): an allow list refuses
+# every one, in any language or script, a homoglyph included (a Cyrillic letter in "Accept").
+BESIDE_A_DECLINE = [
+    "S'abonner", "Créer mon profil", "Créer un compte", "Devenir membre", "Become member", "Join",
+    "Consent", "Consentir", "Je consens", "Einverstanden", "Aceptar", "Accetta", "Aceitar",
+    "Akceptuję", "同意", "A\u0441cept all", "Se déconnecter", "Follow", "Créer une alerte",
+    "Turn on job alerts", "Upload CV", "Déposer mon CV", "Refuser et s'abonner",
+    "Gérer mes choix", "Valider mes choix", "Continue", "Got it", "OK", "Subscribe",
+    "jungle_btn_dismiss", "CookieAccEpt", "Close and accept",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("other", BESIDE_A_DECLINE)
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_a_decline_name_beside_any_other_word_stays_refused(other, signed_in):
+    scope = SCOPE if not signed_in else discovery.Scope(START, ("genai engineer",), signed_in=True)
+    for names in (("No, thanks", other), (other, "Refuser"), ("Reject all", other, "Close")):
+        assert click(button(*names), scope) is not None, names
+    shape = button("No, thanks")
+    shape["point"]["names"] = ["No, thanks", other]  # at the click point too
+    assert click(shape, scope) is not None, other
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "R\u0435ject all",  # a Cyrillic small ie
+        "Reje\u0441t all",  # a Cyrillic small es
+        "\u039do, thanks",  # a Greek capital nu
+        "\u62d2\u5426",
+        "\u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c",
+    ],
+)
+def test_a_decline_phrase_in_another_script_stays_refused(phrase):
+    assert click(button(phrase)) is not None, phrase
+
+
+def test_a_full_width_decline_reads_as_its_latin_letters():
+    assert click(button("\uff32eject all")) is None  # NFKC: the full width R is an R
 
 
 @pytest.mark.parametrize(

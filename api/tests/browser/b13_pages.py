@@ -99,17 +99,17 @@ if (!document.cookie.includes("jungle_consent=")) {
   overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4)";
   overlay.innerHTML = '<div role="dialog" aria-label="C is for COOKIE" style="background:#fff;' +
     'margin:20vh auto;width:320px;padding:16px"><h2>C is for COOKIE</h2>' +
-    '<button type="button" id="jungle_btn_accept">OK for me</button>' +
-    '<button type="button" id="jungle_btn_choose">I choose</button>' +
-    '<button type="button" id="jungle_btn_dismiss">No, thanks</button></div>';
+    '<button type="button" id="axeptio_btn_acceptAll">OK for me</button>' +
+    '<button type="button" id="axeptio_btn_configure">I choose</button>' +
+    '<button type="button" id="axeptio_btn_dismiss">No, thanks</button></div>';
   document.body.appendChild(overlay);
   const close = choice => () => {
     document.cookie = "jungle_consent=" + choice + "; path=/";
     fetch("/b13/jungle/consent?choice=" + choice);
     overlay.remove();
   };
-  overlay.querySelector("#jungle_btn_accept").addEventListener("click", close("accepted"));
-  overlay.querySelector("#jungle_btn_dismiss").addEventListener("click", close("declined"));
+  overlay.querySelector("#axeptio_btn_acceptAll").addEventListener("click", close("accepted"));
+  overlay.querySelector("#axeptio_btn_dismiss").addEventListener("click", close("declined"));
 }
 document.querySelector("#search").addEventListener("submit", event => {
   event.preventDefault();
