@@ -420,7 +420,11 @@ test("pay, how the app applies, the summary, and Start opens Discover", async ()
   await expect(summary).toContainText("Paris; Hybrid");
   await expect(summary).toContainText("Freelance mission, Permanent");
   await expect(summary).toContainText("Rather not say");
-  await expect(pageN.getByText(/covers 1 board from/)).toBeVisible();
+  // Every search runs the job websites ticked in Find jobs alone (owner, 2026-10-28): N saved
+  // a board through the api earlier, and the first search covers no website.
+  await expect(
+    pageN.getByText(/covers 0 job websites ticked in Find jobs/),
+  ).toBeVisible();
   await noDash(pageN);
   await shots(pageN, "summary");
   await press(pageN.getByRole("button", { name: "Start" }), "Enter");
@@ -506,7 +510,9 @@ test("B, with roles and no board, ends the wizard without a sweep", async () => 
   }));
   await pageB.goto("/welcome?step=summary");
   await step(pageB, 7);
-  await expect(pageB.getByText(/covers 0 boards from/)).toBeVisible();
+  await expect(
+    pageB.getByText(/covers 0 job websites ticked in Find jobs/),
+  ).toBeVisible();
   await press(pageB.getByRole("button", { name: "Start" }), "Enter");
   await expect(pageB.getByText(NO_WEBSITES)).toBeVisible();
   await expect(pageB).toHaveURL(/\/discover$/);

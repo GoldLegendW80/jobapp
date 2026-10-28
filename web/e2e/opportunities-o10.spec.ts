@@ -14,7 +14,7 @@ import {
 } from "./stack";
 
 /** O10 uses only an invented account and posting. The existing opportunities group supplies
- * fake boards, feeds and starter data. This journey also records the 375px page inventory that
+ * fake data it needs. This journey also records the 375px page inventory that
  * must be inspected before creating the other lanes' issues. It changes no other lane's page. */
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -115,31 +115,13 @@ test("the product pages fold details, retain settings and restore the open choic
     daily_rate: { min: 600, max: 800, currency: "EUR" },
   });
 
+  // Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone, so the Search
+  // tab no longer shows the freelance and project sources (what a profile holds stays saved).
   await page.goto("/profile?tab=search");
-  const sources = page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", { name: "Freelance and project sources" }),
-    })
-    .last();
-  await expect(sources.getByRole("switch")).toHaveCount(4);
+  await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
   await expect(
-    sources.getByRole("button", { name: "Add a mission by hand" }),
-  ).toHaveCount(1);
-  advanced = sources.getByRole("button", { name: "Advanced", exact: true });
-  await expect(advanced).toHaveAttribute("aria-expanded", "false");
-  await shots(page, "sources-collapsed", true, () =>
-    sources.scrollIntoViewIfNeeded(),
-  );
-  await advanced.click();
-  await expect(
-    sources.getByText("Words for Remote OK", { exact: true }),
-  ).toBeVisible();
-  await shots(page, "sources-open", true, () =>
-    sources.scrollIntoViewIfNeeded(),
-  );
-  await page.reload();
-  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+    page.getByRole("heading", { name: "Freelance and project sources" }),
+  ).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
