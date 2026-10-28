@@ -100,7 +100,10 @@ def sources(count: int, canary: str) -> list[dict[str, Any]]:
 
 @pytest.mark.parametrize("method", ["save", "import"])
 @pytest.mark.parametrize(
-    ("others", "included", "status"), [(9, False, 200), (9, True, 200), (10, False, 422)]
+    # Since the fixed readers went (2026-10-28) only LinkedIn and Free-Work rows exist, one each:
+    # the one row per kind check, not the cap of 10, is what a write can now exceed.
+    ("others", "included", "status"),
+    [(1, False, 200), (1, True, 200), (2, False, 422)],
 )
 def test_capacity_is_checked_after_preservation_without_partial_writes(
     api: Api,
@@ -133,7 +136,7 @@ def test_capacity_is_checked_after_preservation_without_partial_writes(
         assert after == before
     else:
         saved = after[0]["search"]
-        assert len(saved["browser_sources"]) == 10
+        assert len(saved["browser_sources"]) == 2
         assert saved["browser_sources"] == search["browser_sources"] + (
             [] if included else [expected]
         )
@@ -173,7 +176,7 @@ def test_generic_write_preserves_enabled_only_for_stored_true(
 
 
 @pytest.mark.parametrize(
-    ("others", "included", "code"), [(0, False, 0), (9, False, 0), (9, True, 0), (10, False, 2)]
+    ("others", "included", "code"), [(0, False, 0), (1, False, 0), (1, True, 0), (2, False, 2)]
 )
 def test_cli_import_keeps_off_platform_and_capacity_is_atomic(
     api: Api,

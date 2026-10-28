@@ -425,11 +425,13 @@ def _ignored_events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]
             0,
             422,
         ),
+        # The starter list was deleted (2026-10-28): an older tab still sending its entries is
+        # not refused, they are dropped.
         (
             "preferences",
-            {"onboarding": {"steps_passed": ["pay"], "starter_handled": ["ashby:fake-ok"]}},
+            {"onboarding": {"steps_passed": ["looking"], "starter_handled": ["ashby:fake-ok"]}},
             0,
-            422,
+            200,
         ),
         ("identity", {"full_name": "Example Person"}, 0, 200),
     ],

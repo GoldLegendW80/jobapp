@@ -78,7 +78,19 @@ def test_golden(out: dict[str, Any]) -> None:
         GOLDEN.write_text(text, encoding="utf-8")
     if not GOLDEN.is_file():
         pytest.skip(f"no golden output yet: run with UPDATE_GOLDEN=1 to write {GOLDEN}")
-    assert GOLDEN.read_text(encoding="utf-8") == text
+    golden = GOLDEN.read_text(encoding="utf-8")
+    stored = json.loads(golden)
+    sections = stored.get("sections") or {}
+    search = sections.get("search") or {}
+    onboarding = (sections.get("preferences") or {}).get("onboarding") or {}
+    if "boards" in search or "starter_handled" in onboarding:
+        # A golden written before the boards and the starter list were deleted (2026-10-28)
+        # still holds what the importer no longer writes: compared without it until it is
+        # written again.
+        search.pop("boards", None)
+        onboarding.pop("starter_handled", None)
+        golden = json.dumps(stored, ensure_ascii=False, indent=2) + "\n"
+    assert golden == text
 
 
 # --- everything in the sources is in the output -------------------------------------------------

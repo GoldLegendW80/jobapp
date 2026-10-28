@@ -16,7 +16,6 @@ from app.browser.platform_policy import PlatformPolicy
 from app.jobs import sweep
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from app.opportunities.platforms import guard
-from app.profile.schemas import SearchSection
 from tests.identity.api_helpers import Api
 from tests.opportunities.conftest import Person
 from tests.opportunities.test_b14_policy import URLS, context, entries
@@ -133,10 +132,9 @@ def test_the_ticked_save_alone_is_no_permission_and_the_consent_route_records_it
     assert run(policy.reserve(ctx)) is None
     assert entries(factory, sweep_id)[0]["platform"] == platform
     if platform in READERS:
-        # The permission is the websites' only: it turns on no fixed reader of the platform.
+        # The permission is the websites' only (the fixed readers were deleted on 2026-10-28).
         rows = profile(api, person_a)["sections"]["search"]["browser_sources"]
         assert [(r["kind"], r["interactive_only"]) for r in rows] == [(platform, True)]
-        assert sweep.enabled_sources(SearchSection.model_validate({"browser_sources": rows})) == []
 
     # Unticked and saved during the search: its next call stops.
     off = take_back(api, person_a, platform, profile(api, person_a)["revision"])

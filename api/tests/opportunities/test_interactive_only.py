@@ -373,7 +373,7 @@ def test_old_linkedin_omission_still_removes_a_legacy_row(
 
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("method", ["save", "import"])
-def test_restoration_checks_source_cap_and_stale_revision_before_any_write(
+def test_restoration_checks_the_stale_revision_before_any_write(
     api: Api,
     person_a: Person,
     factory: Any,
@@ -381,28 +381,24 @@ def test_restoration_checks_source_cap_and_stale_revision_before_any_write(
     kind: str,
     method: str,
 ) -> None:
+    # Only LinkedIn and Free-Work rows exist since the fixed readers went (2026-10-28), one each,
+    # so a restored row can no longer exceed the cap of 10: the stale check is what is left.
     seed(factory, person_a, kind, True, True, clock())
     current = profile(api, person_a)
     before = snapshot(factory, person_a)
+    other = "freework" if kind == "linkedin" else "linkedin"
     search = {
         **current["sections"]["search"],
-        "browser_sources": [
-            # Ten rows of the other protected kind: restoring the original one would make 11.
-            {
-                "kind": "freework" if kind == "linkedin" else "linkedin",
-                "query": f"Robotics {n}",
-                "enabled": False,
-            }
-            for n in range(10)
-        ],
+        "browser_sources": [{"kind": other, "query": "Robotics", "enabled": False}],
         "min_fit": 40,
     }
     stale = write(api, person_a, method, search, current["revision"] - 1)
     assert stale.status_code == 409, stale.text
     assert snapshot(factory, person_a) == before
-    full = write(api, person_a, method, search, current["revision"])
-    assert full.status_code == 422, full.text
-    assert snapshot(factory, person_a) == before
+    saved = write(api, person_a, method, search, current["revision"])
+    assert saved.status_code == 200, saved.text
+    kinds = [row["kind"] for row in profile(api, person_a)["sections"]["search"]["browser_sources"]]
+    assert sorted(kinds) == sorted([other, kind])
 
 
 @pytest.mark.parametrize("kind", KINDS)
