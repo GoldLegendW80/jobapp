@@ -28,9 +28,10 @@ written in one case is one word, so the path rule lets `/jobs/42/confirmapplicat
 query rule reads the noun inside a word).
 """
 
+import re
 import unicodedata
-from dataclasses import dataclass
-from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
+from dataclasses import dataclass, replace
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit, urlunsplit
 
 from browserd import detect
 
@@ -149,18 +150,22 @@ class Scope:
     places: tuple[str, ...] = ()  # what the location box or select takes, one at a time
     filters: tuple[tuple[str, str], ...] = ()  # one saved value per native filter
     signed_in: bool = False
+    # The Indeed platform (owner, 2026-10-28): its start page's first navigation may follow a
+    # redirect to one of its own country sites (`country_scope`), once.
+    country: bool = False
 
     @classmethod
     def parse(cls, raw: object) -> "Scope | None":
         keys = {"start", "titles", "places", "filters"}
-        if not isinstance(raw, dict) or set(raw) - {"signed_in"} != keys:
+        if not isinstance(raw, dict) or set(raw) - {"signed_in", "country"} != keys:
             return None
         start, filters = raw["start"], raw["filters"]
         titles = _values(raw["titles"], needed=True)
         places = _values(raw["places"], needed=False)
-        signed_in = raw.get("signed_in", False)
+        signed_in, country = raw.get("signed_in", False), raw.get("country", False)
         if (
             type(signed_in) is not bool
+            or type(country) is not bool
             or not isinstance(start, str)
             or not read_url(start, start)
             or titles is None
@@ -175,7 +180,7 @@ class Scope:
             )
         ):
             return None
-        return cls(start, titles, places, tuple(sorted(filters.items())), signed_in)
+        return cls(start, titles, places, tuple(sorted(filters.items())), signed_in, country)
 
     def takes(self, name: object, text: object) -> bool:
         """Whether this text may be typed in a text field of this name: one saved title in a
@@ -263,16 +268,11 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
 REDIRECTS = frozenset({301, 302, 303, 307, 308})
 
 
-def redirect_target(url: str, location: object, scope: Scope) -> str | None:
-    """Where a redirect response of a discovery request goes, when it may be followed (jobs J18:
-    a website's start page that answers on a locale path, `/` to `/en`): its Location resolved
-    against the request's address, held to the rule of the navigation it replaces, read_url
-    within the frozen scope (same scheme, host and port as the start, nothing that applies,
-    submits, reaches an account or signs out, only the saved criteria in its query). None for
-    anything else, a missing or blank Location included: the redirect is refused.
-    A Location Chromium may read otherwise than Python's urljoin is refused before it is
-    resolved: a backslash (a slash to Chromium, so `/\\elsewhere/en` leaves the host), a space
-    or a control character (Chromium strips tab and newline), raw or percent decoded."""
+def _resolved(url: str, location: object) -> str | None:
+    """A redirect's Location resolved against the request's address. None for a missing, blank
+    or overlong one, and for one Chromium may read otherwise than Python's urljoin, before it
+    is resolved: a backslash (a slash to Chromium, so `/\\elsewhere/en` leaves the host), a
+    space or a control character (Chromium strips tab and newline), raw or percent decoded."""
     if not isinstance(location, str) or not location or len(location) > 2000:
         return None
     if any(
@@ -282,10 +282,75 @@ def redirect_target(url: str, location: object, scope: Scope) -> str | None:
     ):
         return None
     try:
-        target = urljoin(url, location)
+        return urljoin(url, location)
     except ValueError:
         return None
-    return target if read_url(target, scope.start, scope=scope) else None
+
+
+def redirect_target(url: str, location: object, scope: Scope) -> str | None:
+    """Where a redirect response of a discovery request goes, when it may be followed (jobs J18:
+    a website's start page that answers on a locale path, `/` to `/en`): its Location resolved
+    against the request's address (`_resolved`), held to the rule of the navigation it
+    replaces, read_url within the frozen scope (same scheme, host and port as the start,
+    nothing that applies, submits, reaches an account or signs out, only the saved criteria in
+    its query). None for anything else, a missing or blank Location included: the redirect is
+    refused."""
+    target = _resolved(url, location)
+    return target if target and read_url(target, scope.start, scope=scope) else None
+
+
+# Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
+# xx.indeed.com is followed, and the search continues there. Redirects to any other domain stay
+# refused." The home host of each platform that has country sites, and the scheme they keep.
+# `www.indeed.test:8080` is the fixture server's stand in for the tests, as the api's
+# platform_policy.test_start maps a platform there: `.test` is reserved (RFC 2606), no public
+# DNS answers it, and the production proxy refuses a private address.
+COUNTRY_HOMES = {"www.indeed.com": "https", "www.indeed.test:8080": "http"}
+COUNTRY_LABEL = re.compile(r"[a-z]{2}")
+
+
+def country_site(start: str, url: str) -> bool:
+    """Whether `url` is the start page on a country site of the home host `start` is on
+    (https://www.indeed.com/ to https://fr.indeed.com/): the home's own scheme, a host of
+    exactly two lowercase ASCII letters then the home's domain and port, no user info, the
+    start's own path and query, no fragment, as written. The home itself is no country site:
+    a redirect on its own host is a redirect_target."""
+    if not isinstance(start, str) or not isinstance(url, str):
+        return False
+    try:
+        home, there = urlsplit(start), urlsplit(url)
+    except ValueError:
+        return False
+    scheme = COUNTRY_HOMES.get(home.netloc)
+    label, dot, rest = there.netloc.partition(".")
+    return (
+        scheme is not None
+        and home.scheme == there.scheme == scheme
+        and bool(dot)
+        and rest == home.netloc[4:]
+        and COUNTRY_LABEL.fullmatch(label) is not None
+        and (there.path, there.query) == (home.path, home.query)
+        and not there.fragment
+        and url == urlunsplit((scheme, there.netloc, there.path, there.query, ""))
+    )
+
+
+def country_scope(scope: Scope, url: str) -> Scope | None:
+    """The frozen scope moved to the country site `url` is on (owner, 2026-10-28), for a
+    search of a platform with country sites (`Scope.country`) from its home host: `url` is
+    its new start, and every other rule holds there unchanged (read_url within the moved
+    scope). The moved scope follows no other country site. None when it may not move."""
+    if not scope.country or not country_site(scope.start, url):
+        return None
+    moved = replace(scope, start=url, country=False)
+    return moved if read_url(url, url, scope=moved) else None
+
+
+def country_redirect(url: str, location: object, scope: Scope) -> Scope | None:
+    """The scope a redirect response of the start page's first navigation moves to, when its
+    Location (`_resolved`) is a country site of the scope's home (`country_scope`)."""
+    target = _resolved(url, location)
+    return country_scope(scope, target) if target else None
 
 
 def location_of(headers: object) -> str | None:

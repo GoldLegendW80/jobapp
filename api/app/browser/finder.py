@@ -297,15 +297,22 @@ class InteractiveScope:
     instructions: str = ""
     # B17: the person signed in to this website: browserd reads it in their persisted context.
     signed_in: bool = False
+    # The Indeed platform (owner, 2026-10-28): its start page may land on one of its own
+    # country sites (`country_site`), where the search continues.
+    country: bool = False
 
     def tool_scope(self) -> dict[str, Any]:
-        scope = {
+        scope: dict[str, Any] = {
             "start": self.start,
             "titles": list(self.titles),
             "places": list(self.places),
             "filters": dict(self.filters),
         }
-        return {**scope, "signed_in": True} if self.signed_in else scope
+        if self.signed_in:
+            scope["signed_in"] = True
+        if self.country:
+            scope["country"] = True
+        return scope
 
     def __post_init__(self) -> None:
         if (
@@ -427,6 +434,40 @@ def same_origin(url: str, other: str) -> bool:
     accepts as the start's own website (discovery.read_url)."""
     first, second = origin(canonical(url)), origin(canonical(other))
     return first is not None and first == second
+
+
+# Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
+# xx.indeed.com is followed, and the search continues there. Redirects to any other domain stay
+# refused." As browserd's discovery.COUNTRY_HOMES: the home host of each platform with country
+# sites and their scheme; `www.indeed.test:8080` is the fixture server's stand in for the tests
+# (`.test` is reserved, RFC 2606), as platform_policy.test_start maps a platform there.
+COUNTRY_HOMES = {"www.indeed.com": "https", "www.indeed.test:8080": "http"}
+COUNTRY_LABEL = re.compile(r"[a-z]{2}")
+
+
+def country_site(start: str, url: str) -> bool:
+    """Whether `url` is the start page on a country site of the home host `start` is on
+    (https://www.indeed.com/ to https://fr.indeed.com/), as browserd's discovery.country_site:
+    the home's scheme, two lowercase ASCII letters then the home's domain and port, the start's
+    own path and query, nothing else."""
+    if not isinstance(start, str) or not isinstance(url, str):
+        return False
+    try:
+        home, there = urlsplit(start), urlsplit(url)
+    except ValueError:
+        return False
+    scheme = COUNTRY_HOMES.get(home.netloc)
+    label, dot, rest = there.netloc.partition(".")
+    return (
+        scheme is not None
+        and home.scheme == there.scheme == scheme
+        and bool(dot)
+        and rest == home.netloc[4:]
+        and COUNTRY_LABEL.fullmatch(label) is not None
+        and (there.path, there.query) == (home.path, home.query)
+        and not there.fragment
+        and url == urlunsplit((scheme, there.netloc, there.path, there.query, ""))
+    )
 
 
 def host_pair(host: str) -> list[str]:
@@ -722,7 +763,15 @@ class FinderSession:
         if self.interactive and canonical(self.interactive.start) != self.start:
             raise ValueError("discovery scope does not match the opened site")
         if self.landed and (
-            canonical(self.landed) != self.landed or not same_origin(self.landed, self.start)
+            canonical(self.landed) != self.landed
+            or not (
+                same_origin(self.landed, self.start)
+                or (
+                    self.interactive is not None
+                    and self.interactive.country
+                    and country_site(self.start, self.landed)
+                )
+            )
         ):
             raise ValueError("the start page landed on another origin")
         self.current = self.landed or self.start
@@ -732,7 +781,8 @@ class FinderSession:
 
     @property
     def site(self) -> tuple[str, str] | None:
-        return site_of(self.start)
+        """The website the session reads: the start's, or the country site it landed on."""
+        return site_of(self.landed or self.start)
 
     def on_site(self, url: str) -> bool:
         """Same scheme, same host or its `www.` twin, same port (`site_of`)."""
@@ -1054,7 +1104,7 @@ class FinderSession:
         url = canonical(urljoin(self.current, item["url"]))
         if not self.on_site(url):
             return None, "other_host"
-        if url == self.start:
+        if url in {self.start, self.landed}:
             return None, "not_a_posting_page"
         if url not in self.seen:
             return None, "not_seen"
@@ -1111,7 +1161,7 @@ class FinderSession:
             return "not_an_address"
         if not self.on_site(url):
             return "other_host"
-        if url == self.start:
+        if url in {self.start, self.landed}:
             return "not_a_posting_page"
         if url not in self.seen:
             return "not_seen"

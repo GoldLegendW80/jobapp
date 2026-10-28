@@ -137,6 +137,10 @@ class GuardedTools:
         self.tools, self.policy, self.context = tools, policy, context
         self.logins = logins  # B17: set only when the website is read signed in
         self.reserved = False
+        # The origin every page must show: the start's, or Indeed's country site its first
+        # page landed on (owner, 2026-10-28; browserd moved its scope there, once).
+        self.origin = finder.origin(context.url)
+        self.first_page = True
 
     async def _before(self, name: str) -> None:
         await _permit(self.policy, self.context)
@@ -159,12 +163,20 @@ class GuardedTools:
         shot = await self.tools.snapshot()
         if shot.get("ok"):
             url, text = shot.get("url"), shot.get("snapshot")
+            first, self.first_page = self.first_page, False
+            landed = finder.canonical(url) if isinstance(url, str) else ""
+            if (
+                first
+                and self.context.platform == "indeed"
+                and finder.country_site(self.context.url, landed)
+            ):
+                self.origin = finder.origin(landed)
             if (
                 not isinstance(url, str)
                 or len(url) > 2000
                 or not isinstance(text, str)
                 or len(text) > finder.SNAPSHOT_MAX
-                or finder.origin(finder.canonical(url)) != finder.origin(self.context.url)
+                or finder.origin(landed) != self.origin
             ):
                 raise SourceError("page_failed")
             code = await self.policy.observe(self.context, url, text) if self.policy else None
@@ -484,7 +496,10 @@ async def _one(
         host=entry.get("host") or "",
     )
     try:
-        code = await _website(runner, plan, context, planned.scope, site, deadline)
+        scope = planned.scope
+        if platform == "indeed":  # its home may send the search to a country site (owner)
+            scope = dataclasses.replace(scope, country=True)
+        code = await _website(runner, plan, context, scope, site, deadline)
     finally:
         site.write(entry)
     return code or ("finding_persistence_pending" if site.found else None)
@@ -574,9 +589,13 @@ async def _search(
                     return "unsupported_interaction"
                 return exc.code
             # The start page may land on another address of its own origin (Welcome to the
-            # Jungle answers `/` on `/en`); browserd held that redirect to the frozen scope.
+            # Jungle answers `/` on `/en`), or Indeed's on the person's country site (owner,
+            # 2026-10-28); browserd held that redirect to the frozen scope.
             landed = finder.canonical(pages.last_url)
-            if not landed or not finder.same_origin(landed, scope.start):
+            if not landed or not (
+                finder.same_origin(landed, scope.start)
+                or (scope.country and finder.country_site(scope.start, landed))
+            ):
                 return "unsupported_interaction"
             site.started = True
             session = finder.FinderSession(
