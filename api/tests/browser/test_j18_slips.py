@@ -2,7 +2,8 @@
 types that its box does not take (a saved place in the title box, a value never saved) or a
 choice that is no saved value is refused before the browser, told to the model as a tool error it
 can correct, and counted apart (`refused["model_value"]`). A refusal of the website or of
-browserd's guards still ends the website `unsupported_interaction`, and browserd still refuses
+browserd's guards is counted too; how the website ends is what was read (test_j18_outcome), and
+browserd still refuses
 whatever is not allowed (test_j18_scope.py). Repeated slips end with the website's share of the
 sweep's time.
 
@@ -246,7 +247,8 @@ def test_slips_after_the_lease_s_time_stop_the_run_too():
 
 
 # (tool, args): what the api lets go on (a saved value where it cannot tell the box, a click),
-# and browserd or the website refuses: that still ends the website, even after good searches.
+# and browserd or the website refuses: told to the model and counted; the website searched before
+# stays searched (2026-10-28: how it ends is what was read, interactive.outcome).
 REFUSED_THERE = [
     ("browser_type", {"ref": "e5", "text": "Paris"}),  # an unnamed box: not told apart
     ("browser_type", {"ref": "e6", "text": "robot"}),  # Salary: neither a title nor a place box
@@ -257,7 +259,7 @@ REFUSED_THERE = [
 
 
 @pytest.mark.parametrize(("tool", "args"), REFUSED_THERE)
-def test_a_refusal_of_browserd_or_the_website_still_ends_the_website(tool, args):
+def test_a_refusal_of_browserd_or_the_website_is_counted_and_what_was_read_stays(tool, args):
     site = FormSite(results={"robot": ["Robot Engineer"], "drone": ["Drone Pilot"]})
     answers: list[tuple[str, bool]] = []
 
@@ -269,7 +271,7 @@ def test_a_refusal_of_browserd_or_the_website_still_ends_the_website(tool, args)
 
     entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
     assert answers == [('{"error": "unsupported_discovery"}', True)]
-    assert entry["error"] == "unsupported_interaction"
+    assert entry["error"] == "finding_persistence_pending"  # searched; postings wait for commits
     assert entry["refused"] == {"unsupported_interaction": 1}
     assert (entry["searches"], entry["found"]) == (2, 2)  # what was read before stays counted
 
@@ -286,12 +288,12 @@ def test_a_slip_and_a_website_refusal_are_counted_apart():
 
     entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
     assert entry["refused"] == {finder.MODEL_VALUE: 1, "unsupported_interaction": 1}
-    assert entry["error"] == "unsupported_interaction"
+    assert entry["error"] == "finding_persistence_pending"
 
 
-def test_only_slips_and_no_search_is_still_an_unsupported_website():
-    """The rule of a website the agent never searched is unchanged: no typing and no click that
-    worked, the website is said unsupported (a slip is no reason, and no excuse either)."""
+def test_only_slips_and_no_search_is_never_a_searched_website():
+    """A website the agent never searched read nothing: no success (a slip is no reason to say
+    it unsupported, and no excuse either)."""
     site = FormSite()
 
     async def script(session: finder.FinderSession) -> finder.Ran:
@@ -301,7 +303,7 @@ def test_only_slips_and_no_search_is_still_an_unsupported_website():
 
     entry, _, _ = run(selected(**SEARCH), site, ScriptedFinder(script))
     assert (entry["error"], entry["refused"]) == (
-        "unsupported_interaction",
+        "nothing_reported",
         {finder.MODEL_VALUE: 1},
     )
     assert site.reached == [("browser_navigate", None)]

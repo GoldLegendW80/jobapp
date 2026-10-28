@@ -76,7 +76,7 @@ const PRESETS = [
   {
     platform: "welcome_to_the_jungle",
     label: "Welcome to the Jungle",
-    url: "https://www.welcometothejungle.com/",
+    url: "https://www.welcometothejungle.com/en/jobs",
   },
   { platform: "indeed", label: "Indeed", url: "https://www.indeed.com/" },
   {

@@ -51,8 +51,12 @@ class InteractiveTools(Tools):
         self.actions.append(name)
         if name == "browser_navigate":
             return await self.navigate(args["url"])
+        if name == "browser_type":
+            self.typed = args["text"]
         if name == "browser_click":
-            self.pages[self.current] = (
+            # The search runs in place: its box still shows the title typed (finder._note).
+            box = f'- searchbox "Query" [ref=e1]: {getattr(self, "typed", "")}\n'
+            self.pages[self.current] = box + (
                 '- link "Next page" [ref=e4]\n  - /url: /b13/search?page=2'
                 if args["ref"] == "e3"
                 else '- link "Robot Engineer" [ref=e5]\n  - /url: /b13/jobs/robot'

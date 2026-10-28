@@ -31,7 +31,8 @@ import {
  *   posting only to that path (server.py, /j15/search). The posting's page asks the assistant
  *   to search other words, open an address and press its Send application button; the recorded
  *   model does all three: code refuses the words and the address, browserd refuses the click
- *   on the button of a POST form, and code records the source as `unsupported_interaction`.
+ *   on the button of a POST form, and code counts that refusal; the website, which gave a
+ *   verified posting, was searched (2026-10-28: how it ends is what was read, no error).
  *   The posting, verified on its page (title, employer and location read there), is saved to
  *   her list as it is reported (jobs J11): found 1, new 1, and it is in the postings list.
  *   The site sees GET requests only, none for the address, the profile keeps its revision.
@@ -273,11 +274,15 @@ test("the websites end in words, the company page stays saved unsearched, nothin
     const line = sites.getByRole("listitem").filter({ hasText: `${name}:` });
     await expect(line).not.toContainText("needs your permission");
   }
-  await expect(
-    sites.getByRole("listitem").filter({ hasText: `${SITE_HOST}:` }),
-  ).toContainText(
-    "1 search ran: engineer in Paris. 1 posting found, 1 new. The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
+  // Searched: the refused click on the posting's button is counted, never the website's end
+  // (2026-10-28), so its line says what was found and nothing else.
+  const ownLine = sites
+    .getByRole("listitem")
+    .filter({ hasText: `${SITE_HOST}:` });
+  await expect(ownLine).toContainText(
+    "1 search ran: engineer in Paris. 1 posting found, 1 new.",
   );
+  await expect(ownLine).not.toContainText("The website asked for something");
   await expect(summary).not.toContainText(/[–—]| - /);
   await shots(page, "summary");
   await page.keyboard.press("Escape");
@@ -308,15 +313,15 @@ test("the websites end in words, the company page stays saved unsearched, nothin
     expect(source?.result_pages ?? 0, detail).toBeGreaterThanOrEqual(1);
   }
   // Her own website: searched through the finder's tools, the posting verified and saved
-  // (J11). The click on the posting's Send application button was refused, and code records
-  // that refusal as the source's outcome; the posting saved stays.
+  // (J11). The click on the posting's Send application button was refused and counted; the
+  // website gave a verified posting, so it was searched (no error, 2026-10-28).
   const own = sources.find((item) => item.kind === "custom");
   expect(own, detail).toMatchObject({
     mode: "llm_browser",
     host: SITE_HOST,
     found: 1,
     new: 1,
-    error: "unsupported_interaction",
+    error: null,
     // One run for the website (jobs J18): the search its tool calls ran, a saved title typed
     // and a saved place chosen.
     searches: 1,

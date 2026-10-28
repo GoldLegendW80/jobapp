@@ -480,3 +480,111 @@ def test_native_detail_ownership_and_prose(native, tmp_path, case, suffix, compa
     finally:
         lease.end()
     native.completed = True
+
+
+JUNGLE = START + "jungle"
+PAGES = "http://pages:8080/"  # its search page sits at the root, /fr/jobs
+
+
+class Person(Lease):
+    """A lease of one person's own browser profile (`profile`), kept from one lease to the next,
+    as a website the person signed in to keeps its cookie (B17)."""
+
+    def __init__(self, stack, purpose: str, profile: str) -> None:
+        self.stack = stack
+        body = {
+            "user_id": "e2e-b5",
+            "profile_id": profile,
+            "uid": 20000 + uuid.UUID(profile).int % 30000,
+            "purpose": purpose,
+            "hosts": ["pages"],
+            "submit_selectors": [],
+        }
+        answer = stack.call("POST", "/leases", body)
+        assert answer["status"] == 201, answer
+        self.id = answer["body"]["lease_id"]
+        self.token = answer["body"]["lease_token"]
+        self.capability = answer["body"].get("gate_capability")
+
+
+def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
+    """2026-10-28, issue 716, on a website like Welcome to the Jungle (b13_pages.jungle): from its
+    home with no search box to its search page by address; its cookie banner covers the search
+    box (`element_covered`), accepting it is refused, declining it closes it; the search runs in
+    the page, its address unchanged, and lists the postings to a member; a posting opens. Signed
+    out, with no JavaScript, the same search shows only a count, no list."""
+    profile = str(uuid.uuid4())
+    member = Person(native, "sweep", profile)  # the person signs in, as in the live view
+    native.redactions.append(member.token)
+    try:
+        assert member.tool("browser_navigate", url=JUNGLE + "/session")["ok"]
+    finally:
+        member.end()
+    scope = {"start": JUNGLE, "titles": ["genai engineer"], "places": [], "filters": {}}
+    signed = {"_discovery": "native_get", "_discovery_scope": {**scope, "signed_in": True}}
+    lease = Person(native, "sweep", profile)
+    native.redactions.append(lease.token)
+    try:
+        assert lease.tool("browser_navigate", url=JUNGLE, **signed)["ok"]
+        home = lease.tool("browser_snapshot")["snapshot"]
+        assert "Find a job" in home
+        assert "searchbox" not in home
+        assert lease.tool("browser_navigate", url=PAGES + "fr/jobs", **signed)["ok"]
+        page = lease.tool("browser_snapshot")["snapshot"]
+        box = ref(page, "searchbox", "What job")
+        covered = lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)
+        assert covered["error"] == "element_covered", covered
+        for name in ("OK for me", "I choose"):
+            refused = lease.tool("browser_click", ref=ref(page, "button", name), **signed)
+            assert not refused["ok"], (name, refused)
+        declined = lease.tool("browser_click", ref=ref(page, "button", "No, thanks"), **signed)
+        assert declined["ok"], declined
+        assert declined.get("declined") is True, declined  # the api never counts it a search
+        page = lease.tool("browser_snapshot")["snapshot"]
+        assert "No, thanks" not in page
+        box = ref(page, "searchbox", "What job")
+        assert lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)["ok"]
+        searched = lease.tool("browser_click", ref=ref(page, "button", "Search"), **signed)
+        assert searched["ok"], searched
+        assert "declined" not in searched, searched
+        assert lease.tool("browser_wait_for", text="GenAI Engineer")["ok"]
+        shot = lease.tool("browser_snapshot")
+        assert shot["url"] == PAGES + "fr/jobs", shot["url"]  # the list updated in place
+        posting = ref(shot["snapshot"], "link", "GenAI Engineer")
+        opened = lease.tool("browser_click", ref=posting, **signed)
+        assert opened["ok"], opened
+        shot = lease.tool("browser_snapshot")
+        assert shot["url"] == PAGES + "fr/companies/example-robotics/jobs/genai-engineer"
+        assert "Build agents with the customers" in shot["snapshot"]
+    finally:
+        lease.end()
+    anonymous = Lease(native, "sweep")
+    native.redactions.append(anonymous.token)
+    marker = {"_discovery": "native_get", "_discovery_scope": scope}
+    try:
+        assert anonymous.tool("browser_navigate", url=JUNGLE, **marker)["ok"]
+        assert anonymous.tool("browser_navigate", url=PAGES + "fr/jobs", **marker)["ok"]
+        page = anonymous.tool("browser_snapshot")["snapshot"]
+        assert "No, thanks" not in page  # its banner needs JavaScript, off signed out
+        box = ref(page, "searchbox", "What job")
+        typed = anonymous.tool("browser_type", ref=box, text="genai engineer", **marker)
+        assert not typed["ok"], typed
+        # A page with scripts takes no typing signed out (no script free proof); its search by
+        # address does, and shows a count, no list.
+        searched = PAGES + "fr/jobs?query=genai+engineer"
+        assert anonymous.tool("browser_navigate", url=searched, **marker)["ok"]
+        shot = anonymous.tool("browser_snapshot")
+        assert "9756 jobs found" in shot["snapshot"]
+        assert "GenAI Engineer" not in shot["snapshot"]
+    finally:
+        anonymous.end()
+    observed = json.loads(fetched(native, "http://pages:8080/observed"))
+    jungle = [p for p in observed if p["path"].startswith("/b13/jungle")]
+    assert {"path": "/b13/jungle/consent", "choice": ["declined"]} in [
+        {"path": p["path"], "choice": p["query"].get("choice")} for p in jungle
+    ]
+    assert not any(p["query"].get("choice") == ["accepted"] for p in jungle)
+    assert not any(p.get("method") == "POST" for p in observed)
+    lists = [p for p in jungle if p["path"] == "/b13/jungle/api/search"]
+    assert [(p["query"], p["member"]) for p in lists] == [({"query": ["GenAI Engineer"]}, True)]
+    native.completed = True

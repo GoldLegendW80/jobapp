@@ -258,7 +258,8 @@ def test_navigation_refusal_recovery_keeps_its_route_contract(
             svc, lease, headers, "browser_navigate", {"url": "http://pages/form"}
         )
         assert status == 200
-        assert result["error"] == ("page_error" if error else "host_not_allowed")
+        # A repair that failed is its own code, never a page to recover on (PR 720 round 2).
+        assert result["error"] == ("guard_failed" if error else "host_not_allowed")
         assert trace == (
             ["close_secondary"]
             if scenario == "off_list_secondary"
@@ -289,5 +290,7 @@ def test_navigation_refusal_recovery_preserves_the_original_exception(
         with pytest.raises(error_type) as caught:
             await actions.run(tab, "browser_navigate", {"url": "http://pages/form"})
         assert caught.value is error
+        if not isinstance(error, asyncio.CancelledError):  # never wrapped, so never noted
+            assert actions.GUARD_FAILED_NOTE in caught.value.__notes__
 
     asyncio.run(go())

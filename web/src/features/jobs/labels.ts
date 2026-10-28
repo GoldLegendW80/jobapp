@@ -187,8 +187,24 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "Postings were read on this website, but saving them came with a later update.",
   unsupported_interaction:
     "The website asked for something the app does not do, so the app refused it. Postings saved before are kept.",
+  // browserd could not close a tab off the website's list or take the page back from an
+  // address off it (its `guard_failed`), so the website ends there (round 2 of PR 720).
+  guard_failed:
+    "The browser could not take back a page outside this website, so the search of it stopped. Postings saved before are kept.",
   unsupported_criteria:
     "Your search uses settings this website search does not take yet, so it was not opened.",
+  // How a website's agent ended with no posting: what it saw, said in its own words
+  // (2026-10-28, interactive.outcome in app/browser/sources/interactive.py).
+  no_job_list:
+    "This website showed no list of jobs, only a count or a prompt to create an account. Use Sign in beside it in Find jobs, then search again.",
+  cookie_wall:
+    "A cookie banner on this website could not be declined, so it was not searched.",
+  signin_wall:
+    "This website shows its jobs only to people signed in. Use Sign in beside it in Find jobs, then search again.",
+  no_search_box:
+    "The assistant found no search box on this website, so it was not searched.",
+  nothing_reported:
+    "The assistant read this website but reported no job and no reason. Postings saved before are kept.",
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
     "The assistant stopped before the end. Postings saved before are kept.",

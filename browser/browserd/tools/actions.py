@@ -122,6 +122,11 @@ class PersonInput(Exception):  # noqa: N818  a control-flow signal
     """The person took back input during a paced action."""
 
 
+# Added to the original exception of a RefusalRecoveryError, which `run` re-raises: browserd
+# could not close a tab off the list or take the page back from an address off it.
+GUARD_FAILED_NOTE = "browserd: a guard could not be restored"
+
+
 class RefusalRecoveryError(Exception):
     """Keep a policy repair failure outside ordinary navigation normalization."""
 
@@ -470,8 +475,8 @@ class Tab:
         if scope is None or self.state.native_failed:
             return False
         if scope.signed_in:
-            return discovery.signed_request(url, method, True, scope)
-        return discovery.read_url(url, scope.start, scope=scope)
+            return discovery.signed_request(url, method, True, scope, hop=True)
+        return discovery.read_url(url, scope.start, scope=scope, hop=True)
 
     async def guard(self) -> Any:
         """The context the lease's tabs live in, with the navigation guard installed on it once
@@ -653,6 +658,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             return failure("person_input", "Refused: the person holds the input.")
         return await tab.settle(result) if result.get("ok") else result
     except RefusalRecoveryError as exc:
+        # The original still propagates; its note tells routes.call_tool to answer guard_failed,
+        # never the catch all's page_error (round 2 of PR 720).
+        exc.original.add_note(GUARD_FAILED_NOTE)
         raise exc.original from None
     except Exception as exc:
         if name != "browser_navigate":
@@ -743,7 +751,8 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if gone:
         return gone
     await tab.approach(locator)
-    no = tab.judge(await tab.facts(locator, point=True), "click", "browser_click")
+    facts = await tab.facts(locator, point=True)
+    no = tab.judge(facts, "click", "browser_click")
     if no:
         return no
     tab.require_input()
@@ -752,7 +761,11 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         click_count=2 if args.get("doubleClick") else 1,
         timeout=ACTION_S * 1000,
     )
-    return await tab.settle(await _here(tab))
+    result = await tab.settle(await _here(tab))
+    if tab.discovery and result.get("ok") and discovery.decline(facts):
+        # A cookie banner's decline (discovery.decline): the api never counts it as a search.
+        result = {**result, "declined": True}
+    return result
 
 
 EMPTY_ONLY_JS = """(element, text) => {

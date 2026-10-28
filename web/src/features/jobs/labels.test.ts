@@ -76,6 +76,12 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "finding_persistence_pending",
       "unsupported_interaction",
       "unsupported_criteria",
+      "guard_failed",
+      "no_job_list",
+      "cookie_wall",
+      "signin_wall",
+      "no_search_box",
+      "nothing_reported",
       "no_credential",
       "agent_failed",
       "page_budget",
@@ -84,6 +90,12 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       const sentence = SOURCE_PROBLEMS[code] ?? "";
       expect(sentence).not.toBe("");
       expect(sentence).not.toMatch(/[–—]| - /);
+    }
+    // Said as signin_wall says it (review of PR 720).
+    for (const code of ["no_job_list", "signin_wall"]) {
+      expect(SOURCE_PROBLEMS[code]).toMatch(
+        /Use Sign in beside it in Find jobs, then search again\.$/,
+      );
     }
   });
 

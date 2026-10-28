@@ -9,7 +9,10 @@ the person would, and a website may want "GenAI Engineer" for the saved "genai e
 same letters in the same order, no control character, nothing else; any other value, a
 translation included, is refused (fail closed). A search request carries one search key holding
 a saved title, a saved place or nothing in `location` (or no `location` at all: the place box
-left empty is always allowed), and every saved filter (`Scope.criteria`).
+left empty is always allowed), and every saved filter (`Scope.criteria`); the search page itself,
+its address with no query, opens as any page (2026-10-28). One click besides: a cookie banner's
+decline button (`decline`), so a banner that covers the page is closed as a person would, never
+by accepting.
 
 A signed in discovery (B17, `Scope.signed_in`) runs in the person's own persisted profile, with
 the site's JavaScript on, for a website the person signed in to: the same controls are refused
@@ -49,6 +52,16 @@ TOOLS = frozenset(
 QUERY = frozenset({"q", "query", "search", "keyword", "keywords"})
 FIELDS = QUERY | {"location", "remote", "contract", "category", "page", "sort"}
 ENDPOINTS = frozenset({"search", "jobs", "careers", "vacancies"})
+# The languages a website's search page may sit under (`/fr/jobs`, `/en-gb/jobs`, SEARCH_PATH):
+# ISO 639-1 codes of languages job websites use, never a word a path of the person's account
+# uses (`/me/jobs`, `/my/jobs`: "my" is left out on purpose).
+LANGUAGES = frozenset(
+    {"ar", "bg", "bn", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
+     "fr", "ga", "gl", "he", "hi", "hr", "hu", "hy", "id", "is", "it", "ja", "ka", "kk", "ko",
+     "lt", "lv", "mk", "ms", "mt", "nb", "nl", "nn", "no", "pl", "pt", "ro", "ru", "sk", "sl",
+     "sq", "sr", "sv", "sw", "ta", "th", "tr", "uk", "ur", "uz", "vi", "zh"}
+)  # fmt: skip
+REGION = re.compile(r"[-_][A-Za-z]{2}")
 UNSUPPORTED = "unsupported_discovery"
 VALUES_MAX = 100  # saved titles, or saved places, a scope carries
 VALUE_MAX = 300  # characters of one saved value
@@ -84,6 +97,41 @@ APPLY_PARTS = (
     "sollicit",
 )
 CSP = "script-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'"
+# A cookie banner's decline button (2026-10-28, issue 716): the one click a discovery takes
+# outside a native search, so a banner that covers the page can be closed as a person would,
+# never by accepting. An allow list (round 2, review of PR 720): every name of the element (its
+# text, aria-label, title, value, id and the names within it) is read in NFKC with format
+# characters, accents and case aside, and is either one of these phrases or made only of
+# NEUTRAL words, and one of them is a phrase; a name holding a letter or a digit outside basic
+# Latin (another script, a homoglyph such as a Cyrillic small es) refuses. It is a button (never a
+# link, never a form's submit button, nothing that holds one), and the click lands on it and
+# reads the same (`decline`).
+DECLINES = frozenset(
+    tuple(phrase.split())
+    for phrase in (
+        "no thanks", "no thank you", "reject", "reject all", "reject cookies",
+        "reject all cookies", "reject optional cookies", "reject non essential cookies",
+        "decline", "decline all", "decline cookies", "decline all cookies",
+        "decline optional cookies", "refuse", "refuse all", "refuse cookies", "refuse all cookies",
+        "deny", "deny all", "disagree", "i disagree", "only necessary", "only necessary cookies",
+        "necessary only", "necessary cookies only", "use necessary cookies only",
+        "only essential", "only essential cookies", "essential only", "essential cookies only",
+        "continue without accepting", "non merci", "refuser", "tout refuser", "refuser tout",
+        "je refuse", "refuser les cookies", "refuser tous les cookies", "refuser et fermer",
+        "continuer sans accepter", "cookies necessaires uniquement",
+        "uniquement les cookies necessaires", "seulement les cookies necessaires", "ablehnen",
+        "alle ablehnen", "nur notwendige", "nur notwendige cookies",
+    )
+)  # fmt: skip
+# Words a decline button's other names may hold: what the decline phrases say, what a banner
+# calls itself and the ids of common consent banners (Axeptio, Didomi, OneTrust, Cookiebot,
+# tarteaucitron). A number is neutral too. Any other word refuses (fail closed).
+NEUTRAL = frozenset(
+    {"no", "thanks", "non", "merci", "reject", "decline", "refuse", "refuser", "deny", "denied",
+     "disagree", "dismiss", "ablehnen", "all", "tout", "close", "fermer", "the", "cookie",
+     "cookies", "banner", "bandeau", "notice", "dialog", "popup", "modal", "button", "btn",
+     "handler", "axeptio", "didomi", "onetrust", "cybot", "cookiebot", "body", "tarteaucitron"}
+)  # fmt: skip
 
 
 def _control(text: str) -> bool:
@@ -222,7 +270,27 @@ class Scope:
         return not complete or (sum(k in QUERY for k in keys) == 1 and expected.keys() <= set(keys))
 
 
-def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None = None) -> bool:
+def search_path(path: str) -> bool:
+    """Whether an address's path is a website's own job search page (round 2, review of PR 720):
+    `/<endpoint>` or `/<language>/<endpoint>` only, a trailing slash aside, the language one of
+    LANGUAGES with a region or not (`/fr/jobs`, `/en-GB/search`), the endpoint one of ENDPOINTS,
+    compared as written (case sensitive). Never at any depth: `/settings/jobs`, `/admin/jobs` or
+    `/fr/mon-compte/jobs` are not. The api's finder.search_page reads it the same way."""
+    segments = path.strip("/").split("/")
+    if len(segments) == 1:
+        return segments[0] in ENDPOINTS
+    language, region = segments[0][:2], segments[0][2:]
+    return (
+        len(segments) == 2
+        and segments[1] in ENDPOINTS
+        and language in LANGUAGES
+        and (not region or REGION.fullmatch(region) is not None)
+    )
+
+
+def read_url(
+    url: str, current: str, *, form: bool = False, scope: Scope | None = None, hop: bool = False
+) -> bool:
     if not isinstance(url, str) or len(url) > 2000:
         return False
     try:
@@ -247,8 +315,16 @@ def read_url(url: str, current: str, *, form: bool = False, scope: Scope | None 
             or any(t.startswith(ACCOUNT_STEMS) for t in tokens)
             or any(part in t for t in tokens for part in APPLY_PARTS)
         )
+        # A search request carries its saved title; the search page itself, its address with
+        # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716). A
+        # redirect hop (`hop`) is held to the rule reviewed with the start page's own redirect:
+        # an endpoint there is a search, so it carries the saved criteria.
+        # The search page is `/<endpoint>` or `/<language>/<endpoint>` (search_path); an
+        # endpoint at any other depth (`/settings/jobs`) is a search, so it carries the criteria.
         complete = bool(pairs) or (
-            url != (scope.start if scope else url) and segments[-1] in ENDPOINTS
+            url != (scope.start if scope else url)
+            and segments[-1] in ENDPOINTS
+            and (hop or not search_path(parts.path))
         )
         return (
             not parts.fragment
@@ -296,7 +372,7 @@ def redirect_target(url: str, location: object, scope: Scope) -> str | None:
     its query). None for anything else, a missing or blank Location included: the redirect is
     refused."""
     target = _resolved(url, location)
-    return target if target and read_url(target, scope.start, scope=scope) else None
+    return target if target and read_url(target, scope.start, scope=scope, hop=True) else None
 
 
 # Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
@@ -474,16 +550,73 @@ def signin_url(url: str) -> bool:
     return any(f.startswith(SIGNIN_PATHS) for f in folded if f)
 
 
-def signed_request(url: str, method: str, document: bool, scope: Scope) -> bool:
+def signed_request(
+    url: str, method: str, document: bool, scope: Scope, *, hop: bool = False
+) -> bool:
     """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, never a
     destructive address on any host (a document's too: `/logoff` or `/fr/deconnexion` in a
     frame would sign the person out), and a document (a frame's navigation) only within the
     frozen scope, as read_url holds the anonymous discovery."""
     if method not in {"GET", "HEAD"} or not isinstance(url, str) or len(url) > 8000:
         return False
-    if document and not read_url(url, scope.start, scope=scope):
+    if document and not read_url(url, scope.start, scope=scope, hop=hop):
         return False
     return not destructive(url, scope)
+
+
+def _latin(name: str) -> bool:
+    """Every letter and digit of the name, in NFKC with its accents aside, is basic Latin: no
+    other script, no homoglyph (a Cyrillic small es inside "Accept"), nothing a folded reading
+    drops."""
+    text = unicodedata.normalize("NFKC", name)
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return all(c.isascii() for c in text if unicodedata.category(c)[0] in "LN")
+
+
+def _declines(facts: dict) -> bool:
+    """Whether these facts are of a cookie banner's decline button (DECLINES, NEUTRAL)."""
+    names = facts.get("names")
+    if not isinstance(names, list) or not names or len(names) > 60:
+        return False
+    if not all(isinstance(n, str) and _latin(n) for n in names):
+        return False
+    phrases = [tuple(detect.words(n, camel=False)) in DECLINES for n in names]
+    if not any(phrases):
+        return False
+    for name, phrase in zip(names, phrases, strict=True):
+        # Its words with camel case split (`CybotCookiebotDialogBodyButtonDecline`): an allow
+        # list, so a split spelling of another word (`AccEpt`) is no neutral word either.
+        if not phrase and not all(w in NEUTRAL or w.isdigit() for w in detect.words(name)):
+            return False
+    d = facts.get("discovery")
+    tag, kind = facts.get("tag"), facts.get("type")
+    button = (
+        tag == "button"
+        or (tag == "input" and kind in {"button", "submit"})
+        or (facts.get("role") == "button" and tag not in {"a", "input", "select", "textarea"})
+    )
+    return (
+        button
+        and isinstance(d, dict)
+        and not d.get("href")
+        and d.get("target") in {"", "_self"}
+        and not (facts.get("in_form") and kind in {"submit", "image"})
+        and not facts.get("holds_submit")
+        and not facts.get("selector_hit")
+        and not facts.get("selector_error")
+        and not facts.get("custom_submit")
+        and not facts.get("editable")
+        and not facts.get("credential")
+    )
+
+
+def decline(facts: object) -> bool:
+    """A click on a cookie banner's decline button, and only that (DECLINES), at its click point
+    too: the element there is the button or within it, and reads as the same decline."""
+    if not isinstance(facts, dict) or not _declines(facts):
+        return False
+    point = facts.get("point")
+    return isinstance(point, dict) and point.get("inside") is True and _declines(point)
 
 
 def verdict(
@@ -503,6 +636,12 @@ def verdict(
         return original
     if detect.says_submit(facts.get("names", []), profile_edit=True):
         return "submit"
+    if tool == "browser_click" and decline(facts):
+        point = facts["point"]
+        refused = detect.verdict(point, action="click", profile_edit=True)
+        if refused and refused != "submit":
+            return refused
+        return "submit" if detect.says_submit(point.get("names", []), profile_edit=True) else None
     d = facts.get("discovery")
     # A signed in page runs its scripts by design (B17): its requests are held instead
     # (signed_request), so the script free proof is the anonymous discovery's alone.

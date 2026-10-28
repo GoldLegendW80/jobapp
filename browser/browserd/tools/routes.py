@@ -45,6 +45,9 @@ from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
 GATE_PURPOSES = ("apply_submit", "profile_edit")
+# What Playwright's error says when another element would take the click or the hover (its
+# actionability log): told to the agent as `element_covered` (a cookie banner, 2026-10-28).
+COVERED = "intercepts pointer events"
 LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 LOCKS: dict[str, asyncio.Lock] = {}
 PACER = pacing.Pacer()
@@ -170,7 +173,23 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
+                kind = type(exc).__name__
+                if actions.GUARD_FAILED_NOTE in getattr(exc, "__notes__", ()):
+                    # A tab off the list could not be closed, or the page not taken back from
+                    # an address off it (Tab.settle): no page the agent may recover on, so its
+                    # own code, which ends the website in the api (round 2 of PR 720).
+                    log.warning("lease %s: %s guard failed: %s", lease_id[:8], name, kind)
+                    return actions.failure(
+                        "guard_failed",
+                        "Refused: the browser could not take back a page outside the allow list.",
+                    )
+                log.warning("lease %s: %s failed: %s", lease_id[:8], name, kind)
+                if COVERED in str(exc):  # Playwright's actionability log: a banner over it
+                    return actions.failure(
+                        "element_covered",
+                        "Another element covers this one, such as a cookie banner: close it "
+                        "first, then try again.",
+                    )
                 return actions.failure("page_error", "The page did not let this action finish.")
 
     passive = name == "browser_snapshot" and args.get("passive") is True
