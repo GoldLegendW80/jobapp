@@ -366,7 +366,7 @@ def test_an_indeed_search_landing_anywhere_else_never_starts_the_agent(landing):
         started.append(session)
         return finder.Ran()
 
-    entry, stored, _ = run(
+    entry, _, _ = run(
         selected(url=HOME, title_include={"terms": ["robot"]}),
         site,
         ScriptedFinder(agent),
@@ -375,7 +375,6 @@ def test_an_indeed_search_landing_anywhere_else_never_starts_the_agent(landing):
     )
     assert entry["error"] in {"page_failed", "unsupported_interaction"}
     assert not started
-    assert not stored
 
 
 def test_another_platform_landing_on_a_country_like_host_never_starts_the_agent():

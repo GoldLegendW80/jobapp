@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.apply.models import Application, Authorisation
 from app.browser import finder
 from app.browser.sources import MemoryPacer, Runner
-from app.jobs import ats, sweep
+from app.jobs import sweep
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
 from tests.browser.fakes import FakeLeases, ScriptedFinder
 from tests.jobs.sweep_helpers import jobs_of, new_sweep, now, read_sweep, search, set_profile
@@ -153,11 +153,6 @@ def profile(factory: sessionmaker[Session], user: uuid.UUID, **changes: Any) -> 
     )
 
 
-class NoBoards:
-    async def fetch_board(self, *_: Any) -> ats.BoardResult:
-        raise AssertionError("no board is selected")
-
-
 def runner(script: Callable[[finder.FinderSession], Any], tools: SiteTools | None = None) -> Runner:
     clock = [0.0]
 
@@ -176,7 +171,7 @@ def runner(script: Callable[[finder.FinderSession], Any], tools: SiteTools | Non
 
 
 def run(factory: sessionmaker[Session], sweep_id: uuid.UUID, hook: Runner) -> Sweep:
-    asyncio.run(sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=hook))  # type: ignore[arg-type]
+    asyncio.run(sweep.run_sweep(factory, sweep_id, now, browser=hook))
     return read_sweep(factory, sweep_id)
 
 
@@ -209,7 +204,7 @@ def assert_counts_agree(factory: sessionmaker[Session], row: Sweep, user: uuid.U
     assert row.stats["skipped_by_rule"] == skipped == entry_of(row)["skipped_by_rule"]
 
 
-# --- stored as a board posting is -------------------------------------------------------------
+# --- stored as every new posting is -------------------------------------------------------------
 
 
 def test_verified_findings_become_scored_found_jobs_with_their_observed_facts_only(
@@ -471,9 +466,7 @@ def test_cancelling_the_sweep_mid_source_keeps_the_stored_jobs_and_their_counts(
     sweep_id = new_sweep(factory, alice)
 
     async def scenario() -> None:
-        task = asyncio.create_task(
-            sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=runner(script))  # type: ignore[arg-type]
-        )
+        task = asyncio.create_task(sweep.run_sweep(factory, sweep_id, now, browser=runner(script)))
         await reported.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -588,7 +581,7 @@ def test_a_commit_that_outlives_the_wait_leaves_the_row_to_recovery_with_its_cou
 
     async def scenario() -> None:
         hook = runner(script)
-        await sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=hook)  # type: ignore[arg-type]
+        await sweep.run_sweep(factory, sweep_id, now, browser=hook)
         # The run let go of the row without an end. The commit now ends: its jobs and the
         # row's counters land together, and nothing is published to the finished run.
         row = read_sweep(factory, sweep_id)
@@ -772,9 +765,7 @@ def test_a_second_cancellation_during_the_drain_leaves_the_row_to_recovery(
     monkeypatch.setattr(sweep.Commits, "settle", settle)
 
     async def scenario() -> None:
-        task = asyncio.create_task(
-            sweep.run_sweep(factory, sweep_id, NoBoards(), now, browser=runner(script))  # type: ignore[arg-type]
-        )
+        task = asyncio.create_task(sweep.run_sweep(factory, sweep_id, now, browser=runner(script)))
         try:
             await asyncio.to_thread(held.inside.wait, 30)
             task.cancel()  # the worker stops: the run waits for the commit

@@ -1,17 +1,18 @@
-"""A permission-only switch does not become a reader when interactive selection is removed."""
+"""A permission-only switch (LinkedIn's or Free-Work's consent row) is never a source: only a
+ticked job website is searched."""
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from app.browser import sources
-from app.jobs import ats, sweep
+from app.jobs import sweep
 from app.jobs.models import SweepStatus, SweepTrigger
 from app.profile.schemas import SearchSection
 from tests.browser.fakes import FakeLeases, FakeTools
 from tests.identity.api_helpers import Api
-from tests.jobs.sweep_helpers import board, read_sweep, set_profile
+from tests.jobs.sweep_helpers import read_sweep, set_profile, website_runner
 from tests.jobs.test_api import Signed, sign_in
 from tests.jobs.test_sweep_api import FakeQueue, fake_queue
 
@@ -54,8 +55,15 @@ def test_permission_rows_never_add_legacy_frozen_modes(kind: str, selection: str
             else [selected(kind, selection == "enabled")],
         }
     )
-    assert sweep.enabled_sources(search) == []
     assert sweep.has_sources(search) is (selection == "enabled")
+    scope = sweep.freeze_scope(
+        type("ProfileView", (), {"sections": {"search": search.model_dump()}, "revision": 1})(),
+        SweepTrigger.manual,
+        datetime.now(UTC),
+    )
+    assert [row["mode"] for row in scope["sources"]] == (
+        ["llm_browser"] if selection == "enabled" else []
+    )
 
 
 @pytest.mark.parametrize("kind", ["linkedin", "freework"])
@@ -66,13 +74,10 @@ def test_real_runner_and_sweep_do_not_fall_back_after_setup_changes(
     factory: Any,
     clock: Any,
     fake_queue: FakeQueue,
-    monkeypatch: Any,
     kind: str,
     selection: str,
 ) -> None:
-    set_profile(
-        factory, owner.id, {"boards": [board("fake-intent")], "interactive_sites": [selected(kind)]}
-    )
+    set_profile(factory, owner.id, {"interactive_sites": [selected(kind)]})
     accepted = api.request(
         "PUT",
         "/api/browser/linkedin" if kind == "linkedin" else f"/api/opportunities/platforms/{kind}",
@@ -97,40 +102,25 @@ def test_real_runner_and_sweep_do_not_fall_back_after_setup_changes(
         json={"data": search, "base_revision": current["revision"]},
     )
     assert saved.status_code == 200, saved.text
-    # The engine with every kind of source (its internal start; every search runs the websites
-    # alone since 2026-10-28): even there a permission row never becomes a reader.
-    started = asyncio.run(
-        sweep.begin(factory, fake_queue, owner.id, clock(), lambda row: row.id, websites_only=False)
-    )
+    started = asyncio.run(sweep.begin(factory, fake_queue, owner.id, clock(), lambda row: row.id))
+    if selection != "enabled":
+        # The permission row alone is no website to search.
+        assert started.outcome == "no_websites"
+        assert fake_queue.calls == []
+        return
     assert started.outcome == "started"
     run_id = started.sweep_id
     assert run_id is not None
     frozen = read_sweep(factory, run_id).stats["search_scope"]
-    assert not any(row["mode"] in ("fixed_reader", "legacy_finder") for row in frozen["sources"])
-    assert len(frozen["sources"]) == (2 if selection == "enabled" else 1)
-
-    async def forbidden_legacy(*args: Any, **kwargs: Any) -> None:
-        pytest.fail("a permission-only row activated a legacy reader")
-
-    monkeypatch.setattr(sources.Runner, "_one", forbidden_legacy)
-
-    class BoardClient:
-        async def fetch_board(self, ats_name: str, org: str) -> ats.BoardResult:
-            assert (ats_name, org) == ("ashby", "fake-intent")
-            return ats.BoardResult()
-
+    assert [row["mode"] for row in frozen["sources"]] == ["llm_browser"]
     leases, tools = FakeLeases(), FakeTools({})
-    runner = sources.Runner(leases, lambda *_: tools)
-    asyncio.run(sweep.run_sweep(factory, run_id, BoardClient(), clock, browser=runner))
+    asyncio.run(sweep.run_sweep(factory, run_id, clock, browser=website_runner(tools, leases)))
     completed = read_sweep(factory, run_id)
     assert completed.status is SweepStatus.done
-    assert completed.stats["boards_ok"] == 1
-    modes = [row["mode"] for row in completed.stats["sources"]]
-    assert modes == (["api", "llm_browser"] if selection == "enabled" else ["api"])
-    if selection == "enabled":
-        interactive = completed.stats["sources"][1]
-        assert interactive["outcome"] == "failed"
-        assert interactive["reason"] == "permission_unavailable"
+    [interactive] = completed.stats["sources"]
+    assert interactive["mode"] == "llm_browser"
+    assert interactive["outcome"] == "failed"
+    assert interactive["reason"] == "permission_unavailable"
     assert leases.acquired == []
     assert tools.calls == []
 

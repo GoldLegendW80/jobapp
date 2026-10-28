@@ -17,8 +17,7 @@ from app.browser.client import BrowserdClient, BrowserError
 from app.browser.tools import LeaseTools
 from tests.browser.b3_support import World, flush, redis_url  # noqa: F401
 from tests.browser.b13_runtime import Recording
-from tests.browser.test_b5_container import TOOL_CALL, Lease, ref
-from tests.browser.test_b9_runtime import (  # noqa: F401
+from tests.browser.runtime_support import (  # noqa: F401
     Runtime,
     alice,
     bob,
@@ -30,6 +29,7 @@ from tests.browser.test_b9_runtime import (  # noqa: F401
     one_connection,
     runtime,
 )
+from tests.browser.test_b5_container import TOOL_CALL, Lease, ref
 from tests.browser.test_browser_container import ROOT, Stack
 
 pytestmark = pytest.mark.docker
@@ -197,7 +197,7 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
                 if verified:
                     one.on_verified = commit
                 ran = await finder.RuntimeFinder(lambda: context)(one)
-                from tests.browser.test_b9_runtime import runs_of
+                from tests.browser.runtime_support import runs_of
 
                 assert not ran.stopped, (
                     [r.error for r in runs_of(runtime.factory, alice)],

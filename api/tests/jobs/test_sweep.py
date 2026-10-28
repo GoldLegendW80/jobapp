@@ -1,15 +1,13 @@
-"""Sweeps end to end against a real Postgres and the fake ATS server over real HTTP
-(tests/jobs/fake_ats.py): what is kept, stored, scored and skipped; every failure mode of a
-board; duplicates; never_apply; isolation; crash recovery, cancellation and time limits; the
-schedules (who is due, a slot started once, concurrency, isolation); and the memory a 5,000
-posting board costs."""
+"""Sweeps end to end against a real Postgres, with a fake of the website Runner that stores what
+its websites "find" through the run's commits (tests/jobs/sweep_helpers.py): what is stored,
+scored and skipped; a website that fails; duplicates and the sources a job names; never_apply;
+isolation; crash recovery, cancellation and time limits; the heartbeat and the progress; the
+schedules (who is due, a slot started once, concurrency, isolation). Every search runs the ticked
+job websites alone (owner, 2026-10-28)."""
 
 import asyncio
-import gc
 import re
 import threading
-import time
-import tracemalloc
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -22,7 +20,6 @@ from app.identity.models import User
 from app.jobs import sweep
 from app.jobs.models import (
     ContractType,
-    Job,
     JobEvent,
     JobStatus,
     Sweep,
@@ -30,11 +27,13 @@ from app.jobs.models import (
     SweepTrigger,
 )
 from app.jobs.service import SweepRunningError
-from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import (
+    HOST,
+    HOST_2,
     SITE,
-    board,
-    fake_ats,
+    SITE_2,
+    each_website,
+    finding,
     jobs_of,
     new_sweep,
     now,
@@ -46,31 +45,43 @@ from tests.jobs.sweep_helpers import (
 )
 from tests.jobs.test_api import seed
 
-__all__ = ["fake_ats"]
-
 
 def stats(row: Sweep) -> dict:
     return row.stats
 
 
+def two_websites(**overrides: Any) -> dict[str, Any]:
+    return search(interactive_sites=[SITE, SITE_2], **overrides)
+
+
+AI = finding("AI Engineer", company="Acme AI", published_on="2026-10-01")
+APPLIED = finding(
+    "Applied AI Engineer, Agents", company="Acme AI", location="London, United Kingdom"
+)
+
+
 # --- the happy path -----------------------------------------------------------------------------
 
 
-def test_sweep_keeps_new_matching_postings_scored_with_events(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+def test_sweep_keeps_the_websites_findings_scored_with_events(
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok", "ashby", "Acme AI")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    set_profile(factory, alice, search())
+    row = run(factory, new_sweep(factory, alice), AI, APPLIED)
     assert row.status is SweepStatus.done
     assert row.finished_at is not None
     assert row.error is None
     s = stats(row)
+    # The board counters stay, at zero: the release before this one reads them.
     assert (s["boards_total"], s["boards_done"], s["boards_ok"], s["boards_failed"]) == (
-        1, 1, 1, [],
+        0, 0, 0, [],
     )  # fmt: skip
-    assert (s["seen"], s["matched"], s["new"], s["duplicates"]) == (3, 2, 2, 0)
+    assert (s["seen"], s["matched"], s["new"], s["duplicates"]) == (2, 2, 2, 0)
     assert s["current_board"] is None
     assert s["duration"] >= 0
+    [source] = s["sources"]
+    assert (source["host"], source["phase"], source["outcome"]) == (HOST, "done", "complete")
+    assert (source["found"], source["postings"], source["duplicates"]) == (2, 2, 0)
     jobs = jobs_of(factory, alice)
     assert [(j.company, j.title, j.location) for j in jobs] == [
         ("Acme AI", "AI Engineer", "Paris, France"),
@@ -78,16 +89,16 @@ def test_sweep_keeps_new_matching_postings_scored_with_events(
     ]
     first = jobs[0]
     assert first.status is JobStatus.found
-    assert first.source == "ashby:fake-ok"
+    assert first.source == HOST
     assert first.slug == "acme-ai-ai-engineer"
     assert first.contract_type is ContractType.CDI
-    assert first.url == "https://jobs.example.org/fake-ok/1"
-    assert first.published_on is not None
+    assert first.url == AI.url
+    assert first.published_on == datetime(2026, 10, 1).date()
+    assert jobs[1].published_on is None  # the page stated no date: never today
     assert first.found_on == now().astimezone(sweep.SWEEP_TZ).date()
     assert first.fit is not None
     assert first.fit > 0
-    assert "agents" in first.competencies
-    assert "python" in first.competencies
+    assert first.posting_text == AI.text
     with factory() as db:
         kinds = sorted(
             e.kind.value
@@ -97,153 +108,150 @@ def test_sweep_keeps_new_matching_postings_scored_with_events(
         swept = db.execute(
             sa.select(JobEvent).where(JobEvent.job_id == first.id, JobEvent.kind == "sweep")
         ).scalar_one()
-        assert swept.data == {"sweep_id": str(row.id), "board": "ashby:fake-ok"}
+        assert (swept.data["sweep_id"], swept.data["board"]) == (str(row.id), HOST)
+        assert swept.data["discovery"]["source_id"] == source["source_id"]
         listed = sweep.new_jobs(db, alice, row.id, 10)
         assert {j.id for j in listed} == {j.id for j in jobs}
 
 
-def test_each_ats_parsed_through_http(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+def test_a_website_sweep_stores_its_findings_in_batches(
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(
+    set_profile(factory, alice, search())
+    row = run(
         factory,
-        alice,
-        search(
-            board("fake-ok", "ashby", "A"),
-            board("fake-ok", "greenhouse", "G"),
-            board("fake-ok", "lever", "L"),
-        ),
+        new_sweep(factory, alice),
+        finding("AI Engineer"),
+        finding("Security Engineer"),
+        *[finding(f"GenAI Engineer {n}") for n in range(6)],
     )
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    assert stats(row)["boards_ok"] == 3
-    # Same URLs on the three boards: the first stored wins, the others are duplicates.
-    assert stats(row)["new"] == 2
-    assert stats(row)["duplicates"] == 4
-    texts = {j.posting_text for j in jobs_of(factory, alice)}
-    assert "Requirements: Python, agents, LLM evaluation." in texts
+    assert row.status is SweepStatus.done, row.error
+    assert row.stats["new"] == 8
+    assert row.stats["boards_total"] == 0
+    assert row.stats["skipped_by_rule"] == 1
+    assert len(jobs_of(factory, alice)) == 8
 
 
 def test_without_skills_jobs_are_stored_unscored(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok")), skills=None)
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    set_profile(factory, alice, search(), skills=None)
+    row = run(factory, new_sweep(factory, alice), AI, APPLIED)
     assert stats(row)["new"] == 2
     assert all(j.fit is None and j.competencies == [] for j in jobs_of(factory, alice))
 
 
-def test_second_sweep_finds_nothing_new(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
-) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), board("fake-ok2", "lever")))
-    first = run(factory, new_sweep(factory, alice), fake_ats)
-    second = run(factory, new_sweep(factory, alice), fake_ats)
-    assert stats(first)["new"] == 3
-    assert (stats(second)["new"], stats(second)["duplicates"]) == (0, 3)
-    assert len(jobs_of(factory, alice)) == 3
-
-
-# --- filters ------------------------------------------------------------------------------------
-
-
-def test_days_window_board_exclude_and_contract_types(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
-) -> None:
-    excluded = board(
-        "fake-ok", "lever", extra_exclude={"terms": ["applied"], "advanced_regex": False}
-    )
-    set_profile(factory, alice, search(excluded, board("fake-ok2", "greenhouse")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    titles = sorted(j.title for j in jobs_of(factory, alice))
-    # "Applied AI Engineer" excluded by the board, "GenAI Engineer" published 40 days ago.
-    assert titles == ["AI Engineer", "Forward Deployed Engineer"]
-    assert (stats(row)["seen"], stats(row)["matched"]) == (5, 2)
-
-    set_profile(factory, alice, search(board("fake-unicode"), contract_types=["VIE"]))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    assert stats(row)["matched"] == 0
+def test_second_sweep_finds_nothing_new(factory: sessionmaker[Session], alice: uuid.UUID) -> None:
+    set_profile(factory, alice, search())
+    first = run(factory, new_sweep(factory, alice), AI, APPLIED)
+    second = run(factory, new_sweep(factory, alice), AI, APPLIED)
+    assert stats(first)["new"] == 2
+    assert (stats(second)["new"], stats(second)["duplicates"]) == (0, 2)
+    assert stats(second)["sources"][0]["outcome"] == "complete"
+    assert len(jobs_of(factory, alice)) == 2
 
 
 def test_unicode_titles_locations_and_text_are_stored(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-unicode", "greenhouse", "Société Ünïcode")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    set_profile(factory, alice, search())
+    tokyo = finding(
+        "AI Engineer 東京 🤖",
+        company="Société Ünïcode",
+        location="Paris, Île-de-France",
+        text="Rôle à Paris. مرحبا. Python, agents.",
+    )
+    arabic = finding("مهندس AI Engineer", company="Société Ünïcode")
+    row = run(factory, new_sweep(factory, alice), tokyo, arabic)
     assert stats(row)["new"] == 2
     jobs = {j.title: j for j in jobs_of(factory, alice)}
     first = jobs["AI Engineer 東京 🤖"]
     assert first.location == "Paris, Île-de-France"
     assert first.posting_text is not None
-    assert "\x00" not in first.posting_text
     assert "مرحبا" in first.posting_text
     assert first.slug == "societe-unicode-ai-engineer"
     assert jobs["مهندس AI Engineer"].slug == "societe-unicode-ai-engineer-2"
 
 
-# --- duplicates ---------------------------------------------------------------------------------
+# --- duplicates and the sources a job names -----------------------------------------------------
 
 
 def test_an_imported_posting_with_a_url_variant_is_a_duplicate(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    seed(
-        factory,
-        alice,
-        [
-            {
-                "company": "Old name",
-                "title": "Something else",
-                "url": "https://jobs.example.org/fake-ok/1",
-            }
-        ],
+    seed(factory, alice, [{"company": "Old name", "title": "Something else", "url": AI.url}])
+    set_profile(factory, alice, search())
+    variant = finding(
+        "AI Engineer", company="Acme AI", url=AI.url.replace("https://", "http://www.")
     )
-    set_profile(factory, alice, search(board("fake-variant")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    row = run(factory, new_sweep(factory, alice), variant)
     assert (stats(row)["matched"], stats(row)["new"], stats(row)["duplicates"]) == (1, 0, 1)
+    assert stats(row)["sources"][0]["duplicates"] == 1
     assert len(jobs_of(factory, alice)) == 1
 
 
 def test_same_company_title_location_is_a_duplicate(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     seed(
         factory,
         alice,
-        [{"company": "Ok", "title": "ai engineer", "location": "PARIS France", "url": None}],
+        [{"company": "Acme AI", "title": "ai engineer", "location": "PARIS France", "url": None}],
     )
-    set_profile(factory, alice, search(board("fake-ok")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    set_profile(factory, alice, search())
+    row = run(factory, new_sweep(factory, alice), AI, APPLIED)
     assert (stats(row)["new"], stats(row)["duplicates"]) == (1, 1)
 
 
-def test_duplicate_postings_across_boards_stored_once(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+def test_an_unnamed_employer_is_a_duplicate_by_its_address_only(
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), board("fake-dup")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    assert (stats(row)["new"], stats(row)["duplicates"]) == (2, 2)
+    set_profile(factory, alice, search())
+    one = finding("AI Engineer", company=None, url="https://jobs.example-robotics.test/a")
+    other = finding("AI Engineer", company=None, url="https://jobs.example-robotics.test/b")
+    row = run(factory, new_sweep(factory, alice), one, other, one)
+    assert (stats(row)["new"], stats(row)["duplicates"]) == (2, 1)
+    assert {j.company for j in jobs_of(factory, alice)} == {sweep.UNKNOWN_EMPLOYER}
+
+
+def test_the_same_posting_on_two_websites_is_one_row_naming_both(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, two_websites())
+    elsewhere = finding("AI Engineer", company="Acme AI", url="https://careers.example-labs.test/1")
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        browser=each_website([AI, APPLIED], [elsewhere]),
+    )
+    assert (stats(row)["new"], stats(row)["duplicates"]) == (2, 1)
+    [job] = [j for j in jobs_of(factory, alice) if j.title == "AI Engineer"]
+    assert sweep.noted_sources(job.source) == [HOST, HOST_2]
+    # Noting a source is not an edit, and the next sweep notes nothing more.
+    again = run(
+        factory,
+        new_sweep(factory, alice),
+        browser=each_website([AI], [elsewhere]),
+    )
+    assert (stats(again)["new"], stats(again)["duplicates"]) == (0, 2)
+    [after] = [j for j in jobs_of(factory, alice) if j.title == "AI Engineer"]
+    assert sweep.noted_sources(after.source) == [HOST, HOST_2]
+    assert after.updated_at == job.updated_at
 
 
 def test_a_row_inserted_meanwhile_is_counted_as_duplicate(
-    factory: sessionmaker[Session],
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    monkeypatch: pytest.MonkeyPatch,
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A posting added by hand while the sweep runs: the unique URL index stops the insert."""
-    set_profile(factory, alice, search(board("fake-ok")))
+    set_profile(factory, alice, search())
     real_init = sweep.Known.__init__
 
     def stale_index(self: sweep.Known, db: Session, user_id: uuid.UUID) -> None:
         real_init(self, db, user_id)
-        seed(
-            factory,
-            alice,
-            [{"company": "Z", "title": "Z", "url": "https://jobs.example.org/fake-ok/1"}],
-        )
+        seed(factory, alice, [{"company": "Z", "title": "Z", "url": AI.url}])
 
     monkeypatch.setattr(sweep.Known, "__init__", stale_index)
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    row = run(factory, new_sweep(factory, alice), AI, APPLIED)
     assert (stats(row)["new"], stats(row)["duplicates"]) == (1, 1)
     assert row.status is SweepStatus.done
 
@@ -252,11 +260,13 @@ def test_a_row_inserted_meanwhile_is_counted_as_duplicate(
 
 
 def test_never_apply_rule_skips_with_the_rule_as_note(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-security"), board("fake-ok")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    set_profile(factory, alice, search())
+    flagged_finding = finding("AI Engineer, Security Agents", company="Acme AI")
+    row = run(factory, new_sweep(factory, alice), flagged_finding, AI)
     assert stats(row)["skipped_by_rule"] == 1
+    assert stats(row)["sources"][0]["skipped_by_rule"] == 1
     by_title = {j.title: j for j in jobs_of(factory, alice)}
     flagged = by_title["AI Engineer, Security Agents"]
     assert flagged.status is JobStatus.skipped
@@ -293,112 +303,69 @@ def test_never_apply_rule_parsing(rule: str, terms: tuple, title: str, hit: bool
     assert parsed.matches(company, title) is hit
 
 
-# --- failures of boards -------------------------------------------------------------------------
+# --- a website that fails -----------------------------------------------------------------------
 
 
-def test_every_failure_mode_is_reported_and_the_others_still_run(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+def test_a_website_failure_is_reported_and_the_others_still_run(
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    boards = [
-        board("fake-ok", "ashby", "Good"),
-        board("fake-404", "ashby", "Missing"),
-        board("fake-403", "greenhouse", "Refused"),
-        board("fake-429", "lever", "Busy once"),
-        board("fake-429-always", "lever", "Busy"),
-        board("fake-500", "greenhouse", "Broken"),
-        board("fake-503-once", "ashby", "Flaky"),
-        board("fake-timeout", "ashby", "Slow"),
-        board("fake-malformed", "greenhouse", "Garbled"),
-        board("fake-shape", "ashby", "Odd"),
-        board("fake-redirect", "lever", "Moved"),
-        board("fake-redirect-away", "lever", "Away"),
-    ]
-    set_profile(factory, alice, search(*boards))
-    row = run(factory, new_sweep(factory, alice), fake_ats, client_options={"timeout_s": 0.5})
-    s = stats(row)
-    assert row.status is SweepStatus.done
-    failed = {f["company"]: f["error"] for f in s["boards_failed"]}
-    assert failed == {
-        "Missing": "not_found",
-        "Refused": "blocked",
-        "Busy": "rate_limited",
-        "Broken": "upstream_error",
-        "Slow": "timeout",
-        "Garbled": "invalid_response",
-        "Odd": "invalid_response",
-        "Away": "upstream_error",
-    }
-    assert all(f["message"] and f["org"] and f["ats"] for f in s["boards_failed"])
-    assert (s["boards_total"], s["boards_done"], s["boards_ok"]) == (12, 12, 4)
-    # Good, Busy once, Flaky and Moved all serve fake-ok's postings: stored once.
-    assert (s["new"], s["duplicates"]) == (2, 6)
-
-
-def test_all_boards_failing_is_still_a_finished_sweep(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
-) -> None:
-    set_profile(factory, alice, search(board("fake-404"), board("fake-500", "lever")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    assert row.status is SweepStatus.done
-    assert stats(row)["boards_ok"] == 0
-    assert len(stats(row)["boards_failed"]) == 2
-
-
-def test_a_board_that_cannot_be_stored_fails_alone(
-    factory: sessionmaker[Session],
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    set_profile(
+    set_profile(factory, alice, two_websites())
+    row = run(
         factory,
-        alice,
-        search(board("fake-ok", company="First"), board("fake-ok2", "lever", "Second")),
+        new_sweep(factory, alice),
+        browser=each_website([], [AI], errors={0: "navigation_failed"}),
     )
-    real = sweep.store_board
+    assert (row.status, row.error) == (SweepStatus.done, None)
+    failed, ok = stats(row)["sources"]
+    assert (failed["outcome"], failed["reason"]) == ("failed", "navigation_failed")
+    assert (ok["outcome"], ok["found"]) == ("complete", 1)
+    assert stats(row)["new"] == 1
 
-    def broken(db, plan, b, result, stats_, when):  # type: ignore[no-untyped-def]
-        real(db, plan, b, result, stats_, when)
-        if b.company == "First":
-            raise RuntimeError("disk full")
 
-    monkeypatch.setattr(sweep, "store_board", broken)
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    s = stats(row)
-    assert [f["error"] for f in s["boards_failed"]] == ["store_failed"]
-    assert {j.company for j in jobs_of(factory, alice)} == {"Second"}
-    assert (s["seen"], s["new"]) == (2, 1)  # the failed board's counts were put back
+def test_a_website_that_fails_after_storing_some_is_partial(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, search())
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        browser=each_website([AI, APPLIED], errors={0: "page_budget"}),
+    )
+    assert row.status is SweepStatus.done
+    [source] = stats(row)["sources"]
+    assert (source["outcome"], source["reason"], source["postings"]) == (
+        "partial", "page_budget", 2,
+    )  # fmt: skip
+    assert len(jobs_of(factory, alice)) == 2
 
 
 # --- the sweep row ------------------------------------------------------------------------------
 
 
-def test_no_enabled_board_fails_with_a_clear_message(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+def test_no_ticked_website_fails_with_a_clear_message(
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search({**board("fake-ok"), "enabled": False}))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    assert (row.status, row.error) == (SweepStatus.failed, sweep.NO_BOARDS)
+    set_profile(factory, alice, search(interactive_sites=[{**SITE, "enabled": False}]))
+    row = run(factory, new_sweep(factory, alice))
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.NO_WEBSITES)
+    assert "Find jobs" in sweep.NO_WEBSITES
     set_profile(factory, alice, None)
-    row = run(factory, new_sweep(factory, alice), fake_ats)
-    assert row.error == sweep.NO_BOARDS
+    row = run(factory, new_sweep(factory, alice))
+    assert row.error == sweep.NO_WEBSITES
 
 
 BROKEN_LIST = {"terms": ["(?P<x>agent)", "(?P<x>llm)"], "advanced_regex": True}
 
 
 def test_a_search_section_that_no_longer_validates_asks_to_save_it_again(
-    factory: sessionmaker[Session],
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    caplog: pytest.LogCaptureFixture,
+    factory: sessionmaker[Session], alice: uuid.UUID, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Issue #11: not "No board is enabled" for a section with enabled boards that the profile's
-    checks now refuse (stored before they got stricter)."""
-    set_profile(factory, alice, search(board("fake-ok"), title_exclude=BROKEN_LIST))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    """Issue #11: not "Tick at least one job website" for a section with ticked websites that the
+    profile's checks now refuse (stored before they got stricter)."""
+    set_profile(factory, alice, search(title_exclude=BROKEN_LIST))
+    row = run(factory, new_sweep(factory, alice), AI)
     assert (row.status, row.error) == (SweepStatus.failed, sweep.SEARCH_INVALID)
-    assert sweep.SEARCH_INVALID != sweep.NO_BOARDS
+    assert sweep.SEARCH_INVALID != sweep.NO_WEBSITES
     assert "Search tab" in sweep.SEARCH_INVALID
     assert jobs_of(factory, alice) == []
     [record] = [r for r in caplog.records if "does not validate" in r.getMessage()]
@@ -411,156 +378,73 @@ def test_a_search_section_that_no_longer_validates_asks_to_save_it_again(
 
 
 def test_a_list_that_stops_compiling_fails_the_sweep_closed(
-    factory: sessionmaker[Session],
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    monkeypatch: pytest.MonkeyPatch,
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A list that validated but no longer compiles (the regex engine changed meanwhile) keeps
-    nothing: the sweep fails with the re-save message instead of dropping excluded terms."""
-    set_profile(factory, alice, search(board("fake-ok")))
+    nothing: the sweep fails with the re-save message instead of searching with a weakened
+    exclude list."""
+    set_profile(factory, alice, search())
+    sweep_id = new_sweep(factory, alice)
 
     def broken(terms: list[str], advanced_regex: bool) -> None:
         raise re.error("changed meanwhile")
 
     monkeypatch.setattr(sweep.matching, "compile_terms", broken)
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    row = run(factory, sweep_id, AI)
     assert (row.status, row.error) == (SweepStatus.failed, sweep.SEARCH_INVALID)
     assert jobs_of(factory, alice) == []
 
 
-def test_fetched_boards_in_memory_never_exceed_the_concurrency(
-    factory: sessionmaker[Session],
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Issue #11: a board holds its slot from its fetch until it is stored, so with a slow store
-    step the fetched boards waiting for it never pile up past `concurrency`."""
-    orgs = ["fake-ok", "fake-ok2", "fake-dup", "fake-unicode", "fake-variant", "fake-security"]
-    boards = [board(org, name, f"Co {name} {org}") for name in ("ashby", "lever") for org in orgs]
-    set_profile(factory, alice, search(*boards))
-    in_memory = 0
-    peak = 0
-    guard = threading.Lock()
-    real_fetch = sweep.ats.AtsClient.fetch_board
-    real_store = sweep._store
-
-    async def counting_fetch(self, ats_name, org):  # type: ignore[no-untyped-def]
-        nonlocal in_memory, peak
-        with guard:
-            in_memory += 1
-            peak = max(peak, in_memory)
-        return await real_fetch(self, ats_name, org)
-
-    def slow_store(*args):  # type: ignore[no-untyped-def]
-        nonlocal in_memory
-        time.sleep(0.05)  # fetches finish faster than boards are stored
-        try:
-            return real_store(*args)
-        finally:
-            with guard:
-                in_memory -= 1
-
-    monkeypatch.setattr(sweep.ats.AtsClient, "fetch_board", counting_fetch)
-    monkeypatch.setattr(sweep, "_store", slow_store)
-    row = run(factory, new_sweep(factory, alice), fake_ats, concurrency=2)
-    assert row.status is SweepStatus.done
-    assert row.stats["boards_done"] == len(boards)
-    assert row.stats["boards_ok"] == len(boards)
-    assert peak == 2, peak
-    assert in_memory == 0
-
-
-def test_without_an_org_prefix_every_org_goes_to_the_stub_and_real_ones_are_not_found(
-    fake_ats: FakeAts,
-) -> None:
-    """The CI stack (tests/ats-stub.compose.yml) sets ATS_BASE_URL with no org prefix: a real org
-    named by any spec reaches the fake server and answers "board not found", never the real ATS."""
-
-    async def go() -> list[str]:
-        codes = []
-        async with sweep.ats.AtsClient(tz=sweep.SWEEP_TZ, stub_base_url=fake_ats.url) as c:
-            for ats_name, org in (
-                ("ashby", "mistral.ai"),
-                ("greenhouse", "anthropic"),
-                ("lever", "x"),
-            ):
-                with pytest.raises(sweep.ats.BoardError) as caught:
-                    await c.fetch_board(ats_name, org)
-                codes.append(caught.value.code)
-            assert len((await c.fetch_board("ashby", "fake-ok")).postings) == 3
-        return codes
-
-    assert asyncio.run(go()) == ["not_found"] * 3
-    assert fake_ats.state.counts == {
-        "ashby/mistral.ai": 1,
-        "greenhouse/anthropic": 1,
-        "lever/x": 1,
-        "ashby/fake-ok": 1,
-    }
-
-
-def test_a_failed_board_gives_its_slot_back(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
-) -> None:
-    """Failed fetches release their slot too: one slot, five boards failing, the sweep ends."""
-    gone = [board(org, name) for name in ("ashby", "lever") for org in ("fake-404", "fake-500")]
-    set_profile(factory, alice, search(*gone, board("fake-ok")))
-    row = run(factory, new_sweep(factory, alice), fake_ats, concurrency=1)
-    assert row.status is SweepStatus.done
-    assert (row.stats["boards_done"], len(row.stats["boards_failed"])) == (5, 4)
-    assert row.stats["new"] == 2
-
-
 def test_a_sweep_picked_twice_is_failed_not_rerun(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok")))
+    set_profile(factory, alice, search())
     sweep_id = new_sweep(factory, alice)
     with factory() as db:
         db.get(Sweep, sweep_id).stats = {"picked_at": now().isoformat()}
         db.commit()
-    row = run(factory, sweep_id, fake_ats)
+    row = run(factory, sweep_id, AI)
     assert (row.status, row.error) == (SweepStatus.failed, sweep.CRASHED)
     assert jobs_of(factory, alice) == []
 
 
 def test_a_finished_or_missing_sweep_is_left_alone(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok")))
-    first = run(factory, new_sweep(factory, alice), fake_ats)
-    again = run(factory, first.id, fake_ats)
+    set_profile(factory, alice, search())
+    first = run(factory, new_sweep(factory, alice), AI)
+    again = run(factory, first.id, APPLIED)
     assert (again.status, again.stats) == (first.status, first.stats)
-    asyncio.run(run_async(factory, uuid.uuid4(), fake_ats))  # nothing happens
+    assert len(jobs_of(factory, alice)) == 1
+    asyncio.run(run_async(factory, uuid.uuid4(), AI))  # nothing happens
 
 
 def test_time_limit_fails_the_sweep_keeping_what_was_stored(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), board("fake-timeout")))
+    set_profile(factory, alice, search())
     row = run(
         factory,
         new_sweep(factory, alice),
-        fake_ats,
-        timeout_s=1.0,
-        client_options={"timeout_s": 5.0},
+        timeout_s=0.5,
+        browser=each_website([AI, APPLIED], hang_s=10.0),
     )
     assert (row.status, row.error) == (SweepStatus.failed, sweep.TIMED_OUT)
     assert stats(row)["new"] == 2
+    [source] = stats(row)["sources"]
+    assert (source["outcome"], source["reason"]) == ("partial", "sweep_failed")
     assert len(jobs_of(factory, alice)) == 2
 
 
 def test_cancellation_marks_the_sweep_interrupted(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-timeout")))
+    set_profile(factory, alice, search())
     sweep_id = new_sweep(factory, alice)
 
     async def go() -> None:
         task = asyncio.create_task(
-            run_async(factory, sweep_id, fake_ats, client_options={"timeout_s": 10.0})
+            run_async(factory, sweep_id, browser=each_website([AI], hang_s=10.0))
         )
         await asyncio.sleep(0.5)
         task.cancel()
@@ -570,28 +454,26 @@ def test_cancellation_marks_the_sweep_interrupted(
     asyncio.run(go())
     row = read_sweep(factory, sweep_id)
     assert (row.status, row.error) == (SweepStatus.failed, sweep.INTERRUPTED)
+    assert stats(row)["new"] == 1
 
 
 def test_an_internal_error_fails_the_sweep(
-    factory: sessionmaker[Session],
-    alice: uuid.UUID,
-    fake_ats: FakeAts,
-    monkeypatch: pytest.MonkeyPatch,
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok")))
+    set_profile(factory, alice, search())
 
     def boom(*_: object) -> None:
         raise RuntimeError("bug")
 
     monkeypatch.setattr(sweep, "finish_done", boom)
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    row = run(factory, new_sweep(factory, alice), AI)
     assert (row.status, row.error) == (SweepStatus.failed, sweep.INTERNAL)
 
 
 def test_progress_is_written_while_the_sweep_runs(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-ok"), board("fake-timeout", company="Slow one")))
+    set_profile(factory, alice, search())
     sweep_id = new_sweep(factory, alice)
     seen: list[dict] = []
 
@@ -604,14 +486,17 @@ def test_progress_is_written_while_the_sweep_runs(
     watcher = threading.Thread(target=watch, args=(stop,))
     watcher.start()
     try:
-        run(factory, sweep_id, fake_ats, client_options={"timeout_s": 5.0})
+        run(factory, sweep_id, browser=each_website([AI, APPLIED], hang_s=1.0))
     finally:
         stop.set()
         watcher.join()
-    running = [s for s in seen if s.get("boards_done") == 1]
+    running = [s for s in seen if s.get("new") == 2 and s.get("current_board")]
     assert running, seen
-    assert any(s.get("current_board") in ("Ok", "Slow one") for s in seen)
+    source_id = running[0]["sources"][0]["source_id"]
+    assert all(s["current_board"] == source_id for s in running)
+    assert all(s["sources"][0]["phase"] == "running" for s in running)
     assert all(s.get("heartbeat_at") for s in running)
+    assert read_sweep(factory, sweep_id).stats["current_board"] is None
 
 
 # --- one running sweep per user, stale ones ------------------------------------------------------
@@ -699,10 +584,10 @@ def test_a_picked_sweep_without_heartbeat_for_two_minutes_is_failed(
     assert read_sweep(factory, row.id).error == sweep.CRASHED
 
 
-def test_the_heartbeat_moves_while_one_board_is_slow(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+def test_the_heartbeat_moves_while_one_website_is_slow(
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(factory, alice, search(board("fake-timeout")))
+    set_profile(factory, alice, search())
     sweep_id = new_sweep(factory, alice)
     beats: set[str] = set()
 
@@ -717,13 +602,7 @@ def test_the_heartbeat_moves_while_one_board_is_slow(
     watcher = threading.Thread(target=watch, args=(stop,))
     watcher.start()
     try:
-        run(
-            factory,
-            sweep_id,
-            fake_ats,
-            heartbeat_s=0.2,
-            client_options={"timeout_s": 2.0, "attempts": 1},
-        )
+        run(factory, sweep_id, heartbeat_s=0.2, browser=each_website([], hang_s=1.5))
     finally:
         stop.set()
         watcher.join()
@@ -753,15 +632,13 @@ def test_a_heartbeat_keeps_a_long_sweep_alive(
 
 
 def test_a_sweep_touches_its_user_only(
-    factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
 ) -> None:
     # Bob already has the posting; Alice does not: she gets it, his row is untouched.
-    [bobs] = seed(
-        factory, bob, [{"title": "AI Engineer", "url": "https://jobs.example.org/fake-ok/1"}]
-    )
-    set_profile(factory, alice, search(board("fake-ok")))
-    set_profile(factory, bob, search(board("fake-ok2")))
-    row = run(factory, new_sweep(factory, alice), fake_ats)
+    [bobs] = seed(factory, bob, [{"title": "AI Engineer", "url": AI.url}])
+    set_profile(factory, alice, search())
+    set_profile(factory, bob, search())
+    row = run(factory, new_sweep(factory, alice), AI, APPLIED)
     assert stats(row)["new"] == 2
     assert [j.id for j in jobs_of(factory, bob)] == [bobs.id]
     with factory() as db:
@@ -796,27 +673,19 @@ def test_only_enabled_schedules_of_active_users_with_websites_are_due(
     erin = new_user(factory, "erin@example.org")
     frank = new_user(factory, "frank@example.org")
     new_user(factory, "gina@example.org")  # no profile at all
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
-    set_profile(factory, bob, search(board("fake-ok"), interactive_sites=[SITE]))  # default: off
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
+    set_profile(factory, bob, search())  # default: off
     set_profile(
         factory,
         carol,
-        search(
-            board("fake-ok"), interactive_sites=[{**SITE, "enabled": False}], sweep_schedule=DAILY
-        ),
+        search(interactive_sites=[{**SITE, "enabled": False}], sweep_schedule=DAILY),
     )
-    set_profile(
-        factory, dave, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
+    set_profile(factory, dave, search(sweep_schedule=DAILY))
     set_profile(factory, erin, {"days": "not a number"})
     set_profile(
         factory,
         frank,
-        search(
-            board("fake-ok"), interactive_sites=[SITE], sweep_schedule={**DAILY, "enabled": False}
-        ),
+        search(sweep_schedule={**DAILY, "enabled": False}),
     )
     with factory() as db:
         db.execute(sa.update(User).where(User.id == dave).values(is_active=False))
@@ -824,9 +693,7 @@ def test_only_enabled_schedules_of_active_users_with_websites_are_due(
     assert due_users(factory) == [(alice, SLOT)]
     # Not every day: Saturday 10 October is not in a weekdays-only schedule.
     weekdays = {**DAILY, "days": ["monday", "tuesday", "wednesday", "thursday", "friday"]}
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=weekdays)
-    )
+    set_profile(factory, alice, search(sweep_schedule=weekdays))
     assert due_users(factory) == []
 
 
@@ -838,10 +705,8 @@ def test_a_scheduled_sweep_of_a_section_that_no_longer_validates_is_logged(
 ) -> None:
     """Issue #11: skipped as before, but with a clear reason in the worker log, and only for a
     schedule the user turned on."""
-    set_profile(
-        factory, alice, search(board("fake-ok"), title_exclude=BROKEN_LIST, sweep_schedule=DAILY)
-    )
-    set_profile(factory, bob, search(board("fake-ok"), title_exclude=BROKEN_LIST))  # off
+    set_profile(factory, alice, search(title_exclude=BROKEN_LIST, sweep_schedule=DAILY))
+    set_profile(factory, bob, search(title_exclude=BROKEN_LIST))  # off
     caplog.set_level("WARNING", logger="app.sweep")
     sweep._invalid_logged.clear()
 
@@ -864,21 +729,19 @@ def test_a_scheduled_sweep_of_a_section_that_no_longer_validates_is_logged(
 def test_a_section_without_a_schedule_or_with_the_old_flag_is_off(
     factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
 ) -> None:
-    old = search(board("fake-ok"))
+    old = search()
     old.pop("sweep_schedule", None)
     set_profile(factory, alice, old)
-    set_profile(factory, bob, {**search(board("fake-ok")), "sweep_nightly": True})
+    set_profile(factory, bob, {**search(), "sweep_nightly": True})
     assert due_users(factory) == []
     with factory() as db:
         assert sweep.user_search(db, bob) is not None  # the old key is dropped, not refused
 
 
 def test_a_slot_starts_once_whatever_the_ticks(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+    factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
     [due] = sweep_due(factory)
     with factory() as db:
         row = sweep.start_scheduled(db, due, TICK)
@@ -891,13 +754,13 @@ def test_a_slot_starts_once_whatever_the_ticks(
         assert sweep.start_scheduled(db, due, TICK) is None
         db.rollback()
     # Run it: the slot stays recorded through the claim, the progress and the end. It searches
-    # the website alone (owner, 2026-10-28): the board is never read.
+    # the ticked website (owner, 2026-10-28).
     searched: list[str] = []
 
     async def browser(plan: Any, *args: Any) -> None:
         searched.extend(site.url for site in plan.search.interactive_sites)
 
-    finished = run(factory, row.id, fake_ats, browser=browser)
+    finished = run(factory, row.id, browser=browser)
     assert finished.status is SweepStatus.done
     assert finished.stats["schedule_slot"] == SLOT
     assert (finished.stats["boards_total"], finished.stats["new"]) == (0, 0)
@@ -917,9 +780,7 @@ def sweep_due(factory: sessionmaker[Session], at: datetime = TICK) -> list[sweep
 def test_a_user_already_sweeping_is_skipped_and_retried_within_the_window(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
     with factory() as db:
         manual = sweep.start(db, alice, SweepTrigger.manual, TICK).id
         db.commit()
@@ -941,9 +802,7 @@ def test_a_user_already_sweeping_is_skipped_and_retried_within_the_window(
 def test_concurrent_ticks_start_a_slot_once(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
     [due] = sweep_due(factory)
     outcomes: list[str] = []
     barrier = threading.Barrier(6)
@@ -972,15 +831,11 @@ def test_concurrent_ticks_start_a_slot_once(
 def test_schedules_are_per_user(
     factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
 ) -> None:
-    set_profile(
-        factory, alice, search(board("fake-ok"), interactive_sites=[SITE], sweep_schedule=DAILY)
-    )
+    set_profile(factory, alice, search(sweep_schedule=DAILY))
     set_profile(
         factory,
         bob,
         search(
-            board("fake-ok"),
-            interactive_sites=[SITE],
             sweep_schedule={**DAILY, "times": ["06:17"], "timezone": "UTC"},
         ),
     )
@@ -995,38 +850,3 @@ def test_schedules_are_per_user(
     with factory() as db:
         assert not sweep.slot_taken(db, bob, SLOT)
         assert sweep.slot_taken(db, alice, SLOT)
-
-
-# --- memory -------------------------------------------------------------------------------------
-
-
-def test_a_5000_posting_board_is_swept_within_memory_and_time(
-    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
-) -> None:
-    set_profile(
-        factory,
-        alice,
-        search(board("fake-big", "ashby", "Big"), board("fake-big", "greenhouse", "Big GH")),
-    )
-    sweep_id = new_sweep(factory, alice)
-    gc.collect()
-    tracemalloc.start()
-    started = datetime.now(UTC)
-    try:
-        row = run(factory, sweep_id, fake_ats, client_options={"timeout_s": 30.0})
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    elapsed = (datetime.now(UTC) - started).total_seconds()
-    s = stats(row)
-    assert row.status is SweepStatus.done, row.error
-    assert (s["seen"], s["new"], s["duplicates"]) == (10_000, 5_000, 5_000)
-    with factory() as db:
-        count = db.execute(
-            sa.select(sa.func.count()).select_from(Job).where(Job.user_id == alice)
-        ).scalar_one()
-    assert count == 5_000
-    mib = peak / 2**20
-    print(f"\n5,000 postings x 2 boards: peak Python allocations {mib:.0f} MiB, {elapsed:.1f}s")
-    assert peak < 400 * 2**20
-    assert elapsed < 300
