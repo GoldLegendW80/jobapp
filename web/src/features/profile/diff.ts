@@ -180,6 +180,8 @@ const ITEM_TITLES: Record<string, string> = {
   adjacent: "Adjacent",
   none: "Lacks",
   gates: "Gate",
+  // Company boards were deleted on 2026-10-28; older revisions in the history still hold them.
+  boards: "Board",
   work_authorization: "Work authorisation",
   eeo_answers: "Equal opportunity answer",
   salary_ranges: "Salary range",
