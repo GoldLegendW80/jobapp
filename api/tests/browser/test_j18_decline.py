@@ -329,7 +329,9 @@ def test_a_guard_that_could_not_be_restored_has_its_own_code(monkeypatch, messag
     or take the page back) is `guard_failed`, never the catch all's recoverable `page_error`."""
 
     async def run(tab, name, args):
-        raise routes.actions.RefusalRecoveryError(RuntimeError(message))
+        error = RuntimeError(message)
+        error.add_note(routes.actions.GUARD_FAILED_NOTE)  # as actions.run re-raises it
+        raise error
 
     answer = call_failing(monkeypatch, run)
     assert answer["error"] == "guard_failed"

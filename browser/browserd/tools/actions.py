@@ -122,6 +122,11 @@ class PersonInput(Exception):  # noqa: N818  a control-flow signal
     """The person took back input during a paced action."""
 
 
+# Added to the original exception of a RefusalRecoveryError, which `run` re-raises: browserd
+# could not close a tab off the list or take the page back from an address off it.
+GUARD_FAILED_NOTE = "browserd: a guard could not be restored"
+
+
 class RefusalRecoveryError(Exception):
     """Keep a policy repair failure outside ordinary navigation normalization."""
 
@@ -652,8 +657,11 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
         except PersonInput:
             return failure("person_input", "Refused: the person holds the input.")
         return await tab.settle(result) if result.get("ok") else result
-    except RefusalRecoveryError:
-        raise  # routes.call_tool answers guard_failed, never the catch all's page_error
+    except RefusalRecoveryError as exc:
+        # The original still propagates; its note tells routes.call_tool to answer guard_failed,
+        # never the catch all's page_error (round 2 of PR 720).
+        exc.original.add_note(GUARD_FAILED_NOTE)
+        raise exc.original from None
     except Exception as exc:
         if name != "browser_navigate":
             raise
