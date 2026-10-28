@@ -1510,10 +1510,6 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(self.ran(["web/e2e/apply-all.config.ts"]), ["apply"])
         self.assertEqual(self.ran(["web/e2e/jobs.spec.ts"]), ["apps"])
         self.assertEqual(self.ran(["tests/gmail-stub.compose.yml"]), ["mail"])
-        # The fake feeds server (O7) is started by the opportunities group alone.
-        rules = {pattern: groups for pattern, groups, _ in ci_plan.JOURNEY_RULES}
-        for path in ("tests/feeds_stub.py", "tests/feeds-stub.compose.yml"):
-            self.assertEqual(rules[path], frozenset({"opportunities"}))
 
     def test_a_file_imported_by_another_module_runs_that_module_s_groups_too(
         self,
@@ -1773,7 +1769,6 @@ class JourneysTest(unittest.TestCase):
 
     def test_runtime_fixture_paths_and_neighbors_run_journeys(self) -> None:
         cases = {
-            "api/tests/jobs/fake_ats.py": [g for g, _ in self.GROUPS],
             "api/tests/mail/fake_gmail.py": ["mail"],
             "api/tests/mail/fixtures/mailboxes/new.json": ["mail"],
             "api/tests/mail/test_sync.py": ["mail"],
@@ -1783,7 +1778,7 @@ class JourneysTest(unittest.TestCase):
                 g for g, _ in self.GROUPS
             ],
             "api/tests/documents/fixtures/new/nested.txt": [g for g, _ in self.GROUPS],
-            "api/tests/jobs/fake_ats_test.py": [],
+            "api/tests/jobs/test_sweep_websites_smoke.py": [],
             "api/tests/mailbox/test_sync.py": [],
             "api/tests/ingestion_extra/fixture.txt": [],
             "api/tests/documents/test_store.py": [],
@@ -1813,7 +1808,6 @@ class JourneysTest(unittest.TestCase):
             for relative in re.findall(r"api/tests/[\w./*-]+", source.read_text()):
                 paths.add(relative.rstrip("/."))
         self.assertTrue(compose)
-        self.assertIn("api/tests/jobs/fake_ats.py", paths)
         self.assertIn("api/tests/mail", paths)
         self.assertIn("api/tests/ingestion/fixtures", paths)
         self.assertIn("api/tests/documents/fixtures/upload_morgan.txt", paths)
@@ -2269,10 +2263,6 @@ class JourneysTest(unittest.TestCase):
         "api/app/apply/agents.py": ci_plan.EVERY,
         "api/app/apply/failures.py": ci_plan.EVERY,
         "api/app/documents/router.py": ci_plan.EVERY,
-        # The Search tab no longer shows the feeds and the starter list (owner, 2026-10-28):
-        # their routes are the opportunities module's alone.
-        "api/app/opportunities/feeds_router.py": frozenset({"opportunities"}),
-        "api/app/opportunities/starter_router.py": frozenset({"opportunities"}),
         # main.py runs their middleware and the 500 handler uses them; the start builds the
         # mail client (accounts.py), which reaches google.py.
         "api/app/mail/routers.py": ci_plan.EVERY,
