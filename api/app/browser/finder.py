@@ -1001,21 +1001,25 @@ class FinderSession:
             return self._stop("page_budget")
         from app.browser.sources import SourceError
 
+        result: dict[str, Any] = {}
+        tool_scope = self.interactive.tool_scope() if self.interactive else None
+
+        async def go() -> dict[str, Any]:
+            nonlocal result
+            result = await self.pages.tools.call(
+                "browser_navigate",
+                {"url": url, "_discovery": "native_get", "_discovery_scope": tool_scope},
+            )
+            return result
+
         try:
             if self.interactive:
-                await self.pages._act(
-                    lambda: self.pages.tools.call(
-                        "browser_navigate",
-                        {
-                            "url": url,
-                            "_discovery": "native_get",
-                            "_discovery_scope": self.interactive.tool_scope(),
-                        },
-                    )
-                )
+                await self.pages._act(go)
             else:
                 await self.pages.open(url)
         except SourceError as exc:
+            if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
+                return self._stop(GUARD_FAILED)  # as in `interact`: no page to recover on
             if exc.code == "page_failed":
                 return "The page did not load.", True
             return self._stop(exc.code)

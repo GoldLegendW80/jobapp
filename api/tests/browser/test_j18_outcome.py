@@ -239,6 +239,30 @@ def test_a_guard_browserd_could_not_restore_ends_the_website_with_its_own_code()
     assert entry["error"] == "guard_failed"
 
 
+def test_a_navigation_whose_guard_browserd_could_not_restore_ends_the_website_too():
+    """A page browserd could not take back after a navigation (its `guard_failed` on
+    browser_navigate, routes.call_tool) ends the website as a click's does, never "The page did
+    not load." for the agent to go on from."""
+
+    class Unguarded(Jungle):
+        async def call(self, name, args):
+            if name == "browser_navigate" and args.get("url", "").endswith("/fr/jobs"):
+                return {"ok": False, "error": "guard_failed"}
+            return await super().call(name, args)
+
+    answers: list = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        answers.append(await session.navigate("/fr/jobs"))
+        answers.append(await session.interact("browser_click", {"ref": "e20"}))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(**SEARCH), Unguarded(), ScriptedFinder(script))
+    stopped = ("Stopped: guard_failed. Report what you found, then stop.", True)
+    assert answers == [stopped, stopped]
+    assert entry["error"] == "guard_failed"
+
+
 def test_a_search_that_lists_no_matching_job_said_honestly_is_a_searched_website():
     site = Jungle(results={})
     answers: list = []
