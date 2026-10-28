@@ -34,9 +34,9 @@ from tests.browser.test_browser_container import ROOT, Stack
 
 pytestmark = pytest.mark.docker
 START = "http://pages:8080/b13/"
-# The fixture server's names: `elsewhere`, and Indeed's home and two country sites under `.test`
+# The fixture server's names: `elsewhere`, and Indeed's home and a country site under `.test`
 # (discovery.COUNTRY_HOMES, owner 2026-10-28), so a request to any of them is in its log.
-PRIVATE = ["pages", "elsewhere", "www.indeed.test", "fr.indeed.test", "de.indeed.test"]
+PRIVATE = ["pages", "elsewhere", "www.indeed.test", "fr.indeed.test"]
 INDEED = "http://www.indeed.test:8080/b13/indeed"
 
 
@@ -364,8 +364,8 @@ def test_native_start_page_redirect_on_its_own_host_is_followed(native):
 
 def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
     """Owner, 2026-10-28: Indeed's home sends the start page to the person's country site, and
-    the search continues there; the scope then stays on that host. A redirect to another
-    country site afterwards, or to another domain, is refused and never requested."""
+    the search continues there. A redirect to another domain, or of another platform's search,
+    is refused and its target never requested (test_j18_country holds the rest)."""
     answers = {}
     for path, country in (("indeed", True), ("indeed-off", True), ("indeed", False)):
         start = INDEED + path.removeprefix("indeed")
@@ -387,9 +387,6 @@ def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
                 assert lease.tool("browser_type", ref=box, text="robot", **marker)["ok"]
                 found = lease.tool("browser_click", ref=ref(text, "button", "Search"), **marker)
                 assert found["ok"], found
-                # A country site's own redirect to another one is no first navigation.
-                again = "http://fr.indeed.test:8080/b13/indeed-again"
-                assert not lease.tool("browser_navigate", url=again, **marker)["ok"]
         finally:
             lease.end()
     assert not answers["indeed-off", True]["ok"]
@@ -397,10 +394,10 @@ def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
     observed = json.loads(fetched(native, "http://pages:8080/observed"))
     hosts = [(p.get("host"), p["path"], p.get("query")) for p in observed]
     assert ("fr.indeed.test:8080", "/b13/search", {"q": ["robot"], "remote": ["0"]}) in hosts
-    # The redirects were made (their pages were requested), and what they lead to never was.
-    assert ("fr.indeed.test:8080", "/b13/indeed-again") in [(h, p) for h, p, _ in hosts]
+    # The redirect to another domain was made (its page was requested), its target never was
+    # (`elsewhere` is in this log, test_native_start_page_redirect_on_its_own_host_is_followed);
+    # the other platform's run never reached the country site (one request there, the first).
     assert ("www.indeed.test:8080", "/b13/indeed-off") in [(h, p) for h, p, _ in hosts]
-    assert not any(host == "de.indeed.test:8080" for host, _, _ in hosts), hosts
     assert not any(host.startswith("elsewhere") for host, _, _ in hosts if host), hosts
     assert [h for h, p, _ in hosts if p == "/b13/indeed"].count("fr.indeed.test:8080") == 1
     native.completed = True

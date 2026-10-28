@@ -64,7 +64,7 @@ COUNTRY = {
         "/b13/indeed": "http://fr.indeed.test:8080/b13/indeed",
         "/b13/indeed-off": "http://elsewhere:8080/b13/indeed-off",
     },
-    "fr.indeed.test:8080": {"/b13/indeed-again": "http://de.indeed.test:8080/b13/indeed"},
+    "fr.indeed.test:8080": {},
 }
 
 
