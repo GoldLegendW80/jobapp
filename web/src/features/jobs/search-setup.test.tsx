@@ -196,7 +196,7 @@ function site(platform: Protected | "custom", url: string, enabled = true) {
 
 const PRESET_URLS: Record<Protected, string> = {
   linkedin: "https://www.linkedin.com/",
-  welcome_to_the_jungle: "https://www.welcometothejungle.com/",
+  welcome_to_the_jungle: "https://www.welcometothejungle.com/en/jobs",
   indeed: "https://www.indeed.com/",
   freework: "https://www.free-work.com/",
 };
