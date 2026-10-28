@@ -25,7 +25,7 @@ export interface SweepRunner {
   /** The sweep being followed, with its latest progress. */
   running: Sweep | null;
   starting: boolean;
-  start: (profileRevision?: number, websitesOnly?: boolean) => Promise<void>;
+  start: (profileRevision?: number) => Promise<void>;
   summary: SweepDetail | null;
   showSummary: (sweep: SweepDetail | null) => void;
 }
@@ -69,9 +69,9 @@ export function useSweepRunner(): SweepRunner {
   }, [target, client]);
 
   const start = useCallback(
-    async (profileRevision?: number, websitesOnly = false) => {
+    async (profileRevision?: number) => {
       setStarting(true);
-      return startSweep(profileRevision, websitesOnly).then(
+      return startSweep(profileRevision).then(
         (sweep) => {
           setStarting(false);
           setProgress(sweep);
@@ -94,9 +94,9 @@ export function useSweepRunner(): SweepRunner {
           // Setup owns its editable error state and must not disappear after a refusal.
           if (profileRevision !== undefined) throw error;
           if (isApiError(error) && error.status === 422) {
-            // No enabled board, or a stored search section to save again: both are fixed in
-            // the Search tab of the profile.
-            toast.error(errorDetail(error) ?? "No board to sweep.", {
+            // No ticked job website, or a stored search section to save again (the api's
+            // detail says which).
+            toast.error(errorDetail(error) ?? "No job website to search.", {
               action: {
                 label: "Open the profile",
                 onClick: () => {

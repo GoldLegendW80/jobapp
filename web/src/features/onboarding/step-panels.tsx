@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 
 import { AdvancedSection } from "@/components/advanced-section";
@@ -621,13 +621,11 @@ export function StepSummary({
   settings,
   search,
   onChange,
-  footer,
 }: {
   draft: Draft;
   settings: ApplySettings | undefined;
   search: Search;
   onChange: (step: StepId) => void;
-  footer?: ReactNode;
 }) {
   const rows = summaryRows(draft, settings);
   return (
@@ -659,10 +657,8 @@ export function StepSummary({
         ))}
       </dl>
       <p className="text-sm text-muted-foreground">
-        The first search covers {sweepCoverage(search)} from your Search
-        options.
+        The first search covers {sweepCoverage(search)} ticked in Find jobs.
       </p>
-      {footer}
     </div>
   );
 }

@@ -17,7 +17,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { fakeProfile, profileBody, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
-import { emptySweeps, server } from "@/test/server";
+import { server } from "@/test/server";
 
 import { PROTECTED, type Protected } from "./site-permissions";
 
@@ -320,10 +320,11 @@ it("shows the four plain lists and saves the unwanted places before starting", a
     expect(
       within(dialog).getByRole("textbox", { name: `New term for ${label}` }),
     ).toBeVisible();
-  // The regular expression switches are folded under the lists' Advanced, off.
+  // Words only, never a regular expression switch, folded or not (owner, 2026-10-28).
   expect(
     within(dialog).queryByRole("switch", { name: /^Regular expressions for/ }),
   ).toBeNull();
+  expect(within(dialog).queryByText(/regular expression/i)).toBeNull();
   expect(
     within(dialog).queryByRole("switch", { name: /regular expressions\) for/ }),
   ).toBeNull();
@@ -583,7 +584,7 @@ it("keeps a server-owned consent-only source out of the existing reader choices"
 });
 
 it.each(["linkedin", "freework"] as const)(
-  "keeps the protected %s reader state read-only on generic save",
+  "keeps the protected %s reader saved as it is, unshown, on save",
   async (kind) => {
     const source = {
       kind,
@@ -594,11 +595,9 @@ it.each(["linkedin", "freework"] as const)(
     const settings: Search = { ...EMPTY.search, browser_sources: [source] };
     const { profile, starts, user, dialog } = await open(settings);
     const label = kind === "linkedin" ? "LinkedIn" : "Free-Work";
-    const control = within(dialog).getByRole("checkbox", {
-      name: `${label} (existing reader)`,
-    });
-    expect(control).toBeChecked();
-    expect(control).toBeDisabled();
+    expect(
+      within(dialog).queryByText(`${label} (existing reader)`),
+    ).not.toBeInTheDocument();
     await user.click(
       within(dialog).getByRole("button", { name: "Save and Start" }),
     );
@@ -1347,82 +1346,50 @@ it("turns a website of her own off and on with its box", async () => {
   });
 });
 
-it("searches the ticked websites only when Websites only is ticked", async () => {
-  const { starts, user, dialog } = await open({
+// Owner, 2026-10-28: the setup is the websites and the criteria. Boards, feeds and readers are
+// neither shown nor searched, and stay saved as they are; there is no "Websites only" choice.
+it("shows no other search source, no Websites only and no link, and keeps them saved", async () => {
+  const board = {
+    company: "Example Robotics",
+    ats: "ashby" as const,
+    org: "example-robotics",
+    enabled: true,
+    extra_exclude: { terms: [], advanced_regex: false },
+  };
+  const feed = {
+    kind: "remoteok" as const,
+    terms: { terms: [], advanced_regex: false },
+    enabled: true,
+  };
+  const reader = {
+    kind: "google_careers" as const,
+    query: "robotics",
+    location: null,
+    enabled: true,
+  };
+  const { profile, starts, user, dialog } = await open({
     ...EMPTY.search,
+    boards: [board],
+    feeds: [feed],
+    browser_sources: [reader],
     interactive_sites: [site("custom", "https://careers.example.org/")],
   });
-  const only = within(dialog).getByRole("checkbox", { name: "Websites only" });
-  expect(only).not.toBeChecked();
-  expect(only).toHaveAccessibleDescription(
-    "Search only the websites ticked above. API boards, feeds and the other readers below are skipped.",
-  );
-  await user.click(only);
   expect(
-    within(dialog).getByRole("region", { name: "Other search sources" }),
-  ).toHaveTextContent("Websites only is ticked: this search skips them.");
+    within(dialog).queryByRole("region", { name: "Other search sources" }),
+  ).toBeNull();
+  expect(
+    within(dialog).queryByRole("checkbox", { name: "Websites only" }),
+  ).toBeNull();
+  for (const text of [/API board/, /\(feed\)/, /fixed reader/, /Remote OK/])
+    expect(within(dialog).queryByText(text)).toBeNull();
+  expect(within(dialog).queryByRole("link")).toBeNull();
   await saveAndStart(user, dialog);
   await waitFor(() => {
-    expect(starts).toEqual([{ profile_revision: 7, websites_only: true }]);
+    expect(starts).toEqual([{ profile_revision: 7 }]);
   });
-});
-
-it("refuses Websites only without a ticked website", async () => {
-  const { profile, starts, user, dialog } = await open();
-  await user.click(
-    within(dialog).getByRole("checkbox", { name: "Websites only" }),
-  );
-  await saveAndStart(user, dialog);
-  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "Tick at least one website to search websites only.",
-  );
-  expect(profile.saves).toEqual([]);
-  expect(starts).toEqual([]);
-});
-
-it("reopens with the Websites only choice of the last search started by hand", async () => {
-  const sweep = (trigger: string, websitesOnly: boolean, id: string) => ({
-    id,
-    trigger,
-    status: "done",
-    started_at: "2026-10-27T08:00:00Z",
-    finished_at: "2026-10-27T08:05:00Z",
-    error: null,
-    boards_total: 0,
-    boards_done: 0,
-    boards_ok: 0,
-    boards_failed: [],
-    current_board: null,
-    seen: 0,
-    matched: 0,
-    new: 0,
-    duplicates: 0,
-    skipped_by_rule: 0,
-    duration: 1,
-    sources: [],
-    search_scope: {
-      version: 1,
-      profile_revision: 6,
-      created_at: "2026-10-27T08:00:00Z",
-      trigger,
-      source_count: 1,
-      criteria: {},
-      websites_only: websitesOnly,
-    },
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    boards: [board],
+    feeds: [feed],
+    browser_sources: [reader],
   });
-  server.use(
-    http.get("*/api/jobs/sweeps", () =>
-      HttpResponse.json({
-        ...emptySweeps,
-        items: [sweep("schedule", false, "s2"), sweep("manual", true, "s1")],
-      }),
-    ),
-  );
-  const { dialog } = await open({
-    ...EMPTY.search,
-    interactive_sites: [site("custom", "https://careers.example.org/")],
-  });
-  expect(
-    within(dialog).getByRole("checkbox", { name: "Websites only" }),
-  ).toBeChecked();
 });

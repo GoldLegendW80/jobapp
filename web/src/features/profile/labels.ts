@@ -28,7 +28,7 @@ const FIELD_LABELS: Record<string, string> = {
   location: "at least one location term",
   contract_types: "at least one contract type",
   remote_stance: "remote stance",
-  boards: "at least one enabled board",
+  interactive_sites: "at least one job website ticked in Find jobs",
   work_authorization: "work authorisation for at least one country",
   notice_period: "notice period",
   earliest_start: "earliest start",

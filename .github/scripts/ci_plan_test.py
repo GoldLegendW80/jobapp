@@ -555,12 +555,12 @@ class VerifyTest(unittest.TestCase):
             problems, ["the plan needs api and its step 'pytest' is skipped"]
         )
         steps = lane_steps("journeys", "web,shell,e2e")
-        del steps["e2e_sweep"]
+        del steps["e2e_identity"]
         problems = ci_plan.verify_problems(
             "journeys", "web,shell,e2e", steps, "success"
         )
         self.assertEqual(
-            problems, ["the plan needs e2e and its step 'e2e_sweep' is missing"]
+            problems, ["the plan needs e2e and its step 'e2e_identity' is missing"]
         )
 
     def test_pre_commit_is_needed_whatever_the_plan(self) -> None:
@@ -1110,7 +1110,7 @@ class WorkflowTest(unittest.TestCase):
         bounded = {
             "api": ("pytest", "docker_tests"),
             "checks": ("e2e_apps", "e2e_ingestion"),
-            "journeys": ("vitest", "e2e_identity", "e2e_sweep"),
+            "journeys": ("vitest", "e2e_identity"),
         }
         for lane, ids in bounded.items():
             steps = steps_by_id(self.jobs[lane])
@@ -1240,9 +1240,7 @@ class WorkflowTest(unittest.TestCase):
                 self.assertIn(
                     "com.docker.compose.project=$PROJECT", following["run"], lane
                 )
-        self.assertEqual(
-            seen, 2, "the teardowns between apps and ingestion, identity and sweep"
-        )
+        self.assertEqual(seen, 1, "the teardown between apps and ingestion")
 
 
 class HookSafetyTest(unittest.TestCase):
@@ -1392,7 +1390,6 @@ class JourneysTest(unittest.TestCase):
         ("mail", "-c e2e/mail-all.config.ts"),
         ("documents", "-c e2e/documents-all.config.ts"),
         ("apply", "-c e2e/apply-all.config.ts"),
-        ("sweep", "jobs-sweep.spec.ts --workers=1"),
     )
 
     def tree(self, files: dict[str, str]) -> Path:
@@ -2183,7 +2180,6 @@ class JourneysTest(unittest.TestCase):
                     f"run\tmail\t{path}: the {'api ' if path.startswith('api/') else ''}module mail",
                     "skip\tdocuments\tno changed file touches it",
                     "skip\tapply\tno changed file touches it",
-                    "skip\tsweep\tno changed file touches it",
                 ],
             )
             bad = subprocess.run(
@@ -2209,7 +2205,7 @@ class JourneysTest(unittest.TestCase):
             [],
             "a module with no journey groups decided",
         )
-        groups = {"apps", "sweep"} | {
+        groups = {"apps"} | {
             p.name.removesuffix("-all.config.ts")
             for p in (ROOT / "web/e2e").glob("*-all.config.ts")
         }
@@ -2226,10 +2222,7 @@ class JourneysTest(unittest.TestCase):
         plan = ci_plan.journey_plan(
             ROOT,
             ["api/app/mail/parse.py"],
-            [
-                (g, f"-c e2e/{g}-all.config.ts")
-                for g in sorted(groups - {"apps", "sweep"})
-            ],
+            [(g, f"-c e2e/{g}-all.config.ts") for g in sorted(groups - {"apps"})],
         )
         self.assertEqual([g for v, g, _ in plan if v == "run"], ["mail"])
         for _, decided, _ in ci_plan.API_AREAS:
@@ -2247,7 +2240,9 @@ class JourneysTest(unittest.TestCase):
         # Narrowed: an apply submit, the browser registry, a sandbox handler, a mail parser,
         # the deck, an apply agent's fake answers. (A browser source follows its finder, see
         # test_a_browser_source_runs_what_its_finder_runs.)
-        "api/app/apply/submit.py": frozenset({"apply", "browser", "opportunities"}),
+        # Reached from main.py's start since apply/profile_router.py's find_spec of
+        # app.browser.later_handoff counts as the edge it is.
+        "api/app/apply/submit.py": ci_plan.EVERY,
         "api/app/browser/registry.py": frozenset({"apply", "browser"}),
         "api/app/opportunities/deck.py": frozenset({"opportunities"}),
         "api/app/ingestion/sandbox/pdf_text.py": frozenset(
@@ -2274,8 +2269,10 @@ class JourneysTest(unittest.TestCase):
         "api/app/apply/agents.py": ci_plan.EVERY,
         "api/app/apply/failures.py": ci_plan.EVERY,
         "api/app/documents/router.py": ci_plan.EVERY,
-        "api/app/opportunities/feeds_router.py": ci_plan.EVERY,
-        "api/app/opportunities/starter_router.py": ci_plan.EVERY,
+        # The Search tab no longer shows the feeds and the starter list (owner, 2026-10-28):
+        # their routes are the opportunities module's alone.
+        "api/app/opportunities/feeds_router.py": frozenset({"opportunities"}),
+        "api/app/opportunities/starter_router.py": frozenset({"opportunities"}),
         # main.py runs their middleware and the 500 handler uses them; the start builds the
         # mail client (accounts.py), which reaches google.py.
         "api/app/mail/routers.py": ci_plan.EVERY,
@@ -2320,9 +2317,7 @@ class JourneysTest(unittest.TestCase):
                 groups, why = ci_plan.journey_groups_for(path, {}, {}, imports)
                 self.assertEqual(groups, finder, why)
                 if groups != ci_plan.EVERY:
-                    self.assertLessEqual(
-                        {"apply", "browser", "opportunities", "sweep"}, groups
-                    )
+                    self.assertLessEqual({"apply", "browser", "opportunities"}, groups)
 
     def test_what_the_model_backend_imports_runs_every_group(self) -> None:
         # api/app/agents/backend.py sets the model credential of every journey: no file it

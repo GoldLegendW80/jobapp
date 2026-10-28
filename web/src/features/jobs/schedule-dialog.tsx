@@ -158,8 +158,8 @@ export function ScheduleDialog({
         <DialogHeader>
           <DialogTitle>Automatic search</DialogTitle>
           <DialogDescription>
-            The app sweeps the boards of your profile by itself at these times,
-            as Find jobs does. It is off until you turn it on.
+            The app searches the job websites ticked in Find jobs by itself at
+            these times, as Find jobs does. It is off until you turn it on.
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-4">
@@ -294,7 +294,7 @@ export function ScheduleDialog({
           </p>
           {draft.enabled && state && !state.active && state.enabled ? (
             <p className="text-xs text-muted-foreground">
-              No board is enabled in your profile yet: nothing runs until one
+              No job website is ticked in Find jobs yet: nothing runs until one
               is.
             </p>
           ) : null}

@@ -1,15 +1,15 @@
-"""/api/jobs/sweeps: start a sweep of the caller's boards, list the caller's sweeps, follow one.
+"""/api/jobs/sweeps: start a search of the caller's websites, list the caller's sweeps, follow one.
 
 - POST /api/jobs/sweeps: 202 with the new sweep (status running, queued for the worker). 409
   with the running sweep's id when the caller already has one (a stale one, with no heartbeat
   for sweep.STALE_AFTER, is failed first and does not block). 422 when the profile's search
-  section has no enabled board. 503 when the queue (Redis) is down: the sweep is then failed at
-  once, so it never blocks the next try.
+  section has no enabled website. 503 when the queue (Redis) is down: the sweep is then failed
+  at once, so it never blocks the next try.
   An optional `{profile_revision}` body refuses a stale reviewed revision with 409. No-body
   callers remain supported. Scope is frozen before enqueue; its public projection omits
-  instructions and source addresses. `{websites_only: true}` (jobs J17) searches the enabled
-  websites alone, no board, feed or fixed reader, and its scope says so; 422 when no website
-  is enabled.
+  instructions and source addresses. Every start searches the enabled websites alone, no
+  board, feed or fixed reader (owner, 2026-10-28), and its scope says `websites_only`; the
+  `{websites_only}` of jobs J17 is still accepted from an older tab and changes nothing.
 - GET /api/jobs/sweeps?limit=N: the caller's newest sweeps (default 20, at most 100) and their
   automatic schedule (`search.sweep_schedule`, off by default) with its next run. The schedule
   itself is changed through PUT /api/profile/search.
@@ -236,16 +236,16 @@ def _sweep_id(value: str) -> uuid.UUID:
         },
         422: {
             "model": ErrorOut,
-            "description": "No enabled board (or website, for websites only), or a search "
-            "section to save again",
+            "description": "No enabled website, or a search section to save again",
         },
         503: {"model": ErrorOut, "description": "The queue is unavailable"},
     },
     dependencies=[Depends(_no_store)],
 )
 async def start_sweep(user: CurrentUser, request: Request, body: SweepStartIn | None = None) -> Any:
-    """Sweep the caller's enabled boards now. The work happens in the worker: follow it with
-    GET /api/jobs/sweeps/{id} or its /events stream."""
+    """Search the caller's ticked websites now (never the boards, feeds or fixed readers, owner
+    2026-10-28). The work happens in the worker: follow it with GET /api/jobs/sweeps/{id} or its
+    /events stream."""
     begun = await sweep.begin(
         sessions_of(request),
         queue_of(request),
@@ -253,7 +253,6 @@ async def start_sweep(user: CurrentUser, request: Request, body: SweepStartIn | 
         deps.clock(request),
         sweep_out,
         profile_revision=body.profile_revision if body else None,
-        websites_only=body.websites_only if body else False,
     )
     if begun.outcome == "running" and begun.sweep_id is not None:
         body = SweepConflictOut(detail=RUNNING, sweep_id=begun.sweep_id).model_dump(mode="json")

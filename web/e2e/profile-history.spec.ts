@@ -82,6 +82,7 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 let exported: string;
+const WEBSITE = "https://jobs.example-robotics.test/";
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "jobapp-p6-"));
 
 test.beforeAll(async ({ browser }) => {
@@ -150,25 +151,35 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   await addTerm(page, "agents", "agent");
   await save(page, "Skills");
 
-  // Search, with a board checked against the real Ashby API by the api
-  await openTab(page, "Search");
-  await addTerm(page, "Job titles", "ai engineer");
-  await addTerm(page, "Places", "Paris");
-  await page.getByRole("button", { name: "CDI (permanent)" }).click();
-  await page
-    .getByLabel("Remote stance", { exact: true })
-    .selectOption("hybrid");
-  await page
-    .getByLabel("New board company", { exact: true })
-    .fill("Mistral AI");
-  await page.getByLabel("New board ATS", { exact: true }).selectOption("ashby");
-  await page.getByLabel("New board org", { exact: true }).fill("mistral.ai");
-  await page.getByRole("button", { name: "Check", exact: true }).click();
-  await expect(
-    page.getByRole("region", { name: "Add company" }).getByRole("status"),
-  ).toContainText(/^Found on Ashby/, { timeout: 20_000 });
-  await page.getByRole("button", { name: "Add board" }).click();
-  await save(page, "Search");
+  // Search, in Find jobs: every search runs the job websites ticked there (owner, 2026-10-28),
+  // and Search is complete with one of them. The website is invented (`.test` is reserved, no
+  // DNS answers it); the search it starts on this stack, which has no browser, finds nothing.
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "Find jobs" }).click();
+  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  await expect(setup).toBeVisible();
+  await setup.getByLabel("Custom website URL").fill(WEBSITE);
+  await setup.getByRole("button", { name: "Add website" }).click();
+  await expect(setup).toContainText(WEBSITE);
+  for (const [label, term] of [
+    ["Job titles", "ai engineer"],
+    ["Places", "Paris"],
+  ] as const) {
+    const box = setup.getByRole("textbox", { name: `New term for ${label}` });
+    await box.fill(term);
+    await box.press("Enter");
+    await expect(
+      setup.getByRole("list", { name: `Terms of ${label}` }),
+    ).toContainText(term);
+  }
+  await setup.getByRole("checkbox", { name: "CDI", exact: true }).check();
+  await setup.getByLabel("Remote preference").selectOption("hybrid");
+  await setup.getByRole("button", { name: "Save and Start" }).click();
+  await expect(setup).toBeHidden({ timeout: 30_000 });
+  await page.goto("/profile");
+  await expect(tab(page, "Search")).toHaveAccessibleName(
+    "Search, 100% complete",
+  );
 
   // Answers
   await openTab(page, "Answers");
@@ -326,7 +337,7 @@ test("export, change, import the export back: data and completeness restored", a
     /^Experience: 1 employer, 1 schoolUnchanged$/,
     /^Facts: 1 blockUnchanged$/,
     /^Skills: 1 category, 0 gatesUnchanged$/,
-    /^Search: 1 board, 1 enabledUnchanged$/,
+    /^Search: 1 job website, 1 tickedUnchanged$/,
     /^Answers: 1 countryReplaced$/,
     // Never touched by this journey: the defaults, exported and imported back unchanged.
     /^Preferences: Documents: language auto, tone plainUnchanged$/,

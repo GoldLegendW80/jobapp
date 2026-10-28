@@ -119,7 +119,7 @@ function fakeOnboarding(
       };
       return HttpResponse.json({
         state: current(),
-        sweep: "no_boards",
+        sweep: "no_websites",
         sweep_id: null,
       });
     }),
@@ -435,7 +435,9 @@ describe("the wizard", () => {
     const app = renderApp("/welcome?step=summary");
     await screen.findByText(/Step 7 of 7/);
     expect(screen.queryByRole("button", { name: "Skip this step" })).toBeNull();
-    expect(screen.getByText(/covers 0 boards/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/covers 0 job websites ticked in Find jobs/),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Change Where" }));
     await screen.findByText(/Step 3 of 7/);
     await user.click(screen.getByRole("button", { name: /Next/ }));
@@ -451,64 +453,52 @@ describe("the wizard", () => {
     expect(calls.complete).toBe(1);
   });
 
-  it("offers the starter list on the summary, and its boards count in the first search", async () => {
+  // Owner, 2026-10-28: every search runs the job websites ticked in Find jobs alone, so the
+  // summary offers no starter list of boards and counts the websites.
+  it("offers no starter list on the summary, and counts the ticked job websites", async () => {
     fakeSession(member);
     const profile = fakeProfile(null);
-    fakeOnboarding(withRoles, SETTINGS, profile);
-    const starter = {
-      targets: true,
-      entries: [
+    profile.sections.search = {
+      ...EMPTY.search,
+      interactive_sites: [
         {
-          key: "ashby:fake-ok",
-          kind: "board",
-          company: "Example Robotics",
-          ats: "ashby",
-          org: "fake-ok",
-          source: null,
-          query: null,
-          location: null,
-          why: "Artificial intelligence, France",
-          added: false,
+          platform: "welcome_to_the_jungle",
+          url: "https://www.welcometothejungle.com/",
+          enabled: true,
+          mode: "llm_browser",
+        },
+        {
+          platform: "indeed",
+          url: "https://fr.indeed.com/",
+          enabled: false,
+          mode: "llm_browser",
+        },
+        {
+          platform: "custom",
+          url: "https://jobs.example.org/",
+          enabled: true,
+          mode: "llm_browser",
         },
       ],
-      unmatched: [],
-      blocked: 0,
-      version: 1,
-      checked_on: "2026-10-20",
     };
+    fakeOnboarding(withRoles, SETTINGS, profile);
+    let reads = 0;
     server.use(
-      http.get("*/api/opportunities/starter", () => HttpResponse.json(starter)),
-      http.post("*/api/opportunities/starter", () => {
-        // as the api does: the board goes to the search section, enabled
-        profile.revision += 1;
-        profile.sections.search = {
-          ...EMPTY.search,
-          boards: [
-            {
-              company: "Example Robotics",
-              ats: "ashby",
-              org: "fake-ok",
-              enabled: true,
-              extra_exclude: { terms: [], advanced_regex: false },
-            },
-          ],
-        };
-        starter.entries = starter.entries.map((e) => ({ ...e, added: true }));
-        return HttpResponse.json({ list: starter, added: ["ashby:fake-ok"] });
+      http.get("*/api/opportunities/starter", () => {
+        reads += 1;
+        return HttpResponse.json({});
       }),
     );
-    const user = userEvent.setup();
     renderApp("/welcome?step=summary");
     await screen.findByText(/Step 7 of 7/);
-    const list = await screen.findByRole("region", {
-      name: "Boards and sites to search",
-    });
-    await user.click(within(list).getByRole("button", { name: "Advanced" }));
-    expect(await within(list).findByText("Example Robotics")).toBeVisible();
-    expect(screen.getByText(/covers 0 boards/)).toBeInTheDocument();
-    await user.click(within(list).getByRole("button", { name: "Add all" }));
-    expect(await screen.findByText(/covers 1 board from/)).toBeInTheDocument();
-    expect(within(list).getByText("Added")).toBeVisible();
+    expect(
+      await screen.findByText(/covers 2 job websites ticked in Find jobs/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Boards and sites to search" }),
+    ).toBeNull();
+    expect(screen.queryByText(/board/i)).toBeNull();
+    expect(reads).toBe(0);
   });
 
   it("Skip for now puts it off and goes home", async () => {
@@ -584,40 +574,6 @@ describe("the wizard", () => {
     expect(screen.getByRole("region", { name: /Summary/ })).toHaveTextContent(
       "Anywhere; Remote",
     );
-  });
-
-  it("asks for the starter list again after a step saves, so step 7 is never stale", async () => {
-    fakeSession(member);
-    const profile = fakeProfile(null);
-    fakeOnboarding(withRoles, SETTINGS, profile);
-    let reads = 0;
-    server.use(
-      http.get("*/api/opportunities/starter", () => {
-        reads += 1;
-        return HttpResponse.json({
-          targets: true,
-          entries: [],
-          unmatched: [],
-          blocked: 0,
-          version: 1,
-          checked_on: "2026-10-20",
-        });
-      }),
-    );
-    const user = userEvent.setup();
-    renderApp("/welcome?step=summary");
-    await screen.findByText(/Step 7 of 7/);
-    await screen.findByRole("region", { name: "Boards and sites to search" });
-    expect(reads).toBe(1);
-    await user.click(screen.getByRole("button", { name: "Change Where" }));
-    await screen.findByText(/Step 3 of 7/);
-    await user.click(screen.getByRole("checkbox", { name: "Anywhere" }));
-    await user.click(screen.getByRole("radio", { name: "Remote" }));
-    await user.click(next());
-    await screen.findByText(/Step 7 of 7/);
-    await waitFor(() => {
-      expect(reads).toBe(2);
-    });
   });
 
   it("never reaches Start from the address while no role is saved", async () => {

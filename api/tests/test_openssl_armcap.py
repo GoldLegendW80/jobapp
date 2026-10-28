@@ -48,7 +48,6 @@ PRODUCTION_FILES = [
     "tests/ats-stub.compose.yml",
     "tests/anthropic-stub.compose.yml",
     "tests/compose.a2-e2e.yml",
-    "tests/compose.j5-e2e.yml",
 ]
 MAC_FILES = ["compose.dev.yml", "compose.mac.yml"]
 PRODUCTION_ENTRY_POINTS = [

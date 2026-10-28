@@ -19,6 +19,15 @@ from tests.jobs.test_scoring import skills as make_skills
 SKILLS = make_skills().model_dump(mode="json")
 
 
+# A job website of the person's own, ticked: every search runs the websites alone (2026-10-28).
+SITE = {
+    "platform": "custom",
+    "url": "https://jobs.example-robotics.test/",
+    "enabled": True,
+    "mode": "llm_browser",
+}
+
+
 def board(org: str, ats_name: str = "ashby", company: str | None = None, **extra: Any) -> dict:
     return {
         "company": company or org.removeprefix("fake-").title(),
@@ -75,8 +84,10 @@ def new_sweep(
     user_id: uuid.UUID,
     trigger: SweepTrigger = SweepTrigger.manual,
 ) -> uuid.UUID:
+    """A running sweep of every enabled source, boards included: the board engine's internal
+    start, which no search uses since the owner's decision of 2026-10-28 (websites only)."""
     with factory() as db:
-        row = sweep.start(db, user_id, trigger, now())
+        row = sweep.start(db, user_id, trigger, now(), websites_only=False)
         db.commit()
         return row.id
 

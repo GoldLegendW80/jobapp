@@ -130,7 +130,7 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "journeys": {
         "web": ("lint", "typecheck", "build", "vitest"),
-        "e2e": ("e2e_identity", "e2e_sweep"),
+        "e2e": ("e2e_identity",),
     },
 }
 # Steps that run on every run, whatever the plan: pre-commit, and the secret scan of the
@@ -192,9 +192,6 @@ SUPPORT: dict[str, tuple[str, ...]] = {
         "identity_stack",
         "identity_logs",
         "identity_down",
-        "sweep_stack",
-        "sweep_logs",
-        "sweep_down",
         "upload",
         "memory",
         "verify",
@@ -530,18 +527,18 @@ AREA_GROUPS: dict[str, frozenset[str] | str] = {
 # LinkedIn step lists applications) and by the opportunities group (a Like queues an application
 # and writes its documents); only the apply and browser stacks start the browser service
 # (COMPOSE_PROFILES=browser in ops/local-check.sh). The worker runs the browser sources and the
-# freelance feeds on every sweep (worker.py browser_sources, feed_sources): the browser,
-# opportunities and sweep groups sweep. The imports add the rest: a file of browser that apply
+# freelance feeds on every sweep (worker.py browser_sources, feed_sources): the browser and
+# opportunities groups sweep. The imports add the rest: a file of browser that apply
 # imports runs apply's groups too.
 API_AREAS: tuple[tuple[str, frozenset[str] | str, str], ...] = (
     (
         "api/app/browser/sources/*",
-        frozenset({"apply", "browser", "opportunities", "sweep"}),
+        frozenset({"apply", "browser", "opportunities"}),
         "a browser source, run by every sweep",
     ),
     (
         "api/app/opportunities/sources/*",
-        frozenset({"browser", "opportunities", "sweep"}),
+        frozenset({"browser", "opportunities"}),
         "a freelance feed, run by every sweep",
     ),
     (
@@ -923,9 +920,10 @@ def python_edges(root: Path, me: str, tree: ast.Module) -> tuple[set[str], set[s
                 continue  # `import importlib.util`, judged where the name is used
             flagged = node.name.split(".")[0] in DYNAMIC_MODULES | DYNAMIC_NAMES
         elif isinstance(node, ast.Name):
-            flagged = node.id in DYNAMIC_NAMES and not (
-                node.id == "importlib" and finds_a_spec(node, parents)
-            )
+            found = finds_a_spec(node, parents) if node.id == "importlib" else None
+            flagged = node.id in DYNAMIC_NAMES and found is None
+            if found is not None and found.split(".")[0] == "app":
+                imported.update(need(found))
         elif isinstance(node, ast.Attribute):
             flagged = node.attr in ("__import__", "import_module") or (
                 node.attr == "modules"
@@ -941,13 +939,15 @@ def python_edges(root: Path, me: str, tree: ast.Module) -> tuple[set[str], set[s
     return imported, hook_hosts(root, me, tree, bound)
 
 
-def finds_a_spec(node: ast.Name, parents: dict[ast.AST, ast.AST]) -> bool:
-    """`importlib.util.find_spec("<a package outside app>")`: it tells whether a package is
-    installed and loads nothing."""
+def finds_a_spec(node: ast.Name, parents: dict[ast.AST, ast.AST]) -> str | None:
+    """`importlib.util.find_spec("<a module named by a literal>")`: it tells whether a module
+    exists and loads nothing; the module it names, or None for any other use of the name. A
+    module of app is an edge of the file, as the import it guards is (apply/profile_router.py
+    looks for app.browser.later_handoff, then imports it)."""
     util = parents.get(node)
     find = parents.get(util) if util is not None else None
     call = parents.get(find) if find is not None else None
-    return (
+    ok = (
         isinstance(util, ast.Attribute)
         and util.attr == "util"
         and isinstance(find, ast.Attribute)
@@ -958,8 +958,8 @@ def finds_a_spec(node: ast.Name, parents: dict[ast.AST, ast.AST]) -> bool:
         and len(call.args) == 1
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)
-        and call.args[0].value.split(".")[0] != "app"
     )
+    return call.args[0].value if ok else None  # type: ignore[union-attr]
 
 
 def loaded_modules(root: Path, me: str, tree: ast.Module, package: str) -> set[str]:

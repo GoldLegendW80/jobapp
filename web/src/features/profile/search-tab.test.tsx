@@ -1,15 +1,16 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { delay, http, HttpResponse } from "msw";
+import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { WORDING } from "@/lib/wording";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import type { Board, Search, Weekday } from "./api";
+import type { Search, Weekday } from "./api";
 
 afterEach(() => {
   toast.dismiss();
@@ -26,79 +27,23 @@ async function openSearch(
   return { user, state, ...app };
 }
 
-interface CheckCall {
-  ats: string;
-  org: string;
-}
-
-/** The board check endpoint, answering `answer` (a body, or a full response). */
-function fakeCheck(
-  answer: Record<string, unknown> | (() => Response | Promise<Response>),
-) {
-  const calls: CheckCall[] = [];
-  server.use(
-    http.post("*/api/profile/boards/check", async ({ request }) => {
-      calls.push((await request.json()) as CheckCall);
-      if (typeof answer === "function") return answer();
-      return HttpResponse.json(answer);
-    }),
-  );
-  return calls;
-}
-
 const save = () => screen.getByRole("button", { name: "Save search" });
 const saved = (state: ReturnType<typeof fakeProfile>, index = 0) =>
   state.saves[index]!.body.data as Search;
-const status = () =>
-  within(screen.getByRole("region", { name: "Add company" })).getByRole(
-    "status",
-  );
-const rows = () =>
-  within(screen.getByRole("table", { name: "Boards" }))
-    .getAllByRole("row")
-    .slice(1);
-const companies = () =>
-  rows().map(
-    (row) =>
-      within(row).queryByRole<HTMLInputElement>("textbox", {
-        name: /^Company of board/,
-      })?.value,
-  );
-
-async function addCompany(
-  user: ReturnType<typeof userEvent.setup>,
-  org: string,
-  { company = "", ats = "ashby" } = {},
-) {
-  if (company)
-    await user.type(screen.getByLabelText("New board company"), company);
-  await user.selectOptions(screen.getByLabelText("New board ATS"), ats);
-  await user.type(screen.getByLabelText("New board org"), org);
-  await user.click(screen.getByRole("button", { name: "Check" }));
-}
-
-const manyBoards = (): Board[] =>
-  Array.from({ length: 32 }, (_, i) => ({
-    company: `Company ${String.fromCharCode(90 - (i % 26))}${i}`,
-    ats: (["ashby", "greenhouse", "lever"] as const)[i % 3]!,
-    org: `org-${i}`,
-    enabled: i % 4 !== 0,
-    extra_exclude: { advanced_regex: false, terms: [] },
-  }));
-
 describe("search tab: terms and preferences", () => {
-  it("shows the terms, preferences, boards and rules", async () => {
+  it("shows the terms, preferences and rules", async () => {
     await openSearch();
     const include = screen.getByRole("list", {
       name: "Terms of Job titles",
     });
     expect(include).toHaveTextContent("applied ai");
-    // The saved regular expressions open the lists' Advanced by themselves.
+    // Saved regular expressions keep working and say so; there is no switch (owner, 2026-10-28).
     expect(
-      screen.getByRole("switch", {
-        name: "Regular expressions for Job titles",
-      }),
-    ).toBeChecked();
+      screen.getAllByText(WORDING.listUsesRegularExpressions).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("switch", { name: /regular expressions/i }),
+    ).toBeNull();
     expect(
       screen.getByRole("list", { name: "Terms of Places" }),
     ).toHaveTextContent("Paris");
@@ -117,12 +62,6 @@ describe("search tab: terms and preferences", () => {
     expect(screen.getByLabelText("Posting age window (days)")).toHaveValue(
       "30",
     );
-    expect(rows()).toHaveLength(2);
-    expect(screen.getByLabelText("Org of board 1")).toHaveValue("mistral.ai");
-    expect(
-      screen.getByRole("switch", { name: "Sweep Datadog" }),
-    ).not.toBeChecked();
-    expect(screen.getByText("2 boards, 1 enabled")).toBeVisible();
     expect(screen.getByLabelText("Rule 1")).toHaveValue(
       "No cybersecurity roles.",
     );
@@ -260,7 +199,6 @@ describe("search tab: terms and preferences", () => {
 
   it("starts empty for a new user", async () => {
     const { user, state } = await openSearch(null);
-    expect(screen.getByText("No board yet.")).toBeVisible();
     expect(screen.getByText("No rule yet.")).toBeVisible();
     // The four lists (job titles, unwanted titles, places, unwanted places), and the industries
     // kept mounted under Advanced.
@@ -366,764 +304,80 @@ describe("search tab: automatic search", () => {
   });
 });
 
-describe("search tab: boards", () => {
-  it("edits a board: company, ATS, org, switch, extra exclude terms, delete", async () => {
-    const { user, state } = await openSearch();
-    await user.click(screen.getByRole("switch", { name: "Sweep Datadog" }));
-    await user.selectOptions(screen.getByLabelText("ATS of board 2"), "lever");
-    const exclude = screen.getByRole("button", {
-      name: "Exclude terms of Datadog",
-    });
-    expect(exclude).toHaveTextContent("None");
-    expect(exclude).toHaveAttribute("aria-expanded", "false");
-    await user.click(exclude);
-    expect(exclude).toHaveAttribute("aria-expanded", "true");
-    await user.type(
-      screen.getByLabelText("New term for Exclude terms of Datadog"),
-      "sales{enter}",
-    );
-    expect(exclude).toHaveTextContent("1 term");
-    await user.click(screen.getByRole("button", { name: "Delete Mistral AI" }));
-    expect(rows()).toHaveLength(2); // the board and its open exclude row
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(saved(state).boards).toEqual([
+// Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. The company
+// boards, the starter list, the job sites read in the browser and the freelance feeds are no
+// longer shown here; what a profile holds of them stays saved, with no deletion.
+describe("search tab: sources no search reads", () => {
+  const stored = {
+    boards: [
       {
-        company: "Datadog",
-        ats: "lever",
-        org: "datadog",
+        company: "Example Labs",
+        ats: "ashby" as const,
+        org: "example-labs",
         enabled: true,
-        extra_exclude: { advanced_regex: false, terms: ["sales"] },
+        extra_exclude: { advanced_regex: false, terms: ["intern"] },
       },
-    ]);
-  });
-
-  it("refuses an invalid or duplicate org in the table before sending", async () => {
-    const { user, state } = await openSearch();
-    const org = screen.getByLabelText("Org of board 2");
-    await user.clear(org);
-    await user.type(org, "../etc");
-    await user.click(save());
-    expect(
-      await screen.findByText(
-        "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-      ),
-    ).toBeVisible();
-    await user.clear(org);
-    await user.type(org, "MISTRAL.AI");
-    await user.selectOptions(screen.getByLabelText("ATS of board 2"), "ashby");
-    await user.click(save());
-    expect(
-      await screen.findByText(
-        "This board is already listed (same ATS and org).",
-      ),
-    ).toBeVisible();
-    // The same org on another ATS is another board.
-    await user.selectOptions(screen.getByLabelText("ATS of board 2"), "lever");
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(state.saves).toHaveLength(1);
-  });
-
-  it("opens a board's exclude terms when the server refuses one of them", async () => {
-    const { user } = await openSearch({
-      ...haraldLike(),
-      search: {
-        ...haraldLike().search,
-        boards: [
-          {
-            ...haraldLike().search.boards[0]!,
-            extra_exclude: { advanced_regex: true, terms: ["sales"] },
-          },
-        ],
+    ],
+    browser_sources: [
+      {
+        kind: "google_careers" as const,
+        query: "ai engineer",
+        location: null,
+        enabled: true,
+        accepted_at: null,
+        text_version: null,
+        interactive_only: false,
       },
-    });
-    server.use(
-      http.put("*/api/profile/search", () =>
-        HttpResponse.json(
-          {
-            detail:
-              "data.boards.0.extra_exclude.terms: term 1: nested quantifiers such as (a+)+ are not allowed: they can make matching hang",
-          },
-          { status: 422 },
-        ),
-      ),
-    );
-    expect(
-      screen.getByRole("button", { name: "Exclude terms of Mistral AI" }),
-    ).toHaveAttribute("aria-expanded", "false");
-    await user.click(screen.getByRole("button", { name: "VIE" }));
-    await user.click(save());
-    expect(
-      await screen.findByText(
-        "Nested quantifiers such as (a+)+ are not allowed: they can make matching hang.",
-      ),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Exclude terms of Mistral AI" }),
-    ).toHaveAttribute("aria-expanded", "true");
-  });
-
-  it("sorts by company both ways without changing the saved order", async () => {
-    const boards = manyBoards();
-    const { user, state } = await openSearch({
-      ...haraldLike(),
-      search: { ...haraldLike().search, boards },
-    });
-    expect(screen.getByText("32 boards, 24 enabled")).toBeVisible();
-    const header = screen.getByRole("columnheader", { name: /Company/ });
-    expect(header).toHaveAttribute("aria-sort", "none");
-    await user.click(within(header).getByRole("button"));
-    expect(header).toHaveAttribute("aria-sort", "ascending");
-    const ascending = boards
-      .map((b) => b.company)
-      .sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }));
-    expect(companies()).toEqual(ascending);
-    await user.click(within(header).getByRole("button"));
-    expect(header).toHaveAttribute("aria-sort", "descending");
-    expect(companies()).toEqual([...ascending].reverse());
-    await user.click(within(header).getByRole("button"));
-    expect(header).toHaveAttribute("aria-sort", "none");
-    expect(companies()).toEqual(boards.map((b) => b.company));
-
-    // Sorted, an edit still lands on the right board.
-    await user.click(within(header).getByRole("button"));
-    const first = boards.find((b) => b.company === ascending[0])!;
-    const index = boards.indexOf(first) + 1;
-    await user.click(
-      screen.getByRole("switch", { name: `Sweep ${first.company}` }),
-    );
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(saved(state).boards.map((b) => b.company)).toEqual(
-      boards.map((b) => b.company),
-    );
-    expect(saved(state).boards[index - 1]!.enabled).toBe(!first.enabled);
-  });
-
-  it("searches boards by company, org and ATS", async () => {
-    const { user } = await openSearch({
-      ...haraldLike(),
-      search: { ...haraldLike().search, boards: manyBoards() },
-    });
-    const box = screen.getByRole("searchbox", { name: "Search boards" });
-    await user.type(box, "org-1");
-    // org-1 and org-10 to org-19
-    expect(rows()).toHaveLength(11);
-    expect(screen.getByText("11 of 32 boards shown")).toBeVisible();
-    await user.clear(box);
-    await user.type(box, "LEVER");
-    expect(rows()).toHaveLength(10);
-    await user.clear(box);
-    await user.type(box, "nothing like this{enter}");
-    expect(
-      screen.getByText("No board matches “nothing like this”."),
-    ).toBeVisible();
-    // Enter in the box never submits.
-    expect(screen.queryByText("Search saved.")).toBeNull();
-  });
-});
-
-describe("search tab: add company with the board check", () => {
-  it("checks a board, fills the company name, adds it and saves", async () => {
-    const { user, state } = await openSearch();
-    const calls = fakeCheck({
-      exists: true,
-      postings: 42,
-      company_name: "Anthropic",
-      error: null,
-    });
-    await addCompany(user, " anthropic ", { ats: "greenhouse" });
-    expect(
-      await within(status()).findByText(
-        "Found on Greenhouse: Anthropic, 42 open postings.",
-      ),
-    ).toBeVisible();
-    expect(calls).toEqual([{ ats: "greenhouse", org: "anthropic" }]);
-    expect(screen.getByLabelText("New board company")).toHaveValue("Anthropic");
-    await user.type(
-      screen.getByRole("searchbox", { name: "Search boards" }),
-      "zzz",
-    );
-    await user.click(screen.getByRole("button", { name: "Add board" }));
-    // The search box clears so the new board shows.
-    expect(
-      screen.getByRole("searchbox", { name: "Search boards" }),
-    ).toHaveValue("");
-    expect(rows()).toHaveLength(3);
-    expect(screen.getByLabelText("Org of board 3")).toHaveValue("anthropic");
-    expect(
-      screen.getByRole("switch", { name: "Sweep Anthropic" }),
-    ).toBeChecked();
-    expect(
-      within(status()).getByText("Anthropic added. Save search to keep it."),
-    ).toBeVisible();
-    expect(screen.getByLabelText("New board org")).toHaveValue("");
-    expect(screen.getByText("Unsaved changes")).toBeVisible();
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(saved(state).boards[2]).toEqual({
-      company: "Anthropic",
-      ats: "greenhouse",
-      org: "anthropic",
-      enabled: true,
-      extra_exclude: { advanced_regex: false, terms: [] },
-    });
-  });
-
-  it("keeps a company typed by hand and counts one posting in the singular", async () => {
-    const { user } = await openSearch();
-    fakeCheck({
-      exists: true,
-      postings: 1,
-      company_name: "Other Name",
-      error: null,
-    });
-    await addCompany(user, "acme", { company: "Acme" });
-    expect(
-      await within(status()).findByText(
-        "Found on Ashby: Other Name, 1 open posting.",
-      ),
-    ).toBeVisible();
-    expect(screen.getByLabelText("New board company")).toHaveValue("Acme");
-  });
-
-  it("does not offer to add a board that does not exist", async () => {
-    const { user } = await openSearch();
-    fakeCheck({ exists: false, postings: null, error: "not_found" });
-    await addCompany(user, "no-such-company", { company: "Nope" });
-    expect(
-      await within(status()).findByText(
-        "No board named “no-such-company” on Ashby. Check the org as it appears in the careers page address.",
-      ),
-    ).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: /^Add (board|without a check)$/ }),
-    ).toBeNull();
-  });
-
-  it.each([
-    [
-      "timeout",
-      "Lever did not answer in time. Try again, or add the board without a check.",
     ],
-    [
-      "blocked",
-      "Lever refused the check from the server. Add the board without a check if you are sure of the org.",
+    feeds: [
+      {
+        kind: "remoteok" as const,
+        terms: { advanced_regex: false, terms: ["agents"] },
+        enabled: true,
+      },
     ],
-    [
-      "upstream_error",
-      "Lever answered with an error. Try again later, or add the board without a check.",
-    ],
-  ])(
-    "on %s it explains and offers to add without a check",
-    async (error, message) => {
-      const { user } = await openSearch();
-      fakeCheck({ exists: false, postings: null, error });
-      await addCompany(user, "spotify", { company: "Spotify", ats: "lever" });
-      expect(await within(status()).findByText(message)).toBeVisible();
-      await user.click(
-        screen.getByRole("button", { name: "Add without a check" }),
-      );
-      expect(screen.getByLabelText("Org of board 3")).toHaveValue("spotify");
-      expect(screen.getByLabelText("ATS of board 3")).toHaveValue("lever");
-    },
-  );
-
-  it("asks for the company name before adding", async () => {
-    const { user } = await openSearch();
-    fakeCheck({ exists: false, postings: null, error: "timeout" });
-    await addCompany(user, "acme");
-    await within(status()).findByText(/did not answer in time/);
-    await user.click(
-      screen.getByRole("button", { name: "Add without a check" }),
-    );
-    expect(within(status()).getByText("Enter the company name.")).toBeVisible();
-    expect(rows()).toHaveLength(2);
-  });
-
-  it("forgets the result when the org or the ATS changes", async () => {
-    const { user } = await openSearch();
-    fakeCheck({ exists: true, postings: 3, error: null });
-    await addCompany(user, "acme", { company: "Acme" });
-    await within(status()).findByText("Found on Ashby: 3 open postings.");
-    await user.type(screen.getByLabelText("New board org"), "x");
-    expect(screen.queryByRole("button", { name: "Add board" })).toBeNull();
-    await user.type(screen.getByLabelText("New board org"), "{backspace}");
-    expect(screen.getByRole("button", { name: "Add board" })).toBeVisible();
-    await user.selectOptions(screen.getByLabelText("New board ATS"), "lever");
-    expect(screen.queryByRole("button", { name: "Add board" })).toBeNull();
-  });
-
-  it.each([
-    [
-      "../etc",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      "a..b",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    [
-      "acme corp",
-      "Use letters, digits, dots, dashes and underscores, starting with a letter or digit.",
-    ],
-    ["x".repeat(101), "Use at most 100 characters."],
-    ["MISTRAL.AI", "This board is already in your list."],
-  ])("refuses %s before calling the api", async (org, message) => {
-    const { user } = await openSearch();
-    const calls = fakeCheck({ exists: true, postings: 1, error: null });
-    await addCompany(user, org);
-    expect(within(status()).getByText(message)).toBeVisible();
-    expect(screen.getByLabelText("New board org")).toHaveAttribute(
-      "aria-invalid",
-      "true",
-    );
-    expect(calls).toEqual([]);
-  });
-
-  it("disables Check while the org is empty and while a check runs", async () => {
-    const { user } = await openSearch();
-    fakeCheck(async () => {
-      await delay(50);
-      return HttpResponse.json({ exists: true, postings: 0, error: null });
-    });
-    expect(screen.getByRole("button", { name: "Check" })).toBeDisabled();
-    await user.type(screen.getByLabelText("New board org"), "quiet{enter}");
-    expect(
-      await screen.findByRole("button", { name: "Checking" }),
-    ).toBeDisabled();
-    expect(
-      await within(status()).findByText("Found on Ashby: 0 open postings."),
-    ).toBeVisible();
-  });
-
-  it("reports the rate limit with the wait", async () => {
-    const { user } = await openSearch();
-    fakeCheck(() =>
-      HttpResponse.json(
-        { detail: "Too many board checks. Wait a minute and try again." },
-        { status: 429, headers: { "Retry-After": "42" } },
-      ),
-    );
-    await addCompany(user, "acme");
-    expect(
-      await within(status()).findByText(
-        "Too many checks. Try again in 42 seconds.",
-      ),
-    ).toBeVisible();
-  });
-
-  it("reports a refused request and a network failure", async () => {
-    const { user } = await openSearch();
-    fakeCheck(() =>
-      HttpResponse.json(
-        { detail: "org: String should match pattern" },
-        { status: 422 },
-      ),
-    );
-    await addCompany(user, "acme");
-    expect(
-      await within(status()).findByText(
-        /^The check failed\. .*String should match pattern/,
-      ),
-    ).toBeVisible();
-    fakeCheck(() => HttpResponse.error());
-    await user.click(screen.getByRole("button", { name: "Check" }));
-    expect(
-      await within(status()).findByText(
-        "The check failed. The API could not be reached.",
-      ),
-    ).toBeVisible();
-  });
-
-  it("ignores a malformed answer from the api", async () => {
-    const { user } = await openSearch();
-    fakeCheck({ exists: "yes" });
-    await addCompany(user, "acme");
-    expect(
-      await within(status()).findByText(/^The check failed\./),
-    ).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Add board" })).toBeNull();
-  });
-
-  it("keeps an added board through a conflict, then saves it", async () => {
-    const { user, state } = await openSearch();
-    fakeCheck({ exists: true, postings: 5, company_name: null, error: null });
-    await addCompany(user, "acme", { company: "Acme" });
-    await within(status()).findByText("Found on Ashby: 5 open postings.");
-    await user.click(screen.getByRole("button", { name: "Add board" }));
-    state.revision = 12;
-    await user.click(save());
-    const dialog = await screen.findByRole("alertdialog", {
-      name: "This section changed elsewhere",
-    });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Keep editing" }),
-    );
-    expect(screen.getByLabelText("Org of board 3")).toHaveValue("acme");
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    await waitFor(() => {
-      expect(state.saves.map((s) => s.body.base_revision)).toEqual([6, 12]);
-    });
-  });
-
-  it("asks before leaving with an added board not saved", async () => {
-    const { user } = await openSearch();
-    fakeCheck({ exists: true, postings: 5, error: null });
-    await addCompany(user, "acme", { company: "Acme" });
-    await within(status()).findByText("Found on Ashby: 5 open postings.");
-    await user.click(screen.getByRole("button", { name: "Add board" }));
-    await user.click(screen.getByRole("tab", { name: /^Answers/ }));
-    expect(
-      await screen.findByRole("alertdialog", {
-        name: "Discard unsaved changes?",
-      }),
-    ).toBeVisible();
-  });
-});
-
-describe("search tab: job sites in your browser (browser B8)", () => {
-  const protectedSource = {
-    kind: "freework" as const,
-    query: "Robotics Engineer",
-    location: "Nantes",
-    enabled: false,
   };
-  const ordinarySource = {
-    kind: "vie" as const,
-    query: "first",
-    location: null,
-    enabled: true,
-  };
-  const browserRows = () =>
-    within(
-      screen.getByRole("list", { name: "Job sites in your browser" }),
-    ).getAllByRole("listitem");
 
-  it("saves an unrelated field with only a hidden Free-Work row and no consent write", async () => {
-    const initial = haraldLike();
-    const { user, state } = await openSearch({
-      ...initial,
-      search: { ...initial.search, browser_sources: [protectedSource] },
+  it("shows no boards table, starter list, browser sites card nor feeds card", async () => {
+    await openSearch({
+      ...haraldLike(),
+      search: { ...haraldLike().search, ...stored },
     });
+    expect(screen.queryByRole("table", { name: "Boards" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Add company" })).toBeNull();
+    expect(screen.queryByText(/starter/i)).toBeNull();
     expect(
       screen.queryByRole("list", { name: "Job sites in your browser" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText("No site yet.")).toBeVisible();
-    const writes: { method: string; path: string }[] = [];
-    const recordWrite = ({ request }: { request: Request }) => {
-      if (!["GET", "HEAD"].includes(request.method))
-        writes.push({
-          method: request.method,
-          path: new URL(request.url).pathname,
-        });
-    };
-    server.events.on("request:start", recordWrite);
-    try {
-      await user.clear(screen.getByLabelText("Posting age window (days)"));
-      await user.type(screen.getByLabelText("Posting age window (days)"), "14");
-      await user.click(save());
-      await screen.findByText("Search saved.");
-      expect(saved(state).browser_sources).toEqual([protectedSource]);
-      expect(saved(state).days).toBe(14);
-      expect(writes).toEqual([{ method: "PUT", path: "/api/profile/search" }]);
-    } finally {
-      server.events.removeListener("request:start", recordWrite);
-    }
-  });
-
-  it.each([0, 1, 2])(
-    "edits and removes visible rows using stored indexes with a hidden row at %i",
-    async (hiddenIndex) => {
-      const initial = haraldLike();
-      const last = { ...ordinarySource, query: "last" };
-      const sources: NonNullable<Search["browser_sources"]> = [
-        ordinarySource,
-        last,
-      ];
-      sources.splice(hiddenIndex, 0, protectedSource);
-      const { user, state } = await openSearch({
-        ...initial,
-        search: { ...initial.search, browser_sources: sources },
-      });
-      expect(browserRows()).toHaveLength(2);
-      expect(screen.queryByDisplayValue(protectedSource.query)).toBeNull();
-      for (const row of browserRows()) {
-        const kind = within(row).getByRole("combobox");
-        expect(
-          within(kind)
-            .getAllByRole("option")
-            .map((option) => option.getAttribute("value")),
-        ).toEqual(["google_careers", "vie", "site", "linkedin"]);
-      }
-      await user.clear(screen.getByLabelText("Search words of site 2"));
-      await user.type(
-        screen.getByLabelText("Search words of site 2"),
-        "edited",
-      );
-      await user.type(
-        screen.getByLabelText("Location (optional) of site 2"),
-        "Paris",
-      );
-      await user.click(screen.getByRole("switch", { name: "Read site 2" }));
-      await user.click(screen.getByRole("button", { name: "Remove site 1" }));
-      await user.click(save());
-      await screen.findByText("Search saved.");
-      const expected = [...sources];
-      expected[sources.indexOf(last)] = {
-        ...last,
-        query: "edited",
-        location: "Paris",
-        enabled: false,
-      };
-      expected.splice(sources.indexOf(ordinarySource), 1);
-      expect(saved(state).browser_sources).toEqual(expected);
-    },
-  );
-
-  it("moves visible rows across a hidden row, then replaces the visible rows", async () => {
-    const initial = haraldLike();
-    const last = { ...ordinarySource, query: "last" };
-    const { user, state } = await openSearch({
-      ...initial,
-      search: {
-        ...initial.search,
-        browser_sources: [ordinarySource, protectedSource, last],
-      },
-    });
-    await user.click(screen.getByRole("button", { name: "Move site 2 up" }));
-    expect(screen.getByLabelText("Search words of site 1")).toHaveValue("last");
-    await user.click(screen.getByRole("button", { name: "Move site 1 down" }));
-    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
-      "first",
-    );
-    await user.click(screen.getByRole("button", { name: "Move site 2 up" }));
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(saved(state).browser_sources).toEqual([
-      last,
-      ordinarySource,
-      protectedSource,
-    ]);
-    await user.click(screen.getByRole("button", { name: "Remove site 2" }));
-    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
-    expect(screen.getByText("No site yet.")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Add site" }));
-    await user.type(
-      screen.getByLabelText("Search words of site 1"),
-      "replacement",
-    );
-    await user.click(save());
-    await waitFor(() => {
-      expect(state.saves).toHaveLength(2);
-    });
-    expect(saved(state, 1).browser_sources).toEqual([
-      protectedSource,
-      {
-        kind: "google_careers",
-        query: "replacement",
-        location: null,
-        enabled: true,
-      },
-    ]);
-  });
-
-  it("counts hidden rows at ten, releases one slot on removal, and caps replacement", async () => {
-    const initial = haraldLike();
-    const visible = Array.from({ length: 9 }, (_, n) => ({
-      ...ordinarySource,
-      query: `words ${n}`,
-    }));
-    const { user, state } = await openSearch({
-      ...initial,
-      search: {
-        ...initial.search,
-        browser_sources: [protectedSource, ...visible],
-      },
-    });
-    expect(browserRows()).toHaveLength(9);
-    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
-    expect(screen.getByText("At most 10 sites.")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
-    expect(screen.getByRole("button", { name: "Add site" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Add site" }));
-    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
-    await user.type(
-      screen.getByLabelText("Search words of site 9"),
-      "replacement",
-    );
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(saved(state).browser_sources).toEqual([
-      protectedSource,
-      ...visible.slice(1),
-      {
-        kind: "google_careers",
-        query: "replacement",
-        location: null,
-        enabled: true,
-      },
-    ]);
-  });
-
-  it("reloads a newer hidden Off decision before replacing visible rows and preserves it after remount", async () => {
-    const initial = haraldLike();
-    const { user, state, unmount } = await openSearch({
-      ...initial,
-      search: {
-        ...initial.search,
-        browser_sources: [
-          { ...protectedSource, enabled: true },
-          ordinarySource,
-        ],
-      },
-    });
-    await user.type(screen.getByLabelText("Search words of site 1"), " draft");
-    const newerOff = {
-      ...protectedSource,
-      query: "new query",
-      location: "Lyon",
-    };
-    state.sections.search = {
-      ...initial.search,
-      browser_sources: [newerOff, ordinarySource],
-    };
-    state.revision = 12;
-    await user.click(save());
-    const dialog = await screen.findByRole("alertdialog", {
-      name: "This section changed elsewhere",
-    });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Reload (discard mine)" }),
-    );
-    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
-      "first",
-    );
-    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
-    await user.click(screen.getByRole("button", { name: "Add site" }));
-    await user.type(
-      screen.getByLabelText("Search words of site 1"),
-      "replacement",
-    );
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    const expected = [
-      newerOff,
-      {
-        kind: "google_careers",
-        query: "replacement",
-        location: null,
-        enabled: true,
-      },
-    ];
-    expect(saved(state, 1).browser_sources).toEqual(expected);
-    expect(state.saves.map((s) => s.body.base_revision)).toEqual([6, 12]);
-    unmount();
-    renderApp("/profile?tab=search");
-    await screen.findByRole("form", { name: "Search" });
-    expect(browserRows()).toHaveLength(1);
-    expect(screen.getByLabelText("Search words of site 1")).toHaveValue(
-      "replacement",
-    );
-    await user.clear(screen.getByLabelText("Posting age window (days)"));
-    await user.type(screen.getByLabelText("Posting age window (days)"), "14");
-    await user.click(save());
-    await waitFor(() => {
-      expect(state.saves).toHaveLength(3);
-    });
-    expect(saved(state, 2).browser_sources).toEqual(expected);
-  });
-
-  it("adds, edits, turns off and removes a site, and saves them", async () => {
-    const { user, state } = await openSearch();
-    const card = () =>
-      screen.getByRole("heading", { name: "Job sites in your browser" })
-        .parentElement!.parentElement!.parentElement!;
-    expect(within(card()).getByText("No site yet.")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Add site" }));
-    await user.click(screen.getByRole("button", { name: "Add site" }));
-    const sites = screen.getByRole("list", {
-      name: "Job sites in your browser",
-    });
-    const kinds = within(sites).getAllByRole("combobox");
-    // Company sites and LinkedIn are listed as coming later and cannot be picked.
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add site" })).toBeNull();
+    expect(screen.queryByText("Freelance and project sources")).toBeNull();
     expect(
-      within(kinds[0]!).getByRole("option", {
-        name: "LinkedIn (coming later)",
-      }),
-    ).toBeDisabled();
-    await user.selectOptions(kinds[1]!, "vie");
-    await user.click(save());
-    expect(await screen.findAllByText("Enter the search words.")).toHaveLength(
-      2,
-    );
-    await user.type(
-      screen.getByLabelText("Search words of site 1"),
-      " ai engineer ",
-    );
-    await user.type(
-      screen.getByLabelText("Location (optional) of site 1"),
-      "Paris",
-    );
-    await user.type(screen.getByLabelText("Search words of site 2"), "data");
-    await user.click(screen.getByRole("switch", { name: "Read site 2" }));
+      screen.getByText("Searches run the job websites ticked in Find jobs."),
+    ).toBeVisible();
+  });
+
+  it("keeps the stored boards, browser sites and feeds through a save", async () => {
+    const { user, state } = await openSearch({
+      ...haraldLike(),
+      search: { ...haraldLike().search, ...stored },
+    });
+    const days = screen.getByLabelText("Posting age window (days)");
+    await user.clear(days);
+    await user.type(days, "14");
     await user.click(save());
     await screen.findByText("Search saved.");
-    expect(saved(state).browser_sources).toEqual([
+    const body = saved(state);
+    expect(body.days).toBe(14);
+    expect(body.boards).toEqual(stored.boards);
+    // The fields the form carries (the api keeps LinkedIn's acceptance fields of its own).
+    expect(body.browser_sources).toEqual([
       {
         kind: "google_careers",
         query: "ai engineer",
-        location: "Paris",
+        location: null,
         enabled: true,
       },
-      { kind: "vie", query: "data", location: null, enabled: false },
     ]);
-    await user.click(screen.getByRole("button", { name: "Remove site 1" }));
-    await user.click(save());
-    await waitFor(() => {
-      expect(state.saves).toHaveLength(2);
-    });
-    expect(saved(state, 1).browser_sources).toEqual([
-      { kind: "vie", query: "data", location: null, enabled: false },
-    ]);
-  });
-
-  it("keeps the sources through a save of another field", async () => {
-    const initial = haraldLike();
-    const sources: Search["browser_sources"] = [
-      { kind: "google_careers", query: "ai", location: null, enabled: true },
-      { kind: "linkedin", query: "genai", location: "Lyon", enabled: false },
-    ];
-    const { user, state } = await openSearch({
-      ...initial,
-      search: { ...initial.search, browser_sources: sources },
-    });
-    expect(screen.getByText(/This site is not read yet/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Add rule" }));
-    await user.type(
-      screen.getByLabelText(`Rule ${initial.search.never_apply.length + 1}`),
-      "No defence roles.",
-    );
-    await user.click(save());
-    await screen.findByText("Search saved.");
-    expect(saved(state).browser_sources).toEqual(sources);
-  });
-
-  it("stops at 10 sites", async () => {
-    const initial = haraldLike();
-    const sources = Array.from({ length: 10 }, (_, n) => ({
-      kind: "vie" as const,
-      query: `words ${n}`,
-      location: null,
-      enabled: true,
-    }));
-    await openSearch({
-      ...initial,
-      search: { ...initial.search, browser_sources: sources },
-    });
-    expect(screen.getByRole("button", { name: "Add site" })).toBeDisabled();
-    expect(screen.getByText("At most 10 sites.")).toBeVisible();
+    expect(body.feeds).toEqual(stored.feeds);
   });
 });

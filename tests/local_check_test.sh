@@ -486,14 +486,14 @@ run 0 env LOCAL_CHECK_JOURNEY_SHARDS="" LOCAL_CHECK_STUB="$WORK/groups.sh" "$CHE
 real_groups="$(for path in "$ROOT"/web/e2e/*-all.config.ts; do name="${path##*/}"; echo "${name%-all.config.ts}"; done)"
 [[ -n "$real_groups" ]] || fail "this repository has no web/e2e/*-all.config.ts"
 want_checks="$(printf '%s\n' apps; printf '%s\nzeta\n' "$real_groups" | grep -vxF identity | LC_ALL=C sort)"
-want_journeys="$(printf '%s\n' "$real_groups" | grep -xF identity || true; echo sweep)"
+want_journeys="$(printf '%s\n' "$real_groups" | grep -xF identity || true)"
 [[ "$(cat "$STUB_CALLS.groups")" == "$want_checks"$'\n--\n'"$want_journeys" ]] ||
   fail "the journey groups found: $(tr '\n' ' ' <"$STUB_CALLS.groups"), expected $(printf '%s -- %s' "$want_checks" "$want_journeys" | tr '\n' ' ')"
 while IFS= read -r group; do
   [[ "$group" == -- ]] && continue
   out_has "journeys-$group"
   grep -qxF "journeys-$group" "$STUB_CALLS.expected" || fail "journeys-$group is not a step of the set"
-  case "$group" in apps | sweep) ;; *)
+  case "$group" in apps) ;; *)
     grep -qxF -- "-c e2e/$group-all.config.ts" "$STUB_CALLS.specs" || fail "the group $group does not run its config"
     git -C "$REPO" cat-file -e "groups:web/e2e/$group-all.config.ts" || fail "the group $group has no config"
     ;;
@@ -503,7 +503,7 @@ done <"$STUB_CALLS.groups"
   fail "the set holds journey steps of no group: $(grep '^journeys-' "$STUB_CALLS.expected" | tr '\n' ' ')"
 [[ "$(wc -l <"$STUB_CALLS.specs" | tr -d ' ')" == "$(grep -cvxF -- -- "$STUB_CALLS.groups")" ]] || fail "not one stack per group: $(tr '\n' ' ' <"$STUB_CALLS.specs")"
 # The decoys (other.config.ts, a .bak, a config in a subfolder) are no group: the list above is exact.
-# Each spec a group names one by one (apps, sweep) is a file of web/e2e.
+# Each spec a group names one by one (apps) is a file of web/e2e.
 while IFS= read -r spec; do
   [[ -f "$ROOT/web/e2e/$spec" ]] || fail "a journey group runs $spec, which is not in web/e2e"
 done < <(grep -o '[a-z0-9-]*\.spec\.ts' "$STUB_CALLS.specs")
@@ -1360,21 +1360,21 @@ assert j["changes"] == hashlib.sha256(b"".join(p + b"\0" for p in paths)).hexdig
 PY
 }
 scoped 0 --merge origin/scope-docs
-out_has "has no PASS record), ran apps, apply, mail, sweep"
+out_has "has no PASS record), ran apps, apply, mail"
 changes_match "$(tree_of)"
 ok "an unchecked base with nonempty changes runs full and retains exact change metadata"
 scoped 0
-out_has "has no PASS record), ran apps, apply, mail, sweep"
-[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "first check of mapped: $(journeys_of "$(tree_of)")"
+out_has "has no PASS record), ran apps, apply, mail"
+[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail | skipped | full" ]] || fail "first check of mapped: $(journeys_of "$(tree_of)")"
 out_has "journeys-apply"
 ok "a base without a PASS record runs every journey group, and the record says why"
 
 scoped 0 --merge origin/scope-docs
-out_has "journeys: scoped, ran none; skipped apps, apply, mail, sweep"
+out_has "journeys: scoped, ran none; skipped apps, apply, mail"
 out_lacks "journeys-"
 out_has "  skip  mail             no changed file touches it"
 docs_tree="$(tree_of)"
-[[ "$(journeys_of "$docs_tree")" == "ran | skipped apps apply mail sweep | scoped" ]] || fail "docs only: $(journeys_of "$docs_tree")"
+[[ "$(journeys_of "$docs_tree")" == "ran | skipped apps apply mail | scoped" ]] || fail "docs only: $(journeys_of "$docs_tree")"
 python3 - "$RECORDS/$docs_tree.json" "$(git -C "$REPO" diff --name-only origin/mapped origin/scope-docs)" <<'PY' || fail "the record of a scoped run does not hold its change set"
 import hashlib, json, sys
 j = json.load(open(sys.argv[1]))["journeys"]
@@ -1385,31 +1385,31 @@ PY
 ok "a documentation only batch on a checked base skips every journey group; its record lists them skipped with the reason and holds the digest of its change set"
 
 scoped 0 --merge origin/scope-mail
-out_has "journeys: scoped, ran mail; skipped apps, apply, sweep"
+out_has "journeys: scoped, ran mail; skipped apps, apply"
 out_has "  run   mail             web/src/features/mail/Message.tsx: the module mail"
 out_has "journeys-mail"
 out_lacks "journeys-apply"
-[[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply sweep | scoped" ]] || fail "one module: $(journeys_of "$(tree_of)")"
+[[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply | scoped" ]] || fail "one module: $(journeys_of "$(tree_of)")"
 ok "a change in one web feature runs only its groups"
 
 scoped 0 --merge origin/scope-api
-out_has "journeys: scoped, ran mail; skipped apps, apply, sweep"
+out_has "journeys: scoped, ran mail; skipped apps, apply"
 out_has "  run   mail             api/app/mail/sync.py: the api module mail"
-[[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply sweep | scoped" ]] || fail "one api module: $(journeys_of "$(tree_of)")"
+[[ "$(journeys_of "$(tree_of)")" == "ran mail | skipped apps apply | scoped" ]] || fail "one api module: $(journeys_of "$(tree_of)")"
 changes_match "$(tree_of)"
 ok "a change in one api module runs only its groups and records exact change metadata"
 
 scoped 0 --merge origin/scope-shared
-out_has "journeys: full (api/app/db.py: a shared file of the api), ran apps, apply, mail, sweep"
+out_has "journeys: full (api/app/db.py: a shared file of the api), ran apps, apply, mail"
 scoped 0 --merge origin/scope-unknown
-out_has "journeys: full (somewhere/new.txt: no rule names this path), ran apps, apply, mail, sweep"
-[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "unknown path: $(journeys_of "$(tree_of)")"
+out_has "journeys: full (somewhere/new.txt: no rule names this path), ran apps, apply, mail"
+[[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail | skipped | full" ]] || fail "unknown path: $(journeys_of "$(tree_of)")"
 ok "a shared file or a path no rule names runs every group"
 
 LOCAL_CHECK_FULL=1 scoped 0 --merge origin/scope-docs
-out_has "journeys: full (LOCAL_CHECK_FULL=1), ran apps, apply, mail, sweep"
-out_has "journeys-sweep"
-[[ "$(journeys_of "$docs_tree")" == "ran apps apply mail sweep | skipped | full" ]] || fail "LOCAL_CHECK_FULL: $(journeys_of "$docs_tree")"
+out_has "journeys: full (LOCAL_CHECK_FULL=1), ran apps, apply, mail"
+out_has "journeys-mail"
+[[ "$(journeys_of "$docs_tree")" == "ran apps apply mail | skipped | full" ]] || fail "LOCAL_CHECK_FULL: $(journeys_of "$docs_tree")"
 python3 - "$RECORDS/$docs_tree.json" <<'PY' || fail "forced full record lost its exact changes"
 import hashlib, json, sys
 j = json.load(open(sys.argv[1]))["journeys"]
@@ -1421,12 +1421,12 @@ ok "LOCAL_CHECK_FULL=1 runs every group, and the record says why"
 
 for ref in scope-failed-mapper scope-no-mapper; do
   scoped 0 --merge "origin/$ref"
-  [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail sweep | skipped | full" ]] || fail "$ref narrowed journeys"
+  [[ "$(journeys_of "$(tree_of)")" == "ran apps apply mail | skipped | full" ]] || fail "$ref narrowed journeys"
   changes_match "$(tree_of)"
 done
 ok "missing and failed mappers run full and retain independently computed change metadata"
 scoped 0 --merge origin/scope-newline
-out_has "journeys: scoped, ran none; skipped apps, apply, mail, sweep"
+out_has "journeys: scoped, ran none; skipped apps, apply, mail"
 changes_match "$(tree_of)"
 ok "the gate attests one newline and quoted pathname without splitting or Git quoting"
 

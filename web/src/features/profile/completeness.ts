@@ -56,13 +56,15 @@ export const REQUIRED: Record<SectionName, Record<string, Rule>> = {
     location: terms("location"),
     contract_types: field("contract_types"),
     remote_stance: field("remote_stance"),
-    boards: (s) =>
-      Array.isArray(s.boards) &&
-      s.boards.some(
-        (board) =>
-          typeof board === "object" &&
-          board !== null &&
-          (board as { enabled?: unknown }).enabled === true,
+    // Every search runs the job websites ticked in Find jobs alone (owner, 2026-10-28): a saved
+    // board no longer counts.
+    interactive_sites: (s) =>
+      Array.isArray(s.interactive_sites) &&
+      s.interactive_sites.some(
+        (site) =>
+          typeof site === "object" &&
+          site !== null &&
+          (site as { enabled?: unknown }).enabled === true,
       ),
   },
   answers: Object.fromEntries(

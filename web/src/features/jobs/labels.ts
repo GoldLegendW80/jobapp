@@ -234,7 +234,8 @@ export function searchesSentence(source: {
 
 /** The saved titles and places a website's search could not carry (jobs J18): its scope takes
  * 100 of each and 32 KiB in all, so a longer list is searched by its first ones, in saved order,
- * and the rest is told here. Empty when none was left out or the api is older. */
+ * and the rest is told here, with a pattern an earlier version saved that holds no plain word
+ * (app/profile/plain_terms.py). Empty when none was left out or the api is older. */
 export function leftOutSentence(source: {
   titles_left_out?: number;
   places_left_out?: number;
@@ -252,7 +253,7 @@ export function leftOutSentence(source: {
   if (!parts.length) return "";
   const total = (source.titles_left_out ?? 0) + (source.places_left_out ?? 0);
   const verb = total === 1 ? "was" : "were";
-  return `${parts.join(" and ")} ${verb} left out: a website's search takes the first ones that fit.`;
+  return `${parts.join(" and ")} ${verb} left out: a website's search types plain words, the first ones that fit.`;
 }
 
 export function sourceName(source: {

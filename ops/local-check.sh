@@ -37,7 +37,7 @@
 #             stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
 #             never a real job site; browser on a stack that runs its browser and the static
 #             pages of tests/browser-pages.compose.yml).
-#   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
+#   journeys  the web lint, type check, vitest and build; the journey group identity.
 #
 # The lists that ci.yml holds (the files of its Shellcheck step, the tests/*_test.sh steps) are read from
 # ci.yml, so a step added there runs here. The journey groups are found in web/e2e (journey_groups,
@@ -802,12 +802,13 @@ s_chromium() {
   pnpm exec playwright install chromium
 }
 
-# The journey groups. Two name their spec files one by one, as ci.yml has them: apps and sweep.
+# The journey groups. One names its spec files one by one, as ci.yml has them: apps.
 # Every other group is a Playwright config of the tree, web/e2e/<group>-all.config.ts, found
 # here: a module adds its group by adding that file, with no line of this script to edit
-# (issue #279). identity and sweep were the e2e groups of the CI job journeys and run in that
-# job here; every other group runs in the job checks. The order is apps, the configs by name,
-# then sweep: the stacks start in that order, LOCAL_CHECK_STACKS at a time.
+# (issue #279). identity was the e2e group of the CI job journeys and runs in that job here;
+# every other group runs in the job checks. The order is apps, then the configs by name: the
+# stacks start in that order, LOCAL_CHECK_STACKS at a time. The group sweep (jobs-sweep.spec.ts)
+# was retired on 2026-10-28: every search runs the job websites alone (browser-j5.spec.ts).
 config_groups() { # the <group> of every web/e2e/<group>-all.config.ts of the tree, sorted
   local config name
   for config in "$TREE"/web/e2e/*-all.config.ts; do
@@ -819,9 +820,9 @@ config_groups() { # the <group> of every web/e2e/<group>-all.config.ts of the tr
 
 journey_groups() { # journey_groups <checks|journeys>: the groups of that CI job, in run order
   local group
-  for group in apps $(config_groups) sweep; do
+  for group in apps $(config_groups); do
     case "$group" in
-    identity | sweep) [[ "$1" != journeys ]] || printf '%s\n' "$group" ;;
+    identity) [[ "$1" != journeys ]] || printf '%s\n' "$group" ;;
     *) [[ "$1" != checks ]] || printf '%s\n' "$group" ;;
     esac
   done
@@ -834,7 +835,6 @@ journey_specs() { # journey_specs <part>: the Playwright arguments of a group (a
   [[ "$1" != *.* ]] || shard=" --shard=${1#*.}/$(shard_count "$group")"
   case "$group" in
   apps) echo "jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts --workers=1$shard" ;;
-  sweep) echo "jobs-sweep.spec.ts --workers=1$shard" ;;
   *) echo "-c e2e/$group-all.config.ts$shard" ;;
   esac
 }
@@ -1040,7 +1040,6 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
     export E2E_JOBS_DATA="$WORK/synthetic/data"
     ;;
   identity) export E2E_ADMIN_EMAIL=e2e-admin@example.org E2E_PASSWORD_THROTTLE=1 ;;
-  sweep) export E2E_SKIP_REAL_SWEEP=1 ;;
   mail)
     # The fake Google beside the stack. The browser of the journey opens its consent page, so
     # it is published on a loopback port of its own, claimed like the stack's.

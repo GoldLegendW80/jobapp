@@ -73,8 +73,9 @@ export const sweepSchema = z.object({
   duration: z.number().nullable(),
   // Absent from an api older than browser B8.
   sources: z.array(sweepSourceSchema).default([]),
-  // The frozen scope's public part (jobs J9): absent from older sweeps. `websites_only` (jobs
-  // J17): the sweep searched the ticked websites and no board, feed or fixed reader.
+  // The frozen scope's public part (jobs J9): absent from older sweeps. `websites_only`: the
+  // sweep searched the ticked websites and no board, feed or fixed reader (every sweep since
+  // the owner's decision of 2026-10-28).
   search_scope: z
     .object({ websites_only: z.boolean().default(false) })
     .nullable()
@@ -102,7 +103,7 @@ export const scheduleSchema = z.object({
   days: z.array(z.string()),
   times: z.array(z.string()),
   timezone: z.string(),
-  /** Off, or on with no enabled board: nothing runs. */
+  /** Off, or on with no ticked website: nothing runs. */
   active: z.boolean(),
   next_run: z.string().nullable(),
 });
@@ -116,21 +117,13 @@ export type SweepList = z.infer<typeof sweepListSchema>;
 
 export const sweepsKey = ["jobs", "sweeps"] as const;
 
-/** Start a sweep; `websitesOnly` (jobs J17) searches the ticked websites alone. */
-export function startSweep(
-  profileRevision?: number,
-  websitesOnly = false,
-): Promise<Sweep> {
+/** Start a sweep: it searches the ticked websites alone (owner, 2026-10-28). */
+export function startSweep(profileRevision?: number): Promise<Sweep> {
   return request("/jobs/sweeps", {
     method: "POST",
     ...(profileRevision === undefined
       ? {}
-      : {
-          body: {
-            profile_revision: profileRevision,
-            ...(websitesOnly ? { websites_only: true } : {}),
-          },
-        }),
+      : { body: { profile_revision: profileRevision } }),
     timeoutMs: 15_000,
     validate: (data) => sweepSchema.parse(data),
   });

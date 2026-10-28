@@ -75,7 +75,7 @@ for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'py
   'pre-commit run --all-files' 'pre-commit run gitleaks-commits --hook-stage manual' \
   'tests/secret_scan_test.sh' 'playwright test -c e2e/identity-all.config.ts' \
   'playwright test -c e2e/ingestion-all.config.ts' \
-  'playwright test jobs-sweep.spec.ts' 'agents-streaming.spec.ts' \
+  'agents-streaming.spec.ts' \
   'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do
   grep -qF -- "$gate" "$WORK/ci.code" || fail "ci.yml lost: $gate"
@@ -85,7 +85,7 @@ if grep -q 'continue-on-error' "$WORK/ci.code"; then fail "ci.yml lets a step fa
 # The run's result stands for every job only while no job can be skipped: none waits for another
 # and none has a condition of its own (step conditions are indented deeper).
 if grep -qE '^    (needs|if):' "$WORK/ci.code"; then fail "a job of ci.yml waits for another or has a condition: it could be skipped"; fi
-ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the three e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, cancel in progress (each looked for outside the comments); no job that could be skipped; worker counts written out"
+ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, cancel in progress (each looked for outside the comments); no job that could be skipped; worker counts written out"
 if grep -qi 'armcap' "$WORK/ci.code"; then fail "ci.yml names the Mac's OpenSSL variable"; fi
 grep -q 'CI_COMPOSE_OVERLAY' "$WORK/ci.code" || fail "ci.yml does not read the runner's CI_COMPOSE_OVERLAY"
 grep -q '^ENV OPENSSL_armcap=0 \\$' ops/ci-runner/Dockerfile || fail "ops/ci-runner/Dockerfile does not set OPENSSL_armcap=0"
@@ -98,7 +98,7 @@ fi
 if grep -n '"rm", "-f"' api/tests/pg.py api/tests/redis_server.py | grep -v '"rm", "-f", "-v"'; then
   fail "a test helper removes a container without its volumes (docker rm -f -v)"
 fi
-if grep -n 'docker rm ' tests/tailscale_test.sh tests/compose_smoke.sh tests/e2e_jetson.sh tests/e2e_jobs_jetson.sh tests/e2e_jobs_sweep_jetson.sh | grep -v -- ' -v '; then
+if grep -n 'docker rm ' tests/tailscale_test.sh tests/compose_smoke.sh tests/e2e_jetson.sh tests/e2e_jobs_jetson.sh | grep -v -- ' -v '; then
   fail "a test script removes a container without its volumes (docker rm -v)"
 fi
 grep -q 'down -v --remove-orphans' "$WORK/ci.code" || fail "the e2e teardown does not remove its volumes"

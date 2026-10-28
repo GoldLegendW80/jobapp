@@ -752,8 +752,8 @@ class SweepStartIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     profile_revision: Annotated[int, Field(ge=0, le=2_147_483_647)] | None = None
-    # Jobs J17, "Websites only" of Find jobs: search the ticked websites and no board, feed or
-    # fixed reader, for this sweep only (the schedule always searches every source).
+    # Jobs J17's "Websites only" choice, still accepted from an older tab and ignored: every
+    # search runs the ticked websites alone since the owner's decision of 2026-10-28.
     websites_only: bool = False
 
 

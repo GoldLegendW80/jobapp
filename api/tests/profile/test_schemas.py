@@ -943,7 +943,7 @@ def test_completeness_of_an_empty_profile() -> None:
         "full_name", "headline", "email", "phone", "city", "country", "languages"
     ]  # fmt: skip
     assert result.sections["search"].missing == [
-        "title_include", "location", "contract_types", "remote_stance", "boards"
+        "title_include", "location", "contract_types", "remote_stance", "interactive_sites"
     ]  # fmt: skip
 
 
@@ -966,7 +966,8 @@ def test_completeness_of_a_partial_profile() -> None:
             "search",
             {
                 **FULL["search"],
-                "boards": [{**FULL["search"]["boards"][1]}],  # only a disabled board
+                # Its boards, one on, no longer count: only a ticked job website does.
+                "interactive_sites": [{**FULL["search"]["interactive_sites"][0], "enabled": False}],
             },
         ),
     }
@@ -979,7 +980,10 @@ def test_completeness_of_a_partial_profile() -> None:
     assert (by["experience"].percent, by["experience"].missing) == (50, ["education"])
     assert (by["facts"].percent, by["facts"].missing) == (100, [])
     assert by["skills"].percent == 0
-    assert (by["search"].percent, by["search"].missing) == (80, ["boards"])
+    assert (by["search"].percent, by["search"].missing) == (
+        80,
+        ["interactive_sites"],
+    )
     assert by["answers"].percent == 0
     assert result.overall == round((43 + 50 + 100 + 0 + 80 + 0) / 6)
 

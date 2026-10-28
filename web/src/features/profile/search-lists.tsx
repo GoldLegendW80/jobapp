@@ -1,20 +1,17 @@
 /**
  * The four plain word lists of the search (owner, 2026-10-27): Job titles, Unwanted titles,
- * Places and Unwanted places, as chips of words. Each list's regular expression switch sits
- * under the shared Advanced, off by default. Advanced opens by itself when a list holds regular
- * expressions (a saved one, or one a reload brings back), so the switch of a saved pattern shows
- * at load; the person can still fold it, and the list then says under its chips that it holds
- * expressions (search-lists.test.tsx).
+ * Places and Unwanted places, as chips of words. The person types the jobs and places she wants
+ * and does not want, never a regular expression (owner, 2026-10-28): there is no switch. A list
+ * saved as regular expressions by an earlier version keeps its terms and its mode, says so under
+ * its chips, and still works (the search reads the words of each, app/profile/plain_terms.py).
  * Used by the profile's Search tab and by the Find jobs setup (jobs/search-setup.tsx).
  */
-import { useState } from "react";
-import { useWatch, type UseFormReturn } from "react-hook-form";
+import type { UseFormReturn } from "react-hook-form";
 
-import { AdvancedSection } from "@/components/advanced-section";
 import { WORDING } from "@/lib/wording";
 
 import type { SearchForm } from "./editor-forms";
-import { TermChips, TermListRegexSwitch } from "./term-chips";
+import { TermChips } from "./term-chips";
 
 const LISTS = [
   {
@@ -41,8 +38,6 @@ const LISTS = [
   },
 ] as const;
 
-const FLAGS = LISTS.map((list) => `${list.name}.advanced_regex` as const);
-
 export function SearchLists({
   form,
   descriptions = true,
@@ -51,15 +46,6 @@ export function SearchLists({
   /** false in a dense dialog: the lists without their one line explanations */
   descriptions?: boolean;
 }) {
-  const flags = useWatch({ control: form.control, name: FLAGS });
-  const usesRegex = flags.some(Boolean);
-  const [open, setOpen] = useState(usesRegex);
-  // A list that starts holding regular expressions (a reload, a reset) opens Advanced again.
-  const [regexSeen, setRegexSeen] = useState(usesRegex);
-  if (regexSeen !== usesRegex) {
-    setRegexSeen(usesRegex);
-    if (usesRegex) setOpen(true);
-  }
   return (
     <div className="flex flex-col gap-4">
       {LISTS.map((list) => (
@@ -72,24 +58,6 @@ export function SearchLists({
           regexSwitch={false}
         />
       ))}
-      <AdvancedSection open={open} onOpenChange={setOpen}>
-        <fieldset className="flex flex-col gap-2">
-          <legend className="text-sm font-medium">
-            {WORDING.regularExpressions}
-          </legend>
-          <p className="text-xs text-muted-foreground">
-            {WORDING.regularExpressionsNote}
-          </p>
-          {LISTS.map((list) => (
-            <TermListRegexSwitch
-              key={list.name}
-              form={form}
-              name={list.name}
-              label={list.label}
-            />
-          ))}
-        </fieldset>
-      </AdvancedSection>
     </div>
   );
 }

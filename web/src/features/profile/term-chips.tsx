@@ -6,9 +6,9 @@
  * refused too. A chip that breaks a rule after the switch changes, or that the server refused
  * on save (a regex error with its position, errors.ts), shows its message under the chip.
  *
- * A list whose switch sits elsewhere (`regexSwitch={false}`: the search lists keep theirs under
- * Advanced, search-lists.tsx) renders `TermListRegexSwitch` there, and says under its chips when
- * it holds regular expressions.
+ * A list with no switch (`regexSwitch={false}`: the search lists, search-lists.tsx, where the
+ * person types words only, owner 2026-10-28) keeps the mode it was saved in and says under its
+ * chips when it holds regular expressions an earlier version saved.
  */
 import { CircleAlert, Plus, X } from "lucide-react";
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -40,7 +40,7 @@ interface TermChipsProps<F extends FieldValues> {
   placeholder?: string;
   /** smaller heading, for lists nested in a card */
   compact?: boolean;
-  /** false: the list's regular expression switch is rendered elsewhere (TermListRegexSwitch) */
+  /** false: no regular expression switch; the list keeps the mode it was saved in */
   regexSwitch?: boolean;
 }
 
@@ -258,44 +258,5 @@ export function TermChips<F extends FieldValues>({
         </p>
       ) : null}
     </div>
-  );
-}
-
-/**
- * The regular expression switch of the term list `name`, for a list rendered with
- * `regexSwitch={false}`: on, its terms are regular expressions searched as written; off, plain
- * words. Its accessible name is "Regular expressions for <label>".
- */
-export function TermListRegexSwitch<F extends FieldValues>({
-  form,
-  name,
-  label,
-}: {
-  form: UseFormReturn<F>;
-  name: string;
-  label: string;
-}) {
-  const advanced = useController({
-    control: form.control,
-    name: `${name}.advanced_regex` as Path<F>,
-  });
-  const on = advanced.field.value === true;
-  return (
-    <label className="flex items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        role="switch"
-        aria-checked={on}
-        aria-label={`${WORDING.regularExpressionsFor} ${label}`}
-        className="size-4 accent-primary"
-        checked={on}
-        onChange={(event) => {
-          advanced.field.onChange(event.target.checked);
-          if (form.formState.isSubmitted)
-            void form.trigger(`${name}.terms` as Path<F>);
-        }}
-      />
-      {label}
-    </label>
   );
 }

@@ -17,7 +17,8 @@ import pytest
 
 from app.browser import finder, platform_policy
 from app.browser.sources import interactive
-from app.browser.sources.interactive import PLAIN, searches_for
+from app.browser.sources.interactive import searches_for
+from app.profile.plain_terms import PLAIN
 from app.profile.schemas import SearchSection
 from tests.browser.test_b9_site import ScriptedFinder
 from tests.browser.test_b13_runtime import BASE, FIRST
@@ -647,15 +648,41 @@ def test_a_regular_expression_is_typed_only_when_it_is_a_plain_word(term, plain)
     assert bool(PLAIN.fullmatch(term)) is plain
 
 
-def test_a_plain_regular_expression_is_searched_and_any_other_stays_unsupported():
+def test_a_saved_regular_expression_is_searched_as_its_plain_words():
+    # Owner, 2026-10-28: an expression saved before the setup stopped asking for them is typed
+    # as the words it stands for when that is safe (app/profile/plain_terms.py).
     plain = selected(title_include={"terms": ["robot", "drone"], "advanced_regex": True})
     assert searches_for(plain).scope.titles == ("robot", "drone")
-    places = selected(location={"terms": ["Paris|Lyon"], "advanced_regex": True})
+    owner = selected(
+        title_include={
+            "terms": ["forward.deployed", "solutions? architect", r"\w+ops"],
+            "advanced_regex": True,
+        },
+        location={"terms": ["Paris|Lyon"], "advanced_regex": True},
+    )
+    planned = searches_for(owner)
+    assert planned.scope.titles == (
+        "forward deployed",
+        "forward-deployed",
+        "solutions architect",
+        "solution architect",
+    )
+    assert planned.scope.places == ("Paris", "Lyon")
+    # The expression with no plain words is told as left out, and stays in the criteria.
+    assert (planned.titles_left_out, planned.places_left_out) == (1, 0)
+    assert r"\\w+ops" in planned.scope.criteria
+
+
+def test_a_saved_list_with_no_plain_word_stays_unsupported_and_is_never_widened():
+    places = selected(location={"terms": [r"\w+ville", "a.*b"], "advanced_regex": True})
     with pytest.raises(ValueError, match="unsupported_criteria"):
         searches_for(places)
     entry, _, leases = run(places, SearchSite(), ScriptedFinder(lambda _: None))
     assert entry["reason"] == "unsupported_criteria"
     assert not leases.acquired
+    titles = selected(title_include={"terms": [r"\w+ops"], "advanced_regex": True})
+    with pytest.raises(ValueError, match="unsupported_criteria"):
+        searches_for(titles)
 
 
 # --- more saved values than a scope carries (review follow up 4) -------------------------------
