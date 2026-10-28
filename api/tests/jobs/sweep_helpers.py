@@ -3,7 +3,9 @@ sweep whose website "finds" the given postings (`websites`: a fake of the websit
 stores them through the run's commits, as the interactive finder does)."""
 
 import asyncio
+import random
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,6 +28,14 @@ SITE = {
     "enabled": True,
     "mode": "llm_browser",
 }
+# A second one, for what two websites do together (duplicates, source notes, failures).
+SITE_2 = {
+    "platform": "custom",
+    "url": "https://careers.example-labs.test/",
+    "enabled": True,
+    "mode": "llm_browser",
+}
+HOST, HOST_2 = "jobs.example-robotics.test", "careers.example-labs.test"
 
 
 def search(**overrides: Any) -> dict[str, Any]:
@@ -105,6 +115,20 @@ def finding(
 def websites(*findings: finder.VerifiedFinding) -> sweep.BrowserHook:
     """A fake of the website Runner: the first ticked website "finds" `findings`, stored through
     the run's commits in batches, as the interactive finder reports them."""
+    return each_website(findings)
+
+
+def each_website(
+    *found: Sequence[finder.VerifiedFinding],
+    hang_s: float = 0.0,
+    hang_at: int = -1,
+    errors: dict[int, str] | None = None,
+) -> sweep.BrowserHook:
+    """A fake of the website Runner over every ticked website in order: website `i` "finds"
+    `found[i]` (nothing past the list), stored through the run's commits in batches. `errors`
+    ends website `i` with that error code, after what it stored; `hang_s` keeps website `hang_at`
+    (the last by default) running that long after its findings are stored (a slow website: the
+    time limit, a cancellation, the heartbeat and the progress)."""
 
     async def hook(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float) -> None:
         del deadline
@@ -114,16 +138,43 @@ def websites(*findings: finder.VerifiedFinding) -> sweep.BrowserHook:
             stats.current_board = entry["source_id"]
             assert plan.commits is not None
             plan.commits.admit(entry["source_id"])
-            mine = list(findings) if index == 0 else []
+            mine = list(found[index]) if index < len(found) else []
             size = finder.VERIFIED_BATCH_MAX
             for first in range(0, len(mine), size):
                 batch = finder.VerifiedBatch(tuple(mine[first : first + size]))
                 await plan.commits.save(entry["source_id"], entry["host"], batch)
             await plan.commits.settle()
+            await progress()
+            if hang_s and index == range(len(sites))[hang_at]:
+                await asyncio.sleep(hang_s)
+            if errors and index in errors:
+                entry["error"] = errors[index]
             sweep.finish_source(entry)
             await progress()
 
     return hook
+
+
+def website_runner(tools: Any, leases: Any = None, **options: Any) -> Any:
+    """The real website Runner (app/browser/sources) over the browser tests' fakes: `tools` for
+    browserd, a recording lease store, a paced clock that never waits."""
+    from app.browser.sources import MemoryPacer, Runner
+    from tests.browser.fakes import FakeLeases
+
+    clock = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    return Runner(
+        leases or FakeLeases(),
+        lambda user, lease, token: tools,
+        sleep=sleep,
+        rng=random.Random(1),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
+        **options,
+    )
 
 
 async def run_async(

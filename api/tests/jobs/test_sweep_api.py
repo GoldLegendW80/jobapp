@@ -1,6 +1,8 @@
 """/api/jobs/sweeps through the app: start (202, 409, 422, 503, stale sweeps), list, detail with
-the jobs a sweep added, the server-sent event stream, isolation, CSRF and caching headers. The
-queue is a recording fake here; tests/test_worker.py runs the real one on Redis."""
+the jobs a sweep added, a row written before the boards were deleted, the server-sent event
+stream, isolation, CSRF and caching headers. The queue is a recording fake here;
+tests/test_worker.py runs the real one on Redis. The sweeps run a fake of the website Runner
+(tests/jobs/sweep_helpers.py)."""
 
 import json
 import threading
@@ -20,11 +22,11 @@ from app.identity.deps import COOKIE_NAME
 from app.jobs import sweep
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from tests.identity.api_helpers import Api
-from tests.jobs.fake_ats import FakeAts
 from tests.jobs.sweep_helpers import (
     SITE,
-    board,
-    fake_ats,
+    SITE_2,
+    each_website,
+    finding,
     new_sweep,
     now,
     run,
@@ -32,8 +34,6 @@ from tests.jobs.sweep_helpers import (
     set_profile,
 )
 from tests.jobs.test_api import Signed, sign_in
-
-__all__ = ["fake_ats"]
 
 
 class FakeQueue:
@@ -74,9 +74,14 @@ def start(api: Api, who: Signed, **kwargs: Any) -> httpx.Response:
 
 
 def engine_start(factory: sessionmaker[Session], who: Signed) -> dict[str, str]:
-    """A sweep of the enabled boards, through the engine's internal start: no search reads
-    boards since the owner's decision of 2026-10-28, while the routes below still show them."""
+    """A sweep of the ticked websites, through the engine's internal start (the worker's)."""
     return {"id": str(new_sweep(factory, who.id))}
+
+
+FOUND = (
+    finding("AI Engineer", company="Acme AI"),
+    finding("Applied AI Engineer, Agents", company="Acme AI", location="London, United Kingdom"),
+)
 
 
 def rows(factory: sessionmaker[Session], user_id: uuid.UUID) -> list[Sweep]:
@@ -94,7 +99,7 @@ def rows(factory: sessionmaker[Session], user_id: uuid.UUID) -> list[Sweep]:
 def test_start_queues_one_sweep_and_refuses_a_second(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, alice.id, search())
     first = start(api, alice)
     assert first.status_code == 202, first.text
     assert first.headers["cache-control"] == "no-store"
@@ -117,12 +122,10 @@ def test_start_without_an_enabled_website_is_422_and_stores_nothing(
     response = start(api, alice)
     assert response.status_code == 422
     assert response.json()["detail"] == sweep.NO_WEBSITES
-    # An enabled board is no longer a search (owner, 2026-10-28), nor a website switched off.
-    set_profile(factory, alice.id, search(board("fake-ok")))
+    # A website switched off is no search, nor a saved section without websites.
+    set_profile(factory, alice.id, search(interactive_sites=[{**SITE, "enabled": False}]))
     assert start(api, alice).json()["detail"] == sweep.NO_WEBSITES
-    set_profile(
-        factory, alice.id, search(board("fake-ok"), interactive_sites=[{**SITE, "enabled": False}])
-    )
+    set_profile(factory, alice.id, search(interactive_sites=[]))
     assert start(api, alice).status_code == 422
     assert rows(factory, alice.id) == []
     assert fake_queue.calls == []
@@ -131,9 +134,9 @@ def test_start_without_an_enabled_website_is_422_and_stores_nothing(
 def test_start_with_a_search_section_that_no_longer_validates_asks_to_save_it_again(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    """Issue #11: a distinct 422, not "No board is enabled", and nothing stored or queued."""
+    """Issue #11: a distinct 422, not the websites message, and nothing stored or queued."""
     broken = {"terms": ["(?P<x>agent)", "(?P<x>llm)"], "advanced_regex": True}
-    set_profile(factory, alice.id, search(board("fake-ok"), title_exclude=broken))
+    set_profile(factory, alice.id, search(title_exclude=broken))
     response = start(api, alice)
     assert response.status_code == 422
     assert response.json()["detail"] == sweep.SEARCH_INVALID
@@ -144,7 +147,7 @@ def test_start_with_a_search_section_that_no_longer_validates_asks_to_save_it_ag
 def test_start_with_the_queue_down_fails_the_sweep_at_once(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, alice.id, search())
     fake_queue.down = True
     response = start(api, alice)
     assert response.status_code == 503
@@ -158,7 +161,7 @@ def test_start_with_the_queue_down_fails_the_sweep_at_once(
 def test_a_stale_running_sweep_does_not_block(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, alice.id, search())
     with factory() as db:
         db.add(
             Sweep(
@@ -178,7 +181,7 @@ def test_a_stale_running_sweep_does_not_block(
 def test_start_needs_a_session_and_the_csrf_header(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok")))
+    set_profile(factory, alice.id, search())
     assert api.request("POST", "/api/jobs/sweeps").status_code == 401
     assert start(api, alice, csrf=False).status_code == 403
     assert fake_queue.calls == []
@@ -196,11 +199,10 @@ def test_list_detail_and_isolation(
     alice: Signed,
     bob: Signed,
     fake_queue: FakeQueue,
-    fake_ats: FakeAts,
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok"), board("fake-404", "lever", "Gone")))
+    set_profile(factory, alice.id, search())
     started = engine_start(factory, alice)
-    run(factory, uuid.UUID(started["id"]), fake_ats)
+    run(factory, uuid.UUID(started["id"]), *FOUND)
 
     listed = api.request("GET", "/api/jobs/sweeps", token=alice.token)
     assert listed.status_code == 200
@@ -217,16 +219,13 @@ def test_list_detail_and_isolation(
     [item] = body["items"]
     assert item["id"] == started["id"]
     assert item["status"] == "done"
-    assert (item["boards_total"], item["boards_ok"], item["new"], item["seen"]) == (2, 1, 2, 3)
-    assert item["boards_failed"] == [
-        {
-            "company": "Gone",
-            "ats": "lever",
-            "org": "fake-404",
-            "error": "not_found",
-            "message": "board not found",
-        }
-    ]
+    assert (item["boards_total"], item["boards_ok"], item["new"], item["seen"]) == (0, 0, 2, 2)
+    assert item["boards_failed"] == []
+    [source] = item["sources"]
+    assert (source["host"], source["outcome"], source["found"], source["new"]) == (
+        "jobs.example-robotics.test", "complete", 2, 2,
+    )  # fmt: skip
+    assert item["search_scope"]["websites_only"] is True
     assert item["current_board"] is None
     assert item["duration"] is not None
 
@@ -265,7 +264,7 @@ def test_list_detail_and_isolation(
 def test_list_limit_and_order(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok")))
+    set_profile(factory, alice.id, search())
     base = now()
     with factory() as db:
         for n in range(25):
@@ -299,6 +298,111 @@ def test_list_limit_and_order(
         )
 
 
+# A sweep row written before the boards, the feeds and the fixed readers were deleted (owner,
+# 2026-10-28): board counters and failures, and `sources` entries of every deleted mode.
+OLD_SOURCES = [
+    {"source_id": "s-board", "mode": "api", "kind": "greenhouse", "query": "acme-ai",
+     "phase": "done", "outcome": "complete", "reason": None, "found": 3, "postings": 2},
+    {"source_id": "s-remoteok", "mode": "feed", "kind": "remoteok", "phase": "done",
+     "outcome": "failed", "reason": "feed_unavailable", "error": "feed_unavailable",
+     "items_skipped": 2},
+    {"source_id": "s-hn", "mode": "feed", "kind": "hn_freelance", "phase": "done",
+     "outcome": "no_matches", "reason": None, "found": 0},
+    {"source_id": "s-wwr", "mode": "feed", "kind": "weworkremotely", "phase": "done",
+     "outcome": "partial", "reason": "feed_timeout", "found": 1, "postings": 1,
+     "skipped_by_rule": 1},
+    {"source_id": "s-vie", "mode": "fixed_reader", "kind": "vie", "query": "AI Engineer",
+     "location": "France", "result_pages": 2, "found": 4, "postings": 1, "phase": "done",
+     "outcome": "complete"},
+    {"kind": "google_careers", "query": "AI Engineer", "result_pages": 1, "found": 2,
+     "postings": 0, "error": "layout_changed"},  # a pre-v1 reader entry, without a slot
+]  # fmt: skip
+OLD_STATS = {
+    "boards_total": 3,
+    "boards_done": 3,
+    "boards_ok": 1,
+    "boards_failed": [
+        {"company": "Gone AI", "ats": "lever", "org": "gone-ai", "error": "not_found",
+         "message": "board not found"},
+        {"company": "Slow AI", "ats": "ashby", "org": "slow-ai", "error": "timeout"},
+    ],
+    "current_board": "Slow AI",
+    "seen": 40, "matched": 6, "new": 4, "duplicates": 2, "skipped_by_rule": 1, "duration": 12.5,
+    "picked_at": "2026-10-20T06:17:02+00:00",
+    "heartbeat_at": "2026-10-20T06:17:14+00:00",
+    "sources": OLD_SOURCES,
+    "search_scope": {
+        "version": 1, "profile_revision": 7, "created_at": "2026-10-20T06:17:00+00:00",
+        "trigger": "schedule", "search": {"days": 30, "boards": [{"ats": "greenhouse"}]},
+        "skills": None, "sources": OLD_SOURCES[:5],
+    },
+}  # fmt: skip
+
+
+def test_a_row_written_before_the_boards_were_deleted_reads_as_stored(
+    api: Api, factory: sessionmaker[Session], alice: Signed, bob: Signed, fake_queue: FakeQueue
+) -> None:
+    at = now() - timedelta(days=8)
+    with factory() as db:
+        row = Sweep(
+            user_id=alice.id,
+            trigger=SweepTrigger.schedule,
+            status=SweepStatus.done,
+            started_at=at,
+            finished_at=at + timedelta(seconds=13),
+            stats=OLD_STATS,
+        )
+        db.add(row)
+        db.commit()
+        sweep_id = str(row.id)
+    listed = api.request("GET", "/api/jobs/sweeps", token=alice.token)
+    assert listed.status_code == 200, listed.text
+    [item] = listed.json()["items"]
+    detail = api.request("GET", f"/api/jobs/sweeps/{sweep_id}", token=alice.token)
+    assert detail.status_code == 200, detail.text
+    for body in (item, detail.json()):
+        assert body["id"] == sweep_id
+        assert (body["status"], body["trigger"]) == ("done", "schedule")
+        assert (body["boards_total"], body["boards_done"], body["boards_ok"]) == (3, 3, 1)
+        assert body["boards_failed"] == [
+            {"company": "Gone AI", "ats": "lever", "org": "gone-ai", "error": "not_found",
+             "message": "board not found"},
+            {"company": "Slow AI", "ats": "ashby", "org": "slow-ai", "error": "timeout",
+             "message": "timeout"},
+        ]  # fmt: skip
+        assert body["current_board"] is None  # a finished row names no board
+        assert (body["seen"], body["new"], body["duplicates"], body["duration"]) == (
+            40, 4, 2, 12.5,
+        )  # fmt: skip
+        sources = body["sources"]
+        assert [(s["mode"], s["kind"], s["outcome"]) for s in sources] == [
+            ("api", "greenhouse", "complete"),
+            ("feed", "remoteok", "failed"),
+            ("feed", "hn_freelance", "no_matches"),
+            ("feed", "weworkremotely", "partial"),
+            ("fixed_reader", "vie", "complete"),
+            (None, "google_careers", None),
+        ]
+        board, remoteok, _, wwr, vie, careers = sources
+        assert (board["found"], board["new"], board["query"]) == (3, 2, "acme-ai")
+        assert (remoteok["error"], remoteok["reason"], remoteok["items_skipped"]) == (
+            "feed_unavailable", "feed_unavailable", 2,
+        )  # fmt: skip
+        assert (wwr["new"], wwr["skipped_by_rule"]) == (1, 1)
+        assert (vie["location"], vie["result_pages"], vie["new"]) == ("France", 2, 1)
+        assert (careers["error"], careers["found"], careers["host"]) == ("layout_changed", 2, None)
+        scope = body["search_scope"]
+        assert (scope["source_count"], scope["websites_only"]) == (5, False)
+        assert scope["criteria"] == {"days": 30}
+    assert detail.json()["new_jobs"] == []
+    # Its events end at once with the row as stored, and it stays Alice's.
+    response, found = events(api, alice, sweep_id)
+    assert response.status_code == 200
+    assert [name for name, _ in found] == ["done"]
+    assert found[0][1]["boards_failed"][0]["org"] == "gone-ai"
+    assert api.request("GET", f"/api/jobs/sweeps/{sweep_id}", token=bob.token).status_code == 404
+
+
 def test_sweeps_route_is_not_read_as_a_job_id(
     api: Api, alice: Signed, fake_queue: FakeQueue
 ) -> None:
@@ -328,11 +432,10 @@ def test_stream_of_a_finished_sweep_is_one_done_event(
     factory: sessionmaker[Session],
     alice: Signed,
     fake_queue: FakeQueue,
-    fake_ats: FakeAts,
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok")))
+    set_profile(factory, alice.id, search())
     started = engine_start(factory, alice)
-    run(factory, uuid.UUID(started["id"]), fake_ats)
+    run(factory, uuid.UUID(started["id"]), *FOUND)
     response, found = events(api, alice, started["id"])
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -347,14 +450,19 @@ def test_stream_follows_a_running_sweep_to_its_end(
     factory: sessionmaker[Session],
     alice: Signed,
     fake_queue: FakeQueue,
-    fake_ats: FakeAts,
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok"), board("fake-ok2", "lever")))
+    set_profile(factory, alice.id, search(interactive_sites=[SITE, SITE_2]))
     started = engine_start(factory, alice)
+    third = finding("Forward Deployed Engineer", url="https://careers.example-labs.test/fde")
 
     def later() -> None:
         time.sleep(0.4)
-        run(factory, uuid.UUID(started["id"]), fake_ats)
+        run(
+            factory,
+            uuid.UUID(started["id"]),
+            heartbeat_s=0.1,
+            browser=each_website(FOUND, [third], hang_s=0.5, hang_at=0),
+        )
 
     worker = threading.Thread(target=later)
     worker.start()
@@ -368,14 +476,15 @@ def test_stream_follows_a_running_sweep_to_its_end(
     assert names.count("done") == 1
     assert found[0][1]["status"] == "running"
     assert found[-1][1]["new"] == 3
-    done_counts = [data["boards_done"] for name, data in found if name == "progress"]
-    assert done_counts == sorted(done_counts)
+    new_counts = [data["new"] for name, data in found if name == "progress"]
+    assert new_counts == sorted(new_counts)
+    assert 2 in new_counts  # the first website's findings, seen before the second one runs
 
 
 def test_stream_ends_with_gone_when_the_sweep_disappears(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok")))
+    set_profile(factory, alice.id, search())
     started = engine_start(factory, alice)
 
     def remove() -> None:
@@ -399,7 +508,7 @@ def test_the_schedule_is_set_through_the_profile_and_shows_its_next_run(
     from app.jobs import schedule
     from app.profile.schemas import SweepSchedule
 
-    set_profile(factory, alice.id, search(board("fake-ok"), interactive_sites=[SITE]))
+    set_profile(factory, alice.id, search())
     profile = api.request("GET", "/api/profile", token=alice.token).json()
     section = profile["sections"]["search"]
     wanted = {
@@ -424,9 +533,9 @@ def test_the_schedule_is_set_through_the_profile_and_shows_its_next_run(
     assert body["active"] is True
     assert datetime.fromisoformat(body["next_run"]) == expected
 
-    # No enabled website: the schedule is kept but nothing runs, an enabled board included.
+    # No ticked website: the schedule is kept but nothing runs.
     no_websites = {**stored, "enabled": True}
-    set_profile(factory, alice.id, search(board("fake-ok"), sweep_schedule=no_websites))
+    set_profile(factory, alice.id, search(interactive_sites=[], sweep_schedule=no_websites))
     body = api.request("GET", "/api/jobs/sweeps", token=alice.token).json()["schedule"]
     assert (body["enabled"], body["active"], body["next_run"]) == (True, False, None)
 
@@ -449,7 +558,7 @@ def test_the_schedule_is_set_through_the_profile_and_shows_its_next_run(
 def test_an_invalid_schedule_is_a_422(
     api: Api, factory: sessionmaker[Session], alice: Signed, bad: dict[str, Any]
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-ok")))
+    set_profile(factory, alice.id, search())
     profile = api.request("GET", "/api/profile", token=alice.token).json()
     section = profile["sections"]["search"]
     response = api.request(

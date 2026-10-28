@@ -1,4 +1,6 @@
-"""Start freezes intent before queueing; status exposes only the owner-safe projection."""
+"""Start freezes intent before queueing; status exposes only the owner-safe projection. Every
+search runs the ticked job websites alone (owner, 2026-10-28): the frozen scope says so, for the
+release before this one."""
 
 import asyncio
 import copy
@@ -12,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.jobs import sweep
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from tests.identity.api_helpers import Api, Clock
-from tests.jobs.sweep_helpers import board, read_sweep, search, set_profile
+from tests.jobs.sweep_helpers import read_sweep, search, set_profile, website_runner
 from tests.jobs.test_api import Signed, sign_in
 from tests.jobs.test_sweep_api import FakeQueue, fake_queue
 
@@ -76,9 +78,11 @@ def test_start_revision_and_owner_safe_reopened_views(
     )
     assert entry["source_id"]
     assert entry["host"] == "jobs.example.org"
+    assert body["search_scope"]["websites_only"] is True
     assert CANARY not in created.text
     sweep_id = uuid.UUID(body["id"])
     scope = read_sweep(factory, sweep_id).stats["search_scope"]
+    assert scope["websites_only"] is True
     assert scope["search"]["interactive_instructions"] == CANARY
     assert scope["trigger"] == "manual"
     assert scope["version"] == 1
@@ -109,24 +113,25 @@ def test_edits_before_claim_and_during_work_only_change_later_sweeps(
     alice: Signed,
     fake_queue: FakeQueue,
 ) -> None:
-    original = search(
-        board("fake-original"), interactive_sites=[site()], interactive_instructions=CANARY
-    )
+    original = search(interactive_sites=[site()], interactive_instructions=CANARY, days=30)
     set_profile(factory, alice.id, original)
     sweep_id = uuid.UUID(start(api, alice).json()["id"])
     frozen = copy.deepcopy(read_sweep(factory, sweep_id).stats["search_scope"])
     set_profile(
-        factory, alice.id, search(board("fake-before-claim"), days=2, interactive_sites=[site()])
+        factory,
+        alice.id,
+        search(days=2, interactive_sites=[site(url="https://before-claim.example.org/")]),
     )
     claimed = sweep.claim(factory, sweep_id, clock())
     assert claimed is not None
-    # Every search runs the websites alone (owner, 2026-10-28): the board is frozen as saved,
-    # never read.
-    assert claimed.boards == []
-    assert [b.org for b in claimed.search.boards] == ["fake-original"]
+    assert claimed.search is not None
+    assert [s.url for s in claimed.search.interactive_sites] == [site()["url"]]
+    assert claimed.search.days == 30
     assert claimed.search.interactive_instructions == CANARY
     set_profile(
-        factory, alice.id, search(board("fake-during-run"), days=7, interactive_sites=[site()])
+        factory,
+        alice.id,
+        search(days=7, interactive_sites=[site(url="https://during-run.example.org/")]),
     )
     sweep.save_progress(factory, sweep_id, sweep.Stats(seen=3), clock())
     assert read_sweep(factory, sweep_id).stats["search_scope"] == frozen
@@ -135,8 +140,11 @@ def test_edits_before_claim_and_during_work_only_change_later_sweeps(
     later = uuid.UUID(start(api, alice).json()["id"])
     next_plan = sweep.claim(factory, later, clock())
     assert next_plan is not None
-    assert [b.org for b in next_plan.search.boards] == ["fake-during-run"]
-    assert next_plan.filter.days == 7
+    assert next_plan.search is not None
+    assert [s.url for s in next_plan.search.interactive_sites] == [
+        "https://during-run.example.org/"
+    ]
+    assert next_plan.search.days == 7
 
 
 @pytest.mark.parametrize("path", ["fail", "reap", "crash", "queue"])
@@ -193,10 +201,11 @@ def test_scheduled_creation_freezes_current_revision_and_keeps_slot(
     frozen = copy.deepcopy(read_sweep(factory, sweep_id).stats["search_scope"])
     assert frozen["trigger"] == "schedule"
     assert frozen["profile_revision"] == 1
-    set_profile(factory, alice.id, search(board("fake-later")))
+    set_profile(factory, alice.id, search(interactive_sites=[]))
     claimed = sweep.claim(factory, sweep_id, tick)
-    assert claimed is not None
-    assert claimed.boards == []
+    assert claimed is not None  # the websites frozen at its start, though none is ticked now
+    assert claimed.search is not None
+    assert [s.url for s in claimed.search.interactive_sites] == [site()["url"]]
     assert claimed.schedule_slot == due.slot.key
     sweep.finish_done(factory, sweep_id, sweep.Stats(), tick)
     row = read_sweep(factory, sweep_id)
@@ -223,21 +232,11 @@ def test_interactive_only_run_explains_unsupported_criteria_without_legacy_fallb
     )
     sweep_id = uuid.UUID(start(api, alice).json()["id"])
 
-    class NoAts:
-        async def fetch_board(self, *args: Any) -> None:
-            pytest.fail("interactive intent reached an API reader")
-
-    async def no_hook(*args: Any) -> None:
-        pytest.fail("interactive intent reached a fixed source reader")
-
     from tests.browser.fakes import FakeTools
-    from tests.jobs.test_sweep_browser_sources import runner
 
-    asyncio.run(
-        sweep.run_sweep(
-            factory, sweep_id, NoAts(), clock, browser=runner(FakeTools({})), feeds=no_hook
-        )
-    )
+    tools = FakeTools({})
+    asyncio.run(sweep.run_sweep(factory, sweep_id, clock, browser=website_runner(tools)))
+    assert tools.calls == []
     row = read_sweep(factory, sweep_id)
     assert row.status is SweepStatus.done
     [entry] = row.stats["sources"]
@@ -252,7 +251,13 @@ def test_old_runs_without_scope_keep_explicit_claim_time_legacy_behavior(
     factory: sessionmaker[Session],
     alice: Signed,
 ) -> None:
-    set_profile(factory, alice.id, search(board("fake-current")))
+    # A saved section that still holds the deleted boards and feeds: dropped on read.
+    current = {
+        **search(interactive_sites=[site(url="https://current.example.org/")]),
+        "boards": [{"ats": "ashby", "org": "fake-current", "company": "Current"}],
+        "feeds": [{"kind": "remoteok", "enabled": True}],
+    }
+    set_profile(factory, alice.id, current)
     with factory() as db:
         row = Sweep(user_id=alice.id, trigger=SweepTrigger.manual, started_at=clock(), stats={})
         db.add(row)
@@ -260,5 +265,109 @@ def test_old_runs_without_scope_keep_explicit_claim_time_legacy_behavior(
         sweep_id = row.id
     claimed = sweep.claim(factory, sweep_id, clock())
     assert claimed is not None
-    assert claimed.boards[0].org == "fake-current"
+    assert claimed.search is not None
+    assert [s.url for s in claimed.search.interactive_sites] == ["https://current.example.org/"]
+    assert "boards" not in claimed.search.model_dump()
     assert "search_scope" not in read_sweep(factory, sweep_id).stats
+
+
+def test_an_old_frozen_scope_with_boards_runs_its_websites_alone(
+    clock: Clock,
+    factory: sessionmaker[Session],
+    alice: Signed,
+) -> None:
+    """A row frozen by the release before this one, its boards and feeds still in the scope's
+    search: claimed, the websites alone run; without a website it fails with the websites
+    message."""
+    for sites, error in (([site()], None), ([], sweep.NO_WEBSITES)):
+        frozen_search = {
+            **search(interactive_sites=sites),
+            "boards": [{"ats": "lever", "org": "fake-old", "company": "Old"}],
+            "feeds": [{"kind": "hn_hiring", "enabled": True}],
+        }
+        scope = {
+            "version": 1, "profile_revision": 3, "created_at": clock().isoformat(),
+            "trigger": "manual", "websites_only": False, "search": frozen_search,
+            "skills": None, "sources": [],
+        }  # fmt: skip
+        with factory() as db:
+            row = Sweep(
+                user_id=alice.id,
+                trigger=SweepTrigger.manual,
+                started_at=clock(),
+                stats={"search_scope": scope, "sources": []},
+            )
+            db.add(row)
+            db.commit()
+            sweep_id = row.id
+        claimed = sweep.claim(factory, sweep_id, clock())
+        if error is None:
+            assert claimed is not None
+            assert claimed.search is not None
+            assert [s.url for s in claimed.search.interactive_sites] == [site()["url"]]
+            sweep.finish_done(factory, sweep_id, sweep.Stats(), clock())
+        else:
+            assert claimed is None
+            assert read_sweep(factory, sweep_id).error == error
+
+
+def with_deleted_sources(**overrides: Any) -> dict[str, Any]:
+    """A saved section of the release before this one: boards, feeds and old readers on."""
+    return {
+        **search(interactive_sites=[site()], **overrides),
+        "boards": [{"ats": "ashby", "org": "fake-board", "company": "Board", "enabled": True}],
+        "feeds": [{"kind": "remoteok", "enabled": True}],
+        "browser_sources": [{"kind": "google_careers", "query": "AI", "enabled": True}],
+    }
+
+
+@pytest.mark.parametrize(
+    "body", [None, {}, {"profile_revision": 1}, {"websites_only": False}, {"websites_only": True}]
+)
+def test_every_start_searches_the_websites_alone(
+    api: Api,
+    factory: sessionmaker[Session],
+    alice: Signed,
+    fake_queue: FakeQueue,
+    body: dict[str, Any] | None,
+) -> None:
+    set_profile(factory, alice.id, with_deleted_sources())
+    created = start(api, alice, **({} if body is None else {"json": body}))
+    assert created.status_code == 202, created.text
+    assert created.json()["search_scope"]["websites_only"] is True
+    assert created.json()["search_scope"]["source_count"] == 1
+    assert [(s["mode"], s["kind"]) for s in created.json()["sources"]] == [
+        ("llm_browser", "custom")
+    ]
+    scope = read_sweep(factory, uuid.UUID(created.json()["id"])).stats["search_scope"]
+    assert scope["websites_only"] is True
+    # The deleted sources are dropped from what is frozen, the old reader row with them.
+    assert "boards" not in scope["search"]
+    assert "feeds" not in scope["search"]
+    assert scope["search"].get("browser_sources", []) == []
+
+
+@pytest.mark.parametrize("value", ["true", 1, None, [True]])
+def test_websites_only_is_still_a_strict_boolean(
+    api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue, value: Any
+) -> None:
+    set_profile(factory, alice.id, with_deleted_sources())
+    assert start(api, alice, json={"websites_only": value}).status_code == 422
+    assert fake_queue.calls == []
+    with factory() as db:
+        assert db.query(Sweep).filter_by(user_id=alice.id).count() == 0
+
+
+@pytest.mark.parametrize("sites", [[], [site(enabled=False)]], ids=["no website", "website off"])
+def test_saved_boards_and_feeds_alone_start_nothing(
+    api: Api,
+    factory: sessionmaker[Session],
+    alice: Signed,
+    fake_queue: FakeQueue,
+    sites: list[dict[str, Any]],
+) -> None:
+    set_profile(factory, alice.id, {**with_deleted_sources(), "interactive_sites": sites})
+    refused = start(api, alice)
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == sweep.NO_WEBSITES
+    assert fake_queue.calls == []

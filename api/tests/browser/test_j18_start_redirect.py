@@ -259,13 +259,10 @@ def test_a_start_page_landing_on_another_origin_never_starts_the_agent(landing):
         started.append(session)
         return finder.Ran()
 
-    entry, stored, _ = run(
-        selected(title_include={"terms": ["robot"]}), site, ScriptedFinder(agent)
-    )
+    entry, _, _ = run(selected(title_include={"terms": ["robot"]}), site, ScriptedFinder(agent))
     # The tools' own host check (page_failed) or _search's origin check: the agent never starts.
     assert entry["error"] in {"page_failed", "unsupported_interaction"}
     assert not started
-    assert not stored
 
 
 class Failing(SearchSite):

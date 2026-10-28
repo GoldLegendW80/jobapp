@@ -1,4 +1,4 @@
-"""TEST_FAST_TIMERS: short schedule tick and board timeout for CI e2e, refused in production."""
+"""TEST_FAST_TIMERS: a short schedule tick for CI e2e, refused in production."""
 
 import base64
 
@@ -30,18 +30,6 @@ def test_off_by_default_ticks_every_five_minutes() -> None:
 def test_fast_timers_tick_every_minute() -> None:
     settings = Settings(database_url=URL, test_fast_timers=True)  # type: ignore[arg-type]
     assert _cron_minutes(settings) == set(range(60))
-
-
-def test_fast_timers_shorten_the_board_client() -> None:
-    fast = Settings(database_url=URL, test_fast_timers=True)  # type: ignore[arg-type]
-    client = worker.ats_client({"settings": fast})
-    assert client.timeout_s == worker.FAST_ATS_TIMEOUT_S
-    assert client.attempts == 1
-
-    normal = Settings(database_url=URL)  # type: ignore[arg-type]
-    default = worker.ats_client({"settings": normal})
-    assert default.timeout_s > worker.FAST_ATS_TIMEOUT_S
-    assert default.attempts > 1
 
 
 def test_refused_in_production() -> None:
