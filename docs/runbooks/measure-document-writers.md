@@ -18,16 +18,17 @@ app's own agent runtime with the real Claude Agent SDK: the same prompt, tools, 
 correction pass as a click in the app. Then it scores two outputs of each run with
 `documents.checks.run`:
 
-- **first**: what the writer submitted first, after the code's dash fix and before the correction
-  pass. This is what the prompt alone produced.
+- **first**: the writer's first valid submit (a submit refused for its structure is not kept),
+  after the code's dash fix and before the correction pass: the closest the tool gets to what the
+  prompt alone produced.
 - **final**: what is stored, after the correction pass and the removal by code.
 
 | Figure | Meaning |
 |---|---|
-| `first_claims`, `first_separators`, `first_notes` | issues of the first output by level: a claim the profile and base CV do not state, a dash used as a separator, a soft length or an empty field |
+| `first_claims`, `first_separators`, `first_notes` | issues of the first output by level: a claim the profile and base CV do not state, a dash used as a separator, a soft length or an empty field. Counted after the code's dash fix, so `first_separators` stays 0 unless a dash could not be fixed |
 | `final_claims`, `final_separators`, `final_notes` | the same for what is stored. A claim left here is shown to the person |
-| `fixed_by_writer`, `fixed_by_code` | corrections made by the writer in the correction pass, and by code (the dash fix, a claim cut) |
-| `rounds` | submits of the run (`submit_cv` or `submit_letter` calls): 1 is a clean first submit, 2 used the correction pass |
+| `fixed_by_writer`, `fixed_by_code` | fields the writer changed in the correction pass, and corrections made by code (the dash fix of the stored submit, a claim cut, a fallback); a claim the code kept as written is not counted |
+| `rounds` | submits of the run (`submit_cv` or `submit_letter` calls, those refused for their structure included): 1 is a clean first submit, 2 or more used the correction pass or followed a refused submit |
 | `turns`, `tool_calls` | the run's own counts |
 | `tokens`, `cost_usd`, `seconds` | input plus output tokens (cache included), the SDK's cost at API prices (billed to nobody on a subscription), run time |
 
@@ -40,7 +41,8 @@ data).
 Declared open points: a letter written alone (`--writer letter`) finds no CV of the posting, a
 state of its own in the app; `--writer both` writes the CV first and the letter from it, as the
 app does. The person's writing rule is the dash rule on and no banned phrase. Only the checker's
-issues are measured, not tailoring quality or style.
+issues are measured, not tailoring quality or style. The shortening pass after a render overflow
+is not run: the tool queues no render (`NullQueue`).
 
 ## Safety
 
@@ -51,8 +53,12 @@ issues are measured, not tailoring quality or style.
   reads its credential from the database, so it is saved there encrypted with a key made in
   memory, in the throwaway database that is dropped when the command ends.
 - The database is one the command makes itself on a Postgres on this machine (host `127.0.0.1` or
-  `localhost` only), migrates, and drops at the end. It does not take its server from
-  `DATABASE_URL`, only from `--database-url`, `MEASURE_DATABASE_URL` or `TEST_DATABASE_URL`.
+  `localhost` only, with no `host`, `hostaddr`, `port` or `service` in the query of the URL),
+  migrates, and drops at the end. It does not take its server from `DATABASE_URL`, only from
+  `--database-url`, `MEASURE_DATABASE_URL` or `TEST_DATABASE_URL`. After connecting, it refuses to
+  go on unless the connection ended on a loopback address or a Unix socket, which also catches
+  `PGHOSTADDR`, `PGSERVICE` and a service file. A Postgres reached through a tunnel on `localhost`
+  looks local and cannot be told apart: do not point it at one.
 - Only the fixtures are read for data. The JSON file must be outside the repository.
 - You type the token yourself: the commands below read it with `read -rs`, so it is neither
   echoed nor in the shell history.
@@ -61,7 +67,7 @@ issues are measured, not tailoring quality or style.
 
 The throwaway Postgres and Redis are the ones `ops/agent-test.sh` starts and removes. The opt-in
 test `api/tests/documents/test_measure_live.py` runs the tool inside them; every other run of the
-test folder, the gate included, skips it.
+test folder skips it, and CI and the gate always do (they set `CI`).
 
 A first, cheap run: one CV writer run on one pair.
 
@@ -75,6 +81,7 @@ unset CLAUDE_CODE_OAUTH_TOKEN
 
 The token comes from `claude setup-token` (run it yourself, in your own terminal). The table is
 printed to the terminal and the JSON goes to `~/jobapp-measure/measure-<date>-<time>.json`.
+Without `MEASURE_ARGS`, the test runs exactly this cheap first run, never the full measure.
 
 The full measure, the default of the tool (5 pairs, 3 runs each, CV and letter):
 
@@ -111,31 +118,43 @@ unset CLAUDE_CODE_OAUTH_TOKEN
 ```
 
 It creates a database named `measure_<id>` on that server and drops it at the end; the server's
-other databases are not touched.
+other databases are not touched. Ctrl+C, a `kill` (SIGTERM) and a closed terminal (SIGHUP) drop it
+too. `kill -9` (SIGKILL) and a power cut cannot, and nor can a second signal that comes while the
+first one is dropping it. Under `ops/agent-test.sh` the throwaway container, and with it the
+database, is removed when the script ends. On a server of your own, find a leftover and drop it:
+
+```bash
+psql -h 127.0.0.1 -p <port> -U <user> <any database> \
+  -c "SELECT datname FROM pg_database WHERE datname LIKE 'measure\_%'"
+psql -h 127.0.0.1 -p <port> -U <user> <any database> -c 'DROP DATABASE "measure_<id>" WITH (FORCE)'
+```
 
 ## What it costs
 
-A run is the app's own writer run, so it spends what the app's estimate predicts
-(`api/app/documents/estimate.py`). For the five default pairs the estimate of one pair (its CV
-and letter), at the prices of `app/ingestion/pricing.py` read on 2026-10-13:
+The table is the app's own estimate (`api/app/documents/estimate.py`, computed on 2026-10-29), not
+a measurement: the `tokens` and `cost_usd` of the first real run replace it. For the five default
+pairs, the estimate of one pair (its CV and letter), at the prices of `app/ingestion/pricing.py`
+read on 2026-10-13:
 
 | | Tokens | Opus 5.5 | Sonnet 5.5 |
 |---|---|---|---|
 | Typical (3 turns each) | 61,000 to 64,200 | $0.22 to $0.23 | $0.11 to $0.12 |
-| Worst (10 turns, 4 submits each) | 402,900 to 417,300 | $2.11 to $2.17 | $1.06 to $1.09 |
+| Worst (10 turns, 4 submits each) | 403,100 to 417,200 | $2.11 to $2.17 | $1.06 to $1.09 |
 
 The writers use Opus on a subscription and Sonnet on an API key. The full measure is 15 pair runs
 (5 pairs, 3 runs): about 0.95 million tokens when runs are typical, up to 6.2 million at the worst,
 so $3.4 to $32 at Opus list prices. On the subscription nothing is billed, but every run counts
 against the plan's weekly usage limit: start with the one run above, read its
 `tokens` and `seconds`, and size the full measure from them. A run stops at its token ceiling
-(twice the worst estimate), at 10 turns and at 300 seconds (the app's settings), so a stuck run
-cannot spend without bound.
+(twice the worst estimate: 806,300 to 834,500 tokens a pair, at most 12.4 million for the full
+measure), at 10 turns and at 300 seconds (the app's settings), so a stuck run cannot spend
+without bound.
 
 ## What the numbers mean for prompt tuning
 
 A reading guide, a judgement and not a measured threshold. Three runs per pair is small: trust the
-`all pairs` block more than one pair, and a spread more than a mean.
+`all pairs` block more than one pair. The spread of a pair is the variation between its replicates;
+the spread of the `all pairs` block also holds the differences between pairs.
 
 - `first_claims` near 0 with a spread near 0: the prompt already produces claims the sources
   state. The correction pass has nothing to do and there is nothing to tune on facts.

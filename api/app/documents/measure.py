@@ -14,8 +14,9 @@ app's own generation (`generate.create` and `generate.start`, the ceiling of `es
 runs it through the app's own agent runtime (`runner.execute`, the real Claude Agent SDK): the
 same prompt, tools, limits, checks and correction pass as a person's click. Then it scores:
 
-- the **first** output: what the writer first submitted, after the dash fix and before the
-  correction pass, i.e. what the prompt alone produced;
+- the **first** output: the writer's first valid submit (a submit refused for its structure is
+  not kept), after the dash fix and before the correction pass: the closest the tool gets to what
+  the prompt alone produced;
 - the **final** output: what is stored, after the correction pass and the removal by code;
 
 each with `checks.run` (issues by level: `claim`, `separator`, `note`, and by code), plus from
@@ -36,12 +37,17 @@ The database. `--database-url`, else MEASURE_DATABASE_URL, else TEST_DATABASE_UR
 server on this machine (the throwaway one `ops/agent-test.sh` starts). The command makes a
 database of its own on it, migrates it, and drops it at the end (it creates and drops that one
 and issues no other statement on the server); the server is not taken from the app's DATABASE_URL,
-which is replaced for the run (`process_settings`). Only the fixtures are read for data
+which is replaced for the run (`process_settings`). It must be on this machine: the host of the URL
+is loopback with no host, hostaddr, port or service in its query, and the connection that libpq
+made must end on a loopback address or a Unix socket (PGHOSTADDR, PGSERVICE and a service file
+are caught there). Ctrl+C, SIGTERM and SIGHUP drop the database on the way out; SIGKILL cannot
+(the runbook says how to find a leftover `measure_` database). Only the fixtures are read for data
 (`Fixtures`); nothing of a real person is.
 
 Declared open points: the letter writer, alone, finds no CV of the posting (a state of its own in
 production: "No CV for this posting yet"); `--writer both` writes the CV first and the letter
 from it, as production does. The person's writing rule is the dash rule on, no banned phrase.
+The shortening pass after a render overflow is not run: the tool queues no render (`NullQueue`).
 """
 
 from __future__ import annotations
@@ -49,13 +55,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
+import signal
 import statistics
 import sys
+import threading
 import traceback
 import uuid
 from collections import Counter
@@ -102,6 +111,12 @@ ENV_SUBSCRIPTION = "CLAUDE_CODE_OAUTH_TOKEN"
 ENV_API_KEY = "ANTHROPIC_API_KEY"
 ENV_DATABASES = ("MEASURE_DATABASE_URL", "TEST_DATABASE_URL")
 LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+# What libpq also takes from the query of a URL, over the host checked: another machine, a service.
+QUERY_TARGETS = frozenset({"host", "hostaddr", "port", "service"})
+# The signals that end a process with no `finally` (a `kill`, a closed terminal).
+TERMINATIONS = tuple(
+    getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)
+)
 DATABASE_PREFIX = "measure_"
 
 WRITERS = ("cv", "letter", "both")
@@ -251,15 +266,33 @@ def database_server(arg: str | None, env: Mapping[str, str]) -> str:
             f"{ENV_DATABASES[0]} (ops/agent-test.sh starts one)."
         )
     try:
-        host = make_url(url).host
-    except sa.exc.ArgumentError as exc:
+        parsed = make_url(url)
+    except (sa.exc.ArgumentError, ValueError) as exc:  # ValueError: two hosts and a port
         raise MeasureError("The database URL is not a valid Postgres URL.") from exc
-    if host not in LOOPBACK:
+    # libpq takes host, hostaddr, port and service from the query too, over the host checked here.
+    if parsed.host not in LOOPBACK or QUERY_TARGETS & {key.lower() for key in parsed.query}:
         raise MeasureError(
             "The database must be a throwaway Postgres on this machine (host 127.0.0.1 or "
-            "localhost), not a shared or production one."
+            "localhost, the address in the URL itself), not a shared or production one."
         )
     return url
+
+
+def reached_this_machine(info: Any) -> bool:
+    """Whether the connection that libpq made ended on this machine: a loopback address or a Unix
+    socket. The URL is only what was asked: PGHOSTADDR, PGHOST, PGSERVICE and a service file
+    can send the connection elsewhere, so the answer is read from the connection itself."""
+    try:
+        address, host = info.hostaddr, info.host
+    except psycopg.NotSupportedError:  # a libpq too old to say: not proven, so refused
+        return False
+    if address:
+        try:
+            found = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return bool((getattr(found, "ipv4_mapped", None) or found).is_loopback)
+    return str(host).startswith("/")
 
 
 def _migrate(url: sa.engine.URL) -> None:
@@ -281,6 +314,11 @@ def throwaway_database(server_url: str) -> Iterator[str]:
     name = f"{DATABASE_PREFIX}{uuid.uuid4().hex[:12]}"
     admin = base.set(drivername="postgresql").render_as_string(hide_password=False)
     with psycopg.connect(admin, autocommit=True) as conn:
+        if not reached_this_machine(conn.info):
+            raise MeasureError(
+                "The database server answered from another machine (PGHOSTADDR, PGHOST or "
+                "PGSERVICE?): only a throwaway Postgres on this machine is accepted."
+            )
         conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     url = base.set(database=name, drivername="postgresql+psycopg")
     try:
@@ -291,6 +329,27 @@ def throwaway_database(server_url: str) -> Iterator[str]:
             conn.execute(
                 sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
             )
+
+
+@contextmanager
+def interrupt_on_termination() -> Iterator[None]:
+    """SIGTERM and SIGHUP (a closed terminal, a `kill`) end Python at once, without the `finally`
+    that drops the throwaway database. For the run they raise KeyboardInterrupt, as Ctrl+C does,
+    and the database goes on the way out. SIGKILL and a power cut cannot be caught: the runbook
+    says how to find and drop what they leave. Only the main thread can take a handler."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def stop(number: int, frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    before = {number: signal.signal(number, stop) for number in TERMINATIONS}
+    try:
+        yield
+    finally:
+        for number, handler in before.items():
+            signal.signal(number, handler if handler is not None else signal.SIG_DFL)
 
 
 @contextmanager
@@ -595,7 +654,9 @@ def run_writer(
             for level in LEVELS:
                 sample.figures[f"{which}_{level}s"] = found.level(level)
         sample.figures["fixed_by_writer"] = sum(1 for k in accepted.corrections if k.by == "writer")
-        sample.figures["fixed_by_code"] = sum(1 for k in accepted.corrections if k.by == "code")
+        sample.figures["fixed_by_code"] = sum(
+            1 for k in accepted.corrections if k.by == "code" and k.before != k.after
+        )
         sample.first_codes, sample.final_codes = scores["first"].by_code, scores["final"].by_code
         sample.first, sample.final = c.dump(first), c.dump(accepted.content)
         sample.status, sample.error = "done", None
@@ -841,6 +902,7 @@ def main(
                 f"{len(pairs)} pairs, {args.runs} runs, writer {args.writer}.",
             )
             with (
+                interrupt_on_termination(),
                 throwaway_database(server) as url,
                 process_settings(url, runtime.fake),
                 TakeRecorder() as recorder,
@@ -851,6 +913,7 @@ def main(
                     app_env="development",
                     credentials_key=key,
                     agents_fake_backend=runtime.fake,
+                    model_api_base_url=None,  # the model's own address, whatever the shell says
                 )
                 engine = build_engine(settings)
                 try:

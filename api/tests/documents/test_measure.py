@@ -11,9 +11,14 @@ import json
 import logging
 import os
 import secrets
+import signal
 import socket
+import subprocess
+import sys
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import psycopg
@@ -33,6 +38,7 @@ from tests.agents.run_helpers import Backends
 from tests.conftest import make_settings
 from tests.documents import canary
 from tests.documents import store_support as support
+from tests.documents import test_measure_live as live
 
 AT = support.AT
 engine, factory, migrated_url = support.engine, support.factory, support.migrated_url  # fixtures
@@ -175,6 +181,19 @@ def test_the_subscription_token_wins_when_both_are_set_and_only_the_kind_is_name
         ([], {}, "MEASURE_DATABASE_URL"),  # no database
         (["--database-url", "postgresql://u:p@db.example.org/x"], {}, "this machine"),
         (["--database-url", "postgresql://u:p@10.0.0.5/x"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost/x?host=10.0.0.5"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@127.0.0.1/x?hostaddr=10.0.0.5"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost/x?service=jetson"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost/x?port=5432"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost/x?HOST=10.0.0.5"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost/x?%68ost=10.0.0.5"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost/x?host=a&host=b"], {}, "this machine"),
+        (["--database-url", "postgresql:///x?host=/var/run/postgresql"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@/x"], {}, "this machine"),  # PGHOST would decide
+        (["--database-url", "postgresql://u:p@localhost,db.example.org/x"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@localhost:5432,10.0.0.5:5432/x"], {}, "valid"),
+        (["--database-url", "postgresql://u:p@localhost.example.org/x"], {}, "this machine"),
+        (["--database-url", "postgresql://u:p@127.0.0.1.nip.io/x"], {}, "this machine"),
         ([], {"TEST_DATABASE_URL": "postgresql://u:p@db/x"}, "this machine"),
         (["--database-url", "not a url"], {}, "valid"),
         (["--json", str(REPO / "measure.json")], {}, "outside this repository"),
@@ -210,6 +229,140 @@ def test_the_database_comes_from_the_measure_variable_first_and_never_from_the_a
     assert chosen.endswith("/a")
     with pytest.raises(MeasureError):
         measure.database_server(None, {"DATABASE_URL": "postgresql://u:p@127.0.0.1/production"})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:p@127.0.0.1:5432/x",
+        "postgresql+psycopg://u:p@localhost:55432/x",
+        "postgresql://u:p@[::1]:5432/x",
+        "postgresql://u:p@localhost/x?sslmode=disable",  # a query that names no target
+        "postgresql://u:p@localhost/x?connect_timeout=5&application_name=measure",
+    ],
+)
+def test_a_url_on_this_machine_with_no_other_target_is_accepted_as_it_was_given(url: str) -> None:
+    assert measure.database_server(url, {}) == url
+
+
+@pytest.mark.parametrize(
+    ("host", "hostaddr", "local"),
+    [
+        ("localhost", "127.0.0.1", True),
+        ("localhost", "::1", True),
+        ("db", "127.0.0.2", True),  # all of 127.0.0.0/8 is this machine
+        ("localhost", "::ffff:127.0.0.1", True),
+        ("/var/run/postgresql", "", True),  # a Unix socket
+        ("localhost", "10.0.0.5", False),
+        ("localhost", "192.168.1.20", False),  # the machine's own LAN address is not proven local
+        ("localhost", "2001:db8::1", False),
+        ("localhost", "::ffff:10.0.0.5", False),
+        ("db.example.org", "", False),  # no address and no socket: not proven
+        ("", "", False),
+        ("localhost", "not an address", False),
+        ("localhost", "127.0.0.1.5", False),
+    ],
+)
+def test_a_connection_counts_as_local_only_when_libpq_ended_on_loopback_or_a_socket(
+    host: str, hostaddr: str, local: bool
+) -> None:
+    assert measure.reached_this_machine(SimpleNamespace(host=host, hostaddr=hostaddr)) is local
+
+
+def test_a_libpq_that_cannot_say_where_it_connected_is_not_proven_local() -> None:
+    class Old:
+        host = "localhost"
+
+        @property
+        def hostaddr(self) -> str:
+            raise psycopg.NotSupportedError("libpq older than 12")
+
+    assert measure.reached_this_machine(Old()) is False
+
+
+def test_the_test_server_is_seen_as_local_by_a_real_connection(database_url: str) -> None:
+    admin = make_url(database_url).set(drivername="postgresql").render_as_string(False)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        assert conn.info.hostaddr  # libpq does say where it went
+        assert measure.reached_this_machine(conn.info) is True
+
+
+class Elsewhere:
+    """A real connection to the test server that libpq would report at another machine, as
+    PGHOSTADDR or a service file can make it."""
+
+    def __init__(self, conn: Any) -> None:
+        self.conn = conn
+        self.info = SimpleNamespace(host="db.example.org", hostaddr="10.0.0.5")
+
+    def __enter__(self) -> Elsewhere:
+        return self
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self.conn.__exit__(*exc)
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        return self.conn.execute(*args, **kwargs)
+
+
+def test_a_connection_that_ends_on_another_machine_is_refused_before_any_statement(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    statements: list[str] = []
+
+    def connect(*args: Any, **kwargs: Any) -> Elsewhere:
+        conn = Elsewhere(psycopg.connect(*args, **kwargs))
+        run = conn.execute
+        conn.execute = lambda query, *a, **k: (  # type: ignore[method-assign]
+            statements.append(str(query)),
+            run(query, *a, **k),
+        )[1]
+        return conn
+
+    monkeypatch.setattr(
+        measure, "psycopg", SimpleNamespace(connect=connect, NotSupportedError=Exception)
+    )
+    code, out, err = run_main(
+        ["--pairs", "alex:lumen"],
+        {"CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "TEST_DATABASE_URL": server},
+        tmp_path,
+        runtime=Runtime(never, fake=True),
+    )
+    assert code == 2
+    assert "another machine" in err
+    assert err.count("\n") == 2  # the credential line, then the one sentence
+    assert out == ""
+    assert statements == []  # not even a CREATE DATABASE
+    monkeypatch.undo()
+    assert throwaway_names(server) == []
+    assert not (tmp_path / "out.json").exists()
+
+
+# --- the opt-in live test ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("env", "wanted"),
+    [
+        ({}, False),
+        ({"MEASURE_LIVE": "1"}, True),
+        ({"MEASURE_LIVE": "1", "CI": ""}, True),
+        ({"MEASURE_LIVE": "1", "CI": "true"}, False),  # the gate exports CI=true
+        ({"MEASURE_LIVE": "1", "CI": "false"}, False),  # any value of CI: fail closed
+        ({"MEASURE_LIVE": "0"}, False),
+        ({"MEASURE_LIVE": "true"}, False),
+        ({"CI": "true"}, False),
+    ],
+)
+def test_the_live_test_runs_only_when_asked_and_never_under_ci(
+    env: dict[str, str], wanted: bool
+) -> None:
+    assert live.live_requested(env) is wanted
+
+
+def test_the_live_test_without_arguments_is_the_cheap_first_run_of_the_runbook() -> None:
+    args = measure._parser().parse_args(live.DEFAULT_ARGS.split())
+    assert (args.writer, args.runs, args.pairs) == ("cv", 1, "alex:brise")
 
 
 # --- the pairs ----------------------------------------------------------------------------------
@@ -368,6 +521,8 @@ def test_each_repetition_is_a_fresh_person_whose_output_is_scored_by_the_checker
     # rewrite_failed: a claim the writer could not fix and the code kept for the person to see.
     assert (kept.figures["first_claims"], kept.figures["final_claims"]) == (1, 1)
     assert kept.final_codes == {"duration_not_in_profile": 1}
+    # The claim the code kept as written (before == after) is not a fix by code.
+    assert (kept.figures["fixed_by_writer"], kept.figures["fixed_by_code"]) == (0, 0)
     assert kept.first is not None
     assert kept.final is not None
     [group, *rest] = measure.summarize(samples)
@@ -613,6 +768,164 @@ def test_the_database_is_dropped_when_the_run_crashes(
     assert "RuntimeError" in err  # the type and the place, no message
     assert OAUTH not in out + err
     assert throwaway_names(server) == []
+
+
+def test_the_model_address_of_the_shell_is_not_the_one_the_tool_runs_with(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A MODEL_API_BASE_URL left in the shell would become the CLI's ANTHROPIC_BASE_URL and the
+    token would go to that address."""
+    monkeypatch.setenv("MODEL_API_BASE_URL", "http://127.0.0.1:9")
+    seen: list[str | None] = []
+    real = measure.build_engine
+
+    def spy(settings: Any) -> Any:
+        seen.append(settings.model_api_base_url)
+        return real(settings)
+
+    monkeypatch.setattr(measure, "build_engine", spy)
+    code, _, err = run_main(
+        ["--writer", "cv", "--pairs", "alex:lumen", "--runs", "1"],
+        {"CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "TEST_DATABASE_URL": server},
+        tmp_path,
+        runtime=Runtime(Backends(speed=0.0), fake=True, script_for=lambda *_: "documents_cv_valid"),
+    )
+    assert code == 0, err
+    assert seen == [None]
+
+
+def test_the_database_is_dropped_on_ctrl_c(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupt(*_: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(measure, "_run_all", interrupt)
+    before = os.environ.get("DATABASE_URL")
+    take = measure.submit.take
+    with pytest.raises(KeyboardInterrupt):
+        run_main(
+            ["--pairs", "alex:lumen"],
+            {"CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "TEST_DATABASE_URL": server},
+            tmp_path,
+            runtime=Runtime(Backends(speed=0.0), fake=True),
+        )
+    assert throwaway_names(server) == []
+    assert os.environ.get("DATABASE_URL") == before
+    assert measure.submit.take is take
+
+
+@pytest.mark.parametrize("number", measure.TERMINATIONS, ids=lambda n: signal.Signals(n).name)
+def test_the_database_is_dropped_on_sigterm_and_sighup_and_the_handlers_are_given_back(
+    number: int, server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without a handler the signal would end this process: only the main thread has one.
+    assert threading.current_thread() is threading.main_thread()
+    before = signal.getsignal(number)
+    seen: list[object] = []
+
+    def terminated(*_: Any) -> Any:
+        seen.append(signal.getsignal(number))
+        if seen == [before]:  # no handler of its own: the signal would end this process
+            return []
+        signal.raise_signal(number)  # the handler runs before this returns
+        return []
+
+    monkeypatch.setattr(measure, "_run_all", terminated)
+    env_before = os.environ.get("DATABASE_URL")
+    take = measure.submit.take
+    with pytest.raises(KeyboardInterrupt):
+        run_main(
+            ["--pairs", "alex:lumen"],
+            {"CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "TEST_DATABASE_URL": server},
+            tmp_path,
+            runtime=Runtime(Backends(speed=0.0), fake=True),
+        )
+    assert seen != [before]  # a handler of its own for the run
+    assert signal.getsignal(number) == before  # and the old one back
+    assert throwaway_names(server) == []
+    assert os.environ.get("DATABASE_URL") == env_before
+    assert measure.submit.take is take
+
+
+def test_off_the_main_thread_no_handler_is_taken_and_nothing_breaks() -> None:
+    before = {number: signal.getsignal(number) for number in measure.TERMINATIONS}
+    outcome: list[str] = []
+
+    def work() -> None:
+        with measure.interrupt_on_termination():
+            outcome.append("ran")
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    thread.join()
+    assert outcome == ["ran"]
+    assert {number: signal.getsignal(number) for number in measure.TERMINATIONS} == before
+
+
+DIRECT = """
+import sys, threading
+from app.documents import measure
+
+prefix, server, path = sys.argv[1:4]
+measure.DATABASE_PREFIX = prefix
+
+
+def wait(*_):
+    print("READY", flush=True)  # the database exists and the run is under way
+    threading.Event().wait()  # until a signal comes
+
+
+measure._run_all = wait
+measure.main(
+    ["--pairs", "alex:lumen", "--json", path],
+    env={"CLAUDE_CODE_OAUTH_TOKEN": sys.argv[4], "TEST_DATABASE_URL": server},
+    runtime=measure.Runtime(lambda: None, fake=True),
+)
+"""
+
+
+@pytest.mark.parametrize("number", measure.TERMINATIONS, ids=lambda n: signal.Signals(n).name)
+def test_a_process_run_directly_drops_its_database_when_it_is_killed_by_signal(
+    number: int, server: str, tmp_path: Path
+) -> None:
+    command = [
+        sys.executable,
+        "-c",
+        DIRECT,
+        measure.DATABASE_PREFIX,
+        server,
+        str(tmp_path / "out.json"),
+        OAUTH,
+    ]
+    with subprocess.Popen(
+        command,
+        cwd=Path(measure.__file__).resolve().parents[2],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as proc:
+        try:
+            assert proc.stdout is not None
+            assert proc.stdout.readline() == "READY\n"
+            assert len(throwaway_names(server)) == 1  # the control: there is something to drop
+            proc.send_signal(number)
+            _, stderr = proc.communicate(timeout=120)  # a hang guard, not a bound
+        finally:
+            proc.kill()
+            leftovers = throwaway_names(server)
+            drop_throwaway_databases(server, leftovers)
+    assert proc.returncode != 0
+    assert "KeyboardInterrupt" in stderr
+    assert OAUTH not in stderr
+    assert leftovers == []
+
+
+def drop_throwaway_databases(server: str, names: list[str]) -> None:
+    admin = make_url(server).set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        for name in names:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 
 # --- the credential appears nowhere -------------------------------------------------------------
