@@ -297,7 +297,8 @@ SEARCH_NAMES = [
     ["Suchen"], ["SUCHEN"], ["Jobs suchen"], ["Stellen finden"], ["Suche starten"],
     ["Search 9756 jobs"], ["Search", "search-btn"], ["Search", "searchButton"],
     ["Search", "magnifying glass icon"], ["Rechercher", "loupe"], ["Ｓｅａｒｃｈ"],
-    ["  Search  "], ["Search!"], ["search_button", "Search"],
+    ["  Search  "], ["Search!"], ["search_button", "Search"], ["Search", "go"],
+    ["Search", "global-nav-search"], ["Rechercher", "hp-search-button-2"],
 ]  # fmt: skip
 NOT_SEARCH_NAMES = [
     [], ["Save search"], ["Search history"], ["Clear search"], ["Advanced search"],
@@ -305,7 +306,8 @@ NOT_SEARCH_NAMES = [
     ["Connect"], ["Message"], ["Se connecter"], ["Sign in"], ["Search and apply"],
     ["Rechercher et postuler"], ["Research"], ["Searching"], ["Search", "Follow"],
     ["Sеarch"], ["Find", "Save"], ["Trouver un mentor"], ["Jobs"], ["icon"],
-    ["Search", "global-nav-search"], ["Go"], ["OK"], ["Submit"], ["Envoyer"],
+    ["Search", "follow-btn"], ["Search", "btnShare"], ["Search", "Bewerben"], ["Find", "easyapply"],
+    ["Search", "saveSearch"], ["Rechercher", "suivre"], ["Search", "jobAlertToggle"], ["Go"], ["OK"], ["Submit"], ["Envoyer"],
     ["Créer une alerte"], ["Search"] * 61, ["Search Search"], ["Find people"], [""],
 ]  # fmt: skip
 

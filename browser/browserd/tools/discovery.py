@@ -905,10 +905,12 @@ def search_box(facts: dict) -> bool:
 # Search, as a person would"). An allow list: every name of the element (its text, aria-label,
 # title, value, name, id and the names within it), read in NFKC with format characters, accents
 # and case aside, with its camel case split or not, is one of these phrases or holds no word at
-# all once the SEARCH_NEUTRAL words and the numbers are taken out, and one name is a phrase; a
-# name with a letter or a digit outside basic Latin refuses (`_latin`). So "Save search",
-# "Search history", "Easy Apply" or "Follow" never pass, and the submit, apply and danger
-# detectors are read before this.
+# all once the SEARCH_NEUTRAL words and the numbers are taken out, and one name is a phrase. A
+# name of one token with no space (an id or a name attribute, `go`, `global-nav-search`) is no
+# label a person reads: it passes unless it holds an ACTION_STEMS stem anywhere (`btnFollow`,
+# `easyapply`). A name with a letter or a digit outside basic Latin refuses (`_latin`). So "Save
+# search", "Search history", "Easy Apply" or "Follow" never pass, and the submit, apply and
+# danger detectors are read before this.
 SEARCH_PHRASES = frozenset(
     tuple(phrase.split())
     for phrase in (
@@ -924,6 +926,18 @@ SEARCH_NEUTRAL = frozenset(
 )  # fmt: skip
 
 
+# What an id or a name attribute of a search button never holds, read inside its glued words:
+# applying, following, connecting, messaging, saving, sharing, alerting, reporting, blocking, an
+# account's pages, in English, French and German.
+ACTION_STEMS = (
+    *APPLY_PARTS, *POST_WORDS, "share", "partag", "teilen", "alert", "report", "signal",
+    "block", "bloqu", "suivr", "abonn", "folg", "speicher", "vernetz", "nachricht", "login",
+    "logout", "signin", "signout", "signup", "register", "account", "compte", "profil",
+    "delete", "remov", "suppr", "like", "upload",
+)  # fmt: skip
+IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,99}")
+
+
 def _search_name(name: str) -> str:
     """'phrase', 'neutral', or '' for a name that refuses."""
     for camel in (False, True):
@@ -936,6 +950,9 @@ def _search_name(name: str) -> str:
             return "neutral"
         if tuple(words) in SEARCH_PHRASES:
             return "phrase"
+    if IDENTIFIER.fullmatch(name.strip()):
+        glued = "".join(detect.words(name))
+        return "" if any(stem in glued for stem in ACTION_STEMS) else "neutral"
     return ""
 
 

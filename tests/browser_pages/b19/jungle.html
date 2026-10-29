@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Jobs</title></head>
+<body>
+<!-- A website like Welcome to the Jungle (B19): a script search box outside any form, a
+     combobox, whose Search button and Enter POST to its search service (another host, as
+     Algolia is) and render the list; posting links carry a tracking query. Beside the box, an
+     Apply button and an Easy Apply link that browserd refuses. -->
+<main>
+  <h1>Find your next job</h1>
+  <div class="search">
+    <input id="query" type="text" role="combobox" aria-expanded="false" autocomplete="off"
+           aria-label="Search for a job title, skill or company">
+    <input id="place" type="text" role="combobox" aria-expanded="false" autocomplete="off"
+           aria-label="Where? City or region">
+    <button id="go" type="button" aria-label="Search"><svg aria-hidden="true" width="12"
+      height="12"><circle cx="5" cy="5" r="4"></circle></svg></button>
+    <button id="apply" type="button">Apply</button>
+    <a id="easy" href="/fr/companies/example-robotics/jobs/genai-engineer_paris/apply">Easy Apply</a>
+  </div>
+  <section id="results" aria-label="Results"></section>
+</main>
+<script>
+(() => {
+  const service = "http://abc-dsn.algolia.test:8080/1/indexes/*/queries?x-algolia-application-id=E2E";
+  const search = () => {
+    const body = JSON.stringify({requests: [{indexName: "jobs_fr", params: "query=" +
+      encodeURIComponent(document.querySelector("#query").value) + "&aroundQuery=" +
+      encodeURIComponent(document.querySelector("#place").value)}]});
+    fetch(service, {method: "POST", body}).then(answer => answer.json()).then(found => {
+      const list = document.querySelector("#results");
+      list.textContent = "";
+      const items = document.createElement("ul");
+      for (const hit of found.results[0].hits) {
+        const item = document.createElement("li"), link = document.createElement("a");
+        link.href = hit.url;
+        link.textContent = hit.title;
+        item.append(link);
+        items.append(item);
+      }
+      list.append(items.childElementCount ? items : document.createTextNode("No job matches."));
+    }).catch(() => { document.querySelector("#results").textContent = "Search failed."; });
+  };
+  document.querySelector("#go").addEventListener("click", search);
+  for (const box of document.querySelectorAll("#query, #place")) {
+    box.addEventListener("keydown", event => { if (event.key === "Enter") search(); });
+  }
+  document.querySelector("#apply").addEventListener("click", () => {
+    fetch("/fr/apply", {method: "POST", body: "x"}).catch(() => 0);
+  });
+})();
+</script>
+</body>
+</html>
