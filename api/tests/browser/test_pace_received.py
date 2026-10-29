@@ -715,7 +715,7 @@ def test_a_release_the_store_refuses_once_is_asked_again_on_the_success_path():
     assert pages.unreleased == set()
 
 
-def test_the_next_page_of_a_lease_never_waits_on_its_own_earlier_hold():
+def test_the_next_page_of_a_lease_gives_back_its_own_earlier_hold():
     """The store refused the release of a page that failed, and the retry too: the hold stays for
     PACE_HOLD_S. The same lease's next page gives it back before it asks, and its pause counts
     from then. (Without it the page asks every second until `lease_budget`.)"""
@@ -736,6 +736,66 @@ def test_the_next_page_of_a_lease_never_waits_on_its_own_earlier_hold():
     assert pacer.holders == {}
     assert pages.unreleased == set()
     assert len(site) == 2
+    assert site[1] - site[0] >= PAGE_PAUSE_S[0] + pacing.DWELL_S[0] - 1e-9
+
+
+def test_a_release_the_store_refuses_twice_on_the_success_path_is_left_for_the_next_page():
+    """The page itself succeeded, then the store refused its release and the retry: the caller
+    hears StoreUnavailableError as before, and the holder is kept (`Pages.unreleased`) for the
+    same lease's next page to give back. (Without the holder kept, that page asks every second
+    until `lease_budget`: the store holds the host for PACE_HOLD_S.)"""
+    time, site = VirtualTime(), []
+    pacer = Refusing(time, 2)
+    browserd = FakeBrowserd(time, site, [])
+    pages = pages_of(browserd, time, pacer, PAGE_PAUSE_S, lease_until=300.0)
+
+    async def go() -> None:
+        with pytest.raises(StoreUnavailableError):
+            await pages._act(ACTIONS["navigate"](browserd))
+        assert browserd.calls == ["navigate", "snapshot"]  # the page itself was done
+        [left] = pages.unreleased
+        assert pacer.holders == {HOST: left}  # the store still holds it
+        await pages._act(ACTIONS["click"](browserd))
+
+    time.run(go)
+    assert pacer.holders == {}
+    assert pages.unreleased == set()
+    assert len(site) == 2
+    assert site[1] - site[0] >= PAGE_PAUSE_S[0] + pacing.DWELL_S[0] - 1e-9
+
+
+def test_a_call_already_polling_gives_back_a_hold_its_own_lease_left_meanwhile():
+    """Two concurrent calls of one lease (tool calls of one finder session): the first holds the
+    host, the second polls for it. The store then refuses the first's release and its retry, so
+    the hold is the lease's own and left. The store answers again, and the second gives it back
+    on its next ask, one poll after the first ended, and takes the host. (Given back once before
+    the loop, it asks every second until `lease_budget`.)"""
+    time, site = VirtualTime(), []
+    pacer = Refusing(time, 2)
+    browserd = FakeBrowserd(time, site, [])
+    pages = pages_of(browserd, time, pacer, PAGE_PAUSE_S, lease_until=300.0)
+
+    async def first() -> str:
+        with pytest.raises(StoreUnavailableError):
+            await pages._act(ACTIONS["navigate"](browserd))
+        return "first refused"
+
+    async def second() -> str:
+        try:
+            await pages._act(ACTIONS["click"](browserd))
+        except SourceError as ended:
+            return ended.code
+        return "second done"
+
+    assert time.run(first, second) == ["first refused", "second done"]
+    assert pacer.holders == {}
+    assert pages.unreleased == set()
+    assert len(site) == 2
+    first_end = pacing.DWELL_S[0] + pacing.READ_S[0]
+    # The polling call asked again one poll after the first call's end at most, then its pause,
+    # the click's dwell and hover.
+    latest = first_end + PACE_POLL_S + PAGE_PAUSE_S[0] + pacing.DWELL_S[0] + pacing.HOVER_S[0]
+    assert site[1] <= latest + 1e-9
     assert site[1] - site[0] >= PAGE_PAUSE_S[0] + pacing.DWELL_S[0] - 1e-9
 
 

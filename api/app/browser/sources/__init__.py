@@ -27,10 +27,11 @@ host are kept in Redis (RedisPacer, one script each to take and give back, so tw
 take the same slot). A page gives its host back when it ends, a failed or a cancelled one too,
 a cancel in the store's reply or in the release included (tests/browser/test_pace_received.py);
 a refused release is asked once more, and a hold still refused is given back by the same
-lease's next page (`Pages.unreleased`); a hold a dead worker left ends after PACE_HOLD_S. A host
-idle for longer than the pause is opened at once. A page is not started when the lease's remaining
-active time cannot hold its wait plus PAGE_LOAD_S (`lease_budget`), nor this close to the sweep's
-time limit (PAGE_BUDGET_S, `time_budget`).
+lease's next ask for the host, a call already polling included (`Pages.unreleased`); a hold a
+dead worker left ends after PACE_HOLD_S. A host idle for longer than the pause is opened at once.
+A page is not started when the lease's remaining active time cannot hold its wait plus
+PAGE_LOAD_S (`lease_budget`), nor this close to the sweep's time limit (PAGE_BUDGET_S,
+`time_budget`).
 
 The fixed readers of Google Careers, Business France VIE, company career pages (`site`) and
 LinkedIn's own reader were deleted with the company boards and the freelance feeds (owner,
@@ -415,8 +416,13 @@ class Pages:
         # a cancel anywhere in the page gives the host back. A release for a hold the page did
         # not get only moves the host's last page time on.
         try:
-            await self._give_back_left()
-            while (wait := await self.pacer.reserve(self.host, pause, holder)) is None:
+            while True:
+                # Before every ask, not once: a concurrent call of this lease that is already
+                # polling waits on the hold another call of the lease has just failed to give back.
+                await self._give_back_left()
+                wait = await self.pacer.reserve(self.host, pause, holder)
+                if wait is not None:
+                    break
                 # Another page of this host has not ended: its end starts our pause, so ask
                 # again until it gives the host back, while the lease can wait.
                 now = self.monotonic()
@@ -451,9 +457,10 @@ class Pages:
 
     async def _give_back_left(self) -> None:
         """The holds an earlier page of this lease could not give back are this lease's own: they
-        go back before the next page asks, or it would wait on its own lease's earlier hold. One
-        holder per page, so two concurrent tool calls of one finder session still pass the host
-        one at a time."""
+        go back before each ask of the next page, and of a call already polling, or that page would
+        wait on its own lease's earlier hold until its lease ends. A give back the store refuses
+        stays in `unreleased` and ends the page as StoreUnavailableError. One holder per page, so
+        two concurrent tool calls of one finder session still pass the host one at a time."""
         for holder in tuple(self.unreleased):
             await self.pacer.release(self.host, holder)
             self.unreleased.discard(holder)
