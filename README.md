@@ -26,6 +26,7 @@ The runbooks are in `docs/runbooks/`, one file per topic. Pick the file by the l
 | [backups-and-restores.md](docs/runbooks/backups-and-restores.md) | Dumps, schedule, 7 day retention, restore, guards | Backing up, restoring or changing retention |
 | [reboot-recovery.md](docs/runbooks/reboot-recovery.md) | What comes back after a reboot or crash | After a power cut or a reboot |
 | [updating-pypdfium2.md](docs/runbooks/updating-pypdfium2.md) | Taking a PDFium security release | When pypdfium2 has a security release |
+| [measure-document-writers.md](docs/runbooks/measure-document-writers.md) | Running the CV and letter writers several times on invented pairs and scoring them with the checker | Judging whether the writers' prompts have room to tune |
 
 ## Documents
 
