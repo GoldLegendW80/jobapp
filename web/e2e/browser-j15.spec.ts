@@ -291,6 +291,29 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
     live.getByRole("button", { name: "Take over", exact: true }),
   ).toBeEnabled();
   await expect(runPage.getByText("Your browser is starting.")).toHaveCount(0);
+  // The canvas holds a frame of the browser (more than one colour), as b4 and b12 wait for it.
+  await expect
+    .poll(
+      () =>
+        live.getByTestId("live-screen").evaluate((screen) => {
+          const canvas = screen.querySelector("canvas");
+          const context = canvas?.getContext("2d");
+          if (!canvas || !context || canvas.width === 0) return false;
+          const { data } = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          for (let i = 4; i < data.length; i += 4 * 97) {
+            for (let c = 0; c < 3; c += 1)
+              if (data[i + c] !== data[c]) return true;
+          }
+          return false;
+        }),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
   await shots(runPage, "run-live-view", false);
   await runPage.close();
 
