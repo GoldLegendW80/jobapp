@@ -9,9 +9,10 @@ Ranked by the REQUEST CHANGES rounds each family caused on the 242 reviewed pull
 from 2026-10-14 to 2026-10-28 (151 rounds, 322 blocking items; the list of 2026-10-14 came from
 61). The code after each title names the family's file in [lessons/INDEX.md](lessons/INDEX.md),
 with its cases: open it when the item applies. Never blocked in either corpus, keep doing them:
-no dashes in user text, migrations expand only with a working downgrade, ruff and format clean, no
-secrets in the diff, no real personal data in fixtures. No block since 2026-10-14, moved to their
-lessons files: the shell traps of the old item 8, the external facts of the old item 15.
+no dashes in user text, migrations expand only with a working downgrade, ruff and format clean
+(once broken by a lint config main gained, #302), no secrets in the diff, no real personal data in
+fixtures. No block since 2026-10-14, moved to their lessons files: the shell traps of the old item
+8, the external facts of the old item 15.
 
 1. **Heuristic rules and checkers fail closed, and a fix closes the family, not the quoted
    input.** (HEUR: 33 rounds, 20 PRs, half of all later round items.)
