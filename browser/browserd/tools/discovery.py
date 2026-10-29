@@ -86,7 +86,10 @@ ACCOUNT_STEMS = (
     "account",
     "application",
     "contact",
-    "message",
+    "messag",  # messages, messaging (B19: never the person's inbox, signed in)
+    "inbox",
+    "mynetwork",
+    "notification",
     "profile",
     "login",
     "logout",

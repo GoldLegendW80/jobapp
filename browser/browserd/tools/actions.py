@@ -312,11 +312,14 @@ class Tab:
     async def _signed_route(self, route: Any, request: Any) -> None:
         scope, method = self.state.scope, request.method
         try:
-            kind = request.resource_type
             frame = request.frame if request.is_navigation_request() else None
             main = frame is not None and frame.parent_frame is None
         except Exception:  # a service worker's request has no frame: not a document
-            kind, frame, main = "", None, False
+            frame, main = None, False
+        try:  # what made it (B19: only a fetch or an XHR may POST, discovery.posts)
+            kind = request.resource_type
+        except Exception:
+            kind = ""
         allowed = (
             not self.state.native_failed
             and scope is not None

@@ -280,10 +280,10 @@ not see.
 
 With browser_type you may type one of `titles` in a search box or one of `places` in the place
 box, as written there or with another case or accents when the website wants it ("GenAI
-Engineer" for "genai engineer"), or nothing, and with submit press Enter after it. Leaving a
-box empty is always allowed. browser_select_option sets a native filter only to a value of
-`filters` or a place of `places`; browser_click presses a search button, opens a posting, a
-result list or the next page, or declines cookies.
+Engineer" for "genai engineer"), or nothing, and with submit press Enter after it.
+Leaving a box empty is always allowed. browser_select_option sets a native filter only to a
+value of `filters` or a place of `places`; browser_click presses a search button, opens a
+posting, a result list or the next page, or declines cookies.
 Any other value, a translation included, is refused.
 Unwanted titles and unwanted places are context: never type them; postings that match them
 are left out after reading. Use the other criteria and the person's instructions to choose
