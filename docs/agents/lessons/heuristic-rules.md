@@ -5,12 +5,12 @@ checks of a CV or a mail, negation in a posting, topic gates for the answer agen
 scoring words, folding of saved terms), or a checker passes what it does not recognise.
 
 Counts, corpus 2026-10-14 to 10-28: 33 rounds, 20 pull requests, 82 items, 42 of the 86 items of
-later rounds. Open branch: 1 (B17). Rank 1. Backs review-checklist.md item 1 and implementer.md,
-"Heuristic code".
+later rounds. Open branch: 1 (B17). Rank 1. Backs review-checklist.md item 1 and when/heuristic-code.md
+(formerly implementer.md, "Heuristic code").
 
 ## Edit rows
 
-component: review-checklist.md item 1 and its "Heuristic code" section
+component: review-checklist.md item 1 and its "Heuristic code" section (now when/heuristic-code.md)
 candidates: the checklist of 2026-10-14
 change: fail closed default, accept and refuse tables, 20+ near misses per rule
 observed: the share of later round items fell from 79% (61 pull requests) to 49% (42 of 86), yet
@@ -26,7 +26,7 @@ but everyday forms of the same two leaks still pass"), #613 ("#575 item 3's fail
 both checks; only its spelling changed"), #687 rounds 2 to 4, #312 rounds 2 and 3, #661 round 2
 verdict: no observed effect
 
-component: implementer.md, "Heuristic code" ("Prefer an allow list")
+component: implementer.md, "Heuristic code", now when/heuristic-code.md ("Prefer an allow list")
 candidates: implementer.md since 2026-10-14
 change: an allow list of what is accepted rather than a deny list
 observed: allow lists were written and still failed open, because what they did not name was

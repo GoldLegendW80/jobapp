@@ -3,19 +3,19 @@
 A reviewer is a subagent with a fresh context that reviews one pull request and posts one verdict.
 The orchestrator gives it a brief (template in [orchestration.md](orchestration.md)).
 
-Same safety, git, worktree, context, process and Docker rules as
-[implementer.md](implementer.md): read it. In short: your own worktree under
+First read [shared-rules.md](shared-rules.md): the safety, git, context, process and Docker
+rules, the same as the builder's. What differs for a reviewer: your own worktree under
 `.claude/worktrees/rv<pr>` (`git -C <main> fetch -q origin`, then `git -C <main> worktree add
---detach .claude/worktrees/rv<pr> origin/<branch>`), never read `.env` files, no background processes,
-no Docker prune, never bypass hooks, never touch files you did not create, the repository is
-public. A fixup is pushed with `git -C <worktree> push origin HEAD:<branch>` (plain, never
-forced). Tests through `ops/agent-test.sh` (at most `-n 2`, under `nice -n 15`); never Playwright
-while `.local-check/lock` of the main checkout exists; throwaway containers and stacks named
-`rv<pr>-*` and removed afterwards.
+--detach .claude/worktrees/rv<pr> origin/<branch>`). A fixup is pushed with
+`git -C <worktree> push origin HEAD:<branch>` (plain, never forced). Tests through
+`ops/agent-test.sh` (at most `-n 2`, under `nice -n 15`); never Playwright while `.local-check/lock`
+of the main checkout exists; throwaway containers and stacks named `rv<pr>-*` and removed
+afterwards. What the author had to run is the Tests section of [implementer.md](implementer.md).
 
-Goal: one review round wherever possible. Measured on 61 pull requests, 66% needed at least one
-REQUEST CHANGES round, heuristic code caused 79% of the findings of later rounds, and each round
-costs a fix agent, a re-check and a wait for the gate.
+Goal: one review round wherever possible. Measured on the 242 reviewed pull requests merged from
+2026-10-14 to 2026-10-28 ([lessons/INDEX.md](lessons/INDEX.md)): 44% needed at least one REQUEST
+CHANGES round, heuristic rules held 49% of the blocking items of later rounds (42 of 86), and
+each round costs a fix agent, a re-check and a wait for the gate.
 
 ## Where the verdict lives
 
@@ -67,7 +67,12 @@ Head: <full 40 character sha>      <- the head AFTER your own fixup commits
 5. **Later rounds:** check only the previous blocking items and the diff since the last reviewed
    head. A new blocker in old code is allowed only for data loss or security; anything else is a
    follow up.
-6. **Checklist:** [review-checklist.md](review-checklist.md) is the minimum, not the maximum.
+6. **Checklist:** [review-checklist.md](review-checklist.md) is the minimum, not the maximum. For
+   each item that applies to the diff, read the file its pointer names before you judge it. Also
+   read [when/shell-scripts.md](when/shell-scripts.md) for a changed `*.sh` file or `ops/` script,
+   [when/gate-and-ship.md](when/gate-and-ship.md) for a gate change (rule 7),
+   [when/migrations.md](when/migrations.md) for an Alembic revision, and
+   [when/journeys.md](when/journeys.md) to run or judge a journey or a Docker stack.
 7. **Gate changes:** a diff that touches `ops/local-check.sh`, `ops/deploy-checked.sh`,
    `.github/scripts/ci_plan.py`, `.github/scripts/ci_plan_test.py`, a step condition or the Shellcheck and
    `tests/*_test.sh` lists of `.github/workflows/ci.yml`, or what the secret scan goes by

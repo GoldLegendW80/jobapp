@@ -6,9 +6,10 @@ click: an agent fills the application form in a live browser and submits only af
 approves. It runs as a Docker Compose stack on a Jetson Orin Nano (arm64) at home, reached through
 Tailscale Funnel. The repository is PUBLIC.
 
-Start here, in this order: this file, [docs/STATUS.md](docs/STATUS.md) (what is live, open,
-next), [docs/decisions.md](docs/decisions.md) (what the owner decided), then the doc of your role
-below.
+Start here, in this order: this file, then the doc of your role (below). The orchestrator also
+reads [docs/STATUS.md](docs/STATUS.md) (what is live, open, next). Owner decisions
+([docs/decisions.md](docs/decisions.md)) are never decided again: read "Standing rules" and the
+section of your module (`grep -n '^## '`), never the whole file.
 
 ## Map
 
@@ -53,35 +54,21 @@ below.
     beyond your own names; remove what you create.
 11. **Everything stays free:** no paid service.
 
-Owner decisions per module are in [docs/decisions.md](docs/decisions.md): never decide them again.
-
 ## Daily commands
 
 ```bash
-ops/dev-setup.sh                                   # a new laptop: what is missing and how to fix it (read only)
-ops/agent-test.sh --name <task> tests/<module> -m "not docker" -n 2   # pytest beside the gate (throwaway db and redis)
-ops/agent-test.sh --name <task> --playwright <args>                   # a journey, one worker, against your own stack
+ops/agent-test.sh --name <task> tests/<module> -m "not docker" -n 2   # pytest, throwaway db and redis
+ops/agent-test.sh --name <task> --playwright <args>                   # a journey, your own stack
 (cd api && uv run ruff check app tests && uv run ruff format --check app tests)
 pnpm --dir web run typecheck && pnpm --dir web run lint && pnpm --dir web exec vitest run src/features/<f>
-python3 .github/scripts/ci_plan_test.py && python3 .github/scripts/e2e_groups.py   # always, fast
-pre-commit run --files <changed files>              # includes the secret scan (gitleaks)
-
-ops/local-check.sh --merge <pr> --merge <pr>        # the gate on a merged batch (the orchestrator, quiet machine)
-ops/ship.sh --plan --approved                       # what would ship, changes nothing
-ops/ship.sh <pr> <pr>                               # gate, merge, deploy the checked tree, check the Jetson: SHIP: OK
-ops/deploy-checked.sh                               # deploy the current checked main only
-ops/remote.sh status                                # the Jetson's figures through GitHub Actions (ops.yml), no ssh; --list for the actions
-ops/card.sh <issue url> doing <module> now           # the card of a task you start (Building)
-ops/board-sync.py                                   # every column from GitHub facts, dry run (ops/ship.sh runs --apply)
+python3 .github/scripts/ci_plan_test.py && python3 .github/scripts/e2e_groups.py
+pre-commit run --files <changed files>              # with the secret scan
+ops/card.sh <issue url> doing <module> now           # the card of a task you start
 ```
 
-`uv` needs `--native-tls` on a network that intercepts TLS. Deploy from any machine, no ssh
-(docs/runbooks/deploy-from-any-machine.md): the gate runs on the laptop that ships and writes its PASS
-record in that checkout; `ops/ship.sh` (or `ops/deploy-checked.sh`) dispatches
-`.github/workflows/deploy.yml` on the Jetson's runner for a tree that gate passed and reads the
-run's `JOBAPP-VERIFY` figures; `ops/remote.sh <action>` dispatches `.github/workflows/ops.yml`
-(status, backup, apply pause and resume, ...). Dispatching needs write access and the gh scope
-`workflow`. `./deploy.sh` and ssh stay for the owner: the first deploy, a new `.env`, sudo steps.
+`uv` needs `--native-tls` on a network that intercepts TLS. To gate, ship, deploy, operate the
+Jetson or set up a laptop, or when your diff touches `ops/`, `deploy.sh` or the workflows: read
+[docs/agents/when/gate-and-ship.md](docs/agents/when/gate-and-ship.md) first.
 
 ## How work flows
 
@@ -91,14 +78,8 @@ reviewer posts `REVIEW VERDICT: APPROVE|REQUEST CHANGES` with a `Head: <sha>` li
 comment; a fresh fix agent addresses blockers; a re-check confirms. `ops/ship.sh` gates the
 approved batch, merges and deploys.
 
-- [docs/agents/orchestration.md](docs/agents/orchestration.md): the orchestrator: lifecycle,
-  model policy, parallelism, brief templates, lessons learned.
-- [docs/agents/implementer.md](docs/agents/implementer.md): rules for whoever builds a task.
-- [docs/agents/reviewer.md](docs/agents/reviewer.md): rules for whoever reviews one.
-- [docs/agents/review-checklist.md](docs/agents/review-checklist.md): the self review list,
-  mined from 130 reviews.
-- [CONTRIBUTING.md](CONTRIBUTING.md): the merge rule, the gate, migrations.
-- [README.md](README.md): what the app is and the Contents table of the runbooks in `docs/runbooks/` (setup in develop-new-machine.md, operations, every runbook).
-
-Subagents: `.claude/agents/implementer.md` and `.claude/agents/reviewer.md`. Slash commands:
-`/build-task`, `/review-pr`, `/fix-pr`, `/ship`, `/status` (`.claude/commands/`).
+Docs: `docs/agents/` (`orchestration.md` for the orchestrator, with the subagents and slash
+commands; `implementer.md`, `reviewer.md`, `shared-rules.md` and `review-checklist.md`, mined from
+512 reviews of 242 pull requests, for the agents; `when/`, read only when a trigger line says so;
+`lessons/`), [CONTRIBUTING.md](CONTRIBUTING.md) (the merge rule, the gate, migrations),
+[README.md](README.md) (what the app is, the runbooks of `docs/runbooks/`).

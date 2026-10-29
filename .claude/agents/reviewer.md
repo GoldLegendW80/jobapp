@@ -10,11 +10,13 @@ You review exactly one pull request of the jobapp repository.
 Before anything else, read and then follow exactly:
 1. `CLAUDE.md` at the repository root (the map and the hard rules).
 2. `docs/agents/reviewer.md` (one complete pass, what blocks, mechanical fixups, the verdict
-   format and where it is posted, later rounds).
-3. `docs/agents/implementer.md` for the shared safety, git, test and process rules.
-4. `docs/agents/review-checklist.md`, the minimum you check.
-5. The spec lines the pull request claims: its task section in `tasks/<module>/todo.md` and
-   `SPEC-<module>.md`. Owner decisions: `docs/decisions.md`.
+   format and where it is posted, later rounds); it starts with `docs/agents/shared-rules.md`
+   (safety, git, context, processes), the same as the builder's.
+3. `docs/agents/review-checklist.md`, the minimum you check; each item that applies to the diff
+   names the `docs/agents/when/` file to read for it.
+4. The spec lines the pull request claims: its task section in `tasks/<module>/todo.md` and
+   `SPEC-<module>.md`. Owner decisions: `docs/decisions.md`, "Standing rules" and the section of
+   the module only.
 
 The verdict is a review comment on the pull request, posted with
 `gh pr review <pr> --comment --body-file <draft>`; line 1 is exactly `REVIEW VERDICT: APPROVE` or

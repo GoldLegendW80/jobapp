@@ -8,9 +8,13 @@ decides what gets built and answers questions; the orchestrator asks him through
 question tool (AskUserQuestion), with concrete options and the recommended one first, never as
 plain text at the end of a message.
 
+Subagents: `.claude/agents/implementer.md` and `.claude/agents/reviewer.md`. Slash commands:
+`/build-task`, `/review-pr`, `/fix-pr`, `/ship`, `/status` (`.claude/commands/`).
+
 Rules for the subagents: [implementer.md](implementer.md), [reviewer.md](reviewer.md),
-[review-checklist.md](review-checklist.md). Merge and deploy mechanics: CONTRIBUTING.md, steps 4
-to 7. Owner decisions: [../decisions.md](../decisions.md).
+[shared-rules.md](shared-rules.md), [review-checklist.md](review-checklist.md); the situational
+ones are in `when/`. Merge and deploy mechanics: CONTRIBUTING.md, steps 4 to 7 (and
+[when/gate-and-ship.md](when/gate-and-ship.md)). Owner decisions: [../decisions.md](../decisions.md).
 
 ## Task lifecycle
 
@@ -201,7 +205,7 @@ Read first: docs/agents/implementer.md (follow it exactly). The review is the la
 begins with "REVIEW VERDICT:" (gh pr view <pr> --comments, or
 gh api repos/GoldLegendW80/jobapp/pulls/<pr>/reviews).
 Fix exactly: <B1 ...>, <B2 ...>, <the "Fixups for the fix agent" list, if any>.
-For a heuristic item, fix the family, not the quoted input (implementer.md, Heuristic code).
+For a heuristic item, fix the family, not the quoted input (when/heuristic-code.md).
 Worktree: a fresh one of the branch under .claude/worktrees/<name>. Push plainly, then add a
 short "Round <n> fixes" section to the pull request body. Hand back as implementer.md says.
 ```
@@ -226,7 +230,8 @@ The harness learns from its own reviews: harness2's harnessing level recursion, 
   docs/agents/lessons/INDEX.md". It reads only those pull requests' verdicts, Round commits and
   bodies, appends their rows to the ledger, files each blocking item under its family with an
   edit row, and proposes checklist or implementer edits only where an entry supports them,
-  keeping the joint size of review-checklist.md and implementer.md from growing.
+  keeping the always on files from growing (detail goes to a `when/` file with a trigger line;
+  the figures of "Context per start" in lessons/INDEX.md are the budget).
 - It commits on a branch `claude/lessons-<date>` in its own worktree and hands back; the
   orchestrator opens the docs pull request, reviewed on Sonnet, and ships it with the next batch.
 - A batch without a REQUEST CHANGES round only adds its ledger rows: fold it into the next pass.
@@ -237,7 +242,7 @@ The harness learns from its own reviews: harness2's harnessing level recursion, 
   Docker and no tests, so it may run beside the gate.
 - Every 10 to 15 shipped pull requests, compare the ledger with the baseline of
   lessons/INDEX.md (blocking items per first review, fix rounds per pull request, rounds per
-  family) and write the comparison there.
+  family), measure "Context per start" again, and write both comparisons there.
 
 ## Lessons learned
 
@@ -246,10 +251,8 @@ The harness learns from its own reviews: harness2's harnessing level recursion, 
   (`ops/ship.sh` names the first failure flaky when the rerun passes), and flaky tests are made
   deterministic rather than retried forever (issue #293). Before blaming load, check `uptime`
   for leftover processes: orphaned CPU loops of one reviewer once broke two gates.
-- **A journey that has never run hides most of its bugs.** The first runs of D11, D12 and A7 each
-  found real issues (a fake stream written for another profile, a browser profile missing in the
-  gate, apply state bugs). Run every new journey on its own stack before the batch gate, and run
-  `pnpm --dir web run typecheck` on every changed journey (21 type errors once reached main).
+- **A journey that has never run hides most of its bugs.** The lesson, with the one on Docker
+  address pools, moved to [when/journeys.md](when/journeys.md) on 2026-10-29.
 - **Run the whole module, not your own files.** With no CI per pull request, an approved change
   broke older tests and journeys that still stated the previous behaviour. Every brief demands
   the whole test folder of the module and a grep for assertions of the changed behaviour.
@@ -263,14 +266,9 @@ The harness learns from its own reviews: harness2's harnessing level recursion, 
   crashed the api natively (SIGSEGV, no traceback). One process wide lock guards every pypdfium2
   call (#320). A native crash shows as a restart count of 1 with no traceback; reproduce in the
   image with `python -X faulthandler`.
-- **bash 3.2 (macOS `/bin/bash`):** no associative arrays or `mapfile`; `set -e` is ignored
-  inside a function called from `if`, `||` or `&&`; `grep -q` in a pipe under `pipefail` can
-  fail a healthy check (SIGPIPE of the writer); an EXIT trap must remove what background jobs of
-  the script created, and a script must never leave a background job behind it.
-- **Docker address pools.** Each journey stack has 4 to 5 networks, and Docker Desktop's default
-  pools ran out at about 30 networks ("all predefined address pools have been fully
-  subnetted"). Gate stacks use /27 subnets of their own range (#292), and every stack is taken
-  down with `down -v` as soon as its group ends.
+- **bash 3.2 (macOS `/bin/bash`)** and **Docker address pools**: moved to
+  [when/shell-scripts.md](when/shell-scripts.md) and [when/journeys.md](when/journeys.md) on
+  2026-10-29.
 - **The session limit cuts every running agent at once.** Their worktrees survive. After the
   reset, check each worktree for uncommitted or unpushed work, then start fresh agents from the
   pushed state (never resume). Briefs demand a work in progress push within the first hour.
