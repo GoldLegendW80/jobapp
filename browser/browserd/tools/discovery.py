@@ -29,12 +29,29 @@ is refused; a document with a `%` in its path already was. A word is read with i
 first too (`/jobs/42/AppLy`, detect.match_words), but a glued confirm verb and application noun
 written in one case is one word, so the path rule lets `/jobs/42/confirmapplication` leave (the
 query rule reads the noun inside a word).
+
+Real job websites (owner, 2026-10-29, B19: "Let it use the search boxes"): a platform's hosts
+are a family (`Family`, `on_site`): Indeed's and LinkedIn's domain, its `www.` host and every
+host of two lowercase letters under it, Welcome to the Jungle's domain and its `www.` host. Every
+rule above that reads the start's host reads its family instead, so a redirect within the family
+is followed and one anywhere else stays stopped. Signed in, the agent may also type one saved
+title or place into a text box of the page (`search_box`, in a GET search form or in no form,
+the box's labels telling which, `Scope.types`), press Enter there, and click a button or link
+whose every name is a search word (`search_words`); a page of the family opens when it is a
+posting (`posting`) or a result list (`listing`) whose search key holds a saved title, and a
+redirect hop within the family when it is no apply, account or sign out address (`page_url`);
+a page's fetch or XHR may POST to the family or the platform's search service (`posts`). The
+submit, apply and danger detectors run first and win, documents stay GET only.
+Declared open points (B19): a place key of a result list (`l`, `location`, `geoId`) is not held
+to a saved place; a combobox that picks its first suggestion on Enter searches that suggestion;
+a POST's body is not read; pagination and filter buttons that are no link are refused; a
+posting whose address holds a refused word (`payments-engineer`) is refused.
 """
 
 import re
 import unicodedata
 from dataclasses import dataclass, replace
-from urllib.parse import parse_qsl, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
 from browserd import detect
 
@@ -69,7 +86,10 @@ ACCOUNT_STEMS = (
     "account",
     "application",
     "contact",
-    "message",
+    "messag",  # messages, messaging (B19: never the person's inbox, signed in)
+    "inbox",
+    "mynetwork",
+    "notification",
     "profile",
     "login",
     "logout",
@@ -198,22 +218,18 @@ class Scope:
     places: tuple[str, ...] = ()  # what the location box or select takes, one at a time
     filters: tuple[tuple[str, str], ...] = ()  # one saved value per native filter
     signed_in: bool = False
-    # The Indeed platform (owner, 2026-10-28): its start page's first navigation may follow a
-    # redirect to one of its own country sites (`country_scope`), once.
-    country: bool = False
 
     @classmethod
     def parse(cls, raw: object) -> "Scope | None":
         keys = {"start", "titles", "places", "filters"}
-        if not isinstance(raw, dict) or set(raw) - {"signed_in", "country"} != keys:
+        if not isinstance(raw, dict) or set(raw) - {"signed_in"} != keys:
             return None
         start, filters = raw["start"], raw["filters"]
         titles = _values(raw["titles"], needed=True)
         places = _values(raw["places"], needed=False)
-        signed_in, country = raw.get("signed_in", False), raw.get("country", False)
+        signed_in = raw.get("signed_in", False)
         if (
             type(signed_in) is not bool
-            or type(country) is not bool
             or not isinstance(start, str)
             or not read_url(start, start)
             or titles is None
@@ -228,7 +244,24 @@ class Scope:
             )
         ):
             return None
-        return cls(start, titles, places, tuple(sorted(filters.items())), signed_in, country)
+        return cls(start, titles, places, tuple(sorted(filters.items())), signed_in)
+
+    def types(self, names: object, text: object) -> bool:
+        """B19, signed in: whether this text may be typed in a text box whose names are these,
+        in any box of the page (`search_box`): nothing to clear it, else one saved title in a
+        box its labels call a title box, one saved place in a place box, and either one where
+        they cannot tell (`box_kind`)."""
+        if text == "":
+            return True
+        kind = box_kind(names)
+        saved = (
+            self.titles
+            if kind == "title"
+            else self.places
+            if kind == "place"
+            else (*self.titles, *self.places)
+        )
+        return saved_as(text, saved) is not None
 
     def takes(self, name: object, text: object) -> bool:
         """Whether this text may be typed in a text field of this name: one saved title in a
@@ -288,13 +321,25 @@ def search_path(path: str) -> bool:
     )
 
 
+def _path_refused(segments: list[str]) -> bool:
+    """A path that submits, deletes, pays, applies or reaches the person's account, by its
+    words (read_url's rule)."""
+    tokens = [word for segment in segments for word in detect.match_words(segment)]
+    return (
+        detect.says_submit(segments, profile_edit=True)
+        or detect.says_danger(segments)
+        or any(t.startswith(ACCOUNT_STEMS) for t in tokens)
+        or any(part in t for t in tokens for part in APPLY_PARTS)
+    )
+
+
 def read_url(
     url: str, current: str, *, form: bool = False, scope: Scope | None = None, hop: bool = False
 ) -> bool:
     if not isinstance(url, str) or len(url) > 2000:
         return False
     try:
-        parts, here = urlsplit(url), urlsplit(scope.start if scope else current)
+        parts = urlsplit(url)
         if (
             parts.scheme not in {"http", "https"}
             or parts.username
@@ -303,18 +348,12 @@ def read_url(
             or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url)
         ):
             return False
-        if (parts.scheme, parts.hostname, parts.port) != (here.scheme, here.hostname, here.port):
+        if not on_site(url, scope.start if scope else current):  # the start's host or family
             return False
         segments = parts.path.strip("/").split("/")
-        tokens = [word for segment in segments for word in detect.match_words(segment)]
         pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
         keys = [k for k, _ in pairs]
-        destructive = (
-            detect.says_submit(segments, profile_edit=True)
-            or detect.says_danger(segments)
-            or any(t.startswith(ACCOUNT_STEMS) for t in tokens)
-            or any(part in t for t in tokens for part in APPLY_PARTS)
-        )
+        destructive = _path_refused(segments)
         # A search request carries its saved title; the search page itself, its address with
         # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716). A
         # redirect hop (`hop`) is held to the rule reviewed with the start page's own redirect:
@@ -375,58 +414,206 @@ def redirect_target(url: str, location: object, scope: Scope) -> str | None:
     return target if target and read_url(target, scope.start, scope=scope, hop=True) else None
 
 
-# Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
-# xx.indeed.com is followed, and the search continues there. Redirects to any other domain stay
-# refused." The home host of each platform that has country sites, and the scheme they keep.
-# `www.indeed.test:8080` is the fixture server's stand in for the tests, as the api's
-# platform_policy.test_start maps a platform there: `.test` is reserved (RFC 2606), no public
-# DNS answers it, and the production proxy refuses a private address.
-COUNTRY_HOMES = {"www.indeed.com": "https", "www.indeed.test:8080": "http"}
+# Owner, 2026-10-29 (B19, "Let it use the search boxes"): each website's own hosts are allowed.
+# A platform's hosts are a family, on https and its default port: its domain, the domain's
+# `www.` host and, with `countries`, every host of exactly two lowercase ASCII letters under the
+# domain (`fr.indeed.com`, the owner's "any xx.indeed.com" of 2026-10-28). Its `signin` hosts
+# (`secure.indeed.com`) are outside it: a page there is the sign in wall (`signin_url`). Its
+# `search` domains are its search service: a page's fetch or XHR may POST to a host under one
+# (`posts`). Each family has a `.test` stand in on http and port 8080, the fixture server's
+# names for the tests, as the api's platform_policy.test_start maps a platform there: `.test` is
+# reserved (RFC 2606), no public DNS answers it, and the production proxy refuses a private
+# address. The api's finder.FAMILIES is the same table.
 COUNTRY_LABEL = re.compile(r"[a-z]{2}")
+PORTS = {"http": 80, "https": 443}
 
 
-def country_site(start: str, url: str) -> bool:
-    """Whether `url` is the start page on a country site of the home host `start` is on
-    (https://www.indeed.com/ to https://fr.indeed.com/): the home's own scheme, a host of
-    exactly two lowercase ASCII letters then the home's domain and port, no user info, the
-    start's own path and query, no fragment, as written. The home itself is no country site:
-    a redirect on its own host is a redirect_target."""
-    if not isinstance(start, str) or not isinstance(url, str):
-        return False
-    try:
-        home, there = urlsplit(start), urlsplit(url)
-    except ValueError:
-        return False
-    scheme = COUNTRY_HOMES.get(home.netloc)
-    label, dot, rest = there.netloc.partition(".")
-    return (
-        scheme is not None
-        and home.scheme == there.scheme == scheme
-        and bool(dot)
-        and rest == home.netloc[4:]
-        and COUNTRY_LABEL.fullmatch(label) is not None
-        and (there.path, there.query) == (home.path, home.query)
-        and not there.fragment
-        and url == urlunsplit((scheme, there.netloc, there.path, there.query, ""))
+@dataclass(frozen=True)
+class Family:
+    domain: str
+    platform: str
+    countries: bool = False
+    signin: tuple[str, ...] = ()
+    search: tuple[str, ...] = ()
+    scheme: str = "https"
+    port: int = 443
+
+    def member(self, host: str) -> bool:
+        if host in (self.domain, "www." + self.domain):
+            return True
+        label, dot, rest = host.partition(".")
+        return (
+            self.countries
+            and bool(dot)
+            and rest == self.domain
+            and COUNTRY_LABEL.fullmatch(label) is not None
+        )
+
+
+def _stand_in(family: Family) -> Family:
+    def test(domain: str) -> str:
+        return domain.rsplit(".", 1)[0] + ".test"
+
+    return replace(
+        family,
+        domain=test(family.domain),
+        search=tuple(map(test, family.search)),
+        scheme="http",
+        port=8080,
     )
 
 
-def country_scope(scope: Scope, url: str) -> Scope | None:
-    """The frozen scope moved to the country site `url` is on (owner, 2026-10-28), for a
-    search of a platform with country sites (`Scope.country`) from its home host: `url` is
-    its new start, and every other rule holds there unchanged (read_url within the moved
-    scope). The moved scope follows no other country site. None when it may not move."""
-    if not scope.country or not country_site(scope.start, url):
+PLATFORM_FAMILIES = (
+    Family("indeed.com", "indeed", countries=True, signin=("secure",)),
+    Family("linkedin.com", "linkedin", countries=True),
+    Family(
+        "welcometothejungle.com", "welcome_to_the_jungle", search=("algolia.net", "algolianet.com")
+    ),
+)
+FAMILIES = (*PLATFORM_FAMILIES, *map(_stand_in, PLATFORM_FAMILIES))
+
+
+def _where(url: object) -> tuple[str, str, int | None] | None:
+    """(scheme, host, port) of an address, the port the scheme's default when it has none."""
+    if not isinstance(url, str):
         return None
-    moved = replace(scope, start=url, country=False)
-    return moved if read_url(url, url, scope=moved) else None
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.username or parts.password:
+        return None
+    port = PORTS.get(parts.scheme) if port is None else port
+    return parts.scheme, parts.hostname or "", port
 
 
-def country_redirect(url: str, location: object, scope: Scope) -> Scope | None:
-    """The scope a redirect response of the start page's first navigation moves to, when its
-    Location (`_resolved`) is a country site of the scope's home (`country_scope`)."""
-    target = _resolved(url, location)
-    return country_scope(scope, target) if target else None
+def family_of(url: object) -> Family | None:
+    """The family an address is on: its scheme and port, its host a member."""
+    where = _where(url)
+    if where is None:
+        return None
+    scheme, host, port = where
+    return next(
+        (f for f in FAMILIES if (f.scheme, f.port) == (scheme, port) and f.member(host)), None
+    )
+
+
+def on_site(url: object, start: object) -> bool:
+    """Whether `url` is on the start's website: the start's family when it is on one, else the
+    start's own scheme, host and port."""
+    family = family_of(start)
+    if family is not None:
+        return family_of(url) is family
+    there, here = _where(url), _where(start)
+    return there is not None and there == here and bool(there[1])
+
+
+def _search_service(url: object, family: Family) -> bool:
+    where = _where(url)
+    return (
+        where is not None
+        and (where[0], where[2]) == (family.scheme, family.port)
+        and any(where[1].endswith("." + domain) for domain in family.search)
+    )
+
+
+def _language(segment: str) -> bool:
+    language, region = segment[:2], segment[2:]
+    return language in LANGUAGES and (not region or REGION.fullmatch(region) is not None)
+
+
+SLUG = re.compile(r"[A-Za-z0-9_-]{1,200}")
+JOB_KEY = re.compile(r"[A-Za-z0-9]{1,40}")
+
+
+def _linkedin_job(segment: str) -> bool:
+    """A LinkedIn posting's id: digits, or a lowercase slug then a hyphen and the digits."""
+    head, _, digits = segment.rpartition("-")
+    return (
+        0 < len(digits) <= 20
+        and digits.isascii()
+        and digits.isdecimal()
+        and len(head) <= 200
+        and all(c.isascii() and (c.islower() or c.isdecimal() or c == "-") for c in head)
+    )
+
+
+def posting(family: Family, segments: list[str], pairs: list[tuple[str, str]]) -> bool:
+    """A posting's page of the platform, by its path (B19), whatever its tracking query:
+    LinkedIn `/jobs/view/<id>`, Indeed `/viewjob?jk=<key>` and `/rc/clk?jk=<key>`, Welcome to the
+    Jungle `/<language>/companies/<company>/jobs/<slug>`."""
+    if family.platform == "linkedin":
+        return (
+            len(segments) == 3 and segments[:2] == ["jobs", "view"] and _linkedin_job(segments[2])
+        )
+    if family.platform == "indeed":
+        keys = [value for key, value in pairs if key == "jk"]
+        return (
+            segments in (["viewjob"], ["rc", "clk"])
+            and len(keys) == 1
+            and JOB_KEY.fullmatch(keys[0]) is not None
+        )
+    return (
+        family.platform == "welcome_to_the_jungle"
+        and len(segments) == 5
+        and _language(segments[0])
+        and segments[1] == "companies"
+        and segments[3] == "jobs"
+        and SLUG.fullmatch(segments[2]) is not None
+        and SLUG.fullmatch(segments[4]) is not None
+    )
+
+
+def listing(family: Family, path: str) -> bool:
+    """A result list of the platform (B19): its search page (`search_path`: `/jobs`,
+    `/fr/jobs`), and LinkedIn's `/jobs/search`, `/jobs/search-results` and the "see all" lists
+    `/jobs/collections/<name>`."""
+    if search_path(path):
+        return True
+    segments = path.strip("/").split("/")
+    return family.platform == "linkedin" and (
+        segments in (["jobs", "search"], ["jobs", "search-results"])
+        or (
+            len(segments) == 3
+            and segments[:2] == ["jobs", "collections"]
+            and SLUG.fullmatch(segments[2]) is not None
+        )
+    )
+
+
+def page_url(url: object, scope: Scope, *, hop: bool = False) -> bool:
+    """A document a signed in discovery may open (B19): what read_url lets through within the
+    frozen scope, or, on the start's family, an address with no user part, no fragment, no
+    control character and no `%` left after one decode, that is a redirect hop (`hop`: a
+    redirect within the family is followed) or a result list (`listing`) and reaches no apply,
+    submit, delete, payment or account page by its path words, or a posting (`posting`), whose
+    path words are its title (read by `destructive` alone, as every request's are). A result
+    list's search key, if any, holds a saved title or nothing."""
+    if not isinstance(url, str) or len(url) > 2000:
+        return False
+    if read_url(url, scope.start, scope=scope, hop=hop):
+        return True
+    family = family_of(scope.start)
+    if family is None or family_of(url) is not family:
+        return False
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return False
+    path = unquote(parts.path)
+    if parts.fragment or "%" in path or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url):
+        return False
+    segments = path.strip("/").split("/")
+    if posting(family, segments, pairs):
+        return True
+    if _path_refused(segments):
+        return False
+    return hop or (
+        listing(family, path)
+        and all(not v or saved_as(v, scope.titles) is not None for k, v in pairs if k in QUERY)
+    )
 
 
 def location_of(headers: object) -> str | None:
@@ -539,27 +726,68 @@ def destructive(url: str, scope: Scope | None = None) -> bool:
 SIGNIN_PATHS = ("login", "signin", "logon", "connexion", "seconnecter", "auth", "sso")
 
 
-def signin_url(url: str) -> bool:
-    """A sign in page's address by its path (B17): a signed in discovery sent there has lost the
-    person's login, which the api tells as `platform_signin`."""
+def signin_url(url: str, scope: Scope | None = None) -> bool:
+    """A sign in page's address by its path (B17), or any page of a sign in host of the start's
+    family (B19: `secure.indeed.com`): a signed in discovery sent there has lost the person's
+    login, which the api tells as `platform_signin`."""
     try:
-        segments = urlsplit(url).path.lower().split("/")
+        parts = urlsplit(url)
+        segments = parts.path.lower().split("/")
     except (ValueError, AttributeError):
         return False
+    family = family_of(scope.start) if scope is not None else None
+    if family is not None and parts.hostname in {f"{h}.{family.domain}" for h in family.signin}:
+        return True
     folded = ["".join(ch for ch in segment if ch.isalnum()) for segment in segments]
     return any(f.startswith(SIGNIN_PATHS) for f in folded if f)
 
 
-def signed_request(
-    url: str, method: str, document: bool, scope: Scope, *, hop: bool = False
-) -> bool:
-    """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, never a
-    destructive address on any host (a document's too: `/logoff` or `/fr/deconnexion` in a
-    frame would sign the person out), and a document (a frame's navigation) only within the
-    frozen scope, as read_url holds the anonymous discovery."""
-    if method not in {"GET", "HEAD"} or not isinstance(url, str) or len(url) > 8000:
+# B19: read inside every glued path segment, query key and query value of a page's POST, the
+# person's own search words aside: a POST that follows, connects, messages, invites or saves
+# never leaves, whatever its host (owner, 2026-10-29: "no ... save, message, follow or connect").
+POST_WORDS = ("follow", "connect", "messag", "invit", "save", "bookmark")
+
+
+def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
+    """Whether a signed in page's background request may POST (B19): a fetch or an XHR, never a
+    document, a beacon or a form, to the start's family or a host of its platform's search
+    service (`Family.search`), reaching no address `destructive` or POST_WORDS refuses. A
+    website on no family posts nothing."""
+    family = family_of(scope.start)
+    if (
+        method != "POST"
+        or kind not in {"fetch", "xhr"}
+        or family is None
+        or not isinstance(url, str)
+        or not (family_of(url) is family or _search_service(url, family))
+    ):
         return False
-    if document and not read_url(url, scope.start, scope=scope, hop=hop):
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return False
+    own = own_words(scope)
+    texts = [*unquote(parts.path).split("/"), *(k for k, _ in pairs)]
+    texts.extend(v for _, v in pairs if tuple(detect.words(v)) not in own)
+    glued = ["".join(detect.words(text)) for text in texts]
+    return not any(word in text for text in glued for word in POST_WORDS)
+
+
+def signed_request(
+    url: str, method: str, document: bool, scope: Scope, *, hop: bool = False, kind: str = ""
+) -> bool:
+    """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, a
+    page's fetch or XHR POST to its website (`posts`, B19) aside, never a destructive address on
+    any host (a document's too: `/logoff` or `/fr/deconnexion` in a frame would sign the person
+    out), and a document (a frame's navigation) only within the frozen scope or a page of the
+    start's family (`page_url`)."""
+    if not isinstance(url, str) or len(url) > 8000:
+        return False
+    if document:
+        if method not in {"GET", "HEAD"} or not page_url(url, scope, hop=hop):
+            return False
+    elif method not in {"GET", "HEAD"} and not posts(url, method, kind, scope):
         return False
     return not destructive(url, scope)
 
@@ -619,12 +847,207 @@ def decline(facts: object) -> bool:
     return isinstance(point, dict) and point.get("inside") is True and _declines(point)
 
 
+# B19: which saved values a text box takes, told from its names (its label, aria-label,
+# placeholder, name and id) as the api's finder.box_of tells it from the snapshot: the same words.
+# A box is a place box when a name holds a place word and no title word, and no name the other
+# way; a title box the other way; else it cannot tell, and either kind of saved value goes.
+PLACE_WORDS = frozenset(
+    {"location", "locations", "localisation", "localization", "lieu", "lieux", "ville", "villes",
+     "city", "cities", "town", "where", "region", "regions", "departement", "departements",
+     "postcode", "zip", "zipcode", "postal", "country", "pays", "commune", "address", "adresse",
+     "place", "standort", "ort", "stadt"}
+)  # fmt: skip
+TITLE_WORDS = frozenset(
+    {"job", "jobs", "title", "titles", "keyword", "keywords", "motcle", "motscles", "motcles",
+     "poste", "postes", "metier", "metiers", "emploi", "emplois", "intitule", "what", "quoi",
+     "role", "roles", "skill", "skills", "competence", "competences", "company", "entreprise",
+     "query", "search", "recherche", "rechercher", "stelle", "stellen", "beruf"}
+)  # fmt: skip
+BOX_WORD = re.compile(r"[^\W_]+(?:-[^\W_]+)*")
+
+
+def _box_name(name: str) -> str | None:
+    folded = unicodedata.normalize("NFKC", name[:500]).casefold()
+    raw = BOX_WORD.findall(folded)
+    words: set[str] = set()
+    for token in raw:
+        plain = "".join(
+            ch for ch in unicodedata.normalize("NFKD", token) if not unicodedata.combining(ch)
+        )
+        words.update(plain.split("-"))
+        words.add(plain.replace("-", ""))
+    place = "où" in {part for token in raw for part in token.split("-")} or bool(
+        words & PLACE_WORDS
+    )
+    title = bool(words & TITLE_WORDS)
+    return None if place == title else "place" if place else "title"
+
+
+def box_kind(names: object) -> str | None:
+    if not isinstance(names, list):
+        return None
+    kinds = {_box_name(n) for n in names[:60] if isinstance(n, str)} - {None}
+    return kinds.pop() if len(kinds) == 1 else None
+
+
+def search_box(facts: dict) -> bool:
+    """A text box a signed in search may type in (B19): an input of type text or search, a
+    textarea of one line, or an editable element with the role searchbox or combobox."""
+    tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
+    if tag == "input":
+        return kind in {"text", "search"}
+    if tag == "textarea":
+        return facts.get("rows") == 1
+    return facts.get("editable") is True and role in {"searchbox", "combobox"}
+
+
+# B19: a button or link a signed in search may click by its names (owner, 2026-10-29: "press
+# Search, as a person would"). An allow list: every name of the element (its text, aria-label,
+# title, value, name, id and the names within it), read in NFKC with format characters, accents
+# and case aside, with its camel case split or not, is one of these phrases or holds no word at
+# all once the SEARCH_NEUTRAL words and the numbers are taken out, and one name is a phrase. A
+# name of one token with no space (an id or a name attribute, `go`, `global-nav-search`) is no
+# label a person reads: it passes unless it holds an ACTION_STEMS stem anywhere (`btnFollow`,
+# `easyapply`). A name with a letter or a digit outside basic Latin refuses (`_latin`). So "Save
+# search", "Search history", "Easy Apply" or "Follow" never pass, and the submit, apply and
+# danger detectors are read before this.
+SEARCH_PHRASES = frozenset(
+    tuple(phrase.split())
+    for phrase in (
+        "search", "find", "rechercher", "recherche", "lancer recherche", "trouver", "suchen",
+        "suche", "suche starten", "finden",
+    )
+)  # fmt: skip
+SEARCH_NEUTRAL = frozenset(
+    {"job", "jobs", "emploi", "emplois", "offre", "offres", "poste", "postes", "stelle", "stellen",
+     "a", "an", "the", "for", "un", "une", "des", "les", "le", "la", "de", "du", "d", "l", "nach",
+     "eine", "einen", "der", "die", "das", "button", "btn", "icon", "svg", "img", "image",
+     "magnifier", "magnifying", "glass", "loupe", "lupe", "lens"}
+)  # fmt: skip
+
+
+# What an id or a name attribute of a search button never holds, read inside its glued words:
+# applying, following, connecting, messaging, saving, sharing, alerting, reporting, blocking, an
+# account's pages, in English, French and German.
+ACTION_STEMS = (
+    *APPLY_PARTS, *POST_WORDS, "share", "partag", "teilen", "alert", "report", "signal",
+    "block", "bloqu", "suivr", "abonn", "folg", "speicher", "vernetz", "nachricht", "login",
+    "logout", "signin", "signout", "signup", "register", "account", "compte", "profil",
+    "delete", "remov", "suppr", "like", "upload",
+)  # fmt: skip
+IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,99}")
+
+
+def _search_name(name: str) -> str:
+    """'phrase', 'neutral', or '' for a name that refuses."""
+    for camel in (False, True):
+        words = [
+            w
+            for w in detect.words(name, camel=camel)
+            if w not in SEARCH_NEUTRAL and not w.isdigit()
+        ]
+        if not words:
+            return "neutral"
+        if tuple(words) in SEARCH_PHRASES:
+            return "phrase"
+    if IDENTIFIER.fullmatch(name.strip()):
+        glued = "".join(detect.words(name))
+        return "" if any(stem in glued for stem in ACTION_STEMS) else "neutral"
+    return ""
+
+
+def search_words(facts: dict) -> bool:
+    names = facts.get("names")
+    if not isinstance(names, list) or not names or len(names) > 60:
+        return False
+    if not all(isinstance(n, str) and _latin(n) for n in names):
+        return False
+    kinds = [_search_name(n) for n in names]
+    return "" not in kinds and "phrase" in kinds
+
+
+def _search_form(facts: dict, d: dict, scope: Scope) -> bool:
+    """A control a signed in search may use is in no form, or in a GET form whose action is a
+    search page or result list of its website (`listing`, or an ENDPOINTS last segment) that
+    applies, submits, deletes, pays and signs out nothing: the request it makes is held to
+    `signed_request` again."""
+    if not facts.get("in_form"):
+        return True
+    action = d.get("action")
+    if d.get("method") != "get" or not isinstance(action, str) or len(action) > 2000:
+        return False
+    if not on_site(action, scope.start) or destructive(action, scope):
+        return False
+    try:
+        path = unquote(urlsplit(action).path)
+    except ValueError:
+        return False
+    segments = path.strip("/").split("/")
+    family = family_of(scope.start)
+    return not _path_refused(segments) and (
+        segments[-1] in ENDPOINTS or (family is not None and listing(family, path))
+    )
+
+
+def _opens(url: object, scope: Scope) -> bool:
+    """A link a signed in search may follow: a page it may open (`page_url`) that is not
+    `destructive`."""
+    return isinstance(url, str) and page_url(url, scope) and not destructive(url, scope)
+
+
+def _in_page(url: object, current: str) -> bool:
+    """A link that stays on the page: no address, a fragment of the page, or a script."""
+    return isinstance(url, str) and (
+        not url or url.startswith("javascript:") or url.split("#", 1)[0] == current.split("#")[0]
+    )
+
+
+def _signed_in_control(
+    facts: dict, d: dict, tool: str, action: str, current: str, scope: Scope, args: dict | None
+) -> bool:
+    """B19, signed in: a search as a person makes it on a real website. A text box (`search_box`)
+    takes one saved title or place (`Scope.types`) and Enter; a button or link named a search
+    word (`search_words`) is clicked, a form it submits held to `_search_form`; a link to a page
+    of the website (`_opens`) is followed."""
+    if tool == "browser_type":
+        if not search_box(facts) or not _search_form(facts, d, scope):
+            return False
+        return action == "key" or scope.types(facts.get("names"), (args or {}).get("text"))
+    if tool != "browser_click" or facts.get("editable") or facts.get("credential"):
+        return False
+    tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
+    if tag == "a":
+        href = d.get("href", "")
+        return _opens(href, scope) or (search_words(facts) and _in_page(href, current))
+    button = (
+        tag == "button"
+        or (tag == "input" and kind in {"button", "submit", "image"})
+        or (role in {"button", "link"} and tag not in {"input", "select", "textarea"})
+    )
+    submits = facts.get("in_form") and tag in {"button", "input"} and kind in {"submit", "image"}
+    return (
+        button
+        and search_words(facts)
+        and not facts.get("holds_submit")
+        and (not submits or _search_form(facts, d, scope))
+    )
+
+
 def verdict(
-    facts: object, tool: str, current: str, *, scope: Scope | None = None, args: dict | None = None
+    facts: object,
+    tool: str,
+    current: str,
+    *,
+    scope: Scope | None = None,
+    args: dict | None = None,
+    action: str | None = None,
 ) -> str | None:
+    """None when a discovery may act on this element, else the refusal's code. `action` is
+    `key` for the Enter browser_type presses after its text (B19, signed in only): the detectors
+    read it as Enter, the text having been judged as a typing."""
     if not isinstance(facts, dict):
         return UNSUPPORTED
-    action = (
+    action = action or (
         "type"
         if tool == "browser_type"
         else "check"
@@ -652,7 +1075,11 @@ def verdict(
         return "submit"
     if d.get("target") not in {"", "_self"}:
         return UNSUPPORTED
-    if tool == "browser_click" and facts.get("tag") == "a":
+    if signed_in and _signed_in_control(facts, d, tool, action, current, scope, args):
+        allowed = True
+    elif action == "key":  # Enter only in a signed in search's text box (B19)
+        allowed = False
+    elif tool == "browser_click" and facts.get("tag") == "a":
         allowed = read_url(d.get("href", ""), current, scope=scope)
     else:
         fields = d.get("fields")
@@ -707,6 +1134,6 @@ def verdict(
                 )
         else:
             allowed = False
-    if allowed and "point" in facts:
-        return verdict(facts["point"], tool, current, scope=scope, args=args)
+    if allowed and action != "key" and "point" in facts:
+        return verdict(facts["point"], tool, current, scope=scope, args=args, action=action)
     return None if allowed else UNSUPPORTED

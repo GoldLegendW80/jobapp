@@ -32,6 +32,17 @@ script tries a POST, a WebSocket and a WebSocketStream at /j15/b17-sbx-*; the lo
 journey which of them reached the site. Nothing it adds shows in the page's snapshot. J15's own
 pages, on its own name, stay script free.
 
+Browser B19 (api/tests/browser/test_b19_native.py), real job websites searched through their
+own search boxes, each on the `.test` stand in names of its platform's family (reserved, RFC
+2606): `www.indeed.test` sends `/` to its country site `fr.indeed.test` with a query, which has
+a native GET form with Indeed's own field names (b19/indeed.html), result lists at `/jobs`,
+postings at `/viewjob?jk=<key>` and a link whose page sends the browser to the sign in host
+`secure.indeed.test`; `www.welcometothejungle.test/fr/jobs` (b19/jungle.html) has a script
+search box outside any form whose Search button and Enter POST to the search service
+`abc-dsn.algolia.test` (answered here with CORS) and render posting links with a tracking query,
+an Apply button and an Easy Apply link beside it. Results are listed only for the words "genai
+engineer" (any case). GET /b19/log answers what those hosts saw (method, host, path).
+
 Browser B10 on a job website (web/e2e/browser-b10.spec.ts): a LinkedIn search of the job websites
 opens LinkedIn's start page here (b8/linkedin/, BROWSER_SOURCES_BASE_URL). GET
 /b10/next?wall=checkpoint or ?wall=signin, asked from inside the container only (the browser's
@@ -68,6 +79,23 @@ LINKEDIN_WALLS = {
 LINKEDIN_NEXT = {"wall": None}
 LINKEDIN_STARTS = ("/b8/linkedin/", "/b10/linkedin/")
 B17_LOG = []
+# Browser B19 (see the doc): the stand in hosts of the platforms' families, and what they saw.
+B19_HOSTS = {
+    "www.indeed.test",
+    "fr.indeed.test",
+    "secure.indeed.test",
+    "www.welcometothejungle.test",
+    "abc-dsn.algolia.test",
+}
+B19_LOG = []
+B19_JOB = "/fr/companies/example-robotics/jobs/genai-engineer_paris"
+B19_KEY = "3f2a9c1d0b8e7a65"
+
+
+def b19_words(text: str) -> bool:
+    return " ".join(text.casefold().split()) == "genai engineer"
+
+
 J15_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title></head>'
     "<body><main><h1>{title}</h1>{body}</main></body></html>"
@@ -244,11 +272,97 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    do_POST = do_PUT = do_PATCH = do_DELETE = refuse
+    def b19(self) -> str:
+        """The host of a B19 stand in name, else ""; its request is logged."""
+        host = self.headers.get("Host", "").split(":")[0].lower()
+        if host not in B19_HOSTS:
+            return ""
+        with J15_LOCK:
+            B19_LOG.append({"method": self.command, "host": host, "path": self.path})
+        return host
+
+    def b19_page(self, host: str, url, query) -> None:
+        """A page of a B19 stand in host (see the doc)."""
+        if host == "www.indeed.test" and url.path == "/":
+            return self.redirect("http://fr.indeed.test:8080/?r=us")
+        if host == "fr.indeed.test" and url.path == "/":
+            self.path = "/b19/indeed.html"
+            return super().do_GET()
+        if host == "fr.indeed.test" and url.path == "/myjobs":
+            return self.redirect(
+                "http://secure.indeed.test:8080/auth?continue=%2Fmyjobs"
+            )
+        if host == "fr.indeed.test" and url.path == "/jobs":
+            found = b19_words(query.get("q", [""])[0])
+            body = (
+                f'<ul><li><a href="/viewjob?jk={B19_KEY}&amp;from=serp&amp;vjs=3">'
+                "GenAI Engineer</a></li></ul>"
+                if found
+                else "<p>No jobs match this search.</p>"
+            )
+            return self.send(J15_PAGE.format(title="Jobs", body=body), "text/html")
+        if host == "fr.indeed.test" and url.path == "/viewjob":
+            if query.get("jk") != [B19_KEY]:
+                return self.send(
+                    J15_PAGE.format(title="Not found", body=""), "text/html"
+                )
+            body = (
+                "<p>Employer: Example Robotics</p><p>Build agents with customers.</p>"
+            )
+            return self.send(
+                J15_PAGE.format(title="GenAI Engineer", body=body), "text/html"
+            )
+        if host == "secure.indeed.test" and url.path == "/auth":
+            self.path = "/b19/signin.html"
+            return super().do_GET()
+        if host == "www.welcometothejungle.test" and url.path == "/fr/jobs":
+            self.path = "/b19/jungle.html"
+            return super().do_GET()
+        if host == "www.welcometothejungle.test" and url.path == B19_JOB:
+            body = (
+                "<p>Employer: Example Robotics</p><p>Build agents with customers.</p>"
+            )
+            return self.send(
+                J15_PAGE.format(title="GenAI Engineer", body=body), "text/html"
+            )
+        return self.send(J15_PAGE.format(title="Not found", body=""), "text/html")
+
+    def do_POST(self):
+        host = self.b19()
+        url = urllib.parse.urlsplit(self.path)
+        if host == "abc-dsn.algolia.test" and url.path == "/1/indexes/*/queries":
+            size = min(int(self.headers.get("Content-Length") or 0), 65536)
+            try:
+                asked = json.loads(self.rfile.read(size))["requests"][0]["params"]
+                words = urllib.parse.parse_qs(asked).get("query", [""])[0]
+            except (ValueError, KeyError, IndexError, TypeError):
+                words = ""
+            hits = (
+                [{"title": "GenAI Engineer", "url": f"{B19_JOB}?q=0f3e2a&o=12"}]
+                if b19_words(words)
+                else []
+            )
+            data = json.dumps({"results": [{"hits": hits}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return None
+        return self.refuse()
+
+    do_PUT = do_PATCH = do_DELETE = refuse
 
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(url.query)
+        host = self.b19()
+        if host:
+            return self.b19_page(host, url, query)
+        if url.path == "/b19/log":
+            with J15_LOCK:
+                return self.send(json.dumps(B19_LOG))
         if url.path == "/b17/log":
             with J15_LOCK:
                 return self.send(json.dumps(B17_LOG))

@@ -14,7 +14,7 @@ import pytest
 
 from app.browser import finder
 from app.browser.sources import interactive
-from tests.browser.test_b9_site import ScriptedFinder
+from tests.browser.fakes import ScriptedFinder
 from tests.browser.test_b13_runtime import BASE
 from tests.browser.test_multi_search import run
 from tests.browser.test_selected_interactive import selected

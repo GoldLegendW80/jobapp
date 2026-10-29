@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Indeed</title></head>
+<body>
+<!-- A website like Indeed's country site (B19), reached from www by a redirect with a query:
+     a native GET form with Indeed's own field names (q, l), a Find jobs button, and a link to
+     the person's jobs that sends the page to the sign in host. -->
+<nav><a href="/myjobs">My jobs</a></nav>
+<main>
+  <h1>Find your next job</h1>
+  <form method="get" action="/jobs" role="search">
+    <label>What <input type="text" name="q" placeholder="Job title, keywords, or company"></label>
+    <label>Where <input type="text" name="l" value="Lyon" placeholder="City, state, or zip code"></label>
+    <input type="hidden" name="from" value="searchOnHP">
+    <button type="submit">Find jobs</button>
+  </form>
+</main>
+</body>
+</html>

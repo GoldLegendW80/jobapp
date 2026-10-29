@@ -233,6 +233,7 @@ FACTS_JS = r"""
       holds_submit: holdsSubmit,
       custom_submit: customSubmit,
       editable: !!(control.isContentEditable || el.isContentEditable),
+      rows: control.tagName === "TEXTAREA" ? control.rows : 0,
       field: fieldText(control),
       form_fields: fields.map(fieldText),
       discovery: {

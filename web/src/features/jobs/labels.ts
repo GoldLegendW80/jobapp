@@ -203,6 +203,9 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "This website shows its jobs only to people signed in. Use Sign in beside it in Find jobs, then search again.",
   no_search_box:
     "The assistant found no search box on this website, so it was not searched.",
+  // The app refused the agent's typing, Enter or search button, or an address it opened, and
+  // nothing was found: the refusal wins over the agent's own reason (B19, 2026-10-29).
+  search_refused: "The app refused the search on this website.",
   nothing_reported:
     "The assistant read this website but reported no job and no reason. Postings saved before are kept.",
   no_credential: "Add your model access in Account to search this website.",

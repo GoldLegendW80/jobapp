@@ -18,14 +18,15 @@ page is never read nor acted on.
 Discovery instead uses an anonymous context with JavaScript disabled before any navigation.
 CDP Fetch holds requests before sending and responses before receiving their bodies. A redirect
 response is refused before Chromium follows it unless its target keeps to the frozen scope
-(discovery.redirect_target: a start page's locale path, jobs J18); the request it leads to is
-judged again. A signed in discovery (B17: a website the
+(discovery.redirect_target: a start page's locale path, jobs J18, or a host of the start's family,
+B19); the request it leads to is judged again. A signed in discovery (B17: a website the
 person signed in to, `Scope.signed_in`) runs in the person's own persisted context instead, with
 the site's JavaScript on: a route on that context lets only GET and HEAD requests leave, never to
 an address whose path applies, submits, deletes or pays, nor one whose path or query applies,
 submits or signs the person out, and a frame's navigation only within the frozen scope
-(discovery.signed_request); a redirect hop off it is stopped as for any lease (`_hop`, which
-holds a discovery's hop to that same rule). Service
+(discovery.signed_request: a page's fetch or XHR may POST to its website, B19); a redirect hop
+off it is stopped as for any lease (`_hop`, which holds a discovery's hop to that same rule).
+browserd's warning of a stopped navigation names its target's host, never its path or query. Service
 workers are bypassed and out of the page's reach (SIGNED_IN_JS removes
 `navigator.serviceWorker`), and the page's frames, an inline sandboxed one included (a sweep
 lease disables IsolateSandboxedIframes, chromium.switches), get the same script and route.
@@ -89,6 +90,19 @@ SIGNED_IN_JS = """(() => {
 })();"""  # noqa: E501  one script run in the page
 
 
+HOST_LOGGED = re.compile(r"[a-z0-9.-]{1,253}")
+
+
+def host_of(url: object) -> str:
+    """The host of an address as a log line may name it (B19): lower case letters, digits, dots
+    and hyphens only, else `unreadable`; never its path, query or user part."""
+    try:
+        host = urlsplit(url).hostname if isinstance(url, str) else None
+    except ValueError:
+        host = None
+    return host if host and HOST_LOGGED.fullmatch(host) else "unreadable"
+
+
 def failure(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": code, "message": message}
 
@@ -149,10 +163,6 @@ class State:
     blocked: list[str] = field(default_factory=list)
     discovery: bool = False
     scope: "discovery.Scope | None" = None
-    # The scope as the api sent it, every call's own to compare: `scope` is moved to a country
-    # site (`country` names its host, owner 2026-10-28), this one never is.
-    given: "discovery.Scope | None" = None
-    country: str = ""
     native_context: Any = None
     native_cdp: Any = None
     native_failed: bool = False
@@ -168,8 +178,7 @@ class State:
         self.files.clear()
         self.blocked.clear()
         self.page = self.guarded = self.chooser = None
-        self.native_context = self.native_cdp = self.scope = self.given = None
-        self.country = ""
+        self.native_context = self.native_cdp = self.scope = None
 
 
 @dataclass
@@ -195,8 +204,15 @@ class Tab:
         return self.request.hosts
 
     def allowed(self, url: str) -> bool:
-        hosts = (*self.hosts, self.state.country) if self.state.country else self.hosts
-        return url == ABOUT_BLANK or policy.url_verdict(url, hosts) is None
+        """On the lease's list; in a discovery, also on the frozen start's website: its own
+        scheme, host and port, or its family (B19: `*.indeed.com` on the list is narrowed to
+        Indeed's own hosts, discovery.on_site)."""
+        if url == ABOUT_BLANK:
+            return True
+        scope = self.state.scope
+        return policy.url_verdict(url, self.hosts) is None and (
+            not self.state.discovery or scope is None or discovery.on_site(url, scope.start)
+        )
 
     def on_list(self, page: Any) -> bool:
         """The page and its main frame show a host of the list."""
@@ -208,7 +224,7 @@ class Tab:
     async def begin_discovery(self, scope: "discovery.Scope", name: str, args: dict) -> None:
         if self.state.native_failed:
             raise UnsupportedDiscovery
-        given = self.state.given or self.state.scope
+        given = self.state.scope
         if given is not None:
             if given != scope:
                 raise UnsupportedDiscovery
@@ -235,7 +251,7 @@ class Tab:
                 context.on("page", self.extra_page)
                 page = await context.new_page()
                 client = await context.new_cdp_session(page)
-                self.state.scope, self.state.given, self.state.page = scope, scope, page
+                self.state.scope, self.state.page = scope, page
                 self.state.native_cdp, self.state.guarded = client, context
                 client.on("Fetch.requestPaused", self.intercept)
                 await client.send(
@@ -287,7 +303,7 @@ class Tab:
                 await client.send("Network.setBlockedURLs", {"urls": ["ws://*", "wss://*"]})
                 self.state.native_cdp = client
                 self.state.native_context = self.state.guarded = context
-                self.state.scope = self.state.given = scope
+                self.state.scope = scope
                 context.on("page", self.extra_page)
         except Exception as exc:
             await self.close_discovery()
@@ -300,10 +316,14 @@ class Tab:
             main = frame is not None and frame.parent_frame is None
         except Exception:  # a service worker's request has no frame: not a document
             frame, main = None, False
+        try:  # what made it (B19: only a fetch or an XHR may POST, discovery.posts)
+            kind = request.resource_type
+        except Exception:
+            kind = ""
         allowed = (
             not self.state.native_failed
             and scope is not None
-            and discovery.signed_request(request.url, method, frame is not None, scope)
+            and discovery.signed_request(request.url, method, frame is not None, scope, kind=kind)
             and (not main or self.allowed(request.url))
         )
         if allowed:
@@ -311,7 +331,8 @@ class Tab:
             return
         if main:  # the tab was sent off the scope: settle() takes it back and says so
             self.state.blocked.append(request.url[:200])
-            self.state.signin_seen = self.state.signin_seen or discovery.signin_url(request.url)
+            signin = scope is not None and discovery.signin_url(request.url, scope)
+            self.state.signin_seen = self.state.signin_seen or signin
         await route.abort("blockedbyclient")
 
     async def close_discovery(self) -> None:
@@ -341,19 +362,14 @@ class Tab:
                 request, request_id = event["request"], event["requestId"]
                 status = event.get("responseStatusCode")
                 redirect = status is not None and 300 <= status < 400
-                moved = None
                 if redirect and scope is not None and status in discovery.REDIRECTS:
-                    # A redirect on the scope's own host (a locale path, a trailing slash) is
-                    # followed: its target is held to the rule of a navigation, and the request
-                    # Chromium then makes is paused and judged again at the Request stage.
+                    # A redirect on the scope's own host or family (a locale path, a trailing
+                    # slash, Indeed's country site) is followed: its target is held to the rule
+                    # of a navigation, and the request Chromium then makes is paused and judged
+                    # again at the Request stage.
                     location = discovery.location_of(event.get("responseHeaders"))
                     target = discovery.redirect_target(request["url"], location, scope)
                     redirect = target is None or not self.allowed(target)
-                    if target is None and self._first_navigation():
-                        # Indeed's home sends the start page to the person's country site:
-                        # the scope moves there once (owner, 2026-10-28).
-                        moved = discovery.country_redirect(request["url"], location, scope)
-                        redirect = moved is None
                 if (
                     self.state.native_failed
                     or scope is None
@@ -364,14 +380,12 @@ class Tab:
                     or event.get("responseErrorReason")
                 ):
                     if not self.state.blocked:
-                        self.state.blocked.append("discovery")
+                        self.state.blocked.append(str(request.get("url", ""))[:200])
                     await client.send(
                         "Fetch.failRequest",
                         {"requestId": request_id, "errorReason": "BlockedByClient"},
                     )
                 elif status is not None and 300 <= status < 400:
-                    if moved is not None and not self._move(moved):
-                        raise UnsupportedDiscovery
                     await client.send("Fetch.continueRequest", {"requestId": request_id})
                 elif status is not None:
                     # A separate CSP restricts scripts and child targets while retaining
@@ -419,58 +433,21 @@ class Tab:
             safe = self.allowed(request.url) and (
                 not self.state.discovery or self._hop_in_scope(request.url, request.method)
             )
-            if not safe and frame.parent_frame is None and self._first_navigation():
-                safe = self._country_hop(request.url, request.method)
             if frame.parent_frame is not None or safe:
                 return
         except Exception:
             return
         self.state.blocked.append(request.url[:200])
-        if self.state.signed_in and discovery.signin_url(request.url):
+        if self.state.signed_in and discovery.signin_url(request.url, self.state.scope):
             self.state.signin_seen = True
         asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
 
-    def _first_navigation(self) -> bool:
-        """The start page's first navigation of a discovery runs: the tab is still blank and
-        its scope never moved."""
-        page = self.state.page
-        try:
-            return (
-                self.state.discovery
-                and not self.state.country
-                and page is not None
-                and page.url == ABOUT_BLANK
-            )
-        except Exception:
-            return False
-
-    def _move(self, moved: "discovery.Scope") -> bool:
-        """The frozen scope moved to a country site (`discovery.country_scope`): its host joins
-        the lease's for this tab, the rules of the scope hold there unchanged."""
-        host = urlsplit(moved.start).hostname or ""
-        if self.state.native_failed or not host:
-            return False
-        self.state.scope, self.state.country = moved, host
-        return True
-
-    def _country_hop(self, url: str, method: str) -> bool:
-        """B17: the signed in start page's first navigation sent to a country site of its
-        home (owner, 2026-10-28), held to `signed_request` within the moved scope."""
-        scope = self.state.scope
-        if scope is None or not scope.signed_in or self.state.native_failed:
-            return False
-        moved = discovery.country_scope(scope, url)
-        return (
-            moved is not None
-            and discovery.signed_request(url, method, True, moved)
-            and self._move(moved)
-        )
-
     def _hop_in_scope(self, url: str, method: str) -> bool:
         """A discovery's redirect hop is held to the rule of the navigation it replaces, within
-        the frozen scope (jobs J18): the start page's own redirect (`/` to `/en`) is followed
-        while the tab's address is still `about:blank`, never one to another host, an apply,
-        account or sign out address, or a query beyond the saved criteria."""
+        the frozen scope (jobs J18): the start page's own redirect (`/` to `/en`) is followed,
+        never one to another host, an apply, account or sign out address, or a query beyond the
+        saved criteria; signed in, any hop within the start's family that is none of these
+        addresses is followed (B19, discovery.page_url)."""
         scope = self.state.scope
         if scope is None or self.state.native_failed:
             return False
@@ -534,6 +511,8 @@ class Tab:
         page = self.state.page
         left = page is not None and not page.is_closed() and not self.on_list(page)
         if left or self.state.blocked:
+            # The target's host only, for the next diagnosis (B19): never a path or a query.
+            stopped = host_of(self.state.blocked[0] if self.state.blocked else page.url)
             try:
                 if left:
                     with contextlib.suppress(Exception):  # no history, a timeout: the blank then
@@ -541,7 +520,11 @@ class Tab:
                     if not self.on_list(page):
                         await page.goto(ABOUT_BLANK)
                 self.state.blocked.clear()
-                log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
+                log.warning(
+                    "lease %s: a navigation outside the allow list stopped: host=%s",
+                    self.lease_tag,
+                    stopped,
+                )
                 if self.state.signin_seen:  # B17: the site asks the person to sign in again
                     self.state.signin_seen = False
                     return failure("signin_required", MESSAGES["signin_required"])
@@ -578,7 +561,12 @@ class Tab:
     ) -> dict[str, Any] | None:
         if self.discovery:
             code = discovery.verdict(
-                facts, tool, self.state.page.url, scope=self.state.scope, args=args
+                facts,
+                tool,
+                self.state.page.url,
+                scope=self.state.scope,
+                args=args,
+                action="key" if action == "key" else None,
             )
             return (
                 failure(code, "Refused: this native discovery control is unsupported.")
@@ -636,12 +624,13 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             return failure(
                 "unsupported_discovery", "Refused: discovery is limited to a search sweep."
             )
-        if args.get("submit"):
+        scope = discovery.Scope.parse(args.get("_discovery_scope"))
+        # Enter after the text, in a signed in search's text box only (B19): judged there.
+        if args.get("submit") and (name != "browser_type" or scope is None or not scope.signed_in):
             return refused("submit")
     try:
         try:
             if marker is not None:
-                scope = discovery.Scope.parse(args.get("_discovery_scope"))
                 if scope is None:
                     raise UnsupportedDiscovery
                 await tab.begin_discovery(scope, name, args)
@@ -726,9 +715,14 @@ async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
-    code = policy.url_verdict(args.get("url"), tab.hosts)
+    url = args.get("url")
+    code = policy.url_verdict(url, tab.hosts)
+    if code is None and tab.state.discovery and not tab.allowed(url):
+        code = "host_not_allowed"  # on the list, but off the frozen start's website (B19)
     if code:
-        log.warning("lease %s: browser_navigate refused: %s", tab.lease_tag, code)
+        log.warning(
+            "lease %s: browser_navigate refused: %s host=%s", tab.lease_tag, code, host_of(url)
+        )
         return refused(code)
     page = await tab.page()
     await tab.pacer.dwell()
@@ -803,7 +797,7 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     facts = await tab.facts(locator, point=True)
     no = tab.judge(facts, "type", "browser_type", args)
     if no is None and args.get("submit"):
-        no = tab.judge(facts, "key", "browser_type")  # Enter after the text
+        no = tab.judge(facts, "key", "browser_type", args)  # Enter after the text
     if no:
         return no
     if "\n" in text and not detect.multiline(facts):
