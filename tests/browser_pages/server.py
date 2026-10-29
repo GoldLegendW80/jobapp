@@ -94,6 +94,8 @@ B19_KEY = "3f2a9c1d0b8e7a65"
 
 def b19_words(text: str) -> bool:
     return " ".join(text.casefold().split()) == "genai engineer"
+
+
 J15_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title></head>'
     "<body><main><h1>{title}</h1>{body}</main></body></html>"
@@ -287,7 +289,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.path = "/b19/indeed.html"
             return super().do_GET()
         if host == "fr.indeed.test" and url.path == "/myjobs":
-            return self.redirect("http://secure.indeed.test:8080/auth?continue=%2Fmyjobs")
+            return self.redirect(
+                "http://secure.indeed.test:8080/auth?continue=%2Fmyjobs"
+            )
         if host == "fr.indeed.test" and url.path == "/jobs":
             found = b19_words(query.get("q", [""])[0])
             body = (
@@ -299,9 +303,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send(J15_PAGE.format(title="Jobs", body=body), "text/html")
         if host == "fr.indeed.test" and url.path == "/viewjob":
             if query.get("jk") != [B19_KEY]:
-                return self.send(J15_PAGE.format(title="Not found", body=""), "text/html")
-            body = "<p>Employer: Example Robotics</p><p>Build agents with customers.</p>"
-            return self.send(J15_PAGE.format(title="GenAI Engineer", body=body), "text/html")
+                return self.send(
+                    J15_PAGE.format(title="Not found", body=""), "text/html"
+                )
+            body = (
+                "<p>Employer: Example Robotics</p><p>Build agents with customers.</p>"
+            )
+            return self.send(
+                J15_PAGE.format(title="GenAI Engineer", body=body), "text/html"
+            )
         if host == "secure.indeed.test" and url.path == "/auth":
             self.path = "/b19/signin.html"
             return super().do_GET()
@@ -309,8 +319,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.path = "/b19/jungle.html"
             return super().do_GET()
         if host == "www.welcometothejungle.test" and url.path == B19_JOB:
-            body = "<p>Employer: Example Robotics</p><p>Build agents with customers.</p>"
-            return self.send(J15_PAGE.format(title="GenAI Engineer", body=body), "text/html")
+            body = (
+                "<p>Employer: Example Robotics</p><p>Build agents with customers.</p>"
+            )
+            return self.send(
+                J15_PAGE.format(title="GenAI Engineer", body=body), "text/html"
+            )
         return self.send(J15_PAGE.format(title="Not found", body=""), "text/html")
 
     def do_POST(self):
