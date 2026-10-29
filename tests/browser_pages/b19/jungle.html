@@ -22,7 +22,13 @@
 </main>
 <script>
 (() => {
-  const service = "http://abc-dsn.algolia.test:8080/1/indexes/*/queries?x-algolia-application-id=E2E";
+  // The Algolia client of a page built with React InstantSearch lists its libraries in the query
+  // (`x-algolia-agent`), and a site may add a segment of its own: browserd reads the keys of the
+  // query and no value of the client's metadata.
+  const agent = "Algolia for JavaScript (4.24.0); Browser; JS Helper (3.22.5); react (18.3.1); " +
+    "react-instantsearch (7.13.0); react-instantsearch-core (7.13.0); e2e-connect-ui (1.0.0)";
+  const service = "http://abc-dsn.algolia.test:8080/1/indexes/*/queries?x-algolia-agent=" +
+    encodeURIComponent(agent) + "&x-algolia-application-id=E2E";
   const search = () => {
     const body = JSON.stringify({requests: [{indexName: "jobs_fr", params: "query=" +
       encodeURIComponent(document.querySelector("#query").value) + "&aroundQuery=" +

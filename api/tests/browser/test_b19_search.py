@@ -13,6 +13,7 @@ what it refuses, near misses included (implementer.md, Heuristic code).
 import asyncio
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -499,7 +500,9 @@ def test_a_website_on_no_family_keeps_the_frozen_scope_rule():
 
 # --- a page's background POST -------------------------------------------------------------------
 
-ALGOLIA = "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia%20for%20JavaScript&x-algolia-api-key=e2e&x-algolia-application-id=CSEKHVMS53"
+# A page built with React InstantSearch: the client lists its libraries in `x-algolia-agent`.
+AGENT = "Algolia for JavaScript (4.24.0); Browser; JS Helper (3.22.5); react (18.3.1); react-instantsearch (7.13.0); react-instantsearch-core (7.13.0)"
+ALGOLIA = f"https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent={quote(AGENT)}&x-algolia-api-key=e2e&x-algolia-application-id=CSEKHVMS53"
 POSTS = [
     (JUNGLE, ALGOLIA, "fetch"),
     (JUNGLE, ALGOLIA, "xhr"),

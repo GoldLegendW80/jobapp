@@ -60,8 +60,15 @@ family, signed in or not; a page's POST says no alert, favourite, subscription, 
 or share either (POST_WORDS). Declared open points: a composer whose names hold none of those
 words ("Type here", "Aa") is read as any box; "posting" and "writer" are no composer words, and
 a glued id holding "post" (`postbox`) is read as a whole word only; a box whose names hold
-"writing" or "note" in another sense is refused (fail closed); a redirect of the platform's own
-to LinkedIn's feed is followed (a signed in LinkedIn answers its root, the saved start, there).
+"writing" or "note" in another sense is refused (fail closed).
+
+Round 2: the one redirect to a person's page that is followed is the saved start's own to
+LinkedIn's `/feed/` exactly (`start_feed`: a signed in LinkedIn answers its root there), no
+other path and no other source; Algolia's client metadata (`x-algolia-agent`, whose library
+list names `react`) is no part of what a POST says (CLIENT_KEYS); `like` and `share` are read
+as whole words and `react` only as `reaction`. Declared open points: a POST whose address says
+`react` alone or a glued `jobshare` is not read; a start that LinkedIn answers by a redirect to
+another address first (`fr.linkedin.com` to `www.linkedin.com`) stops at its second hop.
 """
 
 import re
@@ -350,7 +357,13 @@ def _path_refused(segments: list[str]) -> bool:
 
 
 def read_url(
-    url: str, current: str, *, form: bool = False, scope: Scope | None = None, hop: bool = False
+    url: str,
+    current: str,
+    *,
+    form: bool = False,
+    scope: Scope | None = None,
+    hop: bool = False,
+    source: str | None = None,
 ) -> bool:
     if not isinstance(url, str) or len(url) > 2000:
         return False
@@ -371,7 +384,10 @@ def read_url(
         keys = [k for k, _ in pairs]
         # A person's page or the person's own list on a family never opens (B19, round 1).
         family = family_of(scope.start if scope else current)
-        destructive = _path_refused(segments) or personal(family, parts.hostname, segments, hop=hop)
+        feed = hop and start_feed(url, source, scope.start if scope else current)
+        destructive = _path_refused(segments) or personal(
+            family, parts.hostname, segments, feed=feed
+        )
         # A search request carries its saved title; the search page itself, its address with
         # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716). A
         # redirect hop (`hop`) is held to the rule reviewed with the start page's own redirect:
@@ -429,7 +445,9 @@ def redirect_target(url: str, location: object, scope: Scope) -> str | None:
     its query). None for anything else, a missing or blank Location included: the redirect is
     refused."""
     target = _resolved(url, location)
-    return target if target and read_url(target, scope.start, scope=scope, hop=True) else None
+    if target and read_url(target, scope.start, scope=scope, hop=True, source=url):
+        return target
+    return None
 
 
 # Owner, 2026-10-29 (B19, "Let it use the search boxes"): each website's own hosts are allowed.
@@ -548,27 +566,59 @@ def _language(segment: str) -> bool:
 # detect.words folds it and glued (`My-Items` is `myitems`): on LinkedIn and Indeed a segment
 # of PERSONAL_SEGMENTS anywhere in the path (`/in/<anyone>`, `/pub/`, `/company/<x>/people`,
 # `/mynetwork`, `/notifications`, `/feed`, `/messaging`, `/me`, `/my-items`; `/myjobs`,
-# `/profile`), on Indeed a path word starting with `write` (`/cmp/<x>/reviews/write`) and its
-# account host `my.indeed.com`, on Welcome to the Jungle a PERSONAL_FIRST first segment, after
-# a language or not (`/fr/me`, `/en/account`). A redirect of the platform's own (`hop`) may land
-# on the feed: a signed in LinkedIn answers its root, the saved start, with `/feed/`.
+# `/profile`, and the review forms `/write` and `/writereview`, whole segments: `/cmp/Writer*` is
+# a company), on Indeed its account host `my.indeed.com`, on Welcome to the Jungle a
+# PERSONAL_FIRST first segment, after a language or not (`/fr/me`, `/en/account`). One redirect is
+# followed (`start_feed`): a signed in LinkedIn answers its root, the saved start, with `/feed/`.
 PERSONAL_SEGMENTS = {
     "linkedin": frozenset(
         {"in", "pub", "people", "feed", "me", "myitems", "mynetwork", "notifications",
          "messaging"}
     ),
-    "indeed": frozenset({"myjobs", "profile"}),
+    "indeed": frozenset({"myjobs", "profile", "write", "writereview"}),
 }  # fmt: skip
 PERSONAL_FIRST = {"welcome_to_the_jungle": frozenset({"me", "account"})}
 PERSONAL_HOSTS = {"indeed": frozenset({"my"})}
-PERSONAL_HOPS = frozenset({"feed"})
+
+
+def _address(url: str) -> tuple[str, str | None, int | None, str, str]:
+    parts = urlsplit(url)
+    return parts.scheme, parts.hostname, parts.port, parts.path or "/", parts.query
+
+
+def start_feed(url: object, source: object, start: object) -> bool:
+    """Whether `url` is LinkedIn's own redirect of the start address to its feed: the address
+    `source` the redirect came from is the saved start (scheme, host, port, path and query), and
+    `url` is exactly `/feed/` of the same scheme, host and port, with no query and no fragment. Not
+    `/feed/update/...`, not any other path, not a redirect from another address."""
+    family = family_of(start)
+    if (
+        family is None
+        or family.platform != "linkedin"
+        or family_of(url) is not family
+        or not isinstance(url, str)
+        or not isinstance(source, str)
+        or not isinstance(start, str)
+    ):
+        return False
+    try:
+        target = urlsplit(url)
+        return (
+            target.path == "/feed/"
+            and not target.query
+            and not target.fragment
+            and _address(source) == _address(start)
+            and _address(url)[:3] == _address(start)[:3]
+        )
+    except ValueError:
+        return False
 
 
 def personal(
-    family: Family | None, host: object, segments: list[str], *, hop: bool = False
+    family: Family | None, host: object, segments: list[str], *, feed: bool = False
 ) -> bool:
     """Whether a page of the family is a person's or the person's own list (above). `segments`
-    are the path's, already percent decoded."""
+    are the path's, already percent decoded; `feed` is `start_feed`'s answer for the address."""
     if family is None:
         return False
     label = str(host or "").lower().removesuffix("." + family.domain)
@@ -576,13 +626,9 @@ def personal(
         return True
     glued = ["".join(detect.words(segment, camel=False)) for segment in segments]
     anywhere = PERSONAL_SEGMENTS.get(family.platform, frozenset())
-    if hop:
-        anywhere = anywhere - PERSONAL_HOPS
+    if feed:
+        anywhere = anywhere - {"feed"}
     if any(g in anywhere for g in glued):
-        return True
-    if family.platform == "indeed" and any(
-        word.startswith("write") for segment in segments for word in detect.words(segment)
-    ):
         return True
     first = PERSONAL_FIRST.get(family.platform, frozenset())
     heads = glued[:2] if segments and _language(segments[0]) else glued[:1]
@@ -648,7 +694,7 @@ def listing(family: Family, path: str) -> bool:
     )
 
 
-def page_url(url: object, scope: Scope, *, hop: bool = False) -> bool:
+def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None = None) -> bool:
     """A document a signed in discovery may open (B19): what read_url lets through within the
     frozen scope, or, on the start's family, an address with no user part, no fragment, no
     control character and no `%` left after one decode, no page of a person or of the person's
@@ -659,7 +705,7 @@ def page_url(url: object, scope: Scope, *, hop: bool = False) -> bool:
     list's search key, if any, holds a saved title or nothing."""
     if not isinstance(url, str) or len(url) > 2000:
         return False
-    if read_url(url, scope.start, scope=scope, hop=hop):
+    if read_url(url, scope.start, scope=scope, hop=hop, source=source):
         return True
     family = family_of(scope.start)
     if family is None or family_of(url) is not family:
@@ -673,7 +719,9 @@ def page_url(url: object, scope: Scope, *, hop: bool = False) -> bool:
     if parts.fragment or "%" in path or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url):
         return False
     segments = path.strip("/").split("/")
-    if personal(family, parts.hostname, segments, hop=hop):
+    if personal(
+        family, parts.hostname, segments, feed=hop and start_feed(url, source, scope.start)
+    ):
         return False
     if posting(family, segments, pairs):
         return True
@@ -813,22 +861,31 @@ def signin_url(url: str, scope: Scope | None = None) -> bool:
 
 # B19: read inside every glued path segment, query key and query value of a page's POST, the
 # person's own search words aside: a POST whose address says it follows, connects, messages,
-# invites, saves, bookmarks, sets an alert (a saved search), favourites, subscribes, likes,
-# reacts or shares never leaves, whatever its host (owner, 2026-10-29: "no ... save, message,
-# follow or connect"); its body is not read. Each is an ACTION_STEMS stem too. `favori` holds
-# `favorite`, `Favoriten` and the French `favori` and `favoris`; `subscri` holds `subscribe` and
-# `subscription`.
+# invites, saves, bookmarks, sets an alert (a saved search), favourites, subscribes, reacts, likes
+# or shares never leaves, whatever its host (owner, 2026-10-29: "no ... save, message, follow or
+# connect"); its body is not read. `favori` holds `favorite`, `Favoriten` and the French `favori`
+# and `favoris`; `subscri` holds `subscribe` and `subscription`; `reaction` holds LinkedIn's
+# `voyagerSocialDashReactions`, and leaves `react-aria-12` and `preact` alone. POST_WORDS are
+# ACTION_STEMS too. `like` and `share` are short words inside others (`likely`, `sharepoint`):
+# POST_WHOLE reads them as whole words only (`likes`, `normShares`, `unlike`, `?do=like`), each
+# word of a path segment, key or value read split on camel case and not.
 POST_WORDS = (
     "follow", "connect", "messag", "invit", "save", "bookmark", "alert", "favori", "favour",
-    "subscri", "like", "react", "share",
+    "subscri", "reaction",
 )  # fmt: skip
+POST_WHOLE = re.compile(r"(?:un|dis|re)?(?:likes?|liked|liking|likers?|shares?|shared|sharing|sharers?)")
+# A search service's client metadata, read as a key and never as a value: Algolia's JavaScript
+# client puts its library list into `x-algolia-agent` (`Algolia for JavaScript (4.x); Browser;
+# react (18.x); react-instantsearch (7.x)`), and the key `x-algolia-api-key` is a random string.
+# Skipped only on a host of the platform's search service (Family.search).
+CLIENT_KEYS = frozenset({"x-algolia-agent", "x-algolia-api-key", "x-algolia-application-id"})
 
 
 def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
     """Whether a signed in page's background request may POST (B19): a fetch or an XHR, never a
     document, a beacon or a form, to the start's family or a host of its platform's search
-    service (`Family.search`), reaching no address `destructive` or POST_WORDS refuses. A
-    website on no family posts nothing."""
+    service (`Family.search`), reaching no address `destructive` or POST_WORDS refuses (the
+    values of CLIENT_KEYS on that service aside). A website on no family posts nothing."""
     family = family_of(scope.start)
     if (
         method != "POST"
@@ -844,24 +901,40 @@ def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
     except ValueError:
         return False
     own = own_words(scope)
+    service = _search_service(url, family)
     texts = [*unquote(parts.path).split("/"), *(k for k, _ in pairs)]
-    texts.extend(v for _, v in pairs if tuple(detect.words(v)) not in own)
+    texts.extend(
+        v
+        for k, v in pairs
+        if tuple(detect.words(v)) not in own and not (service and k in CLIENT_KEYS)
+    )
     glued = ["".join(detect.words(text)) for text in texts]
-    return not any(word in text for text in glued for word in POST_WORDS)
+    return not (
+        any(word in text for text in glued for word in POST_WORDS)
+        or any(POST_WHOLE.fullmatch(w) for text in texts for w in detect.match_words(text))
+    )
 
 
 def signed_request(
-    url: str, method: str, document: bool, scope: Scope, *, hop: bool = False, kind: str = ""
+    url: str,
+    method: str,
+    document: bool,
+    scope: Scope,
+    *,
+    hop: bool = False,
+    kind: str = "",
+    source: str | None = None,
 ) -> bool:
     """Whether a request of a signed in discovery page may leave (B17): GET or HEAD only, a
     page's fetch or XHR POST to its website (`posts`, B19) aside, never a destructive address on
     any host (a document's too: `/logoff` or `/fr/deconnexion` in a frame would sign the person
     out), and a document (a frame's navigation) only within the frozen scope or a page of the
-    start's family (`page_url`)."""
+    start's family (`page_url`). A redirect hop (`hop`) names the address it came from
+    (`source`, `start_feed`)."""
     if not isinstance(url, str) or len(url) > 8000:
         return False
     if document:
-        if method not in {"GET", "HEAD"} or not page_url(url, scope, hop=hop):
+        if method not in {"GET", "HEAD"} or not page_url(url, scope, hop=hop, source=source):
             return False
     elif method not in {"GET", "HEAD"} and not posts(url, method, kind, scope):
         return False

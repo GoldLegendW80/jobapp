@@ -12,14 +12,25 @@
   open; a signed in LinkedIn's own redirect of its root to the feed is followed.
 - A page's POST whose address sets an alert, favourites, subscribes, likes, reacts or shares never
   leaves (discovery.POST_WORDS), and a search button whose id holds one of them is not clicked.
+
+Round 2 of its review: Algolia's client metadata (`x-algolia-agent` and its two sisters) is no
+part of what a POST says, so a page built with React InstantSearch searches (discovery.
+CLIENT_KEYS); `like` and `share` are read as whole words and `react` only as `reaction`, so
+`react-aria-12` and `likely` pass; LinkedIn's redirect of its start to the feed is followed for
+exactly `/feed/` and from the start address only (discovery.start_feed); Indeed's `/write` and
+`/writereview` are whole path segments, so `/cmp/Writer*` company pages open.
 """
 
+import asyncio
 import unicodedata
+from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
+from tests.browser import test_b17_browserd as b17
 from tests.browser import test_j18_scope as j18
-from tests.browser.test_b19_search import INDEED, JUNGLE, LINKEDIN, control, judge, scope
+from tests.browser.test_b19_search import ALGOLIA, INDEED, JUNGLE, LINKEDIN, control, judge, scope
 from tests.browser.test_j18_scope import discovery
 
 # --- a composer is never a search box -----------------------------------------------------------
@@ -220,6 +231,9 @@ PERSONAL = [
     (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/reviews/write"),
     (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/write-review"),
     (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/reviews/WriteReview"),
+    (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/reviews/Write/"),
+    (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/Write-Review/"),
+    (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/write"),
     (INDEED, "https://my.indeed.com/resume"),
     (INDEED, "https://my.indeed.com/"),
     (INDEED, "https://MY.indeed.com/"),
@@ -255,6 +269,11 @@ STILL_OPEN = [
     (INDEED, "https://fr.indeed.com/rc/clk?jk=3f2a9c1d0b8e7a65&from=profile"),
     (INDEED, "https://fr.indeed.com/cmp/Example-Robotics"),
     (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/reviews"),
+    (INDEED, "https://fr.indeed.com/cmp/Writer"),  # a company, not the review form (round 2)
+    (INDEED, "https://fr.indeed.com/cmp/Writer/reviews"),
+    (INDEED, "https://fr.indeed.com/cmp/Writers-Guild-Example"),
+    (INDEED, "https://fr.indeed.com/cmp/Writer-Example/salaries"),
+    (INDEED, "https://fr.indeed.com/cmp/Example-Robotics/reviews/Writing"),
     (JUNGLE, "https://www.welcometothejungle.com/en/jobs"),
     (JUNGLE, "https://www.welcometothejungle.com/fr/jobs?query=GenAI%20Engineer"),
     (JUNGLE, "https://www.welcometothejungle.com/fr/companies/example/jobs/genai-engineer_paris"),
@@ -281,22 +300,124 @@ def test_search_pages_result_lists_and_postings_still_open(start, url):
     assert judge(link, "browser_click", start=start) is None
 
 
-def test_linkedin_s_own_redirect_of_its_root_to_the_feed_is_followed():
-    """A signed in LinkedIn answers its root, the saved start, with `/feed/`: a redirect hop
-    there is followed, a navigation or a link there is not, and no other personal page is a hop."""
+FEED = "https://www.linkedin.com/feed/"
+# Where a hop to a person's page may come from, and what it may reach (round 2): the saved start
+# to exactly `/feed/`, nothing else.
+NOT_THE_FEED = [
+    "https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/",
+    "https://www.linkedin.com/feed/update/",
+    "https://www.linkedin.com/feed",
+    "https://www.linkedin.com/feed//",
+    "https://www.linkedin.com/Feed/",
+    "https://www.linkedin.com/feed/?trk=x",
+    "https://www.linkedin.com/feed/#x",
+    "https://www.linkedin.com/feed/hashtag/genai/",
+    "https://www.linkedin.com/jobs/feed/",
+    "https://www.linkedin.com/in/someone-e2e/",
+    "https://www.linkedin.com/messaging/",
+    "https://www.linkedin.com/mynetwork/",
+    "https://www.linkedin.com/notifications/",
+    "https://www.linkedin.com/me/",
+    "https://www.linkedin.com/company/example-robotics/people/",
+    "https://fr.linkedin.com/feed/",  # another host than the start's own
+    "http://www.linkedin.com/feed/",
+]
+NOT_FROM_THE_START = [
+    None,
+    "",
+    "https://www.linkedin.com/jobs/",
+    "https://www.linkedin.com/feed/",
+    "https://www.linkedin.com/?trk=x",
+    "https://fr.linkedin.com/",
+    "https://linkedin.com/",
+    "https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer",
+]
+
+
+def test_linkedin_s_own_redirect_of_its_start_to_the_feed_is_followed():
+    """A signed in LinkedIn answers its root, the saved start, with `/feed/`: that redirect hop
+    is followed, a navigation or a link there is not."""
     signed = scope(LINKEDIN)
-    assert discovery.signed_request("https://www.linkedin.com/feed/", "GET", True, signed, hop=True)
-    assert not discovery.signed_request("https://www.linkedin.com/feed/", "GET", True, signed)
-    for url in (
-        "https://www.linkedin.com/in/someone-e2e/",
-        "https://www.linkedin.com/messaging/",
-        "https://www.linkedin.com/mynetwork/",
-        "https://www.linkedin.com/company/example-robotics/people/",
+    assert discovery.signed_request(FEED, "GET", True, signed, hop=True, source=LINKEDIN)
+    assert discovery.page_url(FEED, signed, hop=True, source=LINKEDIN)
+    assert discovery.read_url(FEED, LINKEDIN, scope=signed, hop=True, source=LINKEDIN)
+    assert discovery.redirect_target(LINKEDIN, "/feed/", signed) == FEED
+    assert discovery.start_feed(FEED, LINKEDIN, LINKEDIN)
+    assert not discovery.signed_request(FEED, "GET", True, signed)  # a navigation
+    assert not discovery.signed_request(FEED, "GET", True, signed, source=LINKEDIN)  # no hop
+    link = control("Ada Example", tag="a", kind="", href=FEED)
+    assert judge(link, "browser_click") is not None  # a link click
+
+
+@pytest.mark.parametrize("url", NOT_THE_FEED)
+def test_no_other_page_is_a_hop_from_the_start(url):
+    signed = scope(LINKEDIN)
+    assert not discovery.signed_request(url, "GET", True, signed, hop=True, source=LINKEDIN)
+    assert not discovery.page_url(url, signed, hop=True, source=LINKEDIN)
+    assert not discovery.start_feed(url, LINKEDIN, LINKEDIN)
+    assert discovery.redirect_target(LINKEDIN, url, signed) is None
+
+
+@pytest.mark.parametrize("source", NOT_FROM_THE_START)
+def test_the_feed_is_followed_from_the_start_address_only(source):
+    signed = scope(LINKEDIN)
+    assert not discovery.signed_request(FEED, "GET", True, signed, hop=True, source=source)
+    assert not discovery.page_url(FEED, signed, hop=True, source=source)
+    assert not discovery.start_feed(FEED, source, LINKEDIN)
+    assert not discovery.read_url(FEED, LINKEDIN, scope=signed, hop=True, source=source)
+
+
+def test_a_hop_to_an_indeed_or_jungle_person_page_is_never_followed():
+    for start, url in (
+        (INDEED, "https://fr.indeed.com/myjobs"),
+        (INDEED, "https://my.indeed.com/"),
+        (JUNGLE, "https://www.welcometothejungle.com/fr/me"),
     ):
-        assert not discovery.signed_request(url, "GET", True, signed, hop=True), url
-    assert not discovery.signed_request(
-        "https://fr.indeed.com/myjobs", "GET", True, scope(INDEED), hop=True
+        assert not discovery.signed_request(
+            url, "GET", True, scope(start), hop=True, source=start
+        ), url
+
+
+def hop_of(url: str, source: object = LINKEDIN) -> list:
+    """The frames browserd's `_hop` stops for a redirect from `source` to `url` of a signed in
+    LinkedIn discovery."""
+    context = b17.Context([b17.Page()])
+    found = b17.tab_on(context)
+    found.request = SimpleNamespace(hosts=("linkedin.com", "*.linkedin.com"), purpose="sweep")
+    asyncio.run(found.begin_discovery(scope(LINKEDIN), "browser_navigate", {"url": LINKEDIN}))
+    stopped: list = []
+
+    async def stop(frame):
+        stopped.append(frame)
+
+    request = SimpleNamespace(
+        url=url,
+        method="GET",
+        redirected_from=SimpleNamespace(url=source) if source is not None else object(),
+        is_navigation_request=lambda: True,
+        frame=SimpleNamespace(parent_frame=None),
     )
+
+    async def go():
+        original = b17.actions.stop_loading
+        b17.actions.stop_loading = stop
+        try:
+            found._hop(request)
+            await asyncio.sleep(0)
+        finally:
+            b17.actions.stop_loading = original
+
+    asyncio.run(go())
+    return stopped
+
+
+def test_browserd_follows_the_start_s_redirect_to_the_feed_and_stops_the_rest():
+    assert not hop_of(FEED)
+    assert not hop_of("https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer")
+    assert len(hop_of("https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/")) == 1
+    assert len(hop_of("https://www.linkedin.com/in/someone-e2e/")) == 1
+    assert len(hop_of(FEED, source="https://www.linkedin.com/jobs/")) == 1
+    assert len(hop_of(FEED, source=None)) == 1  # a source that cannot be read follows nothing
 
 
 def test_a_website_on_no_family_has_no_personal_pages():
@@ -328,15 +449,81 @@ NOT_POSTS = [
     (INDEED, "https://fr.indeed.com/rpc/favorite?jk=3f2a", "fetch"),
     (INDEED, "https://de.indeed.com/rpc/Favoriten", "fetch"),
     (INDEED, "https://fr.indeed.com/rpc/x?do=like", "fetch"),
-    (INDEED, "https://fr.indeed.com/rpc/x?op=reactToJob", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/x?op=reactionToJob", "fetch"),
+    # Round 2: `like` and `share` as whole words, in a path segment, a key or a value; `react` only
+    # as `reaction`.
+    (INDEED, "https://fr.indeed.com/rpc/x?do=reaction", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/x?action=like", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/x?action=Share", "xhr"),
+    (INDEED, "https://fr.indeed.com/rpc/x?like=1", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/x?shared=1", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/Likes", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/job/unlike", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/job/dislike", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/job-share", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/job_sharing", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/jobShared", "fetch"),
+    (INDEED, "https://fr.indeed.com/rpc/x?op=postLike", "fetch"),
+    (LINKEDIN, "https://www.linkedin.com/voyager/api/feed/postLikes", "fetch"),
+    (LINKEDIN, "https://www.linkedin.com/voyager/api/feed/LIKES", "fetch"),
+    # Another key's value on the search service is read as before.
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-application-id=E2E&do=like", "fetch"),
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?do=reaction&x-algolia-agent=Algolia", "fetch"),
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia&follow=1", "fetch"),
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia&action=save", "fetch"),
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia&x-algolia-save=1", "fetch"),  # a key is read, even beside the three
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia&x-algolia-agent-extra=connect", "fetch"),
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?X-Algolia-Agent=connect", "fetch"),  # the keys are Algolia's own, in lower case
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/follow?x-algolia-agent=Algolia", "fetch"),  # its path is read
+    # The skip is for the search service only: the same query on the website's own host is read.
+    (JUNGLE, "https://www.welcometothejungle.com/api/v1/search?x-algolia-agent=connect-ui%20(1.0.0)", "fetch"),
 ]  # fmt: skip
+# The agent strings of three Algolia clients, as their libraries write them (the client's own list,
+# `; ` between the segments), and a search service's whole query.
+AGENT_INSTANTSEARCH = "Algolia for JavaScript (4.24.0); Browser; instantsearch.js (4.75.3); JS Helper (3.22.5)"
+AGENT_REACT = "Algolia for JavaScript (4.24.0); Browser; JS Helper (3.22.5); react (18.2.0); react-instantsearch (7.0.0); react-instantsearch-core (7.0.0)"
+AGENT_V5_NEXT = "Algolia for JavaScript (5.2.1); Search (5.2.1); Browser; instantsearch.js (4.75.3); react (18.3.1); react-instantsearch (7.13.0); react-instantsearch-core (7.13.0); next.js (14.2.3)"
+SERVICE = "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries"
+KEY = "e2e0000000000000000000000000000f"
+
+
+def algolia(agent: str, key: str = KEY, app: str = "CSEKHVMS53") -> str:
+    return f"{SERVICE}?x-algolia-agent={quote(agent)}&x-algolia-api-key={key}&x-algolia-application-id={app}"
+
+
 STILL_POSTS = [
     (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-application-id=CSEKHVMS53", "fetch"),
+    (JUNGLE, algolia(AGENT_INSTANTSEARCH), "fetch"),
+    (JUNGLE, algolia(AGENT_REACT), "fetch"),
+    (JUNGLE, algolia(AGENT_REACT), "xhr"),
+    (JUNGLE, algolia(AGENT_V5_NEXT), "fetch"),
+    (JUNGLE, "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia%20for%20JavaScript%20(4.24.0)%3B%20Browser%3B%20react%20(18.2.0)%3B%20react-instantsearch%20(7.0.0)", "fetch"),  # a browser's own encoding
     (JUNGLE, "https://www.welcometothejungle.com/api/v1/search", "fetch"),
     (LINKEDIN, "https://www.linkedin.com/voyager/api/graphql?queryId=voyagerJobsDashJobCards.1", "xhr"),
     (LINKEDIN, "https://www.linkedin.com/li/track", "fetch"),
     (INDEED, "https://fr.indeed.com/m/rpc/jobsearch", "fetch"),
+    # `react`, `like` and `share` inside other words are no action (round 2).
+    (JUNGLE, "https://www.welcometothejungle.com/api/v1/search?ui=react-aria-12&mode=likely&partner=sharepoint", "fetch"),
+    (JUNGLE, "https://www.welcometothejungle.com/api/v1/likelihood", "fetch"),
+    (JUNGLE, "https://www.welcometothejungle.com/api/v1/react-aria-12", "fetch"),
+    (JUNGLE, "https://www.welcometothejungle.com/api/v1/search?client=react&reactVersion=18", "fetch"),
+    (LINKEDIN, "https://www.linkedin.com/voyager/api/sharepoint", "fetch"),
+    (LINKEDIN, "https://www.linkedin.com/voyager/api/graphql?variables=unlikely&q=shareholder", "xhr"),
+    (INDEED, "https://fr.indeed.com/rpc/alike?preact=1&likeness=1", "fetch"),
 ]  # fmt: skip
+# The search service's client metadata holds words a POST never has: red when CLIENT_KEYS is not
+# skipped. A site may add a segment of its own to the agent (`addAlgoliaAgent`), and a secured API
+# key or an application id is a random string.
+CLIENT_METADATA = [
+    algolia(AGENT_REACT + "; e2e-connect-ui (1.0.0)"),
+    algolia(AGENT_REACT + "; share-widgets (2.1.0)"),
+    algolia(AGENT_REACT + "; like-button (1.0.0)"),
+    algolia(AGENT_INSTANTSEARCH + "; saved-searches (3.0.0)"),
+    algolia(AGENT_V5_NEXT, key="YjA5ZjFkNDRSaVeNzQxZTc4ZDc5YzAzOWY4YzMyMDZm"),  # base64 holding "SaVe"
+    algolia(AGENT_REACT, key="FollowKeyE2e0000"),
+    algolia(AGENT_REACT, app="A1SAVE7XQ2"),
+    algolia(AGENT_REACT, app="MESSAGE0E2"),
+]
 
 
 @pytest.mark.parametrize(("start", "url", "kind"), NOT_POSTS)
@@ -351,6 +538,16 @@ def test_a_search_request_still_posts(start, url, kind):
     assert discovery.signed_request(url, "POST", False, scope(start), kind=kind)
 
 
+@pytest.mark.parametrize("url", CLIENT_METADATA)
+def test_the_search_service_s_client_metadata_is_not_read_as_an_action(url):
+    assert discovery.signed_request(url, "POST", False, scope(JUNGLE), kind="fetch")
+    assert discovery.signed_request(url, "POST", False, scope(JUNGLE), kind="xhr")
+
+
+def test_the_page_s_algolia_query_of_the_search_tests_posts():
+    assert discovery.signed_request(ALGOLIA, "POST", False, scope(JUNGLE), kind="fetch")
+
+
 @pytest.mark.parametrize(
     ("names", "clicked"),
     [
@@ -362,6 +559,10 @@ def test_a_search_request_still_posts(start, url, kind):
         (["Search", "jobAlertButton"], False),
         (["Search", "global-nav-search"], True),
         (["Search", "search-button"], True),
+        (["Search", "react-aria-12"], True),  # a React site's generated id (round 2)
+        (["Search", "react-search-button"], True),
+        (["Search", "preact-btn"], True),
+        (["Search", "reactSearch"], True),
         (["Rechercher", "btn-search-jobs"], True),
     ],
 )

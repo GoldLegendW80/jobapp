@@ -430,8 +430,9 @@ class Tab:
             if request.redirected_from is None or not request.is_navigation_request():
                 return
             frame = request.frame
+            source = getattr(request.redirected_from, "url", "")  # unreadable: no own redirect
             safe = self.allowed(request.url) and (
-                not self.state.discovery or self._hop_in_scope(request.url, request.method)
+                not self.state.discovery or self._hop_in_scope(request.url, request.method, source)
             )
             if frame.parent_frame is not None or safe:
                 return
@@ -442,18 +443,19 @@ class Tab:
             self.state.signin_seen = True
         asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
 
-    def _hop_in_scope(self, url: str, method: str) -> bool:
+    def _hop_in_scope(self, url: str, method: str, source: str) -> bool:
         """A discovery's redirect hop is held to the rule of the navigation it replaces, within
         the frozen scope (jobs J18): the start page's own redirect (`/` to `/en`) is followed,
         never one to another host, an apply, account or sign out address, or a query beyond the
         saved criteria; signed in, any hop within the start's family that is none of these
-        addresses is followed (B19, discovery.page_url)."""
+        addresses is followed (B19, discovery.page_url), a person's page apart except the start's
+        own redirect to LinkedIn's `/feed/` (`source` is the address the hop came from)."""
         scope = self.state.scope
         if scope is None or self.state.native_failed:
             return False
         if scope.signed_in:
-            return discovery.signed_request(url, method, True, scope, hop=True)
-        return discovery.read_url(url, scope.start, scope=scope, hop=True)
+            return discovery.signed_request(url, method, True, scope, hop=True, source=source)
+        return discovery.read_url(url, scope.start, scope=scope, hop=True, source=source)
 
     async def guard(self) -> Any:
         """The context the lease's tabs live in, with the navigation guard installed on it once
