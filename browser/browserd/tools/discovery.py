@@ -37,7 +37,8 @@ rule above that reads the start's host reads its family instead, so a redirect w
 is followed and one anywhere else stays stopped. Signed in, the agent may also type one saved
 title or place into a text box of the page (`search_box`, in a GET search form or in no form,
 the box's labels telling which, `Scope.types`), press Enter there, and click a button or link
-whose every name is a search word (`search_words`); a page of the family opens when it is a
+one of whose names is a search word and whose other names are search or neutral words or one
+token holding no action stem (`search_words`); a page of the family opens when it is a
 posting (`posting`) or a result list (`listing`) whose search key holds a saved title, and a
 redirect hop within the family when it is no apply, account or sign out address (`page_url`);
 a page's fetch or XHR may POST to the family or the platform's search service (`posts`). The
@@ -45,7 +46,10 @@ submit, apply and danger detectors run first and win, documents stay GET only.
 Declared open points (B19): a place key of a result list (`l`, `location`, `geoId`) is not held
 to a saved place; a combobox that picks its first suggestion on Enter searches that suggestion;
 a POST's body is not read; pagination and filter buttons that are no link are refused; a
-posting whose address holds a refused word (`payments-engineer`) is refused.
+posting whose address holds a refused word (`payments-engineer`) is refused; a name of one
+token (an id, a name attribute or a one word label) holding no ACTION_STEMS stem is neutral, so
+a button whose aria-label is "Search" and whose text is "Hide" is clicked; the search words are
+English, French and German only; an empty text with `submit` presses Enter on the emptied box.
 """
 
 import re
@@ -743,8 +747,9 @@ def signin_url(url: str, scope: Scope | None = None) -> bool:
 
 
 # B19: read inside every glued path segment, query key and query value of a page's POST, the
-# person's own search words aside: a POST that follows, connects, messages, invites or saves
-# never leaves, whatever its host (owner, 2026-10-29: "no ... save, message, follow or connect").
+# person's own search words aside: a POST whose address says it follows, connects, messages,
+# invites or saves never leaves, whatever its host (owner, 2026-10-29: "no ... save, message,
+# follow or connect"); its body is not read.
 POST_WORDS = ("follow", "connect", "messag", "invit", "save", "bookmark")
 
 
