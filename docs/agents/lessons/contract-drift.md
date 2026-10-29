@@ -15,8 +15,8 @@ any behaviour you changed")
 candidates: implementer.md since 2026-10-14
 change: fix the older tests that state the changed behaviour
 observed: the misses were readers, not assertions: old editors and imports that omit the new key
-(J16), registries (`FIELD_TYPES`, #699; `ENV_NAMES`, #259), another module's consumer (#477,
-#660, #680) and tests of other modules (#459 round 3, "breaks 8 tests that the PR does not
+(J16), registries (`FIELD_TYPES`, #699; `ENV_NAMES`, #259, derived since #385), another
+module's consumer (#477, #660, #680) and tests of other modules (#459 round 3, "breaks 8 tests that the PR does not
 update")
 verdict: no observed effect
 
@@ -32,7 +32,7 @@ verdict: helped (when run)
 - **cue**: a stored section gains a field.
 - **lesson**: a save, an import or a history restore that omits the key keeps the stored value,
   tested with an old payload; the field joins every registry that lists fields (`FIELD_TYPES`,
-  the schemas' kept when omitted set, `ENV_NAMES` for a setting) and every journey that asserts
+  the schemas' kept when omitted set) and every journey that asserts
   the stored shape (review-checklist.md item 9).
 - **evidence**: J16 ("Any editor or import that does not know `location_exclude` silently empties
   the person's Unwanted places"); #699 ("`search.browser_sources[].interactive_only` has no entry

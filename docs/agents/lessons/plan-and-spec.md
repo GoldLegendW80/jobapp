@@ -31,5 +31,5 @@ verdict: no observed effect
   `MAIL_SEND_KEY` reaches the api and `gmailmcp` and not the worker is not said"; "The M1b
   Playwright journey cannot be written"); #410 (a rehearsal move "cannot work as written"); #508 (a
   decision row whose "only source is the orchestrator note").
-- **confidence**: high for plan pull requests: 5 of 5 blocked.
+- **confidence**: medium to high: 5 plan or spec pull requests were blocked, and at least 2 (#435, #627) merged on a first APPROVE.
 - **supports**: review-checklist.md item 17.

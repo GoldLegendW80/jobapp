@@ -71,9 +71,9 @@ fixtures. No block since 2026-10-14, moved to their lessons files: the shell tra
 
 9. **A new field or a changed contract reaches every reader.** (DRIFT: 11 rounds, 11 PRs.)
    Check: a save, an import or a restore that omits the new key keeps the stored value (a test
-   with an old payload); the field is in `FIELD_TYPES`, the schemas and `ENV_NAMES` where it
-   belongs; grep the callers in `api/app`, `browser/` and `web/src` and run their modules' tests;
-   a slice stands alone.
+   with an old payload); the field is in `FIELD_TYPES` and the schemas where it belongs; grep the
+   callers in `api/app`, `browser/` and `web/src` and run their modules' tests; a slice stands
+   alone.
 
 10. **Make fakes and samples as hard as the real thing.** (FAKE: 11 rounds, 9 PRs.)
     Check: the fake checked once against the real service, tool or version (legacy iptables, a
@@ -114,8 +114,7 @@ fixtures. No block since 2026-10-14, moved to their lessons files: the shell tra
 16. **A test must be able to fail, and must not depend on the machine.** (BLIND: 8 rounds, 8 PRs.)
     Check: remove each layer of the fix alone and watch the test go red; assert on what the system
     writes (the JSON log with `extra`, every route class); an absence is proved only when the
-    fixture tries the forbidden act; no wall time bounds; new settings in `ENV_NAMES` of
-    `api/tests/conftest.py`.
+    fixture tries the forbidden act; no wall time bounds.
 
 17. **Plan and spec PRs: dependencies, one owner per shared file, one run per task, sources.**
     (PLAN: 6 rounds, 5 PRs, 3.6 items each.)

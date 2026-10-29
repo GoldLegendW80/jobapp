@@ -22,7 +22,7 @@ verdict: no observed effect
 component: CLAUDE.md hard rule 8 and the deny list of `.claude/settings.json`
 candidates: the harness of 2026-10-15 onward
 change: no personal data in the repository; secret files denied by name
-observed: #176 ("The owner's personal address is published on `/privacy`") and #681 ("this PR
+observed: #176 (a contact address in a public page constant) and #681 ("this PR
 introduces three secret files ... and none is in the deny lists") were caught by the reviewer,
 not by the builder
 verdict: no observed effect at build time; the review held

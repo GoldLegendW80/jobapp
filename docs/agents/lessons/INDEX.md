@@ -103,7 +103,7 @@ Every REQUEST CHANGES verdict of the corpus was read and each of its blocking it
 family, the one whose lesson would have prevented it (one item, one family; a privacy leak on a
 failure path counts as TRUST, a journey that cannot pass as written as RUN). Recaps of earlier
 items marked fixed are not counted. Two verdicts were the same review posted twice on one head
-(#292, #554) and count as one round. The split is a judgement: read the counts as ranks, not as
+(#292); the two verdicts of #554 on one head came from two reviewers and count as one round, with the item only the first raised filed under round 1 (its first review counts 8 items, not 7). The split is a judgement: read the counts as ranks, not as
 exact figures. Pull requests merged on 2026-10-14 overlap the corpus of the checklist of that
 day.
 
