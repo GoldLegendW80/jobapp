@@ -52,13 +52,16 @@ is not run: the tool queues no render (`NullQueue`).
   subscription token wins. It is never printed, logged or written to the JSON; the app's runtime
   reads its credential from the database, so it is saved there encrypted with a key made in
   memory, in the throwaway database that is dropped when the command ends.
-- The database is one the command makes itself on a Postgres on this machine (host `127.0.0.1` or
-  `localhost` only, with no `host`, `hostaddr`, `port` or `service` in the query of the URL),
+- The database is one the command makes itself on a Postgres on this machine (host `127.0.0.1`,
+  `localhost` or `[::1]` only, with no `host`, `hostaddr`, `port` or `service` in the query of the URL),
   migrates, and drops at the end. It does not take its server from `DATABASE_URL`, only from
   `--database-url`, `MEASURE_DATABASE_URL` or `TEST_DATABASE_URL`. After connecting, it refuses to
   go on unless the connection ended on a loopback address or a Unix socket, which also catches
-  `PGHOSTADDR`, `PGSERVICE` and a service file. A Postgres reached through a tunnel on `localhost`
-  looks local and cannot be told apart: do not point it at one.
+  `PGHOSTADDR`, `PGSERVICE` and a service file. A Postgres reached through an ssh tunnel or a port
+  forward on `localhost` looks local and cannot be told apart: close every tunnel to the Jetson's
+  database (or to any other machine) before you run the command, and unset `MEASURE_DATABASE_URL`
+  if an earlier run left it in your shell, because it wins over the throwaway database that
+  `ops/agent-test.sh` provides.
 - Only the fixtures are read for data. The JSON file must be outside the repository.
 - You type the token yourself: the commands below read it with `read -rs`, so it is neither
   echoed nor in the shell history.

@@ -272,8 +272,8 @@ def database_server(arg: str | None, env: Mapping[str, str]) -> str:
     # libpq takes host, hostaddr, port and service from the query too, over the host checked here.
     if parsed.host not in LOOPBACK or QUERY_TARGETS & {key.lower() for key in parsed.query}:
         raise MeasureError(
-            "The database must be a throwaway Postgres on this machine (host 127.0.0.1 or "
-            "localhost, the address in the URL itself), not a shared or production one."
+            "The database must be a throwaway Postgres on this machine (host 127.0.0.1, "
+            "localhost or [::1], the address in the URL itself), not a shared or production one."
         )
     return url
 

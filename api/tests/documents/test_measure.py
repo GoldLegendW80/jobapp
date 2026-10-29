@@ -333,7 +333,6 @@ def test_a_connection_that_ends_on_another_machine_is_refused_before_any_stateme
     assert err.count("\n") == 2  # the credential line, then the one sentence
     assert out == ""
     assert statements == []  # not even a CREATE DATABASE
-    monkeypatch.undo()
     assert throwaway_names(server) == []
     assert not (tmp_path / "out.json").exists()
 
