@@ -873,7 +873,9 @@ POST_WORDS = (
     "follow", "connect", "messag", "invit", "save", "bookmark", "alert", "favori", "favour",
     "subscri", "reaction",
 )  # fmt: skip
-POST_WHOLE = re.compile(r"(?:un|dis|re)?(?:likes?|liked|liking|likers?|shares?|shared|sharing|sharers?)")
+POST_WHOLE = re.compile(
+    r"(?:un|dis|re)?(?:likes?|liked|liking|likers?|shares?|shared|sharing|sharers?)"
+)
 # A search service's client metadata, read as a key and never as a value: Algolia's JavaScript
 # client puts its library list into `x-algolia-agent` (`Algolia for JavaScript (4.x); Browser;
 # react (18.x); react-instantsearch (7.x)`), and the key `x-algolia-api-key` is a random string.

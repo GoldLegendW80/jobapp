@@ -414,7 +414,10 @@ def hop_of(url: str, source: object = LINKEDIN) -> list:
 def test_browserd_follows_the_start_s_redirect_to_the_feed_and_stops_the_rest():
     assert not hop_of(FEED)
     assert not hop_of("https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer")
-    assert len(hop_of("https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/")) == 1
+    assert (
+        len(hop_of("https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/"))
+        == 1
+    )
     assert len(hop_of("https://www.linkedin.com/in/someone-e2e/")) == 1
     assert len(hop_of(FEED, source="https://www.linkedin.com/jobs/")) == 1
     assert len(hop_of(FEED, source=None)) == 1  # a source that cannot be read follows nothing
@@ -480,7 +483,9 @@ NOT_POSTS = [
 ]  # fmt: skip
 # The agent strings of three Algolia clients, as their libraries write them (the client's own list,
 # `; ` between the segments), and a search service's whole query.
-AGENT_INSTANTSEARCH = "Algolia for JavaScript (4.24.0); Browser; instantsearch.js (4.75.3); JS Helper (3.22.5)"
+AGENT_INSTANTSEARCH = (
+    "Algolia for JavaScript (4.24.0); Browser; instantsearch.js (4.75.3); JS Helper (3.22.5)"
+)
 AGENT_REACT = "Algolia for JavaScript (4.24.0); Browser; JS Helper (3.22.5); react (18.2.0); react-instantsearch (7.0.0); react-instantsearch-core (7.0.0)"
 AGENT_V5_NEXT = "Algolia for JavaScript (5.2.1); Search (5.2.1); Browser; instantsearch.js (4.75.3); react (18.3.1); react-instantsearch (7.13.0); react-instantsearch-core (7.13.0); next.js (14.2.3)"
 SERVICE = "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries"
@@ -519,7 +524,9 @@ CLIENT_METADATA = [
     algolia(AGENT_REACT + "; share-widgets (2.1.0)"),
     algolia(AGENT_REACT + "; like-button (1.0.0)"),
     algolia(AGENT_INSTANTSEARCH + "; saved-searches (3.0.0)"),
-    algolia(AGENT_V5_NEXT, key="YjA5ZjFkNDRSaVeNzQxZTc4ZDc5YzAzOWY4YzMyMDZm"),  # base64 holding "SaVe"
+    algolia(
+        AGENT_V5_NEXT, key="YjA5ZjFkNDRSaVeNzQxZTc4ZDc5YzAzOWY4YzMyMDZm"
+    ),  # base64 holding "SaVe"
     algolia(AGENT_REACT, key="FollowKeyE2e0000"),
     algolia(AGENT_REACT, app="A1SAVE7XQ2"),
     algolia(AGENT_REACT, app="MESSAGE0E2"),
