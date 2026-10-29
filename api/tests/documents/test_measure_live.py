@@ -18,10 +18,15 @@ import pytest
 
 from app.documents import measure
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("MEASURE_LIVE") != "1",
-    reason="set MEASURE_LIVE=1 (and a model credential) to measure the writers on the real model",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("MEASURE_LIVE") != "1",
+        reason="set MEASURE_LIVE=1 and a model credential to measure the writers for real",
+    ),
+    # The project turns warnings into errors; the real SDK's subprocess may leave an unclosed
+    # transport behind, which must not fail a measure that has printed its table.
+    pytest.mark.filterwarnings("ignore"),
+]
 
 
 def test_measure_the_writers_on_the_real_model(
