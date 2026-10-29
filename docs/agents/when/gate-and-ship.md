@@ -11,7 +11,8 @@ deploying from any machine) and the gate part of checklist item 5 of
 [lessons/gate-and-ops-tools.md](../lessons/gate-and-ops-tools.md). The mechanics are in
 [orchestration.md](../orchestration.md) (Task lifecycle, Deploy from any machine, Parallelism and
 the gate) and CONTRIBUTING.md, steps 4 to 7. A builder never runs the gate. To set up a laptop:
-`ops/dev-setup.sh` and the runbook `docs/runbooks/develop-new-machine.md`.
+`ops/dev-setup.sh` and the runbook `docs/runbooks/develop-new-machine.md`. The stack side of the
+gate (journey stacks, Docker address pools) is in [journeys.md](journeys.md).
 
 ## Commands
 

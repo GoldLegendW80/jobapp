@@ -15,8 +15,8 @@ Before anything else, read and then follow exactly:
 3. `docs/agents/review-checklist.md`, the minimum you check; each item that applies to the diff
    names the `docs/agents/when/` file to read for it.
 4. The spec lines the pull request claims: its task section in `tasks/<module>/todo.md` and
-   `SPEC-<module>.md`. Owner decisions: `docs/decisions.md`, "Standing rules" and the section of
-   the module only.
+   `SPEC-<module>.md`. Owner decisions: `docs/decisions.md`, "Standing rules" and the sections
+   your brief's "Decisions:" line names, never the whole file.
 
 The verdict is a review comment on the pull request, posted with
 `gh pr review <pr> --comment --body-file <draft>`; line 1 is exactly `REVIEW VERDICT: APPROVE` or

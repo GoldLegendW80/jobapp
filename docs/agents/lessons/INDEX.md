@@ -105,20 +105,21 @@ the text) and tokens estimated as characters / 4. Taken on 2026-10-29 for harnes
 always on text without losing a rule). "Before" is the tree of the lessons pull request (#723),
 "after" the trim. The brief, the task's plan section and the spec lines vary per task and are not
 counted. The owner's target was at least 30% less for the implementer and for the reviewer;
-reached: -31.3% and -43.4%.
+reached: -30.4% and -41.9% (the figures after round 1 of the review, which added the
+"Decisions:" line and moved two rules to where a reviewer reads them).
 
 Implementer (the files `.claude/agents/implementer.md` tells it to read first, and CLAUDE.md):
 
 | File | Before | After |
 |---|---|---|
-| `.claude/agents/implementer.md` | 1383 | 1278 |
-| `CLAUDE.md` | 7501 | 5873 |
-| `docs/agents/implementer.md` | 11100 | 6373 |
-| `docs/agents/shared-rules.md` | 0 | 3105 |
-| `docs/agents/review-checklist.md` | 8870 | 3207 |
-| **Characters** | **28854** | **19836** |
-| Tokens (characters / 4) | 7213 | 4959 |
-| Change | | -31.3% |
+| `.claude/agents/implementer.md` | 1383 | 1318 |
+| `CLAUDE.md` | 7501 | 6008 |
+| `docs/agents/implementer.md` | 11100 | 6138 |
+| `docs/agents/shared-rules.md` | 0 | 3365 |
+| `docs/agents/review-checklist.md` | 8870 | 3247 |
+| **Characters** | **28854** | **20076** |
+| Tokens (characters / 4) | 7213 | 5019 |
+| Change | | -30.4% |
 
 Reviewer (the files `.claude/agents/reviewer.md` tells it to read first, and CLAUDE.md; before, it
 read all of implementer.md for the shared rules, after, only `shared-rules.md`, so implementer.md
@@ -126,21 +127,25 @@ counts 0):
 
 | File | Before | After |
 |---|---|---|
-| `.claude/agents/reviewer.md` | 1600 | 1771 |
-| `CLAUDE.md` | 7501 | 5873 |
-| `docs/agents/reviewer.md` | 4566 | 5079 |
+| `.claude/agents/reviewer.md` | 1600 | 1812 |
+| `CLAUDE.md` | 7501 | 6008 |
+| `docs/agents/reviewer.md` | 4566 | 5104 |
 | `docs/agents/implementer.md` | 11100 | 0 |
-| `docs/agents/shared-rules.md` | 0 | 3105 |
-| `docs/agents/review-checklist.md` | 8870 | 3207 |
-| **Characters** | **33637** | **19035** |
-| Tokens (characters / 4) | 8409 | 4758 |
-| Change | | -43.4% |
+| `docs/agents/shared-rules.md` | 0 | 3365 |
+| `docs/agents/review-checklist.md` | 8870 | 3247 |
+| **Characters** | **33637** | **19536** |
+| Tokens (characters / 4) | 8409 | 4884 |
+| Change | | -41.9% |
 
 Named by CLAUDE.md but not counted above: before, "Start here" sent every agent through
-`docs/STATUS.md` (9234 characters) and `docs/decisions.md` (34926 characters) whole, 44160
-characters or about 11040 tokens. After, STATUS.md is the orchestrator's, and decisions.md
-is read as "Standing rules" (946 characters) plus the section of the agent's module (most are
-between 1287 and 3991 characters, the longest 12177), never whole.
+`docs/STATUS.md` (9234 characters) and `docs/decisions.md` (34926 characters at the lessons pull
+request, 35204 with the reading rule row) whole, 44160 characters or about 11040 tokens. After,
+STATUS.md is the orchestrator's, and decisions.md is read as "Standing rules" (946 characters)
+plus the sections the "Decisions:" line of the brief names: the module's and those of the other
+modules the task touches (owner, 2026-10-29, "Module + cross refs"; decisions.md is grouped by
+topic, not by module, so the orchestrator names headings). By characters the sections are 221 to
+4215, mostly 1287 to 4215, the longest 12176 ("Interactive job search"). The section sizes
+are counts of characters (Python `len`), not UTF-8 bytes.
 
 Read only when a trigger line says so (the situational text, moved out of the tables above; a task
 reads one to three of these):
@@ -149,7 +154,7 @@ reads one to three of these):
 |---|---|---|
 | `docs/agents/when/contracts-and-plans.md` | 1505 | 376 |
 | `docs/agents/when/every-pull-request.md` | 1942 | 485 |
-| `docs/agents/when/gate-and-ship.md` | 2958 | 739 |
+| `docs/agents/when/gate-and-ship.md` | 3058 | 764 |
 | `docs/agents/when/heuristic-code.md` | 2248 | 562 |
 | `docs/agents/when/journeys.md` | 2482 | 620 |
 | `docs/agents/when/migrations.md` | 1318 | 329 |
@@ -159,7 +164,7 @@ reads one to three of these):
 | `docs/agents/when/untrusted-input.md` | 2362 | 590 |
 | `docs/agents/when/web-ui.md` | 998 | 249 |
 
-Together 21208 characters, 5302 tokens. Each file starts with its trigger, who reads it and where
+Together 21308 characters, 5327 tokens. Each file starts with its trigger, who reads it and where
 its text came from. The trigger lines are the checklist items and the "read when/<file>.md first"
 lines of implementer.md, reviewer.md and CLAUDE.md.
 

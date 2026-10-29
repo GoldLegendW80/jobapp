@@ -170,6 +170,12 @@ turns whose context was over 200k tokens.
 Briefs are short: the rules live in the docs, the brief names the task and what is special. Fill
 the `<placeholders>`.
 
+Every brief has a "Decisions:" line. docs/decisions.md is grouped by topic, not by module
+(identity and profile have no section, jobs has several, and a browser task needs the Indeed
+country site decision of 2026-10-28, which sits under "Interactive job search"), so name the
+headings (`grep -n '^## ' docs/decisions.md`): the module's and those of every other module the
+task touches. The agent reads "Standing rules" and those sections, never the whole file.
+
 ### Builder
 
 ```
@@ -183,6 +189,8 @@ Depends on: <#n or none> (if the pull request needs it merged first, line 1 of t
 Acceptance: <the acceptance lines, or "as in the plan section">.
 Tests: the whole tests/<module> folder through ops/agent-test.sh, ruff, <web checks>,
 ci_plan_test.py, e2e_groups.py<, the journeys of group <group> on your own stack>.
+Decisions: <headings of docs/decisions.md besides "Standing rules": the module's and the other
+modules' the task touches>.
 Special: <owner decisions to respect, known traps, what not to decide again>.
 Model: <opus|sonnet>. Hand back as implementer.md says.
 ```
@@ -193,6 +201,8 @@ Model: <opus|sonnet>. Hand back as implementer.md says.
 Review pull request #<pr> (<title>), branch <branch>, head <sha>. First review.
 Read first: docs/agents/reviewer.md (follow it exactly) and docs/agents/review-checklist.md.
 Spec: the section "<task id>" of tasks/<module>/todo.md and SPEC-<module>.md <sections>.
+Decisions: <headings of docs/decisions.md besides "Standing rules": the module's and the other
+modules' the pull request touches>.
 Known points: <files changed outside the owned ones, gate changes, what the author left open>.
 Post the verdict as a review comment in the format of reviewer.md. Hand back as reviewer.md says.
 ```
@@ -205,6 +215,7 @@ Read first: docs/agents/implementer.md (follow it exactly). The review is the la
 begins with "REVIEW VERDICT:" (gh pr view <pr> --comments, or
 gh api repos/GoldLegendW80/jobapp/pulls/<pr>/reviews).
 Fix exactly: <B1 ...>, <B2 ...>, <the "Fixups for the fix agent" list, if any>.
+Decisions: <the headings of the builder's brief, plus those the blocking items touch>.
 For a heuristic item, fix the family, not the quoted input (when/heuristic-code.md).
 Worktree: a fresh one of the branch under .claude/worktrees/<name>. Push plainly, then add a
 short "Round <n> fixes" section to the pull request body. Hand back as implementer.md says.
@@ -217,6 +228,7 @@ Re-check pull request #<pr> after round <n>. Previous verdict on <reviewed sha>:
 "REVIEW VERDICT:" comment of the pull request.
 Read first: docs/agents/reviewer.md, rule 5 (later rounds) applies.
 Check only: each previous blocking item, and the diff <reviewed sha>..<new head>.
+Decisions: <the headings of the first review's brief>.
 Post the verdict in the format of reviewer.md, with the Head line of the current head.
 ```
 
@@ -252,7 +264,8 @@ The harness learns from its own reviews: harness2's harnessing level recursion, 
   deterministic rather than retried forever (issue #293). Before blaming load, check `uptime`
   for leftover processes: orphaned CPU loops of one reviewer once broke two gates.
 - **A journey that has never run hides most of its bugs.** The lesson, with the one on Docker
-  address pools, moved to [when/journeys.md](when/journeys.md) on 2026-10-29.
+  address pools, moved to [when/journeys.md](when/journeys.md) on 2026-10-29: read it before you
+  gate a batch with journeys or change the stack code of the gate.
 - **Run the whole module, not your own files.** With no CI per pull request, an approved change
   broke older tests and journeys that still stated the previous behaviour. Every brief demands
   the whole test folder of the module and a grep for assertions of the changed behaviour.
@@ -266,9 +279,10 @@ The harness learns from its own reviews: harness2's harnessing level recursion, 
   crashed the api natively (SIGSEGV, no traceback). One process wide lock guards every pypdfium2
   call (#320). A native crash shows as a restart count of 1 with no traceback; reproduce in the
   image with `python -X faulthandler`.
-- **bash 3.2 (macOS `/bin/bash`)** and **Docker address pools**: moved to
-  [when/shell-scripts.md](when/shell-scripts.md) and [when/journeys.md](when/journeys.md) on
-  2026-10-29.
+- **bash 3.2 (macOS `/bin/bash`)** and **Docker address pools**: moved on 2026-10-29 to
+  [when/shell-scripts.md](when/shell-scripts.md) (read it before you change a shell script) and
+  [when/journeys.md](when/journeys.md) (read it before you gate a batch with journeys or change
+  the stack code of the gate).
 - **The session limit cuts every running agent at once.** Their worktrees survive. After the
   reset, check each worktree for uncommitted or unpushed work, then start fresh agents from the
   pushed state (never resume). Briefs demand a work in progress push within the first hour.

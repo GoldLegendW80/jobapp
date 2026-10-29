@@ -57,11 +57,8 @@ Make your own worktree from `origin/main` after `git -C <main> fetch -q origin`:
   for the readers of any field or contract you changed (registries such as `FIELD_TYPES`, old
   editors and imports that omit a new key, other modules), and fix them in the same pull request
   (earlier tasks broke main by running only their own files).
-- When your diff touches a journey, a Compose stack or a Docker image: read
-  [when/journeys.md](when/journeys.md) first.
-- Shared machine: other agents may run beside you. If the folder `.local-check/lock` of the main
-  checkout exists, the gate is running: start nothing heavy until it is gone. If `df` shows under
-  12 GiB free, stop building images and say so in the hand back.
+- When your diff touches a journey, a page a journey drives, a Compose stack or a Docker image:
+  read [when/journeys.md](when/journeys.md) first.
 
 ## Speed rules (owner, 2026-10-14)
 

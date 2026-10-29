@@ -9,7 +9,9 @@ Tailscale Funnel. The repository is PUBLIC.
 Start here, in this order: this file, then the doc of your role (below). The orchestrator also
 reads [docs/STATUS.md](docs/STATUS.md) (what is live, open, next). Owner decisions
 ([docs/decisions.md](docs/decisions.md)) are never decided again: read "Standing rules" and the
-section of your module (`grep -n '^## '`), never the whole file.
+sections your brief's "Decisions:" line names (your module's, and those of the other modules the
+task touches); with no such line, choose them from the headings (`grep -n '^## '`); never the
+whole file.
 
 ## Map
 
@@ -67,7 +69,7 @@ ops/card.sh <issue url> doing <module> now           # the card of a task you st
 ```
 
 `uv` needs `--native-tls` on a network that intercepts TLS. To gate, ship, deploy, operate the
-Jetson or set up a laptop, or when your diff touches `ops/`, `deploy.sh` or the workflows: read
+Jetson or set up a laptop, or when your diff touches `ops/`, `deploy.sh` or `.github/`: read
 [docs/agents/when/gate-and-ship.md](docs/agents/when/gate-and-ship.md) first.
 
 ## How work flows

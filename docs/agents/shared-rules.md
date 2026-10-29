@@ -44,6 +44,9 @@ accounts only, and the others). What they leave open:
 - Never run `docker system prune`, `docker network prune`, `docker volume prune` or
   `docker image prune` with filters wider than your own names: the machine hosts the owner's
   other projects. Remove only the containers, networks, volumes and images you created, by name.
+- Shared machine: other agents may run beside you. If the folder `.local-check/lock` of the main
+  checkout exists, the gate is running: start nothing heavy until it is gone. If `df` shows under
+  12 GiB free, stop building images and say so in the hand back.
 
 ## Shared files
 

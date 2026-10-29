@@ -10,7 +10,7 @@ rules, the same as the builder's. What differs for a reviewer: your own worktree
 `git -C <worktree> push origin HEAD:<branch>` (plain, never forced). Tests through
 `ops/agent-test.sh` (at most `-n 2`, under `nice -n 15`); never Playwright while `.local-check/lock`
 of the main checkout exists; throwaway containers and stacks named `rv<pr>-*` and removed
-afterwards. What the author had to run is the Tests section of [implementer.md](implementer.md).
+afterwards.
 
 Goal: one review round wherever possible. Measured on the 242 reviewed pull requests merged from
 2026-10-14 to 2026-10-28 ([lessons/INDEX.md](lessons/INDEX.md)): 44% needed at least one REQUEST
@@ -68,8 +68,10 @@ Head: <full 40 character sha>      <- the head AFTER your own fixup commits
    head. A new blocker in old code is allowed only for data loss or security; anything else is a
    follow up.
 6. **Checklist:** [review-checklist.md](review-checklist.md) is the minimum, not the maximum. For
-   each item that applies to the diff, read the file its pointer names before you judge it. Also
-   read [when/shell-scripts.md](when/shell-scripts.md) for a changed `*.sh` file or `ops/` script,
+   each item that applies to the diff, read the file its pointer names before you judge it. To
+   judge tests, read the Tests section of [implementer.md](implementer.md), what the author had to
+   run. Also read [when/shell-scripts.md](when/shell-scripts.md) for a changed `*.sh` file or
+   `ops/` script,
    [when/gate-and-ship.md](when/gate-and-ship.md) for a gate change (rule 7),
    [when/migrations.md](when/migrations.md) for an Alembic revision, and
    [when/journeys.md](when/journeys.md) to run or judge a journey or a Docker stack.

@@ -8,8 +8,8 @@ Review pull request $ARGUMENTS, as the orchestrator of `docs/agents/orchestratio
 1. Read its state: `gh pr view <pr> --json title,headRefName,headRefOid,body,files` and the latest
    verdict, `gh api repos/GoldLegendW80/jobapp/pulls/<pr>/reviews --jq '.[-1] | .commit_id, (.body | split("\n")[0:2])'`.
 2. No verdict yet: a first review. Spawn the `reviewer` subagent on Opus with the "First review"
-   brief of `docs/agents/orchestration.md` (the task section, the spec, files changed outside the
-   owned ones, any gate change).
+   brief of `docs/agents/orchestration.md` (the task section, the spec, the "Decisions:" headings,
+   files changed outside the owned ones, any gate change).
 3. A REQUEST CHANGES verdict on an older head, or the argument `recheck`: a re-check. Spawn the
    `reviewer` subagent on Sonnet with the "Re-check" brief (previous blocking items and the diff
    since the reviewed head only).

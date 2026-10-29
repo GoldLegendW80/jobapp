@@ -10,5 +10,6 @@ Fix pull request $ARGUMENTS, as the orchestrator of `docs/agents/orchestration.m
 2. Extract the blocking items (and any "Fixups for the fix agent") as an exact list, one line each.
 3. Spawn a FRESH `implementer` subagent (never resume the builder or an earlier fixer): Opus when
    an item is a heuristic, a race, security or privacy; Sonnet when every item is small. Use the
-   "Fix agent" brief of `docs/agents/orchestration.md` with the list.
+   "Fix agent" brief of `docs/agents/orchestration.md` with the list and the "Decisions:" line of
+   the builder's brief.
 4. When it hands back with a new head, run `/review-pr <pr> recheck`.

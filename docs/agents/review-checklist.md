@@ -4,7 +4,7 @@ The pre pull request self check for implementers and the minimum for reviewers
 ([implementer.md](implementer.md), [reviewer.md](reviewer.md)). Run every item that applies to
 your diff before you ask for review, and name each one you applied under "Self review" in the
 pull request body. An item is the rule; its check is in the `docs/agents/when/` file named after
-it: read that file when the item applies to your diff.
+it: read that file when the item applies to your diff (items 3, 8 and 12 apply to every diff).
 
 Ranked by the REQUEST CHANGES rounds each family caused on the 242 reviewed pull requests merged
 from 2026-10-14 to 2026-10-28 (151 rounds, 322 blocking items). The code after a title is the
