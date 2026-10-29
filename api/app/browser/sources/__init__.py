@@ -18,15 +18,15 @@ returned, and browserd sends the page's request before its call returns, after i
 1 to 3 s (and a hover before a click): so the website receives two pages of a host at least the
 pause apart (tests/browser/test_pace_received.py). Counting the pause between the starts of the
 calls, as it was until 2026-10-29, let browserd's dwell eat into it: the website once saw 3.56 s.
-One page of a host runs at a time: while another person's page of the host has not ended, a
-page waits (PACE_POLL_S between asks) and draws its slot from that page's end; it gives up
-(`lease_budget`) before its own lease would end idle (a Take over of the other lease can hold
-its page for 15 minutes), so the wait never ends the sweep (`lease_ended`). The last page
-time and the page that holds each host are kept in Redis (RedisPacer, one script each to take
-and give back, so two workers never take the same slot); a hold a dead worker left ends after
-PACE_HOLD_S; a host idle for longer than the pause is opened at once. A page is not started
-when the lease's remaining active time cannot hold its wait plus PAGE_LOAD_S (`lease_budget`),
-nor this close to the sweep's time limit (PAGE_BUDGET_S, `time_budget`).
+One page of a host runs at a time: while another person's page of the host has not ended, a page
+waits (PACE_POLL_S between asks) and draws its slot from that page's end; it gives up
+(`lease_budget`) before its own lease would end idle (a Take over of the other lease can hold its
+page for 15 minutes): the wait ends this website, not the lease (`lease_ended` would stop the
+sweep). The last page time and the page that holds each host are kept in Redis (RedisPacer, one
+script each to take and give back, so two workers never take the same slot); a hold a dead worker
+left ends after PACE_HOLD_S; a host idle for longer than the pause is opened at once. A page is not
+started when the lease's remaining active time cannot hold its wait plus PAGE_LOAD_S
+(`lease_budget`), nor this close to the sweep's time limit (PAGE_BUDGET_S, `time_budget`).
 
 The fixed readers of Google Careers, Business France VIE, company career pages (`site`) and
 LinkedIn's own reader were deleted with the company boards and the freelance feeds (owner,
