@@ -49,7 +49,8 @@ to 7. Owner decisions: [../decisions.md](../decisions.md).
    this (owner, 2026-10-15): see "Deploy from any machine" below.
 10. **After.** Follow ups from the review files become issues with cards; the merged branch's
     worktree is removed (`git worktree remove .claude/worktrees/<name>`), its scratch images
-    removed by tag; [../STATUS.md](../STATUS.md) gets the new state.
+    removed by tag; [../STATUS.md](../STATUS.md) gets the new state; the reflector pass (below)
+    adds the batch's lessons.
 
 ## The board (issue #500)
 
@@ -214,6 +215,29 @@ Read first: docs/agents/reviewer.md, rule 5 (later rounds) applies.
 Check only: each previous blocking item, and the diff <reviewed sha>..<new head>.
 Post the verdict in the format of reviewer.md, with the Head line of the current head.
 ```
+
+## Reflector pass after each ship
+
+The harness learns from its own reviews: harness2's harnessing level recursion, done by hand
+([lessons/INDEX.md](lessons/INDEX.md)). After each `SHIP: OK`, before the next batch starts:
+
+- Spawn one fresh agent (Sonnet; Opus when a pull request of the batch needed three or more
+  rounds) with the merged pull request numbers and "Follow the reflector pass of
+  docs/agents/lessons/INDEX.md". It reads only those pull requests' verdicts, Round commits and
+  bodies, appends their rows to the ledger, files each blocking item under its family with an
+  edit row, and proposes checklist or implementer edits only where an entry supports them,
+  keeping the joint size of review-checklist.md and implementer.md from growing.
+- It commits on a branch `claude/lessons-<date>` in its own worktree and hands back; the
+  orchestrator opens the docs pull request, reviewed on Sonnet, and ships it with the next batch.
+- A batch without a REQUEST CHANGES round only adds its ledger rows: fold it into the next pass.
+- Cost: one session of about 20 to 30 turns over 40 to 70k tokens of context (a pull request
+  brings about 14k characters of verdicts and body; then the touched family files and the
+  checklist), about 1 to 2 M tokens in the units of Token economy: the low end of one fresh
+  reviewer, well under one implementer run, plus the Sonnet review of a docs pull request. No
+  Docker and no tests, so it may run beside the gate.
+- Every 10 to 15 shipped pull requests, compare the ledger with the baseline of
+  lessons/INDEX.md (blocking items per first review, fix rounds per pull request, rounds per
+  family) and write the comparison there.
 
 ## Lessons learned
 
