@@ -270,6 +270,45 @@ describe("a running website search", () => {
     expect(screen.queryByText(STARTING)).toBeNull();
   });
 
+  it("does not trust the cache after a failed read either", async () => {
+    const opened = fakeScreens();
+    const state = { detail: run(), browser: mine(lease()) };
+    const { calls } = fakeApi(state);
+    let fail = true;
+    server.use(
+      http.get("*/api/browser", () =>
+        fail
+          ? HttpResponse.json({ detail: "Bad gateway" }, { status: 502 })
+          : HttpResponse.json(state.browser),
+      ),
+    );
+    // The cache holds the lease of the website searched before, and the first read fails.
+    const client = createQueryClient();
+    client.setQueryData(browserQueryKey, mine(lease({ id: "old-website" })));
+    const router = createMemoryRouter(routes, {
+      initialEntries: [`/runs/${ID}`],
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await panel();
+    await waitFor(() => {
+      expect(
+        client.getQueryState(browserQueryKey)?.errorUpdateCount,
+      ).toBeGreaterThan(0);
+    });
+    expect(screen.getByText(STARTING)).toBeInTheDocument();
+    expect(screen.queryByTestId("live-screen")).toBeNull();
+    expect(opened).toHaveLength(0);
+    expect(calls).not.toContain("POST /api/browser/live/ticket");
+    fail = false;
+    await act(() => client.invalidateQueries({ queryKey: browserQueryKey }));
+    await connected(opened);
+    expect(screen.queryByText(STARTING)).toBeNull();
+  });
+
   it("closes the view when the run ends", async () => {
     const opened = fakeScreens();
     const state = { detail: run(), browser: mine(lease()) };
@@ -289,6 +328,60 @@ describe("a running website search", () => {
     expect(await screen.findByText(ELSEWHERE)).toBeInTheDocument();
     expect(screen.queryByTestId("live-screen")).toBeNull();
     expect(view.screen.disconnected).toBe(true);
+  });
+
+  it("announces the line that replaces the view, and keeps the focus from falling to the page", async () => {
+    const opened = fakeScreens();
+    const state = { detail: run(), browser: mine(lease()) };
+    fakeApi(state);
+    renderApp(`/runs/${ID}`);
+    await connected(opened);
+    await panel();
+    const take = await screen.findByRole("button", { name: "Take over" });
+    act(() => {
+      take.focus();
+    });
+    expect(take).toHaveFocus();
+    state.detail = run({ status: "done", finished_at: AFTER_RUN });
+    act(() => {
+      FakeEventSource.last?.emit("step", {
+        seq: 1,
+        at: AFTER_RUN,
+        kind: "status",
+        data: { status: "done" },
+      });
+    });
+    const line = await screen.findByText(ELSEWHERE);
+    expect(line).toHaveAttribute("role", "status");
+    await waitFor(() => {
+      expect(line).toHaveFocus();
+    });
+  });
+
+  it("leaves the focus where it is when the run ends and it was not in the view", async () => {
+    const opened = fakeScreens();
+    const state = { detail: run(), browser: mine(lease()) };
+    fakeApi(state);
+    renderApp(`/runs/${ID}`);
+    await connected(opened);
+    await panel();
+    const title = screen.getByTestId("run-title");
+    act(() => {
+      title.focus();
+    });
+    state.detail = run({ status: "done", finished_at: AFTER_RUN });
+    act(() => {
+      FakeEventSource.last?.emit("step", {
+        seq: 1,
+        at: AFTER_RUN,
+        kind: "status",
+        data: { status: "done" },
+      });
+    });
+    const line = await screen.findByText(ELSEWHERE);
+    expect(line).toHaveAttribute("role", "status");
+    expect(line).not.toHaveFocus();
+    expect(title).toHaveFocus();
   });
 });
 
