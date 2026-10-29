@@ -293,6 +293,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "http://secure.indeed.test:8080/auth?continue=%2Fmyjobs"
             )
         if host == "fr.indeed.test" and url.path == "/jobs":
+            # A recent search after the login expired: Indeed's sign in host.
+            if query.get("from") == ["relogin"]:
+                return self.redirect(
+                    "http://secure.indeed.test:8080/auth?continue=%2Fjobs"
+                )
             found = b19_words(query.get("q", [""])[0])
             body = (
                 f'<ul><li><a href="/viewjob?jk={B19_KEY}&amp;from=serp&amp;vjs=3">'

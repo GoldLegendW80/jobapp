@@ -423,7 +423,6 @@ PAGES = [
     (LINKEDIN, "https://www.linkedin.com/jobs/search-results/?keywords=genai%20engineer"),
     (LINKEDIN, "https://www.linkedin.com/jobs/collections/recommended/?currentJobId=4012345678"),
     (LINKEDIN, "https://www.linkedin.com/jobs/"),
-    (LINKEDIN, "https://www.linkedin.com/feed/"),
     (INDEED, "https://fr.indeed.com/viewjob?jk=3f2a9c1d0b8e7a65&from=serp&vjs=3"),
     (INDEED, "https://fr.indeed.com/rc/clk?jk=3f2a9c1d0b8e7a65&bb=Xy&xkcb=SoA&fccid=abc&vjs=3"),
     (INDEED, "https://fr.indeed.com/jobs?q=GenAI+Engineer&l=Lyon&from=searchOnHP&vjk=3f2a"),
@@ -448,6 +447,7 @@ NOT_PAGES = [
     (LINKEDIN, "https://www.linkedin.com/jobs/collections/a/b/?x=1"),
     (LINKEDIN, "https://www.linkedin.com/messaging/thread/42/"),
     (LINKEDIN, "https://www.linkedin.com/in/someone/?miniProfileUrn=x"),
+    (LINKEDIN, "https://www.linkedin.com/feed/"),  # the person's own list (round 1, test_b19_guards)
     (LINKEDIN, "https://www.linkedin.com/m/logout/"),
     (LINKEDIN, "https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer&action=logout"),
     (LINKEDIN, "https://www.linkedin.com/my-items/saved-jobs/?x=1"),

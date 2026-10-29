@@ -2,10 +2,11 @@
 real ones (tests/browser_pages/server.py, b19/), under the `.test` stand in names of their
 platforms' families. Indeed's home sends the search to its country site with a query, its native
 GET form with Indeed's own field names searches by Enter, a posting opens with its tracking
-query, a page that sends the browser to the sign in host answers `signin_required`. Welcome to
-the Jungle's script search box outside any form searches by Enter and by its magnifier button
-through a POST to its search service, which renders the list; the Apply button and the Easy
-Apply link beside the box stay refused, and nothing is ever posted to the website itself.
+query, the person's own jobs never open, a page that sends the browser to the sign in host
+answers `signin_required`. Welcome to the Jungle's script search box outside any form searches
+by Enter and by its magnifier button through a POST to its search service, which renders the
+list; the Apply button and the Easy Apply link beside the box stay refused, and nothing is ever
+posted to the website itself.
 Needs an existing BROWSER_TEST_IMAGE; never builds or pulls one.
 """
 
@@ -94,7 +95,9 @@ def test_indeed_s_country_site_is_searched_by_its_own_form(b19):
         assert "Build agents" in lease.tool("browser_snapshot")["snapshot"]
         assert lease.tool("browser_navigate", url="http://fr.indeed.test:8080/", **marker)["ok"]
         page = lease.tool("browser_snapshot")["snapshot"]
-        wall = lease.tool("browser_click", ref=ref(page, "link", "My jobs"), **marker)
+        own = lease.tool("browser_click", ref=ref(page, "link", "My jobs"), **marker)
+        assert own["error"] == "unsupported_discovery", own  # the person's own list (round 1)
+        wall = lease.tool("browser_click", ref=ref(page, "link", "Recent search"), **marker)
         assert wall["error"] == "signin_required", wall
         for off in ("http://secure.indeed.test:8080/auth", "http://elsewhere:8080/"):
             assert lease.tool("browser_navigate", url=off, **marker)["error"] == "host_not_allowed"

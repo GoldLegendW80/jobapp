@@ -3,9 +3,10 @@
 <head><meta charset="utf-8"><title>Indeed</title></head>
 <body>
 <!-- A website like Indeed's country site (B19), reached from www by a redirect with a query:
-     a native GET form with Indeed's own field names (q, l), a Find jobs button, and a link to
-     the person's jobs that sends the page to the sign in host. -->
-<nav><a href="/myjobs">My jobs</a></nav>
+     a native GET form with Indeed's own field names (q, l), a Find jobs button, a link to the
+     person's jobs that the app never opens (B19, round 1), and a recent search whose page sends
+     the browser to the sign in host, as when the login expired. -->
+<nav><a href="/myjobs">My jobs</a> <a href="/jobs?q=genai+engineer&amp;from=relogin">Recent search</a></nav>
 <main>
   <h1>Find your next job</h1>
   <form method="get" action="/jobs" role="search">

@@ -50,6 +50,18 @@ posting whose address holds a refused word (`payments-engineer`) is refused; a n
 token (an id, a name attribute or a one word label) holding no ACTION_STEMS stem is neutral, so
 a button whose aria-label is "Search" and whose text is "Hide" is clicked; the search words are
 English, French and German only; an empty text with `submit` presses Enter on the emptied box.
+
+Round 1 of B19's review: a text box whose names say it writes to someone (a message, a reply, a
+comment, a chat, a note or a post, `composes`) is never a search box, so no typing and no Enter
+there; a page of a person or of the person's own lists (`personal`: LinkedIn's profiles, feed,
+network, notifications and inbox, Indeed's jobs, profile and review writing, Welcome to the
+Jungle's `/<language>/me` and account) never opens by a navigation or a link click, on the
+family, signed in or not; a page's POST says no alert, favourite, subscription, like, reaction
+or share either (POST_WORDS). Declared open points: a composer whose names hold none of those
+words ("Type here", "Aa") is read as any box; "posting" and "writer" are no composer words, and
+a glued id holding "post" (`postbox`) is read as a whole word only; a box whose names hold
+"writing" or "note" in another sense is refused (fail closed); a redirect of the platform's own
+to LinkedIn's feed is followed (a signed in LinkedIn answers its root, the saved start, there).
 """
 
 import re
@@ -357,7 +369,9 @@ def read_url(
         segments = parts.path.strip("/").split("/")
         pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
         keys = [k for k, _ in pairs]
-        destructive = _path_refused(segments)
+        # A person's page or the person's own list on a family never opens (B19, round 1).
+        family = family_of(scope.start if scope else current)
+        destructive = _path_refused(segments) or personal(family, parts.hostname, segments, hop=hop)
         # A search request carries its saved title; the search page itself, its address with
         # no query at all (`/fr/jobs`), is where a person types it (2026-10-28, issue 716). A
         # redirect hop (`hop`) is held to the rule reviewed with the start page's own redirect:
@@ -527,6 +541,54 @@ def _language(segment: str) -> bool:
     return language in LANGUAGES and (not region or REGION.fullmatch(region) is not None)
 
 
+# B19, round 1: the pages of a person and of the person's own lists on a platform's family never
+# open by a navigation or a link click, signed in or not: opening a profile tells its owner
+# (LinkedIn's "who viewed your profile"), and the person's feed, network, notifications, inbox,
+# saved jobs and reviews are no job search. Each path segment is read percent decoded, folded as
+# detect.words folds it and glued (`My-Items` is `myitems`): on LinkedIn and Indeed a segment
+# of PERSONAL_SEGMENTS anywhere in the path (`/in/<anyone>`, `/pub/`, `/company/<x>/people`,
+# `/mynetwork`, `/notifications`, `/feed`, `/messaging`, `/me`, `/my-items`; `/myjobs`,
+# `/profile`), on Indeed a path word starting with `write` (`/cmp/<x>/reviews/write`) and its
+# account host `my.indeed.com`, on Welcome to the Jungle a PERSONAL_FIRST first segment, after
+# a language or not (`/fr/me`, `/en/account`). A redirect of the platform's own (`hop`) may land
+# on the feed: a signed in LinkedIn answers its root, the saved start, with `/feed/`.
+PERSONAL_SEGMENTS = {
+    "linkedin": frozenset(
+        {"in", "pub", "people", "feed", "me", "myitems", "mynetwork", "notifications",
+         "messaging"}
+    ),
+    "indeed": frozenset({"myjobs", "profile"}),
+}  # fmt: skip
+PERSONAL_FIRST = {"welcome_to_the_jungle": frozenset({"me", "account"})}
+PERSONAL_HOSTS = {"indeed": frozenset({"my"})}
+PERSONAL_HOPS = frozenset({"feed"})
+
+
+def personal(
+    family: Family | None, host: object, segments: list[str], *, hop: bool = False
+) -> bool:
+    """Whether a page of the family is a person's or the person's own list (above). `segments`
+    are the path's, already percent decoded."""
+    if family is None:
+        return False
+    label = str(host or "").lower().removesuffix("." + family.domain)
+    if label in PERSONAL_HOSTS.get(family.platform, ()):
+        return True
+    glued = ["".join(detect.words(segment, camel=False)) for segment in segments]
+    anywhere = PERSONAL_SEGMENTS.get(family.platform, frozenset())
+    if hop:
+        anywhere = anywhere - PERSONAL_HOPS
+    if any(g in anywhere for g in glued):
+        return True
+    if family.platform == "indeed" and any(
+        word.startswith("write") for segment in segments for word in detect.words(segment)
+    ):
+        return True
+    first = PERSONAL_FIRST.get(family.platform, frozenset())
+    heads = glued[:2] if segments and _language(segments[0]) else glued[:1]
+    return any(g in first for g in heads)
+
+
 SLUG = re.compile(r"[A-Za-z0-9_-]{1,200}")
 JOB_KEY = re.compile(r"[A-Za-z0-9]{1,40}")
 
@@ -589,7 +651,8 @@ def listing(family: Family, path: str) -> bool:
 def page_url(url: object, scope: Scope, *, hop: bool = False) -> bool:
     """A document a signed in discovery may open (B19): what read_url lets through within the
     frozen scope, or, on the start's family, an address with no user part, no fragment, no
-    control character and no `%` left after one decode, that is a redirect hop (`hop`: a
+    control character and no `%` left after one decode, no page of a person or of the person's
+    own lists (`personal`, read_url's rule too), that is a redirect hop (`hop`: a
     redirect within the family is followed) or a result list (`listing`) and reaches no apply,
     submit, delete, payment or account page by its path words, or a posting (`posting`), whose
     path words are its title (read by `destructive` alone, as every request's are). A result
@@ -610,6 +673,8 @@ def page_url(url: object, scope: Scope, *, hop: bool = False) -> bool:
     if parts.fragment or "%" in path or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url):
         return False
     segments = path.strip("/").split("/")
+    if personal(family, parts.hostname, segments, hop=hop):
+        return False
     if posting(family, segments, pairs):
         return True
     if _path_refused(segments):
@@ -748,9 +813,15 @@ def signin_url(url: str, scope: Scope | None = None) -> bool:
 
 # B19: read inside every glued path segment, query key and query value of a page's POST, the
 # person's own search words aside: a POST whose address says it follows, connects, messages,
-# invites or saves never leaves, whatever its host (owner, 2026-10-29: "no ... save, message,
-# follow or connect"); its body is not read.
-POST_WORDS = ("follow", "connect", "messag", "invit", "save", "bookmark")
+# invites, saves, bookmarks, sets an alert (a saved search), favourites, subscribes, likes,
+# reacts or shares never leaves, whatever its host (owner, 2026-10-29: "no ... save, message,
+# follow or connect"); its body is not read. Each is an ACTION_STEMS stem too. `favori` holds
+# `favorite`, `Favoriten` and the French `favori` and `favoris`; `subscri` holds `subscribe` and
+# `subscription`.
+POST_WORDS = (
+    "follow", "connect", "messag", "invit", "save", "bookmark", "alert", "favori", "favour",
+    "subscri", "like", "react", "share",
+)  # fmt: skip
 
 
 def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
@@ -895,9 +966,57 @@ def box_kind(names: object) -> str | None:
     return kinds.pop() if len(kinds) == 1 else None
 
 
+# B19, round 1: a text box whose names say it writes to someone or to the public (a message, a
+# reply, a comment, a chat, a note or a post, in English, French and German) is never a search
+# box, whatever its kind and wherever it is: Enter there would send the saved title, and a chat
+# composer is often a textarea of one line. Every name of the box (its label, aria-label,
+# placeholder, title, name, id and the text within) is read as detect.match_words folds it
+# (NFKC, format characters, accents and case aside, camel case split and not): a word of
+# COMPOSE_WORDS refuses, and in a name of one token with no space (an id or a name attribute,
+# `msgComposer`, `replybox`) a COMPOSE_STEMS stem inside any of its words refuses too. "poste"
+# (a job title box in French), "postal", "postcode", "posting" and "writer" are no such word.
+COMPOSE_WORDS = frozenset(
+    {"message", "messages", "messaging", "messagerie", "messageries", "msg", "inmail",
+     "nachricht", "nachrichten", "reply", "replies", "replying", "repondre", "repondez",
+     "reponds", "reponse", "reponses", "antworten", "antwort", "antworte", "comment", "comments",
+     "commenting", "commenter", "commentez", "commentaire", "commentaires", "kommentar",
+     "kommentare", "kommentieren", "chat", "chats", "chatting", "tchat", "chatten", "note",
+     "notes", "noter", "notiz", "notizen", "post", "posts", "poster", "posten", "publier",
+     "publiez", "publish", "publication", "publications", "beitrag", "beitrage", "write",
+     "writes", "writing", "ecrire", "ecrivez", "ecris", "schreiben", "schreib", "schreibe"}
+)  # fmt: skip
+COMPOSE_STEMS = (
+    "messag", "msg", "inmail", "nachricht", "reply", "repli", "repond", "repons", "antwort",
+    "comment", "kommentar", "chat", "note", "notiz", "publier", "publiez", "publish", "beitrag",
+    "writ", "ecrir", "ecriv", "schreib",
+)  # fmt: skip
+
+
+def composes(facts: dict) -> bool:
+    """Whether a text box's names say it writes to someone (COMPOSE_WORDS). Fails closed: names
+    that cannot be read, or more than FACTS_JS gives, compose."""
+    names = facts.get("names")
+    if not isinstance(names, list) or len(names) > 60:
+        return True
+    for name in names:
+        if not isinstance(name, str):
+            return True
+        tokens = detect.match_words(name[:500])
+        if any(t in COMPOSE_WORDS for t in tokens):
+            return True
+        if IDENTIFIER.fullmatch(name.strip()) and any(
+            stem in t for t in tokens for stem in COMPOSE_STEMS
+        ):
+            return True
+    return False
+
+
 def search_box(facts: dict) -> bool:
     """A text box a signed in search may type in (B19): an input of type text or search, a
-    textarea of one line, or an editable element with the role searchbox or combobox."""
+    textarea of one line, or an editable element with the role searchbox or combobox, whose
+    names say it writes to no one (`composes`)."""
+    if composes(facts):
+        return False
     tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
     if tag == "input":
         return kind in {"text", "search"}
@@ -1064,6 +1183,8 @@ def verdict(
         return original
     if detect.says_submit(facts.get("names", []), profile_edit=True):
         return "submit"
+    if tool == "browser_type" and composes(facts):  # a composer, never a search box (B19)
+        return UNSUPPORTED
     if tool == "browser_click" and decline(facts):
         point = facts["point"]
         refused = detect.verdict(point, action="click", profile_edit=True)
