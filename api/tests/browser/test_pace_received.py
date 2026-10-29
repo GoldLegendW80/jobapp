@@ -363,6 +363,32 @@ def test_a_page_that_cannot_fit_the_lease_while_it_waits_ends_lease_budget():
     assert time() + PAGE_PAUSE_S[0] + sources.PAGE_LOAD_S > 100.0
 
 
+def test_a_page_waits_for_another_only_while_its_own_lease_would_not_end_idle():
+    """A Take over of the other person's lease can hold its page for 15 minutes: the waiting
+    page gives up its website (`lease_budget`) before browserd ends its lease after the lease's
+    idle time without a tool call (`lease_ended` would end the whole sweep), counted from the
+    end of its own last page."""
+    time, site = VirtualTime(), []
+    pacer = MemoryPacer(time)
+    browserd = FakeBrowserd(time, site, [])
+    pages = pages_of(browserd, time, pacer, PAGE_PAUSE_S, idle_s=300, deadline=1000.0)
+
+    async def go() -> str:
+        await pages._act(ACTIONS["navigate"](browserd))
+        assert await pacer.reserve(HOST, 5.0, "a taken over page") == pytest.approx(5.0)
+        with pytest.raises(SourceError) as ended:
+            await pages._act(ACTIONS["navigate"](browserd))
+        return ended.value.code
+
+    first_end = pacing.DWELL_S[0] + pacing.READ_S[0]
+    assert time.run(go) == ["lease_budget"]
+    assert browserd.calls == ["navigate", "snapshot"]
+    assert len(site) == 1
+    # It asked until its next page could no longer start and load within the idle time.
+    assert time() + PAGE_PAUSE_S[0] + sources.PAGE_LOAD_S > first_end + 300
+    assert time() - PACE_POLL_S + PAGE_PAUSE_S[0] + sources.PAGE_LOAD_S <= first_end + 300
+
+
 class Failing(FakeBrowserd):
     def __init__(self, time: VirtualTime, site: list[float], how: str) -> None:
         super().__init__(time, site, [])

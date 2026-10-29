@@ -19,7 +19,9 @@ returned, and browserd sends the page's request before its call returns, after i
 pause apart (tests/browser/test_pace_received.py). Counting the pause between the starts of the
 calls, as it was until 2026-10-29, let browserd's dwell eat into it: the website once saw 3.56 s.
 One page of a host runs at a time: while another person's page of the host has not ended, a
-page waits (PACE_POLL_S between asks) and draws its slot from that page's end. The last page
+page waits (PACE_POLL_S between asks) and draws its slot from that page's end; it gives up
+(`lease_budget`) before its own lease would end idle (a Take over of the other lease can hold
+its page for 15 minutes), so the wait never ends the sweep (`lease_ended`). The last page
 time and the page that holds each host are kept in Redis (RedisPacer, one script each to take
 and give back, so two workers never take the same slot); a hold a dead worker left ends after
 PACE_HOLD_S; a host idle for longer than the pause is opened at once. A page is not started
@@ -64,9 +66,10 @@ PAGE_LOAD_S = 45.0
 PACE_TTL_S = 3600  # a host's last page time is forgotten after an hour without a page
 PACE_POLL_S = 1.0  # how often a page asks again while another page of its host has not ended
 # How long a page may hold its host in Redis: its wait (at most two of LinkedIn's longest pause
-# of 30 s), then its action and its snapshot, each a browserd call the client allows
-# TOOL_TIMEOUT_S plus a person's takeover. A page always gives its host back when it ends; only
-# a worker that died with a page leaves its hold, for this long.
+# of 30 s, 120 s with as much again as a margin), then its action and its snapshot, each a
+# browserd call the client allows TOOL_TIMEOUT_S plus a person's takeover. A page gives its host
+# back when it ends; a worker that died with a page, or a release Redis refused, leaves its hold
+# for this long.
 PACE_HOLD_S = 2 * (TOOL_TIMEOUT_S + TAKEOVER_WAIT_S) + 120.0
 
 ERRORS = (
@@ -374,12 +377,16 @@ class Pages:
         pacer: Pacer | None = None,
         lease_until: float = math.inf,
         pause: tuple[float, float] = PAGE_PAUSE_S,
+        idle_s: float = math.inf,
     ) -> None:
         self.tools, self.deadline = tools, deadline
         self.pause = pause
         self.sleep, self.rng, self.monotonic = sleep, rng, monotonic
         self.host, self.pacer = host, pacer or MemoryPacer(monotonic)
         self.lease_until = lease_until  # monotonic time at which the lease's active time ends
+        # The lease ends after idle_s without a tool call: counted from its start, then from the
+        # end of each page.
+        self.idle_s, self.idle_from = idle_s, monotonic()
         self.count = 0
         self.pauses: list[float] = []
         # The last page's snapshot text and address (the finder agent of B9 reads them).
@@ -393,8 +400,9 @@ class Pages:
         pause, holder = self.rng.uniform(*self.pause), uuid.uuid4().hex
         while (wait := await self.pacer.reserve(self.host, pause, holder)) is None:
             # Another page of this host (another person's) has not ended: its end starts our
-            # pause, so ask again until it gives the host back.
-            if self.monotonic() + pause + PAGE_LOAD_S > self.lease_until:
+            # pause, so ask again until it gives the host back, while the lease can wait.
+            now = self.monotonic()
+            if now + pause + PAGE_LOAD_S > min(self.lease_until, self.idle_from + self.idle_s):
                 raise SourceError("lease_budget")
             await self.sleep(PACE_POLL_S)
             if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
@@ -426,6 +434,8 @@ class Pages:
             shot = await self.tools.snapshot()
         except BrowserError as exc:
             raise SourceError("lease_ended" if exc.code == "ended" else "page_failed") from None
+        finally:
+            self.idle_from = self.monotonic()  # browserd's idle counts from its last tool call
         if not shot.get("ok") or not isinstance(shot.get("snapshot"), str):
             logger.warning("browser browser_snapshot failed: error=%s", failure_code(shot))
             raise SourceError("page_failed")

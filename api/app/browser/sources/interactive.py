@@ -541,6 +541,7 @@ async def _website(
             pacer=runner.pacer,
             lease_until=asked + min(got.lease.max_s, 900),
             pause=platform_policy.pause_for(paced),
+            idle_s=got.lease.idle_s,
         )
         return await _search(runner.finder, pages, scope, str(plan.user_id), site)
     finally:
