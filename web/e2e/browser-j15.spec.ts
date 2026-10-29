@@ -25,6 +25,8 @@ import {
  *   her permission to search it (owner, 2026-10-27, jobs J17), so no permission prompt or card
  *   follows, and the save records the four permissions. She sets the criteria (engineer,
  *   Paris) and instructions, then Save and Start.
+ * - A website's run page (browser B18) shows the live view of the browser while that website is
+ *   read, watching, with Take over, at 375 px and 1280 px, light and dark.
  * - The progress names the website being read. On her own website the interactive finder
  *   (app/agents/fake_streams/browser_discovery.json) types the search words, picks Paris,
  *   presses Search, opens the second page of results and the posting: the site answers that
@@ -251,6 +253,46 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
       revision: number;
     }
   ).revision;
+
+  // browser B18: a website's run page shows the browser the search reads. The first website's
+  // run is the longest (LinkedIn's own 10 to 30 s page pause), so it is still running when its
+  // page is open; the view connects on the sweep lease and only watches (no Take over is
+  // clicked, nothing here starts or ends a lease).
+  let websiteRun = "";
+  await expect
+    .poll(
+      async () => {
+        const answer = await page.request.get("/api/agents/runs?limit=50");
+        const { items } = (await answer.json()) as {
+          items: { id: string; agent: string; status: string }[];
+        };
+        websiteRun =
+          items.find(
+            (item) =>
+              item.agent === "browser_discovery" && item.status === "running",
+          )?.id ?? "";
+        return websiteRun;
+      },
+      { timeout: 120_000, intervals: [1_000] },
+    )
+    .not.toBe("");
+  const runPage = await context.newPage();
+  await runPage.goto(`/runs/${websiteRun}`);
+  const live = runPage.getByTestId("run-live-view");
+  await expect(live.getByTestId("live-screen").locator("canvas")).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(
+    live.getByText(
+      "You are watching your browser. Take over to use it yourself.",
+    ),
+  ).toBeVisible();
+  await expect(
+    live.getByRole("button", { name: "Take over", exact: true }),
+  ).toBeEnabled();
+  await expect(runPage.getByText("Your browser is starting.")).toHaveCount(0);
+  await shots(runPage, "run-live-view", false);
+  await runPage.close();
 
   // The progress names the website being read, never an internal id. Her website comes after
   // the four ticked job websites, one agent each (J17, J18): about 245 s measured, most of it

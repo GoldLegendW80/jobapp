@@ -3,9 +3,10 @@
  * `browser_discovery` reads one job website in the person's browser, and while it does, the page
  * shows that browser, the same LiveBrowser as Sign in and Account's "Your browser".
  *
- * It only reads (GET /api/browser) and watches: it never starts, ends or takes a lease, so
- * nothing here can end the search. Take over and Give back are LiveBrowser's own, as on Account:
- * the agent's next tool call waits, and the lease and the search go on.
+ * It only reads (GET /api/browser) and watches: it never starts, ends or takes a lease. Take
+ * over and Give back are LiveBrowser's own, as on Account: the agent's next tool call waits, and
+ * neither the lease nor the search ends (the website's share of the sweep's time goes on, so a
+ * long Take over can use it up: tasks/browser/todo.md, B18).
  */
 import { useQuery } from "@tanstack/react-query";
 
