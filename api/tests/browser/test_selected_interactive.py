@@ -509,9 +509,12 @@ def test_fresh_permission_is_checked_after_pacing_and_before_initial_navigation(
     policy = Policy()
 
     class Pacer:
-        async def reserve(self, host, pause):
+        async def reserve(self, host, pause, holder):
             policy.allowed = False
             return 0
+
+        async def release(self, host, holder):
+            return None
 
     entries, _, leases, tools, _ = asyncio.run(
         execute(
