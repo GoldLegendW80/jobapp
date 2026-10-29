@@ -60,7 +60,14 @@ from urllib.parse import urlsplit
 from app.browser import finder
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
-from app.browser.sources import ERRORS, PAGE_BUDGET_S, STOPS_SWEEP, Pages, SourceError
+from app.browser.sources import (
+    ERRORS,
+    PAGE_BUDGET_S,
+    STOPS_SWEEP,
+    WEBSITE_CAP_S,
+    Pages,
+    SourceError,
+)
 from app.jobs import sweep
 from app.jobs.importer import kind
 from app.jobs.schemas import SEARCHES_LISTED
@@ -539,7 +546,7 @@ async def _website(
             # One pace per platform, shared by all its addresses (B14), else per host.
             host=platform_policy.pace_key(paced, host, runner.base_url),
             pacer=runner.pacer,
-            lease_until=asked + min(got.lease.max_s, 900),
+            lease_until=asked + min(got.lease.max_s, WEBSITE_CAP_S),
             pause=platform_policy.pause_for(paced),
             idle_s=got.lease.idle_s,
         )

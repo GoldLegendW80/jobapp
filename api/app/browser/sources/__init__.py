@@ -18,15 +18,19 @@ returned, and browserd sends the page's request before its call returns, after i
 1 to 3 s (and a hover before a click): so the website receives two pages of a host at least the
 pause apart (tests/browser/test_pace_received.py). Counting the pause between the starts of the
 calls, as it was until 2026-10-29, let browserd's dwell eat into it: the website once saw 3.56 s.
-One page of a host runs at a time: while another person's page of the host has not ended, a page
+One page of a host runs at a time: while another page of the host has not ended (a page that
+outlives its lease, a preempted sweep's, or a concurrent tool call of one finder session), a page
 waits (PACE_POLL_S between asks) and draws its slot from that page's end; it gives up
-(`lease_budget`) before its own lease would end idle (a Take over of the other lease can hold its
-page for 15 minutes): the wait ends this website, not the lease (`lease_ended` would stop the
-sweep). The last page time and the page that holds each host are kept in Redis (RedisPacer, one
-script each to take and give back, so two workers never take the same slot); a hold a dead worker
-left ends after PACE_HOLD_S; a host idle for longer than the pause is opened at once. A page is not
-started when the lease's remaining active time cannot hold its wait plus PAGE_LOAD_S
-(`lease_budget`), nor this close to the sweep's time limit (PAGE_BUDGET_S, `time_budget`).
+(`lease_budget`) before its own lease would end idle (`lease_ended` would stop the sweep, a wait
+that outlasts the lease ends this website only). The last page time and the page that holds each
+host are kept in Redis (RedisPacer, one script each to take and give back, so two workers never
+take the same slot). A page gives its host back when it ends, a failed or a cancelled one too,
+a cancel in the store's reply or in the release included (tests/browser/test_pace_received.py);
+a refused release is asked once more, and a hold still refused is given back by the same
+lease's next page (`Pages.unreleased`); a hold a dead worker left ends after PACE_HOLD_S. A host
+idle for longer than the pause is opened at once. A page is not started when the lease's remaining
+active time cannot hold its wait plus PAGE_LOAD_S (`lease_budget`), nor this close to the sweep's
+time limit (PAGE_BUDGET_S, `time_budget`).
 
 The fixed readers of Google Careers, Business France VIE, company career pages (`site`) and
 LinkedIn's own reader were deleted with the company boards and the freelance feeds (owner,
@@ -51,7 +55,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from redis.exceptions import RedisError
 
-from app.browser.client import TAKEOVER_WAIT_S, TOOL_TIMEOUT_S, BrowserError
+from app.browser.client import BrowserError
 from app.browser.leases import Leases, StoreUnavailableError
 
 logger = logging.getLogger("app.browser.sources")
@@ -65,12 +69,18 @@ PAGE_BUDGET_S = 60.0  # a page is not started this close to the sweep's time lim
 PAGE_LOAD_S = 45.0
 PACE_TTL_S = 3600  # a host's last page time is forgotten after an hour without a page
 PACE_POLL_S = 1.0  # how often a page asks again while another page of its host has not ended
-# How long a page may hold its host in Redis: its wait (at most two of LinkedIn's longest pause
-# of 30 s, 120 s with as much again as a margin), then its action and its snapshot, each a
-# browserd call the client allows TOOL_TIMEOUT_S plus a person's takeover. A page gives its host
-# back when it ends; a worker that died with a page, or a release Redis refused, leaves its hold
-# for this long.
-PACE_HOLD_S = 2 * (TOOL_TIMEOUT_S + TAKEOVER_WAIT_S) + 120.0
+# The longest a website's search runs, its wait for the pace included (SPEC-browser: the sweep's
+# outer limit of 900 s, jobs J18): interactive._search cancels a search at this age of its lease.
+WEBSITE_CAP_S = 900
+# How long a page may hold its host in Redis. A live worker's page is cancelled at the latest
+# when its website's search is (WEBSITE_CAP_S from the lease's start, the wait included), and a
+# cancelled page gives its host back, so the hold needs that cap plus a margin for the release
+# and the clocks. What the hold covers is a page that outlives its lease, concurrent tool calls
+# of one finder session, and a cancel that lands in the store's reply (the hold taken, the page
+# never told). A page gives the host back whether it ends, fails or is cancelled, so a hold
+# stays when a worker died with its page, Redis refused the release twice, or a second cancel
+# landed in the release itself: then for this long.
+PACE_HOLD_S = WEBSITE_CAP_S + 100.0
 
 ERRORS = (
     "layout_changed",
@@ -389,6 +399,8 @@ class Pages:
         self.idle_s, self.idle_from = idle_s, monotonic()
         self.count = 0
         self.pauses: list[float] = []
+        # The holders of this lease's pages whose host Redis would not take back.
+        self.unreleased: set[str] = set()
         # The last page's snapshot text and address (the finder agent of B9 reads them).
         self.last_text, self.last_url = "", ""
 
@@ -398,24 +410,53 @@ class Pages:
         if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
             raise SourceError("time_budget")
         pause, holder = self.rng.uniform(*self.pause), uuid.uuid4().hex
-        while (wait := await self.pacer.reserve(self.host, pause, holder)) is None:
-            # Another page of this host (another person's) has not ended: its end starts our
-            # pause, so ask again until it gives the host back, while the lease can wait.
-            now = self.monotonic()
-            if now + pause + PAGE_LOAD_S > min(self.lease_until, self.idle_from + self.idle_s):
-                raise SourceError("lease_budget")
-            await self.sleep(PACE_POLL_S)
-            if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
-                raise SourceError("time_budget")
+        # The page may hold its host from its first ask to its release (a cancel can land after
+        # the store took the hold and before its reply, or inside the release), so a failure or
+        # a cancel anywhere in the page gives the host back. A release for a hold the page did
+        # not get only moves the host's last page time on.
         try:
+            await self._give_back_left()
+            while (wait := await self.pacer.reserve(self.host, pause, holder)) is None:
+                # Another page of this host has not ended: its end starts our pause, so ask
+                # again until it gives the host back, while the lease can wait.
+                now = self.monotonic()
+                if now + pause + PAGE_LOAD_S > min(self.lease_until, self.idle_from + self.idle_s):
+                    raise SourceError("lease_budget")
+                await self.sleep(PACE_POLL_S)
+                if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
+                    raise SourceError("time_budget")
             page = await self._page(action, tool, wait)
+            released = await self._release(holder)
         except BaseException:
-            # The first error wins; a hold Redis could not take back ends after PACE_HOLD_S.
-            with contextlib.suppress(StoreUnavailableError):
-                await self.pacer.release(self.host, holder)
+            # The first error wins; a hold Redis would not take back is given back by the next
+            # page of this lease, or ends after PACE_HOLD_S.
+            if not await self._release(holder):
+                self.unreleased.add(holder)
             raise
-        await self.pacer.release(self.host, holder)
+        if not released:
+            self.unreleased.add(holder)
+            raise StoreUnavailableError
         return page
+
+    async def _release(self, holder: str) -> bool:
+        """Gives the host back; a store that refuses is asked once more. False when it refused
+        both times."""
+        for _ in range(2):
+            try:
+                await self.pacer.release(self.host, holder)
+            except StoreUnavailableError:
+                continue
+            return True
+        return False
+
+    async def _give_back_left(self) -> None:
+        """The holds an earlier page of this lease could not give back are this lease's own: they
+        go back before the next page asks, or it would wait on its own lease's earlier hold. One
+        holder per page, so two concurrent tool calls of one finder session still pass the host
+        one at a time."""
+        for holder in tuple(self.unreleased):
+            await self.pacer.release(self.host, holder)
+            self.unreleased.discard(holder)
 
     async def _page(
         self, action: Callable[[], Awaitable[dict[str, Any]]], tool: str, wait: float

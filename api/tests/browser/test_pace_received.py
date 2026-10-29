@@ -1,5 +1,6 @@
-"""The pace per host as the website receives it (SPEC-browser: "sweeps one page every 5 to 15 s",
-per host or per platform; browser-j15 checks it on the fixture website's log).
+"""The pace per host as the website receives it (SPEC-browser: a pause of 5 to 15 s between two
+pages of a host, counted from the end of the previous page; browser-j15 checks it on the fixture
+website's log).
 
 browserd waits through its own human pacing before it sends a page's request (browserd/tools:
 a dwell of DWELL_S before every action, a hover of HOVER_S before a click or a typing, the keys
@@ -35,6 +36,7 @@ from app.browser.sources import (
     PACE_POLL_S,
     PACE_TTL_S,
     PAGE_PAUSE_S,
+    WEBSITE_CAP_S,
     MemoryPacer,
     Pages,
     RedisPacer,
@@ -364,10 +366,10 @@ def test_a_page_that_cannot_fit_the_lease_while_it_waits_ends_lease_budget():
 
 
 def test_a_page_waits_for_another_only_while_its_own_lease_would_not_end_idle():
-    """A Take over of the other person's lease can hold its page for 15 minutes: the waiting
-    page gives up its website (`lease_budget`) before browserd ends its lease after the lease's
-    idle time without a tool call (`lease_ended` would end the whole sweep), counted from the
-    end of its own last page."""
+    """A page that outlives its lease (a preempted sweep's, in its action or a person's takeover)
+    can hold the host for minutes: the waiting page gives up its website (`lease_budget`) before
+    browserd ends its lease after the lease's idle time without a tool call (`lease_ended` would
+    end the whole sweep), counted from the end of its own last page."""
     time, site = VirtualTime(), []
     pacer = MemoryPacer(time)
     browserd = FakeBrowserd(time, site, [])
@@ -544,7 +546,7 @@ def test_both_pacers_count_the_pause_from_the_end_and_hold_the_host(store):
         await pacer.release(HOST, "a2")
         assert await pacer.reserve(HOST, 5.0, "b2") == pytest.approx(35.0)
         if r is not None:
-            assert 0 < await r.ttl(HOLD_KEY + HOST) <= PACE_HOLD_S + 1
+            assert PACE_HOLD_S - 2 <= await r.ttl(HOLD_KEY + HOST) <= PACE_HOLD_S
             assert 0 < await r.ttl(PACE_KEY + HOST) <= PACE_TTL_S
             await pacer.release(HOST, "b2")
             assert await r.get(HOLD_KEY + HOST) is None
@@ -552,12 +554,12 @@ def test_both_pacers_count_the_pause_from_the_end_and_hold_the_host(store):
     asyncio.run(go())
 
 
-def test_a_hold_outlives_the_longest_page_a_live_worker_can_run():
-    """Its wait (two of LinkedIn's longest pauses) then its action and its snapshot, each with
-    the client's whole allowance of a tool call with a takeover."""
-    from app.browser.client import TAKEOVER_WAIT_S, TOOL_TIMEOUT_S
-
-    assert 2 * linkedin.PAUSE_S[1] + 2 * (TOOL_TIMEOUT_S + TAKEOVER_WAIT_S) <= PACE_HOLD_S
+def test_a_hold_is_bounded_by_the_website_s_cap_and_a_margin():
+    """A live worker's page is cancelled at the website's cap at the latest (interactive._search,
+    its wait included) and gives the host back: the hold outlives that cap by a margin only, so
+    a leaked one costs the platform's other pages about 17 minutes, not 36."""
+    assert WEBSITE_CAP_S == 900
+    assert WEBSITE_CAP_S < PACE_HOLD_S <= WEBSITE_CAP_S + 120
     assert PACE_HOLD_S < PACE_TTL_S
 
 
@@ -575,3 +577,200 @@ def test_the_redis_pacer_without_redis_is_store_unavailable(error):
             await pacer.release(HOST, "a")
 
     asyncio.run(go())
+
+
+# --- no hold is left behind ---------------------------------------------------------------------
+
+CLOCK = 1000.0  # a clock that stands still, for the tests that run on a pacer without sleeping
+
+
+class Quick:
+    """Tools whose pages end at once (no browserd pacing): for the tests of the hold itself."""
+
+    async def navigate(self, url: str) -> dict[str, Any]:
+        return {"ok": True, "url": url}
+
+    async def snapshot(self) -> dict[str, Any]:
+        return {"ok": True, "snapshot": SNAPSHOT, "url": URL}
+
+
+async def no_sleep(seconds: float) -> None:
+    return None
+
+
+def run_on(store: str | None, body: Callable[[Any], Awaitable[None]]) -> None:
+    """Runs `body(pacer)` on the pacer under test, the clock standing still at CLOCK."""
+
+    async def go() -> None:
+        if store is None:
+            await body(MemoryPacer(lambda: CLOCK))
+            return
+        pool, close = pool_of(store)
+        try:
+            await body(RedisPacer(pool, lambda: CLOCK))
+        finally:
+            await close()
+
+    asyncio.run(go())
+
+
+class Cutting:
+    """A pacer whose first `where` call (reserve or release) is cut by a cancel of the page's task:
+    after the store did its work, when its reply is lost (`after`), else before it did anything."""
+
+    def __init__(self, inner: Any, where: str, after: bool) -> None:
+        self.inner, self.where, self.after, self.cut = inner, where, after, False
+
+    async def _call(self, name: str, host: str, *args: Any) -> Any:
+        method = getattr(self.inner, name)
+        if name != self.where or self.cut:
+            return await method(host, *args)
+        self.cut = True
+        if self.after:
+            await method(host, *args)
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        await asyncio.sleep(0)  # the cancel lands here
+        raise AssertionError("the cancel did not land")
+
+    async def reserve(self, host: str, pause: float, holder: str) -> float | None:
+        return await self._call("reserve", host, pause, holder)
+
+    async def release(self, host: str, holder: str) -> None:
+        await self._call("release", host, holder)
+
+
+@pytest.mark.parametrize("after", [False, True], ids=["before the store", "in the store's reply"])
+@pytest.mark.parametrize("where", ["reserve", "release"])
+def test_a_cancel_in_the_store_s_round_trip_leaves_no_hold(store, where, after):
+    """The person's Stop, the runtime's wall time or a SIGTERM can land inside the call that takes
+    the hold (the store took it, the page never heard) or the one that gives it back (the success
+    path): the page still gives the host back, on both pacers."""
+
+    async def body(pacer: Any) -> None:
+        cutting = Cutting(pacer, where, after)
+        pages = Pages(
+            Quick(),
+            1e9,
+            sleep=no_sleep,
+            rng=Ends(),
+            monotonic=lambda: CLOCK,
+            host=HOST,
+            pacer=cutting,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await pages._act(lambda: pages.tools.navigate(URL))
+        assert cutting.cut
+        # Nobody holds the host: another page takes it at once.
+        assert await pacer.reserve(HOST, 5.0, "another page") is not None
+
+    run_on(store, body)
+
+
+class Refusing(MemoryPacer):
+    """A pacer whose release the store refuses the first `times` times, whoever asks."""
+
+    def __init__(self, clock: Callable[[], float], times: int) -> None:
+        super().__init__(clock)
+        self.times = times
+        self.released: list[str] = []
+
+    async def release(self, host: str, holder: str) -> None:
+        if self.times:
+            self.times -= 1
+            raise StoreUnavailableError
+        self.released.append(holder)
+        await super().release(host, holder)
+
+
+def test_a_release_the_store_refuses_once_is_asked_again_on_an_error_path():
+    time, site = VirtualTime(), []
+    pacer = Refusing(time, 1)
+    browserd = Failing(time, site, "failed")
+    pages = pages_of(browserd, time, pacer, PAGE_PAUSE_S)
+
+    async def go() -> None:
+        with pytest.raises(SourceError) as raised:
+            await pages._act(ACTIONS["navigate"](browserd))
+        assert raised.value.code == "page_failed"
+
+    time.run(go)
+    assert pacer.holders == {}
+    assert len(pacer.released) == 1
+    assert pages.unreleased == set()
+
+
+def test_a_release_the_store_refuses_once_is_asked_again_on_the_success_path():
+    time, site = VirtualTime(), []
+    pacer = Refusing(time, 1)
+    browserd = FakeBrowserd(time, site, [])
+    pages = pages_of(browserd, time, pacer, PAGE_PAUSE_S)
+
+    async def go() -> None:
+        await pages._act(ACTIONS["navigate"](browserd))
+
+    time.run(go)
+    assert pacer.holders == {}
+    assert pages.unreleased == set()
+
+
+def test_the_next_page_of_a_lease_never_waits_on_its_own_earlier_hold():
+    """The store refused the release of a page that failed, and the retry too: the hold stays for
+    PACE_HOLD_S. The same lease's next page gives it back before it asks, and its pause counts
+    from then. (Without it the page asks every second until `lease_budget`.)"""
+    time, site = VirtualTime(), []
+    pacer = Refusing(time, 2)
+    browserd = Failing(time, site, "failed")
+    pages = pages_of(browserd, time, pacer, PAGE_PAUSE_S, lease_until=300.0)
+
+    async def go() -> None:
+        with pytest.raises(SourceError) as raised:
+            await pages._act(ACTIONS["navigate"](browserd))
+        assert raised.value.code == "page_failed"
+        [left] = pages.unreleased
+        assert pacer.holders == {HOST: left}  # the store still holds it
+        await pages._act(ACTIONS["click"](browserd))
+
+    time.run(go)
+    assert pacer.holders == {}
+    assert pages.unreleased == set()
+    assert len(site) == 2
+    assert site[1] - site[0] >= PAGE_PAUSE_S[0] + pacing.DWELL_S[0] - 1e-9
+
+
+def test_a_hold_left_by_a_lease_is_not_given_back_for_another_person_s_page():
+    """The left holder is this lease's: another lease's page, with its own `Pages`, still waits
+    for it (the hold ends after PACE_HOLD_S)."""
+    time, site = VirtualTime(), []
+    pacer = Refusing(time, 2)
+    first = Failing(time, site, "failed")
+    left = pages_of(first, time, pacer, PAGE_PAUSE_S)
+    other_browserd = FakeBrowserd(time, site, [])
+    other = pages_of(other_browserd, time, pacer, PAGE_PAUSE_S, lease_until=100.0)
+
+    async def go() -> str:
+        with pytest.raises(SourceError):
+            await left._act(ACTIONS["navigate"](first))
+        with pytest.raises(SourceError) as ended:
+            await other._act(ACTIONS["navigate"](other_browserd))
+        return ended.value.code
+
+    assert time.run(go) == ["lease_budget"]
+    assert other_browserd.calls == []
+    assert len(pacer.holders) == 1
+
+
+def test_two_concurrent_calls_of_one_lease_still_pass_the_host_one_at_a_time():
+    """One holder per page, not per lease (concurrent tool calls of one finder session): the
+    second call waits for the end of the first, so the website sees them the pause apart."""
+    time, site = VirtualTime(), []
+    browserd = FakeBrowserd(time, site, [])
+    pages = pages_of(browserd, time, MemoryPacer(time), PAGE_PAUSE_S)
+
+    time.run(
+        lambda: pages._act(ACTIONS["navigate"](browserd)),
+        lambda: pages._act(ACTIONS["click"](browserd)),
+    )
+    assert len(site) == 2
+    assert site[1] - site[0] >= PAGE_PAUSE_S[0] + pacing.DWELL_S[0] - 1e-9
