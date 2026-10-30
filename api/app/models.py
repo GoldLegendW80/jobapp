@@ -12,6 +12,7 @@ from app.identity import models as identity_models
 from app.ingestion import models as ingestion_models
 from app.ingestion import runs_models as ingestion_runs_models
 from app.jobs import models as jobs_models
+from app.jobs.feeds import keys as jobs_feed_keys  # noqa: F401, registers the table
 from app.mail import draft_models as mail_draft_models  # noqa: F401
 from app.mail import models as mail_models
 from app.models_base import Base

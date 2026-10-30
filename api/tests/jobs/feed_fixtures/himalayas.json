@@ -1,0 +1,61 @@
+{
+ "comments": "Search results come 20 to a page.",
+ "offset": 0,
+ "limit": 20,
+ "totalCount": 4,
+ "jobs": [
+  {
+   "title": "GenAI Engineer",
+   "excerpt": "GenAI Engineer excerpt.",
+   "companyName": "Example Cloud",
+   "employmentType": "Full Time",
+   "locationRestrictions": [
+    "France",
+    "Spain"
+   ],
+   "description": "<h3>GenAI Engineer</h3><p>Remote team, Python.</p>",
+   "pubDate": 1793275200,
+   "applicationLink": "https://himalayas.app/companies/example-cloud/jobs/genai-engineer?utm_source=api",
+   "guid": "https://himalayas.app/companies/example-cloud/jobs/genai-engineer"
+  },
+  {
+   "title": "AI Engineer",
+   "excerpt": "AI Engineer excerpt.",
+   "companyName": "Example Data",
+   "employmentType": "Contractor",
+   "locationRestrictions": [
+    "France"
+   ],
+   "description": "<h3>AI Engineer</h3><p>Remote team, Python.</p>",
+   "pubDate": 1793102400,
+   "applicationLink": "https://himalayas.app/companies/example-data/jobs/ai-engineer?utm_source=api",
+   "guid": "https://himalayas.app/companies/example-data/jobs/ai-engineer"
+  },
+  {
+   "title": "Data Analyst",
+   "excerpt": "Data Analyst excerpt.",
+   "companyName": "Example Data",
+   "employmentType": "Full Time",
+   "locationRestrictions": [
+    "France"
+   ],
+   "description": "<h3>Data Analyst</h3><p>Remote team, Python.</p>",
+   "pubDate": 1793188800,
+   "applicationLink": "https://himalayas.app/companies/example-data/jobs/data-analyst?utm_source=api",
+   "guid": "https://himalayas.app/companies/example-data/jobs/data-analyst"
+  },
+  {
+   "title": "AI Engineer",
+   "excerpt": "AI Engineer excerpt.",
+   "companyName": "Example Evil",
+   "employmentType": "Full Time",
+   "locationRestrictions": [
+    "France"
+   ],
+   "description": "<h3>AI Engineer</h3><p>Remote team, Python.</p>",
+   "pubDate": 1793188800,
+   "applicationLink": "http://evil.example.test/apply",
+   "guid": "https://himalayas.app/companies/example-evil/jobs/ai-engineer-evil"
+  }
+ ]
+}

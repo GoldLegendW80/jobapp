@@ -56,6 +56,8 @@ import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { AlertEmailsGroup } from "./alert-emails";
 import { alertSettings } from "./alert-providers";
 import { formatDateTime } from "./format";
+import { isJobFeed, type JobFeed } from "./job-feeds";
+import { JobFeedsChoice } from "./job-feeds-ui";
 import {
   PROTECTED,
   READERS,
@@ -259,6 +261,10 @@ function SetupForm({
   const [instructions, setInstructions] = useState(
     profile.sections.search.interactive_instructions ?? "",
   );
+  // The job feeds ticked (api app/jobs/feeds), saved with the search.
+  const [feeds, setFeeds] = useState<JobFeed[]>(() =>
+    (profile.sections.search.job_feeds ?? []).filter(isJobFeed),
+  );
   const [custom, setCustom] = useState("");
   const [alerts, setAlerts] = useState(() =>
     alertSettings(profile.sections.search.alert_emails),
@@ -453,6 +459,7 @@ function SetupForm({
         ...draft,
         ...settings.data,
         alert_emails: alerts,
+        job_feeds: feeds,
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -722,6 +729,7 @@ function SetupForm({
             </div>
           </section>
           <AlertEmailsGroup id={id} value={alerts} onChange={setAlerts} />
+          <JobFeedsChoice value={feeds} onChange={setFeeds} />
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
             <SearchLists form={form} descriptions={false} />

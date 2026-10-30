@@ -167,6 +167,10 @@ def _keep_consent(
         # Every alert e-mail off, sent or kept: stored as absent (read as off), so a section
         # without one stays readable by the release before them.
         del data["alert_emails"]
+    if data.get("job_feeds") == []:
+        # Sent empty, it replaced the stored list (above); stored only once a feed is ticked, as
+        # the release before this one refuses the key.
+        del data["job_feeds"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data

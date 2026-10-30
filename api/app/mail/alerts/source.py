@@ -1,6 +1,7 @@
 """Job alert e-mails in a sweep (SPEC-mail.md, "Job alert e-mails: a narrow exception").
 
-The sweep's hook (`sweep.run_sweep(alerts=...)`, run before the job websites) reads, for each
+The sweep's hook (`sweep.run_sweep(alerts=...)`, run before the job feeds and the job
+websites) reads, for each
 provider the person turned on in Find jobs setup (`search.alert_emails`, frozen in the sweep's
 scope), the alert e-mails received since that provider's cursor, and stores the postings they
 list through the run's commits (`sweep.Commits`): the same never apply rules, duplicates and
@@ -51,8 +52,8 @@ A listing cut at MAX_LIST_PAGES lacks the oldest messages (Gmail lists the newes
 messages are read, but the cursor stays where it was (`listing_truncated`), so none is skipped.
 
 **Time.** The alert e-mails of every provider share ALERTS_TIME_S of the sweep, so they never
-starve the job websites that run after them; a provider out of time ends `time_limit` with the
-cursor on its last mail handled.
+starve the job feeds and the job websites that run after them; a provider out of time ends
+`time_limit` with the cursor on its last mail handled.
 
 **The stats entry** of each provider: host "mail:<key>", kind "alerts", mode "mail", the
 outcome of `sweep.finish_source`, `found` and `postings` as the commits count them, `messages`,

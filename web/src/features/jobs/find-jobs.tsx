@@ -33,6 +33,7 @@ import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
 import { formatDateTime } from "./format";
+import { isJobFeed } from "./job-feeds";
 import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "./labels";
@@ -77,8 +78,14 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
 
 /** A job website of the sweep: a source with a host, but not a provider's alert e-mails
  * (mode "mail", host "mail:indeed"), which are not a website searched. */
+/** A ticked job feed (mode "api", api app/jobs/feeds). */
+function isFeed(source: Sweep["sources"][number]): boolean {
+  return source.mode === "api" && isJobFeed(source.kind);
+}
+
+/** A job website: neither an alert e-mail provider (mode "mail") nor a job feed. */
 function isWebsite(source: Sweep["sources"][number]): boolean {
-  return Boolean(source.host) && source.mode !== "mail";
+  return Boolean(source.host) && source.mode !== "mail" && !isFeed(source);
 }
 
 /** What the sweep reads now: a website searched in the person's browser by its name (its
@@ -95,7 +102,12 @@ function readingName(sweep: Sweep): string {
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
-  const websites = sweep.sources.filter(isWebsite);
+  // The ticked job feeds (mode "api") count with the websites: read first, one source each.
+  // The alert e-mails (mode "mail") are not counted here.
+  const websites = sweep.sources.filter(
+    (source) => isWebsite(source) || isFeed(source),
+  );
+  const word = websites.some(isFeed) ? "source" : "website";
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
@@ -111,7 +123,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
       >
         <span className="font-medium">
           {total
-            ? `${String(done)} of ${plural(total, "website")} searched`
+            ? `${String(done)} of ${plural(total, word)} searched`
             : sweep.current_board
               ? "Searching job websites"
               : "Waiting for the worker"}
@@ -142,6 +154,14 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   );
 }
 
+/** The job feeds a sweep read (api app/jobs/feeds), as a part of its summary line. */
+function feedsRead(sweep: Sweep): string[] {
+  const feeds = sweep.sources.filter(
+    (source) => source.mode === "api" && isJobFeed(source.kind),
+  );
+  return feeds.length ? [`${plural(feeds.length, "job feed")} read`] : [];
+}
+
 function summaryLine(sweep: Sweep): string {
   const parts = [
     // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
@@ -149,6 +169,7 @@ function summaryLine(sweep: Sweep): string {
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
       : `${plural(sweep.sources.filter(isWebsite).length, "website")} searched`,
+    ...feedsRead(sweep),
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),

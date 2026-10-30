@@ -1,0 +1,45 @@
+{
+ "data": [
+  {
+   "slug": "senior-ai-engineer-lyon-2001",
+   "company_name": "Example Freight",
+   "title": "Senior AI Engineer",
+   "description": "<p>Senior AI Engineer at Example Freight.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-freight/senior-ai-engineer-lyon-2001",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [
+    "Internship"
+   ],
+   "location": "Lyon, France",
+   "created_at": 1793188800
+  },
+  {
+   "slug": "ai-engineer-paris-old-2002",
+   "company_name": "Example Old",
+   "title": "AI Engineer",
+   "description": "<p>AI Engineer at Example Old.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-old/ai-engineer-paris-old-2002",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [],
+   "location": "Paris, France",
+   "created_at": 1789905600
+  }
+ ],
+ "links": {
+  "first": "https://www.arbeitnow.com/api/job-board-api?page=1",
+  "last": null,
+  "prev": "https://www.arbeitnow.com/api/job-board-api?page=1",
+  "next": "https://www.arbeitnow.com/api/job-board-api?page=3"
+ },
+ "meta": {
+  "current_page": 2,
+  "per_page": 300,
+  "terms": "This is a free public API for jobs, please do not abuse. I would appreciate linking back to the site."
+ }
+}

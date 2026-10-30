@@ -812,7 +812,10 @@ class PlatformConsent(_Section):
 InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
 INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 # Search fields an older editor or import leaves out: the stored value is kept (service).
-KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude", "alert_emails")
+# The job feeds a sweep reads beside the websites (owner, 2026-10-30, app/jobs/feeds), ticked in
+# Find jobs: an editor that does not know the field keeps the stored value.
+JobFeed = Literal["arbeitnow", "himalayas", "adzuna"]
+KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude", "alert_emails", "job_feeds")
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -981,6 +984,7 @@ class SearchSection(_Section):
     interactive_instructions: OptText(2000, multiline=True) = None
     # Job alert e-mails read from the connected mailbox (owner, 2026-10-30); off when absent.
     alert_emails: AlertEmails = Field(default_factory=lambda: AlertEmails())
+    job_feeds: Annotated[list[JobFeed], Field(max_length=3)] = Field(default_factory=list)
     # When the job websites are searched automatically (jobs J5 schedules it and edits it next
     # to Find jobs). Off unless the user turns it on; a section saved before this field existed
     # reads as off.
@@ -1041,6 +1045,11 @@ class SearchSection(_Section):
             if sum(source.kind == kind for source in value) > 1:
                 raise ValueError(f"at most one {kind} source")
         return value
+
+    @field_validator("job_feeds")
+    @classmethod
+    def _unique_feeds(cls, value: list[str]) -> list[str]:
+        return _unique(value, str, "job feed")
 
     @field_validator("interactive_sites")
     @classmethod
