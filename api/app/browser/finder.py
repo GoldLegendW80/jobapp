@@ -155,7 +155,9 @@ MODEL_VALUE = "model_value"
 # code each reason ends the website with (interactive.outcome): "no_match" is a website that ran
 # the search and listed no matching job, a success only after a search the session saw;
 # "app_refused" is the app refusing its search (B19, 2026-10-29), which a refusal the session
-# counted says too, whatever other reason the agent gave.
+# counted says too, whatever other reason the agent gave; "security_check" is a website that
+# showed a security check (Cloudflare's "Just a moment", "Vérification supplémentaire requise")
+# that did not clear while the agent waited (2026-10-30, Indeed), which wins over a refusal.
 NO_POSTINGS = {
     "no_match": None,
     "no_list": "no_job_list",
@@ -163,6 +165,7 @@ NO_POSTINGS = {
     "signin_wall": "signin_wall",
     "no_search_control": "no_search_box",
     "app_refused": "search_refused",
+    "security_check": "security_check",
 }
 # What browserd answers when it refused a navigation or an action of the agent's (B19): counted
 # as the app's refusal (`refused["unsupported_interaction"]`), never a page that did not load.
@@ -279,17 +282,28 @@ d'emploi") or open its usual address, such as /jobs or /fr/jobs, with browser_na
 2. A cookie banner may cover the page. Close it by clicking its decline button only ("No,
 thanks", "Reject all", "Refuser", "Continuer sans accepter"); never accept cookies, never
 open its settings. If a click does not finish, read the page again: something may cover it.
+A page may show a security check instead ("Just a moment", "Verify you are human",
+"Vérification supplémentaire requise", "Un instant"). Do not navigate away and never click
+its checkbox or any CAPTCHA: wait for it to clear with browser_wait_for (a few seconds at a
+time, up to about 30 seconds in all), then read the page again. If it never clears, report
+security_check.
 3. Search one saved title at a time: type it in the website's own search box, leave or set
 the place box, then press Enter in the box (browser_type with submit) or click its search
-button. Decide the order and the searches: usually one per wanted title, and per wanted place
-when the website has a place field, until the website is covered for this person.
-4. Read the result list. Open the postings that fit the criteria, read each one, and report
-it with report_postings right after opening it.
+button. When you are not signed in (`signed_in` false), the website's scripts do not run and
+its search box may refuse your typing: then open its search page with one saved title in its
+search key, such as /fr/jobs?query=genai%20engineer (the key the website uses: q, query,
+search, keyword or keywords), and nothing else but a saved place in `location`. Decide the
+order and the searches: usually one per wanted title, and per wanted place when the website
+has a place field, until the website is covered for this person.
+4. Read the result list. Open the postings that fit the criteria (click the posting's title
+link, or its card, whose posting link the app then clicks), read each one, and report it with
+report_postings right after opening it.
 5. When the website shows no list of postings, say so with report_no_postings and its
 reason: no_match (the search ran and listed no matching job), no_list (only a count or a push
 to sign up, no list), cookie_wall (a banner you could not decline), signin_wall (the postings
 need a sign in), no_search_control (no search box anywhere), app_refused (the app refused
-your typing, your Enter or your click on the search button). Never report a reason you did
+your typing, your Enter or your click on the search button), security_check (a security
+check that did not clear while you waited). Never report a reason you did
 not see.
 
 With browser_type you may type one of `titles` in a search box or one of `places` in the place
@@ -299,7 +313,8 @@ Engineer" for "genai engineer"), or nothing, and with submit press Enter after i
 place box ("Worldwide", "Monde entier").
 Leaving a box empty is always allowed. browser_select_option sets a native filter only to a
 value of `filters` or a place of `places` (or the worldwide value, as above); browser_click
-presses a search button, opens a posting, a result list or the next page, chooses the
+clicks into a search box or the place box, presses a search button, opens a posting (its link
+or its result card), a result list or the next page, chooses the
 worldwide suggestion of the place box (as above), or declines cookies.
 Any other value, a translation included, is refused.
 Unwanted titles and unwanted places are context: never type them; postings that match them
@@ -434,6 +449,47 @@ class InteractiveScope:
         if place is None and self.everywhere and worldwide(text):
             place = next((p for p in self.places if worldwide(p)), None)
         return place
+
+    def search_address(self, url: str) -> bool:
+        """Signed out only (2026-10-30, Welcome to the Jungle): the website's own search page
+        (`search_page`) with one search key (QUERY_KEYS) holding a saved title, and besides only
+        `location` holding a saved place (or the worldwide name with no place limit) or
+        nothing, `page` a number, and every saved filter with its saved value: what its native
+        search form sends, held again by browserd's discovery.Scope.criteria. Signed out the
+        site's scripts never run (browserd's CSP), so a script search box takes no typing and
+        this address is the only way to run a search there; signed in, the agent uses the box
+        (B19, "Let it use the search boxes", the address only approach not chosen)."""
+        if self.signed_in:
+            return False
+        try:
+            parts = urlsplit(url)
+            pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+        except ValueError:
+            return False
+        bare = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        keys = [k for k, _ in pairs]
+        if not pairs or not search_page(bare) or len(keys) != len(set(keys)):
+            return False
+        titles = [v for k, v in pairs if k in QUERY_KEYS]
+        if len(titles) != 1 or saved_as(titles[0], self.titles) is None:
+            return False
+        filters = dict(self.filters)
+        for key, value in pairs:
+            if key in QUERY_KEYS:
+                continue
+            if key == "location":
+                fits = (
+                    not value
+                    or saved_as(value, self.places) is not None
+                    or (self.everywhere and worldwide(value))
+                )
+            elif key == "page":
+                fits = value.isascii() and value.isdecimal() and 1 <= int(value) <= 1000
+            else:
+                fits = key in filters and saved_as(value, (filters[key],)) is not None
+            if not fits:
+                return False
+        return filters.keys() <= set(keys)
 
     def tool_scope(self) -> dict[str, Any]:
         scope: dict[str, Any] = {
@@ -661,7 +717,8 @@ def search_page(url: str) -> bool:
     """Whether a canonical address is a website's job search page itself, with no query: its
     path `/<endpoint>` or `/<language>/<endpoint>` (`/jobs`, `/fr/jobs`, `/search/`), as
     browserd's discovery.search_path reads it. A search by address (`/jobs?q=...`) is opened
-    only from a link a page showed."""
+    only from a link a page showed, or signed out with saved values only
+    (`InteractiveScope.search_address`)."""
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -1108,7 +1165,12 @@ class FinderSession:
         if not self.on_site(url):
             self.refused["other_host"] += 1
             return "Refused: only this site's own pages can be opened. Go on with this site.", True
-        if self.interactive and url not in self.seen and not search_page(url):
+        if (
+            self.interactive
+            and url not in self.seen
+            and not search_page(url)
+            and not self.interactive.search_address(url)
+        ):
             self.refused["unobserved_address"] += 1  # the app's refusal (B19, outcome)
             return (
                 "Refused: open only an observed link of this site, or its job search page "
@@ -1537,6 +1599,7 @@ class FinderDefinition(definitions.AgentDefinition):
                         "filters": dict(scope.filters),
                         "criteria": json.loads(scope.criteria),
                         "untrusted_person_instructions": scope.instructions,
+                        "signed_in": scope.signed_in,
                         "seconds_left": session.seconds_left(),
                     }
                 }

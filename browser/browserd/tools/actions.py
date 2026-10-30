@@ -72,8 +72,11 @@ FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.docume
 # an inline sandboxed frame too, as a sweep lease keeps it in its embedder's process):
 # no worker, no socket, and no `navigator.serviceWorker` at all, so a page can neither register
 # a service worker nor message one the profile already holds: their traffic the route would not
-# see (a worker's own fetch, measured in Chromium 153, left without the route).
+# see (a worker's own fetch, measured in Chromium 153, left without the route). Cloudflare's
+# challenge frame alone (its own origin, which no page of the site can script) keeps them, as a
+# browser without them fails its check (2026-10-30, discovery.challenge).
 SIGNED_IN_JS = """(() => {
+  if (location.origin === "https://CHALLENGE_HOST") return;  // Cloudflare's check alone
   const refuse = function () { throw new DOMException("Blocked during a search", "SecurityError"); };
   for (const name of ["Worker", "SharedWorker", "WebSocket", "WebSocketStream", "WebTransport"]) {
     try { Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false }); } catch (e) {}
@@ -87,10 +90,11 @@ SIGNED_IN_JS = """(() => {
     }
   } catch (e) {}
   try { delete Navigator.prototype.serviceWorker; } catch (e) {}
-})();"""  # noqa: E501  one script run in the page
+})();""".replace("CHALLENGE_HOST", discovery.CHALLENGE_HOST)  # noqa: E501  one script run in the page
 
 
 HOST_LOGGED = re.compile(r"[a-z0-9.-]{1,253}")
+KIND_LOGGED = re.compile(r"[^A-Za-z]")  # a resource type as a log line names it: letters only
 
 
 def host_of(url: object) -> str:
@@ -101,6 +105,41 @@ def host_of(url: object) -> str:
     except ValueError:
         host = None
     return host if host and HOST_LOGGED.fullmatch(host) else "unreadable"
+
+
+# What a refusal's warning says of the element (2026-10-30): its tag, role, type and box kind,
+# and the first 40 characters of its first name (aria-label, title, alt, placeholder, name, id,
+# label or text), with every character but letters, digits, spaces and plain punctuation
+# replaced. Never a typed value: an editable element's text is what was typed into it, so its
+# name is not said; an input's value is never among its names (FACTS_JS reads a button input's
+# value only). The api passes no address of the page here.
+NAME_LOGGED = 40
+UNLOGGED = re.compile(r"[^\w ,.:;'()/!+-]")
+
+
+def _logged(value: object, size: int = 20) -> str:
+    text = value if isinstance(value, str) else ""
+    return re.sub(r"\W", "", text)[:size] or "-"
+
+
+def described(facts: object) -> str:
+    """One element's facts as a refusal's warning names them (NAME_LOGGED)."""
+    if not isinstance(facts, dict):
+        return "facts=unreadable"
+    names = facts.get("names")
+    first = (
+        next((n for n in names if isinstance(n, str) and n.strip()), "")
+        if isinstance(names, list)
+        else ""
+    )
+    if facts.get("editable") or facts.get("credential"):
+        first = "(not logged)"
+    name = UNLOGGED.sub("_", " ".join(first.split()))[:NAME_LOGGED]
+    kind = discovery.box_kind(names) or "-"
+    return (
+        f"tag={_logged(facts.get('tag'))} role={_logged(facts.get('role'))} "
+        f"type={_logged(facts.get('type'))} box={kind} name={name!r}"
+    )
 
 
 def failure(code: str, message: str) -> dict[str, Any]:
@@ -168,6 +207,8 @@ class State:
     native_failed: bool = False
     signed_in: bool = False  # B17: discovery in the person's own persisted context
     signin_seen: bool = False  # B17: that discovery was sent to the site's sign in page
+    main_frame: str | None = None  # the anonymous discovery tab's main frame (CDP frame id)
+    stopped_kind: str = ""  # the resource type of the navigation `blocked` holds, for the log
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     chooser_id: int = 0
@@ -177,6 +218,7 @@ class State:
         context's route handler (which holds this state) is collected."""
         self.files.clear()
         self.blocked.clear()
+        self.main_frame, self.stopped_kind = None, ""
         self.page = self.guarded = self.chooser = None
         self.native_context = self.native_cdp = self.scope = None
 
@@ -254,6 +296,11 @@ class Tab:
                 self.state.scope, self.state.page = scope, page
                 self.state.native_cdp, self.state.guarded = client, context
                 client.on("Fetch.requestPaused", self.intercept)
+                # The tab's main frame, so a refused subresource is never a stopped navigation
+                # (`intercept`); unknown, every refused document counts as one (fail closed).
+                tree = await client.send("Page.getFrameTree")
+                frame = (tree or {}).get("frameTree", {}).get("frame", {}).get("id")
+                self.state.main_frame = frame if isinstance(frame, str) else None
                 await client.send(
                     "Fetch.enable",
                     {
@@ -320,10 +367,17 @@ class Tab:
             kind = request.resource_type
         except Exception:
             kind = ""
+        document = frame is not None
         allowed = (
             not self.state.native_failed
             and scope is not None
-            and discovery.signed_request(request.url, method, frame is not None, scope, kind=kind)
+            and (
+                discovery.signed_request(request.url, method, document, scope, kind=kind)
+                # Cloudflare's security check, exactly (2026-10-30, discovery.challenge).
+                or discovery.challenge(
+                    request.url, method, kind, scope, document=document, main=main
+                )
+            )
             and (not main or self.allowed(request.url))
         )
         if allowed:
@@ -331,6 +385,7 @@ class Tab:
             return
         if main:  # the tab was sent off the scope: settle() takes it back and says so
             self.state.blocked.append(request.url[:200])
+            self.state.stopped_kind = str(kind or "document")
             signin = scope is not None and discovery.signin_url(request.url, scope)
             self.state.signin_seen = self.state.signin_seen or signin
         await route.abort("blockedbyclient")
@@ -379,8 +434,9 @@ class Tab:
                     or redirect
                     or event.get("responseErrorReason")
                 ):
-                    if not self.state.blocked:
+                    if self.navigation(event) and not self.state.blocked:
                         self.state.blocked.append(str(request.get("url", ""))[:200])
+                        self.state.stopped_kind = str(event.get("resourceType") or "unknown")
                     await client.send(
                         "Fetch.failRequest",
                         {"requestId": request_id, "errorReason": "BlockedByClient"},
@@ -405,6 +461,19 @@ class Tab:
                     await client.send("Fetch.continueRequest", {"requestId": request_id})
         except Exception:
             await self.close_discovery()
+
+    def navigation(self, event: dict) -> bool:
+        """Whether a paused request of the anonymous discovery is its tab's navigation, which a
+        refusal stops (settle() then answers host_not_allowed): a document of the main frame. A
+        subresource (a font of fonts.gstatic.com, an image, a script, an XHR) or a document of
+        another frame is failed on its own and the page goes on without it (2026-10-30: Welcome
+        to the Jungle's page sank on a refused Google Fonts file). A request whose type or
+        frame CDP does not say counts as a navigation (fail closed)."""
+        kind, frame = event.get("resourceType"), event.get("frameId")
+        if not kind:
+            return True
+        main = self.state.main_frame
+        return kind == "Document" and (main is None or not frame or frame == main)
 
     async def _guard(self, route: Any, request: Any) -> None:
         # A navigation of a tab's main frame to a host outside the list (a link, a redirect, a
@@ -439,6 +508,7 @@ class Tab:
         except Exception:
             return
         self.state.blocked.append(request.url[:200])
+        self.state.stopped_kind = "redirect"
         if self.state.signed_in and discovery.signin_url(request.url, self.state.scope):
             self.state.signin_seen = True
         asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
@@ -513,8 +583,11 @@ class Tab:
         page = self.state.page
         left = page is not None and not page.is_closed() and not self.on_list(page)
         if left or self.state.blocked:
-            # The target's host only, for the next diagnosis (B19): never a path or a query.
+            # The target's host only, for the next diagnosis (B19): never a path or a query;
+            # and what was stopped (a document, a redirect hop: the resource type CDP or
+            # Playwright gave, 2026-10-30).
             stopped = host_of(self.state.blocked[0] if self.state.blocked else page.url)
+            kind = self.state.stopped_kind if self.state.blocked else "committed"
             try:
                 if left:
                     with contextlib.suppress(Exception):  # no history, a timeout: the blank then
@@ -522,10 +595,12 @@ class Tab:
                     if not self.on_list(page):
                         await page.goto(ABOUT_BLANK)
                 self.state.blocked.clear()
+                self.state.stopped_kind = ""
                 log.warning(
-                    "lease %s: a navigation outside the allow list stopped: host=%s",
+                    "lease %s: a navigation outside the allow list stopped: host=%s kind=%s",
                     self.lease_tag,
                     stopped,
+                    KIND_LOGGED.sub("", kind)[:20] or "unknown",
                 )
                 if self.state.signin_seen:  # B17: the site asks the person to sign in again
                     self.state.signin_seen = False
@@ -562,7 +637,7 @@ class Tab:
         self, facts: Any, action: str, tool: str, args: dict | None = None
     ) -> dict[str, Any] | None:
         if self.discovery:
-            code = discovery.verdict(
+            code, rule = discovery.judged(
                 facts,
                 tool,
                 self.state.page.url,
@@ -570,11 +645,17 @@ class Tab:
                 args=args,
                 action="key" if action == "key" else None,
             )
-            return (
-                failure(code, "Refused: this native discovery control is unsupported.")
-                if code
-                else None
+            if not code:
+                return None
+            log.warning(
+                "lease %s: %s refused: %s rule=%s %s",
+                self.lease_tag,
+                tool,
+                code,
+                rule,
+                described(facts),
             )
+            return failure(code, "Refused: this native discovery control is unsupported.")
         code = detect.verdict(
             facts, action=action, profile_edit=self.request.purpose == "profile_edit"
         )
@@ -613,6 +694,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
         and marker is None
         and name not in {"browser_snapshot", "browser_wait_for"}
     ):
+        log.warning(
+            "lease %s: %s refused: %s rule=no_marker", tab.lease_tag, name, discovery.UNSUPPORTED
+        )
         return failure(
             "unsupported_discovery", "Refused: this lease requires discovery permission."
         )
@@ -623,12 +707,19 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             or tab.gate
             or name not in discovery.TOOLS
         ):
+            log.warning(
+                "lease %s: %s refused: %s rule=not_a_sweep_tool",
+                tab.lease_tag,
+                name,
+                discovery.UNSUPPORTED,
+            )
             return failure(
                 "unsupported_discovery", "Refused: discovery is limited to a search sweep."
             )
         scope = discovery.Scope.parse(args.get("_discovery_scope"))
         # Enter after the text, in a signed in search's text box only (B19): judged there.
         if args.get("submit") and (name != "browser_type" or scope is None or not scope.signed_in):
+            log.warning("lease %s: %s refused: submit rule=enter_signed_out", tab.lease_tag, name)
             return refused("submit")
     try:
         try:
@@ -639,6 +730,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
                 tab.discovery = True
             result = await TOOLS[name](tab, args)
         except UnsupportedDiscovery:
+            log.warning(
+                "lease %s: %s refused: %s rule=boundary", tab.lease_tag, name, discovery.UNSUPPORTED
+            )
             return failure(
                 discovery.UNSUPPORTED, "Refused: this native discovery flow is unsupported."
             )
@@ -734,7 +828,37 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     result = await pages.navigate(page, args["url"], before_input=before_input)
     if result.get("ok"):
         await tab.pacer.read()
+    elif tab.discovery:
+        # Why a page of a search did not load (2026-10-30: a LinkedIn posting's address "failed
+        # to load" with no word of why): the failure, Chromium's net error if it named one, and
+        # the target's host and, for a posting or a result list the scope opens, its path;
+        # never its query, nor the path of any other page (a person's profile names them).
+        found = NET_ERROR.search(str(result.get("detail") or ""))
+        scope = tab.state.scope
+        shown = scope is not None and discovery.page_url(url, scope)
+        log.warning(
+            "lease %s: browser_navigate failed: %s net=%s host=%s path=%s",
+            tab.lease_tag,
+            result.get("error"),
+            found.group(0) if found else "-",
+            host_of(url),
+            path_of(url) if shown else "(not logged)",
+        )
     return await tab.settle(result)
+
+
+NET_ERROR = re.compile(r"net::ERR_[A-Z_]{1,60}|interrupted by another navigation|Timeout")
+PATH_LOGGED = re.compile(r"[^A-Za-z0-9/._-]")
+
+
+def path_of(url: object) -> str:
+    """The path of an address as a log line may name it: letters, digits, slashes, dots,
+    underscores and hyphens (anything else replaced), at most 80 characters; never its query."""
+    try:
+        path = urlsplit(url).path if isinstance(url, str) else ""
+    except ValueError:
+        path = ""
+    return PATH_LOGGED.sub("_", path)[:80] or "-"
 
 
 async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -742,12 +866,26 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if button not in ("left", "right", "middle") or args.get("modifiers"):
         return failure("bad_args", "Only a plain click is allowed, with no modifier key.")
     if tab.discovery and (button != "left" or args.get("doubleClick")):
+        log.warning(
+            "lease %s: browser_click refused: %s rule=plain_click",
+            tab.lease_tag,
+            discovery.UNSUPPORTED,
+        )
         return failure(discovery.UNSUPPORTED, "Refused: discovery requires one plain click.")
     locator, gone = await tab.element(args)
     if gone:
         return gone
     await tab.approach(locator)
     facts = await tab.facts(locator, point=True)
+    link = None
+    if tab.discovery and tab.state.signed_in and discovery.card(facts):
+        # A result card stands for its one posting link (discovery.card_posting, 2026-10-30):
+        # that link is approached, read and judged as any link, and clicked instead.
+        link = await card_link(tab, locator)
+        if link is not None:
+            locator = link
+            await tab.approach(locator)
+            facts = await tab.facts(locator, point=True)
     no = tab.judge(facts, "click", "browser_click")
     if no:
         return no
@@ -758,10 +896,34 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         timeout=ACTION_S * 1000,
     )
     result = await tab.settle(await _here(tab))
+    if link is not None and result.get("ok"):
+        result = {**result, "clicked": "the card's posting link"}
     if tab.discovery and result.get("ok") and discovery.decline(facts):
         # A cookie banner's decline (discovery.decline): the api never counts it as a search.
         result = {**result, "declined": True}
     return result
+
+
+# A card's links, in page order (CARD_LINKS at most, one more to tell a longer list).
+CARD_LINKS_JS = "(e, n) => Array.from(e.querySelectorAll('a[href]')).slice(0, n).map(a => a.href)"
+
+
+async def card_link(tab: Tab, locator: Any) -> Any:
+    """The posting link a result card holds (discovery.card_posting), as a locator, read back
+    by its own address so a link Playwright counts otherwise (an open shadow root) is never
+    clicked in its place; None when the card holds no posting link or more than one."""
+    try:
+        links = await locator.evaluate(
+            CARD_LINKS_JS, discovery.CARD_LINKS + 1, timeout=ACTION_S * 1000
+        )
+        index = discovery.card_posting(links, tab.state.scope)
+        if index is None:
+            return None
+        link = locator.locator("a[href]").nth(index)
+        same = await link.evaluate("a => a.href", timeout=ACTION_S * 1000) == links[index]
+    except Exception:
+        return None
+    return link if same else None
 
 
 EMPTY_ONLY_JS = """(element, text) => {
