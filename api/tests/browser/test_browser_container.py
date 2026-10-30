@@ -249,7 +249,7 @@ def test_the_container_as_compose_starts_it(stack: Stack) -> None:
     assert host["ReadonlyRootfs"] is True
     assert host["CapDrop"] == ["ALL"]
     assert sorted(c.removeprefix("CAP_") for c in host["CapAdd"]) == ["SETGID", "SETUID"]
-    assert host["Memory"] == host["MemorySwap"] == 1024 * 1024 * 1024
+    assert host["Memory"] == host["MemorySwap"] == 1536 * 1024 * 1024
     assert host["ShmSize"] == 128 * 1024 * 1024
     assert host["PidsLimit"] == 1024
     assert not host.get("PortBindings")
@@ -261,7 +261,7 @@ def test_the_container_as_compose_starts_it(stack: Stack) -> None:
         "print(open('/sys/fs/cgroup/memory.max').read().strip(),"
         " open('/sys/fs/cgroup/memory.swap.max').read().strip())"
     ).split()
-    assert limits == [str(1024 * 1024 * 1024), "0"]
+    assert limits == [str(1536 * 1024 * 1024), "0"]
     # browserd's effective capabilities: SETGID (6) and SETUID (7), nothing else.
     browserd = [pid for uid, pid, cmd in processes(stack) if uid == 0 and cmd == "python"]
     status = stack.python(f"print(open('/proc/{browserd[0]}/status').read())")

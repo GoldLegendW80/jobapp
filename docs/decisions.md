@@ -227,8 +227,9 @@ choice made by the build that stands until the owner says otherwise.
 - Browser B6 (late on 2026-10-14, built in #318): after a reboot the browser stays off until a deploy has checked its firewall rules
   (no restart policy); a browser image that fails to build deploys the rest without the browser.
 - Planner defaults: EEO answers `decline` and salary `leave_blank` unless the person stores them,
-  never inferred; browser memory 1024m without swap; Chromium keeps its own sandbox under a
-  custom seccomp profile.
+  never inferred; browser memory 1536m without swap (1024m until 2026-10-30, owner approved
+  after LinkedIn's search passed the guard); Chromium keeps its own sandbox under a custom
+  seccomp profile.
 - 2026-10-15: the filter of form questions the answer agent may answer is a positive topic
   anchor (the job, the company, the team, motivation, experience); the person answers everything
   else in the approval screen.

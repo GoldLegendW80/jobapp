@@ -218,8 +218,8 @@ def test_the_ci_stack_probes_the_parser_as_soon_as_it_starts() -> None:
     }
 
 
-def test_the_memory_limits_keep_the_core_exception_and_optional_mail_cost_explicit() -> None:
-    """Keep the 5 GiB target and B2's 128 MiB core exception; mail adds another 128 MiB.
+def test_the_memory_limits_keep_the_core_and_optional_mail_cost_within_the_budget() -> None:
+    """Keep the 6 GiB target (5 GiB until the browser's 1536m, 2026-10-30); mail adds 128 MiB.
     Declared limits do not establish physical Jetson capacity acceptance."""
     services = compose()["services"]
     limits = {name: service["mem_limit"] for name, service in services.items()}
@@ -233,14 +233,14 @@ def test_the_memory_limits_keep_the_core_exception_and_optional_mail_cost_explic
         "db": "768m",
         "redis": "256m",
         "renderer": "256m",
-        "browser": "1024m",
+        "browser": "1536m",
     }
-    # 128m over the 5G budget with the browser (B2) until G8 sets the parser's limit from its
-    # Jetson peaks: the parser at 512m brings the stack to 5120m (compose.yml, budget comment).
-    assert sum(int(limit[:-1]) for limit in core_limits.values()) == 5248 == 5 * 1024 + 128
+    # 384m under the 6G budget: the browser at 1536m since LinkedIn's signed in search passed
+    # the guard of its 1024m (compose.yml, budget comment).
+    assert sum(int(limit[:-1]) for limit in core_limits.values()) == 5760 == 6 * 1024 - 384
     assert services["gmailmcp"]["profiles"] == ["mail"]
     assert limits["gmailmcp"] == "128m"
-    assert sum(int(limit[:-1]) for limit in limits.values()) == 5376 == 5 * 1024 + 256
+    assert sum(int(limit[:-1]) for limit in limits.values()) == 5888 == 6 * 1024 - 256
 
 
 def test_the_test_stack_takes_the_service_from_compose_yml_and_adds_no_privilege() -> None:

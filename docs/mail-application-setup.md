@@ -24,8 +24,9 @@ settles such a send; a background task never sends it again).
 The regular deployment starts the base `gmailmcp` service in read-only mode after checking its
 separate host firewall. OAuth refresh tokens remain encrypted in the API database. The provider
 receives one access token per call, verifies its connected address, and stores no credentials.
-Its memory limit is 128 MiB. The original declared service limits total 5248 MiB. With the
-provider they total 5376 MiB, above the 5120 MiB platform budget. No existing limit was reduced.
+Its memory limit is 128 MiB. The declared core service limits total 5760 MiB (5248 MiB before
+the browser went to 1536 MiB on 2026-10-30). With the provider they total 5888 MiB, within the
+6144 MiB platform budget (5120 MiB until then). No existing limit was reduced.
 Physical Jetson memory acceptance remains an operator measurement before deployment.
 
 The sending overlay is adopted automatically by `deploy.sh` when `.env.mailsend` exists.
