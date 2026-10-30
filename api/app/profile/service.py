@@ -162,6 +162,10 @@ def _keep_consent(
     if not consents:
         # No dedicated decision yet: store no map at all (schemas._stored_section).
         del data["platform_consents"]
+    if data.get("job_feeds") == []:
+        # Sent empty, it replaced the stored list (above); stored only once a feed is ticked, as
+        # the release before this one refuses the key.
+        del data["job_feeds"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data

@@ -38,6 +38,7 @@ from app.ingestion.routers import no_store as ingestion_no_store
 from app.ingestion.routers import private as ingestion_private
 from app.ingestion.routers import routers as ingestion_routers
 from app.jobs import service as jobs_service
+from app.jobs.feeds.router import router as job_feeds_router
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging, error_name, private_trace
@@ -300,8 +301,10 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(profile_router)
-    # Before the jobs router: /api/jobs/sweeps must not be read as /api/jobs/{job_id}.
+    # Before the jobs router: /api/jobs/sweeps and /api/jobs/feeds must not be read as
+    # /api/jobs/{job_id}.
     app.include_router(sweeps_router)
+    app.include_router(job_feeds_router)
     app.include_router(jobs_router)
     app.include_router(agents_router.router)
     app.include_router(agent_runs_router.router)

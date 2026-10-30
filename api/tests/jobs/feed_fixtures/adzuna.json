@@ -1,0 +1,45 @@
+{
+ "count": 2,
+ "results": [
+  {
+   "id": "4001",
+   "title": "<strong>AI Engineer</strong> H/F",
+   "description": "We build <strong>agents</strong> with Python...",
+   "created": "2026-10-29T08:00:00Z",
+   "redirect_url": "https://www.adzuna.fr/land/ad/4001?se=tracking&v=one",
+   "location": {
+    "display_name": "Bordeaux, Gironde",
+    "area": [
+     "France",
+     "Nouvelle-Aquitaine",
+     "Gironde",
+     "Bordeaux"
+    ]
+   },
+   "company": {
+    "display_name": "Example Conseil"
+   },
+   "contract_type": "permanent",
+   "contract_time": "full_time"
+  },
+  {
+   "id": 4002,
+   "title": "Forward Deployed Engineer",
+   "description": "Customer facing engineering.",
+   "created": "2026-10-28T08:00:00Z",
+   "redirect_url": "https://www.adzuna.fr/land/ad/4002?se=tracking",
+   "location": {
+    "display_name": "Paris",
+    "area": [
+     "France",
+     "Ile-de-France",
+     "Paris"
+    ]
+   },
+   "company": {
+    "display_name": "Example Robotics"
+   },
+   "contract_type": "contract"
+  }
+ ]
+}
