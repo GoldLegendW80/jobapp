@@ -44,12 +44,13 @@ redirect hop within the family when it is no apply, account or sign out address 
 a page's fetch or XHR may POST to the family or the platform's search service (`posts`). The
 submit, apply and danger detectors run first and win, documents stay GET only.
 Declared open points (B19): a place key of a result list (`l`, `location`, `geoId`) is not held
-to a saved place; a combobox that picks its first suggestion on Enter searches that suggestion;
-a POST's body is not read; pagination and filter buttons that are no link are refused; a
-posting whose address holds a refused word (`payments-engineer`) is refused; a name of one
-token (an id, a name attribute or a one word label) holding no ACTION_STEMS stem is neutral, so
-a button whose aria-label is "Search" and whose text is "Hide" is clicked; the search words are
-English, French and German only; an empty text with `submit` presses Enter on the emptied box.
+to a saved place (a worldwide name in it is, below); a combobox that picks its first
+suggestion on Enter searches that suggestion; a POST's body is not read; pagination and
+filter buttons that are no link are refused; a posting whose address holds a refused word
+(`payments-engineer`) is refused; a name of one token (an id, a name attribute or a one word
+label) holding no ACTION_STEMS stem is neutral, so a button whose aria-label is "Search" and
+whose text is "Hide" is clicked; the search words are English, French and German only; an
+empty text with `submit` presses Enter on the emptied box.
 
 Round 1 of B19's review: a text box whose names say it writes to someone (a message, a reply, a
 comment, a chat, a note or a post, `composes`) is never a search box, so no typing and no Enter
@@ -69,6 +70,19 @@ list names `react`) is no part of what a POST says (CLIENT_KEYS); `like` and `sh
 as whole words and `react` only as `reaction`. Declared open points: a POST whose address says
 `react` alone or a glued `jobshare` is not read; a start that LinkedIn answers by a redirect to
 another address first (`fr.linkedin.com` to `www.linkedin.com`) stops at its second hop.
+
+No place limit (2026-10-30): LinkedIn fills its place box from the person's own profile on the
+site, so a person whose saved place is "everywhere" got a search limited to that city. When the
+saved places are empty or one of them says no place limit (`worldwide`: "everywhere",
+"worldwide", "partout", ...; `Scope.everywhere`), the agent may also type the site's own
+worldwide name ("Worldwide", "Monde entier", WORLDWIDE) in a place box, choose it in a
+`location` select, click the place box's suggestion that says it (`worldwide_option`), and open
+a result list whose place key holds it. With only specific places saved, none of that: a
+worldwide name in a result list's `l` or `location` is refused, so a search is never widened.
+Declared open points: LinkedIn's `geoId` is a code and is not read, so a result list with a
+worldwide `geoId` and no place words opens whatever the saved places (as an empty place box
+always may, owner 2026-10-28); a website's worldwide name in a language other than English,
+French or German is refused (the empty box stays the way there).
 """
 
 import re
@@ -218,6 +232,40 @@ def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
     return next((value for value in saved if same_value(text, value)), None)
 
 
+# No place limit (2026-10-30, a LinkedIn sweep of a person whose saved place is "everywhere"
+# read only the postings of the city the site's place box held from the person's profile): the
+# words a person saves for it and the names a website gives its own worldwide place (LinkedIn's
+# "Worldwide", "Monde entier" in its French interface, "Weltweit" in German), in English, French
+# and German, read as detect.words folds them (NFKC, accents and case aside). A scope whose
+# places are empty or hold one of them (`Scope.everywhere`) lets the agent type or choose such a
+# name in a place box, so a place the site filled in by itself is replaced; a scope with only
+# specific places never does, so a search is never widened beyond what the person saved.
+WORLDWIDE = frozenset(
+    tuple(phrase.split())
+    for phrase in (
+        "everywhere", "anywhere", "worldwide", "world", "partout", "n importe ou", "monde",
+        "monde entier", "le monde entier", "weltweit", "uberall",
+    )
+)  # fmt: skip
+WORLDWIDE_TEXT = re.compile(r"[^\W\d_]+(?:[ '\u2019-]+[^\W\d_]+)*")
+
+
+def worldwide(text: object) -> bool:
+    """Whether a text says no place limit (WORLDWIDE): letters, with spaces, apostrophes or
+    hyphens between words only, basic Latin once its accents are aside, no compatibility form
+    (full width letters, ligatures: `same_value`'s rule), and folded to one of the phrases.
+    "Worldwide", "monde entier" and "n'importe où" are; "Worldwide, Paris", a digit or another
+    script are not."""
+    return (
+        isinstance(text, str)
+        and len(text) <= 100
+        and WORLDWIDE_TEXT.fullmatch(text) is not None
+        and unicodedata.normalize("NFKC", text) == unicodedata.normalize("NFC", text)
+        and _latin(text)
+        and tuple(detect.words(text, camel=False)) in WORLDWIDE
+    )
+
+
 def _values(raw: object, *, needed: bool) -> tuple[str, ...] | None:
     """A list of saved values as the api sends it: strings with a non blank character, no
     control character, at most VALUE_MAX characters each and VALUES_MAX in all, none twice."""
@@ -269,14 +317,26 @@ class Scope:
             return None
         return cls(start, titles, places, tuple(sorted(filters.items())), signed_in)
 
+    @property
+    def everywhere(self) -> bool:
+        """The person saved no place limit: no place, or a place that says so (`worldwide`)."""
+        return not self.places or any(worldwide(place) for place in self.places)
+
+    def _worldwide(self, text: object) -> bool:
+        """A worldwide name (`worldwide`) typed or chosen as a place: only with no place limit."""
+        return self.everywhere and worldwide(text)
+
     def types(self, names: object, text: object) -> bool:
         """B19, signed in: whether this text may be typed in a text box whose names are these,
         in any box of the page (`search_box`): nothing to clear it, else one saved title in a
         box its labels call a title box, one saved place in a place box, and either one where
-        they cannot tell (`box_kind`)."""
+        they cannot tell (`box_kind`); with no place limit, a worldwide name in a box that is
+        no title box too (`everywhere`)."""
         if text == "":
             return True
         kind = box_kind(names)
+        if kind != "title" and self._worldwide(text):
+            return True
         saved = (
             self.titles
             if kind == "title"
@@ -288,19 +348,23 @@ class Scope:
 
     def takes(self, name: object, text: object) -> bool:
         """Whether this text may be typed in a text field of this name: one saved title in a
-        search box, one saved place in the location box (`saved_as`), nothing to clear either;
-        in any other field, nothing."""
+        search box, one saved place in the location box (`saved_as`), or a worldwide name there
+        with no place limit (`everywhere`), nothing to clear either; in any other field,
+        nothing."""
         if name not in QUERY and name != "location":
             return False
+        if name == "location" and self._worldwide(text):
+            return True
         return (
             text == "" or saved_as(text, self.titles if name in QUERY else self.places) is not None
         )
 
     def chooses(self, name: object, value: object) -> bool:
-        """Whether a native select of this name may be set to this value: one saved place, or
-        the filter's one saved value (`saved_as`); nothing for any other select."""
+        """Whether a native select of this name may be set to this value: one saved place (or a
+        worldwide name with no place limit), or the filter's one saved value (`saved_as`);
+        nothing for any other select."""
         if name == "location":
-            return saved_as(value, self.places) is not None
+            return saved_as(value, self.places) is not None or self._worldwide(value)
         saved = dict(self.filters).get(name) if isinstance(name, str) else None
         return saved is not None and saved_as(value, (saved,)) is not None
 
@@ -694,6 +758,12 @@ def listing(family: Family, path: str) -> bool:
     )
 
 
+# The place keys of a platform's result list whose words are read: Indeed's `l`, LinkedIn's and
+# Welcome to the Jungle's `location` (LinkedIn's `geoId` is a code and is not read: places are
+# never mapped to a website's codes).
+PLACE_KEYS = frozenset({"l", "location"})
+
+
 def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None = None) -> bool:
     """A document a signed in discovery may open (B19): what read_url lets through within the
     frozen scope, or, on the start's family, an address with no user part, no fragment, no
@@ -702,7 +772,8 @@ def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None
     redirect within the family is followed) or a result list (`listing`) and reaches no apply,
     submit, delete, payment or account page by its path words, or a posting (`posting`), whose
     path words are its title (read by `destructive` alone, as every request's are). A result
-    list's search key, if any, holds a saved title or nothing."""
+    list's search key, if any, holds a saved title or nothing, and its place key (PLACE_KEYS)
+    holds a worldwide name only when the person saved no place limit (`Scope.everywhere`)."""
     if not isinstance(url, str) or len(url) > 2000:
         return False
     if read_url(url, scope.start, scope=scope, hop=hop, source=source):
@@ -730,6 +801,7 @@ def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None
     return hop or (
         listing(family, path)
         and all(not v or saved_as(v, scope.titles) is not None for k, v in pairs if k in QUERY)
+        and (scope.everywhere or not any(k in PLACE_KEYS and worldwide(v) for k, v in pairs))
     )
 
 
@@ -1165,6 +1237,20 @@ def search_words(facts: dict) -> bool:
     return "" not in kinds and "phrase" in kinds
 
 
+def worldwide_option(facts: dict) -> bool:
+    """A suggestion of a place box that says no place limit (2026-10-30): one of its names is a
+    worldwide name (`worldwide`: LinkedIn's "Worldwide" or "Monde entier") and every other one
+    is made of search neutral words or is an id that holds no action stem (`_search_name`), all
+    in basic Latin. "Worldwide jobs alert", "Paris" or a name in another script refuse."""
+    names = facts.get("names")
+    if not isinstance(names, list) or not names or len(names) > 60:
+        return False
+    if not all(isinstance(n, str) and _latin(n) for n in names):
+        return False
+    kinds = ["worldwide" if worldwide(n.strip()) else _search_name(n) for n in names]
+    return "worldwide" in kinds and all(k in {"worldwide", "neutral"} for k in kinds)
+
+
 def _search_form(facts: dict, d: dict, scope: Scope) -> bool:
     """A control a signed in search may use is in no form, or in a GET form whose action is a
     search page or result list of its website (`listing`, or an ENDPOINTS last segment) that
@@ -1207,7 +1293,8 @@ def _signed_in_control(
     """B19, signed in: a search as a person makes it on a real website. A text box (`search_box`)
     takes one saved title or place (`Scope.types`) and Enter; a button or link named a search
     word (`search_words`) is clicked, a form it submits held to `_search_form`; a link to a page
-    of the website (`_opens`) is followed."""
+    of the website (`_opens`) is followed; with no place limit, the worldwide suggestion of a
+    place box (`worldwide_option`) is chosen."""
     if tool == "browser_type":
         if not search_box(facts) or not _search_form(facts, d, scope):
             return False
@@ -1215,6 +1302,14 @@ def _signed_in_control(
     if tool != "browser_click" or facts.get("editable") or facts.get("credential"):
         return False
     tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
+    if role == "option":  # a place box's suggestion: only the worldwide one, no place limit
+        return (
+            scope.everywhere
+            and tag not in {"a", "button", "input", "select", "textarea"}
+            and not facts.get("in_form")
+            and not facts.get("holds_submit")
+            and worldwide_option(facts)
+        )
     if tag == "a":
         href = d.get("href", "")
         return _opens(href, scope) or (search_words(facts) and _in_page(href, current))

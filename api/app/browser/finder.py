@@ -258,6 +258,19 @@ words (`untrusted_person_instructions`). Read every criterion as the person mean
 person reading the form would: a place such as "everywhere", "anywhere", "worldwide" or
 "partout" means no place, so leave the place box empty.
 
+No place, or a place that means no place, means the search covers the whole world, and the
+website must not narrow it by itself. A website often fills its place box on its own, from
+the person's profile on it or from where the person is ("Lyon et périphérie", "Paris",
+"France"). Before you read the results of a search, look at the place box and at the place
+the result list says it covers, and remove any place the website set:
+- clear the place box by typing nothing in it (browser_type with an empty text), then search;
+- if the website fills it again, or needs a place, type its own worldwide value in the place
+box and choose that suggestion: "Worldwide" on LinkedIn ("Monde entier" when LinkedIn is in
+French, "Weltweit" in German);
+- Indeed searches one country per site: leave its place box ("Where", "Où") empty;
+- Welcome to the Jungle: leave its place box empty.
+When the person saved specific places, never type a worldwide value: search those places.
+
 How a person searches a job website, step by step:
 1. Start with browser_snapshot. The first page may be a home page with no search box: find
 the website's job search page through its navigation ("Find a job", "Jobs", "Offres
@@ -280,10 +293,13 @@ not see.
 
 With browser_type you may type one of `titles` in a search box or one of `places` in the place
 box, as written there or with another case or accents when the website wants it ("GenAI
-Engineer" for "genai engineer"), or nothing, and with submit press Enter after it.
+Engineer" for "genai engineer"), or nothing, and with submit press Enter after it. When
+`places` is empty or means no place, you may also type the website's worldwide value in the
+place box ("Worldwide", "Monde entier").
 Leaving a box empty is always allowed. browser_select_option sets a native filter only to a
-value of `filters` or a place of `places`; browser_click presses a search button, opens a
-posting, a result list or the next page, or declines cookies.
+value of `filters` or a place of `places` (or the worldwide value, as above); browser_click
+presses a search button, opens a posting, a result list or the next page, chooses the
+worldwide suggestion of the place box (as above), or declines cookies.
 Any other value, a translation included, is refused.
 Unwanted titles and unwanted places are context: never type them; postings that match them
 are left out after reading. Use the other criteria and the person's instructions to choose
@@ -296,6 +312,40 @@ and go on another way.
 `seconds_left` says how much time you have: report what you opened before it runs out, and
 stop when the website is covered or a tool tells you to stop.
 """
+
+
+# No place limit (2026-10-30), as browserd's discovery.WORLDWIDE: what a person saves for it
+# and the names a website gives its own worldwide place, in English, French and German, folded
+# (NFKC, format characters dropped, accents and case aside, cut on anything not a letter or a
+# digit). With no saved place, or one of these saved, the agent may type or choose such a name
+# in the place box so a place the website filled in by itself is replaced; never otherwise.
+WORLDWIDE = frozenset(
+    tuple(phrase.split())
+    for phrase in (
+        "everywhere", "anywhere", "worldwide", "world", "partout", "n importe ou", "monde",
+        "monde entier", "le monde entier", "weltweit", "uberall",
+    )
+)  # fmt: skip
+WORLDWIDE_TEXT = re.compile(r"[^\W\d_]+(?:[ '\u2019-]+[^\W\d_]+)*")
+
+
+def worldwide(text: object) -> bool:
+    """Whether a text says no place limit, as browserd's discovery.worldwide: letters, with
+    spaces, apostrophes or hyphens between words only, basic Latin once its accents are aside,
+    no compatibility form, and folded to one of WORLDWIDE ("Worldwide", "monde entier",
+    "n'importe où")."""
+    if not isinstance(text, str) or len(text) > 100 or not WORLDWIDE_TEXT.fullmatch(text):
+        return False
+    if unicodedata.normalize("NFKC", text) != unicodedata.normalize("NFC", text):
+        return False
+    folded = unicodedata.normalize("NFKC", text)
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
+    folded = "".join(
+        ch for ch in unicodedata.normalize("NFKD", folded) if not unicodedata.combining(ch)
+    )
+    if not all(ch.isascii() for ch in folded if unicodedata.category(ch)[0] in "LN"):
+        return False
+    return tuple(w for w in re.split(r"[^0-9a-z]+", folded.casefold()) if w) in WORLDWIDE
 
 
 def _base(letter: str) -> str:
@@ -368,6 +418,21 @@ class InteractiveScope:
     instructions: str = ""
     # B17: the person signed in to this website: browserd reads it in their persisted context.
     signed_in: bool = False
+
+    @property
+    def everywhere(self) -> bool:
+        """No place limit saved: no place, or a place that says so (`worldwide`), as browserd's
+        discovery.Scope.everywhere."""
+        return not self.places or any(worldwide(place) for place in self.places)
+
+    def place_of(self, text: object) -> str | None:
+        """The saved place a typed or chosen place is: one of `places` (`saved_as`), or, for a
+        worldwide name with no place limit, the saved place that says so (None when no place is
+        saved)."""
+        place = saved_as(text, self.places)
+        if place is None and self.everywhere and worldwide(text):
+            place = next((p for p in self.places if worldwide(p)), None)
+        return place
 
     def tool_scope(self) -> dict[str, Any]:
         scope: dict[str, Any] = {
@@ -976,8 +1041,10 @@ class FinderSession:
                 self.typed_place = None
             elif (title := saved_as(text, scope.titles)) is not None and box != "place":
                 self.typed_title = title
-            elif (place := saved_as(text, scope.places)) is not None:
-                self.typed_place = place
+            elif saved_as(text, scope.places) is not None or (
+                box != "title" and scope.everywhere and worldwide(text)
+            ):  # a saved place, or the website's worldwide name with no place limit
+                self.typed_place = scope.place_of(text)
             if args.get("submit") is True:  # Enter in the box (B19): a search, as a button's
                 if self._shows_typed(canonical(self.pages.last_url)):
                     self.searches.setdefault((self.typed_title, self.typed_place), None)
@@ -985,9 +1052,15 @@ class FinderSession:
                     self._searched_at(canonical(self.pages.last_url))
         elif name == "browser_select_option":
             values = args.get("values")
-            if isinstance(values, list) and len(values) == 1:
-                place = saved_as(values[0], scope.places)
-                self.typed_place = place if place is not None else self.typed_place
+            if (
+                isinstance(values, list)
+                and len(values) == 1
+                and (
+                    saved_as(values[0], scope.places) is not None
+                    or (scope.everywhere and worldwide(values[0]))
+                )
+            ):
+                self.typed_place = scope.place_of(values[0])
         elif name == "browser_click" and result.get("declined") is not True:
             # A cookie banner's decline (browserd says so) is no search. Any other click counts
             # when the page that follows carries a saved title in its address (a link, a GET
@@ -1102,7 +1175,7 @@ class FinderSession:
         titles = [saved_as(v, scope.titles) for k, v in pairs if k in QUERY_KEYS]
         if len(titles) != 1 or titles[0] is None:
             return
-        places = [saved_as(v, scope.places) for k, v in pairs if k == "location" and v]
+        places = [scope.place_of(v) for k, v in pairs if k == "location" and v]
         self.searches.setdefault((titles[0], places[0] if places else None), None)
 
     def _slip(self, name: str, args: dict[str, Any]) -> str | None:
@@ -1124,6 +1197,8 @@ class FinderSession:
                 allowed, refusal = scope.places, PLACE_BOX_REFUSED
             else:
                 allowed, refusal = (*scope.titles, *scope.places), TYPE_REFUSED
+            if box != "title" and scope.everywhere and worldwide(text):
+                return None  # the website's worldwide name, no place limit (2026-10-30)
             return None if text == "" or saved_as(text, allowed) is not None else refusal
         if name == "browser_select_option":
             values = args.get("values")
@@ -1131,7 +1206,10 @@ class FinderSession:
             chosen = (
                 isinstance(values, list)
                 and len(values) == 1
-                and saved_as(values[0], choices) is not None
+                and (
+                    saved_as(values[0], choices) is not None
+                    or (scope.everywhere and worldwide(values[0]))
+                )
             )
             return None if chosen else CHOICE_REFUSED
         return None
