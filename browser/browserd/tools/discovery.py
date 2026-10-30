@@ -826,6 +826,73 @@ def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None
     )
 
 
+# Round 3 (sweep of 2026-10-30, 16:08): two result links of LinkedIn and a navigation to its
+# `/jobs/search-results/` were refused with no word of which part of the address refused them.
+# `why_refused` names it in the code's own words, and `logged_keys` the address's query keys a
+# log may name (the keys job websites use, LOGGED_KEYS; any other is only counted), never a
+# value, a path beyond `shown_path`'s or the page's text.
+LOGGED_KEYS = frozenset(
+    {*FIELDS, "currentJobId", "geoId", "origin", "refresh", "distance", "f_TPR", "f_WT", "f_E",
+     "f_JT", "f_AL", "f_C", "f_I", "sortBy", "start", "eBP", "refId", "trackingId", "trk",
+     "referralSearchId", "savedSearchId", "lipi", "l", "jk", "vjk", "fromage", "radius", "from",
+     "advn", "tk", "aroundQuery", "refinementList", "searchTitle", "position", "pageNum"}
+)  # fmt: skip
+
+
+def logged_keys(url: object) -> str:
+    """The query keys of an address as a log line may name them (above): the known ones in
+    order, at most 20, then `+N` for the others; `-` for none, `unreadable` for a query that
+    cannot be split."""
+    if not isinstance(url, str):
+        return "unreadable"
+    try:
+        pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return "unreadable"
+    known = [k for k, _ in pairs if k in LOGGED_KEYS][:20]
+    others = sum(1 for k, _ in pairs if k not in LOGGED_KEYS)
+    text = ",".join(known) + (f",+{others}" if others and known else f"+{others}" if others else "")
+    return text or "-"
+
+
+def why_refused(url: object, scope: Scope | None) -> str:
+    """Why a signed in discovery does not open this address (`page_url` and `destructive`), as
+    one of the code's own words: `opens` when it does."""
+    if scope is None or not isinstance(url, str):
+        return "unreadable"
+    if len(url) > 2000:
+        return "too_long"
+    family = family_of(scope.start)
+    if family is None or family_of(url) is not family:
+        return "off_family"
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return "unreadable"
+    path = unquote(parts.path)
+    segments = path.strip("/").split("/")
+    if parts.fragment:
+        return "fragment"
+    if "%" in path or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url):
+        return "encoding"
+    if personal(family, parts.hostname, segments):
+        return "personal"
+    if destructive(url, scope):
+        return "destructive"
+    if posting(family, segments, pairs) or (page_url(url, scope) and not destructive(url, scope)):
+        return "opens"
+    if _path_refused(segments):
+        return "path"
+    if not listing(family, path):
+        return "not_listing"
+    if any(v and saved_as(v, scope.titles) is None for k, v in pairs if k in QUERY):
+        return "unsaved_title"
+    if not scope.everywhere and any(_says_worldwide(k, v) for k, v in pairs):
+        return "worldwide"
+    return "unknown"
+
+
 def shown_path(url: object, scope: Scope | None) -> bool:
     """Whether browserd's warning of a page that did not load may name its path (SPEC "Three
     websites" (4)): a posting (`posting`) or a result list (`listing`) of the start's family,
@@ -1009,13 +1076,21 @@ def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
         or not (family_of(url) is family or _search_service(url, family))
     ):
         return False
+    return not says_post_word(url, scope, service=_search_service(url, family))
+
+
+def says_post_word(url: str, scope: Scope | None = None, *, service: bool = False) -> bool:
+    """Whether an address says it follows, connects, messages, invites, saves, sets an alert,
+    favourites, subscribes, reacts, likes or shares (POST_WORDS, POST_WHOLE), read in its path
+    segments, query keys and query values, the person's own search words aside and, on a search
+    service (`service`), the values of CLIENT_KEYS. Fails closed: an address that cannot be read
+    says one."""
     try:
         parts = urlsplit(url)
         pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
     except ValueError:
-        return False
+        return True
     own = own_words(scope)
-    service = _search_service(url, family)
     texts = [*unquote(parts.path).split("/"), *(k for k, _ in pairs)]
     texts.extend(
         v
@@ -1023,9 +1098,8 @@ def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
         if tuple(detect.words(v)) not in own and not (service and k in CLIENT_KEYS)
     )
     glued = ["".join(detect.words(text)) for text in texts]
-    return not (
-        any(word in text for text in glued for word in POST_WORDS)
-        or any(POST_WHOLE.fullmatch(w) for text in texts for w in detect.match_words(text))
+    return any(word in text for text in glued for word in POST_WORDS) or any(
+        POST_WHOLE.fullmatch(w) for text in texts for w in detect.match_words(text)
     )
 
 
@@ -1133,7 +1207,8 @@ def _latin(name: str) -> bool:
 # hidden or other input, no select, textarea or editable element, so the form carries nothing of
 # the person's), that submits to a dialog or to the page's own website (`on_site`, or the page
 # itself when its action is empty) at an address that applies, submits, deletes, pays and signs
-# out nothing (`destructive`). Whatever request it then makes is held by the route as any other.
+# out nothing (`destructive`) and says no POST word (`says_post_word`: subscribe, save, follow,
+# alert..., round 3). Whatever request it then makes is held by the route as any other.
 CONSENT_KINDS = frozenset(
     {"button:submit", "button:button", "button:reset", "input:submit", "input:button",
      "input:reset", "input:checkbox", "input:radio", "fieldset:fieldset"}
@@ -1159,6 +1234,8 @@ def consent_form(facts: dict, current: str) -> bool:
         and bool(current)
         and on_site(target, current)
         and not destructive(target)
+        # Round 3 (review of PR 730): nor one that subscribes, saves, follows, sets an alert...
+        and not says_post_word(target)
     )
 
 
@@ -1538,6 +1615,89 @@ def place_opener(facts: object) -> bool:
     )
 
 
+# Round 3 (sweep of 2026-10-30, 16:08 on the Jetson): LinkedIn's place box has a clear button,
+# a native `<button type=button>` of 15 characters ("Effacer le lieu"), refused by the danger
+# detector, as "effacer" also reads as erase. Signed in, exactly a place box's clear button is
+# clicked (`place_clear`): a native button of type button, or an element with the role button
+# (a `div`, `span` or `li`, OPENER_TAGS), whose names `box_kind` reads as a place box, in no form
+# or a GET search form (`_search_form`), inside no link or button, holding no submit control, on
+# no selector of the lease and with no target, and every one of whose names is a clear phrase
+# (one CLEAR_WORDS word with place words and CLEAR_NEUTRAL words only: "Effacer le lieu", "Clear
+# location", "Vider") or a neutral name (place and CLEAR_NEUTRAL words only, or an id, one token
+# with a digit, a hyphen or an underscore, holding no ACTION_STEMS stem), all in basic Latin, at
+# least one a clear phrase; its names say no submit, write to no one and, the clear word aside,
+# nothing the danger detector refuses. A generic clear,
+# delete, remove or reset button ("Effacer tout", "Supprimer", "Clear all filters", "Reset")
+# stays refused, as does any clear button of a title box or a box it cannot tell.
+CLEAR_WORDS = frozenset({"clear", "effacer", "vider", "leeren"})
+CLEAR_NEUTRAL = frozenset(
+    {"le", "la", "les", "l", "du", "de", "d", "the", "a", "un", "une", "your", "votre", "text",
+     "texte", "input", "saisie", "field", "champ", "box", "button", "btn", "icon", "svg",
+     "selection", "filter", "filtre", "eingabe", "feld"}
+)  # fmt: skip
+
+
+CLEAR_ID = re.compile(r"[0-9_-]")
+
+
+def _clear_name(name: str) -> str:
+    """'clear', 'neutral', or '' for a name a place box's clear button never holds."""
+    for camel in (False, True):
+        words = [w for w in detect.words(name, camel=camel) if not w.isdigit()]
+        rest = [w for w in words if w not in PLACE_WORDS and w not in CLEAR_NEUTRAL]
+        if not rest:
+            return "neutral"
+        if len(rest) == 1 and rest[0] in CLEAR_WORDS:
+            return "clear"
+    # An id (a digit, a hyphen or an underscore in one token: `ember42`), never a word.
+    if IDENTIFIER.fullmatch(name.strip()) and CLEAR_ID.search(name):
+        glued = "".join(detect.words(name))
+        return "" if any(stem in glued for stem in ACTION_STEMS) else "neutral"
+    return ""
+
+
+def place_clear(facts: object, scope: Scope | None) -> bool:
+    """A click on a place box's clear button in a signed in search (above)."""
+    if not isinstance(facts, dict) or scope is None or not scope.signed_in:
+        return False
+    names, d = facts.get("names"), facts.get("discovery")
+    tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
+    native = tag == "button" and kind == "button" and role in {"", "button"}
+    if not (native or (tag in OPENER_TAGS and role == "button")):
+        return False
+    if (
+        not isinstance(names, list)
+        or not names
+        or len(names) > 60
+        or not all(isinstance(n, str) and _latin(n) for n in names)
+        or not isinstance(d, dict)
+    ):
+        return False
+    kinds = [_clear_name(n) for n in names]
+    if "" in kinds or "clear" not in kinds or box_kind(names) != "place":
+        return False
+    # Every name read again with its clear words taken out: nothing else the detectors refuse.
+    rest = [
+        " ".join(w for w in detect.words(n, camel=False) if w not in CLEAR_WORDS) for n in names
+    ]
+    return (
+        not facts.get("in_control")
+        and not facts.get("holds_submit")
+        and not facts.get("editable")
+        and not facts.get("credential")
+        and not facts.get("selector_hit")
+        and not facts.get("selector_error")
+        and not facts.get("custom_submit")
+        and d.get("target") in {"", "_self"}
+        and not d.get("href")
+        and _search_form(facts, d, scope)
+        and not detect.says_submit(names, profile_edit=True)
+        and not detect.says_danger(rest)
+        and not composes(facts)
+        and not acts(names)
+    )
+
+
 def posting_key(url: object, scope: Scope) -> tuple[str, ...] | None:
     """The posting a link of a signed in page opens (`_opens` and `posting`), as its host, its
     path and Indeed's job key, whatever its tracking query; None for any other address."""
@@ -1599,6 +1759,8 @@ def _signed_in_control(
     if tool != "browser_click" or facts.get("editable") or facts.get("credential"):
         return False
     if place_opener(facts):  # LinkedIn's place setting opens its place box (round 2)
+        return True
+    if place_clear(facts, scope):  # a place box's clear button (round 3)
         return True
     tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
     if (  # a place box's worldwide suggestion, no place limit; any other option is judged below
@@ -1670,6 +1832,17 @@ def judged(
         else "click"
     )
     original = detect.verdict(facts, action=action, profile_edit=True)
+    if original == "danger" and tool == "browser_click" and action == "click":
+        # A place box's clear button reads as erase ("Effacer le lieu", round 3): taken only
+        # when it and the element at its click point are that button, nothing else refusing.
+        point = facts.get("point")
+        if (
+            place_clear(facts, scope)
+            and isinstance(point, dict)
+            and point.get("inside") is True
+            and place_clear(point, scope)
+        ):
+            return None, "point:place_clear"
     if original and original != "submit":
         return original, "detector"
     if detect.says_submit(facts.get("names", []), profile_edit=True):

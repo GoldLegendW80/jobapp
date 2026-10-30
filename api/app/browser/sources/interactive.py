@@ -24,7 +24,8 @@ finish (a cookie banner over it) is told to it to recover from. Its budget a web
 (owner): no cap on its turns, pages, tokens or verified postings. What bounds it is not its
 budget: its share of the
 sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
-never starves the next), which it is told; the lease's own maximum; pacing per platform and the
+never starves the next; a website with its own pace, LinkedIn, runs last, `run_order`, round 3),
+which it is told; the lease's own maximum; pacing per platform and the
 7 day pause (no daily limit and no page cap on any website, LinkedIn included, owner 2026-10-28).
 Its postings merge into the website's one result, counted once per canonical address, in one
 place only: an unwanted reading wins over another contract, which wins over a kept one
@@ -398,6 +399,20 @@ class _Site:
             entry["unwanted"] = len(self.unwanted)
 
 
+def run_order[T](sites: list[T]) -> list[T]:
+    """The order the websites of a sweep run in. Round 3 (sweep of 2026-10-30, 16:08): LinkedIn
+    ran first with a third of the 900 s, about 300 s, and each of its actions waits its pace (10
+    to 30 s), so its agent ran out of time after one title of three. A website with a pace of
+    its own (platform_policy.PAUSES: LinkedIn) runs after the others, in saved order otherwise:
+    its share is never smaller than before (a share is the time left divided by the websites
+    left, so the first websites' shares are the same), and the time the others leave is its."""
+    from app.browser import platform_policy
+
+    return sorted(
+        sites, key=lambda site: getattr(site, "effective_platform", "") in platform_policy.PAUSES
+    )
+
+
 async def run_selected(
     runner: Runner,
     plan: Any,
@@ -409,7 +424,7 @@ async def run_selected(
     search = getattr(plan, "search", None)
     if search is None:
         return  # Pre-v1 legacy callers have no selected interactive sources.
-    sites = [source for source in search.interactive_sites if source.enabled]
+    sites = run_order([source for source in search.interactive_sites if source.enabled])
     for index, source in enumerate(sites):
         entry = sweep.bind_source(
             stats,

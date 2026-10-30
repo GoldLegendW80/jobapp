@@ -314,8 +314,10 @@ def test_the_stopped_target_s_host_is_logged_never_its_path_or_query(caplog):
         answer = asyncio.run(found.settle({"ok": True}))
     assert answer["error"] == "signin_required"
     [line] = [r.getMessage() for r in caplog.records if "allow list" in r.getMessage()]
-    assert line.endswith("host=secure.indeed.com kind=redirect")  # what was stopped too
+    # What was stopped too, and why in the code's words, its query's keys counted (round 3).
+    assert line.endswith("host=secure.indeed.com kind=redirect why=off_family keys=+1")
     assert "auth" not in line
+    assert "token" not in line
     assert "e2e-8f3a1c" not in line
 
 

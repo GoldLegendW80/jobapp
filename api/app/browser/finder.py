@@ -186,6 +186,12 @@ APP_REFUSED = frozenset(
     {"host_not_allowed", "unsupported_discovery", "refused_scheme", "bad_url", "submit", "danger"}
 )
 NAVIGATION_REFUSED = "Refused: the app does not open this address. Go on another way."
+# Round 3 (sweep of 2026-10-30, 16:08): LinkedIn's result links name the posting they select
+# beside the list (`currentJobId`); when the app refuses the link, that posting's own page opens.
+SELECTS_POSTING = (
+    "Refused: the app does not follow this link, but it selects a posting whose own page you "
+    "may open: browser_navigate to {url} to read it."
+)
 # What browserd answers when an action could not finish on the page (routes.call_tool's
 # `page_error`: Playwright gave up, often because a cookie banner covers the element;
 # `element_covered`: browserd saw another element over it; `stale_ref`: the element is gone):
@@ -287,6 +293,11 @@ French, "Weltweit" in German);
 - Welcome to the Jungle: leave its place box empty.
 When the person saved specific places, never type a worldwide value unless one of them means
 no place: search those places.
+On LinkedIn, change the place in this order: click the button showing the place it set
+("Bordeaux et périphérie") to open the place box; click the box's clear button ("Effacer le
+lieu", "Clear location") or type nothing in the box; type its worldwide value ("Worldwide",
+"Monde entier"); then click that suggestion in the list under the box. The place stays for
+the next searches: set it once.
 
 How a person searches a job website, step by step:
 1. Start with browser_snapshot. The first page may be a home page with no search box: find
@@ -313,11 +324,17 @@ search key, such as /fr/jobs?query=genai%20engineer (the key the website uses: q
 search, keyword or keywords), and nothing else but a saved place in `location`. Decide the
 order and the searches: usually one per wanted title, and per wanted place when the website
 has a place field, until the website is covered for this person.
+Every action waits for the website's pace (10 to 30 seconds on LinkedIn), and `seconds_left`
+is short, so run the search of every wanted title first: type the next title in the same box
+with submit, the place set once, and note the postings each list shows (their links, or the
+currentJobId of a card). Then open the postings that fit best, one after the other, and
+report each one.
 4. Read the result list. Open the postings that fit the criteria (click the posting's title
 link, or its card, whose posting link the app then clicks), read each one, and report it with
 report_postings right after opening it. A posting is reported from its own page only: when
 LinkedIn shows a posting beside its list and its address holds currentJobId=<number>, open
-/jobs/view/<number>/ on the same host to read and report it.
+/jobs/view/<number>/ on the same host to read and report it. The same holds for a result
+link or card whose address holds currentJobId=<number>: open /jobs/view/<number>/ directly.
 5. When the website shows no list of postings, say so with report_no_postings and its
 reason: no_match (the search ran and listed no matching job), no_list (only a count or a push
 to sign up, no list), cookie_wall (a banner you could not decline), signin_wall (the postings
@@ -784,6 +801,32 @@ def search_page(url: str) -> bool:
     )
 
 
+LIST_SLUG = re.compile(r"[A-Za-z0-9_-]{1,200}")
+
+
+def result_list(url: str) -> bool:
+    """Whether a canonical address is a LinkedIn result list itself, with no query: `/jobs/search`,
+    `/jobs/search-results` (the current UI's, round 3) or `/jobs/collections/<name>`, a trailing
+    slash aside, on the LinkedIn family, as browserd's discovery.listing reads them. Opened by
+    its address as the search page is (`search_page`); with a query, only from a link a page
+    showed."""
+    family = family_of(url)
+    if family is None or family[0].split(".")[0] != "linkedin":
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.query:
+        return False
+    segments = parts.path.strip("/").split("/")
+    return segments in (["jobs", "search"], ["jobs", "search-results"]) or (
+        len(segments) == 3
+        and segments[:2] == ["jobs", "collections"]
+        and LIST_SLUG.fullmatch(segments[2]) is not None
+    )
+
+
 @dataclass
 class Found:
     """A posting kept by code."""
@@ -1053,6 +1096,9 @@ class FinderSession:
     # The role of every ref of the page last read (`link`, `button`, ...), so a click is known
     # by what the agent saw it press.
     roles: dict[str, str] = field(default_factory=dict)
+    # The links of the page last read that select a LinkedIn posting beside the list
+    # (`currentJobId`): ref, that posting's own page (round 3, `shown_posting`).
+    selects: dict[str, str] = field(default_factory=dict)
     _report_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # Where the start page landed, when its website redirected it on its own origin (a locale
     # path, `/` to `/en`, jobs J18): its links are read from there.
@@ -1092,7 +1138,7 @@ class FinderSession:
 
         root = sources.parse_snapshot(text[:SNAPSHOT_MAX] if self.interactive else text)
         if self.interactive:
-            self.boxes, self.roles = {}, {}
+            self.boxes, self.roles, self.selects = {}, {}, {}
         for node in root.walk():
             if self.interactive and node.ref and len(self.roles) < SEEN_MAX:
                 self.roles[node.ref] = node.role
@@ -1104,6 +1150,13 @@ class FinderSession:
                     not self.interactive or (self.on_site(link) and len(self.seen) < SEEN_MAX)
                 ):
                     self.seen.add(link)
+                    # Round 3: a LinkedIn result link naming the posting it selects beside its
+                    # list (`currentJobId`) shows that posting too: its own page opens.
+                    shown = shown_posting(link) if self.interactive else ""
+                    if shown and len(self.seen) < SEEN_MAX:
+                        self.seen.add(shown)
+                        if node.ref:
+                            self.selects[node.ref] = shown
         if self.interactive and len(self.seen) < SEEN_MAX and (shown := shown_posting(url)):
             self.seen.add(shown)  # the posting LinkedIn shows beside its list (round 2)
         key = canonical(url)
@@ -1218,6 +1271,7 @@ class FinderSession:
             self.interactive
             and url not in self.seen
             and not search_page(url)
+            and not result_list(url)
             and not self.interactive.search_address(url)
         ):
             self.refused["unobserved_address"] += 1  # the app's refusal (B19, outcome)
@@ -1252,6 +1306,9 @@ class FinderSession:
                 and result.get("error") in APP_REFUSED
             ):
                 self.refused["unsupported_interaction"] += 1
+                shown = shown_posting(url)
+                if shown and shown != url:  # round 3: the posting it selects opens
+                    return SELECTS_POSTING.format(url=shown), True
                 return NAVIGATION_REFUSED, True
             if exc.code == "page_failed":
                 return "The page did not load.", True
@@ -1371,6 +1428,10 @@ class FinderSession:
                 return self._stop(ended) if ended else (ACTION_FAILED, True)
             if exc.code == "page_failed":
                 self.refused["unsupported_interaction"] += 1
+                ref = args.get("ref")
+                shown = self.selects.get(ref, "") if isinstance(ref, str) else ""
+                if name == "browser_click" and shown:  # round 3: the posting it selects opens
+                    return SELECTS_POSTING.format(url=shown), True
                 return json.dumps({"error": result.get("error", "page_failed")}), True
             return self._stop(exc.code)
         url = canonical(self.pages.last_url)
