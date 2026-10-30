@@ -123,7 +123,8 @@ class BoardClient:
             status, location, body = await self._get(url)
             if status not in (301, 302, 303, 307, 308):
                 return body
-            if not location or not _same_host(target := urljoin(url, location), host):
+            target = _same_host_target(url, location, host) if location else None
+            if target is None:
                 raise ats.BoardError("upstream_error")
             url = target
         raise ats.BoardError("upstream_error")
@@ -161,18 +162,21 @@ class BoardClient:
             raise ats.BoardError("network") from None
 
 
-def _same_host(target: str, host: str | None) -> bool:
-    """A redirect the client follows: https, the same host, no port, no credentials. A malformed
-    target (a port that is not a number) is not one."""
+def _same_host_target(url: str, location: str, host: str | None) -> str | None:
+    """The address a redirect from `url` leads to when the client follows it: https, the same
+    host, no port, no credentials; else None. A malformed Location (an unclosed IPv6 bracket that
+    urljoin refuses, a port that is not a number) is not one."""
     try:
+        target = urljoin(url, location)
         parts = urlsplit(target)
         port = parts.port
     except ValueError:
-        return False
-    return (
+        return None
+    same = (
         parts.scheme == "https"
         and parts.hostname == host
         and port is None
         and not parts.username
         and not parts.password
     )
+    return target if same else None

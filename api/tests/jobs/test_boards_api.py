@@ -62,6 +62,16 @@ def test_the_list_is_saved_kept_when_left_out_and_cleared_by_an_empty_list(
     assert stored(api, alice)["sections"]["search"]["company_boards"] == []
 
 
+def test_an_explicit_null_is_never_stored(api: Api, alice: Signed) -> None:
+    section = search(interactive_sites=[])
+    assert put_search(api, alice, {**section, "company_boards": [LABS]}).status_code == 200
+    # Null means never saved: the key is dropped, not stored as null.
+    assert put_search(api, alice, {**section, "company_boards": None}).status_code == 200
+    assert "company_boards" not in stored(api, alice)["sections"]["search"]
+    assert put_search(api, alice, {**section, "company_boards": None}).status_code == 200
+    assert "company_boards" not in stored(api, alice)["sections"]["search"]
+
+
 @pytest.mark.parametrize(
     "boards",
     [

@@ -186,6 +186,8 @@ def test_redirects_only_to_the_same_host_over_https() -> None:
         "https://api.lever.co:notaport/v0/postings/new",  # a malformed port
         "https://api.lever.co:99999/v0/postings/new",  # a port out of range
         "//evil.test/v0/postings/new",  # another host, scheme relative
+        "https://[api.lever.co/v0/postings/new",  # an unclosed IPv6 bracket urljoin refuses
+        "//[::1/v0/postings/new",  # the same, scheme relative
     ],
 )
 def test_a_redirect_elsewhere_than_the_same_https_host_is_refused(target: str) -> None:
