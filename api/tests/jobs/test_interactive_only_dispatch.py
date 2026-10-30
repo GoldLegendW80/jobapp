@@ -61,9 +61,10 @@ def test_permission_rows_never_add_legacy_frozen_modes(kind: str, selection: str
         SweepTrigger.manual,
         datetime.now(UTC),
     )
-    assert [row["mode"] for row in scope["sources"]] == (
-        ["llm_browser"] if selection == "enabled" else []
-    )
+    # A ticked LinkedIn is searched through its public job search by default (owner,
+    # 2026-10-30); the permission row adds no mode either way.
+    mode = "api" if kind == "linkedin" else "llm_browser"
+    assert [row["mode"] for row in scope["sources"]] == ([mode] if selection == "enabled" else [])
 
 
 @pytest.mark.parametrize("kind", ["linkedin", "freework"])
@@ -112,13 +113,14 @@ def test_real_runner_and_sweep_do_not_fall_back_after_setup_changes(
     run_id = started.sweep_id
     assert run_id is not None
     frozen = read_sweep(factory, run_id).stats["search_scope"]
-    assert [row["mode"] for row in frozen["sources"]] == ["llm_browser"]
+    mode = "api" if kind == "linkedin" else "llm_browser"
+    assert [row["mode"] for row in frozen["sources"]] == [mode]
     leases, tools = FakeLeases(), FakeTools({})
     asyncio.run(sweep.run_sweep(factory, run_id, clock, browser=website_runner(tools, leases)))
     completed = read_sweep(factory, run_id)
     assert completed.status is SweepStatus.done
     [interactive] = completed.stats["sources"]
-    assert interactive["mode"] == "llm_browser"
+    assert interactive["mode"] == mode
     assert interactive["outcome"] == "failed"
     assert interactive["reason"] == "permission_unavailable"
     assert leases.acquired == []

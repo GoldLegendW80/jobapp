@@ -279,6 +279,8 @@ export const interactiveSettingsSchema = z
       seen.add(key);
     });
   });
+export const LINKEDIN_SEARCH = ["api", "browser"] as const;
+export type LinkedInSearch = (typeof LINKEDIN_SEARCH)[number];
 export interface Search {
   title_include: TermList;
   title_exclude: TermList;
@@ -295,6 +297,9 @@ export interface Search {
   /** Saved intent; browser consent remains owned by the browser API. */
   interactive_sites?: InteractiveSite[];
   interactive_instructions?: string | null;
+  /** how a ticked LinkedIn is searched: LinkedIn's public job search ("api", the default when
+   * absent) or the browser; Easy Apply uses the browser either way. Set in Find jobs. */
+  linkedin_search?: LinkedInSearch;
   /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */

@@ -134,6 +134,7 @@ FULL: dict[str, dict[str, Any]] = {
             }
         ],
         "interactive_instructions": None,
+        "linkedin_search": "api",
         "sweep_schedule": {
             "enabled": False,
             "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],

@@ -809,10 +809,11 @@ class PlatformConsent(_Section):
         return self
 
 
+LinkedInSearchMode = Literal["api", "browser"]
 InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
 INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 # Search fields an older editor or import leaves out: the stored value is kept (service).
-KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude")
+KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude", "linkedin_search")
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -970,6 +971,11 @@ class SearchSection(_Section):
         default_factory=list
     )
     interactive_instructions: OptText(2000, multiline=True) = None
+    # How a ticked LinkedIn is searched (owner, 2026-10-30: "Both, switchable in setup"): "api",
+    # LinkedIn's public job search without an account (app/browser/sources/linkedin_guest.py),
+    # or "browser", the finder agent in the person's browser. Easy Apply uses the browser
+    # either way. A section saved before it reads "api".
+    linkedin_search: LinkedInSearchMode = "api"
     # When the job websites are searched automatically (jobs J5 schedules it and edits it next
     # to Find jobs). Off unless the user turns it on; a section saved before this field existed
     # reads as off.

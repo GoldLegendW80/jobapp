@@ -40,6 +40,7 @@ import {
   profileKey,
   saveSection,
   type InteractiveSite,
+  type LinkedInSearch,
   type Profile,
   type Search,
 } from "@/features/profile/api";
@@ -126,6 +127,7 @@ function ordinarySearch(search: Search, except?: Protected) {
       .sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0)),
     interactive_sites: search.interactive_sites ?? [],
     interactive_instructions: search.interactive_instructions ?? "",
+    linkedin_search: search.linkedin_search ?? "api",
   };
 }
 
@@ -256,6 +258,10 @@ function SetupForm({
   );
   const [instructions, setInstructions] = useState(
     profile.sections.search.interactive_instructions ?? "",
+  );
+  // How a ticked LinkedIn is searched (owner, 2026-10-30): the public job search by default.
+  const [linkedinSearch, setLinkedinSearch] = useState<LinkedInSearch>(
+    profile.sections.search.linkedin_search ?? "api",
   );
   const [custom, setCustom] = useState("");
   const [revision, setRevision] = useState(profile.revision);
@@ -447,6 +453,7 @@ function SetupForm({
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
+        linkedin_search: linkedinSearch,
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -640,6 +647,13 @@ function SetupForm({
                       state={permissionOf(preset.platform)}
                       note={noteOf(preset.platform)}
                     />
+                    {preset.platform === "linkedin" &&
+                    ticked.has("linkedin") ? (
+                      <LinkedInSearchChoice
+                        value={linkedinSearch}
+                        onChange={setLinkedinSearch}
+                      />
+                    ) : null}
                   </li>
                 );
               })}
@@ -759,6 +773,46 @@ const ALSO_ALLOWS: Partial<Record<Protected, string>> = {
   linkedin:
     "Ticking LinkedIn also allows Easy Apply with your LinkedIn account. Each application still needs your approval before it is sent.",
 };
+
+const LINKEDIN_SEARCH_LABELS: Record<LinkedInSearch, string> = {
+  api: "Search with LinkedIn's public job search (no login)",
+  browser: "Search with the browser, signed in",
+};
+
+/** How a ticked LinkedIn is searched (owner, 2026-10-30: "Both, switchable in setup"): its
+ * public job search, without an account (the default), or the browser agent, signed in. */
+function LinkedInSearchChoice({
+  value,
+  onChange,
+}: {
+  value: LinkedInSearch;
+  onChange: (value: LinkedInSearch) => void;
+}) {
+  const name = useId();
+  return (
+    <fieldset className="space-y-1 pt-1 pl-6 text-xs">
+      <legend className="sr-only">How LinkedIn is searched</legend>
+      {(["api", "browser"] as const).map((mode) => (
+        <label key={mode} className="flex items-center gap-2">
+          <input
+            type="radio"
+            name={name}
+            value={mode}
+            className="size-3.5 shrink-0 accent-primary"
+            checked={value === mode}
+            onChange={() => {
+              onChange(mode);
+            }}
+          />
+          {LINKEDIN_SEARCH_LABELS[mode]}
+        </label>
+      ))}
+      <p className="text-muted-foreground">
+        Easy Apply always uses the browser.
+      </p>
+    </fieldset>
+  );
+}
 
 /** A job website's risk sentence as the server words it now, what else its tick allows, and
  * what saving does: all inside the element the box names as its description. */

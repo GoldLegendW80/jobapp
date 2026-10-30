@@ -170,6 +170,11 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "LinkedIn needs you to sign in. Nothing else was opened on LinkedIn.",
   linkedin_checkpoint:
     "LinkedIn showed a security check, so all LinkedIn work is paused for a week.",
+  // LinkedIn's public job search (owner, 2026-10-30, app/browser/sources/linkedin_guest.py).
+  rate_limited:
+    "LinkedIn asked the app to slow down, so its search stopped for this time. Postings saved before are kept.",
+  linkedin_searched_once:
+    "LinkedIn was searched once through its public job search for all your LinkedIn addresses.",
   // The job websites searched in the person's browser (jobs J10, app/browser/sources/interactive.py).
   permission_unavailable:
     "Searching this website needs your permission for it, so it was not opened. Tick it in Find jobs and save to give it.",

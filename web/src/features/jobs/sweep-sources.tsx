@@ -21,8 +21,12 @@ import type { SweepSource } from "./sweeps-api";
 
 export function SweepSources({ sources }: { sources: SweepSource[] }) {
   const feeds = sources.filter((source) => isFeedKind(source.kind));
+  // A deleted company board (mode api) is left out; LinkedIn's public job search (mode api,
+  // kind linkedin, owner 2026-10-30) is one of the job sites.
   const sites = sources.filter(
-    (source) => !isFeedKind(source.kind) && source.mode !== "api",
+    (source) =>
+      !isFeedKind(source.kind) &&
+      (source.mode !== "api" || source.kind === "linkedin"),
   );
   return (
     <>
@@ -34,7 +38,7 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
 
 function sourceStatus(source: SweepSource): string {
   if (
-    source.mode === "llm_browser" &&
+    (source.mode === "llm_browser" || source.mode === "api") &&
     (source.phase === "pending" ||
       source.outcome === "not_attempted" ||
       source.reason === "interactive_executor_pending")

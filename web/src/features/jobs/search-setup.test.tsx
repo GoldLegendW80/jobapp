@@ -1371,3 +1371,90 @@ it("shows no other search source, no Websites only and no link, and sends none b
   expect(sent).not.toHaveProperty("feeds");
   expect(sent.browser_sources ?? []).toEqual([]);
 });
+
+// LinkedIn searched through its public job search or the browser (owner, 2026-10-30: "Both,
+// switchable in setup"); Easy Apply uses the browser either way.
+const LINKEDIN_API = "Search with LinkedIn's public job search (no login)";
+const LINKEDIN_BROWSER = "Search with the browser, signed in";
+const LINKEDIN_TICKED: Search = {
+  ...EMPTY.search,
+  interactive_sites: [site("linkedin", PRESET_URLS.linkedin)],
+};
+
+it("shows LinkedIn's search choice only while LinkedIn is ticked, the public job search first and chosen", async () => {
+  const { user, dialog } = await open(structuredClone(EMPTY.search), {
+    linkedin: { enabled: true, accepted: true },
+  });
+  expect(
+    within(dialog).queryByRole("radio", { name: LINKEDIN_API }),
+  ).not.toBeInTheDocument();
+  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  const choice = within(dialog).getByRole("group", {
+    name: "How LinkedIn is searched",
+  });
+  const radios = within(choice).getAllByRole("radio");
+  expect(radios.map((radio) => radio.getAttribute("value"))).toEqual([
+    "api",
+    "browser",
+  ]);
+  expect(
+    within(choice).getByRole("radio", { name: LINKEDIN_API }),
+  ).toBeChecked();
+  expect(
+    within(choice).getByRole("radio", { name: LINKEDIN_BROWSER }),
+  ).not.toBeChecked();
+  expect(choice).toHaveTextContent("Easy Apply always uses the browser.");
+  // No dash as a separator in what the person reads.
+  expect(choice.textContent).not.toMatch(/[–—]| - /);
+  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  expect(
+    within(dialog).queryByRole("group", { name: "How LinkedIn is searched" }),
+  ).not.toBeInTheDocument();
+});
+
+it("saves the browser choice for LinkedIn's search", async () => {
+  const { profile, starts, user, dialog } = await open(
+    structuredClone(LINKEDIN_TICKED),
+    { linkedin: { enabled: true, accepted: true } },
+  );
+  await user.click(
+    within(dialog).getByRole("radio", { name: LINKEDIN_BROWSER }),
+  );
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    linkedin_search: "browser",
+  });
+});
+
+it("reopens a saved browser choice as saved", async () => {
+  const { dialog } = await open(
+    { ...structuredClone(LINKEDIN_TICKED), linkedin_search: "browser" },
+    { linkedin: { enabled: true, accepted: true } },
+  );
+  expect(
+    within(dialog).getByRole("radio", { name: LINKEDIN_BROWSER }),
+  ).toBeChecked();
+  expect(
+    within(dialog).getByRole("radio", { name: LINKEDIN_API }),
+  ).not.toBeChecked();
+});
+
+it("sends the public job search for a search saved before the choice existed", async () => {
+  const { profile, starts, user, dialog } = await open(
+    structuredClone(LINKEDIN_TICKED),
+    { linkedin: { enabled: true, accepted: true } },
+  );
+  expect(
+    within(dialog).getByRole("radio", { name: LINKEDIN_API }),
+  ).toBeChecked();
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    linkedin_search: "api",
+  });
+});

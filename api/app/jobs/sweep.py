@@ -147,6 +147,9 @@ class Posting:
     url: str
     published: str  # YYYY-MM-DD, "" when the page states no date
     text: str
+    # The contract type the website states (LinkedIn's employment type, linkedin_guest), used
+    # when the title, location and address state none.
+    contract: ContractType | None = None
 
 
 def published_date(value: str) -> date | None:
@@ -195,6 +198,18 @@ def has_sources(search: SearchSection | None) -> bool:
     return has_websites(search)
 
 
+def linkedin_mode(search: SearchSection | None) -> str:
+    """The mode a ticked LinkedIn runs in: `api` (LinkedIn's public job search, the default) or
+    `llm_browser` (the finder agent in the person's browser), from `search.linkedin_search`."""
+    if search is not None and getattr(search, "linkedin_search", "api") == "browser":
+        return "llm_browser"
+    return "api"
+
+
+def _site_mode(search: SearchSection, site: Any) -> str:
+    return linkedin_mode(search) if site.effective_platform == "linkedin" else site.mode
+
+
 def _source_id(mode: str, *key: str) -> str:
     encoded = json.dumps([mode, *key], ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
@@ -221,8 +236,9 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         sources.extend(
             {
                 **site.model_dump(mode="json"),
+                "mode": _site_mode(search, site),
                 "platform": site.effective_platform,
-                "source_id": _source_id(site.mode, site.url),
+                "source_id": _source_id(_site_mode(search, site), site.url),
                 "host": urlsplit(site.url).hostname,
             }
             for site in search.interactive_sites
@@ -451,6 +467,8 @@ def _new_job(plan: Plan, company: str, posting: Posting, source: str, now: datet
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
     contract = kind(posting.title, posting.location, posting.url)
+    if contract is ContractType.CDI and posting.contract is not None:
+        contract = posting.contract
     # Pay and work mode (opportunities O3): what the text and the location state in an accepted
     # shape, else nothing.
     pay = pays.pay_of(text, freelance=contract is ContractType.Freelance)
@@ -883,7 +901,12 @@ def _store_finding(
 ) -> None:  # fmt: skip
     company = finding.company or UNKNOWN_EMPLOYER
     posting = Posting(
-        finding.title, finding.location, finding.url, finding.published_on or "", finding.text
+        finding.title,
+        finding.location,
+        finding.url,
+        finding.published_on or "",
+        finding.text,
+        getattr(finding, "contract", None),
     )
     delta.seen += 1
     delta.matched += 1

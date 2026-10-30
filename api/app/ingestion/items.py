@@ -88,7 +88,8 @@ start, and a school with no date at all last. Every other list appends.
 **Never proposable.** A setting is the user's choice about how the app behaves, not a claim a
 document supports: a gate's `penalty`, every `advanced_regex`, `search.min_fit`,
 `search.days`, `search.browser_sources`, `search.sweep_schedule`, `search.documents`,
-`search.interactive_sites`, `search.interactive_instructions`, `search.company_types` and
+`search.interactive_sites`, `search.interactive_instructions`, `search.linkedin_search`,
+`search.company_types` and
 `search.compensation` (wishes and pay a document does not state for the person), the whole
 `preferences` section (how the app behaves, and the wizard's dates), and the apply fields of
 `answers` (EEO, salary stance and ranges, consents, preferred name and the like). They are typed
@@ -357,6 +358,8 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.interactive_sites[].enabled": _T.SETTING,
         "search.interactive_sites[].mode": _T.SETTING,
         "search.interactive_instructions": _T.SETTING,
+        # How a ticked LinkedIn is searched (owner, 2026-10-30), set in Find jobs only.
+        "search.linkedin_search": _T.SETTING,
         # The permission map is written only by its dedicated route, never read from a document.
         "search.platform_consents": _T.SETTING,
         "preferences.onboarding.completed_at": _T.SETTING,
@@ -512,6 +515,7 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             compensation=_K.setting,
             interactive_sites=_K.setting,
             interactive_instructions=_K.setting,
+            linkedin_search=_K.setting,
         ),
         "answers": _slots(
             "answers",

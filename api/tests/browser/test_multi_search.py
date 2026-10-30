@@ -500,7 +500,8 @@ def test_linkedin_s_agent_has_no_page_cap():
     site = SearchSite(base=LINKEDIN, results={t: [f"{t} Engineer"] for t in ("a1", "b2", "c3")})
     policy = NoDatabasePolicy()
     entry, _, leases = run(
-        selected(LINKEDIN, title_include={"terms": ["a1", "b2", "c3"]}),
+        # The browser agent (the default is LinkedIn's public job search, owner 2026-10-30).
+        selected(LINKEDIN, title_include={"terms": ["a1", "b2", "c3"]}, linkedin_search="browser"),
         site,
         ScriptedFinder(searching(site)),
         policy=policy,
