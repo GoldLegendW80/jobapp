@@ -3,13 +3,14 @@
 - POST /api/jobs/sweeps: 202 with the new sweep (status running, queued for the worker). 409
   with the running sweep's id when the caller already has one (a stale one, with no heartbeat
   for sweep.STALE_AFTER, is failed first and does not block). 422 when the profile's search
-  section has no enabled website. 503 when the queue (Redis) is down: the sweep is then failed
-  at once, so it never blocks the next try.
+  section has no enabled website nor company board. 503 when the queue (Redis) is down: the
+  sweep is then failed at once, so it never blocks the next try.
   An optional `{profile_revision}` body refuses a stale reviewed revision with 409. No-body
   callers remain supported. Scope is frozen before enqueue; its public projection omits
-  instructions and source addresses. Every start searches the enabled websites: the boards,
-  feeds and fixed readers were deleted (owner, 2026-10-28), and its scope still says
-  `websites_only` for the release before; the `{websites_only}` of jobs J17 is still accepted
+  instructions and source addresses. Every start reads the enabled company job boards
+  (owner, 2026-10-30, app/jobs/boards) and searches the enabled websites; the feeds and fixed
+  readers stay deleted (owner, 2026-10-28), and its scope still says `websites_only` for the
+  release before (which then reads no board); the `{websites_only}` of jobs J17 is still accepted
   from an older tab and changes nothing.
 - GET /api/jobs/sweeps?limit=N: the caller's newest sweeps (default 20, at most 100) and their
   automatic schedule (`search.sweep_schedule`, off by default) with its next run. The schedule

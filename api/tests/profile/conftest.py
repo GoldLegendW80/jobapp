@@ -134,6 +134,15 @@ FULL: dict[str, dict[str, Any]] = {
             }
         ],
         "interactive_instructions": None,
+        # Company job boards (owner, 2026-10-30).
+        "company_boards": [
+            {
+                "company": "Example Labs",
+                "ats": "greenhouse",
+                "board": "examplelabs",
+                "enabled": True,
+            }
+        ],
         "sweep_schedule": {
             "enabled": False,
             "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],

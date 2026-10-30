@@ -141,6 +141,8 @@ const KIND_NAMES: Record<string, string> = {
   welcome_to_the_jungle: "Welcome to the Jungle",
   indeed: "Indeed",
   freework: "Free-Work",
+  // A company job board read through its ATS's public API (owner, 2026-10-30).
+  board: "Company board",
 };
 
 /** What each `error` of a source means, for the person. */
@@ -159,6 +161,24 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   page_failed: "A page did not load. What was read before is kept.",
   browser_unavailable: "The browser could not be reached.",
   not_started: "not read this time, it comes at the next search.",
+  // Company job boards (owner, 2026-10-30, app/jobs/boards/client.py and run.py).
+  not_found:
+    "This board was not found on its ATS. Check its address in Find jobs.",
+  blocked: "The ATS refused to answer for this board.",
+  rate_limited:
+    "The ATS asked the app to slow down, so its other boards wait for the next search.",
+  host_rate_limited:
+    "Its ATS asked the app to slow down earlier in this search, so this board waits for the next one.",
+  upstream_error:
+    "The ATS answered with an error. The board is read again at the next search.",
+  timeout: "The ATS did not answer in time.",
+  network: "The ATS could not be reached.",
+  too_large: "The board's answer was too large to read.",
+  invalid_response: "The ATS answered something the app could not read.",
+  no_titles:
+    "Add a title you want in Find jobs: a company board is never read whole.",
+  store_refused:
+    "What this board found could not be saved, so it stopped there. Postings saved before are kept.",
   // LinkedIn (browser B10, app/browser/linkedin_guard.py).
   linkedin_off: "LinkedIn is off for you, so it was not searched.",
   linkedin_paused:

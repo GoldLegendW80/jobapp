@@ -1,0 +1,19 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "totalFound": 2,
+  "content": [
+    {
+      "id": "700000000000001",
+      "name": "GenAI Engineer",
+      "releasedDate": "2026-10-04T14:35:38.568Z",
+      "company": {"identifier": "ExampleConsulting", "name": "Example Consulting"},
+      "location": {"city": "Paris", "country": "fr", "remote": false},
+      "typeOfEmployment": {"id": "permanent", "label": "Full-time"}
+    },
+    {
+      "name": "AI Engineer without an id",
+      "releasedDate": "2026-10-04T14:35:38.568Z"
+    }
+  ]
+}

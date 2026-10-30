@@ -295,6 +295,8 @@ export interface Search {
   /** Saved intent; browser consent remains owned by the browser API. */
   interactive_sites?: InteractiveSite[];
   interactive_instructions?: string | null;
+  /** Company job boards (owner, 2026-10-30), edited in Find jobs; null or absent: never saved */
+  company_boards?: CompanyBoard[] | null;
   /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */
@@ -305,6 +307,20 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+}
+
+/** schemas.py CompanyBoard: a company's public job board on its ATS. */
+export interface CompanyBoard {
+  company: string;
+  ats:
+    | "ashby"
+    | "greenhouse"
+    | "lever"
+    | "smartrecruiters"
+    | "workable"
+    | "recruitee";
+  board: string;
+  enabled: boolean;
 }
 
 export interface PayRange {

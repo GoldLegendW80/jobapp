@@ -39,6 +39,7 @@ import {
   interactiveSettingsSchema,
   profileKey,
   saveSection,
+  type CompanyBoard,
   type InteractiveSite,
   type Profile,
   type Search,
@@ -53,6 +54,8 @@ import { SearchLists } from "@/features/profile/search-lists";
 import { TargetFields } from "@/features/profile/target-fields";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
+import { getStarterBoards, savedBoard, starterKey } from "./boards-api";
+import { CompanyBoards } from "./company-boards";
 import { formatDateTime } from "./format";
 import {
   PROTECTED,
@@ -258,6 +261,24 @@ function SetupForm({
     profile.sections.search.interactive_instructions ?? "",
   );
   const [custom, setCustom] = useState("");
+  // Company job boards (owner, 2026-10-30): never saved, the starter list is shown ticked and
+  // Save stores it; a list saved before is the person's own. Sent only once shown or changed.
+  const savedBoards = profile.sections.search.company_boards ?? null;
+  const [edited, setEdited] = useState<CompanyBoard[] | null>(() =>
+    savedBoards ? structuredClone(savedBoards) : null,
+  );
+  const starter = useQuery({
+    queryKey: starterKey,
+    queryFn: ({ signal }) => getStarterBoards(signal),
+    enabled: savedBoards === null,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  });
+  const seeded = starter.data ? starter.data.boards.map(savedBoard) : null;
+  // null while the starter list loads; an empty list when it could not be loaded (not sent).
+  const boards = edited ?? seeded ?? (starter.isError ? [] : null);
+  const sendBoards = edited !== null || seeded !== null;
   const [revision, setRevision] = useState(profile.revision);
   const [reviewed, setReviewed] = useState(() =>
     structuredClone(profile.sections.search),
@@ -447,6 +468,7 @@ function SetupForm({
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
+        ...(sendBoards && boards !== null ? { company_boards: boards } : {}),
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -715,6 +737,7 @@ function SetupForm({
               </div>
             </div>
           </section>
+          <CompanyBoards boards={boards} onChange={setEdited} />
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
             <SearchLists form={form} descriptions={false} />

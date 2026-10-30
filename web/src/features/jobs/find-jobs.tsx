@@ -1,6 +1,6 @@
 /**
- * "Find jobs" on /jobs: start a search of the job websites ticked in its setup (every search
- * runs the websites alone, owner 2026-10-28), follow it live (the website being read, new
+ * "Find jobs" on /jobs: start a search of the company job boards and the job websites ticked in
+ * its setup (owner, 2026-10-30), follow it live (the website being read, new
  * postings so far), then a summary of what it found. An older sweep that read boards still
  * shows them. The history of the last sweeps, with the automatic schedule and its next run, is one
  * click away. A sweep already running when the page opens (started elsewhere, or an automatic
@@ -83,6 +83,14 @@ function readingName(sweep: Sweep): string {
   return source ? sourceName(source) : sourceLabel(current);
 }
 
+/** What the sweep's sources are called: "website", or "source" once company job boards (mode
+ * "api", owner 2026-10-30) are among them. */
+function sourceWord(sweep: Sweep): string {
+  return sweep.sources.some((source) => source.mode === "api")
+    ? "source"
+    : "website";
+}
+
 /** The live line under the header while a sweep runs. A sweep searches the job websites ticked
  * in Find jobs alone (owner, 2026-10-28), so it counts them: one source with a host each, done
  * once its phase is. */
@@ -105,7 +113,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
       >
         <span className="font-medium">
           {total
-            ? `${String(done)} of ${plural(total, "website")} searched`
+            ? `${String(done)} of ${plural(total, sourceWord(sweep))} searched`
             : sweep.current_board
               ? "Searching job websites"
               : "Waiting for the worker"}
@@ -142,7 +150,7 @@ function summaryLine(sweep: Sweep): string {
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
-      : `${plural(sweep.sources.filter((source) => source.host).length, "website")} searched`,
+      : `${plural(sweep.sources.filter((source) => source.host).length, sourceWord(sweep))} searched`,
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),

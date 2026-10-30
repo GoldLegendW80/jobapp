@@ -232,9 +232,11 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
 
 
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
-    await sweep.run_sweep(
-        sessions_of(ctx), uuid.UUID(sweep_id), clock_of(ctx), browser=browser_sources(ctx)
-    )
+    from app.jobs.boards import run as boards
+
+    # The company boards (app/jobs/boards) first, then the job websites with the time left.
+    hook = boards.chain(boards.Boards(ctx.get("boards_transport")), browser_sources(ctx))
+    await sweep.run_sweep(sessions_of(ctx), uuid.UUID(sweep_id), clock_of(ctx), browser=hook)
 
 
 def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:

@@ -20,12 +20,15 @@ One sweep, `run_sweep(sweep_id)`:
 5. End. `done` with the duration, or `failed` with a short error (time limit, cancellation, a
    bug); the row is never left running by a sweep that returns.
 
-Company boards (Ashby, Greenhouse, Lever), freelance feeds and the fixed browser readers were
-deleted (owner, 2026-10-28: "Delete it"). Their saved settings are dropped from the profile on
-the next read or save (app/profile/schemas.py). A sweep row they wrote keeps its stats as
-stored (`boards_*`, the feed and reader entries of `sources`), and the history reads them; new
-rows still write `boards_total` and the other board counters, at zero, so the release before
-this one reads every row.
+Company job boards are back (owner, 2026-10-30, reversing "Delete it" of 2026-10-28), rebuilt
+in app/jobs/boards: the person's `company_boards`, read through their ATS's public API before
+the websites (worker.run_sweep chains app/jobs/boards/run.py's hook before the website Runner),
+one source of the frozen scope and of `stats.sources` per board (`mode` "api", `kind` "board").
+The freelance feeds and the fixed browser readers stay deleted (owner, 2026-10-28), and the old
+`boards` key of the profile stays dropped on the next read or save (app/profile/schemas.py). A
+sweep row written before keeps its stats as stored (`boards_*`, the feed and reader entries of
+`sources`), and the history reads them; new rows still write `boards_total` and the other board
+counters, at zero (the boards are counted in `sources`), so an older release reads every row.
 
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
@@ -74,6 +77,7 @@ from app import queue as queues
 from app.identity.models import User
 from app.jobs import schedule, scoring, service
 from app.jobs import slug as slugs
+from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
 from app.jobs.models import (
     ContractType,
@@ -191,8 +195,8 @@ def has_websites(search: SearchSection | None) -> bool:
 
 
 def has_sources(search: SearchSection | None) -> bool:
-    """Whether a sweep of `search` has something to read: an enabled website."""
-    return has_websites(search)
+    """Whether a sweep of `search` has something to read: an enabled website or company board."""
+    return has_websites(search) or bool(boards.enabled_boards(search))
 
 
 def _source_id(mode: str, *key: str) -> str:
@@ -227,6 +231,17 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             }
             for site in search.interactive_sites
             if site.enabled
+        )
+        # The company boards (app/jobs/boards/run.py `entry_of`, the same identity).
+        sources.extend(
+            {
+                "source_id": _source_id("api", board.ats, board.board),
+                "mode": "api",
+                "kind": "board",
+                "host": boards.api_host(board.ats, board.board),
+                "query": f"{board.ats}:{board.board}",
+            }
+            for board in boards.enabled_boards(search)
         )
     return {
         "version": 1,

@@ -1,0 +1,21 @@
+[
+  {
+    "id": "abc",
+    "text": "Forward Deployed Engineer",
+    "hostedUrl": "https://jobs.lever.co/exampleworks/abc",
+    "categories": {"location": "Paris", "commitment": "Full-time", "allLocations": ["Paris", "Lyon"]},
+    "createdAt": 1791028800000,
+    "workplaceType": "hybrid",
+    "descriptionPlain": "Forward Deployed Engineer. Agents in production."
+  },
+  {
+    "id": "def",
+    "text": "AI Engineer",
+    "hostedUrl": "https://jobs.lever.co/exampleworks/def",
+    "categories": {"location": "Berlin", "commitment": "Contract"},
+    "createdAt": 1791028800000,
+    "workplaceType": "remote",
+    "descriptionPlain": "Remote contract."
+  },
+  {"id": "ghi", "text": "", "hostedUrl": "https://jobs.lever.co/exampleworks/ghi"}
+]
