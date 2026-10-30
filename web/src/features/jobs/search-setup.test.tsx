@@ -1361,7 +1361,12 @@ it("shows no other search source, no Websites only and no link, and sends none b
   ).toBeNull();
   for (const text of [/API board/, /\(feed\)/, /fixed reader/, /Remote OK/])
     expect(within(dialog).queryByText(text)).toBeNull();
-  expect(within(dialog).queryByRole("link")).toBeNull();
+  // The only links are the job feeds' way to Adzuna's key, never the old boards' page.
+  expect(
+    within(dialog)
+      .queryAllByRole("link")
+      .map((link) => link.textContent),
+  ).toEqual(["developer.adzuna.com", "Account"]);
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
@@ -1370,4 +1375,85 @@ it("shows no other search source, no Websites only and no link, and sends none b
   expect(sent).not.toHaveProperty("boards");
   expect(sent).not.toHaveProperty("feeds");
   expect(sent.browser_sources ?? []).toEqual([]);
+});
+
+// --- job feeds (api app/jobs/feeds, owner 2026-10-30) ------------------------------------------
+
+it("ticks job feeds beside the websites and saves them with the search", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    job_feeds: ["himalayas"],
+  });
+  const feeds = within(dialog).getByRole("list", { name: "Job feeds" });
+  const box = (name: string) => within(feeds).getByRole("checkbox", { name });
+  expect(box("Arbeitnow (jobs in Europe)")).not.toBeChecked();
+  expect(box("Himalayas (remote jobs open to France)")).toBeChecked();
+  const adzuna = box("Adzuna (jobs in France, needs a free key)");
+  expect(adzuna).not.toBeChecked();
+  // No key stored: the box says so, and where to get and store one.
+  await waitFor(() => {
+    expect(adzuna).toHaveAccessibleDescription(
+      "No Adzuna key is stored, so Adzuna is skipped. Create a free key at developer.adzuna.com, then store it in Account.",
+    );
+  });
+  expect(
+    within(feeds).getByRole("link", { name: "developer.adzuna.com" }),
+  ).toHaveAttribute("href", "https://developer.adzuna.com/signup");
+  expect(within(feeds).getByRole("link", { name: "Account" })).toHaveAttribute(
+    "href",
+    "/account#adzuna-key",
+  );
+  await user.click(box("Arbeitnow (jobs in Europe)"));
+  await user.click(adzuna);
+  await user.click(box("Himalayas (remote jobs open to France)"));
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  const sent = profile.saves[0]!.body.data as Record<string, unknown>;
+  expect(sent.job_feeds).toEqual(["arbeitnow", "adzuna"]);
+});
+
+it("says when the Adzuna key is stored", async () => {
+  server.use(
+    http.get("*/api/jobs/feeds", () =>
+      HttpResponse.json({
+        feeds: [
+          { name: "arbeitnow", needs_key: false },
+          { name: "himalayas", needs_key: false },
+          {
+            name: "adzuna",
+            needs_key: true,
+            key_stored: true,
+            key_last4: "k042",
+            key_saved_at: "2026-10-30T10:00:00Z",
+          },
+        ],
+        keys_available: true,
+      }),
+    ),
+  );
+  const { dialog } = await open();
+  const feeds = within(dialog).getByRole("list", { name: "Job feeds" });
+  expect(
+    await within(feeds).findByText(
+      /Your Adzuna key ending in k042 is stored\./,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(feeds).getByRole("link", { name: "Change it in Account" }),
+  ).toHaveAttribute("href", "/account#adzuna-key");
+});
+
+it("saves no job feed when none is ticked", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    interactive_sites: [site("custom", "https://careers.example.org/")],
+  });
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  const sent = profile.saves[0]!.body.data as Record<string, unknown>;
+  expect(sent.job_feeds).toEqual([]);
 });

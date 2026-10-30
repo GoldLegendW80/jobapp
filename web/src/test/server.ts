@@ -39,6 +39,15 @@ export const emptySweeps = {
   },
 };
 
+export const noFeedKeys = {
+  feeds: [
+    { name: "arbeitnow", needs_key: false, key_stored: false, key_last4: null },
+    { name: "himalayas", needs_key: false, key_stored: false, key_last4: null },
+    { name: "adzuna", needs_key: true, key_stored: false, key_last4: null },
+  ],
+  keys_available: true,
+};
+
 export const onboardingDone = {
   completed_at: "2026-10-08T10:00:00+00:00",
   dismissed_at: null,
@@ -53,6 +62,8 @@ export const onboardingDone = {
 export const handlers = [
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
+  // The job feeds, no Adzuna key stored (Find jobs and the Account page's Adzuna key card).
+  http.get("*/api/jobs/feeds", () => HttpResponse.json(noFeedKeys)),
   http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
   // No model credential saved (the Account page's Model access card).
   http.get("*/api/me/model-credential", () =>

@@ -388,7 +388,7 @@ test("B ticked no website: the start is refused, nothing queued, nothing of A or
   });
   expect(refused.status()).toBe(422);
   expect(await refused.text()).toContain(
-    "Tick at least one job website in Find jobs, then start the search again.",
+    "Tick at least one job website or job feed in Find jobs, then start the search again.",
   );
   expect((await sweeps(page.request)).items).toEqual([]);
   expect(await jobsOf(page.request)).toEqual([]);

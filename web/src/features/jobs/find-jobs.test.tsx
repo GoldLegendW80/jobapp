@@ -570,7 +570,7 @@ describe("Find jobs", () => {
         HttpResponse.json(
           {
             detail:
-              "Tick at least one job website in Find jobs, then start the search again.",
+              "Tick at least one job website or job feed in Find jobs, then start the search again.",
           },
           { status: 422 },
         ),
@@ -579,7 +579,9 @@ describe("Find jobs", () => {
     const user = userEvent.setup();
     await startSearch(user);
     expect(
-      await screen.findByText(/Tick at least one job website in Find jobs/),
+      await screen.findByText(
+        /Tick at least one job website or job feed in Find jobs/,
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Save and Start" }),
@@ -840,5 +842,65 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     });
     expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
     expect(summary).not.toHaveTextContent("websites searched");
+  });
+});
+
+describe("Find jobs with job feeds", () => {
+  it("counts the job feeds with the websites and lists them in the summary", async () => {
+    const feed = (
+      kind: string,
+      phase: string,
+      extra: Partial<SweepSource> = {},
+    ) => ({
+      ...searching(
+        kind === "arbeitnow" ? "www.arbeitnow.com" : "api.adzuna.com",
+        phase,
+      ),
+      kind,
+      mode: "api",
+      ...extra,
+    });
+    fakeSweeps({
+      states: [
+        makeSweep({
+          boards_total: 0,
+          current_board: "feed",
+          sources: [
+            feed("arbeitnow", "running"),
+            feed("adzuna", "pending"),
+            searching("jobs.example.org", "pending"),
+          ],
+        }),
+        finished({
+          boards_total: 0,
+          boards_done: 0,
+          boards_ok: 0,
+          boards_failed: [],
+          sources: [
+            feed("arbeitnow", "done", { found: 3, new: 2 }),
+            feed("adzuna", "done", { error: "no_key", reason: "no_key" }),
+            searching("jobs.example.org", "done"),
+          ],
+        }),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent(/0 of 3 sources searched/);
+    const dialog = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(dialog).toHaveTextContent(
+      "1 website searched, 2 job feeds read, 120 postings seen",
+    );
+    const feeds = within(dialog).getByRole("region", { name: "Job feeds" });
+    expect(feeds).toHaveTextContent("Arbeitnow: 3 postings kept, 2 new.");
+    expect(feeds).toHaveTextContent(
+      "Adzuna: Skipped: no Adzuna key is stored.",
+    );
   });
 });
