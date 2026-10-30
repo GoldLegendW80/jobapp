@@ -1,9 +1,10 @@
 """Which company boards a search reads, and the starter list Find jobs offers.
 
 `company_boards` in the search section (profile/schemas.CompanyBoard) is the person's list. None
-means never saved: Find jobs then shows the starter list (`seed`) ticked, and Save stores it as
-the person's own, so what the setup shows is what runs. A sweep reads only a saved list: None
-reads no board, so no account starts calling the ATSs before its person saw the list.
+means never saved: Find jobs then shows the starter list (`seed`) ticked as a proposal, saved
+only once the person changes it or keeps it (a Save of other settings leaves the key out: the
+release before refuses it, SPEC-jobs, Company job boards, Rollback). A sweep reads only a saved
+list: None reads no board, so no account starts calling the ATSs before its person chose.
 
 The starter list (seed.json): the 20 boards that answered on 2026-10-30 in the research of
 alternatives to the deleted engine, and the 13 boards of the engine's own list that also

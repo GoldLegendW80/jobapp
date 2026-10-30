@@ -292,13 +292,17 @@ export function sourceName(source: {
   query: string;
   location?: string | null;
   host?: string | null;
+  company?: string | null;
 }): string {
   // A website of the person's own (jobs J9, platform custom) is named by its host.
   const kind =
     source.kind === "custom" && source.host
       ? source.host
       : (KIND_NAMES[source.kind] ?? source.kind);
-  const parts = source.query ? [kind, source.query] : [kind];
+  // A company job board by its company (owner, 2026-10-30), else its `<ats>:<board>`.
+  const query =
+    source.kind === "board" && source.company ? source.company : source.query;
+  const parts = query ? [kind, query] : [kind];
   if (source.location) parts.push(source.location);
   return parts.join(", ");
 }

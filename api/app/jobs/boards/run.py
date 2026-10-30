@@ -5,7 +5,8 @@ the run's commits (sweep.Commits), before the job websites, which then get the t
 - Reading: the boards of one ATS one after the other, paced (client.py); different ATSs side by
   side. Storing: one board at a time, in the saved order, since the commits admit one source.
 - Each board is one source of the sweep's stats: `mode` "api", `kind` "board", `host` the ATS's
-  API host, `query` "<ats>:<board>" (also the stored job's `source`), `result_pages` the
+  API host, `query` "<ats>:<board>" (also the stored job's `source`), `company` the board's
+  company name as saved (frozen with the scope, so the summary names it), `result_pages` the
   requests made, `listed` the postings the board lists, `left_out` the postings the filters left
   out by reason, then the store's `found`, `postings`, `duplicates`, `skipped_by_rule` and the
   `outcome` and `reason` of sweep.finish_source. A board not asked ends `not_attempted` with its
@@ -15,8 +16,10 @@ the run's commits (sweep.Commits), before the job websites, which then get the t
 - The sweep's `seen` counts every posting listed, `matched` and the rest what was stored, as for
   a website; `invalid` the postings without a title or an address.
 - A posting is stored with the board's company name, the ATS's date, the text the API gives,
-  and in its `sweep` event's discovery the time the API was read (`detail_read_at`) and no page
-  evidence.
+  its one contract (filters.contract_of, the one the filter used), and in its `sweep` event's
+  discovery the time the API was read (`detail_read_at`) and no page evidence.
+- Memory: a board's answer is parsed one at a time across the ATSs (client.py), and its postings
+  are let go once stored (`reads[i] = None`), so what waits is only the boards read ahead.
 """
 
 import asyncio
@@ -24,14 +27,15 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from app.jobs import sweep
 from app.jobs.boards import ats, catalog
 from app.jobs.boards.client import PAUSE_S, BoardClient, Read
-from app.jobs.boards.filters import BoardFilter
+from app.jobs.boards.filters import BoardFilter, contract_of
+from app.jobs.models import ContractType
 from app.profile.schemas import CompanyBoard
 
 BUDGET_S = 300.0  # the longest the boards may take, out of the sweep's 900 s
@@ -41,7 +45,8 @@ BATCH = 50  # postings per commit
 
 @dataclass(frozen=True)
 class BoardFinding:
-    """A board's posting as the store reads it (the fields of finder.VerifiedFinding)."""
+    """A board's posting as the store reads it (the fields of finder.VerifiedFinding, and the
+    contract the store keeps: sweep._store_finding reads `contract` when a finding has one)."""
 
     title: str
     location: str
@@ -51,6 +56,7 @@ class BoardFinding:
     published_on: str | None
     detail_read_at: str
     evidence: dict[str, str] = field(default_factory=dict)
+    contract: ContractType | None = None
 
 
 @dataclass(frozen=True)
@@ -70,7 +76,18 @@ def entry_of(board: CompanyBoard) -> dict[str, Any]:
         "kind": "board",
         "host": catalog.api_host(board.ats, board.board),
         "query": label(board),
+        "company": board.company,
     }
+
+
+def _settle(future: "asyncio.Future[Read] | None", outcome: Read | ats.BoardError) -> None:
+    """Fill a board's future, unless it was released or cancelled meanwhile."""
+    if future is None or future.done():
+        return
+    if isinstance(outcome, ats.BoardError):
+        future.set_exception(outcome)
+    else:
+        future.set_result(outcome)
 
 
 Hook = Callable[[Any, sweep.Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
@@ -131,16 +148,24 @@ class Boards:
             reads, tasks = self._read_all(client, boards)
             try:
                 stop: str | None = None
-                for board, read in zip(boards, reads, strict=True):
-                    if stop is not None:
+                for index, board in enumerate(boards):
+                    pending = cast("asyncio.Future[Read]", reads[index])  # set until here
+                    if stop is None:
+                        stop = await self._one(plan, board, pending, wanted, stats, progress, end)
+                    else:
                         await self._skip(board, stats, progress, stop)
-                        continue
-                    stop = await self._one(plan, board, read, wanted, stats, progress, end)
+                    if pending.done() and not pending.cancelled():
+                        pending.exception()  # retrieved: a board never stored is not an error
+                    # Its postings are stored (or never will be): let them go.
+                    reads[index] = None
+                    del pending
             finally:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 for read in reads:
+                    if read is None:
+                        continue
                     if read.done() and not read.cancelled():
                         read.exception()  # retrieved: a board never stored is not an error
                     else:
@@ -148,10 +173,12 @@ class Boards:
 
     def _read_all(
         self, client: BoardClient, boards: list[CompanyBoard]
-    ) -> tuple[list["asyncio.Future[Read]"], list["asyncio.Task[None]"]]:
-        """One future per board, and the tasks that fill them: the boards of one ATS in order."""
+    ) -> tuple[list["asyncio.Future[Read] | None"], list["asyncio.Task[None]"]]:
+        """One future per board, and the tasks that fill them: the boards of one ATS in order.
+        The caller sets a board's slot to None once it is done with it: a reader that comes to
+        a released slot (the sweep stopped meanwhile) reads nothing more."""
         loop = asyncio.get_running_loop()
-        futures: list[asyncio.Future[Read]] = [loop.create_future() for _ in boards]
+        futures: list[asyncio.Future[Read] | None] = [loop.create_future() for _ in boards]
         groups: dict[str, list[int]] = {}
         for index, board in enumerate(boards):
             groups.setdefault(ats.pace_key(board.ats), []).append(index)
@@ -159,12 +186,17 @@ class Boards:
         async def read_group(indexes: list[int]) -> None:
             for index in indexes:
                 board = boards[index]
+                if futures[index] is None:
+                    continue
                 try:
-                    futures[index].set_result(await client.read(board.ats, board.board))
+                    read = await client.read(board.ats, board.board)
                 except ats.BoardError as exc:
-                    futures[index].set_exception(exc)
+                    _settle(futures[index], exc)
                 except Exception:  # a bug on one board's answer ends that board only
-                    futures[index].set_exception(ats.BoardError("invalid_response"))
+                    _settle(futures[index], ats.BoardError("invalid_response"))
+                else:
+                    _settle(futures[index], read)
+                    del read
 
         return futures, [loop.create_task(read_group(indexes)) for indexes in groups.values()]
 
@@ -224,7 +256,8 @@ class Boards:
         kept: list[BoardFinding] = []
         at = commits.clock().isoformat()
         for posting in read.parsed.postings:
-            reason = wanted.reason(posting)
+            contract = contract_of(posting)
+            reason = wanted.reason(posting, contract)
             if reason is not None:
                 left_out[reason] += 1
                 continue
@@ -237,6 +270,7 @@ class Boards:
                     company=board.company,
                     published_on=posting.published or None,
                     detail_read_at=at,
+                    contract=contract,
                 )
             )
         entry["left_out"] = dict(sorted(left_out.items()))

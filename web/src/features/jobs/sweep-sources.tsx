@@ -37,7 +37,8 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
   );
 }
 
-/** A board's line: what it found and kept, or why it was not read (its `reason`). */
+/** A board's line, named by its company (frozen with the sweep, else its `<ats>:<board>`):
+ * what it found and kept, or why it was not read (its `reason`). */
 function boardStatus(source: SweepSource): string {
   if (source.error === "not_started")
     return (
@@ -65,7 +66,9 @@ function CompanyBoardSources({ sources }: { sources: SweepSource[] }) {
       <ul className="flex flex-col gap-1 text-sm break-words">
         {sources.map((source, index) => (
           <li key={`${source.query}:${String(index)}`}>
-            <span className="font-medium">{source.query}</span>
+            <span className="font-medium">
+              {source.company || source.query}
+            </span>
             <span className="text-muted-foreground">
               : {boardStatus(source)}
             </span>

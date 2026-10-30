@@ -7,13 +7,17 @@
 - A 429 stops that ATS for the rest of the sweep: the board that met it ends `rate_limited`, the
   next boards on it are not asked (`host_rate_limited`).
 - TIMEOUT_S per request, the whole answer read within it; bodies above MAX_BODY are refused.
-- Redirects are followed only to the same host over https, at most MAX_REDIRECTS.
+- Redirects are followed only to the same host over https, with no port and no credentials,
+  at most MAX_REDIRECTS; any other target (http, another host, a port, a malformed address) ends
+  the board `upstream_error`.
+- Memory: an answer is read into one growing buffer (no list of chunks joined into a copy), and
+  one answer is parsed at a time across the ATSs (`_parsing`), its buffer let go right after.
 - No cookie, no proxy from the environment, a User-Agent naming the app.
 
 Error codes (`ats.BoardError.code`, then the board's `reason` in the sweep's stats): not_found
 (404, or Lever's error object), blocked (401, 403), rate_limited, host_rate_limited,
-upstream_error (5xx, another status, a refused redirect), timeout, network, too_large,
-invalid_response.
+upstream_error (5xx, another status, a refused redirect, an answer that breaks HTTP), timeout,
+network, too_large, invalid_response.
 """
 
 import asyncio
@@ -56,6 +60,8 @@ class BoardClient:
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     _last: dict[str, float] = field(default_factory=dict)
     stopped: set[str] = field(default_factory=set)  # ATSs that answered 429 in this sweep
+    # One parse at a time for the whole sweep: a parsed answer can be several times its size.
+    _parsing: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
     async def __aenter__(self) -> "BoardClient":
         self._client = httpx.AsyncClient(
@@ -79,7 +85,9 @@ class BoardClient:
         for page in range(ats.PAGES_MAX):
             body = await self._paced(kind, ats.api_url(kind, board, page))
             requests += 1
-            one = await asyncio.to_thread(ats.parse, kind, board, body)
+            async with self._parsing:
+                one = await asyncio.to_thread(ats.parse, kind, board, body)
+            del body
             parsed.postings += one.postings
             parsed.invalid += one.invalid
             listed = len(parsed.postings) + parsed.invalid
@@ -89,7 +97,7 @@ class BoardClient:
                 break
         return Read(parsed, requests)
 
-    async def _paced(self, kind: str, url: str) -> bytes:
+    async def _paced(self, kind: str, url: str) -> bytearray:
         key = ats.pace_key(kind)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -109,32 +117,25 @@ class BoardClient:
             finally:
                 self._last[key] = self.monotonic()
 
-    async def _follow(self, url: str) -> bytes:
+    async def _follow(self, url: str) -> bytearray:
         host = urlsplit(url).hostname
         for _ in range(MAX_REDIRECTS + 1):
             status, location, body = await self._get(url)
             if status not in (301, 302, 303, 307, 308):
                 return body
-            target = urljoin(url, location or "")
-            parts = urlsplit(target)
-            if (
-                not location
-                or parts.scheme != "https"
-                or parts.hostname != host
-                or (parts.username or parts.password or parts.port)
-            ):
+            if not location or not _same_host(target := urljoin(url, location), host):
                 raise ats.BoardError("upstream_error")
             url = target
         raise ats.BoardError("upstream_error")
 
-    async def _get(self, url: str) -> tuple[int, str | None, bytes]:
+    async def _get(self, url: str) -> tuple[int, str | None, bytearray]:
         if self._client is None:
             raise RuntimeError("use BoardClient as an async context manager")
         try:
             async with asyncio.timeout(self.timeout_s), self._client.stream("GET", url) as answer:
                 status = answer.status_code
                 if status in (301, 302, 303, 307, 308):
-                    return status, answer.headers.get("location"), b""
+                    return status, answer.headers.get("location"), bytearray()
                 if status == 404:
                     raise ats.BoardError("not_found")
                 if status in (401, 403):
@@ -146,14 +147,32 @@ class BoardClient:
                 declared = answer.headers.get("content-length")
                 if declared and declared.isdigit() and int(declared) > self.max_body:
                     raise ats.BoardError("too_large")
-                chunks, size = [], 0
+                body = bytearray()
                 async for chunk in answer.aiter_bytes():
-                    size += len(chunk)
-                    if size > self.max_body:
+                    if len(body) + len(chunk) > self.max_body:
                         raise ats.BoardError("too_large")
-                    chunks.append(chunk)
-                return status, None, b"".join(chunks)
+                    body += chunk
+                return status, None, body
         except (TimeoutError, httpx.TimeoutException):
             raise ats.BoardError("timeout") from None
+        except httpx.RemoteProtocolError:  # an answer that breaks HTTP, a malformed redirect
+            raise ats.BoardError("upstream_error") from None
         except httpx.TransportError:
             raise ats.BoardError("network") from None
+
+
+def _same_host(target: str, host: str | None) -> bool:
+    """A redirect the client follows: https, the same host, no port, no credentials. A malformed
+    target (a port that is not a number) is not one."""
+    try:
+        parts = urlsplit(target)
+        port = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.scheme == "https"
+        and parts.hostname == host
+        and port is None
+        and not parts.username
+        and not parts.password
+    )

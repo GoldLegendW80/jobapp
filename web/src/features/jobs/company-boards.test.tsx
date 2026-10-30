@@ -11,6 +11,7 @@ import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
 import { boardKey, boardPage } from "./boards-api";
+import { sourceName } from "./labels";
 import { SweepSources } from "./sweep-sources";
 import type { SweepSource } from "./sweeps-api";
 
@@ -89,7 +90,14 @@ function savedBoards(profile: { saves: { body: { data: unknown } }[] }) {
   return last?.company_boards;
 }
 
-it("offers the starter list ticked on first use and saves it", async () => {
+const STARTER_SAVED = STARTER.map(({ company, ats, board, enabled }) => ({
+  company,
+  ats,
+  board,
+  enabled,
+}));
+
+it("offers the starter list ticked on first use without saving it unchosen", async () => {
   const { profile, user, dialog } = await open(null);
   const list = await within(dialog).findByRole("list", {
     name: "Company job boards",
@@ -103,20 +111,77 @@ it("offers the starter list ticked on first use and saves it", async () => {
     "href",
     "https://jobs.ashbyhq.com/example-robotics",
   );
+  expect(
+    within(dialog).getByText(
+      "A starter list, not saved yet. Searches read these boards once you keep them or change the list.",
+    ),
+  ).toBeVisible();
+  expect(
+    within(dialog).getByText(/read up to its newest 200 postings/),
+  ).toBeVisible();
+  // Saving the other settings leaves the key out: the profile keeps no board list.
   await user.click(
     within(dialog).getByRole("button", { name: "Save and Start" }),
   );
   await waitFor(() => {
     expect(profile.saves).toHaveLength(1);
   });
-  expect(savedBoards(profile)).toEqual(
-    STARTER.map(({ company, ats, board, enabled }) => ({
-      company,
-      ats,
-      board,
-      enabled,
-    })),
+  const sent = profile.saves[0]?.body.data as Record<string, unknown>;
+  expect(sent).not.toHaveProperty("company_boards");
+});
+
+it("saves the starter list once the person keeps it", async () => {
+  const { profile, user, dialog } = await open(null);
+  await within(dialog).findByRole("list", { name: "Company job boards" });
+  await user.click(
+    within(dialog).getByRole("button", { name: "Keep these boards" }),
   );
+  expect(
+    within(dialog).queryByRole("button", { name: "Keep these boards" }),
+  ).not.toBeInTheDocument();
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  );
+  await waitFor(() => {
+    expect(profile.saves).toHaveLength(1);
+  });
+  expect(savedBoards(profile)).toEqual(STARTER_SAVED);
+});
+
+it("saves the starter list once the person changes it", async () => {
+  const { profile, user, dialog } = await open(null);
+  const list = await within(dialog).findByRole("list", {
+    name: "Company job boards",
+  });
+  await user.click(within(list).getAllByRole("checkbox")[1] as HTMLElement);
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  );
+  await waitFor(() => {
+    expect(profile.saves).toHaveLength(1);
+  });
+  expect(savedBoards(profile)).toEqual([
+    STARTER_SAVED[0],
+    { ...STARTER_SAVED[1], enabled: false },
+  ]);
+});
+
+it("never offers the starter list over a saved list", async () => {
+  const { profile, user, dialog } = await open([]);
+  expect(
+    within(dialog).getByText("No company board yet. Paste one below."),
+  ).toBeVisible();
+  expect(
+    within(dialog).queryByRole("button", { name: "Keep these boards" }),
+  ).not.toBeInTheDocument();
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save and Start" }),
+  );
+  await waitFor(() => {
+    expect(profile.saves).toHaveLength(1);
+  });
+  // A list saved before (here the empty one) is the person's own: it is saved as it is.
+  expect(savedBoards(profile)).toEqual([]);
 });
 
 it("adds a pasted board, pauses and removes boards", async () => {
@@ -229,6 +294,17 @@ it("names boards and their pages as the api does", () => {
   expect(boardPage({ ats: "workable", board: "examplemodels" })).toBe(
     "https://apply.workable.com/examplemodels/",
   );
+  // The live line of a running sweep names a board by its company, else by its ATS and id.
+  expect(
+    sourceName({
+      kind: "board",
+      query: "greenhouse:examplelabs",
+      company: "Example Labs",
+    }),
+  ).toBe("Company board, Example Labs");
+  expect(sourceName({ kind: "board", query: "greenhouse:examplelabs" })).toBe(
+    "Company board, greenhouse:examplelabs",
+  );
 });
 
 it("lists each board of a sweep with what it kept or why it was not read", () => {
@@ -249,7 +325,11 @@ it("lists each board of a sweep with what it kept or why it was not read", () =>
   render(
     <SweepSources
       sources={[
-        board("ashby:example-robotics", { found: 3, new: 2 }),
+        board("ashby:example-robotics", {
+          found: 3,
+          new: 2,
+          company: "Example Robotics",
+        }),
         board("ashby:example-two", { error: "rate_limited" }),
         board("ashby:example-three", {
           error: "not_started",
@@ -263,7 +343,8 @@ it("lists each board of a sweep with what it kept or why it was not read", () =>
     .getAllByRole("listitem")
     .map((item) => item.textContent);
   expect(lines).toEqual([
-    "ashby:example-robotics: 3 postings matched, 2 new.",
+    // Named by the company frozen with the sweep, else by its ATS and id (an older sweep).
+    "Example Robotics: 3 postings matched, 2 new.",
     "ashby:example-two: 0 postings matched, 0 new. The ATS asked the app to slow down, so its other boards wait for the next search.",
     "ashby:example-three: Its ATS asked the app to slow down earlier in this search, so this board waits for the next one.",
   ]);

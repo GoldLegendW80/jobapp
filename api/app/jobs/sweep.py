@@ -221,6 +221,12 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+        # No board saved, or none listed: the key is not frozen at all. The release before the
+        # company boards refuses it (extra="forbid"), so a queued run it claims after a
+        # rollback stays valid unless the person really saved boards (SPEC-jobs, Company job
+        # boards, the one way door).
+        if not raw.get("company_boards"):
+            raw.pop("company_boards", None)
     if search is not None:
         sources.extend(
             {
@@ -240,6 +246,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
                 "kind": "board",
                 "host": boards.api_host(board.ats, board.board),
                 "query": f"{board.ats}:{board.board}",
+                "company": board.company,
             }
             for board in boards.enabled_boards(search)
         )
@@ -260,7 +267,7 @@ def initial_sources(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
         {
             **{
                 key: source[key]
-                for key in ("source_id", "mode", "host", "query", "location")
+                for key in ("source_id", "mode", "host", "query", "location", "company")
                 if key in source
             },
             "kind": source.get("kind", source.get("platform", "")),
@@ -453,9 +460,18 @@ class _NewJob:
     rule: NeverApplyRule | None
 
 
-def _new_job(plan: Plan, company: str, posting: Posting, source: str, now: datetime) -> _NewJob:
+def _new_job(
+    plan: Plan,
+    company: str,
+    posting: Posting,
+    source: str,
+    now: datetime,
+    contract: ContractType | None = None,
+) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
-    then the ones service.apply_score, set_status and set_notes would have written."""
+    then the ones service.apply_score, set_status and set_notes would have written. A company
+    board (app/jobs/boards, filters.contract_of) states the contract it filtered on; else it is
+    read from the posting as for every source."""
     text = posting.text[:POSTING_TEXT_MAX]
     rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
     score = (
@@ -465,7 +481,7 @@ def _new_job(plan: Plan, company: str, posting: Posting, source: str, now: datet
     )
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
-    contract = kind(posting.title, posting.location, posting.url)
+    contract = contract or kind(posting.title, posting.location, posting.url)
     # Pay and work mode (opportunities O3): what the text and the location state in an accepted
     # shape, else nothing.
     pay = pays.pay_of(text, freelance=contract is ContractType.Freelance)
@@ -906,7 +922,7 @@ def _store_finding(
     for _ in range(2):
         if plan.known.has(key):
             break
-        new = _new_job(plan, company, posting, source, now)
+        new = _new_job(plan, company, posting, source, now, getattr(finding, "contract", None))
         new.events[1]["data"]["discovery"] = {
             "source_id": source_id,
             "detail_read_at": finding.detail_read_at,

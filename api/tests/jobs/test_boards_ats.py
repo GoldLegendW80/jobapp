@@ -3,6 +3,7 @@ network), a pasted board address as an ATS and an id, the contract words, the st
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -25,7 +26,9 @@ def test_ashby_listed_postings_with_every_place_remote_and_contract() -> None:
     assert parsed.invalid == 2  # no address, not an object
     first = parsed.postings[0]
     assert first.location == "Paris, London"  # duplicates removed, in order
-    assert (first.published, first.contract) == ("2026-10-01", ContractType.CDI)
+    # FullTime is a schedule, not a contract: unknown here (filters.contract_of makes it a CDI
+    # unless the title says otherwise).
+    assert (first.published, first.contract) == ("2026-10-01", None)
     assert first.url == "https://jobs.ashbyhq.com/example-robotics/1111"
     intern = next(p for p in parsed.postings if p.title == "AI Engineer Intern")
     assert (intern.location, intern.contract) == ("Remote", ContractType.Stage)
@@ -44,7 +47,8 @@ def test_lever_places_commitment_and_date() -> None:
     parsed = ats.parse("lever", "exampleworks", body("lever"))
     assert parsed.invalid == 1
     fde, contract = parsed.postings
-    assert (fde.location, fde.published, fde.contract) == ("Paris, Lyon", "2026-10-03", "CDI")
+    # "Full-time" is a schedule: no contract stated (filters.contract_of decides).
+    assert (fde.location, fde.published, fde.contract) == ("Paris, Lyon", "2026-10-03", None)
     # "Contract" alone is unknown (fixed term or freelance); remote is added to the places.
     assert (contract.location, contract.contract) == ("Berlin, Remote", None)
 
@@ -67,6 +71,24 @@ def test_workable_hidden_places_left_out() -> None:
     (one,) = ats.parse("workable", "examplemodels", body("workable")).postings
     assert one.location == "Paris, France, Remote"
     assert (one.text, one.published) == ("Agents & evaluation in Python.", "2026-10-05")
+    assert one.contract is None  # "Full-time" names a schedule
+
+
+@pytest.mark.parametrize("places", [{"city": "Munich"}, "Munich", 3, True])
+def test_workable_locations_that_are_not_a_list_fall_back_to_the_city(places: Any) -> None:
+    raw = {
+        "jobs": [
+            {
+                "title": "AI Engineer",
+                "url": "https://apply.workable.com/j/ABC123",
+                "city": "Paris",
+                "country": "France",
+                "locations": places,
+            }
+        ]
+    }
+    (one,) = ats.parse("workable", "examplemodels", json.dumps(raw).encode()).postings
+    assert one.location == "Paris, France"
 
 
 def test_recruitee_text_and_internship() -> None:
@@ -167,7 +189,7 @@ def test_company_name_from_the_id() -> None:
 
 def test_api_urls_are_fixed_hosts_and_one_segment() -> None:
     assert ats.api_url("ashby", "mistral.ai") == (
-        "https://api.ashbyhq.com/posting-api/job-board/mistral.ai?includeCompensation=true"
+        "https://api.ashbyhq.com/posting-api/job-board/mistral.ai"
     )
     assert ats.api_url("smartrecruiters", "Example", 1).endswith("limit=100&offset=100")
     assert (
@@ -183,7 +205,8 @@ def test_api_urls_are_fixed_hosts_and_one_segment() -> None:
 @pytest.mark.parametrize(
     ("words", "expected"),
     [
-        ("FullTime", "CDI"), ("Full-time", "CDI"), ("fulltime_permanent", "CDI"),
+        ("FullTime", None), ("Full-time", None), ("full_time", None), ("permanent", "CDI"),
+        ("fulltime_permanent", "CDI"), ("CDI", "CDI"),
         ("Intern", "Stage"), ("internship", "Stage"), ("International", None),
         ("Temporary", "CDD"), ("fulltime_fixed_term", "CDD"), ("freelance", "Freelance"),
         ("apprenticeship", "Alternance"), ("Contract", None), ("PartTime", None), (None, None),

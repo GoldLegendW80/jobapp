@@ -261,8 +261,11 @@ function SetupForm({
     profile.sections.search.interactive_instructions ?? "",
   );
   const [custom, setCustom] = useState("");
-  // Company job boards (owner, 2026-10-30): never saved, the starter list is shown ticked and
-  // Save stores it; a list saved before is the person's own. Sent only once shown or changed.
+  // Company job boards (owner, 2026-10-30): never saved, the starter list is shown ticked as a
+  // proposal; a list saved before is the person's own. The list is sent with Save only once the
+  // person changed it (tick, untick, remove, add) or kept the proposal ("Keep these boards"):
+  // opening Find jobs and saving other settings never stores it, so a profile holds the key
+  // (which the release before refuses) only when its person chose boards.
   const savedBoards = profile.sections.search.company_boards ?? null;
   const [edited, setEdited] = useState<CompanyBoard[] | null>(() =>
     savedBoards ? structuredClone(savedBoards) : null,
@@ -278,7 +281,8 @@ function SetupForm({
   const seeded = starter.data ? starter.data.boards.map(savedBoard) : null;
   // null while the starter list loads; an empty list when it could not be loaded (not sent).
   const boards = edited ?? seeded ?? (starter.isError ? [] : null);
-  const sendBoards = edited !== null || seeded !== null;
+  // The starter list shown and not chosen yet.
+  const proposal = savedBoards === null && edited === null && seeded !== null;
   const [revision, setRevision] = useState(profile.revision);
   const [reviewed, setReviewed] = useState(() =>
     structuredClone(profile.sections.search),
@@ -468,7 +472,7 @@ function SetupForm({
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
-        ...(sendBoards && boards !== null ? { company_boards: boards } : {}),
+        ...(edited !== null ? { company_boards: edited } : {}),
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -737,7 +741,14 @@ function SetupForm({
               </div>
             </div>
           </section>
-          <CompanyBoards boards={boards} onChange={setEdited} />
+          <CompanyBoards
+            boards={boards}
+            onChange={setEdited}
+            proposal={proposal}
+            onKeep={() => {
+              setEdited(seeded);
+            }}
+          />
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
             <SearchLists form={form} descriptions={false} />

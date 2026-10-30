@@ -5,6 +5,7 @@ real wait (the pauses are recorded)."""
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -70,8 +71,8 @@ def test_one_request_per_board_and_a_pause_between_two_of_one_ats() -> None:
         ("greenhouse", "examplelabs"),
     )
     assert seen == [
-        "https://api.ashbyhq.com/posting-api/job-board/example-robotics?includeCompensation=true",
-        "https://api.ashbyhq.com/posting-api/job-board/example-two?includeCompensation=true",
+        "https://api.ashbyhq.com/posting-api/job-board/example-robotics",
+        "https://api.ashbyhq.com/posting-api/job-board/example-two",
         "https://boards-api.greenhouse.io/v1/boards/examplelabs/jobs?content=true",
     ]
     assert [r.requests for r in results] == [1, 1, 1]  # type: ignore[attr-defined]
@@ -173,6 +174,69 @@ def test_redirects_only_to_the_same_host_over_https() -> None:
     (ok,) = read(client(same, Clock()), ("lever", "old"))
     assert ok.requests == 1  # type: ignore[attr-defined]
     assert read(client(elsewhere, Clock()), ("lever", "x")) == ["upstream_error"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://api.lever.co/v0/postings/new?mode=json",  # the same host, without TLS
+        "https://api.lever.co:8443/v0/postings/new?mode=json",  # an explicit port
+        "https://api.lever.co:443/v0/postings/new?mode=json",  # even the default one
+        "https://user:secret@api.lever.co/v0/postings/new?mode=json",  # credentials
+        "https://api.lever.co:notaport/v0/postings/new",  # a malformed port
+        "https://api.lever.co:99999/v0/postings/new",  # a port out of range
+        "//evil.test/v0/postings/new",  # another host, scheme relative
+    ],
+)
+def test_a_redirect_elsewhere_than_the_same_https_host_is_refused(target: str) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(301, headers={"location": target})
+
+    assert read(client(handler, Clock()), ("lever", "x")) == ["upstream_error"]
+    assert seen == ["https://api.lever.co/v0/postings/x?mode=json"]  # never followed
+
+
+def test_too_many_redirects_end_the_board() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "/v0/postings/again?mode=json"})
+
+    assert read(client(handler, Clock()), ("lever", "x")) == ["upstream_error"]
+
+
+def test_one_answer_is_parsed_at_a_time_across_the_atss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two ATSs read side by side never parse two answers at once (memory)."""
+    parsing = {"now": 0, "most": 0}
+    real = ats.parse
+
+    def counted(kind: str, board: str, body: bytes | bytearray) -> ats.Parsed:
+        parsing["now"] += 1
+        parsing["most"] = max(parsing["most"], parsing["now"])
+        try:
+            time.sleep(0.02)  # in the worker thread: long enough for the other to overlap
+            return real(kind, board, body)
+        finally:
+            parsing["now"] -= 1
+
+    monkeypatch.setattr(ats, "parse", counted)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.lever.co":
+            return httpx.Response(200, content=(FIXTURES / "lever.json").read_bytes())
+        return httpx.Response(200, content=(FIXTURES / "greenhouse.json").read_bytes())
+
+    async def go() -> list[object]:
+        async with client(handler, Clock()) as c:
+            return list(
+                await asyncio.gather(c.read("lever", "exampleworks"), c.read("greenhouse", "x"))
+            )
+
+    lever, greenhouse = asyncio.run(go())
+    assert parsing["most"] == 1
+    assert len(lever.parsed.postings) == 2  # type: ignore[attr-defined]
+    assert len(greenhouse.parsed.postings) == 2  # type: ignore[attr-defined]
 
 
 def test_recruitee_reads_the_boards_own_subdomain() -> None:

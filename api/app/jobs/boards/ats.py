@@ -2,9 +2,9 @@
 how a pasted board address names its ATS and id, and how one answer becomes postings.
 
 Endpoints (official, public, no key, no sign in; checked 2026-10-30, one request per board):
-- ashby: GET https://api.ashbyhq.com/posting-api/job-board/{org}?includeCompensation=true
-  -> {"jobs": [...]}; a posting with `isListed: false` is left out. Board pages:
-  jobs.ashbyhq.com/{org}.
+- ashby: GET https://api.ashbyhq.com/posting-api/job-board/{org} -> {"jobs": [...]}; pay is
+  not read, so `includeCompensation` is not asked (smaller answers); a posting with
+  `isListed: false` is left out. Board pages: jobs.ashbyhq.com/{org}.
 - greenhouse: GET https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true
   -> {"jobs": [...]}, `content` HTML escaped twice. Board pages: boards.greenhouse.io/{token},
   job-boards.greenhouse.io/{token}, boards.greenhouse.io/embed/job_board?for={token}.
@@ -27,7 +27,8 @@ address is counted (`Parsed.invalid`) and skipped. A body of the wrong shape rai
 BoardError("invalid_response"). Text is made storable (NUL characters and lone surrogates
 removed). A posting's location is every place the ATS names, then "Remote" when it says the
 posting is remote, joined with ", ". Its contract is what the ATS states, mapped to the app's
-contract types when the words say it plainly (`contract_of`), else None.
+contract types when the words say it plainly (`contract_of`), else None; the contract a posting
+is filtered and stored with is filters.contract_of's (the title's words first).
 """
 
 import html
@@ -115,7 +116,7 @@ def api_url(ats: str, board: str, page: int = 0) -> str:
     segment = quote(board, safe="")
     host = api_host(ats, board)
     paths = {
-        "ashby": f"/posting-api/job-board/{segment}?includeCompensation=true",
+        "ashby": f"/posting-api/job-board/{segment}",
         "greenhouse": f"/v1/boards/{segment}/jobs?content=true",
         "lever": f"/v0/postings/{segment}?mode=json",
         "smartrecruiters": f"/v1/companies/{segment}/postings?limit={PAGE_SIZE}"
@@ -253,14 +254,16 @@ def _day(value: Any) -> str:
 
 # The contract words of the ATSs (Ashby's employmentType, Lever's commitment, Workable's
 # employment_type, SmartRecruiters' typeOfEmployment, Recruitee's employment_type_code), in
-# order: the first that matches wins. "Contract" alone stays unknown (fixed term or freelance).
+# order: the first that matches wins. "Contract" alone stays unknown (fixed term or freelance),
+# and so does "Full time" or "Part time": a schedule, not a contract (an internship is often
+# listed FullTime). filters.contract_of decides the posting's contract with the title's words.
 _CONTRACTS = (
     (ContractType.Alternance, re.compile(r"apprentice|alternance|work.?study")),
     (ContractType.Stage, re.compile(r"\bintern(?:ship)?s?\b|trainee|\bstage\b")),
     (ContractType.VIE, re.compile(r"\bvie\b")),
     (ContractType.Freelance, re.compile(r"freelance|contractor")),
     (ContractType.CDD, re.compile(r"temporary|fixed.?term|\bcdd\b")),
-    (ContractType.CDI, re.compile(r"permanent|full.?time|\bcdi\b")),
+    (ContractType.CDI, re.compile(r"permanent|\bcdi\b")),
 )
 
 
@@ -404,7 +407,8 @@ def _workable(payload: Any, board: str) -> Parsed:
             parsed.invalid += 1
             continue
         places: list[Any] = []
-        for place in job.get("locations") or []:
+        listed = job.get("locations")
+        for place in listed if isinstance(listed, list) else []:
             if isinstance(place, dict) and place.get("hidden") is not True:
                 places += [place.get("city"), place.get("country")]
         if not places:
@@ -482,7 +486,7 @@ def _address(url: str) -> bool:
     )
 
 
-def parse(ats: str, board: str, body: bytes) -> Parsed:
+def parse(ats: str, board: str, body: bytes | bytearray) -> Parsed:
     """The postings of one raw answer. Raises BoardError for a body that is not the JSON the
     ATS documents. A posting whose address is not an http or https link is invalid; a long
     title, location or text is cut to what a job row takes."""

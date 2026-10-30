@@ -171,6 +171,11 @@ def test_a_search_with_boards_only_starts(
     answer = start(api, alice)
     assert answer.status_code == 202, answer.text
     assert answer.json()["search_scope"]["source_count"] == 1
+    # The board is named by its company in the sweep the api shows (web sweep-sources).
+    [source] = answer.json()["sources"]
+    assert (source["kind"], source["query"], source["company"]) == (
+        "board", "greenhouse:examplelabs", "Example Labs",
+    )  # fmt: skip
 
 
 def test_signed_out_is_401(api: Api) -> None:

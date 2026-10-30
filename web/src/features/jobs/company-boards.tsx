@@ -23,14 +23,20 @@ import {
  * every search reads through its ATS's API (Ashby, Greenhouse, Lever, SmartRecruiters, Workable,
  * Recruitee). Paste a board address to add it: the api names its ATS and id. Boards the
  * person's own postings point to are suggested, never added by themselves. `boards` is null
- * while the starter list loads; the parent saves the list with the search.
+ * while the starter list loads; the parent saves the list with the search. `proposal`: the
+ * starter list is shown and not chosen yet; it is saved only once the person changes it or
+ * keeps it (`onKeep`), never by a Save of other settings.
  */
 export function CompanyBoards({
   boards,
   onChange,
+  proposal = false,
+  onKeep,
 }: {
   boards: CompanyBoard[] | null;
   onChange: (next: CompanyBoard[]) => void;
+  proposal?: boolean;
+  onKeep?: () => void;
 }) {
   const id = useId();
   const [address, setAddress] = useState("");
@@ -89,8 +95,20 @@ export function CompanyBoards({
         Every search also reads these companies&apos; public job boards through
         their official API, then keeps the postings that match your criteria.
         Ashby, Greenhouse, Lever, SmartRecruiters, Workable and Recruitee are
-        supported. Untick a board to pause it.
+        supported. Untick a board to pause it. A large SmartRecruiters board is
+        read up to its newest 200 postings.
       </p>
+      {proposal && boards !== null ? (
+        <div className="flex flex-col gap-2 rounded-md border border-dashed p-2 text-sm sm:flex-row sm:items-center">
+          <p className="flex-1 text-muted-foreground">
+            A starter list, not saved yet. Searches read these boards once you
+            keep them or change the list.
+          </p>
+          <Button type="button" size="sm" variant="outline" onClick={onKeep}>
+            Keep these boards
+          </Button>
+        </div>
+      ) : null}
       {boards === null ? (
         <p className="text-sm text-muted-foreground">Loading the boards…</p>
       ) : list.length === 0 ? (

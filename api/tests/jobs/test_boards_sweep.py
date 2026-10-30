@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import worker
 from app.jobs import sweep
 from app.jobs.boards import run as boards
-from app.jobs.models import Job, JobEvent, JobStatus, SweepStatus
+from app.jobs.models import ContractType, Job, JobEvent, JobStatus, Sweep, SweepStatus
 from tests.jobs.sweep_helpers import (
     SITE,
     finding,
@@ -110,12 +111,16 @@ def test_a_board_is_read_filtered_and_stored(
     assert fde.fit is not None
     assert fde.posting_text.startswith("Forward Deployed Engineer")
     assert jobs["Security AI Engineer"].status is JobStatus.skipped
+    # Ashby's FullTime is a schedule, so a title-neutral posting is a CDI; its Intern a Stage.
+    assert fde.contract_type is ContractType.CDI
+    assert jobs["AI Engineer Intern"].contract_type is ContractType.Stage
     [entry] = boards_of(stats)
     assert entry == entry | {
         "mode": "api",
         "kind": "board",
         "host": "api.ashbyhq.com",
         "query": "ashby:example-robotics",
+        "company": "Example Robotics",  # frozen with the scope: the summary names it
         "phase": "done",
         "outcome": "complete",
         "reason": None,
@@ -147,11 +152,75 @@ def test_the_frozen_scope_holds_one_source_per_enabled_board(
     stats = read_sweep(factory, sweep_id).stats
     scoped = [s for s in stats["search_scope"]["sources"] if s.get("mode") == "api"]
     assert [s["query"] for s in scoped] == ["ashby:example-robotics", "greenhouse:examplelabs"]
+    assert [s["company"] for s in scoped] == ["Example Robotics", "Example Labs"]
     assert [s["phase"] for s in boards_of(stats)] == ["pending", "pending"]
+    assert [s["company"] for s in boards_of(stats)] == ["Example Robotics", "Example Labs"]
     # The website stays a source of its own beside them.
     assert [s["host"] for s in stats["sources"] if s.get("mode") == "llm_browser"] == [
         "jobs.example-robotics.test"
     ]
+
+
+def test_no_saved_board_is_never_frozen_into_the_scope(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """The release before the boards refuses the key: a run frozen without boards stays one it
+    can claim after a rollback (SPEC-jobs, Company job boards, the one way door)."""
+    for saved in ({}, {"company_boards": None}, {"company_boards": []}):
+        set_profile(factory, alice, search(**saved))
+        sweep_id = new_sweep(factory, alice)
+        frozen = read_sweep(factory, sweep_id).stats["search_scope"]["search"]
+        assert "company_boards" not in frozen, saved
+        with factory() as db, db.begin():
+            row = db.get(Sweep, sweep_id)
+            row.status, row.finished_at = SweepStatus.done, CLOCK
+    set_profile(factory, alice, search(company_boards=[LABS]))
+    frozen = read_sweep(factory, new_sweep(factory, alice)).stats["search_scope"]["search"]
+    assert frozen["company_boards"] == [{**LABS, "enabled": True}]
+
+
+INTERNSHIP_FULL_TIME = {
+    "jobs": [
+        {
+            "title": "AI Engineer, Internship",
+            "location": "Paris",
+            "employmentType": "FullTime",
+            "publishedAt": "2026-10-04T10:00:00.000+00:00",
+            "jobUrl": "https://jobs.ashbyhq.com/example-robotics/9001",
+            "descriptionPlain": "An internship listed FullTime by its ATS.",
+        },
+        {
+            "title": "AI Engineer",
+            "location": "Paris",
+            "employmentType": "FullTime",
+            "publishedAt": "2026-10-04T10:00:00.000+00:00",
+            "jobUrl": "https://jobs.ashbyhq.com/example-robotics/9002",
+            "descriptionPlain": "A permanent role, nothing in the title.",
+        },
+    ]
+}
+
+
+@pytest.mark.parametrize(
+    ("wanted", "stored"),
+    [
+        (["Stage"], {"AI Engineer, Internship": ContractType.Stage}),
+        (["CDI"], {"AI Engineer": ContractType.CDI}),
+        ([], {"AI Engineer, Internship": ContractType.Stage, "AI Engineer": ContractType.CDI}),
+    ],
+)
+def test_one_contract_per_posting_filters_and_is_stored(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    wanted: list[str],
+    stored: dict[str, ContractType],
+) -> None:
+    """The title's "Internship" beats the ATS's FullTime, in the filter and in the stored job."""
+    answer = httpx.MockTransport(lambda _: httpx.Response(200, json=INTERNSHIP_FULL_TIME))
+    _, stats = sweep_with(factory, alice, [ROBOTICS], answer, contract_types=wanted)
+    assert {j.title: j.contract_type for j in jobs_of(factory, alice)} == stored
+    [entry] = boards_of(stats)
+    assert entry["left_out"] == ({"contract": 1} if wanted else {})
 
 
 def test_boards_only_is_a_search(factory: sessionmaker[Session], alice: uuid.UUID) -> None:

@@ -123,6 +123,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             kind=str(item.get("kind", "")),
             query=str(item.get("query", "")),
             location=item["location"] if isinstance(item.get("location"), str) else None,
+            company=item["company"][:200] if isinstance(item.get("company"), str) else None,
             result_pages=count(item, "result_pages"),
             found=count(item, "found"),
             new=count(item, "postings"),

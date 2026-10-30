@@ -30,8 +30,8 @@ from app.profile.schemas import CompanyBoard
 
 UNKNOWN_EMPLOYER = "Employer not stated"  # sweep.UNKNOWN_EMPLOYER
 SUGGESTIONS_MAX = 20
-JOBS_READ = 2000  # the person's newest postings read
-TEXT_READ = 20_000  # characters of a posting's text searched for board links
+JOBS_READ = 500  # the person's newest postings read (kept small: the setup asks on every open)
+TEXT_READ = 5_000  # characters of a posting's text searched for board links
 _LINK = re.compile(
     r"https?://(?:[a-z0-9-]+\.)*(?:ashbyhq\.com|greenhouse\.io|lever\.co|smartrecruiters\.com|"
     r"workable\.com|recruitee\.com)/[^\s\"'<>)\]]*",
