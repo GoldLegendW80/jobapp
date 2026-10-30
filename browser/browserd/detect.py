@@ -239,6 +239,9 @@ FACTS_JS = r"""
       rows: control.tagName === "TEXTAREA" ? control.rows : 0,
       field: fieldText(control),
       form_fields: fields.map(fieldText),
+      // Each control of the form as `tag:type` (`editable` for a contenteditable): a cookie
+      // banner's consent form holds buttons and toggles only (discovery.consent_form).
+      form_kinds: fields.map(n => n.tagName.toLowerCase() + ":" + (n.isContentEditable ? "editable" : kindOf(n))),
       discovery: {
         native, method: control.hasAttribute("formmethod") ? control.formMethod : form ? form.method : "",
         action: (control.hasAttribute("formaction") ? control.formAction : form ? form.action : "").slice(0, 2001),

@@ -178,9 +178,13 @@ DECLINES = frozenset(
         "deny", "deny all", "disagree", "i disagree", "only necessary", "only necessary cookies",
         "necessary only", "necessary cookies only", "use necessary cookies only",
         "only essential", "only essential cookies", "essential only", "essential cookies only",
-        "continue without accepting", "non merci", "refuser", "tout refuser", "refuser tout",
+        "continue without accepting", "continue without accepting cookies",
+        "close without accepting", "close without accepting cookies", "non merci", "refuser",
+        "tout refuser", "refuser tout",
         "je refuse", "refuser les cookies", "refuser tous les cookies", "refuser et fermer",
-        "continuer sans accepter", "cookies necessaires uniquement",
+        "continuer sans accepter", "continuer sans accepter les cookies",
+        "fermer sans accepter", "fermer sans accepter les cookies",
+        "cookies necessaires uniquement",
         "uniquement les cookies necessaires", "seulement les cookies necessaires", "ablehnen",
         "alle ablehnen", "nur notwendige", "nur notwendige cookies",
     )
@@ -1040,9 +1044,10 @@ def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
 # says so; a click into the frame is refused as any control of another site). Declared open
 # points: what the frame's own worker fetches leaves without the route, Cloudflare's code
 # alone; a redirect inside an allowed CHALLENGE_HOST frame is not judged again (actions._hop
-# reads the main frame's hops only; the route still judges each request the frame makes); the
-# site's page that Cloudflare answers with its interstitial keeps SIGNED_IN_JS, so a check that
-# needs a worker there does not pass, and the agent says `security_check`.
+# reads the main frame's hops only; the route still judges each request the frame makes). The
+# site's page that Cloudflare answers with its interstitial keeps SIGNED_IN_JS but for the Worker
+# Cloudflare's code builds there and `navigator.serviceWorker` (round 2, actions.SIGNED_IN_JS);
+# a check that still does not pass is the agent's `security_check`.
 CHALLENGE_HOST = "challenges.cloudflare.com"
 CHALLENGE_PATH = "/cdn-cgi/challenge-platform/"
 CHALLENGE_KEYS = ("__cf_chl_",)
@@ -1120,8 +1125,46 @@ def _latin(name: str) -> bool:
     return all(c.isascii() for c in text if unicodedata.category(c)[0] in "LN")
 
 
-def _declines(facts: dict) -> bool:
-    """Whether these facts are of a cookie banner's decline button (DECLINES, NEUTRAL)."""
+# Round 2 (sweep of 2026-10-30, 14:42, Welcome to the Jungle signed in): its cookie banner's
+# "Close without accepting cookies" is a `<button type=submit>` of the banner's own form, refused
+# as a form's submit button, so the banner never closed. A decline phrased submit button is a
+# decline only in a consent form: one whose controls (`form_kinds`, at most 299 read) are
+# buttons, fieldsets and toggles alone (a checkbox or a radio: no text, e-mail, password, file,
+# hidden or other input, no select, textarea or editable element, so the form carries nothing of
+# the person's), that submits to a dialog or to the page's own website (`on_site`, or the page
+# itself when its action is empty) at an address that applies, submits, deletes, pays and signs
+# out nothing (`destructive`). Whatever request it then makes is held by the route as any other.
+CONSENT_KINDS = frozenset(
+    {"button:submit", "button:button", "button:reset", "input:submit", "input:button",
+     "input:reset", "input:checkbox", "input:radio", "fieldset:fieldset"}
+)  # fmt: skip
+CONSENT_FIELDS = 300  # FACTS_JS reads at most this many controls: a full list fails closed
+
+
+def consent_form(facts: dict, current: str) -> bool:
+    """Whether a decline button's form is a cookie banner's consent form (above)."""
+    kinds, d = facts.get("form_kinds"), facts.get("discovery")
+    if not isinstance(kinds, list) or len(kinds) >= CONSENT_FIELDS or not isinstance(d, dict):
+        return False
+    if not all(isinstance(k, str) and k in CONSENT_KINDS for k in kinds):
+        return False
+    method, action = d.get("method"), d.get("action")
+    if method == "dialog":
+        return True
+    if method not in {"get", "post"} or not isinstance(action, str) or len(action) > 2000:
+        return False
+    target = action or current
+    return (
+        isinstance(current, str)
+        and bool(current)
+        and on_site(target, current)
+        and not destructive(target)
+    )
+
+
+def _declines(facts: dict, current: str = "") -> bool:
+    """Whether these facts are of a cookie banner's decline button (DECLINES, NEUTRAL); a submit
+    button only in a consent form (`consent_form`) of the page at `current`."""
     names = facts.get("names")
     if not isinstance(names, list) or not names or len(names) > 60:
         return False
@@ -1147,7 +1190,11 @@ def _declines(facts: dict) -> bool:
         and isinstance(d, dict)
         and not d.get("href")
         and d.get("target") in {"", "_self"}
-        and not (facts.get("in_form") and kind in {"submit", "image"})
+        and not (
+            facts.get("in_form")
+            and kind in {"submit", "image"}
+            and not (kind == "submit" and consent_form(facts, current))
+        )
         and not facts.get("holds_submit")
         and not facts.get("selector_hit")
         and not facts.get("selector_error")
@@ -1157,13 +1204,14 @@ def _declines(facts: dict) -> bool:
     )
 
 
-def decline(facts: object) -> bool:
+def decline(facts: object, current: str = "") -> bool:
     """A click on a cookie banner's decline button, and only that (DECLINES), at its click point
-    too: the element there is the button or within it, and reads as the same decline."""
-    if not isinstance(facts, dict) or not _declines(facts):
+    too: the element there is the button or within it, and reads as the same decline. `current`
+    is the page's address, which a consent form submits to (`consent_form`)."""
+    if not isinstance(facts, dict) or not _declines(facts, current):
         return False
     point = facts.get("point")
-    return isinstance(point, dict) and point.get("inside") is True and _declines(point)
+    return isinstance(point, dict) and point.get("inside") is True and _declines(point, current)
 
 
 # B19: which saved values a text box takes, told from its names (its label, aria-label,
@@ -1382,8 +1430,8 @@ def _opens(url: object, scope: Scope) -> bool:
 # finds the one posting address among the card's links (`card_posting`) and clicks that link,
 # judged as any link (actions.click). An element is a card when it is a plain container, no
 # control a click acts on by itself (a link, a field, a form part, nor anything with the role of
-# a button or a link, which is judged on its own), sits in no link or button, holds no submit
-# control and is in no form.
+# a button or a link, which is judged on its own, `button_card` below aside), sits in no link or
+# button, holds no submit control and is in no form.
 CARD_ROLES = frozenset(
     {"", "listitem", "article", "group", "region", "presentation", "none", "row", "gridcell",
      "cell"}
@@ -1407,6 +1455,86 @@ def card(facts: object) -> bool:
         and not facts.get("holds_submit")
         and not facts.get("editable")
         and not facts.get("credential")
+    )
+
+
+# Round 2 (sweep of 2026-10-30, 14:25): LinkedIn's result cards are `div role=button` elements
+# (150 and more characters of card text), refused since a button role is no plain container. A
+# card of that role is retargeted the same way, and only that way: a `div`, `li` or `article`
+# with the role button, in no form, link or button, holding no submit control and nothing
+# editable, stands for its one posting link (`card_posting`); the click is dispatched on that
+# link alone, judged as any link at its own click point (a nested "Easy Apply" button there is
+# refused as a submit), and never on the card. With no posting link or several, the element is
+# judged on its own, as before (a search button by its words, the place opener below, else
+# refused). A `role=link` card is not retargeted: no website showed one, and an element that
+# says it is a link whose destination browserd cannot read stays refused.
+BUTTON_CARD_TAGS = frozenset({"div", "li", "article"})
+
+
+def button_card(facts: object) -> bool:
+    """Whether a signed in search's click target is a result card with the role button that may
+    stand for its one posting link (above), never clicked itself."""
+    return (
+        isinstance(facts, dict)
+        and facts.get("tag") in BUTTON_CARD_TAGS
+        and facts.get("role") == "button"
+        and not facts.get("in_form")
+        and not facts.get("in_control")
+        and not facts.get("holds_submit")
+        and not facts.get("editable")
+        and not facts.get("credential")
+    )
+
+
+# Round 2: LinkedIn shows the place of a search as a `div role=button` holding the current place
+# ("Bordeaux et périphérie", which it set from the person's profile), and a click on it opens the
+# place box where the agent clears it or types the saved place or the worldwide name. That click
+# is allowed signed in: an element with the role button (never a native button, a link or a
+# field: a place filter `<button>` stays refused) whose names `box_kind` reads as a place box,
+# in no form and inside no link or button, holding no submit control, whose names say no submit
+# (`detect.says_submit`, read first), write to no one (`composes`) and hold no action word
+# (`acts`: an ACTION_STEMS stem starting any of their words, or inside an id). The box that
+# opens is then typed in under the rules of a search box (`search_box`, `Scope.types`).
+OPENER_TAGS = frozenset({"div", "span", "li"})
+
+
+def acts(names: object) -> bool:
+    """Whether names hold an action word: a word, folded as detect.match_words folds it, that
+    starts with an ACTION_STEMS stem (follow, save, alert, share, message, report, block, an
+    account's pages...), or, in a name of one token with no space (an id), a stem anywhere in it.
+    Fails closed: names that cannot be read act."""
+    if not isinstance(names, list) or len(names) > 60:
+        return True
+    for name in names:
+        if not isinstance(name, str):
+            return True
+        if any(t.startswith(ACTION_STEMS) for t in detect.match_words(name[:500])):
+            return True
+        if IDENTIFIER.fullmatch(name.strip()):
+            glued = "".join(detect.words(name))
+            if any(stem in glued for stem in ACTION_STEMS):
+                return True
+    return False
+
+
+def place_opener(facts: object) -> bool:
+    """A click on the element that shows a search's place and opens its place box (above)."""
+    if not isinstance(facts, dict):
+        return False
+    names = facts.get("names")
+    return (
+        facts.get("role") == "button"
+        and facts.get("tag") in OPENER_TAGS
+        and box_kind(names) == "place"
+        and not facts.get("in_form")
+        and not facts.get("in_control")
+        and not facts.get("holds_submit")
+        and not facts.get("editable")
+        and not facts.get("credential")
+        and isinstance(names, list)
+        and not detect.says_submit([n for n in names if isinstance(n, str)], profile_edit=True)
+        and not composes(facts)
+        and not acts(names)
     )
 
 
@@ -1452,7 +1580,8 @@ def _signed_in_control(
     takes one saved title or place (`Scope.types`) and Enter, and a click that focuses it
     (2026-10-30); a button or link named a search word (`search_words`) is clicked, a form it
     submits held to `_search_form`; a link to a page of the website (`_opens`) is followed; with
-    no place limit, the worldwide suggestion of a place box (`worldwide_option`) is chosen."""
+    no place limit, the worldwide suggestion of a place box (`worldwide_option`) is chosen; the
+    element showing a search's place opens its place box (`place_opener`, round 2)."""
     if tool == "browser_type":
         if not search_box(facts) or not _search_form(facts, d, scope):
             return False
@@ -1469,6 +1598,8 @@ def _signed_in_control(
         return True
     if tool != "browser_click" or facts.get("editable") or facts.get("credential"):
         return False
+    if place_opener(facts):  # LinkedIn's place setting opens its place box (round 2)
+        return True
     tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
     if (  # a place box's worldwide suggestion, no place limit; any other option is judged below
         role == "option"
@@ -1545,7 +1676,7 @@ def judged(
         return "submit", "names_submit"
     if tool == "browser_type" and composes(facts):  # a composer, never a search box (B19)
         return UNSUPPORTED, "composer"
-    if tool == "browser_click" and decline(facts):
+    if tool == "browser_click" and decline(facts, current):
         point = facts["point"]
         refused = detect.verdict(point, action="click", profile_edit=True)
         if refused and refused != "submit":

@@ -183,7 +183,14 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                         "guard_failed",
                         "Refused: the browser could not take back a page outside the allow list.",
                     )
-                log.warning("lease %s: %s failed: %s", lease_id[:8], name, kind)
+                # Why, in the code's own words only (actions.actionability, round 2).
+                log.warning(
+                    "lease %s: %s failed: %s reason=%s",
+                    lease_id[:8],
+                    name,
+                    kind,
+                    actions.actionability(exc),
+                )
                 if COVERED in str(exc):  # Playwright's actionability log: a banner over it
                     return actions.failure(
                         "element_covered",
