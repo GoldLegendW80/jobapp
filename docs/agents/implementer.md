@@ -64,15 +64,16 @@ messages and the pull request body.
   `ops/local-check.sh`, the e2e group list, imports in `api/app/worker.py`, `api/app/config.py`,
   `.env.example`), keep it a single line, append it in sorted position, and name it in the pull
   request body. These files cause most batch conflicts.
-- Heuristic code (a parser, classifier, matcher, rule set, regex over user or web text): 79% of
-  second and later review rounds came from these. Before writing the rule, write the accept and
-  refuse table from the spec as a parametrized test: 30 to 40 neighbour cases around every rule
-  (near misses, other languages, spacing, case, punctuation, empty, huge) plus a corpus of true
-  inputs that must stay untouched. Make the default fail closed (when unsure, do the safe thing
-  the spec names). Prefer an allow list of what is accepted to a deny list of what is refused.
-  Model the structure (a tree, a period, a vocabulary) instead of adding strings. Keep it pure and
-  linear in input size. List what it still misses under "Declared open points" in the pull
-  request body, so it is not re-blocked.
+- Heuristic code (a parser, classifier, matcher, rule set, regex over user or web text): half the
+  items of later review rounds came from these (42 of 86, 2026-10-14 to 10-28; lessons in
+  [lessons/heuristic-rules.md](lessons/heuristic-rules.md)). Before writing the rule, write the
+  accept and refuse table from the spec as a parametrized test: 30 to 40 neighbour cases around
+  every rule (near misses, other languages, spacing, case, punctuation, empty, huge) plus a corpus
+  of true inputs that must stay untouched. Make the default fail closed (when unsure, do the safe
+  thing the spec names). Prefer an allow list of what is accepted, and refuse or leave what it
+  does not name. Model the structure (a tree, a period, a vocabulary) instead of adding strings.
+  Keep it pure and linear in input size. List what it still misses under "Declared open points" in
+  the pull request body, so it is not re-blocked (residue only: never an acceptance line).
 
 ## Tests
 
@@ -95,15 +96,17 @@ messages and the pull request body.
   - shell: every `tests/*_test.sh` of a script you changed, and shellcheck through the pinned
     image: `docker run --rm --name <task>-sc -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0 <files>`.
 - Then `grep -rn` in `api/tests` and `web/e2e` for assertions of any behaviour you changed, and
-  fix those tests in the same pull request (earlier tasks broke main by running only their own
-  files).
+  for the readers of any field or contract you changed (registries such as `FIELD_TYPES`, old
+  editors and imports that omit a new key, other modules), and fix them in the same pull request
+  (earlier tasks broke main by running only their own files).
 - Playwright journeys, when the task has one: grep `ops/local-check.sh` for `stack_up` and
   `s_journey` to see how the gate starts a Compose stack for a journey group, and do the same
   with your own project name (`-p <task>-$RANDOM`), `-f compose.yml -f compose.mac.yml` on an
   Apple silicon Mac as the gate does, and your OWN image tags through an override file (never
   retag or rebuild `jobapp-*:latest`). Run ALL journeys of your module's group, not only your new
   file. A journey that has never run hides most of its bugs: run every new journey on its own
-  stack before you push. Take the stack down with its volumes and `docker rmi` your tags after.
+  stack before you push; if the gate's lock, the disk or the sandbox stops a run, write "not run"
+  and why in the body. Take the stack down with its volumes and `docker rmi` your tags after.
 - Shared machine: other agents may run beside you. If the folder `.local-check/lock` of the main
   checkout exists, the gate is running: start nothing heavy until it is gone. If `df` shows under
   12 GiB free, stop building images and say so in the hand back.
@@ -128,7 +131,8 @@ messages and the pull request body.
   applies to your diff. In the pull request body, add a "Self review" section with one line per
   item applied. Reviewers block on the same list, so each missed item costs a round of about 30
   minutes.
-- Before the push: merge `origin/main` into your branch and rerun your tests; sweep docs, plan
+- Before the push: merge `origin/main` into your branch and rerun your tests and the typecheck on
+  the merged tree (merges without a conflict still broke both); sweep docs, plan
   text, the pull request body and UI strings for values your change made stale
   (`grep -rn <old value>`).
 - Dependencies: when your pull request needs another open one merged first, put
