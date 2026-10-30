@@ -299,10 +299,15 @@ A page may show a security check instead ("Just a moment", "Verify you are human
 "Vérification supplémentaire requise", "Un instant"). Do not navigate away and never click
 its checkbox or any CAPTCHA: wait for it to clear with browser_wait_for (a few seconds at a
 time, up to about 30 seconds in all), then read the page again. If it never clears, report
-security_check.
+security_check. Opening another address of the website does not help while a check shows:
+the check comes back on every page of it.
 3. Search one saved title at a time: type it in the website's own search box, leave or set
 the place box, then press Enter in the box (browser_type with submit) or click its search
-button. When you are not signed in (`signed_in` false), the website's scripts do not run and
+button. When you are signed in (`signed_in` true), an address holding search terms (such as
+/jobs?q=...) is refused: always type in the search box. A website may show its place as a
+button holding the place it set ("Bordeaux et périphérie" on LinkedIn): click it to open the
+place box, then clear it or type in it.
+When you are not signed in (`signed_in` false), the website's scripts do not run and
 its search box may refuse your typing: then open its search page with one saved title in its
 search key, such as /fr/jobs?query=genai%20engineer (the key the website uses: q, query,
 search, keyword or keywords), and nothing else but a saved place in `location`. Decide the
@@ -310,7 +315,9 @@ order and the searches: usually one per wanted title, and per wanted place when 
 has a place field, until the website is covered for this person.
 4. Read the result list. Open the postings that fit the criteria (click the posting's title
 link, or its card, whose posting link the app then clicks), read each one, and report it with
-report_postings right after opening it.
+report_postings right after opening it. A posting is reported from its own page only: when
+LinkedIn shows a posting beside its list and its address holds currentJobId=<number>, open
+/jobs/view/<number>/ on the same host to read and report it.
 5. When the website shows no list of postings, say so with report_no_postings and its
 reason: no_match (the search ran and listed no matching job), no_list (only a count or a push
 to sign up, no list), cookie_wall (a banner you could not decline), signin_wall (the postings
@@ -326,7 +333,8 @@ Engineer" for "genai engineer"), or nothing, and with submit press Enter after i
 place box ("Worldwide", "Monde entier").
 Leaving a box empty is always allowed. browser_select_option sets a native filter only to a
 value of `filters` or a place of `places` (or the worldwide value, as above); browser_click
-clicks into a search box or the place box, presses a search button, opens a posting (its link
+clicks into a search box or the place box, opens the place box from the button showing the
+place, presses a search button, opens a posting (its link
 or its result card), a result list or the next page, chooses the
 worldwide suggestion of the place box (as above), or declines cookies.
 Any other value, a translation included, is refused.
@@ -726,6 +734,32 @@ def site_of(url: str) -> tuple[str, str] | None:
     return (scheme, rest if "." in rest.split(":")[0] else netloc)
 
 
+# Round 2 (sweep of 2026-10-30, 14:25): a LinkedIn result list shows the posting it selected in a
+# pane beside the list and names it in its address (`currentJobId=4012345678`), and a click on a
+# card often only selects it there. That posting's own page, `/jobs/view/<id>/` on the same host,
+# counts as a link the page showed, so the agent may open it, read it and report it: a posting is
+# verified on its own page only. The id is digits only, as browserd's discovery._linkedin_job reads
+# a LinkedIn posting's, and one such key exactly.
+JOB_ID = re.compile(r"[0-9]{1,20}")
+
+
+def shown_posting(url: str) -> str:
+    """The canonical address of the posting a LinkedIn page shows by its `currentJobId`, or ""
+    when the page is on no LinkedIn family or names no one posting."""
+    landed = canonical(url)
+    family = family_of(landed) if landed else None
+    if family is None or family[0].split(".")[0] != "linkedin":
+        return ""
+    parts = urlsplit(landed)
+    try:
+        ids = [v for k, v in parse_qsl(parts.query, max_num_fields=100) if k == "currentJobId"]
+    except ValueError:
+        return ""
+    if len(ids) != 1 or not JOB_ID.fullmatch(ids[0]):
+        return ""
+    return canonical(f"{parts.scheme}://{parts.netloc}/jobs/view/{ids[0]}/")
+
+
 def search_page(url: str) -> bool:
     """Whether a canonical address is a website's job search page itself, with no query: its
     path `/<endpoint>` or `/<language>/<endpoint>` (`/jobs`, `/fr/jobs`, `/search/`), as
@@ -1070,6 +1104,8 @@ class FinderSession:
                     not self.interactive or (self.on_site(link) and len(self.seen) < SEEN_MAX)
                 ):
                     self.seen.add(link)
+        if self.interactive and len(self.seen) < SEEN_MAX and (shown := shown_posting(url)):
+            self.seen.add(shown)  # the posting LinkedIn shows beside its list (round 2)
         key = canonical(url)
         if key:
             if self.interactive:

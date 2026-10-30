@@ -28,7 +28,8 @@ submits or signs the person out, and a frame's navigation only within the frozen
 off it is stopped as for any lease (`_hop`, which holds a discovery's hop to that same rule).
 browserd's warning of a stopped navigation names its target's host, never its path or query. Service
 workers are bypassed and out of the page's reach (SIGNED_IN_JS removes
-`navigator.serviceWorker`), and the page's frames, an inline sandboxed one included (a sweep
+`navigator.serviceWorker`, but on Cloudflare's own interstitial, where registering one stays
+refused), and the page's frames, an inline sandboxed one included (a sweep
 lease disables IsolateSandboxedIframes, chromium.switches), get the same script and route.
 
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
@@ -75,22 +76,98 @@ FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.docume
 # see (a worker's own fetch, measured in Chromium 153, left without the route). Cloudflare's
 # challenge frame alone (its own origin, which no page of the site can script) keeps them, as a
 # browser without them fails its check (2026-10-30, discovery.challenge).
+#
+# Round 2 (sweep of 2026-10-30, 14:25): Indeed still showed Cloudflare's interstitial with
+# "Navigateur non pris en charge" (browser not supported), while the person passed the same check
+# by hand in the same profile and from the same address, in a session with none of this script.
+# The interstitial is Cloudflare's own page served on the site's origin: the site's scripts never
+# run in that document, only Cloudflare's, which builds a Worker from a blob: address and reads
+# `navigator.serviceWorker`. So on that document alone the Worker it builds is constructed and
+# `navigator.serviceWorker` is read (registering one stays refused); every other API stays
+# refused there, and nothing changes on any other page. That document is told safely: the top
+# frame, its own response status (the navigation timing's `responseStatus`, which no script can
+# change) 403 or 503 as Cloudflare answers a check, and, read when the API is used,
+# `window._cf_chl_opt`, which Cloudflare's inline script defines; a Worker only from a blob: address
+# of the same origin or the origin's CHALLENGE_PATH. Declared open point: what that Worker fetches
+# leaves without the route (Cloudflare's code alone on that document).
+#
+# Every refusal and every allowance of the script is told to browserd as a console line of its own
+# (SCRIPT_LINE: the event, the API and the frame's origin, no page text), which browserd counts and
+# logs (`Tab._console`), so the next run says what the check asked for.
+SCRIPT_MARK = "browserd:signed_in"
 SIGNED_IN_JS = """(() => {
   if (location.origin === "https://CHALLENGE_HOST") return;  // Cloudflare's check alone
-  const refuse = function () { throw new DOMException("Blocked during a search", "SecurityError"); };
+  const origin = location.origin;
+  const say = console.debug.bind(console);  // the page's own console methods may change later
+  const tell = (event, api) => { try { say(`SCRIPT_MARK ${event} ${api} ${origin}`); } catch (e) {} };
+  let status = 0;
+  try {
+    const entry = performance.getEntriesByType("navigation")[0];
+    status = entry ? entry.responseStatus : 0;
+  } catch (e) {}
+  let top = false;
+  try { top = window.top === window; } catch (e) {}
+  const interstitial = top && (status === 403 || status === 503);
+  const challenged = () => {
+    try { const opt = self._cf_chl_opt; return interstitial && typeof opt === "object" && opt !== null; } catch (e) { return false; }
+  };
+  const own = url => {
+    try {
+      const at = new URL(String(url), location.href);
+      return at.origin === origin && (at.protocol === "blob:" || at.pathname.startsWith("CHALLENGE_PATH"));
+    } catch (e) { return false; }
+  };
+  const blocked = () => new DOMException("Blocked during a search", "SecurityError");
+  const RealWorker = globalThis.Worker;
   for (const name of ["Worker", "SharedWorker", "WebSocket", "WebSocketStream", "WebTransport"]) {
-    try { Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false }); } catch (e) {}
+    let value = function () { tell("blocked", name); throw blocked(); };
+    if (name === "Worker" && interstitial && typeof RealWorker === "function") {
+      value = function Worker(url, options) {
+        if (new.target && challenged() && own(url)) {
+          tell("allowed", name);
+          return Reflect.construct(RealWorker, [url, options], new.target);
+        }
+        tell("blocked", name);
+        throw blocked();
+      };
+      value.prototype = RealWorker.prototype;
+    }
+    try { Object.defineProperty(globalThis, name, { value, writable: false, configurable: false }); } catch (e) {}
   }
   try {
     if (globalThis.ServiceWorkerContainer) {
       Object.defineProperty(globalThis.ServiceWorkerContainer.prototype, "register", {
-        value: () => Promise.reject(new DOMException("Blocked during a search", "SecurityError")),
+        value: () => { tell("blocked", "register"); return Promise.reject(blocked()); },
         writable: false, configurable: false,
       });
     }
   } catch (e) {}
-  try { delete Navigator.prototype.serviceWorker; } catch (e) {}
-})();""".replace("CHALLENGE_HOST", discovery.CHALLENGE_HOST)  # noqa: E501  one script run in the page
+  try {
+    const read = Object.getOwnPropertyDescriptor(Navigator.prototype, "serviceWorker");
+    if (interstitial && read && read.get) {
+      Object.defineProperty(Navigator.prototype, "serviceWorker", {
+        get() {
+          if (challenged()) return read.get.call(this);
+          tell("blocked", "serviceWorker");
+          return undefined;
+        },
+        enumerable: read.enumerable, configurable: false,
+      });
+    } else {
+      delete Navigator.prototype.serviceWorker;
+    }
+  } catch (e) {}
+})();"""  # noqa: E501  one script run in the page
+SIGNED_IN_JS = (
+    SIGNED_IN_JS.replace("CHALLENGE_HOST", discovery.CHALLENGE_HOST)
+    .replace("CHALLENGE_PATH", discovery.CHALLENGE_PATH)
+    .replace("SCRIPT_MARK", SCRIPT_MARK)
+)
+# A console line of SIGNED_IN_JS: its event, the API (letters only) and the frame's origin.
+SCRIPT_LINE = re.compile(
+    re.escape(SCRIPT_MARK) + r" (blocked|allowed) ([A-Za-z]{1,30}) (\S{1,300})"
+)
+SCRIPT_LOGGED = 200  # distinct (event, API, host) counted per lease, at most
 
 
 HOST_LOGGED = re.compile(r"[a-z0-9.-]{1,253}")
@@ -105,6 +182,22 @@ def host_of(url: object) -> str:
     except ValueError:
         host = None
     return host if host and HOST_LOGGED.fullmatch(host) else "unreadable"
+
+
+ROUTE_LOGGED = 40  # a signed in discovery's refused subresources logged per lease, at most
+
+
+def challenge_request(url: object) -> bool:
+    """A request of Cloudflare's check by its address alone: on its host, or under its path on
+    any host (round 2 diagnostics: its refusals are logged, `Tab._log_refusal`)."""
+    try:
+        parts = urlsplit(url) if isinstance(url, str) else None
+    except ValueError:
+        return False
+    return parts is not None and (
+        parts.hostname == discovery.CHALLENGE_HOST
+        or parts.path.startswith(discovery.CHALLENGE_PATH)
+    )
 
 
 # What a refusal's warning says of the element (2026-10-30, review of the three websites
@@ -255,6 +348,11 @@ class State:
     signin_seen: bool = False  # B17: that discovery was sent to the site's sign in page
     main_frame: str | None = None  # the anonymous discovery tab's main frame (CDP frame id)
     stopped_kind: str = ""  # the resource type of the navigation `blocked` holds, for the log
+    # Round 2 diagnostics of a signed in discovery: the tab's document came with Cloudflare's
+    # `cf-mitigated: challenge`; SIGNED_IN_JS's console lines counted; route refusals logged.
+    challenged: bool = False
+    script_counts: dict[tuple[str, str, str], int] = field(default_factory=dict)
+    route_logged: int = 0
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     chooser_id: int = 0
@@ -265,6 +363,8 @@ class State:
         self.files.clear()
         self.blocked.clear()
         self.main_frame, self.stopped_kind = None, ""
+        self.challenged, self.route_logged = False, 0
+        self.script_counts.clear()
         self.page = self.guarded = self.chooser = None
         self.native_context = self.native_cdp = self.scope = None
 
@@ -377,7 +477,9 @@ class Tab:
         open points: an event the browser itself delivers to such a worker (push, background
         sync, a cookie change) can still wake it; `Network.setBlockedURLs` stopped a fetch but
         not a page's WebSocket in Chromium 153, so SIGNED_IN_JS is what refuses a socket there.
-        A step that fails ends the discovery: nothing is read."""
+        A step that fails ends the discovery: nothing is read. Round 2 diagnostics listen to the
+        context's responses (`_response`: a tab's document that is Cloudflare's check) and
+        console (`_console`: what SIGNED_IN_JS refused or allowed)."""
         self.state.signed_in = True
         try:
             async with asyncio.timeout(ACTION_S):
@@ -385,6 +487,8 @@ class Tab:
                 await context.add_init_script(SIGNED_IN_JS)
                 await context.route("**/*", self._signed_route)
                 context.on("request", self._hop)
+                context.on("response", self._response)  # round 2 diagnostics
+                context.on("console", self._console)
                 page = context.pages[0] if context.pages else await context.new_page()
                 self.state.page = page  # closed by close_discovery if a step below fails
                 for other in context.pages:
@@ -434,7 +538,77 @@ class Tab:
             self.state.stopped_kind = str(kind or "document")
             signin = scope is not None and discovery.signin_url(request.url, scope)
             self.state.signin_seen = self.state.signin_seen or signin
+        else:
+            self._log_refusal(request.url, str(kind or ""), str(method or ""))
         await route.abort("blockedbyclient")
+
+    def _log_refusal(self, url: str, kind: str, method: str) -> None:
+        """A frame's or a background request the route refused (round 2: Cloudflare's check
+        did not pass, and Welcome to the Jungle showed a count and no list, with no word of what
+        was refused): its host, resource type and method, never its path or query, and whether
+        it was Cloudflare's check's (`check=1`: the tab shows the check, or the request is on
+        its host or path); at most ROUTE_LOGGED a lease."""
+        if self.state.route_logged >= ROUTE_LOGGED:
+            return
+        self.state.route_logged += 1
+        check = self.state.challenged or challenge_request(url)
+        log.warning(
+            "lease %s: a request refused: host=%s kind=%s method=%s check=%d",
+            self.lease_tag,
+            host_of(url),
+            KIND_LOGGED.sub("", kind)[:20] or "unknown",
+            KIND_LOGGED.sub("", method)[:10] or "unknown",
+            int(bool(check)),
+        )
+
+    def _response(self, response: Any) -> None:
+        """Round 2 diagnostics: whether the tab's document came with Cloudflare's
+        `cf-mitigated: challenge` (a security check), logged with its host and status only."""
+        try:
+            request = response.request
+            if not request.is_navigation_request() or request.frame.parent_frame is not None:
+                return
+            mitigated = str((response.headers or {}).get("cf-mitigated", "")).strip().lower()
+            status, url = int(response.status), str(response.url)
+        except Exception:
+            return
+        self.state.challenged = mitigated == "challenge"
+        if self.state.challenged:
+            log.warning(
+                "lease %s: the page is a security check: host=%s status=%d",
+                self.lease_tag,
+                host_of(url),
+                status,
+            )
+
+    def _console(self, message: Any) -> None:
+        """SIGNED_IN_JS's own console lines (SCRIPT_LINE): each refusal or allowance of an API,
+        counted per event, API and host, and logged at its 1st, 2nd, 4th, 8th... time. A page
+        may print such a line too: it only adds a line to the log, naming no page text."""
+        try:
+            text = message.text
+        except Exception:
+            return
+        if not isinstance(text, str) or not text.startswith(SCRIPT_MARK):
+            return
+        found = SCRIPT_LINE.fullmatch(text)
+        if found is None:
+            return
+        event, api, origin = found.groups()
+        key = (event, api, host_of(origin))
+        counts = self.state.script_counts
+        if key not in counts and len(counts) >= SCRIPT_LOGGED:
+            return
+        count = counts[key] = counts.get(key, 0) + 1
+        if count & (count - 1) == 0:
+            log.warning(
+                "lease %s: the search's page script %s %s: host=%s count=%d",
+                self.lease_tag,
+                event,
+                api,
+                key[2],
+                count,
+            )
 
     async def close_discovery(self) -> None:
         self.state.native_failed = True
@@ -920,12 +1094,23 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     locator, gone = await tab.element(args)
     if gone:
         return gone
-    await tab.approach(locator)
+    try:
+        await tab.approach(locator)
+    except Exception as exc:
+        if not tab.discovery or type(exc).__name__ != "TimeoutError":
+            raise
+        return await not_ready(tab, locator, exc)
     facts = await tab.facts(locator, point=True)
     link = None
-    if tab.discovery and tab.state.signed_in and discovery.card(facts):
+    if (
+        tab.discovery
+        and tab.state.signed_in
+        and (discovery.card(facts) or discovery.button_card(facts))
+    ):
         # A result card stands for its one posting link (discovery.card_posting, 2026-10-30):
-        # that link is approached, read and judged as any link, and clicked instead.
+        # that link is approached, read and judged as any link, and clicked instead; a card
+        # with the role button (LinkedIn's, round 2) is never clicked itself. With no one
+        # posting link the element is judged on its own, as before.
         link = await card_link(tab, locator)
         if link is not None:
             locator = link
@@ -934,6 +1119,7 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     no = tab.judge(facts, "click", "browser_click")
     if no:
         return no
+    current = tab.state.page.url if tab.discovery else ""
     tab.require_input()
     await locator.click(
         button=button,
@@ -943,10 +1129,64 @@ async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     result = await tab.settle(await _here(tab))
     if link is not None and result.get("ok"):
         result = {**result, "clicked": "the card's posting link"}
-    if tab.discovery and result.get("ok") and discovery.decline(facts):
+    if tab.discovery and result.get("ok") and discovery.decline(facts, current):
         # A cookie banner's decline (discovery.decline): the api never counts it as a search.
         result = {**result, "declined": True}
     return result
+
+
+# Round 2 (sweep of 2026-10-30, 14:42): the first click on Welcome to the Jungle's cookie
+# banner failed with a bare TimeoutError: the element never became ready for the pointer within
+# ACTION_S (Playwright's hover waits for it to be visible, stable and to receive the events), and
+# neither the agent nor the log said why. A discovery's click that times out on the way to its
+# element now answers why, from Playwright's own words (ACTIONABILITY, never the page's) and from
+# where a click would land: another element there (an overlay, a banner, transparent or not) is
+# `element_covered`, naming that element's tag and role in the log, never its text; else a
+# `page_error` saying the element is hidden, moving or out of reach.
+ACTIONABILITY = (
+    ("intercepts pointer events", "covered"),
+    ("not visible", "not_visible"),
+    ("not stable", "moving"),
+    ("outside of the viewport", "outside_viewport"),
+    ("not enabled", "disabled"),
+    ("detached", "detached"),
+)
+NOT_READY = (
+    "The element did not become clickable: it is hidden, still moving or out of reach. Read the "
+    "page again with browser_snapshot and try again or another way."
+)
+
+
+def actionability(message: object) -> str:
+    """Why Playwright's wait for an element ran out, as one of the code's own words."""
+    text = str(message)
+    return next((reason for words, reason in ACTIONABILITY if words in text), "unknown")
+
+
+async def not_ready(tab: Tab, locator: Any, exc: Exception) -> dict[str, Any]:
+    """A discovery's click whose element never became ready (above): covered, or not ready."""
+    reason = actionability(exc)
+    facts = await tab.facts(locator, point=True)
+    point = facts.get("point") if isinstance(facts, dict) else None
+    covered = reason == "covered" or (isinstance(point, dict) and point.get("inside") is False)
+    over = (
+        f"{_logged(point.get('tag'))}/{_logged(point.get('role'))}"
+        if isinstance(point, dict) and point.get("inside") is False
+        else "-"
+    )
+    log.warning(
+        "lease %s: browser_click not ready: reason=%s covered_by=%s",
+        tab.lease_tag,
+        reason,
+        over,
+    )
+    if covered:
+        return failure(
+            "element_covered",
+            "Another element covers this one, such as a cookie banner or a transparent layer "
+            "over the page: close it first, then try again.",
+        )
+    return failure("page_error", NOT_READY)
 
 
 # A card's links, in page order (CARD_LINKS at most, one more to tell a longer list).
