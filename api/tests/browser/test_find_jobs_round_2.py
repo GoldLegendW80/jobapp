@@ -444,8 +444,9 @@ def test_a_tab_s_document_that_is_cloudflare_s_check_is_logged(caplog):
     assert not found.state.challenged
 
 
-def console(text: str) -> Any:
-    return SimpleNamespace(text=text)
+def console(text: str, page: str = INDEED) -> Any:
+    """A console line of the page at `page` (round 3: the host logged is the page's own)."""
+    return SimpleNamespace(text=text, page=SimpleNamespace(url=page))
 
 
 def test_what_the_page_script_refused_is_counted_and_logged(caplog):
@@ -456,7 +457,8 @@ def test_what_the_page_script_refused_is_counted_and_logged(caplog):
             found._console(console(f"{mark} blocked Worker https://fr.indeed.com"))
         found._console(console(f"{mark} allowed Worker https://fr.indeed.com"))
         found._console(console(f"{mark} blocked serviceWorker https://fr.indeed.com"))
-        # Page text, another format, an origin that is no host: never logged as such.
+        # Page text, another format, an origin that is no host: never logged as such; the
+        # host is the page's own, never the line's (round 3), so this counts as the 6th.
         found._console(console("Jane Roe e2e-77aa says hello"))
         found._console(console(f"{mark} blocked Worker https://fr.indeed.com extra words"))
         found._console(console(f"{mark} blocked Wor-ker https://fr.indeed.com"))
@@ -469,7 +471,6 @@ def test_what_the_page_script_refused_is_counted_and_logged(caplog):
         "lease e2e-l1: the search's page script blocked Worker: host=fr.indeed.com count=4",
         "lease e2e-l1: the search's page script allowed Worker: host=fr.indeed.com count=1",
         "lease e2e-l1: the search's page script blocked serviceWorker: host=fr.indeed.com count=1",
-        "lease e2e-l1: the search's page script blocked Worker: host=x.test count=1",
     ]
     for word in ("Jane", "secret", "e2e-jane", "extra"):
         assert all(word not in line for line in lines)
@@ -478,7 +479,8 @@ def test_what_the_page_script_refused_is_counted_and_logged(caplog):
 def test_the_counts_are_bounded_and_end_with_the_lease():
     found = indeed_tab()
     for index in range(actions.SCRIPT_LOGGED + 10):
-        found._console(console(f"{actions.SCRIPT_MARK} blocked Worker https://h{index}.test"))
+        page = f"https://h{index}.test/"
+        found._console(console(f"{actions.SCRIPT_MARK} blocked Worker https://x.test", page))
     assert len(found.state.script_counts) == actions.SCRIPT_LOGGED
     found.state.challenged, found.state.route_logged = True, 3
     found.state.end()
@@ -598,8 +600,9 @@ def test_the_page_script_lets_only_cloudflare_s_interstitial_build_its_worker():
     assert "status === 403 || status === 503" in script
     assert "self._cf_chl_opt" in script
     # Only the Worker, from a blob: address of its origin or the check's own path.
-    assert 'at.protocol === "blob:"' in script
-    assert 'at.pathname.startsWith("/cdn-cgi/challenge-platform/")' in script
+    # (round 3: through the URL getters captured before any page script runs)
+    assert 'protocolOf(at) === "blob:"' in script
+    assert 'startsWith(pathOf(at), "/cdn-cgi/challenge-platform/")' in script
     assert 'name === "Worker" && interstitial' in script
     # Registering a service worker stays refused everywhere; elsewhere it is removed.
     assert '"register"' in script
