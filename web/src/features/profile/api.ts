@@ -295,6 +295,8 @@ export interface Search {
   /** Saved intent; browser consent remains owned by the browser API. */
   interactive_sites?: InteractiveSite[];
   interactive_instructions?: string | null;
+  /** the job feeds ticked in Find jobs (api app/jobs/feeds); absent until one is ticked */
+  job_feeds?: string[];
   /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */

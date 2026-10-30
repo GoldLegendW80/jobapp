@@ -33,6 +33,7 @@ import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
 import { formatDateTime } from "./format";
+import { isJobFeed } from "./job-feeds";
 import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "./labels";
@@ -89,7 +90,13 @@ function readingName(sweep: Sweep): string {
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
+  // The ticked job feeds (mode "api") count with the websites: read first, one source each.
   const websites = sweep.sources.filter((source) => source.host);
+  const word = websites.some(
+    (source) => source.mode === "api" && isJobFeed(source.kind),
+  )
+    ? "source"
+    : "website";
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
@@ -105,7 +112,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
       >
         <span className="font-medium">
           {total
-            ? `${String(done)} of ${plural(total, "website")} searched`
+            ? `${String(done)} of ${plural(total, word)} searched`
             : sweep.current_board
               ? "Searching job websites"
               : "Waiting for the worker"}
@@ -136,13 +143,22 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   );
 }
 
+/** The job feeds a sweep read (api app/jobs/feeds), as a part of its summary line. */
+function feedsRead(sweep: Sweep): string[] {
+  const feeds = sweep.sources.filter(
+    (source) => source.mode === "api" && isJobFeed(source.kind),
+  );
+  return feeds.length ? [`${plural(feeds.length, "job feed")} read`] : [];
+}
+
 function summaryLine(sweep: Sweep): string {
   const parts = [
     // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
-      : `${plural(sweep.sources.filter((source) => source.host).length, "website")} searched`,
+      : `${plural(sweep.sources.filter((source) => source.host && !(source.mode === "api" && isJobFeed(source.kind))).length, "website")} searched`,
+    ...feedsRead(sweep),
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),

@@ -1,0 +1,124 @@
+{
+ "data": [
+  {
+   "slug": "forward-deployed-engineer-paris-1001",
+   "company_name": "Example Robotics",
+   "title": "Forward Deployed Engineer",
+   "description": "<p>Forward Deployed Engineer at Example Robotics.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-robotics/forward-deployed-engineer-paris-1001",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [
+    "Full Time",
+    "Permanent"
+   ],
+   "location": "Paris, France",
+   "created_at": 1793358000
+  },
+  {
+   "slug": "account-executive-paris-1002",
+   "company_name": "Example Labs",
+   "title": "Account Executive",
+   "description": "<p>Account Executive at Example Labs.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-labs/account-executive-paris-1002",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [],
+   "location": "Paris, France",
+   "created_at": 1793354400
+  },
+  {
+   "slug": "ai-engineer-sales-tools-paris-1003",
+   "company_name": "Example Labs",
+   "title": "AI Engineer, Sales Tools",
+   "description": "<p>AI Engineer, Sales Tools at Example Labs.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-labs/ai-engineer-sales-tools-paris-1003",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [],
+   "location": "Paris, France",
+   "created_at": 1793350800
+  },
+  {
+   "slug": "ai-engineer-berlin-1004",
+   "company_name": "Example Bank",
+   "title": "AI Engineer",
+   "description": "<p>AI Engineer at Example Bank.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-bank/ai-engineer-berlin-1004",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [
+    "Unbefristeter arbeitsvertrag"
+   ],
+   "location": "Berlin",
+   "created_at": 1793347200
+  },
+  {
+   "slug": "security-ai-engineer-paris-1005",
+   "company_name": "Example Shield",
+   "title": "Security AI Engineer",
+   "description": "<p>Security AI Engineer at Example Shield.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-shield/security-ai-engineer-paris-1005",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [],
+   "location": "Paris, France",
+   "created_at": 1793343600
+  },
+  {
+   "slug": "ai-engineer-remote-1006",
+   "company_name": "Example Remote Co",
+   "title": "AI Engineer",
+   "description": "<p>AI Engineer at Example Remote Co.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": true,
+   "url": "https://www.arbeitnow.com/jobs/companies/example-remote-co/ai-engineer-remote-1006",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [],
+   "location": "",
+   "created_at": 1793340000
+  },
+  {
+   "slug": "",
+   "title": "Broken",
+   "url": "https://www.arbeitnow.com/jobs/x",
+   "created_at": 1793336400
+  },
+  {
+   "slug": "ai-engineer-evil-1007",
+   "company_name": "Example Evil",
+   "title": "AI Engineer",
+   "description": "<p>AI Engineer at Example Evil.</p><ul><li>Python</li><li>LLM agents</li></ul>",
+   "remote": false,
+   "url": "http://evil.example.test/job",
+   "tags": [
+    "Engineering"
+   ],
+   "job_types": [],
+   "location": "Paris, France",
+   "created_at": 1793332800
+  }
+ ],
+ "links": {
+  "first": "https://www.arbeitnow.com/api/job-board-api?page=1",
+  "last": null,
+  "prev": null,
+  "next": "https://www.arbeitnow.com/api/job-board-api?page=2"
+ },
+ "meta": {
+  "current_page": 1,
+  "per_page": 300,
+  "terms": "This is a free public API for jobs, please do not abuse. I would appreciate linking back to the site."
+ }
+}

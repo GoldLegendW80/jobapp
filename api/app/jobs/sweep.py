@@ -9,7 +9,9 @@ One sweep, `run_sweep(sweep_id)`:
    profile row lock at creation; pre-v1 rows without `stats.search_scope` explicitly retain
    claim-time profile reads. Without a ticked website, or with a search section that no longer
    validates, the sweep fails with a clear message.
-2. Search. The browser hook (app/browser/sources, `Runner`) runs every ticked website through
+2. Search. The feed hook (app/jobs/feeds, `FeedRunner`) first reads every ticked job feed
+   (Arbeitnow, Himalayas, Adzuna: official APIs, owner 2026-10-30), then the browser hook
+   (app/browser/sources, `Runner`) runs every ticked website through
    the bounded interactive finder (app/browser/finder.py), one website after the other, within
    the sweep's time limit.
 3. Store. Each batch of findings the finder verified on its detail page is stored as it is
@@ -107,7 +109,7 @@ NOT_PICKED = "The worker did not pick up this sweep. Start it again."
 TIMED_OUT = "The sweep took too long and was stopped."
 INTERRUPTED = "The sweep was interrupted (the worker restarted). Start it again."
 INTERNAL = "The sweep failed because of an internal error."
-NO_WEBSITES = "Tick at least one job website in Find jobs, then start the search again."
+NO_WEBSITES = "Tick at least one job website or job feed in Find jobs, then start the search again."
 SEARCH_INVALID = (
     "The search section of your profile no longer passes the checks. "
     "Open the Search tab of your profile and save it again."
@@ -191,8 +193,9 @@ def has_websites(search: SearchSection | None) -> bool:
 
 
 def has_sources(search: SearchSection | None) -> bool:
-    """Whether a sweep of `search` has something to read: an enabled website."""
-    return has_websites(search)
+    """Whether a sweep of `search` has something to read: an enabled website or a ticked job
+    feed (app/jobs/feeds, owner 2026-10-30)."""
+    return has_websites(search) or bool(search and search.job_feeds)
 
 
 def _source_id(mode: str, *key: str) -> str:
@@ -217,6 +220,10 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+        # No feed ticked: no key, as the profile stores it, so a sweep queued before a rollback
+        # still validates under the release before, which refuses the key.
+        if not raw.get("job_feeds"):
+            raw.pop("job_feeds", None)
     if search is not None:
         sources.extend(
             {
@@ -227,6 +234,12 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             }
             for site in search.interactive_sites
             if site.enabled
+        )
+        # The ticked job feeds (app/jobs/feeds), read before the websites, in their own order.
+        from app.jobs import feeds
+
+        sources.extend(
+            feeds.scope_entry(name) for name in feeds.FEED_NAMES if name in search.job_feeds
         )
     return {
         "version": 1,
@@ -438,9 +451,19 @@ class _NewJob:
     rule: NeverApplyRule | None
 
 
-def _new_job(plan: Plan, company: str, posting: Posting, source: str, now: datetime) -> _NewJob:
+def _new_job(
+    plan: Plan,
+    company: str,
+    posting: Posting,
+    source: str,
+    now: datetime,
+    contract: ContractType | None = None,
+    work_mode: str | None = None,
+) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
-    then the ones service.apply_score, set_status and set_notes would have written."""
+    then the ones service.apply_score, set_status and set_notes would have written. A job feed
+    (app/jobs/feeds) may state the contract type and the work mode; else both are read from the
+    posting as for every source."""
     text = posting.text[:POSTING_TEXT_MAX]
     rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
     score = (
@@ -450,11 +473,11 @@ def _new_job(plan: Plan, company: str, posting: Posting, source: str, now: datet
     )
     job_id = uuid.uuid4()
     slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
-    contract = kind(posting.title, posting.location, posting.url)
+    contract = contract or kind(posting.title, posting.location, posting.url)
     # Pay and work mode (opportunities O3): what the text and the location state in an accepted
     # shape, else nothing.
     pay = pays.pay_of(text, freelance=contract is ContractType.Freelance)
-    work_mode = pays.work_mode_of(posting.location)
+    work_mode = work_mode or pays.work_mode_of(posting.location)
     row = {
         "id": job_id,
         "user_id": plan.user_id,
@@ -675,6 +698,8 @@ Clock = Callable[[], datetime]
 # The job websites' run (app/browser/sources, `Runner`): given the plan, the stats, the progress
 # save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`.
 BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
+# The job feeds' run (app/jobs/feeds, `FeedRunner`), the same shape, run before the websites.
+FeedHook = BrowserHook
 
 
 async def run_sweep(
@@ -685,6 +710,7 @@ async def run_sweep(
     timeout_s: float = SWEEP_TIMEOUT_S,
     heartbeat_s: float = HEARTBEAT_S,
     browser: BrowserHook | None = None,
+    feeds: FeedHook | None = None,
 ) -> None:
     """Run one sweep to its end (module docstring). Never raises for a website's failure; any
     other error fails the sweep and is re-raised only for cancellation."""
@@ -714,6 +740,8 @@ async def run_sweep(
 
             beating = asyncio.create_task(beat())
             try:
+                if feeds is not None:
+                    await feeds(plan, stats, progress, started + timeout_s)
                 if browser is not None:
                     await browser(plan, stats, progress, started + timeout_s)
             finally:
@@ -764,7 +792,10 @@ async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
 
 def _summary(stats: Stats) -> dict[str, Any]:
     return {
-        "websites": sum(1 for source in stats.sources if source.get("host")),
+        "websites": sum(
+            1 for source in stats.sources if source.get("host") and source.get("mode") != "api"
+        ),
+        "feeds": sum(1 for source in stats.sources if source.get("mode") == "api"),
         "seen": stats.seen,
         "matched": stats.matched,
         "new": stats.new,
@@ -891,7 +922,15 @@ def _store_finding(
     for _ in range(2):
         if plan.known.has(key):
             break
-        new = _new_job(plan, company, posting, source, now)
+        new = _new_job(
+            plan,
+            company,
+            posting,
+            source,
+            now,
+            getattr(finding, "contract", None),
+            getattr(finding, "work_mode", None),
+        )
         new.events[1]["data"]["discovery"] = {
             "source_id": source_id,
             "detail_read_at": finding.detail_read_at,

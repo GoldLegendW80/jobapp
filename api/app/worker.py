@@ -233,8 +233,25 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
 
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     await sweep.run_sweep(
-        sessions_of(ctx), uuid.UUID(sweep_id), clock_of(ctx), browser=browser_sources(ctx)
+        sessions_of(ctx),
+        uuid.UUID(sweep_id),
+        clock_of(ctx),
+        browser=browser_sources(ctx),
+        feeds=feed_sources(ctx),
     )
+
+
+def feed_sources(ctx: dict[str, Any]) -> sweep.FeedHook:
+    """The job feeds' run (app/jobs/feeds): tests put theirs in the context. It reads only the
+    feeds the person ticked, so a sweep without one sends no request."""
+    if "feed_sources" in ctx:
+        hook: sweep.FeedHook = ctx["feed_sources"]
+        return hook
+    from app.jobs import feeds
+    from app.jobs.feeds import keys
+
+    sessions = sessions_of(ctx)
+    return feeds.FeedRunner(sessions, keys=keys.reader(sessions, ctx.get("credentials_keyring")))
 
 
 def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
