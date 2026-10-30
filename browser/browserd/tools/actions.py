@@ -107,14 +107,40 @@ def host_of(url: object) -> str:
     return host if host and HOST_LOGGED.fullmatch(host) else "unreadable"
 
 
-# What a refusal's warning says of the element (2026-10-30): its tag, role, type and box kind,
-# and the first 40 characters of its first name (aria-label, title, alt, placeholder, name, id,
-# label or text), with every character but letters, digits, spaces and plain punctuation
-# replaced. Never a typed value: an editable element's text is what was typed into it, so its
-# name is not said; an input's value is never among its names (FACTS_JS reads a button input's
-# value only). The api passes no address of the page here.
+# What a refusal's warning says of the element (2026-10-30, review of the three websites
+# change): its tag, role, type and box kind, the answers of the classifiers that judged it
+# (`search_words`, `composes`, `says_submit`, `decline`: booleans, no page text), and its first
+# name only when every word of it, as detect.words folds it, is one of the code's own words
+# (LOGGED_WORDS: search phrases and neutral words, place and title words, decline and
+# worldwide words, submit and apply words, FORM_WORDS); else `name=(not logged, N chars)`. A
+# name is free page text (a person's name on a profile link, a message preview, an e-mail
+# address), so it is never logged otherwise; an editable element's or a credential's name
+# never, as its text is what was typed. The api passes no address of the page here.
 NAME_LOGGED = 40
-UNLOGGED = re.compile(r"[^\w ,.:;'()/!+-]")
+SUBMIT_WORDS = frozenset(
+    {"submit", "send", "envoyer", "envoi", "apply", "postuler", "postulez", "candidater",
+     "candidatez", "candidature", "application", "easy", "simplifiee", "now", "maintenant",
+     "valider", "confirmer", "confirm", "bewerben", "jetzt", "absenden"}
+)  # fmt: skip
+# Connectors and form words a search box's label holds ("Ville, département ou code postal",
+# "City, state, or zip code"): no one's name.
+FORM_WORDS = frozenset(
+    {"ou", "or", "et", "and", "oder", "und", "code", "state", "province", "your", "votre",
+     "ihre", "enter", "entrez", "saisir", "here", "ici"}
+)  # fmt: skip
+LOGGED_WORDS = frozenset(
+    {
+        *(word for phrase in discovery.SEARCH_PHRASES for word in phrase),
+        *discovery.SEARCH_NEUTRAL,
+        *discovery.PLACE_WORDS,
+        *discovery.TITLE_WORDS,
+        *(word for phrase in discovery.DECLINES for word in phrase),
+        *discovery.NEUTRAL,
+        *(word for phrase in discovery.WORLDWIDE for word in phrase),
+        *SUBMIT_WORDS,
+        *FORM_WORDS,
+    }
+)
 
 
 def _logged(value: object, size: int = 20) -> str:
@@ -122,23 +148,43 @@ def _logged(value: object, size: int = 20) -> str:
     return re.sub(r"\W", "", text)[:size] or "-"
 
 
+def logged_name(name: object) -> str:
+    """A name as a refusal's warning may say it (LOGGED_WORDS): its folded words when every one
+    is the code's own, else how long it is and nothing of its text."""
+    if not isinstance(name, str):
+        return "(not logged)"
+    found = detect.words(name[:500], camel=False)
+    if found and all(word in LOGGED_WORDS for word in found):
+        return " ".join(found)[:NAME_LOGGED]
+    return f"(not logged, {len(name)} chars)"
+
+
+def _answer(judge: Any, facts: dict) -> str:
+    try:
+        return "1" if judge(facts) else "0"
+    except Exception:
+        return "?"
+
+
 def described(facts: object) -> str:
-    """One element's facts as a refusal's warning names them (NAME_LOGGED)."""
+    """One element's facts as a refusal's warning names them (above)."""
     if not isinstance(facts, dict):
         return "facts=unreadable"
     names = facts.get("names")
-    first = (
-        next((n for n in names if isinstance(n, str) and n.strip()), "")
-        if isinstance(names, list)
-        else ""
-    )
+    readable = isinstance(names, list)
+    first = next((n for n in names if isinstance(n, str) and n.strip()), "") if readable else ""
     if facts.get("editable") or facts.get("credential"):
-        first = "(not logged)"
-    name = UNLOGGED.sub("_", " ".join(first.split()))[:NAME_LOGGED]
+        name = "(not logged)"
+    else:
+        name = logged_name(first) if first else "-"
     kind = discovery.box_kind(names) or "-"
+    submit = _answer(lambda f: detect.says_submit(f["names"], profile_edit=True), facts)
     return (
         f"tag={_logged(facts.get('tag'))} role={_logged(facts.get('role'))} "
-        f"type={_logged(facts.get('type'))} box={kind} name={name!r}"
+        f"type={_logged(facts.get('type'))} box={kind} "
+        f"search_words={_answer(discovery.search_words, facts)} "
+        f"composes={_answer(discovery.composes, facts)} says_submit={submit} "
+        f"decline={_answer(discovery.decline, facts)} name={name!r}"
     )
 
 
@@ -834,8 +880,7 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         # the target's host and, for a posting or a result list the scope opens, its path;
         # never its query, nor the path of any other page (a person's profile names them).
         found = NET_ERROR.search(str(result.get("detail") or ""))
-        scope = tab.state.scope
-        shown = scope is not None and discovery.page_url(url, scope)
+        shown = discovery.shown_path(url, tab.state.scope)
         log.warning(
             "lease %s: browser_navigate failed: %s net=%s host=%s path=%s",
             tab.lease_tag,

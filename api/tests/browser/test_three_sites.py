@@ -18,8 +18,10 @@
    exactly (discovery.challenge), its frame keeps its Worker (actions.SIGNED_IN_JS), a sweep of
    Indeed starts Chromium with software WebGL (chromium.webgl), and the agent waits for a check
    and else reports `security_check`.
-4. A refusal names its rule in browserd's warning, with the element's tag, role, box kind and
-   the start of its name, never a typed value nor an address (actions.described).
+4. A refusal names its rule in browserd's warning, with the element's tag, role, box kind, the
+   classifiers' answers and its name only when it is made of the code's own words, never free
+   page text, a typed value nor an address (actions.described); a page that did not load names
+   its path only for a posting or a result list (discovery.shown_path).
 
 Only the Playwright and CDP boundary is fake; no real site is requested.
 """
@@ -47,7 +49,7 @@ RESULTS = (
 )
 # A result card's title link as LinkedIn writes it, its tracking values invented.
 POSTING = (
-    "https://www.linkedin.com/jobs/view/4012345678/?eBP=CwEAAAGSzQ2fXk-vb3RjYXRlZ29yeV9pZF8xMjM0NQ"
+    "https://www.linkedin.com/jobs/view/4012345678/?eBP=CwEAAAGSzQ2fXk-vb3RjYXRlZ29yeV9pZF8xMjM0NQ"  # gitleaks:allow
     "&refId=Zm9vYmFyYmF6cXV4MTIzNA%3D%3D&trackingId=cXV4YmF6YmFyZm9vNDMyMQ%3D%3D"  # gitleaks:allow
     "&trk=flagship3_search_srp_jobs"
 )
@@ -297,6 +299,14 @@ def test_browserd_opens_the_same_search_address_signed_out():
     )
 
 
+def test_the_refusal_of_an_unobserved_address_is_accurate_in_both_modes():
+    signed_in = " ".join(finder.UNOBSERVED_SIGNED_IN.split())
+    signed_out = " ".join(finder.UNOBSERVED.split())
+    assert signed_in.endswith("such as /jobs or /fr/jobs, with no query.")
+    assert "with no query or with one saved title in its search key" in signed_out
+    assert "saved place in `location`" in signed_out
+
+
 def test_the_agent_is_told_how_to_search_signed_out():
     prompt = " ".join(finder.INTERACTIVE_PROMPT.split())
     assert "When you are not signed in (`signed_in` false)" in prompt
@@ -345,6 +355,17 @@ def test_a_click_into_linkedin_s_search_boxes_is_allowed(shape):
     assert judged(shape) == (None, "point:signed_in")
     # Anonymous, the native rule holds: a script page's box is never clicked.
     assert judged(shape, signed_in=False)[0] == discovery.UNSUPPORTED
+
+
+@pytest.mark.parametrize(
+    "inside",
+    [{"in_control": True}, {"holds_submit": True}, {"in_control": True, "holds_submit": True}],
+)
+def test_a_click_into_a_box_inside_a_link_or_holding_a_submit_is_refused(inside):
+    # The click would activate the link or button around it, whose names are never judged.
+    box = control("Ville, département ou code postal", role="combobox", in_form=False, **inside)
+    assert judged(box)[0] == discovery.UNSUPPORTED
+    assert judged(PLACE_BOX) == (None, "point:signed_in")  # the plain box still is
 
 
 def test_the_place_box_then_takes_the_worldwide_name_and_the_title_box_does_not():
@@ -466,7 +487,10 @@ def test_indeed_s_card_reads_its_job_key():
     ("facts", "is_card"),
     [
         (CARD, True),
-        (control("x", tag="div", kind="", role="button", in_form=False), True),
+        (control("x", tag="div", kind="", role="listitem", in_form=False), True),
+        # A button or a link role is judged on its own, never retargeted as a card.
+        (control("x", tag="div", kind="", role="button", in_form=False), False),
+        (control("x", tag="div", kind="", role="link", in_form=False), False),
         (control("x", tag="article", kind="", role="article", in_form=False), True),
         (TITLE_LINK, False),
         (PLACE_BOX, False),
@@ -627,6 +651,24 @@ CF_FLOW = (
             True,
         ),
         ("https://fr.indeed.com/?__cf_chl_tk=a1b2", "POST", "document", True, True, True),
+        # The reload of the page with Cloudflare's token, a GET of the tab's document.
+        (
+            "https://fr.indeed.com/jobs?q=genai+engineer&__cf_chl_rt_tk=a1b2.c3-4",
+            "GET",
+            "document",
+            True,
+            True,
+            True,
+        ),
+        ("https://fr.indeed.com/?__cf_chl_rt_tk=a1b2", "GET", "document", True, True, True),
+        (
+            "https://fr.indeed.com/?__cf_chl_rt_tk=a1b2&__cf_chl_f_tk=c3",
+            "GET",
+            "document",
+            True,
+            True,
+            True,
+        ),
         # Refused: its host as the tab's document, a form POST, another host, a beacon, a
         # challenge path as a document, a POST of the tab without the challenge's key or to an
         # address the discovery never opens, http, another port, a user part.
@@ -671,6 +713,46 @@ CF_FLOW = (
             False,
         ),
         ("https://fr.indeed.com/apply?__cf_chl_f_tk=a1", "POST", "document", True, True, False),
+        # A reload with an extra key the address without the token would not open (the start
+        # takes none), with another title, no token, a subframe or a HEAD of the tab.
+        ("https://fr.indeed.com/?ref=a1&__cf_chl_rt_tk=a1", "GET", "document", True, True, False),
+        (
+            "https://fr.indeed.com/jobs?q=data+engineer&__cf_chl_rt_tk=a1",
+            "GET",
+            "document",
+            True,
+            True,
+            False,
+        ),
+        ("https://fr.indeed.com/?cf_chl_rt_tk=a1", "GET", "document", True, True, False),
+        ("https://fr.indeed.com/?__cf_chl_rt_tk=a1", "GET", "document", True, False, False),
+        ("https://fr.indeed.com/?__cf_chl_rt_tk=a1", "HEAD", "document", True, True, False),
+        ("https://fr.indeed.com/logout?__cf_chl_rt_tk=a1", "GET", "document", True, True, False),
+        # The challenge path on the family is no way past `destructive`.
+        (
+            "https://fr.indeed.com/cdn-cgi/challenge-platform/x?action=logout",
+            "GET",
+            "script",
+            False,
+            False,
+            False,
+        ),
+        (
+            "https://fr.indeed.com/cdn-cgi/challenge-platform/h/g/logout",
+            "POST",
+            "xhr",
+            False,
+            False,
+            False,
+        ),
+        (
+            "https://fr.indeed.com/cdn-cgi/challenge-platform/x?do=apply",
+            "GET",
+            "script",
+            False,
+            False,
+            False,
+        ),
         (
             "https://fr.indeed.com/jobs?q=genai+engineer&__cf_chl_f_tk=a1",
             "POST",
@@ -715,6 +797,8 @@ def test_the_signed_in_route_lets_the_check_through_and_nothing_else_new():
     assert (
         routed(found, "https://fr.indeed.com/?__cf_chl_tk=a1", "POST", "document", "main") == "sent"
     )
+    reload = "https://fr.indeed.com/?__cf_chl_rt_tk=a1"  # the check reloads the start
+    assert routed(found, reload, "GET", "document", "main") == "sent"
     assert not found.state.blocked
     assert routed(found, CF, "GET", "document", "main") == "blockedbyclient"  # never the tab
     assert found.state.blocked
@@ -792,9 +876,11 @@ def outcome(reason: str | None, **refused: int) -> str | None:
     return interactive.outcome(session)
 
 
-def test_a_check_that_never_cleared_wins_over_a_refusal():
+def test_a_refusal_of_the_app_wins_over_a_check_the_agent_reports():
+    # The agent says `security_check` itself, so it never hides a refusal of the app.
     assert outcome("security_check") == "security_check"
-    assert outcome("security_check", unsupported_interaction=2) == "security_check"
+    assert outcome("security_check", unsupported_interaction=2) == "search_refused"
+    assert outcome("security_check", unobserved_address=1) == "search_refused"
     assert outcome("cookie_wall", unsupported_interaction=1) == "search_refused"  # as before
 
 
@@ -828,6 +914,71 @@ def test_the_warning_names_the_element_and_never_its_text_or_address(caplog):
     assert "?" not in second
 
 
+# Free page text a refused element's first name held on 2026-10-30, with invented people.
+PERSON_LINK = control(
+    "Jane Roe", tag="a", kind="", href="https://www.linkedin.com/in/jane-roe-e2e/", in_form=False
+)
+PREVIEW = control(
+    "Jane Roe: Bonjour Harald, merci pour",
+    tag="a",
+    kind="",
+    href="https://www.linkedin.com/messaging/thread/2-abc/",
+    in_form=False,
+)
+PROFILE_LINK = control(
+    "Jane Roe View profile",
+    tag="a",
+    kind="",
+    href="https://www.linkedin.com/in/jane-roe-e2e/",
+    in_form=False,
+)
+EMAIL = control("e2e-jane_example.org", tag="button", kind="button", in_form=False)
+
+
+@pytest.mark.parametrize("shape", [PERSON_LINK, PREVIEW, PROFILE_LINK, EMAIL])
+def test_free_page_text_is_never_logged(shape, caplog):
+    found = signed_in_tab()
+    with caplog.at_level(logging.WARNING, logger="browserd"):
+        assert found.judge(shape, "click", "browser_click") is not None
+    [line] = [r.getMessage() for r in caplog.records]
+    first = shape["names"][0]
+    assert f"name='(not logged, {len(first)} chars)'" in line
+    for word in ("Jane", "jane", "Roe", "roe", "Bonjour", "Harald", "example", "profile"):
+        assert word not in line
+    # The classifiers' answers carry no page text.
+    assert "search_words=0 composes=" in line
+    assert "says_submit=0 decline=0" in line
+
+
+@pytest.mark.parametrize(
+    ("name", "logged"),
+    [("Rechercher", "rechercher"), ("Search", "search"), ("Tout refuser", "tout refuser")],
+)
+def test_a_name_of_the_code_s_own_words_is_logged(name, logged, caplog):
+    found = signed_in_tab()
+    # A search button in a POST form: refused, and its name is the code's own word.
+    button = control(
+        name, tag="button", kind="submit", in_form=True, method="post",
+        action="https://www.linkedin.com/jobs/search/",
+    )  # fmt: skip
+    with caplog.at_level(logging.WARNING, logger="browserd"):
+        assert found.judge(button, "click", "browser_click") is not None
+    [line] = [r.getMessage() for r in caplog.records]
+    assert line.endswith(f"name={logged!r}")
+
+
+def test_a_logged_name_holds_only_the_code_s_words():
+    assert actions.logged_name("Ville, département ou code postal") == (
+        "ville departement ou code postal"
+    )
+    assert actions.logged_name("Easy Apply") == "easy apply"
+    assert actions.logged_name("Monde entier") == "monde entier"
+    assert actions.logged_name("Search Jane") == "(not logged, 11 chars)"
+    assert actions.logged_name("Search 0612345678") == "(not logged, 17 chars)"  # a number too
+    assert actions.logged_name("Поиск") == "(not logged, 5 chars)"
+    assert actions.logged_name(None) == "(not logged)"
+
+
 def test_every_refusal_of_a_discovery_says_its_rule(caplog):
     found = signed_in_tab()
     with caplog.at_level(logging.WARNING, logger="browserd"):
@@ -857,7 +1008,7 @@ def test_the_session_opens_the_search_address_signed_out_and_counts_no_refusal()
     assert opened == ("The page did not load.", True)  # the fake has no such page: it was asked
     address = "https://jobs.example.test/fr/jobs?query=genai+engineer&remote=remote"
     assert ("browser_navigate", address) in site.calls
-    assert refused[0].startswith("Refused: open only an observed link")  # never a saved title
+    assert refused[0] == finder.UNOBSERVED  # never a saved title: it says what goes signed out
     assert entry["refused"] == {"unobserved_address": 1}
 
 
@@ -893,3 +1044,39 @@ def test_a_page_of_a_search_that_did_not_load_says_why_without_its_query(monkeyp
         asyncio.run(actions.navigate(found, {"url": "https://www.linkedin.com/in/jane-roe-e2e/"}))
     [line] = [r.getMessage() for r in caplog.records]
     assert line.endswith("host=www.linkedin.com path=(not logged)")
+    # Pages the scope opens that are no posting nor result list name people in their path.
+    for other in (
+        "https://www.linkedin.com/posts/jane-roe-e2e_genai-activity-7123456789012345678-AbCd/",
+        "https://www.linkedin.com/company/acme/people/jane-roe-e2e/",
+        "https://www.linkedin.com/groups/12345/",
+        "https://www.linkedin.com/school/acme-university/alumni/",
+    ):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="browserd"):
+            asyncio.run(actions.navigate(found, {"url": other}))
+        [line] = [r.getMessage() for r in caplog.records]
+        assert line.endswith("path=(not logged)"), line
+        assert "jane" not in line
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="browserd"):
+        asyncio.run(actions.navigate(found, {"url": RESULTS}))
+    [line] = [r.getMessage() for r in caplog.records]
+    assert line.endswith("path=/jobs/search/")
+
+
+def test_the_path_logged_is_a_posting_s_or_a_result_list_s_only():
+    s = scope()
+    assert discovery.shown_path(POSTING, s)
+    assert discovery.shown_path("https://www.linkedin.com/jobs/collections/recommended/", s)
+    assert discovery.shown_path(RESULTS, s)
+    posts = "https://www.linkedin.com/posts/jane-roe-e2e_genai-activity-7123/"
+    assert discovery.page_url(posts, s)  # the scope opens it, but it names a person
+    assert not discovery.shown_path(posts, s)
+    assert not discovery.shown_path("https://elsewhere.example.test/jobs/view/4012345678/", s)
+    assert not discovery.shown_path(POSTING, None)
+    jungle = scope(JUNGLE, signed_in=False, places=())
+    job = "https://www.welcometothejungle.com/fr/companies/acme/jobs/genai-engineer_bordeaux"
+    assert discovery.shown_path(job, jungle)
+    assert not discovery.shown_path(
+        "https://www.welcometothejungle.com/fr/companies/acme/team/jane-roe", jungle
+    )

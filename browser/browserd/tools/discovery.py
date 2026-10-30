@@ -822,6 +822,25 @@ def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None
     )
 
 
+def shown_path(url: object, scope: Scope | None) -> bool:
+    """Whether browserd's warning of a page that did not load may name its path (SPEC "Three
+    websites" (4)): a posting (`posting`) or a result list (`listing`) of the start's family,
+    which name no one. Never any other page `page_url` opens (a person's post, a company's
+    team page, a group or a school's alumni name people in their path)."""
+    if scope is None or not isinstance(url, str) or len(url) > 2000:
+        return False
+    family = family_of(scope.start)
+    if family is None or family_of(url) is not family:
+        return False
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return False
+    path = unquote(parts.path)
+    return posting(family, path.strip("/").split("/"), pairs) or listing(family, path)
+
+
 def location_of(headers: object) -> str | None:
     """The one Location header of a CDP response (names in any case); None when there is none or
     more than one (ambiguous: refused)."""
@@ -1012,15 +1031,18 @@ def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
 # challenge is let through in a signed in discovery (`challenge`): on CHALLENGE_HOST, https and
 # its default port, any GET or HEAD but the tab's own document (a frame of it, its scripts, its
 # images) and a fetch or XHR POST; on the start's family, a GET, HEAD or fetch or XHR POST under
-# CHALLENGE_PATH that is no document; and the tab's own document POST that answers the check,
-# on the family, whose query holds a CHALLENGE_KEYS key and is, those keys aside, an address the
-# discovery opens (`page_url`, or the start itself). Its frame keeps its own Worker and
-# WebSocket (actions.SIGNED_IN_JS skips CHALLENGE_HOST); the site's pages do not. No CAPTCHA is
-# ever clicked by the agent (the prompt says so; a click into the frame is refused as any
-# control of another site). Declared open points: what the frame's own worker fetches leaves
-# without the route, Cloudflare's code alone; the site's page that Cloudflare answers with its
-# interstitial keeps SIGNED_IN_JS, so a check that needs a worker there does not pass, and the
-# agent says `security_check`.
+# CHALLENGE_PATH that is no document and not `destructive`; and the tab's own document, a POST
+# that answers the check or the GET that reloads the page with its token (`__cf_chl_rt_tk`), on
+# the family, whose query holds a CHALLENGE_KEYS key and is, those keys aside, an address the
+# discovery opens (`page_url`, or the start itself): any other extra key is refused, as
+# read_url refuses it. Its frame keeps its own Worker and WebSocket (actions.SIGNED_IN_JS skips
+# CHALLENGE_HOST); the site's pages do not. No CAPTCHA is ever clicked by the agent (the prompt
+# says so; a click into the frame is refused as any control of another site). Declared open
+# points: what the frame's own worker fetches leaves without the route, Cloudflare's code
+# alone; a redirect inside an allowed CHALLENGE_HOST frame is not judged again (actions._hop
+# reads the main frame's hops only; the route still judges each request the frame makes); the
+# site's page that Cloudflare answers with its interstitial keeps SIGNED_IN_JS, so a check that
+# needs a worker there does not pass, and the agent says `security_check`.
 CHALLENGE_HOST = "challenges.cloudflare.com"
 CHALLENGE_PATH = "/cdn-cgi/challenge-platform/"
 CHALLENGE_KEYS = ("__cf_chl_",)
@@ -1053,9 +1075,10 @@ def challenge(
     if family is None or family_of(url) is not family:
         return False
     if parts.path.startswith(CHALLENGE_PATH):
-        return not document and (read or background)
+        return not document and (read or background) and not destructive(url, scope)
     keys = [k for k, _ in pairs if k.startswith(CHALLENGE_KEYS)]
-    if not (main and document and method == "POST" and keys) or destructive(url, scope):
+    answer = method in {"GET", "POST"}  # the reload with its token, or the answer's POST
+    if not (main and document and answer and keys) or destructive(url, scope):
         return False
     rest = [(k, v) for k, v in pairs if not k.startswith(CHALLENGE_KEYS)]
     bare = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(rest), ""))
@@ -1357,12 +1380,13 @@ def _opens(url: object, scope: Scope) -> bool:
 # opens the posting) was clicked and refused, as no rule takes a plain container. A signed in
 # search's click on a result card is a click on the card's own posting link instead: browserd
 # finds the one posting address among the card's links (`card_posting`) and clicks that link,
-# judged as any link (actions.click). An element is a card when it is no control a click acts
-# on by itself (a link, a field, a form part), sits in no link or button, holds no submit
+# judged as any link (actions.click). An element is a card when it is a plain container, no
+# control a click acts on by itself (a link, a field, a form part, nor anything with the role of
+# a button or a link, which is judged on its own), sits in no link or button, holds no submit
 # control and is in no form.
 CARD_ROLES = frozenset(
     {"", "listitem", "article", "group", "region", "presentation", "none", "row", "gridcell",
-     "cell", "button", "link"}
+     "cell"}
 )  # fmt: skip
 NOT_CARD_TAGS = frozenset(
     {"a", "button", "input", "select", "textarea", "option", "label", "summary", "form",
@@ -1436,6 +1460,9 @@ def _signed_in_control(
     if (  # a click into a search box focuses it, as a person does before typing (2026-10-30)
         tool == "browser_click"
         and not facts.get("credential")
+        # never inside a link or a button, whose names are not the box's, nor holding a submit
+        and not facts.get("in_control")
+        and not facts.get("holds_submit")
         and search_box(facts)
         and _search_form(facts, d, scope)
     ):

@@ -151,13 +151,26 @@ CHOICE_REFUSED = (
     "search scope, as written there (its case or accents may differ, no translation)."
 )
 MODEL_VALUE = "model_value"
+# The refusal of an address that is no observed link (B19), as accurate signed in as signed out,
+# where a saved title may go in the search page's search key (InteractiveScope.search_address).
+UNOBSERVED_SIGNED_IN = (
+    "Refused: open only an observed link of this site, or its job search page at its root or "
+    "under a language, such as /jobs or /fr/jobs, with no query."
+)
+UNOBSERVED = (
+    "Refused: open only an observed link of this site, or its job search page at its root or "
+    "under a language, such as /jobs or /fr/jobs, with no query or with one saved title in its "
+    "search key and nothing else but a saved place in `location`, a page number and your saved "
+    "filters, as in your search scope."
+)
 # Why the agent of a job website reports no posting (`report_no_postings`, 2026-10-28), and the
 # code each reason ends the website with (interactive.outcome): "no_match" is a website that ran
 # the search and listed no matching job, a success only after a search the session saw;
 # "app_refused" is the app refusing its search (B19, 2026-10-29), which a refusal the session
 # counted says too, whatever other reason the agent gave; "security_check" is a website that
 # showed a security check (Cloudflare's "Just a moment", "Vérification supplémentaire requise")
-# that did not clear while the agent waited (2026-10-30, Indeed), which wins over a refusal.
+# that did not clear while the agent waited (2026-10-30, Indeed), which a refusal the session
+# counted wins over, as the agent names it (review of the change).
 NO_POSTINGS = {
     "no_match": None,
     "no_list": "no_job_list",
@@ -1172,11 +1185,7 @@ class FinderSession:
             and not self.interactive.search_address(url)
         ):
             self.refused["unobserved_address"] += 1  # the app's refusal (B19, outcome)
-            return (
-                "Refused: open only an observed link of this site, or its job search page "
-                "at its root or under a language, such as /jobs or /fr/jobs, with no query.",
-                True,
-            )
+            return (UNOBSERVED_SIGNED_IN if self.interactive.signed_in else UNOBSERVED), True
         if not self.interactive and self.pages.count >= PAGES_MAX:
             self.refused["pages_max"] += 1
             return self._stop("page_budget")
