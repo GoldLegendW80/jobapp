@@ -10,7 +10,8 @@ website set, and browserd also lets it type the website's own worldwide name in 
 ("Worldwide", "Monde entier"), choose it in a `location` select, click the place box's
 suggestion that says only it, and open a result list whose `l` or `location` holds it. With only
 specific places saved none of that goes through, and a result list whose `l` or `location`
-holds a worldwide name is refused: a search is never widened. Each rule is a table of what it
+holds a worldwide name is refused, written in any case or spacing (another wide place there
+is a declared open point). Each rule is a table of what it
 accepts and what it refuses, near misses included (implementer.md, Heuristic code).
 """
 
@@ -33,10 +34,10 @@ TITLES = ["GenAI Engineer", "Solution Architect"]
 WORLDWIDE = [
     "everywhere", "Everywhere", "EVERYWHERE", "anywhere", "Anywhere", "worldwide", "Worldwide",
     "World", "partout", "Partout", "n'importe où", "N’importe où", "Monde", "monde entier",
-    "Monde entier", "Le monde entier", "Weltweit", "überall", "Überall", "  Worldwide  ".strip(),
+    "Monde entier", "Le monde entier", "Weltweit", "überall", "Überall",
 ]  # fmt: skip
 NOT_WORLDWIDE = [
-    "", " ", "Paris", "France", "Europe", "Remote", "Télétravail", "Lyon et périphérie",
+    "", " ", " Worldwide", "Worldwide ", "Worldwide.", "Paris", "France", "Europe", "Remote", "Télétravail", "Lyon et périphérie",
     "Worldwide, Paris", "Worldwide Paris", "worldwide jobs", "World 1", "everywhere!", "every where",
     "Wоrldwide",  # a Cyrillic small o
     "Ｗｏｒｌｄｗｉｄｅ",  # full width letters
@@ -167,8 +168,8 @@ def test_a_native_search_request_may_carry_it_only_with_no_place_limit():
     assert not discovery.read_url(url, START, scope=everywhere_native(SPECIFIC))
 
 
-def option(*names: str, tag: str = "div", **more: Any) -> dict:
-    return control(*names, tag=tag, kind="", role="option", in_form=False, **more)
+def option(*names: str, tag: str = "div", in_form: bool = False, **more: Any) -> dict:
+    return control(*names, tag=tag, kind="", role="option", in_form=in_form, **more)
 
 
 OPTIONS = [
@@ -191,6 +192,8 @@ NOT_OPTIONS = [
     control("Worldwide", tag="a", kind="", role="option", in_form=False, href=LINKEDIN + "feed/"),
     option("Worldwide", holds_submit=True),
     option("Worldwide", editable=True),
+    option("Worldwide", in_form=True),
+    option("Worldwide", in_control=True),  # inside a link or a button: the click would reach it
 ]
 
 
@@ -208,6 +211,37 @@ def test_with_specific_places_the_worldwide_suggestion_is_refused(shape):
 @pytest.mark.parametrize("shape", NOT_OPTIONS)
 def test_no_other_suggestion_is_clicked(shape):
     assert judge(shape, "browser_click", EVERYWHERE) is not None
+
+
+# role=option on a link or a search button (review of 2026-10-30): judged as the link or the
+# button it is, as before the worldwide suggestion, whatever the saved places.
+OPTION_LINKS_AND_BUTTONS = [
+    control(
+        "GenAI Engineer jobs",
+        tag="a",
+        kind="",
+        role="option",
+        href="https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer&geoId=92000000",
+    ),
+    control("Search", tag="button", kind="button", role="option"),
+]
+
+
+@pytest.mark.parametrize("shape", OPTION_LINKS_AND_BUTTONS)
+@pytest.mark.parametrize("places", [SPECIFIC, ["Paris"], EVERYWHERE, []])
+def test_a_link_or_search_button_with_role_option_is_still_clicked(shape, places):
+    assert judge(shape, "browser_click", places) is None
+
+
+@pytest.mark.parametrize("places", [SPECIFIC, EVERYWHERE])
+def test_any_other_option_is_refused_whatever_the_places(places):
+    assert judge(option("Paris"), "browser_click", places) == discovery.UNSUPPORTED
+    assert judge(option("Search", in_control=True), "browser_click", places) is not None
+
+
+def test_facts_report_a_link_or_button_around_the_control():
+    assert "in_control: !!(up(control) && closest(up(control), " in discovery.detect.FACTS_JS
+    assert '"a, button, [role=button], [role=link]"' in discovery.detect.FACTS_JS
 
 
 def test_an_anonymous_discovery_never_clicks_a_suggestion():
@@ -261,6 +295,37 @@ def test_a_worldwide_result_list_never_opens_with_specific_places(start, url):
 def test_other_result_lists_open_as_before_whatever_the_places(start, url):
     for places in (EVERYWHERE, SPECIFIC, []):
         assert discovery.page_url(url, signed_in(places, start)), places
+
+
+# A worldwide name written another way in a place key: refused with specific places all the same
+# (the refusal reads keys in any case and values folded; `worldwide`, which allows, stays strict).
+SEARCH = "https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer&"
+LOOSE_WORLDWIDE_LISTS = [
+    (LINKEDIN, SEARCH + "location=%20Worldwide"),
+    (LINKEDIN, SEARCH + "location=Worldwide."),
+    (LINKEDIN, SEARCH + "Location=Worldwide"),
+    (LINKEDIN, SEARCH + "LOCATION=monde+ENTIER+"),
+    (LINKEDIN, SEARCH + "location=%EF%BC%B7orldwide"),
+    (INDEED, "https://fr.indeed.com/jobs?q=GenAI+Engineer&L=%20Partout%21"),
+]
+
+
+@pytest.mark.parametrize(("start", "url"), LOOSE_WORLDWIDE_LISTS)
+def test_a_worldwide_name_written_loosely_never_opens_with_specific_places(start, url):
+    assert not discovery.page_url(url, signed_in(SPECIFIC, start))
+
+
+@pytest.mark.parametrize(("start", "url"), LOOSE_WORLDWIDE_LISTS)
+def test_a_worldwide_name_written_loosely_opens_with_no_place_limit(start, url):
+    assert discovery.page_url(url, signed_in(EVERYWHERE, start))
+    assert discovery.page_url(url, signed_in([], start))
+
+
+def test_another_wide_place_in_a_result_list_is_a_declared_open_point():
+    """A place key is not held to the saved places (discovery's declared open point): only a
+    worldwide name is refused there."""
+    url = "https://www.linkedin.com/jobs/search/?keywords=GenAI%20Engineer&location=Earth"
+    assert discovery.page_url(url, signed_in(SPECIFIC))
 
 
 def test_a_redirect_hop_to_a_worldwide_list_is_still_followed():
@@ -396,7 +461,7 @@ def test_the_prompt_tells_the_agent_to_remove_a_place_the_website_set():
         '"Monde entier"',
         "Indeed searches one country per site",
         "Welcome to the Jungle",
-        "never type a worldwide value",
+        "never type a worldwide value unless one of them means\nno place",
         "chooses the\nworldwide suggestion of the place box",
     ):
         assert words in prompt, words

@@ -76,13 +76,18 @@ site, so a person whose saved place is "everywhere" got a search limited to that
 saved places are empty or one of them says no place limit (`worldwide`: "everywhere",
 "worldwide", "partout", ...; `Scope.everywhere`), the agent may also type the site's own
 worldwide name ("Worldwide", "Monde entier", WORLDWIDE) in a place box, choose it in a
-`location` select, click the place box's suggestion that says it (`worldwide_option`), and open
+`location` select, click the place box's suggestion that says it (`worldwide_option`, with no
+form, link or button around it a click would reach: `in_form`, FACTS_JS's `in_control`), and open
 a result list whose place key holds it. With only specific places saved, none of that: a
-worldwide name in a result list's `l` or `location` is refused, so a search is never widened.
-Declared open points: LinkedIn's `geoId` is a code and is not read, so a result list with a
-worldwide `geoId` and no place words opens whatever the saved places (as an empty place box
-always may, owner 2026-10-28); a website's worldwide name in a language other than English,
-French or German is refused (the empty box stays the way there).
+worldwide name in a result list's `l` or `location` is refused (`_says_worldwide`: the key in
+any case, the value folded loosely, so `location=%20Worldwide` or `Location=Worldwide.` is
+refused too), so the agent cannot widen a search to the website's worldwide name. Declared open
+points: a place key is otherwise not held to the saved places (above), so a result list whose
+`location` is another wide place (`Earth`, `Europe`) opens whatever the saved places; LinkedIn's
+`geoId` is a code and is not read, so a result list with a worldwide `geoId` and no place words
+opens whatever the saved places (as an empty place box always may, owner 2026-10-28); a
+website's worldwide name in a language other than English, French or German is refused (the
+empty box stays the way there).
 """
 
 import re
@@ -239,7 +244,7 @@ def saved_as(text: object, saved: tuple[str, ...]) -> str | None:
 # and German, read as detect.words folds them (NFKC, accents and case aside). A scope whose
 # places are empty or hold one of them (`Scope.everywhere`) lets the agent type or choose such a
 # name in a place box, so a place the site filled in by itself is replaced; a scope with only
-# specific places never does, so a search is never widened beyond what the person saved.
+# specific places never does (a result list's other place words are a declared open point).
 WORLDWIDE = frozenset(
     tuple(phrase.split())
     for phrase in (
@@ -764,6 +769,18 @@ def listing(family: Family, path: str) -> bool:
 PLACE_KEYS = frozenset({"l", "location"})
 
 
+def _says_worldwide(key: str, value: str) -> bool:
+    """Whether a query pair of a result list puts a worldwide name in a place key, read loosely
+    as it serves a refusal only: the key in any case and spacing (`Location`), the value decoded
+    and folded as detect.words reads it (NFKC, format characters dropped, accents and case aside,
+    whitespace and punctuation around and between its words: `%20Worldwide`, `Worldwide.`).
+    `worldwide`, which allows, stays strict."""
+    return (
+        key.strip().casefold() in PLACE_KEYS
+        and tuple(detect.words(value, camel=False)) in WORLDWIDE
+    )
+
+
 def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None = None) -> bool:
     """A document a signed in discovery may open (B19): what read_url lets through within the
     frozen scope, or, on the start's family, an address with no user part, no fragment, no
@@ -801,7 +818,7 @@ def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None
     return hop or (
         listing(family, path)
         and all(not v or saved_as(v, scope.titles) is not None for k, v in pairs if k in QUERY)
-        and (scope.everywhere or not any(k in PLACE_KEYS and worldwide(v) for k, v in pairs))
+        and (scope.everywhere or not any(_says_worldwide(k, v) for k, v in pairs))
     )
 
 
@@ -1302,14 +1319,16 @@ def _signed_in_control(
     if tool != "browser_click" or facts.get("editable") or facts.get("credential"):
         return False
     tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
-    if role == "option":  # a place box's suggestion: only the worldwide one, no place limit
-        return (
-            scope.everywhere
-            and tag not in {"a", "button", "input", "select", "textarea"}
-            and not facts.get("in_form")
-            and not facts.get("holds_submit")
-            and worldwide_option(facts)
-        )
+    if (  # a place box's worldwide suggestion, no place limit; any other option is judged below
+        role == "option"
+        and scope.everywhere
+        and tag not in {"a", "button", "input", "select", "textarea"}
+        and not facts.get("in_form")
+        and not facts.get("in_control")
+        and not facts.get("holds_submit")
+        and worldwide_option(facts)
+    ):
+        return True
     if tag == "a":
         href = d.get("href", "")
         return _opens(href, scope) or (search_words(facts) and _in_page(href, current))

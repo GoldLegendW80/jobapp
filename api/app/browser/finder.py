@@ -269,7 +269,8 @@ box and choose that suggestion: "Worldwide" on LinkedIn ("Monde entier" when Lin
 French, "Weltweit" in German);
 - Indeed searches one country per site: leave its place box ("Where", "Où") empty;
 - Welcome to the Jungle: leave its place box empty.
-When the person saved specific places, never type a worldwide value: search those places.
+When the person saved specific places, never type a worldwide value unless one of them means
+no place: search those places.
 
 How a person searches a job website, step by step:
 1. Start with browser_snapshot. The first page may be a home page with no search box: find

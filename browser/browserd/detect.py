@@ -150,7 +150,9 @@ CREDENTIAL_FN = """e => {
 # walk up crosses shadow roots (a shadow root's host is the next ancestor), since closest() stops
 # at them. `holds_submit`: a submit control or a selector of the lease among the descendants (a
 # wrapper whose centre is the button). `custom_submit`: the element or a composed ancestor is a
-# custom element of type submit (<sl-button type="submit">, form associated). With `opts.point`,
+# custom element of type submit (<sl-button type="submit">, form associated). `in_control`: an
+# ancestor of the control (shadow roots crossed) is a link or a button, which a click on the
+# control would bubble to (a place box's suggestion inside one, discovery). With `opts.point`,
 # `point` holds the same facts of the element at the centre of the visible box, the point a click
 # lands on (elementFromPoint, then down through open shadow roots), with `inside` true when that
 # element is the one named or within it; null when no element is there.
@@ -227,6 +229,7 @@ FACTS_JS = r"""
       type: kindOf(control),
       role: (control.getAttribute("role") || "").toLowerCase(),
       in_form: !!form,
+      in_control: !!(up(control) && closest(up(control), "a, button, [role=button], [role=link]")),
       names: names.slice(0, 60),
       selector_hit: selectorHit,
       selector_error: selectorError,
