@@ -314,7 +314,7 @@ def test_the_stopped_target_s_host_is_logged_never_its_path_or_query(caplog):
         answer = asyncio.run(found.settle({"ok": True}))
     assert answer["error"] == "signin_required"
     [line] = [r.getMessage() for r in caplog.records if "allow list" in r.getMessage()]
-    assert line.endswith("host=secure.indeed.com")
+    assert line.endswith("host=secure.indeed.com kind=redirect")  # what was stopped too
     assert "auth" not in line
     assert "e2e-8f3a1c" not in line
 

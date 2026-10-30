@@ -82,6 +82,7 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "signin_wall",
       "no_search_box",
       "search_refused",
+      "security_check",
       "nothing_reported",
       "no_credential",
       "agent_failed",

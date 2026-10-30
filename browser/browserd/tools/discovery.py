@@ -93,7 +93,7 @@ empty box stays the way there).
 import re
 import unicodedata
 from dataclasses import dataclass, replace
-from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 from browserd import detect
 
@@ -822,6 +822,25 @@ def page_url(url: object, scope: Scope, *, hop: bool = False, source: str | None
     )
 
 
+def shown_path(url: object, scope: Scope | None) -> bool:
+    """Whether browserd's warning of a page that did not load may name its path (SPEC "Three
+    websites" (4)): a posting (`posting`) or a result list (`listing`) of the start's family,
+    which name no one. Never any other page `page_url` opens (a person's post, a company's
+    team page, a group or a school's alumni name people in their path)."""
+    if scope is None or not isinstance(url, str) or len(url) > 2000:
+        return False
+    family = family_of(scope.start)
+    if family is None or family_of(url) is not family:
+        return False
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return False
+    path = unquote(parts.path)
+    return posting(family, path.strip("/").split("/"), pairs) or listing(family, path)
+
+
 def location_of(headers: object) -> str | None:
     """The one Location header of a CDP response (names in any case); None when there is none or
     more than one (ambiguous: refused)."""
@@ -1004,6 +1023,66 @@ def posts(url: object, method: object, kind: object, scope: Scope) -> bool:
         any(word in text for text in glued for word in POST_WORDS)
         or any(POST_WHOLE.fullmatch(w) for text in texts for w in detect.match_words(text))
     )
+
+
+# 2026-10-30: Indeed, signed in, showed only Cloudflare's security check ("Vérification
+# supplémentaire requise"): its challenge frame on CHALLENGE_HOST was refused as a document
+# outside the family, and its POSTs as a page's POST off the family. Exactly Cloudflare's
+# challenge is let through in a signed in discovery (`challenge`): on CHALLENGE_HOST, https and
+# its default port, any GET or HEAD but the tab's own document (a frame of it, its scripts, its
+# images) and a fetch or XHR POST; on the start's family, a GET, HEAD or fetch or XHR POST under
+# CHALLENGE_PATH that is no document and not `destructive`; and the tab's own document, a POST
+# that answers the check or the GET that reloads the page with its token (`__cf_chl_rt_tk`), on
+# the family, whose query holds a CHALLENGE_KEYS key and is, those keys aside, an address the
+# discovery opens (`page_url`, or the start itself): any other extra key is refused, as
+# read_url refuses it. Its frame keeps its own Worker and WebSocket (actions.SIGNED_IN_JS skips
+# CHALLENGE_HOST); the site's pages do not. No CAPTCHA is ever clicked by the agent (the prompt
+# says so; a click into the frame is refused as any control of another site). Declared open
+# points: what the frame's own worker fetches leaves without the route, Cloudflare's code
+# alone; a redirect inside an allowed CHALLENGE_HOST frame is not judged again (actions._hop
+# reads the main frame's hops only; the route still judges each request the frame makes); the
+# site's page that Cloudflare answers with its interstitial keeps SIGNED_IN_JS, so a check that
+# needs a worker there does not pass, and the agent says `security_check`.
+CHALLENGE_HOST = "challenges.cloudflare.com"
+CHALLENGE_PATH = "/cdn-cgi/challenge-platform/"
+CHALLENGE_KEYS = ("__cf_chl_",)
+
+
+def challenge(
+    url: object, method: object, kind: object, scope: Scope, *, document: bool, main: bool
+) -> bool:
+    """Whether a signed in page's request is Cloudflare's security check (above)."""
+    if not isinstance(url, str) or len(url) > 8000:
+        return False
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return False
+    if (
+        parts.username
+        or parts.password
+        or parts.fragment
+        or any(ord(c) <= 32 or 127 <= ord(c) <= 159 for c in url)
+    ):
+        return False
+    background = method == "POST" and kind in {"fetch", "xhr"}
+    read = method in {"GET", "HEAD"}
+    if parts.hostname == CHALLENGE_HOST:
+        return parts.scheme == "https" and port in (None, 443) and not main and (read or background)
+    family = family_of(scope.start)
+    if family is None or family_of(url) is not family:
+        return False
+    if parts.path.startswith(CHALLENGE_PATH):
+        return not document and (read or background) and not destructive(url, scope)
+    keys = [k for k, _ in pairs if k.startswith(CHALLENGE_KEYS)]
+    answer = method in {"GET", "POST"}  # the reload with its token, or the answer's POST
+    if not (main and document and answer and keys) or destructive(url, scope):
+        return False
+    rest = [(k, v) for k, v in pairs if not k.startswith(CHALLENGE_KEYS)]
+    bare = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(rest), ""))
+    return bare == scope.start or page_url(bare, scope)
 
 
 def signed_request(
@@ -1297,6 +1376,68 @@ def _opens(url: object, scope: Scope) -> bool:
     return isinstance(url, str) and page_url(url, scope) and not destructive(url, scope)
 
 
+# 2026-10-30: a LinkedIn result card (an `li` around a `div.job-card-container`, whose script
+# opens the posting) was clicked and refused, as no rule takes a plain container. A signed in
+# search's click on a result card is a click on the card's own posting link instead: browserd
+# finds the one posting address among the card's links (`card_posting`) and clicks that link,
+# judged as any link (actions.click). An element is a card when it is a plain container, no
+# control a click acts on by itself (a link, a field, a form part, nor anything with the role of
+# a button or a link, which is judged on its own), sits in no link or button, holds no submit
+# control and is in no form.
+CARD_ROLES = frozenset(
+    {"", "listitem", "article", "group", "region", "presentation", "none", "row", "gridcell",
+     "cell"}
+)  # fmt: skip
+NOT_CARD_TAGS = frozenset(
+    {"a", "button", "input", "select", "textarea", "option", "label", "summary", "form",
+     "fieldset", "iframe", "frame", "object", "embed", "img", "svg", "html", "body"}
+)  # fmt: skip
+CARD_LINKS = 50  # the links of a card read, in page order
+
+
+def card(facts: object) -> bool:
+    """Whether a signed in search's click target may stand for its one posting link (above)."""
+    return (
+        isinstance(facts, dict)
+        and isinstance(facts.get("tag"), str)
+        and facts.get("tag") not in NOT_CARD_TAGS
+        and facts.get("role") in CARD_ROLES
+        and not facts.get("in_form")
+        and not facts.get("in_control")
+        and not facts.get("holds_submit")
+        and not facts.get("editable")
+        and not facts.get("credential")
+    )
+
+
+def posting_key(url: object, scope: Scope) -> tuple[str, ...] | None:
+    """The posting a link of a signed in page opens (`_opens` and `posting`), as its host, its
+    path and Indeed's job key, whatever its tracking query; None for any other address."""
+    family = family_of(scope.start)
+    if family is None or not isinstance(url, str) or not _opens(url, scope):
+        return None
+    try:
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return None
+    path = unquote(parts.path)
+    if not posting(family, path.strip("/").split("/"), pairs):
+        return None
+    return (str(parts.hostname), path.rstrip("/"), *(v for k, v in pairs if k == "jk"))
+
+
+def card_posting(links: object, scope: Scope) -> int | None:
+    """The index, among a card's links (their addresses in page order, at most CARD_LINKS), of
+    its posting link: the first link to the one posting the card's links open. None when they
+    open no posting or more than one (a list, not a card), or cannot be read."""
+    if not isinstance(links, list) or len(links) > CARD_LINKS:
+        return None
+    keys = [posting_key(link, scope) for link in links]
+    found = {key for key in keys if key is not None}
+    return keys.index(found.pop()) if len(found) == 1 else None
+
+
 def _in_page(url: object, current: str) -> bool:
     """A link that stays on the page: no address, a fragment of the page, or a script."""
     return isinstance(url, str) and (
@@ -1308,14 +1449,24 @@ def _signed_in_control(
     facts: dict, d: dict, tool: str, action: str, current: str, scope: Scope, args: dict | None
 ) -> bool:
     """B19, signed in: a search as a person makes it on a real website. A text box (`search_box`)
-    takes one saved title or place (`Scope.types`) and Enter; a button or link named a search
-    word (`search_words`) is clicked, a form it submits held to `_search_form`; a link to a page
-    of the website (`_opens`) is followed; with no place limit, the worldwide suggestion of a
-    place box (`worldwide_option`) is chosen."""
+    takes one saved title or place (`Scope.types`) and Enter, and a click that focuses it
+    (2026-10-30); a button or link named a search word (`search_words`) is clicked, a form it
+    submits held to `_search_form`; a link to a page of the website (`_opens`) is followed; with
+    no place limit, the worldwide suggestion of a place box (`worldwide_option`) is chosen."""
     if tool == "browser_type":
         if not search_box(facts) or not _search_form(facts, d, scope):
             return False
         return action == "key" or scope.types(facts.get("names"), (args or {}).get("text"))
+    if (  # a click into a search box focuses it, as a person does before typing (2026-10-30)
+        tool == "browser_click"
+        and not facts.get("credential")
+        # never inside a link or a button, whose names are not the box's, nor holding a submit
+        and not facts.get("in_control")
+        and not facts.get("holds_submit")
+        and search_box(facts)
+        and _search_form(facts, d, scope)
+    ):
+        return True
     if tool != "browser_click" or facts.get("editable") or facts.get("credential"):
         return False
     tag, kind, role = facts.get("tag"), facts.get("type"), facts.get("role")
@@ -1358,8 +1509,28 @@ def verdict(
     """None when a discovery may act on this element, else the refusal's code. `action` is
     `key` for the Enter browser_type presses after its text (B19, signed in only): the detectors
     read it as Enter, the text having been judged as a typing."""
+    return judged(facts, tool, current, scope=scope, args=args, action=action)[0]
+
+
+def judged(
+    facts: object,
+    tool: str,
+    current: str,
+    *,
+    scope: Scope | None = None,
+    args: dict | None = None,
+    action: str | None = None,
+) -> tuple[str | None, str]:
+    """`verdict`'s answer and the name of the rule that gave it, for browserd's warning of a
+    refusal (2026-10-30: two clicks on LinkedIn were refused with no word of which rule): a
+    detector's code (`detector`), a submit word in its names (`names_submit`), a composer
+    (`composer`), a page whose scripts may run outside a signed in search (`not_native`), a
+    lease's submit selector (`selector`), another target (`target`), Enter outside a signed in
+    search box (`key`), a link the scope does not open (`link`), a control outside a native
+    GET search form (`native_form`), each of them after no rule of a signed in search took it
+    (`signed_in/<rule>`), and each at the click point (`point:<rule>`)."""
     if not isinstance(facts, dict):
-        return UNSUPPORTED
+        return UNSUPPORTED, "unreadable"
     action = action or (
         "type"
         if tool == "browser_type"
@@ -1369,34 +1540,38 @@ def verdict(
     )
     original = detect.verdict(facts, action=action, profile_edit=True)
     if original and original != "submit":
-        return original
+        return original, "detector"
     if detect.says_submit(facts.get("names", []), profile_edit=True):
-        return "submit"
+        return "submit", "names_submit"
     if tool == "browser_type" and composes(facts):  # a composer, never a search box (B19)
-        return UNSUPPORTED
+        return UNSUPPORTED, "composer"
     if tool == "browser_click" and decline(facts):
         point = facts["point"]
         refused = detect.verdict(point, action="click", profile_edit=True)
         if refused and refused != "submit":
-            return refused
-        return "submit" if detect.says_submit(point.get("names", []), profile_edit=True) else None
+            return refused, "point:detector"
+        if detect.says_submit(point.get("names", []), profile_edit=True):
+            return "submit", "point:names_submit"
+        return None, "decline"
     d = facts.get("discovery")
     # A signed in page runs its scripts by design (B17): its requests are held instead
     # (signed_request), so the script free proof is the anonymous discovery's alone.
     signed_in = scope is not None and scope.signed_in
     if not isinstance(d, dict) or (d.get("native") is not True and not signed_in):
-        return UNSUPPORTED
+        return UNSUPPORTED, "not_native"
     if facts.get("selector_hit") or facts.get("selector_error") or facts.get("custom_submit"):
-        return "submit"
+        return "submit", "selector"
     if d.get("target") not in {"", "_self"}:
-        return UNSUPPORTED
+        return UNSUPPORTED, "target"
+    rule = "signed_in"
     if signed_in and _signed_in_control(facts, d, tool, action, current, scope, args):
         allowed = True
     elif action == "key":  # Enter only in a signed in search's text box (B19)
-        allowed = False
+        allowed, rule = False, "key"
     elif tool == "browser_click" and facts.get("tag") == "a":
-        allowed = read_url(d.get("href", ""), current, scope=scope)
+        allowed, rule = read_url(d.get("href", ""), current, scope=scope), "link"
     else:
+        rule = "native_form"
         fields = d.get("fields")
         allowed = (
             d.get("method") == "get"
@@ -1450,5 +1625,9 @@ def verdict(
         else:
             allowed = False
     if allowed and action != "key" and "point" in facts:
-        return verdict(facts["point"], tool, current, scope=scope, args=args, action=action)
-    return None if allowed else UNSUPPORTED
+        code, why = judged(facts["point"], tool, current, scope=scope, args=args, action=action)
+        return code, why if why.startswith("point:") else f"point:{why}"
+    if allowed:
+        return None, rule
+    # Signed in, no rule of a signed in search took it, nor the anonymous one after it.
+    return UNSUPPORTED, f"signed_in/{rule}" if signed_in and rule != "signed_in" else rule

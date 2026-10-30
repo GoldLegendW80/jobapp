@@ -32,13 +32,32 @@ MEASURE_S = 120  # the walk and the trim of a large profile, as its uid
 REAP_TRIES = 100  # 50 ms apart: what a reap killed is gone in 5 s, or the next start is refused
 
 
+# Software WebGL "when necessary" (owner, 2026-10-14, issue #264): off by default, as it costs
+# the GPU process's memory; on for a sweep lease of a website whose bot check fails without it.
+# 2026-10-30: Indeed, signed in, showed only Cloudflare's check and "Navigateur non pris en
+# charge" (browser not supported), and WebGL is one thing that browser lacked. The lease's
+# hosts tell the website (api finder.lease_hosts: the platform's domain, then its wildcard or
+# its `www.` host), so a sweep whose first host is one of WEBGL_DOMAINS (or its `.test` stand
+# in) starts Chromium with SwiftShader through ANGLE. Declared open points: its memory was not
+# measured on the Jetson (the 90 % guard still closes a tab past it), nor whether Debian's
+# arm64 Chromium ships SwiftShader (without it WebGL stays off, as before).
+WEBGL_DOMAINS = frozenset({"indeed.com", "indeed.test"})
+WEBGL_SWITCHES = ("--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader")
+
+
+def webgl(request: Request) -> bool:
+    """Whether this lease's Chromium starts with software WebGL (WEBGL_DOMAINS)."""
+    return request.purpose == "sweep" and bool(request.hosts) and request.hosts[0] in WEBGL_DOMAINS
+
+
 def switches(
     request: Request, lease_dir: str, port: int | None, address: str = "about:blank"
 ) -> list[str]:
     """SPEC-browser's switches. Never --no-sandbox, never --headless. The user agent is
     Chromium's own (B1: "X11; Linux x86_64" with the client hint architecture "arm"): a
     fingerprint that lies is never set. WebGL stays off under Xvfb (no SwiftShader): the
-    owner's question in B2's pull request. `port` None: no debugging port at all (a person's
+    owner's question in B2's pull request; on only for a sweep of a website that needs it
+    (WEBGL_DOMAINS). `port` None: no debugging port at all (a person's
     own session, browserd/signin.py), and no --disable-blink-features=AutomationControlled
     either: nothing automates that session. The address comes last, after `--`, so Chromium
     never reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
@@ -89,6 +108,7 @@ def switches(
         # a DNS query out of the proxy, a WebRTC STUN server's name for instance.
         "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
         "--disable-quic",
+        *(WEBGL_SWITCHES if webgl(request) else ()),
         "--",
         address,
     ]

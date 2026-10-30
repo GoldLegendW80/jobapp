@@ -206,6 +206,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   // The app refused the agent's typing, Enter or search button, or an address it opened, and
   // nothing was found: the refusal wins over the agent's own reason (B19, 2026-10-29).
   search_refused: "The app refused the search on this website.",
+  // The website showed a security check (Cloudflare's) that did not clear while the agent
+  // waited (2026-10-30, Indeed).
+  security_check:
+    "The website showed a security check the app's browser could not pass.",
   nothing_reported:
     "The assistant read this website but reported no job and no reason. Postings saved before are kept.",
   no_credential: "Add your model access in Account to search this website.",

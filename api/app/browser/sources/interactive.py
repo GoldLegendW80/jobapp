@@ -566,7 +566,9 @@ def outcome(session: finder.FinderSession) -> str | None:
     listed no matching job (`report_no_postings` no_match). Else the blocker it named (a cookie
     wall, a sign in wall, no search control, a page with no list), but when the app refused one
     of its actions (B19, 2026-10-29: "The app refused the search on this website."), the
-    refusal wins, `search_refused`; else `unsupported_interaction` when browserd or the website
+    refusal wins, `search_refused`, over a security check that never cleared too (2026-10-30,
+    `security_check`: the agent says it, so it never hides a refusal of the app); else
+    `unsupported_interaction` when browserd or the website
     refused one of its actions, `search_refused` when the api refused an address; else
     `nothing_reported`. Opening a search page by its address, pressing a link or a failed click
     that it recovered from are how a person searches too: no kind of action is required, and

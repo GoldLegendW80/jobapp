@@ -391,7 +391,20 @@ def test_a_search_button_is_pressed(shape):
             control("Search", tag="a", kind="", href="https://elsewhere.example.test/"),
             discovery.UNSUPPORTED,
         ),
-        (control("Search", tag="input", kind="text"), discovery.UNSUPPORTED),
+        # A click into a search box focuses it (2026-10-30, test_three_sites.py); a box in a
+        # POST form or one that writes to someone is no search box to click.
+        (
+            control(
+                "Search",
+                tag="input",
+                kind="text",
+                in_form=True,
+                method="post",
+                action="https://www.linkedin.com/jobs/search/",
+            ),
+            discovery.UNSUPPORTED,
+        ),
+        (control("Write a message", tag="input", kind="text"), discovery.UNSUPPORTED),
         (control("Search", tag="button", kind="button", selector_hit=True), "submit"),
     ],
 )
