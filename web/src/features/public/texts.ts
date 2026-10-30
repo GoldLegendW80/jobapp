@@ -8,7 +8,7 @@
  */
 
 /** The version of the texts below. Bump it whenever a sentence of /privacy or /terms changes. */
-export const VERSION = "2026-10-25";
+export const VERSION = "2026-10-30";
 
 /** The first sync searches this many days back (MAIL first sync, `newer_than:180d`). */
 export const FIRST_SYNC_DAYS = 180;
@@ -61,6 +61,15 @@ export const WHAT_IS_READ =
   "It reads and stores the whole mail only when it does. " +
   `When you connect Gmail, it asks Gmail to search your last ${FIRST_SYNC_DAYS} days for the terms listed below. ` +
   "That search can also catch mail that is not about a job.";
+
+/**
+ * The job alert e-mails (SPEC-mail.md, "Job alert e-mails: a narrow exception", owner
+ * 2026-10-30): read only for the providers ticked in Find jobs setup, from the addresses of
+ * api/app/mail/alerts/providers.py, never their links.
+ */
+export const ALERT_EMAILS =
+  "If you tick a job website's alert e-mails in Find jobs setup, the app also reads the whole alert e-mails that website sends you, only from its own sender addresses, to add the postings they list to your search. " +
+  "It reads no other mail for this, never opens the links in them, and stores the postings, not the mails.";
 
 export const WHERE_STORED = "This instance, on the owner's server.";
 

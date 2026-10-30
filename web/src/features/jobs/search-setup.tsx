@@ -54,6 +54,8 @@ import { SearchLists } from "@/features/profile/search-lists";
 import { TargetFields } from "@/features/profile/target-fields";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
+import { AlertEmailsGroup } from "./alert-emails";
+import { alertSettings } from "./alert-providers";
 import { getStarterBoards, savedBoard, starterKey } from "./boards-api";
 import { CompanyBoards } from "./company-boards";
 import { formatDateTime } from "./format";
@@ -289,6 +291,9 @@ function SetupForm({
   const boards = edited ?? seeded ?? (starter.isError ? [] : null);
   // The starter list shown and not chosen yet.
   const proposal = savedBoards === null && edited === null && seeded !== null;
+  const [alerts, setAlerts] = useState(() =>
+    alertSettings(profile.sections.search.alert_emails),
+  );
   const [revision, setRevision] = useState(profile.revision);
   const [reviewed, setReviewed] = useState(() =>
     structuredClone(profile.sections.search),
@@ -478,6 +483,7 @@ function SetupForm({
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
+        alert_emails: alerts,
         job_feeds: feeds,
         ...(edited !== null ? { company_boards: edited } : {}),
       });
@@ -748,6 +754,7 @@ function SetupForm({
               </div>
             </div>
           </section>
+          <AlertEmailsGroup id={id} value={alerts} onChange={setAlerts} />
           <JobFeedsChoice value={feeds} onChange={setFeeds} />
           <CompanyBoards
             boards={boards}

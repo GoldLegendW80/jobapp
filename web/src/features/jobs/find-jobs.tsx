@@ -76,6 +76,27 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
   );
 }
 
+/** A ticked job feed (mode "api", api app/jobs/feeds). */
+function isFeed(source: Sweep["sources"][number]): boolean {
+  return source.mode === "api" && isJobFeed(source.kind);
+}
+
+/** A company job board (mode "api", kind "board", api app/jobs/boards). */
+function isBoard(source: Sweep["sources"][number]): boolean {
+  return source.kind === "board";
+}
+
+/** A job website of the sweep: a source with a host, but neither a provider's alert e-mails
+ * (mode "mail", host "mail:indeed"), nor a job feed, nor a company board. */
+function isWebsite(source: Sweep["sources"][number]): boolean {
+  return (
+    Boolean(source.host) &&
+    source.mode !== "mail" &&
+    !isFeed(source) &&
+    !isBoard(source)
+  );
+}
+
 /** What the sweep reads now: a website searched in the person's browser by its name (its
  * `current_board` is the source's id, jobs J10), any other source by its label. */
 function readingName(sweep: Sweep): string {
@@ -99,8 +120,10 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
   // The ticked job feeds and the company boards (mode "api") count with the websites: read
-  // first, one source each.
-  const websites = sweep.sources.filter((source) => source.host);
+  // first, one source each. The alert e-mails (mode "mail") are not counted here.
+  const websites = sweep.sources.filter(
+    (source) => isWebsite(source) || isFeed(source) || isBoard(source),
+  );
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
@@ -157,7 +180,7 @@ function feedsRead(sweep: Sweep): string[] {
 
 /** The company job boards a sweep read (api app/jobs/boards), as a part of its summary line. */
 function boardsRead(sweep: Sweep): string[] {
-  const boards = sweep.sources.filter((source) => source.kind === "board");
+  const boards = sweep.sources.filter(isBoard);
   return boards.length
     ? [`${plural(boards.length, "company board")} read`]
     : [];
@@ -169,7 +192,7 @@ function summaryLine(sweep: Sweep): string {
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
-      : `${plural(sweep.sources.filter((source) => source.host && source.mode !== "api").length, "website")} searched`,
+      : `${plural(sweep.sources.filter(isWebsite).length, "website")} searched`,
     ...feedsRead(sweep),
     ...boardsRead(sweep),
     `${plural(sweep.seen, "posting")} seen`,

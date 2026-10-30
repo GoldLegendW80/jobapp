@@ -816,7 +816,13 @@ INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 # The job feeds a sweep reads beside the websites (owner, 2026-10-30, app/jobs/feeds), ticked in
 # Find jobs: an editor that does not know the field keeps the stored value.
 JobFeed = Literal["arbeitnow", "himalayas", "adzuna"]
-KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude", "job_feeds", "company_boards")
+KEPT_WHEN_OMITTED = (
+    *INTERACTIVE_FIELDS,
+    "location_exclude",
+    "alert_emails",
+    "job_feeds",
+    "company_boards",
+)
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -985,6 +991,15 @@ def without_starter(data: Any) -> Any:
     return {**data, "onboarding": onboarding}
 
 
+class AlertEmails(_Section):
+    """Which job websites' alert e-mails a sweep reads (SPEC-mail.md, "Job alert e-mails: a
+    narrow exception"): one switch per provider of `app/mail/alerts/providers.py`, off unless the
+    person turns it on in Find jobs setup."""
+
+    indeed: bool = False
+    linkedin: bool = False
+
+
 class SearchSection(_Section):
     title_include: TermList = Field(default_factory=TermList)
     title_exclude: TermList = Field(default_factory=TermList)
@@ -1012,6 +1027,8 @@ class SearchSection(_Section):
     company_boards: Annotated[list[CompanyBoard], Field(max_length=COMPANY_BOARDS_MAX)] | None = (
         None
     )
+    # Job alert e-mails read from the connected mailbox (owner, 2026-10-30); off when absent.
+    alert_emails: AlertEmails = Field(default_factory=lambda: AlertEmails())
     job_feeds: Annotated[list[JobFeed], Field(max_length=3)] = Field(default_factory=list)
     # When the job websites are searched automatically (jobs J5 schedules it and edits it next
     # to Find jobs). Off unless the user turns it on; a section saved before this field existed

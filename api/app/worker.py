@@ -234,16 +234,28 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     from app.jobs.boards import run as boards
 
-    # One shared deadline, in this order: the ticked job feeds (app/jobs/feeds, at most
-    # FEEDS_TIME_S), the company boards (app/jobs/boards, at most BUDGET_S and never closer than
-    # 30 s to the deadline), then the job websites with the time left.
+    # One shared deadline, in this order: the alert e-mails (app/mail/alerts, at most
+    # ALERTS_TIME_S), the ticked job feeds (app/jobs/feeds, at most FEEDS_TIME_S), the company
+    # boards (app/jobs/boards, at most BUDGET_S and never closer than 30 s to the deadline), then
+    # the job websites with the time left.
     await sweep.run_sweep(
         sessions_of(ctx),
         uuid.UUID(sweep_id),
         clock_of(ctx),
+        alerts=alert_sources(ctx),
         browser=boards.chain(boards.Boards(ctx.get("boards_transport")), browser_sources(ctx)),
         feeds=feed_sources(ctx),
     )
+
+
+def alert_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The job alert e-mails' run (app/mail/alerts/source.py): tests put theirs in the context."""
+    if "alert_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["alert_sources"]
+        return hook
+    from app.mail.alerts import source
+
+    return source.hook_for(ctx["settings"], sessions_of(ctx), ctx.get("credentials_keyring"))
 
 
 def feed_sources(ctx: dict[str, Any]) -> sweep.FeedHook:

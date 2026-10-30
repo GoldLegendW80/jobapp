@@ -294,6 +294,9 @@ export function sourceName(source: {
   host?: string | null;
   company?: string | null;
 }): string {
+  // A provider's job alert e-mails ("mail:indeed"), SPEC-mail.md "Job alert e-mails".
+  const alerts = alertSourceName(source.host ?? "");
+  if (alerts) return alerts;
   // A website of the person's own (jobs J9, platform custom) is named by its host.
   const kind =
     source.kind === "custom" && source.host
@@ -321,7 +324,19 @@ export function sourceLabel(current: string): string {
     : oneSource(current);
 }
 
+const ALERT_SOURCES = new Map([
+  ["mail:indeed", "Indeed alert e-mails"],
+  ["mail:linkedin", "LinkedIn alert e-mails"],
+]);
+
+/** The words of a job alert e-mails source ("mail:indeed"), null for any other name. */
+export function alertSourceName(current: string): string | null {
+  return ALERT_SOURCES.get(current) ?? null;
+}
+
 function oneSource(current: string): string {
+  const alerts = alertSourceName(current);
+  if (alerts) return alerts;
   // Opportunities O8: a freelance and project feed ("remoteok", "hackernews:freelance").
   const feed = feedSourceName(current);
   if (feed) return feed;

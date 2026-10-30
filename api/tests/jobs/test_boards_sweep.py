@@ -361,6 +361,8 @@ def test_the_worker_runs_the_boards_then_the_websites(
         "sessions": factory,
         "clock": clock,
         "boards_transport": transport,
+        # No alert e-mail is on (and the context has no settings for the Gmail hook).
+        "alert_sources": None,
         "browser_sources": recorded("websites", websites(finding("GenAI Engineer"))),
     }
     asyncio.run(worker.run_sweep(ctx, str(sweep_id)))
