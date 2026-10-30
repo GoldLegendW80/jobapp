@@ -7,13 +7,14 @@ One sweep, `run_sweep(sweep_id)`:
    a worker that then died is failed at once instead of half run again). The user comes from
    the row, never from the queue message. New runs use the search and skills frozen under the
    profile row lock at creation; pre-v1 rows without `stats.search_scope` explicitly retain
-   claim-time profile reads. Without a ticked website, or with a search section that no longer
-   validates, the sweep fails with a clear message.
-2. Search. The feed hook (app/jobs/feeds, `FeedRunner`) first reads every ticked job feed
-   (Arbeitnow, Himalayas, Adzuna: official APIs, owner 2026-10-30), then the browser hook
-   (app/browser/sources, `Runner`) runs every ticked website through
-   the bounded interactive finder (app/browser/finder.py), one website after the other, within
-   the sweep's time limit.
+   claim-time profile reads. Without a ticked website, alert e-mail or job feed, or with a
+   search section that no longer validates, the sweep fails with a clear message.
+2. Search. The alerts hook (app/mail/alerts/source.py) first reads the job alert e-mails of
+   every provider turned on (SPEC-mail.md), then the feed hook (app/jobs/feeds, `FeedRunner`)
+   reads every ticked job feed (Arbeitnow, Himalayas, Adzuna: official APIs, owner
+   2026-10-30), then the browser hook (app/browser/sources, `Runner`) runs every ticked website
+   through the bounded interactive finder (app/browser/finder.py), one website after the other,
+   within the sweep's time limit.
 3. Store. Each batch of findings the finder verified on its detail page is stored as it is
    reported (`Commits`, jobs J11 and J11b, below): scored against the user's skills, moved to
    `skipped` when a never apply rule matches, counted as a duplicate when the user has it.
@@ -192,10 +193,28 @@ def has_websites(search: SearchSection | None) -> bool:
     return bool(search and any(site.enabled for site in search.interactive_sites))
 
 
+def alert_keys(search: SearchSection | None) -> list[str]:
+    """The providers whose job alert e-mails the person turned on (app/mail/alerts)."""
+    if search is None:
+        return []
+    return [key for key, on in search.alert_emails.model_dump().items() if on]
+
+
+def alert_entry(key: str) -> dict[str, Any]:
+    """The frozen source of one provider's alert e-mails: its stats entry is "mail:<key>"."""
+    return {
+        "source_id": _source_id("mail", key),
+        "mode": "mail",
+        "kind": "alerts",
+        "host": f"mail:{key}",
+    }
+
+
 def has_sources(search: SearchSection | None) -> bool:
-    """Whether a sweep of `search` has something to read: an enabled website or a ticked job
-    feed (app/jobs/feeds, owner 2026-10-30)."""
-    return has_websites(search) or bool(search and search.job_feeds)
+    """Whether a sweep of `search` has something to read: an enabled website, the alert
+    e-mails of a provider (app/mail/alerts), or a ticked job feed (app/jobs/feeds, owner
+    2026-10-30)."""
+    return has_websites(search) or bool(alert_keys(search)) or bool(search and search.job_feeds)
 
 
 def _source_id(mode: str, *key: str) -> str:
@@ -224,6 +243,10 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         # still validates under the release before, which refuses the key.
         if not raw.get("job_feeds"):
             raw.pop("job_feeds", None)
+        # Every alert e-mail off: no key either, as the profile stores it (profile/service.py).
+        alerts = raw.get("alert_emails")
+        if isinstance(alerts, dict) and not any(alerts.values()):
+            raw.pop("alert_emails", None)
     if search is not None:
         sources.extend(
             {
@@ -235,6 +258,8 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             for site in search.interactive_sites
             if site.enabled
         )
+        # The ticked alert e-mails (app/mail/alerts), read first.
+        sources.extend(alert_entry(key) for key in alert_keys(search))
         # The ticked job feeds (app/jobs/feeds), read before the websites, in their own order.
         from app.jobs import feeds
 
@@ -696,9 +721,11 @@ def finish_done(
 
 Clock = Callable[[], datetime]
 # The job websites' run (app/browser/sources, `Runner`): given the plan, the stats, the progress
-# save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`.
+# save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`. The
+# alert e-mails' run (app/mail/alerts/source.py) has the same shape and runs first.
 BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
-# The job feeds' run (app/jobs/feeds, `FeedRunner`), the same shape, run before the websites.
+# The job feeds' run (app/jobs/feeds, `FeedRunner`), the same shape, run after the alert e-mails
+# and before the websites.
 FeedHook = BrowserHook
 
 
@@ -710,6 +737,7 @@ async def run_sweep(
     timeout_s: float = SWEEP_TIMEOUT_S,
     heartbeat_s: float = HEARTBEAT_S,
     browser: BrowserHook | None = None,
+    alerts: BrowserHook | None = None,
     feeds: FeedHook | None = None,
 ) -> None:
     """Run one sweep to its end (module docstring). Never raises for a website's failure; any
@@ -740,6 +768,9 @@ async def run_sweep(
 
             beating = asyncio.create_task(beat())
             try:
+                # The alert e-mails, then the job feeds, then the job websites.
+                if alerts is not None:
+                    await alerts(plan, stats, progress, started + timeout_s)
                 if feeds is not None:
                     await feeds(plan, stats, progress, started + timeout_s)
                 if browser is not None:
@@ -792,8 +823,11 @@ async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
 
 def _summary(stats: Stats) -> dict[str, Any]:
     return {
+        # The alert e-mails' entries ("mail") are neither websites nor feeds.
         "websites": sum(
-            1 for source in stats.sources if source.get("host") and source.get("mode") != "api"
+            1
+            for source in stats.sources
+            if source.get("host") and source.get("mode") not in ("api", "mail")
         ),
         "feeds": sum(1 for source in stats.sources if source.get("mode") == "api"),
         "seen": stats.seen,

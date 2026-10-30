@@ -237,8 +237,19 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         uuid.UUID(sweep_id),
         clock_of(ctx),
         browser=browser_sources(ctx),
+        alerts=alert_sources(ctx),
         feeds=feed_sources(ctx),
     )
+
+
+def alert_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The job alert e-mails' run (app/mail/alerts/source.py): tests put theirs in the context."""
+    if "alert_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["alert_sources"]
+        return hook
+    from app.mail.alerts import source
+
+    return source.hook_for(ctx["settings"], sessions_of(ctx), ctx.get("credentials_keyring"))
 
 
 def feed_sources(ctx: dict[str, Any]) -> sweep.FeedHook:

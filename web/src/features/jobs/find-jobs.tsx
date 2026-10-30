@@ -76,6 +76,18 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
   );
 }
 
+/** A job website of the sweep: a source with a host, but not a provider's alert e-mails
+ * (mode "mail", host "mail:indeed"), which are not a website searched. */
+/** A ticked job feed (mode "api", api app/jobs/feeds). */
+function isFeed(source: Sweep["sources"][number]): boolean {
+  return source.mode === "api" && isJobFeed(source.kind);
+}
+
+/** A job website: neither an alert e-mail provider (mode "mail") nor a job feed. */
+function isWebsite(source: Sweep["sources"][number]): boolean {
+  return Boolean(source.host) && source.mode !== "mail" && !isFeed(source);
+}
+
 /** What the sweep reads now: a website searched in the person's browser by its name (its
  * `current_board` is the source's id, jobs J10), any other source by its label. */
 function readingName(sweep: Sweep): string {
@@ -91,12 +103,11 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
   // The ticked job feeds (mode "api") count with the websites: read first, one source each.
-  const websites = sweep.sources.filter((source) => source.host);
-  const word = websites.some(
-    (source) => source.mode === "api" && isJobFeed(source.kind),
-  )
-    ? "source"
-    : "website";
+  // The alert e-mails (mode "mail") are not counted here.
+  const websites = sweep.sources.filter(
+    (source) => isWebsite(source) || isFeed(source),
+  );
+  const word = websites.some(isFeed) ? "source" : "website";
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
@@ -157,7 +168,7 @@ function summaryLine(sweep: Sweep): string {
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
-      : `${plural(sweep.sources.filter((source) => source.host && !(source.mode === "api" && isJobFeed(source.kind))).length, "website")} searched`,
+      : `${plural(sweep.sources.filter(isWebsite).length, "website")} searched`,
     ...feedsRead(sweep),
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,

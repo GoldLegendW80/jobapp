@@ -90,6 +90,7 @@ describe.each([
     ).toBeInTheDocument();
     for (const sentence of [
       texts.WHAT_IS_READ,
+      texts.ALERT_EMAILS,
       texts.WHERE_STORED,
       texts.ASSISTANT,
       texts.HOW_LONG,

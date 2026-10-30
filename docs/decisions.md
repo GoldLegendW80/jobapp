@@ -172,6 +172,17 @@ choice made by the build that stands until the owner says otherwise.
   task; the sync's batches stay under 150 `messages.get` a minute.
 - 2026-10-21 (#17): the points of the mail spec review are answered in the plan; closed.
 - 2026-10-21 (#251): applications by e-mail stay behind mail M12, M18 and M23, as planned.
+- 2026-10-30, job alert e-mails (asked through the orchestrator how Indeed's postings should reach
+  Find jobs, since Indeed has no API and its security check blocks automation; answer "Gmail job
+  alerts"): a narrow exception to "a mailbox read never adds a candidate posting". Only messages
+  from an allow list of exact alert sender addresses per provider, only when they pass the
+  module's sender authentication (`mail/auth.py`, plus the `dmarc=fail` veto above), parsed by
+  deterministic code per provider (never an LLM agent), giving candidate postings that take the
+  sweep's commit path (filters, never apply rules, duplicates, scoring); links canonicalised from
+  their text (tracking stripped, job id kept) and never fetched; nothing else of the mailbox read
+  for it; turned on per provider in Find jobs setup. Indeed and LinkedIn are built; Welcome to the
+  Jungle, APEC, HelloWork, France Travail and mon-vie-via stay TODO until a format is established
+  (SPEC-mail.md, "Job alert e-mails: a narrow exception").
 
 ## Documents (2026-10-14)
 

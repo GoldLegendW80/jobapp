@@ -295,6 +295,8 @@ export interface Search {
   /** Saved intent; browser consent remains owned by the browser API. */
   interactive_sites?: InteractiveSite[];
   interactive_instructions?: string | null;
+  /** the job alert e-mails a sweep reads from the connected Gmail (absent: every one off) */
+  alert_emails?: AlertEmails;
   /** the job feeds ticked in Find jobs (api app/jobs/feeds); absent until one is ticked */
   job_feeds?: string[];
   /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
@@ -307,6 +309,12 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+}
+
+/** One switch per provider of api/app/mail/alerts/providers.py. */
+export interface AlertEmails {
+  indeed: boolean;
+  linkedin: boolean;
 }
 
 export interface PayRange {
