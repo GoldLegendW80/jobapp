@@ -260,7 +260,7 @@ function SetupForm({
     profile.sections.search.interactive_instructions ?? "",
   );
   // How a ticked LinkedIn is searched (owner, 2026-10-30): the public job search by default.
-  const [linkedinSearch, setLinkedinSearch] = useState<LinkedInSearch>(
+  const [linkedinMode, setLinkedinMode] = useState<LinkedInSearch>(
     profile.sections.search.linkedin_search ?? "api",
   );
   const [custom, setCustom] = useState("");
@@ -450,10 +450,15 @@ function SetupForm({
         );
         return;
       }
+      // The release before the choice refuses the key, so it is sent only when the person
+      // changed it or the section already holds it: the server keeps what is left out.
+      const stored = reviewed.linkedin_search;
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
-        linkedin_search: linkedinSearch,
+        ...(stored !== undefined || linkedinMode !== "api"
+          ? { linkedin_search: linkedinMode }
+          : {}),
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -650,8 +655,8 @@ function SetupForm({
                     {preset.platform === "linkedin" &&
                     ticked.has("linkedin") ? (
                       <LinkedInSearchChoice
-                        value={linkedinSearch}
-                        onChange={setLinkedinSearch}
+                        value={linkedinMode}
+                        onChange={setLinkedinMode}
                       />
                     ) : null}
                   </li>

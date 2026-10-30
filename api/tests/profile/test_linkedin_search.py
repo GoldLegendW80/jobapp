@@ -7,6 +7,7 @@ tests/browser/test_linkedin_guest.py."""
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -58,6 +59,32 @@ def test_a_save_keeps_a_stored_choice_it_leaves_out_and_replaces_it_when_sent(
     refused = save(api, ana, "search", stored | {"linkedin_search": "robot"}, 3)
     assert refused.status_code == 422
     assert read(api, ana)["sections"]["search"]["linkedin_search"] == "api"
+
+
+def test_rollback_query_names_exactly_the_people_holding_a_choice(
+    factory: sessionmaker[Session], api: Api, ana: str, ben: str
+) -> None:
+    # The one way door declared in the pull request (CONTRIBUTING, Migrations, the JSON part):
+    # the release before this one refuses the key, so Find jobs sends it only once the person
+    # chose, and this read only query names exactly who a rollback by hand must strip first.
+    carl = signed_in(factory, api, "e2e-linkedin-mode-carl@example.org")
+    save_ok(api, ana, "search", without_choice(full("search")), 0)  # never chose: not stored
+    save_ok(api, ben, "search", full("search") | {"linkedin_search": "browser"}, 0)
+    save_ok(api, carl, "search", full("search") | {"linkedin_search": "browser"}, 0)
+    save_ok(api, carl, "search", full("search") | {"linkedin_search": "api"}, 1)  # chose back
+    assert "linkedin_search" not in read(api, ana)["sections"]["search"]
+    with factory() as db:
+        holders = set(
+            db.execute(
+                sa.text("select user_id from profiles where sections->'search' ? 'linkedin_search'")
+            ).scalars()
+        )
+        emails = set(
+            db.execute(
+                sa.text("select email from users where id = any(:ids)"), {"ids": list(holders)}
+            ).scalars()
+        )
+    assert emails == {"e2e-linkedin-mode-ben@example.org", "e2e-linkedin-mode-carl@example.org"}
 
 
 def test_b_never_reads_a_s_choice(api: Api, ana: str, ben: str) -> None:

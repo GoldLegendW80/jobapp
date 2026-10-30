@@ -526,11 +526,19 @@ class Runner:
         interactive_policy: "InteractivePolicy | None" = None,
         site_logins: Any = None,
         guest_http: Callable[[], Any] | None = None,
+        guest_cooldown: Any = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         # LinkedIn's public job search (linkedin_guest): a new HTTP transport per sweep; None
         # makes no request at all (tests that do not give one).
         self.guest_http = guest_http
+        # LinkedIn's cooldown after a refusal, shared by every sweep (linkedin_guest.RedisCooldown
+        # in the worker; this process alone without Redis).
+        if guest_cooldown is None:
+            from app.browser.sources.linkedin_guest import MemoryCooldown
+
+            guest_cooldown = MemoryCooldown()
+        self.guest_cooldown = guest_cooldown
         self.finder = finder  # the finder agent of the websites (finder.RuntimeFinder)
         self.interactive_policy = interactive_policy
         self.site_logins = site_logins  # B17: the websites the person signed in to (site_logins)
@@ -582,6 +590,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
     )
     from app.browser import platform_policy
     from app.browser.site_logins import SiteLogins
+    from app.browser.sources.linkedin_guest import RedisCooldown
 
     return Runner(
         leases,
@@ -592,6 +601,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         interactive_policy=platform_policy.runtime_policy(settings, sessions),
         site_logins=SiteLogins(sessions),
         guest_http=_guest_http,
+        guest_cooldown=RedisCooldown(pool),
     )
 
 

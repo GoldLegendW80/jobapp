@@ -7,9 +7,12 @@ request goes to an httpx.MockTransport: no test reaches the network. The clock i
 so the pacing is measured, never waited."""
 
 import asyncio
+import gzip
 import itertools
 import json
 import random
+import threading
+import time
 import uuid
 from datetime import datetime
 from types import SimpleNamespace
@@ -19,7 +22,8 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
-from app.browser import sources
+from app.browser import platform_policy, sources
+from app.browser.leases import StoreUnavailableError
 from app.browser.sources import linkedin_guest as guest
 from app.jobs import sweep
 from app.jobs.models import ContractType
@@ -177,7 +181,11 @@ def test_the_saved_days_limit_the_age(days: int, seconds: str) -> None:
     [
         ([], [("GenAI Engineer", None, False)]),
         (["CDI"], [("GenAI Engineer", "F", False)]),
-        (["CDD"], [("GenAI Engineer", "T", False)]),
+        # CDD without CDI: LinkedIn lists most fixed term contracts as full time, so no filter,
+        # the postings read are checked.
+        (["CDD"], [("GenAI Engineer", None, True)]),
+        (["CDD", "Freelance"], [("GenAI Engineer", None, True)]),
+        (["CDI", "CDD"], [("GenAI Engineer", "F,T", False)]),
         (["Freelance"], [("GenAI Engineer", "C", False)]),
         (["Stage"], [("GenAI Engineer", "I", False)]),
         (["CDI", "CDD", "Freelance", "Stage"], [("GenAI Engineer", "C,F,I,T", False)]),
@@ -316,6 +324,13 @@ class Allow:
         return None
 
 
+def answer(status: int, body: str | bytes = "", headers: dict[str, str] | None = None) -> Any:
+    """An answer streamed as the network gives it (the source reads the raw body, so an answer
+    built in memory, already read, would not do)."""
+    data = body.encode() if isinstance(body, str) else body
+    return httpx.Response(status, headers=headers, stream=httpx.ByteStream(data))
+
+
 class LinkedInFake:
     """Answers by path: search pages from `pages` (keyed by start), postings from `postings`;
     `answers` overrides by request number (1 based) with a status (and headers)."""
@@ -336,19 +351,19 @@ class LinkedInFake:
         number = len(self.requests)
         if number in self.answers:
             status, headers = self.answers[number]
-            return httpx.Response(status, headers=headers, text="")
+            return answer(status, headers=headers)
         path = request.url.path
         if path.endswith("/seeMoreJobPostings/search"):
             start = int(request.url.params["start"])
             body = self.pages.get(start)
             if body is None:
-                return httpx.Response(400, text="")
-            return httpx.Response(200, text=body, headers={"set-cookie": "lang=v=2&lang=en-us"})
+                return answer(400)
+            return answer(200, body, {"set-cookie": "lang=v=2&lang=en-us"})
         job_id = path.rsplit("/", 1)[1]
         if self.postings is not None and job_id not in self.postings:
-            return httpx.Response(404, text="")
+            return answer(404)
         text = (self.postings or {}).get(job_id, POSTING)
-        return httpx.Response(200, text=text)
+        return answer(200, text)
 
     def paths(self) -> list[str]:
         return [
@@ -370,6 +385,7 @@ def execute(
     pacer: Any = None,
     now: list[float] | None = None,
     rules: Any = None,
+    cooldown: Any = None,
 ) -> tuple[list[dict[str, Any]], Any, FakeLeases, list[float]]:
     """One sweep's browser hook (sources.Runner) with this search; the LinkedIn fake answers."""
     now = now if now is not None else [0.0]
@@ -406,6 +422,7 @@ def execute(
         interactive_policy=Allow() if policy is None else policy,
         base_url=base_url,
         guest_http=(lambda: httpx.MockTransport(fake.handler)) if transport else None,
+        guest_cooldown=cooldown or guest.MemoryCooldown(lambda: now[0]),
     )
     asyncio.run(runner(plan, stats, progress, deadline))
     return stats.sources, fake, leases, now
@@ -491,8 +508,8 @@ def test_a_refusal_stops_linkedin_at_once_without_retry(
     entries, fake, _, _ = execute(section(), lambda now: LinkedInFake(now, answers=answers))
     [entry] = entries
     assert len(fake.requests) == requests
-    assert entry["error"] == "rate_limited"
-    assert entry["reason"] == "rate_limited"
+    assert entry["error"] == "linkedin_rate_limited"
+    assert entry["reason"] == "linkedin_rate_limited"
     assert entry["found"] == found
     assert entry["outcome"] == ("partial" if found else "failed")
 
@@ -624,6 +641,27 @@ def test_the_permission_is_checked_before_every_request() -> None:
     assert len(fake.requests) == 1
 
 
+@pytest.mark.parametrize(
+    ("refused", "refuse_from", "requests", "code"),
+    [
+        # Switched off before anything was sent: never given.
+        ("linkedin_off", 1, 0, "permission_unavailable"),
+        ("linkedin_off", 2, 0, "permission_unavailable"),
+        # Switched off after a request: withdrawn during the run, as a browser search says.
+        ("linkedin_off", 4, 1, "permission_revoked"),
+        ("linkedin_paused", 4, 1, "permission_checkpoint"),
+    ],
+)
+def test_a_permission_withdrawn_during_the_run_reads_revoked(
+    refused: str, refuse_from: int, requests: int, code: str
+) -> None:
+    # The code the real platform policy gives the guard's refusal: this source never reserves a
+    # browser page, so the policy itself always says `reserved=False`.
+    policy = Allow(refuse_from, platform_policy.source_code("linkedin", refused, False))
+    entries, fake, _, _ = execute(section(), policy=policy)
+    assert (entries[0]["error"], len(fake.requests)) == (code, requests)
+
+
 def test_no_transport_or_no_time_makes_no_request() -> None:
     entries, fake, _, _ = execute(section(), transport=False)
     assert (entries[0]["error"], fake.requests) == ("page_failed", [])
@@ -673,6 +711,20 @@ def test_the_frozen_scope_names_the_mode_and_wins_over_a_later_setting() -> None
 
     [api] = frozen(section())
     [browser] = frozen(section(linkedin_search="browser"))
+
+    # The release before the choice refuses the key in the frozen search a sweep it claims
+    # validates: the default is left out, the mode lives in the frozen sources.
+    def raw(search: SearchSection) -> dict[str, Any]:
+        return sweep.freeze_scope(
+            SimpleNamespace(sections={"search": search.model_dump(mode="json")}, revision=1),
+            sweep.SweepTrigger.manual,
+            datetime.fromisoformat("2026-10-30T00:00:00+00:00"),
+        )["search"]
+
+    assert "linkedin_search" not in raw(section())
+    assert "linkedin_search" not in raw(section(linkedin_search="api"))
+    assert raw(section(linkedin_search="browser"))["linkedin_search"] == "browser"
+    assert SearchSection.model_validate(raw(section())).linkedin_search == "api"
     assert (api["mode"], api["source_id"]) == ("api", sweep._source_id("api", LINKEDIN["url"]))
     assert (browser["mode"], browser["source_id"]) == (
         "llm_browser",
@@ -696,3 +748,218 @@ def test_the_setting_defaults_to_api_and_takes_only_its_two_values() -> None:
     with pytest.raises(ValueError, match="linkedin_search"):
         section(linkedin_search="headless")
     assert sweep.linkedin_mode(None) == "api"
+
+
+def test_a_refusal_keeps_every_sweep_away_from_linkedin_for_half_an_hour() -> None:
+    now = [0.0]
+    cooldown = guest.MemoryCooldown(lambda: now[0])
+    entries, fake, _, _ = execute(
+        section(), lambda c: LinkedInFake(c, answers={1: (429, {})}), now=now, cooldown=cooldown
+    )
+    assert (entries[0]["error"], len(fake.requests)) == ("linkedin_rate_limited", 1)
+    refused_at = fake.times[0]
+    # Another sweep (another person's too: one key per host) before the half hour is over.
+    now[0] = refused_at + guest.COOLDOWN_S - 60
+    entries, fake, _, _ = execute(section(), now=now, cooldown=cooldown, deadline=now[0] + 1000)
+    assert (entries[0]["error"], fake.requests) == ("linkedin_rate_limited", [])
+    assert entries[0]["outcome"] == "failed"
+    # Once it is over, LinkedIn is searched again.
+    now[0] = refused_at + guest.COOLDOWN_S + 1
+    entries, fake, _, _ = execute(section(), now=now, cooldown=cooldown, deadline=now[0] + 1000)
+    assert entries[0]["error"] == "finding_persistence_pending"
+    assert len(fake.requests) == 3
+    # A wall starts it too; a page that failed otherwise does not.
+    for answer, cooled in (
+        ((302, {"location": "https://www.linkedin.com/authwall"}), True),
+        ((999, {}), True),
+        ((500, {}), False),
+    ):
+        fresh = guest.MemoryCooldown(lambda: now[0])
+        execute(section(), lambda c, a=answer: LinkedInFake(c, answers={1: a}), now=now,
+                cooldown=fresh, deadline=now[0] + 1000)  # fmt: skip
+        assert asyncio.run(fresh.active("www.linkedin.com")) is cooled
+
+
+def test_a_cooldown_that_starts_during_the_pause_stops_before_the_request() -> None:
+    now = [0.0]
+
+    class Starting(guest.MemoryCooldown):
+        async def active(self, key: str) -> bool:
+            self.asked = getattr(self, "asked", 0) + 1
+            if self.asked == 2:  # another sweep met a refusal while this one waited its turn
+                await self.start(key, guest.COOLDOWN_S)
+            return await super().active(key)
+
+    entries, fake, _, _ = execute(section(), now=now, cooldown=Starting(lambda: now[0]))
+    assert (entries[0]["error"], fake.requests) == ("linkedin_rate_limited", [])
+
+
+def test_the_redis_cooldown_is_one_key_per_host_that_ends_by_itself() -> None:
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.keys: dict[str, tuple[str, int]] = {}
+
+        async def exists(self, key: str) -> int:
+            return int(key in self.keys)
+
+        async def set(self, key: str, value: str, ex: int) -> None:
+            self.keys[key] = (value, ex)
+
+    redis = FakeRedis()
+
+    async def pool() -> Any:
+        return redis
+
+    cooldown = guest.RedisCooldown(pool, clock=lambda: 1000.0)
+    assert asyncio.run(cooldown.active("www.linkedin.com")) is False
+    asyncio.run(cooldown.start("www.linkedin.com", guest.COOLDOWN_S))
+    key = guest.COOLDOWN_KEY + "www.linkedin.com"
+    assert redis.keys == {key: ("2800", 1800)}
+    assert asyncio.run(cooldown.active("www.linkedin.com")) is True
+    assert asyncio.run(cooldown.active("pages")) is False
+
+    async def broken() -> Any:
+        raise OSError("no redis")
+
+    with pytest.raises(StoreUnavailableError):
+        asyncio.run(guest.RedisCooldown(broken).active("www.linkedin.com"))
+    # A cooldown that cannot be read sends nothing.
+    entries, fake, _, _ = execute(section(), cooldown=guest.RedisCooldown(broken))
+    assert (entries[0]["error"], fake.requests) == ("page_failed", [])
+
+
+def test_a_request_is_bounded_in_total_time_and_asks_for_an_uncompressed_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(guest, "REQUEST_S", 0.2)
+
+    def slow(now: list[float]) -> LinkedInFake:
+        fake = LinkedInFake(now)
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            fake.requests.append(request)
+            await asyncio.sleep(5)  # a server that trickles: real time, not the fake clock
+            return answer(200, SEARCH_PAGE)
+
+        fake.handler = handler  # type: ignore[assignment,method-assign]
+        return fake
+
+    started = time.perf_counter()
+    entries, fake, _, _ = execute(section(), slow)
+    assert time.perf_counter() - started < 3
+    assert (entries[0]["error"], len(fake.requests)) == ("page_failed", 1)
+    assert fake.requests[0].headers["accept-encoding"] == "identity"
+
+
+def test_a_compressed_answer_is_decoded_within_the_size_cap() -> None:
+    def compressed(body: bytes, coding: str = "gzip") -> Any:
+        def make(now: list[float]) -> LinkedInFake:
+            fake = LinkedInFake(now, postings={})
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                fake.requests.append(request)
+                if not request.url.path.endswith("/search"):
+                    return answer(404)
+                return answer(200, body, {"content-encoding": coding})
+
+            fake.handler = handler  # type: ignore[method-assign]
+            return fake
+
+        return make
+
+    entries, _, _, _ = execute(section(), compressed(gzip.compress(SEARCH_PAGE.encode())))
+    assert entries[0]["result_pages"] == 1
+    assert entries[0]["unwanted"] == 1  # the page was read: its cards were filtered
+    assert entries[0]["error"] is None
+    bomb = gzip.compress(b"<li>" + b" " * (guest.BODY_MAX * 4))
+    assert len(bomb) < guest.BODY_MAX // 100
+    entries, _, _, _ = execute(section(), compressed(bomb))
+    assert entries[0]["error"] == "page_failed"
+    entries, _, _, _ = execute(section(), compressed(b"not brotli", "br"))
+    assert entries[0]["error"] == "page_failed"
+    entries, _, _, _ = execute(section(), compressed(b"not gzip"))
+    assert entries[0]["error"] == "page_failed"
+
+
+# --- hostile answers -----------------------------------------------------------------------------
+
+HOSTILE_BYTES = 2_000_000  # BODY_MAX: the most one answer gives
+
+
+def hostile(unit: str) -> str:
+    return (unit * (HOSTILE_BYTES // len(unit) + 1))[:HOSTILE_BYTES]
+
+
+@pytest.mark.parametrize(
+    ("name", "html"),
+    [
+        (
+            "nested cards with an id and no title",
+            "".join(f'<div data-entity-urn="urn:li:jobPosting:{n}">' for n in range(60_000)),
+        ),
+        ("a deep stack and stray end tags", "<div>" * 40_000 + "</a>" * 500_000),
+        ("nested criteria", '<div class="description__job-criteria-item">' * 50_000),
+        ("unclosed tags", hostile("<a")),
+        ("unclosed comments", hostile("<!--x>")),
+        ("unclosed marked sections", hostile("<![CDATA[x>")),
+        ("unclosed end tags", hostile("</")),
+        ("elements past the cap", hostile("<a>")),
+    ],
+)
+def test_a_hostile_answer_of_the_largest_size_parses_in_bounded_time(name: str, html: str) -> None:
+    html = html[:HOSTILE_BYTES]
+    started = time.perf_counter()
+    assert guest.parse_cards(html) == []
+    guest.parse_posting(html)
+    # Generous: both parses take well under a second each on the Mac; quadratic parsing took
+    # minutes at this size.
+    assert time.perf_counter() - started < 4, name
+
+
+def test_hostile_markup_keeps_real_cards_and_postings_readable() -> None:
+    # Unclosed and stray markup around real cards does not hide them.
+    page = "<a<!--" + SEARCH_PAGE + "</b></i><![x" + card("4100000004", "GenAI Engineer 4")
+    assert [c.job_id for c in guest.parse_cards(page)] == [
+        "4100000001",
+        "4100000002",
+        "4100000003",
+        "4100000004",
+    ]
+    detail = guest.parse_posting("<!--" + POSTING + "<a")
+    assert detail is not None
+    assert detail.criteria["Employment type"] == "Internship"
+    # Only the first CRITERIA_MAX items are looked into.
+    item = (
+        '<li class="description__job-criteria-item">'
+        '<h3 class="description__job-criteria-subheader">N{n}</h3>'
+        '<span class="description__job-criteria-text">V{n}</span></li>'
+    )
+    items = "".join(item.format(n=n) for n in range(30))
+    many = '<div class="show-more-less-html__markup">x</div>' + items
+    parsed = guest.parse_posting(many)
+    assert parsed is not None
+    assert len(parsed.criteria) == guest.CRITERIA_MAX
+    # Past DEPTH_MAX open elements, deeper ones are flattened: a card there loses its title.
+    deep = "<div>" * (guest.DEPTH_MAX - 10) + card("4100000005", "GenAI Engineer 5")
+    assert [c.job_id for c in guest.parse_cards(deep)] == ["4100000005"]
+    deeper = "<div>" * (guest.DEPTH_MAX + 10) + card("4100000006", "GenAI Engineer 6")
+    assert guest.parse_cards(deeper) == []
+
+
+def test_parsing_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    threads: list[str] = []
+    real_cards, real_posting = guest.parse_cards, guest.parse_posting
+
+    def cards(html: str) -> list[guest.Card]:
+        threads.append(threading.current_thread().name)
+        return real_cards(html)
+
+    def posting(html: str) -> guest.Detail | None:
+        threads.append(threading.current_thread().name)
+        return real_posting(html)
+
+    monkeypatch.setattr(guest, "parse_cards", cards)
+    monkeypatch.setattr(guest, "parse_posting", posting)
+    execute(section())
+    assert len(threads) == 3
+    assert threading.main_thread().name not in threads

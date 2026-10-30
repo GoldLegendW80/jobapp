@@ -49,9 +49,13 @@ TEXT_VERSION = 1
 PAUSE = timedelta(days=7)
 KIND = "linkedin"
 
-# The sweeps whose stats hold a LinkedIn source that opened a page, and one that met the wall.
-_OPENED = '$.sources[*] ? (@.kind == "linkedin" && @.result_pages >= 1)'
-_SIGNIN = '$.sources[*] ? (@.kind == "linkedin" && @.error == "linkedin_signin")'
+# The sweeps whose stats hold a LinkedIn source that opened a page in the browser, and one that
+# met the wall. LinkedIn's public job search (mode `api`, sources/linkedin_guest.py) opens no page
+# of the person's browser, so it neither counts as the last sweep nor clears `needs_signin`; an
+# entry stored without a mode (older rows) is the browser's.
+_BROWSER = '@.kind == "linkedin" && !(@.mode == "api")'
+_OPENED = f"$.sources[*] ? ({_BROWSER} && @.result_pages >= 1)"
+_SIGNIN = f'$.sources[*] ? ({_BROWSER} && @.error == "linkedin_signin")'
 
 
 def _has(path: str) -> Any:

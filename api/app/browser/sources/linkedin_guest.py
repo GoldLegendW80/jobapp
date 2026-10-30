@@ -16,7 +16,9 @@ gives its one permission (linkedin_guard), which this source checks too.
   `f_TPR=r<days * 86400>` limits the age to the saved days. Contract types: `f_JT` with CDI as F
   (full time), CDD as T (temporary), Freelance as C (contract), Stage as I (internship), all the
   saved ones in one filter; Alternance has no code, so with it saved no `f_JT` is sent and the
-  postings read are checked against the saved types (`contract_of`). VIE has no code either:
+  postings read are checked against the saved types (`contract_of`). CDD saved without CDI sends
+  no `f_JT` either and is checked the same way: LinkedIn lists most fixed term contracts as full
+  time, so `f_JT=T` alone would miss them. VIE has no code either:
   with VIE saved each title is also searched as "<title> VIE", without `f_JT` and checked the
   same way; with VIE alone saved, only those searches run. Pages: `start=0, 10, 20`, at most
   PAGES_PER_SEARCH a search, in rounds (the first page of every search, then the second ...), a
@@ -38,13 +40,20 @@ gives its one permission (linkedin_guard), which this source checks too.
   got HTTP 429 for a request 4 s after another, and none at 8 s between pages and 6 s between
   postings. At most REQUESTS_MAX requests a sweep, and the source's share of the sweep's time.
 - Stop: HTTP 429 or 999, or a redirect to LinkedIn's sign in or security pages, ends the source
-  at once `rate_limited`, with what was stored kept; no retry. It records no LinkedIn
-  checkpoint: the calls carry no account, so the 7 day pause of the person's account (and of
-  Easy Apply) is not started by an anonymous refusal. Any other unexpected answer ends it
-  `page_failed`; a posting gone (404) is skipped.
+  at once `linkedin_rate_limited`, with what was stored kept; no retry. It also starts
+  LinkedIn's cooldown: for COOLDOWN_S no sweep of any person sends LinkedIn a request (a Redis
+  key per host, RedisCooldown, read before every request); while it lasts the source ends
+  `linkedin_rate_limited` without a request. It records no LinkedIn checkpoint: the calls carry
+  no account, so the 7 day pause of the person's account (and of Easy Apply) is not started by
+  an anonymous refusal. Any other unexpected answer ends it `page_failed`, as does a request
+  that takes longer than REQUEST_S in all; a posting gone (404) is skipped.
+- Parsing: the standard library's parser on markup defused first (`_defused`), within bounds
+  of elements, depth and searched elements (NODES_MAX and the others), in a thread: linear in
+  the answer, never on the worker's event loop.
 - Permission, kept conservative: the LinkedIn switch, its accepted sentence and the 7 day pause
   (platform_policy, linkedin_guard) are checked before every request, as before every browser
-  page, although the anonymous calls cannot harm the account.
+  page, although the anonymous calls cannot harm the account. A permission withdrawn after the
+  first request ends the source `permission_revoked` (`refused`).
 
 LinkedIn's User Agreement forbids automated access, these endpoints included; the owner accepted
 that risk in the LinkedIn checkbox. These requests send no cookie and no account: the worst case
@@ -57,13 +66,17 @@ makes no request and ends `page_failed`.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
+import math
 import re
+import time
 import unicodedata
 import uuid
+import zlib
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
@@ -71,6 +84,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+from redis.exceptions import RedisError
 
 from app.browser import finder
 from app.browser.leases import StoreUnavailableError
@@ -114,6 +128,9 @@ HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    # The body as sent, so BODY_MAX bounds what is read (_fetch still decodes gzip in bounded
+    # steps should LinkedIn compress anyway).
+    "Accept-Encoding": "identity",
 }
 # LinkedIn's f_JT codes of the saved contract types (module docstring); Alternance and VIE have
 # none.
@@ -125,6 +142,12 @@ EMPLOYMENT = {
     "contract": ContractType.Freelance,
 }
 STOPPED = frozenset({429, 999})
+# The code that ends the source on a refusal (module docstring, Stop), and LinkedIn's cooldown:
+# after a refusal, no sweep of any person sends LinkedIn a request for COOLDOWN_S (a Redis key,
+# RedisCooldown, per host).
+RATE_LIMITED = "linkedin_rate_limited"
+COOLDOWN_S = 1800.0
+COOLDOWN_KEY = "jobapp:browser:linkedin-guest-cooldown:"
 WALL_SEGMENTS = frozenset({"authwall", "login", "uas", "checkpoint", "signup"})
 _JOB_ID = re.compile(r"urn:li:jobPosting:([0-9]{1,24})$")
 _VIEW = re.compile(r"/jobs/view/(?:[^/?#]*-)?([0-9]{1,24})/?$")
@@ -171,7 +194,10 @@ def queries_for(search: SearchSection) -> list[Query]:
     spots.extend((place, place, None) for place in places if not finder.worldwide(place))
     saved = set(search.contract_types)
     others = saved - {"VIE"}
-    native = bool(others) and others <= set(JOB_TYPES)
+    # CDD without CDI sends no filter: LinkedIn lists most fixed term contracts as full time,
+    # so "temporary" alone would miss them; the postings are checked instead.
+    cdd_alone = "CDD" in others and "CDI" not in others
+    native = bool(others) and others <= set(JOB_TYPES) and not cdd_alone
     job_types = ",".join(sorted({JOB_TYPES[c] for c in others})) if native else None
     found: list[Query] = []
     for title in titles:
@@ -221,7 +247,17 @@ VOID = frozenset(
 BLOCKS = frozenset(
     {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "section", "tr"}
 )
+# Bounds that keep parsing linear in the answer, whatever it holds (the answer is at most
+# BODY_MAX bytes, read off the event loop): elements kept, the depth of open elements (a deeper
+# start tag is a child that is never opened), how many open elements an end tag looks through,
+# the elements one card's or one criterion's field is looked for in, and the characters of a
+# field's text read (a longer one is no field: _clean gives "").
 NODES_MAX = 50_000
+DEPTH_MAX = 256
+END_SCAN = 16
+CARD_NODES = 400
+FIELD_RAW = 20 * FIELD_MAX
+CRITERIA_MAX = 10  # criteria items looked into on a posting page
 
 
 @dataclass
@@ -233,29 +269,41 @@ class _Node:
     def classes(self) -> set[str]:
         return set(self.attrs.get("class", "").split())
 
-    def walk(self) -> list[_Node]:
-        found: list[_Node] = []
+    def walk(self, limit: int | None = None) -> Iterator[_Node]:
+        """This node and the ones below, in document order, lazily; at most `limit` of them."""
         stack: list[_Node] = [self]
-        while stack:
+        seen = 0
+        while stack and (limit is None or seen < limit):
             node = stack.pop()
-            found.append(node)
-            stack.extend(reversed([c for c in node.children if isinstance(c, _Node)]))
-        return found
+            seen += 1
+            yield node
+            stack.extend(c for c in reversed(node.children) if isinstance(c, _Node))
 
-    def first(self, cls: str, tag: str | None = None) -> _Node | None:
+    def first(self, cls: str, tag: str | None = None, limit: int | None = None) -> _Node | None:
+        """The first node below (this one included) with the class `cls`, looked for in at most
+        `limit` nodes; it stops at the first found."""
         return next(
-            (n for n in self.walk() if cls in n.classes() and (tag is None or n.tag == tag)),
+            (
+                n
+                for n in self.walk(limit)
+                if cls in n.attrs.get("class", "").split() and (tag is None or n.tag == tag)
+            ),
             None,
         )
 
-    def text(self, blocks: bool = False) -> str:
-        """The text below, whitespace collapsed; with `blocks`, one line per block element."""
+    def text(self, blocks: bool = False, limit: int | None = None) -> str:
+        """The text below, whitespace collapsed; with `blocks`, one line per block element. With
+        `limit`, "" when the text below holds more than `limit` characters (read no further)."""
         parts: list[str] = []
+        size = 0
         stack: list[_Node | str] = [self]
         while stack:
             item = stack.pop()
             if isinstance(item, str):
                 parts.append(item)
+                size += len(item)
+                if limit is not None and size > limit:
+                    return ""
                 continue
             if blocks and item.tag in BLOCKS:
                 parts.append("\n")
@@ -267,8 +315,10 @@ class _Node:
 
 
 class _Tree(HTMLParser):
-    """A forgiving tree of an HTML fragment: an end tag closes up to its open element, a stray
-    one is ignored, and parsing stops at NODES_MAX elements."""
+    """A forgiving tree of an HTML fragment: an end tag closes up to its open element among the
+    END_SCAN innermost ones, else is ignored; open elements go DEPTH_MAX deep (a deeper start
+    tag is a child never opened); parsing stops at NODES_MAX elements. Each tag costs at most
+    END_SCAN steps, so a hostile answer parses in time linear in its size."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -282,16 +332,17 @@ class _Tree(HTMLParser):
         self.count += 1
         node = _Node(tag, {k: v or "" for k, v in attrs})
         self.stack[-1].children.append(node)
-        if tag not in VOID:
+        if tag not in VOID and len(self.stack) < DEPTH_MAX:
             self.stack.append(node)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        depth = len(self.stack)
         self.handle_starttag(tag, attrs)
-        if tag not in VOID and self.stack[-1].tag == tag and len(self.stack) > 1:
+        if len(self.stack) > depth:
             self.stack.pop()
 
     def handle_endtag(self, tag: str) -> None:
-        for index in range(len(self.stack) - 1, 0, -1):
+        for index in range(len(self.stack) - 1, max(0, len(self.stack) - 1 - END_SCAN), -1):
             if self.stack[index].tag == tag:
                 del self.stack[index:]
                 return
@@ -301,10 +352,30 @@ class _Tree(HTMLParser):
             self.stack[-1].children.append(data)
 
 
+# A "<" that no ">" closes before the next "<": the standard library's parser looks for its end
+# from every such "<" to the end of the answer (quadratic on "<a<a<a..."), so it is read as text.
+# The look ahead stops at the next "<" or ">": linear in the answer.
+_OPEN = re.compile(r"<(?=[^<>]*(?:<|\Z))")
+
+
+def _defused(html: str) -> str:
+    """The answer with the markup the standard parser would scan to its end from many places
+    read as text (module _OPEN), so parsing it stays linear: every marked section ("<![", no
+    use in LinkedIn's fragments), every comment opened after the last "-->", every unclosed
+    "<"."""
+    html = html.replace("<![", "&lt;![")
+    end = html.rfind("-->") + 3 if "-->" in html else 0
+    html = html[:end] + html[end:].replace("<!--", "&lt;!--")
+    return _OPEN.sub("&lt;", html)
+
+
 def _tree(html: str) -> _Node:
     parser = _Tree()
-    parser.feed(html)
-    parser.close()
+    try:
+        parser.feed(_defused(html))
+        parser.close()
+    except (AssertionError, ValueError):
+        pass  # markup the standard parser gives up on: the tree read so far
     return parser.root
 
 
@@ -326,9 +397,15 @@ class Card:
     published: str  # YYYY-MM-DD, "" when the card states no valid date
 
 
+def _field(node: _Node | None) -> str:
+    """A card's or a posting's one line field: "" when absent or longer than FIELD_MAX."""
+    return _clean(node.text(limit=FIELD_RAW)) if node is not None else ""
+
+
 def parse_cards(html: str) -> list[Card]:
     """The job cards of a search page, at most CARDS_MAX, each once; a card without its LinkedIn
-    id or a title is left out."""
+    id or a title is left out. At most 2 * CARDS_MAX elements with a new id are looked into,
+    each within its first CARD_NODES elements, titled or not."""
     root = _tree(html)
     cards: list[Card] = []
     seen: set[str] = set()
@@ -337,20 +414,23 @@ def parse_cards(html: str) -> list[Card]:
         if found is None or found.group(1) in seen:
             continue
         seen.add(found.group(1))
-        title_node = node.first("base-search-card__title") or node.first("sr-only")
-        title = _clean(title_node.text()) if title_node else ""
+        if len(seen) > 2 * CARDS_MAX:
+            break
+        title = _field(node.first("base-search-card__title", limit=CARD_NODES)) or _field(
+            node.first("sr-only", limit=CARD_NODES)
+        )
         if not title:
             continue
-        company = node.first("base-search-card__subtitle")
-        place = node.first("job-search-card__location")
-        time = next((n for n in node.walk() if n.tag == "time"), None)
-        published = time.attrs.get("datetime", "") if time else ""
+        company = node.first("base-search-card__subtitle", limit=CARD_NODES)
+        place = node.first("job-search-card__location", limit=CARD_NODES)
+        stamp = next((n for n in node.walk(CARD_NODES) if n.tag == "time"), None)
+        published = stamp.attrs.get("datetime", "") if stamp else ""
         cards.append(
             Card(
                 found.group(1),
                 title,
-                _clean(company.text()) if company else "",
-                _clean(place.text()) if place else "",
+                _field(company),
+                _field(place),
                 published if _valid_date(published) else "",
             )
         )
@@ -403,14 +483,16 @@ def parse_posting(html: str) -> Detail | None:
     if not description.strip():
         return None
     criteria: dict[str, str] = {}
+    items = 0
     for item in root.walk():
-        if "description__job-criteria-item" not in item.classes():
+        if "description__job-criteria-item" not in item.attrs.get("class", "").split():
             continue
-        name = item.first("description__job-criteria-subheader")
-        value = item.first("description__job-criteria-text")
-        if name and value and _clean(name.text()) and _clean(value.text()):
-            criteria.setdefault(_clean(name.text()), _clean(value.text()))
-        if len(criteria) >= 10:
+        items += 1  # every item counts, read or not
+        name = _field(item.first("description__job-criteria-subheader", limit=CARD_NODES))
+        value = _field(item.first("description__job-criteria-text", limit=CARD_NODES))
+        if name and value:
+            criteria.setdefault(name, value)
+        if items >= CRITERIA_MAX:
             break
     title = root.first("top-card-layout__title")
     company = root.first("topcard__org-name-link")
@@ -423,13 +505,7 @@ def parse_posting(html: str) -> Detail | None:
         ),
         None,
     )
-    return Detail(
-        description,
-        criteria,
-        _clean(title.text()) if title else "",
-        _clean(company.text()) if company else "",
-        _clean(location.text()) if location else "",
-    )
+    return Detail(description, criteria, _field(title), _field(company), _field(location))
 
 
 def contract_of(title: str, location: str, url: str, criteria: dict[str, str]) -> ContractType:
@@ -469,6 +545,60 @@ class _Batch:
 # --- the HTTP client -----------------------------------------------------------------------------
 
 
+class MemoryCooldown:
+    """The cooldown of one process (tests, a runner without Redis): RedisCooldown's rule in
+    memory, on `clock` (seconds)."""
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self.clock = clock
+        self.until: dict[str, float] = {}
+
+    async def active(self, key: str) -> bool:
+        return self.until.get(key, -math.inf) > self.clock()
+
+    async def start(self, key: str, seconds: float) -> None:
+        self.until[key] = max(self.until.get(key, -math.inf), self.clock() + seconds)
+
+
+class RedisCooldown:
+    """LinkedIn's cooldown across sweeps, people and workers (module docstring, Stop): one Redis
+    key per host that lives COOLDOWN_S and holds the time it ends. Raises StoreUnavailableError
+    without Redis."""
+
+    def __init__(
+        self, pool: Callable[[], Awaitable[Any]], clock: Callable[[], float] = time.time
+    ) -> None:
+        self.pool, self.clock = pool, clock
+
+    async def active(self, key: str) -> bool:
+        try:
+            r = await self.pool()
+            return bool(await r.exists(COOLDOWN_KEY + key))
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+
+    async def start(self, key: str, seconds: float) -> None:
+        try:
+            r = await self.pool()
+            await r.set(COOLDOWN_KEY + key, f"{self.clock() + seconds:.0f}", ex=math.ceil(seconds))
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+
+
+def _decoder(header: str) -> Any:
+    """How an answer's body is decoded, within BODY_MAX: as sent (identity, what HEADERS ask),
+    gzip or deflate; any other coding is StopError."""
+    codings = [c.strip().casefold() for c in header.split(",")]
+    codings = [c for c in codings if c not in ("", "identity")]
+    if not codings:
+        return None
+    if codings in (["gzip"], ["x-gzip"]):
+        return zlib.decompressobj(16 + zlib.MAX_WBITS)
+    if codings == ["deflate"]:
+        return zlib.decompressobj()
+    raise StopError("page_failed")
+
+
 class Guest:
     """LinkedIn's guest endpoints, one paced request at a time (module docstring: Pace, Stop)."""
 
@@ -482,16 +612,27 @@ class Guest:
     ) -> None:
         self.runner, self.client, self.key = runner, client, key
         self.deadline, self.check = deadline, check
+        self.cooldown = runner.guest_cooldown
         self.requests = 0
+
+    async def _ready(self) -> None:
+        """The permission, then LinkedIn's cooldown: while a refusal of any sweep is recent, no
+        request is sent."""
+        await self.check()
+        if await self.cooldown.active(self.key):
+            raise StopError(RATE_LIMITED)
 
     async def get(self, url: str) -> tuple[int, str]:
         """The answer's status and body (200), or its status with no body (400, 404). Raises
         StopError for a refusal, a wall, any other answer, the request cap or the time limit."""
         if self.requests >= REQUESTS_MAX:
             raise StopError("request_cap")
-        await self.check()
         runner = self.runner
         pause, holder = runner.rng.uniform(*PAUSE_S), uuid.uuid4().hex
+        try:
+            await self._ready()
+        except StoreUnavailableError:
+            raise StopError("page_failed") from None
         try:
             while True:
                 wait = await runner.pacer.reserve(self.key, pause, holder)
@@ -504,9 +645,17 @@ class Guest:
                 raise StopError("time_budget")
             if wait > 0:
                 await runner.sleep(wait)
-            await self.check()  # the pause may have outlasted the permission
+            await self._ready()  # the pause may have outlasted the permission or met a refusal
             self.requests += 1
-            return await self._fetch(url)
+            try:
+                async with asyncio.timeout(REQUEST_S):
+                    return await self._fetch(url)
+            except TimeoutError:
+                raise StopError("page_failed") from None
+            except StopError as stop:
+                if stop.code == RATE_LIMITED:
+                    await self._cool()
+                raise
         except StoreUnavailableError:
             raise StopError("page_failed") from None
         finally:
@@ -517,29 +666,52 @@ class Guest:
             except StoreUnavailableError:
                 logger.warning("linkedin guest pace release failed")
 
+    async def _cool(self) -> None:
+        """LinkedIn refused: no sweep sends it a request for COOLDOWN_S."""
+        try:
+            await self.cooldown.start(self.key, COOLDOWN_S)
+        except StoreUnavailableError:
+            logger.warning("linkedin guest cooldown not recorded")
+
     async def _fetch(self, url: str) -> tuple[int, str]:
         self.client.cookies.clear()  # no cookie LinkedIn set is ever sent back
         try:
             async with self.client.stream("GET", url) as answer:
                 status = answer.status_code
                 if status in STOPPED:
-                    raise StopError("rate_limited")
+                    raise StopError(RATE_LIMITED)
                 if 300 <= status < 400:
                     target = urlsplit(answer.headers.get("location", ""))
                     segments = {s.casefold() for s in target.path.split("/") if s}
-                    raise StopError("rate_limited" if segments & WALL_SEGMENTS else "page_failed")
+                    raise StopError(RATE_LIMITED if segments & WALL_SEGMENTS else "page_failed")
                 if status in (400, 404):
                     return status, ""
                 if status != 200:
                     raise StopError("page_failed")
-                body = bytearray()
-                async for chunk in answer.aiter_bytes():
-                    body += chunk
-                    if len(body) > BODY_MAX:
+                decoder = _decoder(answer.headers.get("content-encoding", ""))
+                body, sent = bytearray(), 0
+                async for raw in answer.aiter_raw():
+                    sent += len(raw)
+                    if decoder is None:
+                        body += raw
+                    else:
+                        # Decoded in steps of at most what BODY_MAX still allows.
+                        body += decoder.decompress(raw, BODY_MAX + 1 - len(body))
+                        if decoder.unconsumed_tail:
+                            raise StopError("page_failed")
+                    if len(body) > BODY_MAX or sent > BODY_MAX:
                         raise StopError("page_failed")
-        except httpx.HTTPError:
+        except (httpx.HTTPError, zlib.error):
             raise StopError("page_failed") from None
         return 200, body.decode("utf-8", "replace")
+
+
+def refused(code: str, sent: bool) -> str:
+    """The source's code of the platform policy's refusal. The policy says `permission_revoked`
+    only after its own reservation of a browser page (platform_policy.source_code), which this
+    source never makes: once a request was sent, a permission that is gone was withdrawn during
+    the run, so it ends `permission_revoked` as a browser search would."""
+    return "permission_revoked" if sent and code == "permission_unavailable" else code
 
 
 # --- the source ----------------------------------------------------------------------------------
@@ -676,13 +848,14 @@ async def _search(
         f"{base}/",
     )
     policy = runner.interactive_policy
+    guest: Guest | None = None
 
     async def check() -> None:
         if policy is None or context.sweep_id is None:
             raise StopError("permission_unavailable")
         code = await policy.check(context)
         if code is not None:
-            raise StopError(code)
+            raise StopError(refused(code, guest is not None and guest.requests > 0))
 
     try:
         await check()  # the permission first, before anything else is decided
@@ -747,7 +920,8 @@ async def _rounds(
             done.pages += 1
             entry["result_pages"] = done.pages
             done.searches.setdefault((query.title, query.place), None)
-            cards = parse_cards(body) if status == 200 else []
+            # Parsed off the event loop: the worker's other jobs go on meanwhile.
+            cards = await asyncio.to_thread(parse_cards, body) if status == 200 else []
             if status == 200 and not cards and page == 0 and looks_like_cards(body):
                 raise StopError("layout_changed")
             new = 0
@@ -826,7 +1000,7 @@ async def _details(
             status, body = await guest.get(posting_url(base, card.job_id))
             if status != 200:
                 continue  # the posting is gone
-            detail = parse_posting(body)
+            detail = await asyncio.to_thread(parse_posting, body)
             if detail is None:
                 continue
             done.details += 1

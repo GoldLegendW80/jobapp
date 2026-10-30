@@ -232,6 +232,11 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+        # The release before LinkedIn's public job search refuses the key, and a sweep it
+        # claims after a rollback would fail: the default is left out (the sweep reads the mode
+        # from the frozen sources below, never from `search`), only "browser" is kept.
+        if raw.get("linkedin_search") == "api":
+            del raw["linkedin_search"]
     if search is not None:
         sources.extend(
             {

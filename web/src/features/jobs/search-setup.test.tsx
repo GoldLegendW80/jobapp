@@ -1442,7 +1442,9 @@ it("reopens a saved browser choice as saved", async () => {
   ).not.toBeChecked();
 });
 
-it("sends the public job search for a search saved before the choice existed", async () => {
+// The release before the choice refuses the key (a rollback would break the person's profile),
+// so the default is not sent for a search that never stored it; the server keeps what is left out.
+it("sends no choice for a search saved before it existed and left on the public job search", async () => {
   const { profile, starts, user, dialog } = await open(
     structuredClone(LINKEDIN_TICKED),
     { linkedin: { enabled: true, accepted: true } },
@@ -1450,6 +1452,33 @@ it("sends the public job search for a search saved before the choice existed", a
   expect(
     within(dialog).getByRole("radio", { name: LINKEDIN_API }),
   ).toBeChecked();
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).not.toHaveProperty("linkedin_search");
+});
+
+it("sends the public job search back once a choice is stored", async () => {
+  const { profile, starts, user, dialog } = await open(
+    { ...structuredClone(LINKEDIN_TICKED), linkedin_search: "browser" },
+    { linkedin: { enabled: true, accepted: true } },
+  );
+  await user.click(within(dialog).getByRole("radio", { name: LINKEDIN_API }));
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    linkedin_search: "api",
+  });
+});
+
+it("keeps sending a stored public job search choice", async () => {
+  const { profile, starts, user, dialog } = await open(
+    { ...structuredClone(LINKEDIN_TICKED), linkedin_search: "api" },
+    { linkedin: { enabled: true, accepted: true } },
+  );
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
