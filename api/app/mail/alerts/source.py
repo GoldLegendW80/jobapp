@@ -21,8 +21,10 @@ any other message is counted as `refused` and its body is not parsed.
 **How it is parsed.** By the provider's deterministic parser (never a model): its text part
 first; the HTML part only when the text part gave nothing and the provider has an HTML reading,
 and then only through the parser service's text version (`parser_client.sanitise_mail_html`),
-never parsed in this process. A mail that gives no job is counted (`empty_messages`): a format
-that changed shows there.
+never parsed in this process, and every parser runs off the event loop. A mail that gives no
+job is counted (`empty_messages`): a format that changed shows there. A mail that fails to parse
+is counted (`failed_messages`, the error logged without its text) and the cursor moves past it:
+one bad mail never stops its provider.
 
 **What is stored.** Each job as a finding: the title, the company and the location the mail
 states, the snippet as the posting's text (an alert never holds the full description), the
@@ -33,15 +35,19 @@ when she chose contract types, a job of another type (the engine's `kind`) is to
 
 **The cursor** is the date of the newest message handled, kept in the provider's entry of the
 sweep row (`cursor`, with the connection it belongs to) and read back from the person's latest
-sweeps: no table of its own. It moves only after the message's postings are stored, so a crash
-reads a message again (its postings are then duplicates) and never skips one. Without a cursor
-(the first sweep, or a mailbox connected again) the search goes FIRST_DAYS back.
+sweeps: no table of its own. Every sweep where the provider runs writes it again, a sweep that
+found no new alert included, so it never ages out of those sweeps. It moves only after the
+message's postings are stored, so a crash reads a message again (its postings are then
+duplicates) and never skips one. The connection is the account's `connected_at`: reconnecting
+the same Google account keeps it, and the cursor with it; a disconnect deletes the account, so
+the next connection starts without a cursor. Without one (the first sweep of a provider, or a
+new connection) the search goes FIRST_DAYS back, never before the connection.
 
 **The stats entry** of each provider: host "mail:<key>", kind "alerts", mode "mail", the
 outcome of `sweep.finish_source`, `found` and `postings` as the commits count them, `messages`,
-`refused`, `empty_messages`, `dropped`, `unwanted`, `other_contract`. A provider that cannot read
-ends with a code: `mail_not_connected`, `mail_needs_reconnect`, `mail_unavailable`,
-`time_limit`, `store_failed`, `mail_failed`.
+`refused`, `empty_messages`, `failed_messages`, `dropped`, `unwanted`, `other_contract`. A
+provider that cannot read ends with a code: `mail_not_connected`, `mail_needs_reconnect`,
+`mail_unavailable`, `time_limit`, `store_failed`, `mail_failed`.
 
 Nothing of a mail (address, subject, text) is logged or put in a stats entry: ids and counts.
 """
@@ -263,6 +269,33 @@ def load_cursor(
     return best
 
 
+def _log_failure(plan: Any, provider: Provider, error: Exception) -> None:
+    """One mail that could not be read: the error's type only, as its message or traceback may
+    quote the mail's text (a decoding error quotes its bytes)."""
+    logger.warning(
+        "an alert e-mail could not be read",
+        extra={
+            "sweep_id": str(plan.sweep_id),
+            "provider": provider.key,
+            "error": type(error).__name__,
+        },
+    )
+
+
+def _before(stamp: int, cursor: int | None, after: int) -> bool:
+    """Whether a message is not this sweep's: handled by an earlier sweep (at or before the
+    cursor), or older than the search's start (Gmail's `after:` is a pre-filter only)."""
+    return (cursor is not None and stamp <= cursor) or stamp < after
+
+
+def _internal_ms(raw: Any) -> int | None:
+    """Gmail's date of a message (`internalDate`, milliseconds) when it reads as one."""
+    stamp = raw.get("internalDate") if isinstance(raw, dict) else None
+    if isinstance(stamp, str) and stamp.isascii() and stamp.isdigit() and len(stamp) <= 14:
+        return int(stamp)
+    return None
+
+
 def _account_error(account: MailAccount | None) -> str | None:
     if account is None or account.disconnecting_at is not None:
         return "mail_not_connected"
@@ -317,6 +350,7 @@ class Reader:
                     "messages": 0,
                     "refused": 0,
                     "empty_messages": 0,
+                    "failed_messages": 0,
                     "dropped": 0,
                     "error": None,
                 },
@@ -364,9 +398,15 @@ class Reader:
         cursor = await asyncio.to_thread(
             load_cursor, self.sessions, plan.user_id, source_id, connection
         )
+        if cursor is not None:
+            # Carried forward by every sweep where the provider runs, quiet ones included: the
+            # cursor is looked for in the latest CURSOR_SWEEPS sweeps only.
+            entry["cursor"] = {"after_ms": cursor, "account": connection}
         after = cursor
         if after is None:
-            after = int((self.now() - timedelta(days=FIRST_DAYS)).timestamp() * 1000)
+            # Nothing older than the connection, and at most FIRST_DAYS back.
+            first = max(self.now() - timedelta(days=FIRST_DAYS), account.connected_at)
+            after = int(first.timestamp() * 1000)
         ids: list[str] = []
         page: str | None = None
         for _ in range(MAX_LIST_PAGES):
@@ -394,37 +434,68 @@ class Reader:
                 raise _StopError("time_limit")
             raw = _answer(await mailbox.get_message(account, message_id, format="full"))
             try:
-                message = parse.parse(raw, account.email)
+                message = await asyncio.to_thread(parse.parse, raw, account.email)
             except parse.NotAMessageError:
                 handled += 1
                 entry["refused"] += 1
                 continue
+            except Exception as error:
+                # A mail the parser cannot read: counted, and passed by the cursor when Gmail
+                # gave its date, so it never stops the provider for good.
+                _log_failure(plan, provider, error)
+                stamp = _internal_ms(raw)
+                if stamp is not None and _before(stamp, cursor, after):
+                    continue
+                handled += 1
+                entry["failed_messages"] += 1
+                if stamp is not None:
+                    newest = max(newest or 0, stamp)
+                    entry["cursor"] = {"after_ms": newest, "account": connection}
+                continue
             stamp = int(message.received_at.timestamp() * 1000)
-            if cursor is not None and stamp <= cursor:
-                continue  # read by an earlier sweep
+            if _before(stamp, cursor, after):
+                continue  # read by an earlier sweep, or older than the connection
             handled += 1
             if refused(message, provider, raw) is None:
-                await self._message(plan, provider, message, entry, filters, commits)
+                kept = await self._kept(plan, provider, message, entry, filters)
+                if kept is not None:
+                    await self._store(entry, kept, commits)
             else:
                 entry["refused"] += 1
             # Only after its postings are stored: a crash before reads it again.
             newest = max(newest or 0, stamp)
             entry["cursor"] = {"after_ms": newest, "account": connection}
 
-    async def _message(
+    async def _kept(
         self, plan: Any, provider: Provider, message: parse.ParsedMessage,
-        entry: dict[str, Any], filters: _Filters, commits: Any,
-    ) -> None:  # fmt: skip
+        entry: dict[str, Any], filters: _Filters,
+    ) -> list[AlertFinding] | None:  # fmt: skip
+        """The findings of one read message, None when reading it failed: the failure is
+        counted (`failed_messages`) and the cursor moves past the message, so one bad mail never
+        stops its provider for good. Storing is not in here: a store that fails stops the
+        provider and keeps the cursor (`_store`)."""
         entry["messages"] += 1
-        result = read_jobs(message, provider)
+        try:
+            return await self._read(provider, message, entry, filters)
+        except Exception as error:
+            _log_failure(plan, provider, error)
+            entry["failed_messages"] += 1
+            return None
+
+    async def _read(
+        self, provider: Provider, message: parse.ParsedMessage, entry: dict[str, Any],
+        filters: _Filters,
+    ) -> list[AlertFinding]:  # fmt: skip
+        # Off the event loop: a hostile part costs parse time, never the sweep's heartbeat.
+        result = await asyncio.to_thread(read_jobs, message, provider)
         if not result.jobs and message.raw_html and provider.parse_html_text is not None:
             version = await self.html_text(message.raw_html)
             if version:
-                result = provider.parse_html_text(version)
+                result = await asyncio.to_thread(provider.parse_html_text, version)
         entry["dropped"] += result.dropped
         if not result.jobs:
             entry["empty_messages"] += 1
-            return
+            return []
         kept: list[AlertFinding] = []
         for job in result.jobs:
             place = filters.place(job)
@@ -432,6 +503,11 @@ class Reader:
                 kept.append(finding(job, provider, message))
             else:
                 entry[place] = entry.get(place, 0) + 1
+        return kept
+
+    async def _store(self, entry: dict[str, Any], kept: list[AlertFinding], commits: Any) -> None:
+        if not kept:
+            return
         if commits is None:
             entry["found"] += len(kept)  # no store (a caller that is not a sweep): counted only
             return

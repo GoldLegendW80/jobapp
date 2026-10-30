@@ -2,6 +2,13 @@
 
 Everything here reads a stranger's text, so it is pure, linear in the size of its input and
 bounded: a line longer than `MAX_LINE` is not read as a field, a field is cut at its own cap.
+
+**Fail closed on addresses.** An alert names its recipient ("Sent to <address>") and carries
+tracking links (an unsubscribe token, `midToken`, `email=`), and a parser that reads a layout
+it was not written for may take such a line for a field. So a line that holds a link or an
+e-mail address (`holds_address`) is never a field: it is left out of the snippet
+(`snippet_of`), and a job whose title, company or location line holds one is dropped and
+counted (`fields_clear`), never stored.
 """
 
 from __future__ import annotations
@@ -23,6 +30,8 @@ _DIRECTION = re.compile("[؜‎‏‪-‮⁦-⁩]")
 # An address as it stands in a text part: up to the first space or angle bracket.
 URL = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 _ENDING = re.compile(r"https?://[^\s<>\"]+$", re.IGNORECASE)
+# A link without its scheme still names a host: "www.", or any "scheme://".
+_BARE_LINK = re.compile(r"://|\bwww\.", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -57,6 +66,35 @@ def clean(text: str, limit: int) -> str:
         if unicodedata.category(char) not in ("Cs", "Co", "Cn", "Cf") or char == "‍"
     ]
     return " ".join(unicodedata.normalize("NFC", "".join(kept)).split())[:limit].rstrip()
+
+
+def _has_mail_address(line: str) -> bool:
+    """Whether `line` holds `\\S+@\\S+\\.\\S+`, in linear time: a word with an "@" after its
+    first character and a "." at least two characters further, before its last character."""
+    for word in line.split():
+        at = word.find("@", 1)
+        if at != -1 and word.rfind(".", 0, len(word) - 1) >= at + 2:
+            return True
+    return False
+
+
+def holds_address(line: str) -> bool:
+    """Whether a line holds a link or an e-mail address, as it stands or once `clean` dropped
+    the characters that could hide one (a direction override, a zero width space)."""
+    for form in (line, clean(line, MAX_LINE)):
+        if URL.search(form) or _BARE_LINK.search(form) or _has_mail_address(form):
+            return True
+    return False
+
+
+def fields_clear(*fields: str) -> bool:
+    """Whether none of a job's field lines (title, company, location) holds an address."""
+    return not any(holds_address(field) for field in fields)
+
+
+def snippet_of(found: list[str]) -> str:
+    """The snippet of a job from its lines: every line holding an address left out."""
+    return clean(" ".join(line for line in found if not holds_address(line)), MAX_SNIPPET)
 
 
 def lines(text: str) -> list[str]:

@@ -15,7 +15,9 @@ The first line is the title, the second "Company - Location" (the LAST " - " spl
 lines between it and the link are the snippet, and the paragraph ends with the job's link. A
 paragraph is a job only when it ends with a job link of Indeed's (`job_id`) and has a title and
 a company line above it; anything else (the header, the footer, a sponsored entry whose link
-carries no `jk`) is not a job.
+carries no `jk`) is not a job. Header lines glued to the first job ("Votre alerte pour …") are
+skipped above its title (`_HEADER`); a title or company line that holds a link or an e-mail
+address drops the job, and such a line is left out of the snippet (text.py, fail closed).
 
 **The HTML part** (`parse_html_text`) is never parsed here: the parser service turns it into its
 text version (one line per block, a tab between cells, a link written "label (address)"), and
@@ -43,6 +45,14 @@ _JOB_PATHS = frozenset({"/rc/clk", "/rc/clk/dl", "/pagead/clk", "/pagead/clk/dl"
 _JOB_KEY = re.compile(r"[0-9a-fA-F]{16}")
 # A line of the parser service's text version that is a link: "label (address)".
 _LABELLED = re.compile(r"(?P<label>.*\S) \((?P<url>https?://[^\s()<>\"]+)\)")
+# The header lines of an alert ("3 nouveaux emplois correspondent à votre alerte …", "Votre
+# alerte pour …"), when a copy of the mail lost the blank line under them: never a job's title.
+# French and English wordings.
+_HEADER = re.compile(
+    r"(?:\d+\s+)?(?:nouvel(?:le)?s?\s+(?:emplois?|offres?)|nouveaux\s+emplois|votre\s+alerte"
+    r"|emplois?\s+correspond|your\s+(?:job\s+)?alert|new\s+jobs?\b)\b.*",
+    re.IGNORECASE,
+)
 
 
 def _site(url: str) -> str | None:
@@ -85,6 +95,10 @@ def canonical(url: str) -> str | None:
 
 
 def _job(title: str, company_line: str, snippet: list[str], url: str) -> t.AlertJob | None:
+    """The job of its lines, None when a field is missing or a field line holds an address
+    (text.py: fail closed)."""
+    if not t.fields_clear(title, company_line):
+        return None
     key, address = job_id(url), canonical(url)
     if "\t" in company_line:
         company, location = (cell.strip() for cell in company_line.split("\t", 2)[:2])
@@ -98,7 +112,7 @@ def _job(title: str, company_line: str, snippet: list[str], url: str) -> t.Alert
         title=title,
         company=company,
         location=t.clean(location, t.MAX_LOCATION),
-        snippet=t.clean(" ".join(snippet), t.MAX_SNIPPET),
+        snippet=t.snippet_of(snippet),
         url=address,
         job_id=key,
     )
@@ -118,7 +132,9 @@ def parse_text(body: str) -> t.Parsed:
         url = t.ending_link(paragraph[-1])
         if url is None or not is_job_link(url):
             continue
-        above = [line for line in paragraph[:-1] if t.ending_link(line) is None]
+        above = paragraph[:-1]
+        while above and _HEADER.fullmatch(above[0]):
+            above = above[1:]
         job = _job(above[0], above[1], above[2:], url) if len(above) >= 2 else None
         if job is None:
             dropped += 1

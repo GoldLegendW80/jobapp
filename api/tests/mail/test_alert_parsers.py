@@ -449,3 +449,163 @@ def test_the_query_names_the_exact_senders_and_never_spam_or_trash() -> None:
         "from:(alert@indeed.com OR donotreply@jobalert.indeed.com) after:1793343600 "
         "-in:spam -in:trash"
     )
+
+
+# --- the person's address and tracking tokens never reach a posting (fail closed) -------------
+
+ADDRESS = "harald@example.org"  # the account's own address, as an alert names its recipient
+SECRET = "SECRET123"  # a tracking token of an invented link
+
+
+def leaks(parsed: t.Parsed) -> list[str]:
+    """Every field of every job that names the address, the token or a tracking link."""
+    return [
+        value
+        for job in parsed.jobs
+        for value in (job.title, job.company, job.location, job.snippet, job.url)
+        if ADDRESS in value or SECRET in value or "unsub" in value or "track" in value
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"Sent to {ADDRESS}",
+        f"envoyé à {ADDRESS} voir https://fr.indeed.com/unsub?t={SECRET} ici",  # a link mid line
+        f"https://www.linkedin.com/comm/jobs/alerts?midToken={SECRET}",  # a trailing link
+        f"Gérer l'alerte : https://fr.indeed.com/alert?email={ADDRESS}",
+        f"voir fr.indeed.com/unsub?t={SECRET} ou www.example.org",  # no scheme
+        "voir www\u200b.example.org/unsub",  # a zero width space hiding a link
+        "harald\x07@example.org",  # a control character inside it
+    ],
+)
+def test_a_line_with_a_link_or_an_address_holds_one(line: str) -> None:
+    assert t.holds_address(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Data Engineer (H/F)",
+        "Exemple Données & Cie - Lyon 3e (69)",
+        "Node.js, React et AWS. Salaire : 45 000 €",
+        "Contact @ l'équipe produit.",  # an "@" without an address
+        "a@b.",  # nothing after the dot
+        "",
+    ],
+)
+def test_ordinary_text_holds_no_address(line: str) -> None:
+    assert not t.holds_address(line)
+
+
+def test_the_address_check_is_linear_on_a_hostile_line() -> None:
+    hostile = ("a@" * (t.MAX_LINE // 2)) + " " + ("@." * (t.MAX_LINE // 2))
+    assert t.holds_address(hostile)
+    assert not t.holds_address("@" * t.MAX_LINE + " " + "." * t.MAX_LINE)
+
+
+def test_indeed_drops_the_address_and_links_from_the_snippet() -> None:
+    parsed = indeed.parse_text(
+        plain(
+            "Data Engineer\nExemple - Paris\nConstruire les flux.\n"
+            f"envoyé à {ADDRESS} voir https://fr.indeed.com/unsub?t={SECRET} ici\n"
+            f"Sent to {ADDRESS}\nil y a 1 jour\n{LINK}"
+        )
+    )
+    assert [(j.title, j.company, j.location, j.snippet) for j in parsed.jobs] == [
+        ("Data Engineer", "Exemple", "Paris", "Construire les flux. il y a 1 jour")
+    ]
+    assert leaks(parsed) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The header, holding the address, glued to the first job.
+        f"Votre alerte pour {ADDRESS}\nData Engineer\nExemple - Paris\n{LINK}",
+        f"3 nouveaux emplois correspondent à votre alerte\nData Engineer\nExemple - Paris\n{LINK}",
+        f"New jobs for {ADDRESS}\nData Engineer\nExemple - Paris\n{LINK}",
+    ],
+)
+def test_an_indeed_header_glued_to_the_first_job_is_never_its_title(text: str) -> None:
+    parsed = indeed.parse_text(text)
+    assert [(j.title, j.company, j.location) for j in parsed.jobs] == [
+        ("Data Engineer", "Exemple", "Paris")
+    ]
+    assert leaks(parsed) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # An unknown line above the title that holds the address: the job is dropped.
+        f"Bonjour {ADDRESS}\nData Engineer\nExemple - Paris\n{LINK}",
+        f"Data Engineer\nExemple - Paris {ADDRESS}\n{LINK}",
+        f"Data Engineer https://fr.indeed.com/unsub?t={SECRET}\nExemple - Paris\n{LINK}",
+        f"Data Engineer\nhttps://fr.indeed.com/unsub?t={SECRET}\n{LINK}",
+    ],
+)
+def test_an_indeed_field_line_with_an_address_drops_the_job(text: str) -> None:
+    parsed = indeed.parse_text(text)
+    assert parsed.jobs == ()
+    assert parsed.dropped == 1
+
+
+def test_the_indeed_html_text_version_fails_closed_too() -> None:
+    version = "\n".join(
+        [
+            f"Ingénieur MLOps (https://fr.indeed.com/rc/clk/dl?jk={JOB}&from=ja)",
+            "Exemple Robotique\tParis (75)",
+            f"Envoyé à {ADDRESS}",
+            "Industrialiser les modèles.",
+            "Data Analyst (https://fr.indeed.com/viewjob?jk=fedcba9876543210)",
+            f"Exemple Conseil {ADDRESS}\tNantes",
+        ]
+    )
+    parsed = indeed.parse_html_text(version)
+    assert [(j.title, j.snippet) for j in parsed.jobs] == [
+        ("Ingénieur MLOps", "Industrialiser les modèles.")
+    ]
+    assert parsed.dropped == 1
+    assert leaks(parsed) == []
+
+
+def test_linkedin_drops_the_address_and_tracking_links_from_the_snippet() -> None:
+    parsed = linkedin.parse_text(
+        "Your job alert for data\n\n"
+        f"Data Engineer\nExemple\nLyon\nActively recruiting\n"
+        f"Sent to {ADDRESS} https://www.linkedin.com/comm/track?email={ADDRESS}\n"
+        f"Manage: https://www.linkedin.com/comm/jobs/alerts?midToken={SECRET}\n"
+        f"{VIEW}\n{DASH}\n"
+        f"See all jobs on LinkedIn: https://www.linkedin.com/comm/jobs/search?k=data\n"
+        f"Unsubscribe: https://www.linkedin.com/comm/jobs/alerts?midToken={SECRET}"
+    )
+    assert [(j.title, j.company, j.location, j.snippet) for j in parsed.jobs] == [
+        ("Data Engineer", "Exemple", "Lyon", "Actively recruiting")
+    ]
+    assert leaks(parsed) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A header holding the address glued to the first job, not one LinkedIn's guard knows.
+        f"Sent to {ADDRESS}\nData Engineer\nExemple\nLyon\n{VIEW}",
+        f"Data Engineer\nExemple {ADDRESS}\nLyon\n{VIEW}",
+        f"Data Engineer\nExemple\nLyon https://www.linkedin.com/comm/track?midToken={SECRET}\n{VIEW}",
+    ],
+)
+def test_a_linkedin_field_line_with_an_address_drops_the_job(text: str) -> None:
+    parsed = linkedin.parse_text(text)
+    assert parsed.jobs == ()
+    assert parsed.dropped == 1
+
+
+def test_a_linkedin_header_with_the_address_glued_to_the_first_job_is_skipped() -> None:
+    parsed = linkedin.parse_text(
+        f"Your job alert for {ADDRESS}\nData Engineer\nExemple\nLyon\n{VIEW}"
+    )
+    assert [(j.title, j.company, j.location) for j in parsed.jobs] == [
+        ("Data Engineer", "Exemple", "Lyon")
+    ]
+    assert leaks(parsed) == []

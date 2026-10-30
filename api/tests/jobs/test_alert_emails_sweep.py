@@ -207,6 +207,84 @@ def test_the_cursor_reads_each_mail_once_and_a_new_connection_starts_over(
     assert len(jobs_of(factory, alice)) == 4
 
 
+def test_quiet_sweeps_carry_the_cursor_forward(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, alerts_on())
+    connect(factory, alice)
+    first = indeed_mail(message_id="m-first")
+    sweep_with(factory, alice, a.FakeMailbox([first]))
+    # More quiet sweeps than the cursor is looked for in: each one writes it again.
+    for _ in range(source.CURSOR_SWEEPS + 1):
+        row = sweep_with(factory, alice, a.FakeMailbox([]))
+        assert entry(row)["cursor"] == {"after_ms": FIRST_MS, "account": CONNECTED.isoformat()}
+    mailbox = a.FakeMailbox([first])
+    row = sweep_with(factory, alice, mailbox)
+    assert f"after:{FIRST_MS // 1000} " in mailbox.calls[0][1]
+    assert (entry(row)["messages"], entry(row)["postings"]) == (0, 0)  # never read again
+
+
+def test_the_first_sweep_reads_nothing_older_than_the_connection(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, alerts_on())
+    connected = NOW - timedelta(days=2)
+    connect(factory, alice, connected_at=connected)
+    before = indeed_mail(internal_ms=int((connected - timedelta(hours=1)).timestamp() * 1000))
+    after = a.gmail_json(
+        a.eml("indeed-latin1.eml"),
+        internal_ms=int((connected + timedelta(hours=1)).timestamp() * 1000),
+    )
+    # Gmail's `after:` is a pre-filter: the fake lists both, the code still skips the older one.
+    mailbox = a.FakeMailbox([before, after])
+    row = sweep_with(factory, alice, mailbox)
+    assert f"after:{int(connected.timestamp())} " in mailbox.calls[0][1]
+    stats = entry(row)
+    assert (stats["messages"], stats["postings"]) == (1, 1)
+    assert [job.company for job in jobs_of(factory, alice)] == ["Exemple Énergie"]
+
+
+@pytest.mark.parametrize("where", ["parse", "parser"])
+def test_one_bad_message_is_counted_and_passed_never_stopping_its_provider(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+) -> None:
+    set_profile(factory, alice, alerts_on())
+    connect(factory, alice)
+    if where == "parse":
+        original = source.parse.parse
+
+        def parse(raw: Any, own: str) -> Any:
+            if raw["id"] == "m-bad":
+                raise RuntimeError("a parser bug")
+            return original(raw, own)
+
+        monkeypatch.setattr(source.parse, "parse", parse)
+    else:
+        read = source.read_jobs
+
+        def read_jobs(message: Any, provider: Any) -> Any:
+            if message.gmail_message_id == "m-bad":
+                raise RuntimeError("a parser bug")
+            return read(message, provider)
+
+        monkeypatch.setattr(source, "read_jobs", read_jobs)
+    bad = indeed_mail(message_id="m-bad")
+    good = a.gmail_json(
+        a.eml("indeed-latin1.eml"), internal_ms=FIRST_MS + 1000, message_id="m-good"
+    )
+    row = sweep_with(factory, alice, a.FakeMailbox([bad, good]))
+    stats = entry(row)
+    assert (stats["reason"], stats["outcome"]) == (None, "complete")
+    assert (stats["failed_messages"], stats["postings"]) == (1, 1)
+    assert stats["cursor"]["after_ms"] == FIRST_MS + 1000
+    # The next sweep is past both: the bad one is not read again.
+    row = sweep_with(factory, alice, a.FakeMailbox([bad, good]))
+    assert (entry(row)["failed_messages"], entry(row)["messages"]) == (0, 0)
+
+
 def test_a_job_found_twice_is_one_row_naming_both_sources(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:

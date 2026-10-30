@@ -16,7 +16,9 @@ Within a block, the job is the paragraph that ends with its link line ("View job
 label, or the link alone), or the paragraph just above that line when the link stands alone:
 its first three lines are the title, the company and the location, the rest (badges such as
 "Actively recruiting") are the snippet. A block whose link names no job (`job_id`), or whose
-paragraph has fewer than three lines, is not a job: the header and the footer never are.
+paragraph has fewer than three lines, is not a job: the header and the footer never are. A
+title, company or location line that holds a link or an e-mail address drops the job, and such
+a line ("Sent to <address>", a tracking link) is left out of the snippet (text.py, fail closed).
 
 **The link** is `https://www.linkedin.com/comm/jobs/view/<id>/?trackingId=…` (or `/jobs/view/`)
 on `linkedin.com` or one of its country hosts; the canonical address is
@@ -86,6 +88,8 @@ def _block_job(block: list[str]) -> tuple[t.AlertJob | None, bool]:
             paragraph = paragraph[1:]
         if len(paragraph) < 3:
             return None, True
+        if not t.fields_clear(*paragraph[:3]):
+            return None, True  # a field line holds a link or an address: fail closed
         title = t.clean(paragraph[0], t.MAX_TITLE)
         company = t.clean(paragraph[1], t.MAX_COMPANY)
         address = canonical(url)
@@ -96,7 +100,7 @@ def _block_job(block: list[str]) -> tuple[t.AlertJob | None, bool]:
                 title=title,
                 company=company,
                 location=t.clean(paragraph[2], t.MAX_LOCATION),
-                snippet=t.clean(" ".join(paragraph[3:]), t.MAX_SNIPPET),
+                snippet=t.snippet_of(paragraph[3:]),
                 url=address,
                 job_id=job_id(url) or "",
             ),

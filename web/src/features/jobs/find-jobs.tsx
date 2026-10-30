@@ -75,14 +75,14 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
   );
 }
 
-/** What the sweep reads now: a website searched in the person's browser by its name (its
- * `current_board` is the source's id, jobs J10), any other source by its label. */
 /** A job website of the sweep: a source with a host, but not a provider's alert e-mails
  * (mode "mail", host "mail:indeed"), which are not a website searched. */
 function isWebsite(source: Sweep["sources"][number]): boolean {
   return Boolean(source.host) && source.mode !== "mail";
 }
 
+/** What the sweep reads now: a website searched in the person's browser by its name (its
+ * `current_board` is the source's id, jobs J10), any other source by its label. */
 function readingName(sweep: Sweep): string {
   const current = sweep.current_board ?? "";
   const source = sweep.sources.find((item) => item.source_id === current);
