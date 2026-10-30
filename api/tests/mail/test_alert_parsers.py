@@ -477,6 +477,13 @@ def leaks(parsed: t.Parsed) -> list[str]:
         f"voir fr.indeed.com/unsub?t={SECRET} ou www.example.org",  # no scheme
         "voir www\u200b.example.org/unsub",  # a zero width space hiding a link
         "harald\x07@example.org",  # a control character inside it
+        "Sent to harald\uff20example.org",  # a fullwidth "@"
+        "Sent to harald\ufe6bexample.org",  # a small "@"
+        "voir \uff57\uff57\uff57\uff0eexample\uff0eorg",  # a fullwidth "www."
+        "Sent to harald%40example.org",  # an "@" percent encoded
+        "Sent to harald @ example.org",  # an "@" between spaces
+        "Sent to harald [at] example.org",
+        "Sent to harald(AT)example.org",
     ],
 )
 def test_a_line_with_a_link_or_an_address_holds_one(line: str) -> None:
@@ -490,6 +497,8 @@ def test_a_line_with_a_link_or_an_address_holds_one(line: str) -> None:
         "Exemple Données & Cie - Lyon 3e (69)",
         "Node.js, React et AWS. Salaire : 45 000 €",
         "Contact @ l'équipe produit.",  # an "@" without an address
+        "Data Scientist @ Exemple",  # an "@" between spaces, no address after it
+        "Chef de projet (attaché commercial)",  # "at" inside a word is no "@"
         "a@b.",  # nothing after the dot
         "",
     ],
@@ -525,6 +534,9 @@ def test_indeed_drops_the_address_and_links_from_the_snippet() -> None:
         f"Votre alerte pour {ADDRESS}\nData Engineer\nExemple - Paris\n{LINK}",
         f"3 nouveaux emplois correspondent à votre alerte\nData Engineer\nExemple - Paris\n{LINK}",
         f"New jobs for {ADDRESS}\nData Engineer\nExemple - Paris\n{LINK}",
+        # Indeed's English header: "Jobs for <search> in <place>".
+        f"Jobs for data engineer in Paris\nData Engineer\nExemple - Paris\n{LINK}",
+        f"Jobs for {ADDRESS} in Paris\nData Engineer\nExemple - Paris\n{LINK}",
     ],
 )
 def test_an_indeed_header_glued_to_the_first_job_is_never_its_title(text: str) -> None:

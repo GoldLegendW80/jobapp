@@ -22,9 +22,13 @@ any other message is counted as `refused` and its body is not parsed.
 first; the HTML part only when the text part gave nothing and the provider has an HTML reading,
 and then only through the parser service's text version (`parser_client.sanitise_mail_html`),
 never parsed in this process, and every parser runs off the event loop. A mail that gives no
-job is counted (`empty_messages`): a format that changed shows there. A mail that fails to parse
-is counted (`failed_messages`, the error logged without its text) and the cursor moves past it:
-one bad mail never stops its provider.
+job is counted (`empty_messages`): a format that changed shows there, and so does a mail whose
+HTML part the parser service refused as a file. A mail that one of the pure parsers
+(`parse.parse`, the provider's text and HTML readings) fails on is counted (`failed_messages`,
+the error logged without its text) and the cursor moves past it: one bad mail never stops its
+provider. Anything else that fails while a mail is read (the parser service down, busy or too
+slow, the filters, the store) stops the provider with the cursor on the previous mail, so the
+next sweep reads that mail again.
 
 **What is stored.** Each job as a finding: the title, the company and the location the mail
 states, the snippet as the posting's text (an alert never holds the full description), the
@@ -41,7 +45,14 @@ message's postings are stored, so a crash reads a message again (its postings ar
 duplicates) and never skips one. The connection is the account's `connected_at`: reconnecting
 the same Google account keeps it, and the cursor with it; a disconnect deletes the account, so
 the next connection starts without a cursor. Without one (the first sweep of a provider, or a
-new connection) the search goes FIRST_DAYS back, never before the connection.
+new connection) the search goes FIRST_DAYS back, never before the connection. A provider that
+stops before it reads (a connection to renew, no OAuth client) still writes the cursor it had.
+A listing cut at MAX_LIST_PAGES lacks the oldest messages (Gmail lists the newest first): its
+messages are read, but the cursor stays where it was (`listing_truncated`), so none is skipped.
+
+**Time.** The alert e-mails of every provider share ALERTS_TIME_S of the sweep, so they never
+starve the job websites that run after them; a provider out of time ends `time_limit` with the
+cursor on its last mail handled.
 
 **The stats entry** of each provider: host "mail:<key>", kind "alerts", mode "mail", the
 outcome of `sweep.finish_source`, `found` and `postings` as the commits count them, `messages`,
@@ -82,8 +93,9 @@ logger = logging.getLogger("app.mail.alerts")
 
 MAX_MESSAGES = 40  # alert e-mails of one provider read in one sweep, oldest first
 LIST_PAGE = 100
-MAX_LIST_PAGES = 5
+MAX_LIST_PAGES = 20  # a listing longer than this is truncated: the cursor then stays
 FIRST_DAYS = 14  # how far back the first sweep of a provider reads
+ALERTS_TIME_S = 120.0  # the alert e-mails' share of a sweep, every provider together
 CURSOR_SWEEPS = 30  # the person's latest sweeps where a provider's cursor is looked for
 BATCH = 25  # findings handed to one commit
 NOTE = "From a job alert e-mail: the full description is on the posting's page."
@@ -132,6 +144,22 @@ class _StopError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class _UnreadableError(Exception):
+    """A pure parser failed on one mail: counted and passed (module docstring)."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(type(error).__name__)
+        self.error = error
+
+
+async def _pure(function: Callable[..., Any], *args: Any) -> Any:
+    """A pure parser, off the event loop: whatever it raises is `_UnreadableError`."""
+    try:
+        return await asyncio.to_thread(function, *args)
+    except Exception as error:
+        raise _UnreadableError(error) from None
 
 
 @dataclass
@@ -269,11 +297,12 @@ def load_cursor(
     return best
 
 
-def _log_failure(plan: Any, provider: Provider, error: Exception) -> None:
-    """One mail that could not be read: the error's type only, as its message or traceback may
-    quote the mail's text (a decoding error quotes its bytes)."""
+def _log_failure(plan: Any, provider: Provider, error: Exception, what: str = "") -> None:
+    """A mail that could not be read, or a provider that failed: the error's type only, as its
+    message or traceback may quote the mail's text (a decoding error quotes its bytes, a
+    database error the posting it was given)."""
     logger.warning(
-        "an alert e-mail could not be read",
+        what or "an alert e-mail could not be read",
         extra={
             "sweep_id": str(plan.sweep_id),
             "provider": provider.key,
@@ -335,6 +364,8 @@ class Reader:
         keys = [key for key in sweep.alert_keys(getattr(plan, "search", None)) if key in PROVIDERS]
         if not keys:
             return
+        # Every provider together: the job websites run after them (ALERTS_TIME_S).
+        deadline = min(deadline, self.monotonic() + ALERTS_TIME_S)
         account = await asyncio.to_thread(load_account, self.sessions, plan.user_id)
         filters = _Filters.of(plan.search)
         for key in keys:
@@ -361,14 +392,26 @@ class Reader:
             if commits is not None:
                 commits.admit(entry["source_id"])
             try:
+                cursor: int | None = None
+                if account is not None:
+                    # Carried forward by every sweep where the provider runs, one that stops
+                    # before reading included: the cursor is looked for in the latest
+                    # CURSOR_SWEEPS sweeps only.
+                    connection = account.connected_at.isoformat()
+                    cursor = await asyncio.to_thread(
+                        load_cursor, self.sessions, plan.user_id, entry["source_id"], connection
+                    )
+                    if cursor is not None:
+                        entry["cursor"] = {"after_ms": cursor, "account": connection}
                 error = _account_error(account)
                 if error is None and self.mailbox is None:
                     error = "mail_unavailable"
                 if error is not None or account is None or self.mailbox is None:
                     raise _StopError(error or "mail_unavailable")
                 await self._provider(
-                    plan, provider, self.mailbox, account, entry, filters, deadline, commits
-                )
+                    plan, provider, self.mailbox, account, cursor, entry, filters, deadline,
+                    commits,
+                )  # fmt: skip
             except _StopError as stop:
                 entry["error"] = stop.code
             except MailConnectionError:
@@ -377,11 +420,8 @@ class Reader:
                 entry["error"] = "mail_unavailable"
             except sweep.StoreRefusedError:
                 entry["error"] = "store_failed"
-            except Exception:
-                logger.exception(
-                    "alert e-mails failed",
-                    extra={"sweep_id": str(plan.sweep_id), "provider": key},
-                )
+            except Exception as error:
+                _log_failure(plan, provider, error, "alert e-mails failed")
                 entry["error"] = "mail_failed"
             if commits is not None and not await commits.settle():
                 entry["error"] = entry["error"] or "store_failed"
@@ -391,17 +431,10 @@ class Reader:
 
     async def _provider(
         self, plan: Any, provider: Provider, mailbox: Mailbox, account: MailAccount,
-        entry: dict[str, Any], filters: _Filters, deadline: float, commits: Any,
+        cursor: int | None, entry: dict[str, Any], filters: _Filters, deadline: float,
+        commits: Any,
     ) -> None:  # fmt: skip
-        source_id = entry["source_id"]
         connection = account.connected_at.isoformat()
-        cursor = await asyncio.to_thread(
-            load_cursor, self.sessions, plan.user_id, source_id, connection
-        )
-        if cursor is not None:
-            # Carried forward by every sweep where the provider runs, quiet ones included: the
-            # cursor is looked for in the latest CURSOR_SWEEPS sweeps only.
-            entry["cursor"] = {"after_ms": cursor, "account": connection}
         after = cursor
         if after is None:
             # Nothing older than the connection, and at most FIRST_DAYS back.
@@ -410,6 +443,8 @@ class Reader:
         ids: list[str] = []
         page: str | None = None
         for _ in range(MAX_LIST_PAGES):
+            if self.monotonic() >= deadline:
+                raise _StopError("time_limit")
             listed = _answer(
                 await mailbox.list_messages(
                     account, q=query(provider, after), page_token=page, max_results=LIST_PAGE
@@ -420,9 +455,22 @@ class Reader:
                     ids.append(item["id"])
             page = listed.get("nextPageToken")
             if not isinstance(page, str) or not page:
+                page = None
                 break
-        ids = list(dict.fromkeys(ids))[::-1]  # Gmail lists the newest first
+        # Gmail lists the newest first: a listing cut short lacks the oldest messages, so the
+        # cursor must not move past them (module docstring).
+        truncated = page is not None
+        if truncated:
+            entry["listing_truncated"] = True
+        ids = list(dict.fromkeys(ids))[::-1]
         newest = cursor
+
+        def advance(stamp: int) -> None:
+            nonlocal newest
+            newest = max(newest or 0, stamp)
+            if not truncated:
+                entry["cursor"] = {"after_ms": newest, "account": connection}
+
         handled = 0
         for index, message_id in enumerate(ids):
             # A message an earlier sweep read (Gmail's `after:` is in seconds) costs a read but
@@ -434,23 +482,22 @@ class Reader:
                 raise _StopError("time_limit")
             raw = _answer(await mailbox.get_message(account, message_id, format="full"))
             try:
-                message = await asyncio.to_thread(parse.parse, raw, account.email)
-            except parse.NotAMessageError:
-                handled += 1
-                entry["refused"] += 1
-                continue
-            except Exception as error:
+                message = await _pure(parse.parse, raw, account.email)
+            except _UnreadableError as failed:
+                if isinstance(failed.error, parse.NotAMessageError):
+                    handled += 1
+                    entry["refused"] += 1
+                    continue
                 # A mail the parser cannot read: counted, and passed by the cursor when Gmail
                 # gave its date, so it never stops the provider for good.
-                _log_failure(plan, provider, error)
+                _log_failure(plan, provider, failed.error)
                 stamp = _internal_ms(raw)
                 if stamp is not None and _before(stamp, cursor, after):
                     continue
                 handled += 1
                 entry["failed_messages"] += 1
                 if stamp is not None:
-                    newest = max(newest or 0, stamp)
-                    entry["cursor"] = {"after_ms": newest, "account": connection}
+                    advance(stamp)
                 continue
             stamp = int(message.received_at.timestamp() * 1000)
             if _before(stamp, cursor, after):
@@ -463,35 +510,40 @@ class Reader:
             else:
                 entry["refused"] += 1
             # Only after its postings are stored: a crash before reads it again.
-            newest = max(newest or 0, stamp)
-            entry["cursor"] = {"after_ms": newest, "account": connection}
+            advance(stamp)
 
     async def _kept(
         self, plan: Any, provider: Provider, message: parse.ParsedMessage,
         entry: dict[str, Any], filters: _Filters,
     ) -> list[AlertFinding] | None:  # fmt: skip
-        """The findings of one read message, None when reading it failed: the failure is
-        counted (`failed_messages`) and the cursor moves past the message, so one bad mail never
-        stops its provider for good. Storing is not in here: a store that fails stops the
-        provider and keeps the cursor (`_store`)."""
+        """The findings of one read message, None when a pure parser failed on it: the failure
+        is counted (`failed_messages`) and the cursor moves past the message, so one bad mail
+        never stops its provider for good. Anything else raises and stops the provider with the
+        cursor on the previous mail: the parser service down, busy or too slow (`_StopError`
+        from `parser_text`), the filters, the findings. Storing is not in here: a store that
+        fails stops the provider and keeps the cursor too (`_store`)."""
         entry["messages"] += 1
         try:
-            return await self._read(provider, message, entry, filters)
-        except Exception as error:
-            _log_failure(plan, provider, error)
+            result = await self._parsed(provider, message)
+        except _UnreadableError as failed:
+            _log_failure(plan, provider, failed.error)
             entry["failed_messages"] += 1
             return None
+        return self._sorted(provider, message, result, entry, filters)
 
-    async def _read(
-        self, provider: Provider, message: parse.ParsedMessage, entry: dict[str, Any],
-        filters: _Filters,
-    ) -> list[AlertFinding]:  # fmt: skip
+    async def _parsed(self, provider: Provider, message: parse.ParsedMessage) -> Parsed:
         # Off the event loop: a hostile part costs parse time, never the sweep's heartbeat.
-        result = await asyncio.to_thread(read_jobs, message, provider)
+        result: Parsed = await _pure(read_jobs, message, provider)
         if not result.jobs and message.raw_html and provider.parse_html_text is not None:
             version = await self.html_text(message.raw_html)
             if version:
-                result = await asyncio.to_thread(provider.parse_html_text, version)
+                result = await _pure(provider.parse_html_text, version)
+        return result
+
+    def _sorted(
+        self, provider: Provider, message: parse.ParsedMessage, result: Parsed,
+        entry: dict[str, Any], filters: _Filters,
+    ) -> list[AlertFinding]:  # fmt: skip
         entry["dropped"] += result.dropped
         if not result.jobs:
             entry["empty_messages"] += 1
@@ -513,17 +565,32 @@ class Reader:
             return
         for start in range(0, len(kept), BATCH):
             chunk = tuple(kept[start : start + BATCH])
-            await commits.save(entry["source_id"], entry["host"], Batch(chunk))
+            try:
+                await commits.save(entry["source_id"], entry["host"], Batch(chunk))
+            except sweep.StoreRefusedError:
+                raise
+            except Exception as error:
+                # A commit that failed: its error may quote the postings, so its type only.
+                logger.warning(
+                    "storing alert postings failed",
+                    extra={"source_id": entry["source_id"], "error": type(error).__name__},
+                )
+                raise _StopError("store_failed") from None
 
 
 async def parser_text(html: str) -> str | None:
-    """The parser service's text version of an HTML part, None when it failed."""
+    """The parser service's text version of an HTML part. None when the parser refused it as
+    a file (permanent: the mail is counted empty and passed); the parser down, busy, too slow
+    or failing on its side stops the provider with the cursor on the previous mail, so the next
+    sweep reads that mail again (`_StopError("mail_unavailable")`)."""
     from app.ingestion import parser_client
 
     try:
         return (await parser_client.sanitise_mail_html(html)).text
-    except parser_client.ParserError:
-        return None
+    except parser_client.ParserError as error:
+        if error.failure == "file":
+            return None
+        raise _StopError("mail_unavailable") from None
 
 
 def hook_for(

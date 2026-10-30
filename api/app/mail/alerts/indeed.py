@@ -16,7 +16,8 @@ lines between it and the link are the snippet, and the paragraph ends with the j
 paragraph is a job only when it ends with a job link of Indeed's (`job_id`) and has a title and
 a company line above it; anything else (the header, the footer, a sponsored entry whose link
 carries no `jk`) is not a job. Header lines glued to the first job ("Votre alerte pour …") are
-skipped above its title (`_HEADER`); a title or company line that holds a link or an e-mail
+skipped above its title (`_HEADER`, in French and in English: "Jobs for <search> in
+<place>"); a title or company line that holds a link or an e-mail
 address drops the job, and such a line is left out of the snippet (text.py, fail closed).
 
 **The HTML part** (`parse_html_text`) is never parsed here: the parser service turns it into its
@@ -46,11 +47,12 @@ _JOB_KEY = re.compile(r"[0-9a-fA-F]{16}")
 # A line of the parser service's text version that is a link: "label (address)".
 _LABELLED = re.compile(r"(?P<label>.*\S) \((?P<url>https?://[^\s()<>\"]+)\)")
 # The header lines of an alert ("3 nouveaux emplois correspondent à votre alerte …", "Votre
-# alerte pour …"), when a copy of the mail lost the blank line under them: never a job's title.
-# French and English wordings.
+# alerte pour …", "Jobs for data engineer in Lyon"), when a copy of the mail lost the blank line
+# under them: never a job's title. French and English wordings.
 _HEADER = re.compile(
     r"(?:\d+\s+)?(?:nouvel(?:le)?s?\s+(?:emplois?|offres?)|nouveaux\s+emplois|votre\s+alerte"
-    r"|emplois?\s+correspond|your\s+(?:job\s+)?alert|new\s+jobs?\b)\b.*",
+    r"|emplois?\s+correspond|your\s+(?:job\s+)?alert|new\s+jobs?\b"
+    r"|jobs?\s+for\s+\S.*?\s+in\s+(?=\S))\b.*",
     re.IGNORECASE,
 )
 

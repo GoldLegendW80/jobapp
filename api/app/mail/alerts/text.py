@@ -32,6 +32,10 @@ URL = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 _ENDING = re.compile(r"https?://[^\s<>\"]+$", re.IGNORECASE)
 # A link without its scheme still names a host: "www.", or any "scheme://".
 _BARE_LINK = re.compile(r"://|\bwww\.", re.IGNORECASE)
+# An "@" written as a word ("[at]", "(at)"), with the spaces around it.
+_AT_WORD = re.compile(r"\s*[\[(]\s*at\s*[\])]\s*", re.IGNORECASE)
+# An "@" between spaces.
+_SPACED_AT = re.compile(r"[ \t]*@[ \t]*")
 
 
 @dataclass(frozen=True)
@@ -78,10 +82,19 @@ def _has_mail_address(line: str) -> bool:
     return False
 
 
+def _undisguised(line: str) -> str:
+    """`line` with the usual disguises of an "@" written as one: "%40", "[at]", "(at)", and
+    an "@" between spaces ("name @ example.org")."""
+    return _SPACED_AT.sub("@", _AT_WORD.sub("@", line.replace("%40", "@")))
+
+
 def holds_address(line: str) -> bool:
-    """Whether a line holds a link or an e-mail address, as it stands or once `clean` dropped
-    the characters that could hide one (a direction override, a zero width space)."""
-    for form in (line, clean(line, MAX_LINE)):
+    """Whether a line holds a link or an e-mail address, as it stands, once `clean` dropped
+    the characters that could hide one (a direction override, a zero width space), in its NFKC
+    form (a fullwidth or small "@", a fullwidth "www."), and with a disguised "@" undone."""
+    cleaned = clean(line, MAX_LINE)
+    folded = unicodedata.normalize("NFKC", cleaned)
+    for form in (line, cleaned, folded, _undisguised(folded)):
         if URL.search(form) or _BARE_LINK.search(form) or _has_mail_address(form):
             return True
     return False
