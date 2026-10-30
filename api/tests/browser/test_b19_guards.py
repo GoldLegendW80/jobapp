@@ -525,7 +525,8 @@ CLIENT_METADATA = [
     algolia(AGENT_REACT + "; like-button (1.0.0)"),
     algolia(AGENT_INSTANTSEARCH + "; saved-searches (3.0.0)"),
     algolia(
-        AGENT_V5_NEXT, key="YjA5ZjFkNDRSaVeNzQxZTc4ZDc5YzAzOWY4YzMyMDZm"
+        AGENT_V5_NEXT,
+        key="YjA5ZjFkNDRSaVeNzQxZTc4ZDc5YzAzOWY4YzMyMDZm",  # gitleaks:allow
     ),  # base64 holding "SaVe"
     algolia(AGENT_REACT, key="FollowKeyE2e0000"),
     algolia(AGENT_REACT, app="A1SAVE7XQ2"),
