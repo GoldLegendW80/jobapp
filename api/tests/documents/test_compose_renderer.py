@@ -137,15 +137,15 @@ def test_memory_accounting_keeps_the_core_and_mail_limits_explicit() -> None:
     services = load("compose.yml")["services"]
     total = sum(size(s["mem_limit"]) for s in services.values())
     core = sum(size(s["mem_limit"]) for name, s in services.items() if name != "gmailmcp")
-    target = 5 * 1024 * MIB
-    # Keep the existing core allowance and platform target explicit. Email's separately
-    # limited provider adds 128MiB; this accounting does not claim Jetson capacity acceptance.
-    assert core == 5248 * MIB, core // MIB
+    target = 6 * 1024 * MIB  # 5G until the browser's 1536m (2026-10-30, compose.yml)
+    # Keep the core allowance and platform target explicit. Email's separately limited
+    # provider adds 128MiB; this accounting does not claim Jetson capacity acceptance.
+    assert core == 5760 * MIB, core // MIB
     assert services["gmailmcp"]["profiles"] == ["mail"]
     assert size(services["gmailmcp"]["mem_limit"]) == 128 * MIB
     assert total == core + 128 * MIB, total // MIB
-    assert core - target == 128 * MIB
-    assert total - target == 256 * MIB
+    assert target - core == 384 * MIB
+    assert target - total == 256 * MIB
 
 
 def test_a_weakened_overlay_fails_the_table(monkeypatch: pytest.MonkeyPatch) -> None:
