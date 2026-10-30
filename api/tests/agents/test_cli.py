@@ -1,5 +1,6 @@
 """python -m app.agents.cli rotate against a real Postgres: rows of the previous key re-encrypted,
-rows of the current key untouched, a row of an unknown key refusing the whole run, and no key."""
+rows of the current key untouched, a row of an unknown key refusing the whole run, and no key.
+The job feed keys (Adzuna's) are rotated with the model credentials."""
 
 import pytest
 import sqlalchemy as sa
@@ -9,6 +10,7 @@ from app.agents import cli, credentials
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind, ModelCredential
 from app.config import get_settings
+from app.jobs.feeds import keys as feed_keys
 from tests.agents.conftest import API_KEY, OAUTH, new_key
 from tests.identity.api_helpers import Clock, make_user
 
@@ -122,6 +124,33 @@ def test_rotate_refuses_a_row_of_an_unknown_key_and_changes_nothing(
     assert cli.main(["rotate"]) == 1
     assert "does not hold" in capsys.readouterr().err
     assert rows(factory) == before
+
+
+def test_rotate_re_encrypts_the_job_feed_keys(
+    migrated_url: str,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old, new = new_key(), new_key()
+    key = {"app_id": "ab" * 4, "app_key": "q" * 28 + "9876"}  # a made-up key of Adzuna's shape
+    user = make_user(factory, email="a@example.org")
+    with factory() as db, db.begin():
+        feed_keys.save(db, Keyring.from_text(old), user.id, "adzuna", key, clock.now)
+    use_keys(monkeypatch, new, old)
+    assert cli.main(["rotate"]) == 0
+    out = capsys.readouterr().out
+    assert "1 credential re-encrypted" in out
+    assert key["app_key"] not in out
+    alone = Keyring.from_text(new)  # the old key is gone from .env
+    with factory() as db:
+        assert feed_keys.reveal(db, alone, user.id, "adzuna") == key
+        row = feed_keys.get(db, user.id, "adzuna")
+        assert row is not None
+        assert row.key_version == alone.version
+    assert cli.main(["rotate"]) == 0
+    assert "0 credentials re-encrypted" in capsys.readouterr().out
 
 
 def test_rotate_without_a_key(

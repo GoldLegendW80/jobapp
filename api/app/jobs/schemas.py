@@ -724,6 +724,8 @@ class SourceOut(BaseModel):
     kind: str
     query: str
     location: str | None = None
+    # A company job board (app/jobs/boards): its company name as saved, frozen with the scope.
+    company: str | None = None
     result_pages: int = 0
     found: int = 0
     new: int = 0

@@ -5,11 +5,12 @@
  * (`not_started`, after another stopped the sweep's sites) shows only that. The freelance and
  * project feeds of the same list have their own heading and words (opportunities O8).
  */
-import { Globe } from "lucide-react";
+import { Building2, Globe } from "lucide-react";
 
 import { isFeedKind } from "@/features/opportunities/sources/source-words";
 import { SweepFeeds } from "@/features/opportunities/sources/sweep-feeds";
 
+import { SweepJobFeeds } from "./job-feeds-ui";
 import {
   SOURCE_PROBLEMS,
   leftOutSentence,
@@ -21,18 +22,66 @@ import type { SweepSource } from "./sweeps-api";
 
 export function SweepSources({ sources }: { sources: SweepSource[] }) {
   const feeds = sources.filter((source) => isFeedKind(source.kind));
-  // A deleted company board (mode api) is left out; LinkedIn's public job search (mode api,
-  // kind linkedin, owner 2026-10-30) is one of the job sites.
+  // The company boards and job feeds (mode api) have their own blocks below; LinkedIn's public
+  // job search (mode api, kind linkedin, owner 2026-10-30) is one of the job sites.
   const sites = sources.filter(
     (source) =>
       !isFeedKind(source.kind) &&
       (source.mode !== "api" || source.kind === "linkedin"),
   );
+  // Company job boards (owner, 2026-10-30): one source each, read through the ATS's API.
+  const boards = sources.filter(
+    (source) => source.mode === "api" && source.kind === "board",
+  );
   return (
     <>
       <BrowserSites sources={sites} />
+      <CompanyBoardSources sources={boards} />
+      <SweepJobFeeds sources={sources} />
       <SweepFeeds feeds={feeds} />
     </>
+  );
+}
+
+/** A board's line, named by its company (frozen with the sweep, else its `<ats>:<board>`):
+ * what it found and kept, or why it was not read (its `reason`). */
+function boardStatus(source: SweepSource): string {
+  if (source.error === "not_started")
+    return (
+      (source.reason ? SOURCE_PROBLEMS[source.reason] : undefined) ??
+      SOURCE_PROBLEMS.not_started ??
+      ""
+    );
+  const found = `${plural(source.found, "posting")} matched, ${source.new.toLocaleString("en-GB")} new.`;
+  return source.error
+    ? `${found} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
+    : found;
+}
+
+function CompanyBoardSources({ sources }: { sources: SweepSource[] }) {
+  if (!sources.length) return null;
+  return (
+    <section aria-label="Company job boards" className="flex flex-col gap-1">
+      <h3 className="flex items-center gap-1.5 text-sm font-medium">
+        <Building2
+          aria-hidden="true"
+          className="size-4 text-muted-foreground"
+        />
+        Company job boards
+      </h3>
+      <ul className="flex flex-col gap-1 text-sm break-words">
+        {sources.map((source, index) => (
+          <li key={`${source.query}:${String(index)}`}>
+            <span className="font-medium">
+              {source.company || source.query}
+            </span>
+            <span className="text-muted-foreground">
+              : {boardStatus(source)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

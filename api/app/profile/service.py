@@ -162,6 +162,19 @@ def _keep_consent(
     if not consents:
         # No dedicated decision yet: store no map at all (schemas._stored_section).
         del data["platform_consents"]
+    alerts = data.get("alert_emails")
+    if isinstance(alerts, dict) and not any(alerts.values()):
+        # Every alert e-mail off, sent or kept: stored as absent (read as off), so a section
+        # without one stays readable by the release before them.
+        del data["alert_emails"]
+    if data.get("job_feeds") == []:
+        # Sent empty, it replaced the stored list (above); stored only once a feed is ticked, as
+        # the release before this one refuses the key.
+        del data["job_feeds"]
+    if "company_boards" in data and data["company_boards"] is None:
+        # Sent as null, it replaced the stored list (above). Null means never saved, which is the
+        # key's absence: never stored as null. An empty list is a choice and is stored.
+        del data["company_boards"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data

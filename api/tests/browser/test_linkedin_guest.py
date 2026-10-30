@@ -963,3 +963,19 @@ def test_parsing_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> Non
     execute(section())
     assert len(threads) == 3
     assert threading.main_thread().name not in threads
+
+
+def test_the_sweep_summary_counts_the_public_job_search_as_a_website() -> None:
+    # Merged with the job feeds, company boards and alert e-mails (owner, 2026-10-30): LinkedIn's
+    # entry is mode "api" like a feed's and a board's, but it is one of the job websites.
+    stats = sweep.Stats(
+        sources=[
+            {"mode": "api", "kind": "linkedin", "host": "www.linkedin.com"},
+            {"mode": "llm_browser", "kind": "welcome_to_the_jungle", "host": "www.wttj.com"},
+            {"mode": "api", "kind": "arbeitnow", "host": "www.arbeitnow.com"},
+            {"mode": "api", "kind": "board", "host": "boards-api.greenhouse.io"},
+            {"mode": "mail", "kind": "alerts", "host": "mail:indeed"},
+        ]
+    )
+    summary = sweep._summary(stats)
+    assert (summary["websites"], summary["feeds"], summary["boards"]) == (2, 1, 1)

@@ -38,6 +38,8 @@ from app.ingestion.routers import no_store as ingestion_no_store
 from app.ingestion.routers import private as ingestion_private
 from app.ingestion.routers import routers as ingestion_routers
 from app.jobs import service as jobs_service
+from app.jobs.boards.router import router as boards_router
+from app.jobs.feeds.router import router as job_feeds_router
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging, error_name, private_trace
@@ -155,6 +157,8 @@ def create_app(
     mail_registry.load()
     app.state.credential_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
     app.state.credential_checks = RateLimiter(agents_router.VERIFY_LIMIT, agents_router.WINDOW_S)
+    # The job feeds' keys (Adzuna's): saved under the same per user limit as a credential.
+    app.state.feed_key_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
 
     # Middleware added last runs first: request_log, then CSRF, then the cookie writer, then the
     # body limits closest to the router (app.body_limit, issue #100). Added first so that it is
@@ -300,8 +304,11 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(profile_router)
-    # Before the jobs router: /api/jobs/sweeps must not be read as /api/jobs/{job_id}.
+    # Before the jobs router: /api/jobs/sweeps, /api/jobs/boards and /api/jobs/feeds must not be
+    # read as /api/jobs/{job_id}.
     app.include_router(sweeps_router)
+    app.include_router(boards_router)
+    app.include_router(job_feeds_router)
     app.include_router(jobs_router)
     app.include_router(agents_router.router)
     app.include_router(agent_runs_router.router)

@@ -90,3 +90,45 @@ it("says a LinkedIn public search not run yet was not searched this time", () =>
     "LinkedIn: not searched this time.",
   );
 });
+
+// Merged with the company boards, job feeds and alert e-mails (owner, 2026-10-30): LinkedIn's
+// public job search stays among the job sites; a board and a feed, also mode api, keep their own
+// blocks.
+it("keeps LinkedIn's public job search among the job sites beside boards and feeds", () => {
+  render(
+    <SweepSources
+      sources={[
+        source({ mode: "api", phase: "done", outcome: "complete", found: 2 }),
+        source({
+          mode: "api",
+          kind: "board",
+          host: "boards-api.greenhouse.io",
+          query: "greenhouse:examplelabs",
+          company: "Example Labs",
+          found: 4,
+          new: 1,
+        }),
+        source({
+          mode: "api",
+          kind: "arbeitnow",
+          host: "www.arbeitnow.com",
+          found: 5,
+          new: 3,
+        }),
+        source({ mode: "mail", kind: "alerts", host: "mail:indeed", found: 1 }),
+      ]}
+    />,
+  );
+  const sites = screen.getByRole("region", {
+    name: "Job sites in your browser",
+  });
+  expect(sites).toHaveTextContent("LinkedIn: ");
+  expect(sites).not.toHaveTextContent("Example Labs");
+  expect(sites).not.toHaveTextContent("Arbeitnow");
+  expect(
+    screen.getByRole("region", { name: "Company job boards" }),
+  ).toHaveTextContent("Example Labs: 4 postings matched, 1 new.");
+  expect(screen.getByRole("region", { name: "Job feeds" })).toHaveTextContent(
+    "Arbeitnow",
+  );
+});

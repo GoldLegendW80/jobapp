@@ -1,0 +1,77 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "title": "Forward Deployed Engineer",
+      "location": "Paris",
+      "secondaryLocations": [{"location": "London"}, {"location": "Paris"}],
+      "isRemote": false,
+      "workplaceType": "Hybrid",
+      "isListed": true,
+      "employmentType": "FullTime",
+      "publishedAt": "2026-10-01T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/1111",
+      "descriptionPlain": "Forward Deployed Engineer. We build agents with Python and LLMs."
+    },
+    {
+      "title": "Account Executive, AI Engineer accounts",
+      "location": "Paris",
+      "isListed": true,
+      "employmentType": "FullTime",
+      "publishedAt": "2026-10-02T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/2222",
+      "descriptionPlain": "Sell."
+    },
+    {
+      "title": "AI Engineer, unlisted",
+      "location": "Paris",
+      "isListed": false,
+      "publishedAt": "2026-10-02T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/3333",
+      "descriptionPlain": "Hidden."
+    },
+    {
+      "title": "AI Engineer Intern",
+      "location": "",
+      "isRemote": true,
+      "isListed": true,
+      "employmentType": "Intern",
+      "publishedAt": "2026-10-03T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/4444",
+      "descriptionPlain": "AI Engineer Intern. Python and LLMs."
+    },
+    {
+      "title": "GenAI Engineer without an address",
+      "location": "Paris",
+      "isListed": true
+    },
+    {
+      "title": "Security AI Engineer",
+      "location": "Paris",
+      "isListed": true,
+      "employmentType": "FullTime",
+      "publishedAt": "2026-10-04T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/6666",
+      "descriptionPlain": "Security AI Engineer. Python and LLMs."
+    },
+    {
+      "title": "GenAI Engineer",
+      "location": "Tokyo",
+      "isListed": true,
+      "employmentType": "FullTime",
+      "publishedAt": "2026-10-04T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/7777",
+      "descriptionPlain": "GenAI Engineer in Tokyo."
+    },
+    {
+      "title": "AI Engineer",
+      "location": "Paris",
+      "isListed": true,
+      "employmentType": "FullTime",
+      "publishedAt": "2026-06-01T10:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-robotics/8888",
+      "descriptionPlain": "An old AI Engineer posting."
+    },
+    "not an object"
+  ]
+}

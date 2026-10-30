@@ -300,6 +300,12 @@ export interface Search {
   /** how a ticked LinkedIn is searched: LinkedIn's public job search ("api", the default when
    * absent) or the browser; Easy Apply uses the browser either way. Set in Find jobs. */
   linkedin_search?: LinkedInSearch;
+  /** Company job boards (owner, 2026-10-30), edited in Find jobs; null or absent: never saved */
+  company_boards?: CompanyBoard[] | null;
+  /** the job alert e-mails a sweep reads from the connected Gmail (absent: every one off) */
+  alert_emails?: AlertEmails;
+  /** the job feeds ticked in Find jobs (api app/jobs/feeds); absent until one is ticked */
+  job_feeds?: string[];
   /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */
@@ -310,6 +316,26 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+}
+
+/** schemas.py CompanyBoard: a company's public job board on its ATS. */
+export interface CompanyBoard {
+  company: string;
+  ats:
+    | "ashby"
+    | "greenhouse"
+    | "lever"
+    | "smartrecruiters"
+    | "workable"
+    | "recruitee";
+  board: string;
+  enabled: boolean;
+}
+
+/** One switch per provider of api/app/mail/alerts/providers.py. */
+export interface AlertEmails {
+  indeed: boolean;
+  linkedin: boolean;
 }
 
 export interface PayRange {

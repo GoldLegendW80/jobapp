@@ -1,0 +1,16 @@
+{
+  "offers": [
+    {
+      "id": 1,
+      "title": "AI Engineer",
+      "careers_url": "https://examplelabs.recruitee.com/o/ai-engineer",
+      "location": "Paris, France",
+      "country": "France",
+      "remote": false,
+      "published_at": "2026-10-06 09:00:00 UTC",
+      "employment_type_code": "internship",
+      "description": "<p>LLM agents.</p>",
+      "requirements": "<ul><li>Python</li></ul>"
+    }
+  ]
+}

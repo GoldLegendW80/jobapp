@@ -1,0 +1,27 @@
+{
+  "jobs": [
+    {
+      "id": 42,
+      "title": "AI Engineer",
+      "absolute_url": "https://job-boards.greenhouse.io/examplelabs/jobs/42",
+      "location": {"name": "London, UK"},
+      "first_published": "2026-10-02T09:00:00-04:00",
+      "updated_at": "2026-10-05T09:00:00-04:00",
+      "content": "&lt;p&gt;Build agents &amp;amp; tools in Python.&lt;/p&gt;"
+    },
+    {
+      "id": 43,
+      "absolute_url": "https://job-boards.greenhouse.io/examplelabs/jobs/43",
+      "location": {"name": "Paris"}
+    },
+    {
+      "id": 44,
+      "title": "GenAI Engineer, Remote",
+      "absolute_url": "https://job-boards.greenhouse.io/examplelabs/jobs/44",
+      "location": {"name": "Remote, Europe"},
+      "updated_at": "2026-10-06T09:00:00Z",
+      "content": ""
+    }
+  ],
+  "meta": {"total": 3}
+}
