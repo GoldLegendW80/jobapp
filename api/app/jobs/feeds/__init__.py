@@ -301,10 +301,12 @@ def https_url(value: object, hosts: Sequence[str]) -> str | None:
     """`value` when it is an https address on one of `hosts` (or a subdomain), else None."""
     if not isinstance(value, str) or len(value) > 2000:
         return None
-    parsed = httpx.URL(value) if value.startswith("https://") else None
-    if parsed is None:
+    if not value.startswith("https://"):
         return None
-    host = parsed.host.lower()
+    try:
+        host = httpx.URL(value).host.lower()
+    except httpx.InvalidURL:
+        return None
     if not any(host == h or host.endswith("." + h) for h in hosts):
         return None
     return value

@@ -9,8 +9,11 @@ The cursor moves to the newest posting read only when the run was not stopped by
 (a 429 or a failed page): a stopped run reads the same pages again next time.
 """
 
+import re
 from datetime import datetime, timedelta
 from typing import Any
+
+import httpx
 
 from app.jobs.feeds import (
     Criteria,
@@ -19,7 +22,6 @@ from app.jobs.feeds import (
     Fetched,
     Finding,
     epoch,
-    https_url,
     line,
     plain_text,
 )
@@ -27,7 +29,10 @@ from app.jobs.models import ContractType
 
 API = "https://www.arbeitnow.com/api/job-board-api"
 PAGES = 10  # about five days of postings on 2026-10-30
-HOSTS = ("arbeitnow.com", "arbeitnow.co.uk", "arbeitnow.de")
+# Its postings live on its country sites (www.arbeitnow.com, .co.uk, .ch, .nl, .fr seen on
+# 2026-10-30): exactly arbeitnow.com, arbeitnow.co.uk or arbeitnow.<two letters>, with or without
+# www, over https.
+HOST = re.compile(r"(?:www\.)?arbeitnow\.(?:com|co\.uk|[a-z]{2})")
 # The cursor's overlap: a posting stamped a little before the previous run's newest one still
 # reads (the addresses dedupe what was stored).
 OVERLAP = timedelta(hours=1)
@@ -53,12 +58,23 @@ def contract_of(types: object) -> ContractType | None:
     return None
 
 
+def address_of(value: object) -> str | None:
+    """The posting's page on an Arbeitnow site (HOST), None for any other address."""
+    if not isinstance(value, str) or len(value) > 2000 or not value.startswith("https://"):
+        return None
+    try:
+        host = httpx.URL(value).host.lower()
+    except httpx.InvalidURL:
+        return None
+    return value if HOST.fullmatch(host) else None
+
+
 def finding_of(item: Any, now: datetime) -> Finding | None:
     """One posting of a page, None when it lacks what a row needs."""
     if not isinstance(item, dict):
         return None
     slug, title = line(item.get("slug"), 300), line(item.get("title"))
-    url = https_url(item.get("url"), HOSTS)
+    url = address_of(item.get("url"))
     if not slug or not title or url is None:
         return None
     remote = item.get("remote") is True

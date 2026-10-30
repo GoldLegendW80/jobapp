@@ -19,7 +19,7 @@ import pytest
 
 from app.jobs import feeds
 from app.jobs.feeds import Criteria, FeedContext, FeedRunner, Http
-from app.jobs.feeds.arbeitnow import Arbeitnow, contract_of
+from app.jobs.feeds.arbeitnow import Arbeitnow, address_of, contract_of
 from app.jobs.models import ContractType
 from app.profile.schemas import SearchSection
 
@@ -281,6 +281,25 @@ def test_arbeitnow_budget_is_its_page_cap() -> None:
 )
 def test_arbeitnow_contract_words(types: Any, contract: ContractType | None) -> None:
     assert contract_of(types) is contract
+
+
+@pytest.mark.parametrize(
+    ("url", "kept"),
+    [
+        ("https://www.arbeitnow.com/jobs/companies/acme/fde-1", True),
+        ("https://www.arbeitnow.co.uk/jobs/companies/acme/fde-1", True),
+        ("https://www.arbeitnow.ch/jobs/companies/acme/fde-1", True),
+        ("https://arbeitnow.fr/jobs/companies/acme/fde-1", True),
+        ("http://www.arbeitnow.com/jobs/companies/acme/fde-1", False),
+        ("https://www.arbeitnow.com.example.test/jobs/x", False),
+        ("https://arbeitnow.example.test/jobs/x", False),
+        ("https://www.arbeitnow.community/jobs/x", False),
+        ("https://[::1/jobs", False),
+        (None, False),
+    ],
+)
+def test_arbeitnow_addresses_are_its_own_sites(url: Any, kept: bool) -> None:
+    assert address_of(url) == (url if kept else None)
 
 
 # --- Himalayas ------------------------------------------------------------------------------------
