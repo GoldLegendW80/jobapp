@@ -233,8 +233,22 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
 
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     await sweep.run_sweep(
-        sessions_of(ctx), uuid.UUID(sweep_id), clock_of(ctx), browser=browser_sources(ctx)
+        sessions_of(ctx),
+        uuid.UUID(sweep_id),
+        clock_of(ctx),
+        browser=browser_sources(ctx),
+        alerts=alert_sources(ctx),
     )
+
+
+def alert_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
+    """The job alert e-mails' run (app/mail/alerts/source.py): tests put theirs in the context."""
+    if "alert_sources" in ctx:
+        hook: sweep.BrowserHook | None = ctx["alert_sources"]
+        return hook
+    from app.mail.alerts import source
+
+    return source.hook_for(ctx["settings"], sessions_of(ctx), ctx.get("credentials_keyring"))
 
 
 def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:

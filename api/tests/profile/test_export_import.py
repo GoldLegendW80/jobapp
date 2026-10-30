@@ -162,11 +162,12 @@ def test_export_keys_follow_the_model_order_not_jsonb_order(api: Api, alice: str
     import_ok(api, alice, document())
     sections = export(api, alice)["sections"]
     for name in SECTIONS:
-        # The map of permissions is stored only once a dedicated writer records a decision.
+        # The map of permissions is stored only once a dedicated writer records a decision, and
+        # the alert e-mails only once one is on (SPEC-mail.md, "Job alert e-mails").
         expected = [
             field
             for field in SECTION_MODELS[name].model_fields
-            if (name, field) != ("search", "platform_consents")
+            if (name, field) not in {("search", "platform_consents"), ("search", "alert_emails")}
         ]
         assert list(sections[name]) == expected
 

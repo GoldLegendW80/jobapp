@@ -53,6 +53,8 @@ import { SearchLists } from "@/features/profile/search-lists";
 import { TargetFields } from "@/features/profile/target-fields";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
+import { AlertEmailsGroup } from "./alert-emails";
+import { alertSettings } from "./alert-providers";
 import { formatDateTime } from "./format";
 import {
   PROTECTED,
@@ -258,6 +260,9 @@ function SetupForm({
     profile.sections.search.interactive_instructions ?? "",
   );
   const [custom, setCustom] = useState("");
+  const [alerts, setAlerts] = useState(() =>
+    alertSettings(profile.sections.search.alert_emails),
+  );
   const [revision, setRevision] = useState(profile.revision);
   const [reviewed, setReviewed] = useState(() =>
     structuredClone(profile.sections.search),
@@ -447,6 +452,7 @@ function SetupForm({
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
+        alert_emails: alerts,
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -715,6 +721,7 @@ function SetupForm({
               </div>
             </div>
           </section>
+          <AlertEmailsGroup id={id} value={alerts} onChange={setAlerts} />
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
             <SearchLists form={form} descriptions={false} />

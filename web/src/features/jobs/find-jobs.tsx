@@ -77,6 +77,12 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
 
 /** What the sweep reads now: a website searched in the person's browser by its name (its
  * `current_board` is the source's id, jobs J10), any other source by its label. */
+/** A job website of the sweep: a source with a host, but not a provider's alert e-mails
+ * (mode "mail", host "mail:indeed"), which are not a website searched. */
+function isWebsite(source: Sweep["sources"][number]): boolean {
+  return Boolean(source.host) && source.mode !== "mail";
+}
+
 function readingName(sweep: Sweep): string {
   const current = sweep.current_board ?? "";
   const source = sweep.sources.find((item) => item.source_id === current);
@@ -89,7 +95,7 @@ function readingName(sweep: Sweep): string {
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
-  const websites = sweep.sources.filter((source) => source.host);
+  const websites = sweep.sources.filter(isWebsite);
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
@@ -142,7 +148,7 @@ function summaryLine(sweep: Sweep): string {
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
-      : `${plural(sweep.sources.filter((source) => source.host).length, "website")} searched`,
+      : `${plural(sweep.sources.filter(isWebsite).length, "website")} searched`,
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),

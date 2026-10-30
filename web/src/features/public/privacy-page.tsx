@@ -1,5 +1,6 @@
 import {
   AFTER_DISCONNECT,
+  ALERT_EMAILS,
   ASSISTANT,
   BROWSER_DISK,
   BROWSER_FORGET,
@@ -46,6 +47,7 @@ export function PrivacyPage() {
           </li>
           <li>{SEARCH_COMPANIES}</li>
         </ul>
+        <p>{ALERT_EMAILS}</p>
       </Section>
       <Section id="stored" title="Where it is stored">
         <p>{WHERE_STORED}</p>

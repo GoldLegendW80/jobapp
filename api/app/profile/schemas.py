@@ -812,7 +812,7 @@ class PlatformConsent(_Section):
 InteractivePlatform = Literal["linkedin", "welcome_to_the_jungle", "indeed", "freework", "custom"]
 INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 # Search fields an older editor or import leaves out: the stored value is kept (service).
-KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude")
+KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude", "alert_emails")
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -948,6 +948,15 @@ def without_starter(data: Any) -> Any:
     return {**data, "onboarding": onboarding}
 
 
+class AlertEmails(_Section):
+    """Which job websites' alert e-mails a sweep reads (SPEC-mail.md, "Job alert e-mails: a
+    narrow exception"): one switch per provider of `app/mail/alerts/providers.py`, off unless the
+    person turns it on in Find jobs setup."""
+
+    indeed: bool = False
+    linkedin: bool = False
+
+
 class SearchSection(_Section):
     title_include: TermList = Field(default_factory=TermList)
     title_exclude: TermList = Field(default_factory=TermList)
@@ -970,6 +979,8 @@ class SearchSection(_Section):
         default_factory=list
     )
     interactive_instructions: OptText(2000, multiline=True) = None
+    # Job alert e-mails read from the connected mailbox (owner, 2026-10-30); off when absent.
+    alert_emails: AlertEmails = Field(default_factory=lambda: AlertEmails())
     # When the job websites are searched automatically (jobs J5 schedules it and edits it next
     # to Find jobs). Off unless the user turns it on; a section saved before this field existed
     # reads as off.

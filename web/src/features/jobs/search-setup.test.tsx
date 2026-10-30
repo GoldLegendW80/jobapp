@@ -1371,3 +1371,35 @@ it("shows no other search source, no Websites only and no link, and sends none b
   expect(sent).not.toHaveProperty("feeds");
   expect(sent.browser_sources ?? []).toEqual([]);
 });
+
+it("saves the ticked alert e-mails with the search and reopens them ticked", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    alert_emails: { indeed: false, linkedin: true },
+  });
+  const group = within(dialog).getByRole("region", { name: "Alert e-mails" });
+  expect(
+    within(group).getByRole("checkbox", { name: "LinkedIn alert e-mails" }),
+  ).toBeChecked();
+  await user.click(
+    within(group).getByRole("checkbox", { name: "Indeed alert e-mails" }),
+  );
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    alert_emails: { indeed: true, linkedin: true },
+  });
+});
+
+it("a search saved before the alert e-mails sends every one off", async () => {
+  const { profile, user, dialog } = await open();
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(profile.saves).toHaveLength(1);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    alert_emails: { indeed: false, linkedin: false },
+  });
+});

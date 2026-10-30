@@ -190,9 +190,27 @@ def has_websites(search: SearchSection | None) -> bool:
     return bool(search and any(site.enabled for site in search.interactive_sites))
 
 
+def alert_keys(search: SearchSection | None) -> list[str]:
+    """The providers whose job alert e-mails the person turned on (app/mail/alerts)."""
+    if search is None:
+        return []
+    return [key for key, on in search.alert_emails.model_dump().items() if on]
+
+
+def alert_entry(key: str) -> dict[str, Any]:
+    """The frozen source of one provider's alert e-mails: its stats entry is "mail:<key>"."""
+    return {
+        "source_id": _source_id("mail", key),
+        "mode": "mail",
+        "kind": "alerts",
+        "host": f"mail:{key}",
+    }
+
+
 def has_sources(search: SearchSection | None) -> bool:
-    """Whether a sweep of `search` has something to read: an enabled website."""
-    return has_websites(search)
+    """Whether a sweep of `search` has something to read: an enabled website, or the alert
+    e-mails of a provider."""
+    return has_websites(search) or bool(alert_keys(search))
 
 
 def _source_id(mode: str, *key: str) -> str:
@@ -228,6 +246,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             for site in search.interactive_sites
             if site.enabled
         )
+        sources.extend(alert_entry(key) for key in alert_keys(search))
     return {
         "version": 1,
         "profile_revision": profile.revision if profile else 0,
@@ -673,7 +692,8 @@ def finish_done(
 
 Clock = Callable[[], datetime]
 # The job websites' run (app/browser/sources, `Runner`): given the plan, the stats, the progress
-# save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`.
+# save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`. The
+# alert e-mails' run (app/mail/alerts/source.py) has the same shape and runs first.
 BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
 
 
@@ -685,6 +705,7 @@ async def run_sweep(
     timeout_s: float = SWEEP_TIMEOUT_S,
     heartbeat_s: float = HEARTBEAT_S,
     browser: BrowserHook | None = None,
+    alerts: BrowserHook | None = None,
 ) -> None:
     """Run one sweep to its end (module docstring). Never raises for a website's failure; any
     other error fails the sweep and is re-raised only for cancellation."""
@@ -714,6 +735,8 @@ async def run_sweep(
 
             beating = asyncio.create_task(beat())
             try:
+                if alerts is not None:
+                    await alerts(plan, stats, progress, started + timeout_s)
                 if browser is not None:
                     await browser(plan, stats, progress, started + timeout_s)
             finally:
