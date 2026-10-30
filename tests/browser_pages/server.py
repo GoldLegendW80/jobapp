@@ -89,7 +89,7 @@ B19_HOSTS = {
 }
 B19_LOG = []
 B19_JOB = "/fr/companies/example-robotics/jobs/genai-engineer_paris"
-B19_KEY = "3f2a9c1d0b8e7a65"
+B19_KEY = "3f2a9c1d0b8e7a65"  # gitleaks:allow (fake key of the .test fixture site)
 
 
 def b19_words(text: str) -> bool:
