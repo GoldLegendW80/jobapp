@@ -223,6 +223,11 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
     setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
   await setup.getByLabel("Instructions for this search").fill(INSTRUCTIONS);
+  // The journey follows the browser agent on LinkedIn's fixture pages: LinkedIn's public job
+  // search is the default (owner, 2026-10-30), so it chooses the browser.
+  await setup
+    .getByRole("radio", { name: "Search with the browser, signed in" })
+    .check();
   // Owner, 2026-10-28: the setup is the websites and the words. The company careers page she
   // sent (a deleted reader) is neither shown nor searched, and no switch asks for regular
   // expressions.

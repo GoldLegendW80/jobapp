@@ -1,6 +1,8 @@
 """The job websites of the sweep (SPEC-browser "The second use", jobs J9 to J18): the websites
 the person ticked in Find jobs, each searched by the interactive finder in the person's browser
-(app/browser/sources/interactive.py, `run_selected`).
+(app/browser/sources/interactive.py, `run_selected`). A ticked LinkedIn whose search mode is
+`api` (owner, 2026-10-30, the default) is searched first, through LinkedIn's public job search,
+with no lease (app/browser/sources/linkedin_guest.py); the other websites then run as before.
 
 `Runner` is the hook of app/jobs/sweep.py's `run_sweep`: it holds what a website's search needs
 (the lease store, browserd's tools, the pacer, the finder agent, the platform policy and the
@@ -523,8 +525,20 @@ class Runner:
         finder: Any = None,
         interactive_policy: "InteractivePolicy | None" = None,
         site_logins: Any = None,
+        guest_http: Callable[[], Any] | None = None,
+        guest_cooldown: Any = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
+        # LinkedIn's public job search (linkedin_guest): a new HTTP transport per sweep; None
+        # makes no request at all (tests that do not give one).
+        self.guest_http = guest_http
+        # LinkedIn's cooldown after a refusal, shared by every sweep (linkedin_guest.RedisCooldown
+        # in the worker; this process alone without Redis).
+        if guest_cooldown is None:
+            from app.browser.sources.linkedin_guest import MemoryCooldown
+
+            guest_cooldown = MemoryCooldown()
+        self.guest_cooldown = guest_cooldown
         self.finder = finder  # the finder agent of the websites (finder.RuntimeFinder)
         self.interactive_policy = interactive_policy
         self.site_logins = site_logins  # B17: the websites the person signed in to (site_logins)
@@ -539,9 +553,12 @@ class Runner:
         progress: Callable[[], Awaitable[None]],
         deadline: float,
     ) -> None:
+        from app.browser.sources import linkedin_guest
         from app.browser.sources.interactive import run_selected
 
-        await run_selected(self, plan, stats, progress, deadline, None)
+        # LinkedIn in API mode first (no lease), then the websites read in the browser.
+        rest, stop = await linkedin_guest.run(self, plan, stats, progress, deadline)
+        await run_selected(self, rest, stats, progress, deadline, stop)
 
     async def _give_back(self, user: str, held: str | None) -> None:
         if held is None:
@@ -573,6 +590,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
     )
     from app.browser import platform_policy
     from app.browser.site_logins import SiteLogins
+    from app.browser.sources.linkedin_guest import RedisCooldown
 
     return Runner(
         leases,
@@ -582,7 +600,16 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         finder=None if agent_context is None else _finder(agent_context),
         interactive_policy=platform_policy.runtime_policy(settings, sessions),
         site_logins=SiteLogins(sessions),
+        guest_http=_guest_http,
+        guest_cooldown=RedisCooldown(pool),
     )
+
+
+def _guest_http() -> Any:
+    """The worker's way to LinkedIn's public job search: its own network, no proxy, no retry."""
+    import httpx
+
+    return httpx.AsyncHTTPTransport(retries=0)
 
 
 def _finder(agent_context: Any) -> Any:

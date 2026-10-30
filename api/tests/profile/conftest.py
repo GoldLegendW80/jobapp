@@ -134,6 +134,7 @@ FULL: dict[str, dict[str, Any]] = {
             }
         ],
         "interactive_instructions": None,
+        "linkedin_search": "api",
         # Company job boards (owner, 2026-10-30).
         "company_boards": [
             {

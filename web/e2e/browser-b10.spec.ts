@@ -133,6 +133,11 @@ async function findJobs(page: Page) {
   const setup = page.getByRole("dialog", { name: "Find jobs setup" });
   await expect(setup).toBeVisible();
   await setup.getByRole("checkbox", { name: "LinkedIn", exact: true }).check();
+  // These guards are the browser search's: LinkedIn's public job search is the default
+  // (owner, 2026-10-30), so the journey chooses the browser.
+  await setup
+    .getByRole("radio", { name: "Search with the browser, signed in" })
+    .check();
   await setup.getByRole("button", { name: "Save and Start" }).click();
   const dialog = page.getByRole("dialog", {
     name: /new postings? found|No new posting|The sweep stopped/,

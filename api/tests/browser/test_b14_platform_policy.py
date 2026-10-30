@@ -302,7 +302,8 @@ def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
         interactive_sites=[
             {"platform": label, "url": url, "enabled": True, "mode": "llm_browser"}
             for label, url in sites
-        ]
+        ],
+        linkedin_search="browser",  # the browser agent's pace (the default is the public search)
     )
     entries, _, leases, _, _ = asyncio.run(
         execute(

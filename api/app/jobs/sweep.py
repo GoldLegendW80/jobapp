@@ -228,6 +228,18 @@ def has_sources(search: SearchSection | None) -> bool:
     )
 
 
+def linkedin_mode(search: SearchSection | None) -> str:
+    """The mode a ticked LinkedIn runs in: `api` (LinkedIn's public job search, the default) or
+    `llm_browser` (the finder agent in the person's browser), from `search.linkedin_search`."""
+    if search is not None and getattr(search, "linkedin_search", "api") == "browser":
+        return "llm_browser"
+    return "api"
+
+
+def _site_mode(search: SearchSection, site: Any) -> str:
+    return linkedin_mode(search) if site.effective_platform == "linkedin" else site.mode
+
+
 def _source_id(mode: str, *key: str) -> str:
     encoded = json.dumps([mode, *key], ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
@@ -250,6 +262,11 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+        # The release before LinkedIn's public job search refuses the key, and a sweep it
+        # claims after a rollback would fail: the default is left out (the sweep reads the mode
+        # from the frozen sources below, never from `search`), only "browser" is kept.
+        if raw.get("linkedin_search") == "api":
+            del raw["linkedin_search"]
         # No board saved, or none listed: the key is not frozen at all. The release before the
         # company boards refuses it (extra="forbid"), so a queued run it claims after a
         # rollback stays valid unless the person really saved boards (SPEC-jobs, Company job
@@ -268,8 +285,9 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         sources.extend(
             {
                 **site.model_dump(mode="json"),
+                "mode": _site_mode(search, site),
                 "platform": site.effective_platform,
-                "source_id": _source_id(site.mode, site.url),
+                "source_id": _source_id(_site_mode(search, site), site.url),
                 "host": urlsplit(site.url).hostname,
             }
             for site in search.interactive_sites
@@ -854,19 +872,27 @@ async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
 
 
 def _summary(stats: Stats) -> dict[str, Any]:
+    from app.jobs import feeds  # feeds imports this module
+
+    def is_feed(source: dict[str, Any]) -> bool:
+        return source.get("mode") == "api" and source.get("kind") in feeds.FEED_NAMES
+
+    def is_board(source: dict[str, Any]) -> bool:
+        return source.get("kind") == "board"
+
     return {
-        # The alert e-mails' entries ("mail") are neither websites nor feeds.
+        # The alert e-mails' entries ("mail") are neither websites nor feeds. LinkedIn read
+        # through its public job search (mode "api", kind "linkedin") is a website.
         "websites": sum(
             1
             for source in stats.sources
-            if source.get("host") and source.get("mode") not in ("api", "mail")
+            if source.get("host")
+            and source.get("mode") != "mail"
+            and not is_feed(source)
+            and not is_board(source)
         ),
-        "feeds": sum(
-            1
-            for source in stats.sources
-            if source.get("mode") == "api" and source.get("kind") != "board"
-        ),
-        "boards": sum(1 for source in stats.sources if source.get("kind") == "board"),
+        "feeds": sum(1 for source in stats.sources if is_feed(source)),
+        "boards": sum(1 for source in stats.sources if is_board(source)),
         "seen": stats.seen,
         "matched": stats.matched,
         "new": stats.new,

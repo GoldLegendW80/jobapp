@@ -49,7 +49,13 @@ def site(platform: str) -> dict[str, Any]:
 def tick_and_save(api: Api, who: Person, platform: str) -> int:
     """The setup's generic save of the search with the website ticked: no permission in it."""
     current = profile(api, who)
-    search = {**current["sections"]["search"], "interactive_sites": [site(platform)]}
+    # The browser's search, whose permission these tests follow (LinkedIn's public job
+    # search is the default since 2026-10-30, tests/browser/test_linkedin_guest.py).
+    search = {
+        **current["sections"]["search"],
+        "interactive_sites": [site(platform)],
+        "linkedin_search": "browser",
+    }
     response = api.request(
         "PUT",
         "/api/profile/search",

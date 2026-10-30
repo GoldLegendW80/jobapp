@@ -78,6 +78,9 @@ def running(
                 {"platform": "custom", "url": url, "enabled": True, "mode": "llm_browser"}
                 for url in urls
             ],
+            # The browser's search (LinkedIn's public job search is the default since
+            # 2026-10-30, tests/browser/test_linkedin_guest.py).
+            "linkedin_search": "browser",
         }
     )
     profile = type("P", (), {"sections": {"search": search.model_dump(mode="json")}, "revision": 1})
@@ -460,7 +463,7 @@ def test_the_agent_of_linkedin_runs_again_in_a_second_sweep_of_the_day(
 
     accept(api, person_a, "linkedin")
     policy = PlatformPolicy(factory, clock)
-    search = selected(LINKEDIN, title_include={"terms": ["a1", "b2"]})
+    search = selected(LINKEDIN, title_include={"terms": ["a1", "b2"]}, linkedin_search="browser")
 
     def sweep_of(sweep_id: uuid.UUID) -> tuple[dict[str, Any], Any]:
         site = SearchSite(base=LINKEDIN, results={"a1": ["a1 Engineer"]})

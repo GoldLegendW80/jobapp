@@ -187,3 +187,27 @@ def test_the_switch_is_off_by_default_and_needs_the_sentence(
 def test_the_routes_need_a_session(api: Api) -> None:
     assert api.get("/api/browser/linkedin").status_code == 401
     assert api.request("PUT", "/api/browser/linkedin", json={"enabled": False}).status_code == 401
+
+
+def test_linkedin_public_job_search_neither_counts_as_the_last_sweep_nor_clears_the_wall(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """LinkedIn's public job search (mode `api`, sources/linkedin_guest.py) opens no page of the
+    person's browser: a later sweep of it keeps the browser's last sweep and its sign in wall."""
+    set_profile(factory, alice, search(browser_sources=[linkedin()]))
+    walled = NOW - timedelta(hours=3)
+    add_sweep(factory, alice, {"mode": "llm_browser", "error": "linkedin_signin"}, walled)
+    add_sweep(factory, alice, {"mode": "api", "result_pages": 3, "error": None}, NOW)
+    with factory() as db:
+        state = guard.state(db, alice, NOW + timedelta(hours=1))
+    assert state.needs_signin is True
+    assert state.last_sweep_at == walled + timedelta(minutes=5)
+    # A browser sweep that read pages without the wall clears it, an older row without a mode too.
+    add_sweep(factory, alice, {"error": None}, NOW + timedelta(minutes=30))
+    with factory() as db:
+        state = guard.state(db, alice, NOW + timedelta(hours=1))
+    assert (state.needs_signin, state.last_sweep_at) == (False, NOW + timedelta(minutes=35))
+    # An API entry with the wall's code (never written, but read safely) is not the browser's.
+    add_sweep(factory, alice, {"mode": "api", "error": "linkedin_signin"}, NOW + timedelta(hours=2))
+    with factory() as db:
+        assert guard.state(db, alice, NOW + timedelta(hours=3)).needs_signin is False
