@@ -295,6 +295,8 @@ export interface Search {
   /** Saved intent; browser consent remains owned by the browser API. */
   interactive_sites?: InteractiveSite[];
   interactive_instructions?: string | null;
+  /** Company job boards (owner, 2026-10-30), edited in Find jobs; null or absent: never saved */
+  company_boards?: CompanyBoard[] | null;
   /** the job alert e-mails a sweep reads from the connected Gmail (absent: every one off) */
   alert_emails?: AlertEmails;
   /** the job feeds ticked in Find jobs (api app/jobs/feeds); absent until one is ticked */
@@ -309,6 +311,20 @@ export interface Search {
   company_types: (typeof COMPANY_TYPES)[number][];
   /** O4: the pay sought; changes no score */
   compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+}
+
+/** schemas.py CompanyBoard: a company's public job board on its ATS. */
+export interface CompanyBoard {
+  company: string;
+  ats:
+    | "ashby"
+    | "greenhouse"
+    | "lever"
+    | "smartrecruiters"
+    | "workable"
+    | "recruitee";
+  board: string;
+  enabled: boolean;
 }
 
 /** One switch per provider of api/app/mail/alerts/providers.py. */

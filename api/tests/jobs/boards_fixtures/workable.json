@@ -1,0 +1,22 @@
+{
+  "name": "Example Models",
+  "jobs": [
+    {
+      "title": "AI Engineer",
+      "shortcode": "ABC123",
+      "employment_type": "Full-time",
+      "telecommuting": true,
+      "url": "https://apply.workable.com/j/ABC123",
+      "shortlink": "https://apply.workable.com/j/ABC123",
+      "published_on": "2026-10-05",
+      "created_at": "2026-10-04",
+      "country": "France",
+      "city": "Paris",
+      "locations": [
+        {"country": "France", "countryCode": "FR", "city": "Paris", "hidden": false},
+        {"country": "Germany", "countryCode": "DE", "city": "Munich", "hidden": true}
+      ],
+      "description": "<p>Agents &amp; evaluation in Python.</p>"
+    }
+  ]
+}

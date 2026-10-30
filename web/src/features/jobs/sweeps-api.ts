@@ -30,6 +30,8 @@ export const sweepSourceSchema = z.object({
   kind: z.string(),
   query: z.string(),
   location: z.string().nullable(),
+  // A company job board (owner, 2026-10-30): its company name; absent from an older api.
+  company: z.string().nullable().optional(),
   // The website's host, for a website searched in the person's browser (jobs J10).
   host: z.string().nullable().optional(),
   result_pages: z.number().int().nonnegative(),

@@ -1,6 +1,6 @@
 /**
- * "Find jobs" on /jobs: start a search of the job websites ticked in its setup (every search
- * runs the websites alone, owner 2026-10-28), follow it live (the website being read, new
+ * "Find jobs" on /jobs: start a search of the company job boards and the job websites ticked in
+ * its setup (owner, 2026-10-30), follow it live (the website being read, new
  * postings so far), then a summary of what it found. An older sweep that read boards still
  * shows them. The history of the last sweeps, with the automatic schedule and its next run, is one
  * click away. A sweep already running when the page opens (started elsewhere, or an automatic
@@ -76,16 +76,25 @@ export function FindJobsButton({ runner }: { runner: SweepRunner }) {
   );
 }
 
-/** A job website of the sweep: a source with a host, but not a provider's alert e-mails
- * (mode "mail", host "mail:indeed"), which are not a website searched. */
 /** A ticked job feed (mode "api", api app/jobs/feeds). */
 function isFeed(source: Sweep["sources"][number]): boolean {
   return source.mode === "api" && isJobFeed(source.kind);
 }
 
-/** A job website: neither an alert e-mail provider (mode "mail") nor a job feed. */
+/** A company job board (mode "api", kind "board", api app/jobs/boards). */
+function isBoard(source: Sweep["sources"][number]): boolean {
+  return source.kind === "board";
+}
+
+/** A job website of the sweep: a source with a host, but neither a provider's alert e-mails
+ * (mode "mail", host "mail:indeed"), nor a job feed, nor a company board. */
 function isWebsite(source: Sweep["sources"][number]): boolean {
-  return Boolean(source.host) && source.mode !== "mail" && !isFeed(source);
+  return (
+    Boolean(source.host) &&
+    source.mode !== "mail" &&
+    !isFeed(source) &&
+    !isBoard(source)
+  );
 }
 
 /** What the sweep reads now: a website searched in the person's browser by its name (its
@@ -96,18 +105,25 @@ function readingName(sweep: Sweep): string {
   return source ? sourceName(source) : sourceLabel(current);
 }
 
+/** What the sweep's sources are called: "website", or "source" once job feeds or company job
+ * boards (mode "api", owner 2026-10-30) are among them. */
+function sourceWord(sweep: Sweep): string {
+  return sweep.sources.some((source) => source.mode === "api")
+    ? "source"
+    : "website";
+}
+
 /** The live line under the header while a sweep runs. A sweep searches the job websites ticked
  * in Find jobs alone (owner, 2026-10-28), so it counts them: one source with a host each, done
  * once its phase is. */
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
-  // The ticked job feeds (mode "api") count with the websites: read first, one source each.
-  // The alert e-mails (mode "mail") are not counted here.
+  // The ticked job feeds and the company boards (mode "api") count with the websites: read
+  // first, one source each. The alert e-mails (mode "mail") are not counted here.
   const websites = sweep.sources.filter(
-    (source) => isWebsite(source) || isFeed(source),
+    (source) => isWebsite(source) || isFeed(source) || isBoard(source),
   );
-  const word = websites.some(isFeed) ? "source" : "website";
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
@@ -123,7 +139,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
       >
         <span className="font-medium">
           {total
-            ? `${String(done)} of ${plural(total, word)} searched`
+            ? `${String(done)} of ${plural(total, sourceWord(sweep))} searched`
             : sweep.current_board
               ? "Searching job websites"
               : "Waiting for the worker"}
@@ -162,6 +178,14 @@ function feedsRead(sweep: Sweep): string[] {
   return feeds.length ? [`${plural(feeds.length, "job feed")} read`] : [];
 }
 
+/** The company job boards a sweep read (api app/jobs/boards), as a part of its summary line. */
+function boardsRead(sweep: Sweep): string[] {
+  const boards = sweep.sources.filter(isBoard);
+  return boards.length
+    ? [`${plural(boards.length, "company board")} read`]
+    : [];
+}
+
 function summaryLine(sweep: Sweep): string {
   const parts = [
     // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
@@ -170,6 +194,7 @@ function summaryLine(sweep: Sweep): string {
       ? `${plural(sweep.boards_ok, "board")} read`
       : `${plural(sweep.sources.filter(isWebsite).length, "website")} searched`,
     ...feedsRead(sweep),
+    ...boardsRead(sweep),
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),

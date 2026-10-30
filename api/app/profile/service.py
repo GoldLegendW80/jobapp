@@ -171,6 +171,10 @@ def _keep_consent(
         # Sent empty, it replaced the stored list (above); stored only once a feed is ticked, as
         # the release before this one refuses the key.
         del data["job_feeds"]
+    if "company_boards" in data and data["company_boards"] is None:
+        # Sent as null, it replaced the stored list (above). Null means never saved, which is the
+        # key's absence: never stored as null. An empty list is a choice and is stored.
+        del data["company_boards"]
     sources = data.get("browser_sources")
     if not isinstance(sources, list):
         return data

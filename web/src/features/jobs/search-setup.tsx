@@ -39,6 +39,7 @@ import {
   interactiveSettingsSchema,
   profileKey,
   saveSection,
+  type CompanyBoard,
   type InteractiveSite,
   type Profile,
   type Search,
@@ -55,6 +56,8 @@ import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import { AlertEmailsGroup } from "./alert-emails";
 import { alertSettings } from "./alert-providers";
+import { getStarterBoards, savedBoard, starterKey } from "./boards-api";
+import { CompanyBoards } from "./company-boards";
 import { formatDateTime } from "./format";
 import { isJobFeed, type JobFeed } from "./job-feeds";
 import { JobFeedsChoice } from "./job-feeds-ui";
@@ -266,6 +269,28 @@ function SetupForm({
     (profile.sections.search.job_feeds ?? []).filter(isJobFeed),
   );
   const [custom, setCustom] = useState("");
+  // Company job boards (owner, 2026-10-30): never saved, the starter list is shown ticked as a
+  // proposal; a list saved before is the person's own. The list is sent with Save only once the
+  // person changed it (tick, untick, remove, add) or kept the proposal ("Keep these boards"):
+  // opening Find jobs and saving other settings never stores it, so a profile holds the key
+  // (which the release before refuses) only when its person chose boards.
+  const savedBoards = profile.sections.search.company_boards ?? null;
+  const [edited, setEdited] = useState<CompanyBoard[] | null>(() =>
+    savedBoards ? structuredClone(savedBoards) : null,
+  );
+  const starter = useQuery({
+    queryKey: starterKey,
+    queryFn: ({ signal }) => getStarterBoards(signal),
+    enabled: savedBoards === null,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  });
+  const seeded = starter.data ? starter.data.boards.map(savedBoard) : null;
+  // null while the starter list loads; an empty list when it could not be loaded (not sent).
+  const boards = edited ?? seeded ?? (starter.isError ? [] : null);
+  // The starter list shown and not chosen yet.
+  const proposal = savedBoards === null && edited === null && seeded !== null;
   const [alerts, setAlerts] = useState(() =>
     alertSettings(profile.sections.search.alert_emails),
   );
@@ -460,6 +485,7 @@ function SetupForm({
         ...settings.data,
         alert_emails: alerts,
         job_feeds: feeds,
+        ...(edited !== null ? { company_boards: edited } : {}),
       });
       if (!isMounted()) return;
       if (!isCurrent(saved))
@@ -730,6 +756,14 @@ function SetupForm({
           </section>
           <AlertEmailsGroup id={id} value={alerts} onChange={setAlerts} />
           <JobFeedsChoice value={feeds} onChange={setFeeds} />
+          <CompanyBoards
+            boards={boards}
+            onChange={setEdited}
+            proposal={proposal}
+            onKeep={() => {
+              setEdited(seeded);
+            }}
+          />
           <section aria-label="Search criteria" className="space-y-4">
             <h3 className="font-medium">Search criteria</h3>
             <SearchLists form={form} descriptions={false} />

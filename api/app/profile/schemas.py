@@ -21,7 +21,8 @@ Sections and what they replace in the engine:
   have, adjacent, none (names unique across the three), gates with a penalty 0 to 100.
 - search: title include, title exclude, location and unwanted location terms, contract
   types, remote stance, min_fit, posting age window, never-apply rules (`engine/boards.json`,
-  hard rule 11), the job websites searched, and what the person aims for (opportunities O4):
+  hard rule 11), the job websites searched, the company job boards read through their ATS's
+  public API (owner, 2026-10-30), and what the person aims for (opportunities O4):
   seniority levels, industries, company types (a small bonus to the fit, never a filter) and
   the pay sought (changes no score).
 - preferences: the language and tone of the generated documents, and the dates of the first
@@ -815,7 +816,13 @@ INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 # The job feeds a sweep reads beside the websites (owner, 2026-10-30, app/jobs/feeds), ticked in
 # Find jobs: an editor that does not know the field keeps the stored value.
 JobFeed = Literal["arbeitnow", "himalayas", "adzuna"]
-KEPT_WHEN_OMITTED = (*INTERACTIVE_FIELDS, "location_exclude", "alert_emails", "job_feeds")
+KEPT_WHEN_OMITTED = (
+    *INTERACTIVE_FIELDS,
+    "location_exclude",
+    "alert_emails",
+    "job_feeds",
+    "company_boards",
+)
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
     "welcometothejungle.com": "welcome_to_the_jungle",
@@ -917,6 +924,39 @@ class Compensation(_Section):
     daily_rate: PayRange | None = None
 
 
+# Company job boards (owner, 2026-10-30, reversing the deletion of 2026-10-28): the person's
+# target companies, each a public job board on its ATS, read through the ATS's official public
+# posting API (app/jobs/boards). `board` is the board's id on its ATS (Ashby's organisation,
+# Greenhouse's board token, Lever's company, SmartRecruiters' company identifier, Workable's
+# account, Recruitee's subdomain); it becomes one path segment, or for Recruitee one DNS label,
+# so its shape is fixed here (BOARD_PATTERN, Recruitee: RECRUITEE_PATTERN).
+BoardAts = Literal["ashby", "greenhouse", "lever", "smartrecruiters", "workable", "recruitee"]
+BOARD_ATS: tuple[str, ...] = get_args(BoardAts)
+BOARD_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$"
+RECRUITEE_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+COMPANY_BOARDS_MAX = 100
+
+
+class CompanyBoard(_Section):
+    company: Text(200)
+    ats: BoardAts
+    board: Text(100, pattern=BOARD_PATTERN)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _board_shape(self) -> "CompanyBoard":
+        if ".." in self.board:
+            raise ValueError("a board id never holds two dots in a row")
+        if self.ats == "recruitee" and not RECRUITEE_PATTERN.fullmatch(self.board):
+            raise ValueError("a Recruitee board id is its lowercase subdomain")
+        return self
+
+    @property
+    def key(self) -> tuple[str, str]:
+        """The board's identity: its ATS and its id, case aside."""
+        return self.ats, self.board.casefold()
+
+
 # What a search section saved before 2026-10-28 may hold that no code reads any more: the
 # company boards, the freelance feeds and the fixed browser readers were deleted (owner,
 # 2026-10-28: "Delete it").
@@ -982,6 +1022,11 @@ class SearchSection(_Section):
         default_factory=list
     )
     interactive_instructions: OptText(2000, multiline=True) = None
+    # Company job boards (app/jobs/boards). None: never saved (Find jobs offers its starter
+    # list then); a list, the empty one included, is the person's own.
+    company_boards: Annotated[list[CompanyBoard], Field(max_length=COMPANY_BOARDS_MAX)] | None = (
+        None
+    )
     # Job alert e-mails read from the connected mailbox (owner, 2026-10-30); off when absent.
     alert_emails: AlertEmails = Field(default_factory=lambda: AlertEmails())
     job_feeds: Annotated[list[JobFeed], Field(max_length=3)] = Field(default_factory=list)
@@ -1045,6 +1090,13 @@ class SearchSection(_Section):
             if sum(source.kind == kind for source in value) > 1:
                 raise ValueError(f"at most one {kind} source")
         return value
+
+    @field_validator("company_boards")
+    @classmethod
+    def _unique_boards(cls, value: list[CompanyBoard] | None) -> list[CompanyBoard] | None:
+        if value is None:
+            return None
+        return _unique(value, lambda board: ":".join(board.key), "company job board")
 
     @field_validator("job_feeds")
     @classmethod

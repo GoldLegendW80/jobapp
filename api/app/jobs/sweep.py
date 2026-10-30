@@ -7,14 +7,16 @@ One sweep, `run_sweep(sweep_id)`:
    a worker that then died is failed at once instead of half run again). The user comes from
    the row, never from the queue message. New runs use the search and skills frozen under the
    profile row lock at creation; pre-v1 rows without `stats.search_scope` explicitly retain
-   claim-time profile reads. Without a ticked website, alert e-mail or job feed, or with a
-   search section that no longer validates, the sweep fails with a clear message.
+   claim-time profile reads. Without a ticked website, company board, alert e-mail or job feed,
+   or with a search section that no longer validates, the sweep fails with a clear message.
 2. Search. The alerts hook (app/mail/alerts/source.py) first reads the job alert e-mails of
    every provider turned on (SPEC-mail.md), then the feed hook (app/jobs/feeds, `FeedRunner`)
    reads every ticked job feed (Arbeitnow, Himalayas, Adzuna: official APIs, owner
-   2026-10-30), then the browser hook (app/browser/sources, `Runner`) runs every ticked website
-   through the bounded interactive finder (app/browser/finder.py), one website after the other,
-   within the sweep's time limit.
+   2026-10-30), then the company boards hook (app/jobs/boards/run.py, chained before the
+   website Runner) reads every enabled company board, then the browser hook
+   (app/browser/sources, `Runner`) runs every ticked website through the bounded interactive
+   finder (app/browser/finder.py), one website after the other, all within the sweep's one
+   deadline.
 3. Store. Each batch of findings the finder verified on its detail page is stored as it is
    reported (`Commits`, jobs J11 and J11b, below): scored against the user's skills, moved to
    `skipped` when a never apply rule matches, counted as a duplicate when the user has it.
@@ -23,12 +25,15 @@ One sweep, `run_sweep(sweep_id)`:
 5. End. `done` with the duration, or `failed` with a short error (time limit, cancellation, a
    bug); the row is never left running by a sweep that returns.
 
-Company boards (Ashby, Greenhouse, Lever), freelance feeds and the fixed browser readers were
-deleted (owner, 2026-10-28: "Delete it"). Their saved settings are dropped from the profile on
-the next read or save (app/profile/schemas.py). A sweep row they wrote keeps its stats as
-stored (`boards_*`, the feed and reader entries of `sources`), and the history reads them; new
-rows still write `boards_total` and the other board counters, at zero, so the release before
-this one reads every row.
+Company job boards are back (owner, 2026-10-30, reversing "Delete it" of 2026-10-28), rebuilt
+in app/jobs/boards: the person's `company_boards`, read through their ATS's public API before
+the websites (worker.run_sweep chains app/jobs/boards/run.py's hook before the website Runner),
+one source of the frozen scope and of `stats.sources` per board (`mode` "api", `kind` "board").
+The freelance feeds and the fixed browser readers stay deleted (owner, 2026-10-28), and the old
+`boards` key of the profile stays dropped on the next read or save (app/profile/schemas.py). A
+sweep row written before keeps its stats as stored (`boards_*`, the feed and reader entries of
+`sources`), and the history reads them; new rows still write `boards_total` and the other board
+counters, at zero (the boards are counted in `sources`), so an older release reads every row.
 
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
@@ -77,6 +82,7 @@ from app import queue as queues
 from app.identity.models import User
 from app.jobs import schedule, scoring, service
 from app.jobs import slug as slugs
+from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
 from app.jobs.models import (
     ContractType,
@@ -211,10 +217,15 @@ def alert_entry(key: str) -> dict[str, Any]:
 
 
 def has_sources(search: SearchSection | None) -> bool:
-    """Whether a sweep of `search` has something to read: an enabled website, the alert
-    e-mails of a provider (app/mail/alerts), or a ticked job feed (app/jobs/feeds, owner
-    2026-10-30)."""
-    return has_websites(search) or bool(alert_keys(search)) or bool(search and search.job_feeds)
+    """Whether a sweep of `search` has something to read: an enabled website, an enabled company
+    board, the alert e-mails of a provider (app/mail/alerts), or a ticked job feed (app/jobs/feeds,
+    owner 2026-10-30)."""
+    return (
+        has_websites(search)
+        or bool(boards.enabled_boards(search))
+        or bool(alert_keys(search))
+        or bool(search and search.job_feeds)
+    )
 
 
 def _source_id(mode: str, *key: str) -> str:
@@ -239,6 +250,12 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+        # No board saved, or none listed: the key is not frozen at all. The release before the
+        # company boards refuses it (extra="forbid"), so a queued run it claims after a
+        # rollback stays valid unless the person really saved boards (SPEC-jobs, Company job
+        # boards, the one way door).
+        if not raw.get("company_boards"):
+            raw.pop("company_boards", None)
         # No feed ticked: no key, as the profile stores it, so a sweep queued before a rollback
         # still validates under the release before, which refuses the key.
         if not raw.get("job_feeds"):
@@ -260,11 +277,24 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         )
         # The ticked alert e-mails (app/mail/alerts), read first.
         sources.extend(alert_entry(key) for key in alert_keys(search))
-        # The ticked job feeds (app/jobs/feeds), read before the websites, in their own order.
+        # The ticked job feeds (app/jobs/feeds), read after the alert e-mails, in their own order.
         from app.jobs import feeds
 
         sources.extend(
             feeds.scope_entry(name) for name in feeds.FEED_NAMES if name in search.job_feeds
+        )
+        # The company boards (app/jobs/boards/run.py `entry_of`, the same identity), read after
+        # the feeds and before the websites.
+        sources.extend(
+            {
+                "source_id": _source_id("api", board.ats, board.board),
+                "mode": "api",
+                "kind": "board",
+                "host": boards.api_host(board.ats, board.board),
+                "query": f"{board.ats}:{board.board}",
+                "company": board.company,
+            }
+            for board in boards.enabled_boards(search)
         )
     return {
         "version": 1,
@@ -283,7 +313,7 @@ def initial_sources(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
         {
             **{
                 key: source[key]
-                for key in ("source_id", "mode", "host", "query", "location")
+                for key in ("source_id", "mode", "host", "query", "location", "company")
                 if key in source
             },
             "kind": source.get("kind", source.get("platform", "")),
@@ -486,7 +516,8 @@ def _new_job(
     work_mode: str | None = None,
 ) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
-    then the ones service.apply_score, set_status and set_notes would have written. A job feed
+    then the ones service.apply_score, set_status and set_notes would have written. A company
+    board (app/jobs/boards, filters.contract_of) states the contract it filtered on, a job feed
     (app/jobs/feeds) may state the contract type and the work mode; else both are read from the
     posting as for every source."""
     text = posting.text[:POSTING_TEXT_MAX]
@@ -725,7 +756,7 @@ Clock = Callable[[], datetime]
 # alert e-mails' run (app/mail/alerts/source.py) has the same shape and runs first.
 BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
 # The job feeds' run (app/jobs/feeds, `FeedRunner`), the same shape, run after the alert e-mails
-# and before the websites.
+# and before the company boards and the websites (both in `browser`, boards.chain).
 FeedHook = BrowserHook
 
 
@@ -768,7 +799,8 @@ async def run_sweep(
 
             beating = asyncio.create_task(beat())
             try:
-                # The alert e-mails, then the job feeds, then the job websites.
+                # The alert e-mails, then the job feeds, then the company boards and the job
+                # websites (`browser`, chained in app/worker.py), one shared deadline.
                 if alerts is not None:
                     await alerts(plan, stats, progress, started + timeout_s)
                 if feeds is not None:
@@ -829,7 +861,12 @@ def _summary(stats: Stats) -> dict[str, Any]:
             for source in stats.sources
             if source.get("host") and source.get("mode") not in ("api", "mail")
         ),
-        "feeds": sum(1 for source in stats.sources if source.get("mode") == "api"),
+        "feeds": sum(
+            1
+            for source in stats.sources
+            if source.get("mode") == "api" and source.get("kind") != "board"
+        ),
+        "boards": sum(1 for source in stats.sources if source.get("kind") == "board"),
         "seen": stats.seen,
         "matched": stats.matched,
         "new": stats.new,
