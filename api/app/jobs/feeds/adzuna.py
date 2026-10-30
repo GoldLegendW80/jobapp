@@ -84,7 +84,8 @@ class Adzuna:
 
     async def fetch(self, ctx: FeedContext, criteria: Criteria) -> Fetched:
         key = ctx.key or {}
-        fetched = Fetched(queries_left_out=criteria.queries_left_out)
+        fetched = ctx.fetched  # added to as it reads: a cancelled run keeps its findings
+        fetched.queries_left_out = criteria.queries_left_out
         for query in criteria.queries:
             if ctx.http.left <= 0 or fetched.error:
                 fetched.queries_left_out += 1

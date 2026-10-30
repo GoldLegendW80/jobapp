@@ -5,8 +5,14 @@ sweep (the newest `created_at` it read) or to `search.days`, whichever is later,
 pages, and the shared criteria pick what it keeps. Its terms ask for no abuse and a link back to
 the site: every posting's address is its page on arbeitnow.com, shown as "via Arbeitnow".
 
-The cursor moves to the newest posting read only when the run was not stopped by an error
-(a 429 or a failed page): a stopped run reads the same pages again next time.
+The cursor moves to the newest posting read only when the run was not stopped (a 429, a failed
+page, the time budget, a refused store): a stopped run reads the same pages again next time.
+
+Reaching PAGES before the window's end stops the run with `page_cap`: the postings older than
+the last page read are not read in this sweep, the entry says so (outcome `partial`), and the
+cursor does not move, so the next sweep pages back to the same point again rather than skipping
+what this one could not reach. Postings of that gap that are still newer than `search.days`
+are read once a sweep reaches them within its pages.
 """
 
 import re
@@ -109,9 +115,10 @@ class Arbeitnow:
             previous = epoch(ctx.cursor)
             if previous is not None:
                 cutoff = max(cutoff, previous - OVERLAP)
-        fetched = Fetched()
+        fetched = ctx.fetched  # added to as it reads: a cancelled run keeps its findings
         newest = ctx.cursor
         page = 1
+        ended = False  # the window's end, or the feed's last page, was reached
         while ctx.http.left > 0:
             try:
                 data = await ctx.http.get_json(API, {"page": page})
@@ -136,9 +143,12 @@ class Arbeitnow:
                 fetched.findings.append(found)
             links = data.get("links") if isinstance(data.get("links"), dict) else {}
             if reached or not links.get("next"):
+                ended = True
                 break
             page += 1
         fetched.requests = ctx.http.requests
+        if fetched.error is None and not ended:
+            fetched.error = "page_cap"  # module docstring: said, and the cursor stays
         if fetched.error is None:
             fetched.cursor = newest
         return fetched

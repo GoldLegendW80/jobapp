@@ -10,10 +10,15 @@ whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of t
   them with the websites (`sweep.freeze_scope`, one `stats.sources` entry each, mode "api") and
   `FeedRunner`, the sweep's feed hook, reads them one after the other before the websites.
 - Politeness. One request at a time per feed, PAUSE_S apart, at most the feed's own request
-  budget per sweep (a few), a User-Agent naming the app, FEED_TIME_S per feed. A 429 stops that
-  feed for this sweep (`rate_limited`), whatever Retry-After says: the next sweep reads it again.
-  Requests go straight to the transport, never through httpx's Client, whose INFO log line would
-  carry the address, and Adzuna's key is in its query.
+  budget per sweep (a few), a User-Agent naming the app, FEED_TIME_S per feed and FEEDS_TIME_S
+  for all the ticked feeds together, so the websites read after them keep most of the sweep's
+  time. A 429 stops that feed for this sweep (`rate_limited`), whatever Retry-After says: the
+  next sweep reads it again. Requests go straight to the transport, never through httpx's
+  Client, whose INFO log line would carry the address, and Adzuna's key is in its query; they
+  ask for an uncompressed answer (`Accept-Encoding: identity`) and a compressed one is still
+  decoded.
+- Time. A feed stopped by its time (`time_budget`) keeps what it read before: the sources add
+  to the `Fetched` of their context as they read, so the cancellation loses nothing read.
 - Filtering (`Criteria`), the same as the websites' after reading: a wanted title must match
   (the feeds' own keyword search is loose), no unwanted title or place may match, a wanted place
   must match when the person saved places and the feed is not already scoped to a place
@@ -25,6 +30,10 @@ whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of t
 - Storing. Kept findings go through the run's commits (sweep.Commits) under the feed's source
   entry: deduplicated by address, then by employer, title and location, against the person's
   rows and this sweep's; scored; the external id kept in the sweep event's evidence.
+- Cursor (Arbeitnow). The entry records the feed's new cursor only when the run ended with no
+  error at all: every page read, every batch stored and the commits settled. A refused or
+  failed store, a time budget, a 429 or the page cap leave it unrecorded, so the next sweep
+  reads back to the previous cursor again.
 - Missing key. Adzuna without a stored key is skipped with the reason `no_key` and the outcome
   `not_attempted`, never an error of the sweep.
 
@@ -62,6 +71,7 @@ USER_AGENT = "jobapp/1.0 (self-hosted personal job search; https://github.com/Go
 PAUSE_S = 3.0  # between two requests of one feed
 TIMEOUT_S = 20.0  # one request
 FEED_TIME_S = 120.0  # one feed in one sweep
+FEEDS_TIME_S = 180.0  # all the ticked feeds of one sweep together (of SWEEP_TIMEOUT_S, 900)
 BODY_MAX = 8_000_000  # bytes of one answer (an Arbeitnow page of 300 postings is about 2 MB)
 TEXT_MAX = 50_000  # characters of one posting's text
 QUERIES_MAX = 3  # saved titles searched by a feed with a keyword search, in saved order
@@ -86,7 +96,10 @@ ERRORS = (
     "key_refused",
     "unsupported_criteria",
     "feed_failed",
+    "page_cap",
 )
+# The reasons a refused store replaces: a store failure is worth more to the person.
+STORE_OVERRIDES = (None, "page_cap")
 
 
 class FeedError(Exception):
@@ -186,7 +199,13 @@ class Http:
             "GET",
             url,
             params={k: v for k, v in (params or {}).items() if v is not None},
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                # Read with the transport's raw bytes, so ask for no compression (a compressed
+                # answer anyway is decoded below).
+                "Accept-Encoding": "identity",
+            },
             extensions={"timeout": httpx.Timeout(TIMEOUT_S).as_dict()},
         )
         try:
@@ -207,10 +226,15 @@ class Http:
                 raise FeedError("upstream_error")
             body = bytearray()
             try:
+                encoded = response.headers.get("Content-Encoding", "identity").strip().lower()
                 if response.is_stream_consumed:  # an answer already in memory
                     body += response.content
                 else:
-                    async for chunk in response.aiter_raw():
+                    # Decoded when the server compressed it anyway; the cap counts decoded bytes.
+                    chunks = (
+                        response.aiter_raw() if encoded == "identity" else response.aiter_bytes()
+                    )
+                    async for chunk in chunks:
                         body += chunk
                         if len(body) > BODY_MAX:
                             break
@@ -218,6 +242,8 @@ class Http:
                     raise FeedError("too_large")
             except httpx.TimeoutException:
                 raise FeedError("timeout") from None
+            except httpx.DecodingError:
+                raise FeedError("invalid_response") from None
             except httpx.HTTPError:
                 raise FeedError("network") from None
         finally:
@@ -402,6 +428,9 @@ class FeedContext:
     now: datetime
     key: dict[str, str] | None = None  # Adzuna's app_id and app_key
     cursor: int | None = None  # the feed's last cursor (Arbeitnow: newest created_at read)
+    # What the feed has read so far: a source adds to it as it reads and returns it, so a feed
+    # cancelled by its time budget keeps its findings (FeedRunner._read).
+    fetched: Fetched = field(default_factory=Fetched)
 
 
 class FeedSource(Protocol):
@@ -455,10 +484,13 @@ class FeedRunner:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
         sources: dict[str, FeedSource] | None = None,
+        feed_time_s: float = FEED_TIME_S,
+        feeds_time_s: float = FEEDS_TIME_S,
     ) -> None:
         self.sessions, self.keys = sessions, keys
         self.transport, self.sleep, self.clock, self.monotonic = transport, sleep, clock, monotonic
         self.sources = sources
+        self.feed_time_s, self.feeds_time_s = feed_time_s, feeds_time_s
 
     async def __call__(
         self,
@@ -473,6 +505,9 @@ class FeedRunner:
             return
         sources = self.sources or feeds()
         transport = self.transport or httpx.AsyncHTTPTransport(retries=0)
+        # All the feeds together stop at FEEDS_TIME_S (feeds_time_s) from now, well before the
+        # sweep's own deadline: `_read` leaves DEADLINE_MARGIN_S before the deadline it is given.
+        deadline = min(deadline, self.monotonic() + self.feeds_time_s + DEADLINE_MARGIN_S)
         try:
             for name, source in sources.items():
                 if name in ticked:
@@ -512,16 +547,26 @@ class FeedRunner:
         stats.current_board = entry["source_id"]
         await progress()
         commits = getattr(plan, "commits", None)
+        cursor: int | None = None
         try:
-            entry["error"] = await self._read(plan, entry, search, source, transport, deadline)
+            entry["error"], cursor = await self._read(
+                plan, entry, search, source, transport, deadline
+            )
         except Exception:
             logger.exception("job feed failed", extra={"feed": source.name})
             entry["error"] = "feed_failed"
-        if commits is not None and not await commits.settle():
-            entry["error"] = entry["error"] or "store_failed"
+        # Always settled first; a store failure then replaces only a lesser reason.
+        unsettled = commits is not None and not await commits.settle()
+        if unsettled and entry["error"] in STORE_OVERRIDES:
+            entry["error"] = "store_failed"
+        # The cursor moves only once everything read was stored (module docstring, Cursor).
+        if entry["error"] is None and cursor is not None:
+            entry["cursor"] = cursor
         sweep.finish_source(entry)
         if entry["error"] == "no_key":
             entry["outcome"] = "not_attempted"  # skipped, never a failure (owner brief)
+        elif entry["error"] == "page_cap":
+            entry["outcome"] = "partial"  # pages were read, the window's end was not reached
         await progress()
 
     async def _read(
@@ -532,37 +577,42 @@ class FeedRunner:
         source: FeedSource,
         transport: httpx.AsyncBaseTransport,
         deadline: float,
-    ) -> str | None:
+    ) -> tuple[str | None, int | None]:
+        """Read one feed and store what it keeps: the entry's error (None when it read what it
+        meant to) and the cursor to record once the commits settled."""
         try:
             criteria = Criteria.of(search)
         except FeedError as error:
-            return error.code
+            return error.code, None
         key = None
         if source.needs_key:
             try:
                 key = await asyncio.to_thread(self._key, plan.user_id, source.name)
             except Exception:
                 logger.warning("job feed key unreadable", extra={"feed": source.name})
-                return "key_unreadable"
+                return "key_unreadable", None
             if key is None:
-                return "no_key"
+                return "no_key", None
         cursor = await asyncio.to_thread(self._cursor, plan, source.name)
         now = self.clock()
         ctx = FeedContext(Http(transport, budget=source.budget, sleep=self.sleep), now, key, cursor)
-        left = min(FEED_TIME_S, deadline - self.monotonic() - DEADLINE_MARGIN_S)
+        left = min(self.feed_time_s, deadline - self.monotonic() - DEADLINE_MARGIN_S)
         if left <= 0:
-            return "time_budget"
+            return "time_budget", None
         try:
             async with asyncio.timeout(left):
                 fetched = await source.fetch(ctx, criteria)
         except TimeoutError:
-            fetched = Fetched(requests=ctx.http.requests, error="time_budget")
+            # What was read before the time ran out is kept, never the cursor: the pages after
+            # it were not read.
+            fetched = ctx.fetched
+            fetched.error, fetched.cursor = "time_budget", None
+            fetched.requests = ctx.http.requests
         entry["result_pages"] = fetched.requests
         entry["searches"] = len(fetched.searched)
         entry["searched"] = [{"title": q, "place": None} for q in fetched.searched]
         entry["titles_left_out"] = fetched.queries_left_out
-        if fetched.cursor is not None:
-            entry["cursor"] = fetched.cursor
+        cursor = fetched.cursor if fetched.error is None else None
         kept: list[Finding] = []
         seen: set[str] = set()
         left_out: dict[str, int] = {}
@@ -586,8 +636,8 @@ class FeedRunner:
                         entry["source_id"], source.name, Batch(tuple(kept[first : first + BATCH]))
                     )
                 except sweep.StoreRefusedError:
-                    return "store_failed"
-        return fetched.error
+                    return "store_failed", None
+        return fetched.error, cursor
 
     def _key(self, user_id: uuid.UUID, name: str) -> dict[str, str] | None:
         return self.keys(user_id, name) if self.keys is not None else None

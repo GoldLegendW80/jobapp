@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy.orm import Session
 
+from app.agents import router as agents_router
 from app.agents.router import keyring_of
 from app.db import get_session
 from app.identity import deps
@@ -17,6 +18,8 @@ from app.identity.schemas import ErrorOut
 from app.jobs.feeds import FEED_NAMES, keys
 
 router = APIRouter(prefix="/api/jobs/feeds", tags=["jobs"])
+
+TOO_MANY_SAVES = "Too many key changes."
 
 Db = Annotated[Session, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(deps.current_user)]
@@ -67,7 +70,11 @@ def list_feeds(request: Request, user: CurrentUser, db: Db) -> FeedsOut:
 @router.put(
     "/{feed}/key",
     response_model=FeedOut,
-    responses={422: {"model": ErrorOut}, 503: {"model": ErrorOut}},
+    responses={
+        422: {"model": ErrorOut},
+        429: {"model": ErrorOut, "description": "Too many saves; see Retry-After"},
+        503: {"model": ErrorOut},
+    },
 )
 def put_key(
     feed: Literal["adzuna"], body: FeedKeyIn, request: Request, user: CurrentUser, db: Db
@@ -79,6 +86,8 @@ def put_key(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from None
+    # The same per person limit as the model credential's saves (main.py builds it).
+    agents_router._limit(request.app.state.feed_key_saves, user, TOO_MANY_SAVES)
     keys.save(db, keyring, user.id, feed, key, deps.clock(request))
     db.commit()
     return _out(db, user, feed)

@@ -1,12 +1,15 @@
 """The job feeds (app/jobs/feeds): Arbeitnow, Himalayas and Adzuna read from small hand-made JSON
 fixtures through a fake transport, never the network. What each maps, what the person's
 criteria leave out, paging and the cursor, a 429, a missing or refused key, the politeness of
-the requests and what is logged. The sweep side (storing, duplicates, stats, settings and the
-key routes) is in test_job_feeds_sweep.py."""
+the requests and what is logged; the cursor kept back when storing fails, findings kept on a
+time budget, the total time of all feeds and the page cap. The sweep side (storing,
+duplicates, stats, settings and the key routes) is in test_job_feeds_sweep.py."""
 
 import asyncio
+import gzip
 import json
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -17,7 +20,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.jobs import feeds
+from app.jobs import feeds, sweep
 from app.jobs.feeds import Criteria, FeedContext, FeedRunner, Http
 from app.jobs.feeds.arbeitnow import Arbeitnow, address_of, contract_of
 from app.jobs.models import ContractType
@@ -48,6 +51,22 @@ class Transport(httpx.AsyncBaseTransport):
         self.handler = handler
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return self.handler(request)
+
+
+class Slow(Transport):
+    """A transport that never answers the requests `slow` picks (it waits far longer than any
+    time budget of a test), and answers the others from `handler`."""
+
+    def __init__(self, handler: Handler, slow: Callable[[httpx.Request], bool]) -> None:
+        super().__init__(handler)
+        self.slow = slow
+        self.asked: list[httpx.Request] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.asked.append(request)
+        if self.slow(request):
+            await asyncio.sleep(60)
         return self.handler(request)
 
 
@@ -122,10 +141,28 @@ class Commits:
         return True
 
 
+class RefusingCommits(Commits):
+    """The run's commits refusing every batch, as when the sweep row is no longer this run's."""
+
+    async def save(self, source_id: str, source: str, batch: Any) -> None:
+        raise sweep.StoreRefusedError
+
+
+class UnsettledCommits(Commits):
+    """The run's commits with a commit still running when the feed ends."""
+
+    async def settle(self) -> bool:
+        return False
+
+
 def run(
     api: Api,
     section: SearchSection,
     keys: dict[str, dict[str, str]] | None = None,
+    *,
+    commits_class: type[Commits] = Commits,
+    transport: httpx.AsyncBaseTransport | None = None,
+    **runner: Any,
 ) -> tuple[list[dict[str, Any]], Commits, list[float]]:
     """One FeedRunner over the ticked feeds: the stats entries, the commits and the pauses."""
     pauses: list[float] = []
@@ -134,7 +171,7 @@ def run(
         pauses.append(seconds)
 
     stats = SimpleNamespace(sources=[], current_board=None)
-    commits = Commits(stats)
+    commits = commits_class(stats)
     plan = SimpleNamespace(
         search=section, user_id=uuid.uuid4(), sweep_id=uuid.uuid4(), commits=commits
     )
@@ -142,15 +179,16 @@ def run(
     async def progress() -> None:
         return None
 
-    runner = FeedRunner(
+    feed_runner = FeedRunner(
         None,
         keys=lambda user, feed: (keys or {}).get(feed),
-        transport=api.transport,
+        transport=transport or api.transport,
         sleep=sleep,
         clock=lambda: NOW,
-        monotonic=lambda: 0.0,
+        **{"monotonic": lambda: 0.0, **runner},
     )
-    asyncio.run(runner(plan, stats, progress, 900.0))
+    deadline = feed_runner.monotonic() + 900.0
+    asyncio.run(feed_runner(plan, stats, progress, deadline))
     return stats.sources, commits, pauses
 
 
@@ -259,12 +297,99 @@ def test_a_429_stops_the_feed_keeps_what_was_read_and_keeps_the_cursor() -> None
     assert len(api.requests) == 2
 
 
-def test_arbeitnow_budget_is_its_page_cap() -> None:
+def test_arbeitnow_budget_is_its_page_cap_and_says_so() -> None:
     endless = fixture("arbeitnow_page1")  # always newer than the window, always a next page
     api = Api({("www.arbeitnow.com", ""): endless})
-    _, _, pauses = run(api, search(job_feeds=["arbeitnow"]))
+    entries, commits, pauses = run(api, search(job_feeds=["arbeitnow"]))
     assert len(api.requests) == Arbeitnow.budget == 10
     assert len(pauses) == 9
+    entry = entry_of(entries, "arbeitnow")
+    # The window's end was not reached: said, what was read kept, the cursor left where it was
+    # so the next sweep pages back to the same point.
+    assert entry["error"] == "page_cap"
+    assert entry["reason"] == "page_cap"
+    assert entry["outcome"] == "partial"
+    assert "cursor" not in entry
+    assert len(commits.saved["arbeitnow"]) == 2
+
+
+def test_the_cursor_stays_when_storing_is_refused() -> None:
+    entries, commits, _ = run(
+        arbeitnow_api(), search(job_feeds=["arbeitnow"]), commits_class=RefusingCommits
+    )
+    entry = entry_of(entries, "arbeitnow")
+    assert entry["error"] == "store_failed"
+    assert entry["outcome"] == "failed"
+    assert "cursor" not in entry  # the next sweep reads the same postings again
+    assert commits.saved == {}
+
+
+def test_the_cursor_stays_when_the_commits_do_not_settle() -> None:
+    entries, _, _ = run(
+        arbeitnow_api(), search(job_feeds=["arbeitnow"]), commits_class=UnsettledCommits
+    )
+    entry = entry_of(entries, "arbeitnow")
+    assert entry["error"] == "store_failed"
+    assert "cursor" not in entry
+
+
+def test_the_cursor_stays_when_a_commit_fails_unexpectedly() -> None:
+    class Failing(Commits):
+        async def save(self, source_id: str, source: str, batch: Any) -> None:
+            raise RuntimeError("database gone")
+
+    entries, _, _ = run(arbeitnow_api(), search(job_feeds=["arbeitnow"]), commits_class=Failing)
+    entry = entry_of(entries, "arbeitnow")
+    assert entry["error"] == "feed_failed"
+    assert "cursor" not in entry
+
+
+def test_a_time_budget_keeps_what_was_read_and_never_the_cursor() -> None:
+    api = arbeitnow_api()
+    page2 = Slow(api.handler, lambda request: request.url.params.get("page") == "2")
+    entries, commits, _ = run(
+        api, search(job_feeds=["arbeitnow"]), transport=page2, feed_time_s=0.2
+    )
+    entry = entry_of(entries, "arbeitnow")
+    assert entry["error"] == "time_budget"
+    assert entry["outcome"] == "partial"
+    assert entry["result_pages"] == 2  # page 2 was asked, never answered
+    # Page 1's two kept postings are stored; page 2's Lyon posting was never read.
+    assert {f.external_id for f in commits.saved["arbeitnow"]} == {
+        "forward-deployed-engineer-paris-1001",
+        "security-ai-engineer-paris-1005",
+    }
+    assert entry["read"] == 6
+    assert "cursor" not in entry
+
+
+def test_all_feeds_together_stop_at_their_total_time() -> None:
+    api = Api(
+        {
+            **arbeitnow_api().answers,
+            ("himalayas.app", ""): fixture("himalayas"),
+            ("api.adzuna.com", "1"): fixture("adzuna"),
+        }
+    )
+    never = Slow(api.handler, lambda request: True)
+    started = time.monotonic()
+    entries, _, _ = run(
+        api,
+        search(),
+        keys={"adzuna": {"app_id": APP_ID, "app_key": APP_KEY}},
+        transport=never,
+        monotonic=time.monotonic,
+        feed_time_s=0.3,
+        feeds_time_s=0.5,
+    )
+    spent = time.monotonic() - started
+    # The first feed spends its own 0.3 s, the second the 0.2 s left, the third gets none and
+    # sends nothing: the websites after them keep the rest of the sweep.
+    assert spent < 0.5 + 0.4
+    assert [e["error"] for e in entries] == ["time_budget"] * 3
+    assert {r.url.host for r in never.asked} == {"www.arbeitnow.com", "himalayas.app"}
+    assert feeds.FEEDS_TIME_S <= sweep.SWEEP_TIMEOUT_S / 5
+    assert feeds.FEED_TIME_S <= feeds.FEEDS_TIME_S
 
 
 @pytest.mark.parametrize(
@@ -464,6 +589,39 @@ def test_plain_text_reads_html_as_lines() -> None:
     )
     assert feeds.line("<strong>AI</strong>\n Engineer") == "AI Engineer"
     assert feeds.plain_text(None) == ""
+
+
+def test_requests_ask_for_an_uncompressed_answer_and_read_a_compressed_one() -> None:
+    seen: list[httpx.Request] = []
+    answer = gzip.compress(json.dumps({"data": []}).encode())
+
+    def compressed(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, stream=httpx.ByteStream(answer)
+        )
+
+    http = Http(Transport(compressed), budget=2, sleep=_no_sleep)
+    assert asyncio.run(http.get_json("https://www.arbeitnow.com/api/job-board-api")) == {"data": []}
+    assert seen[0].headers["Accept-Encoding"] == "identity"
+
+    def broken(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, stream=httpx.ByteStream(b"not gzip")
+        )
+
+    with pytest.raises(feeds.FeedError) as caught:
+        asyncio.run(
+            Http(Transport(broken), budget=1, sleep=_no_sleep).get_json(
+                "https://www.arbeitnow.com/api/job-board-api"
+            )
+        )
+    assert caught.value.code == "invalid_response"
+
+
+def test_every_code_is_known() -> None:
+    assert "page_cap" in feeds.ERRORS
+    assert len(set(feeds.ERRORS)) == len(feeds.ERRORS)
 
 
 async def _no_sleep(seconds: float) -> None:

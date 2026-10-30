@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
+import { FEED_WORDS } from "./job-feeds";
 import { AdzunaKeyCard, SweepJobFeeds } from "./job-feeds-ui";
 import type { SweepSource } from "./sweeps-api";
 
@@ -145,4 +146,31 @@ it("words a refused key without echoing it", async () => {
     "The application key holds only letters and digits, at least 16, as Adzuna shows it.",
   );
   expect(screen.getByRole("alert")).not.toHaveTextContent("short key");
+});
+
+// Every code a feed's entry ends with (api app/jobs/feeds/__init__.py ERRORS).
+const API_CODES = [
+  "rate_limited",
+  "blocked",
+  "not_found",
+  "upstream_error",
+  "timeout",
+  "network",
+  "too_large",
+  "invalid_response",
+  "store_failed",
+  "time_budget",
+  "no_key",
+  "key_unreadable",
+  "key_refused",
+  "unsupported_criteria",
+  "feed_failed",
+  "page_cap",
+];
+
+it("has plain words without a dash for every code a feed ends with", () => {
+  expect(Object.keys(FEED_WORDS).sort()).toEqual([...API_CODES].sort());
+  for (const words of Object.values(FEED_WORDS)) {
+    expect(words, words).not.toMatch(/[\u2012-\u2015]|\s-\s|_/);
+  }
 });

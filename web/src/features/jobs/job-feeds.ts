@@ -57,6 +57,8 @@ export const FEED_WORDS: Record<string, string> = {
   unsupported_criteria:
     "Not searched: add a job title you want, so the feed has words to search.",
   feed_failed: "The feed could not be read this time.",
+  page_cap:
+    "The feed had more new postings than the app reads in one search. What was read is kept, and the next search reads back to the same point.",
 };
 
 export const feedWords = (code: string): string =>

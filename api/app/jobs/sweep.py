@@ -220,6 +220,10 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         search = None  # a direct internal start still fails closed when claimed
     if search is not None:
         raw = search.model_dump(mode="json")
+        # No feed ticked: no key, as the profile stores it, so a sweep queued before a rollback
+        # still validates under the release before, which refuses the key.
+        if not raw.get("job_feeds"):
+            raw.pop("job_feeds", None)
     if search is not None:
         sources.extend(
             {

@@ -6,6 +6,8 @@ The person pastes them in Account (web features/jobs/adzuna-key-card.tsx, PUT
 /api/jobs/feeds/adzuna/key). The plaintext exists only in memory: it is never returned by the
 API (only whether one is stored, the last four characters of the app key and when it was saved),
 never logged and never quoted in an error. A sweep reads it through `reveal` (feeds.FeedRunner).
+A key rotation re-encrypts the rows with the new key (`rotate_all`, run by `python -m
+app.agents.cli rotate`).
 """
 
 import json
@@ -128,6 +130,27 @@ def reveal(db: Session, keyring: Keyring, user_id: uuid.UUID, feed: str) -> dict
     if not isinstance(data, dict):
         raise ValueError("not a feed key")
     return {"app_id": str(data.get("app_id", "")), "app_key": str(data.get("app_key", ""))}
+
+
+def rotate_all(db: Session, keyring: Keyring) -> int:
+    """Re-encrypt with the current key every feed key written by another key; how many changed.
+    A row this server cannot open raises crypto.DecryptError and nothing changes (`python -m
+    app.agents.cli rotate` runs it with the model credentials, in one transaction)."""
+    stale = db.scalars(
+        sa.select(FeedKey)
+        .where(FeedKey.key_version != keyring.version)
+        .options(undefer(FeedKey.secret_encrypted))
+        .order_by(FeedKey.user_id, FeedKey.feed)
+        .with_for_update()
+    ).all()
+    for row in stale:
+        kind = _kind(row.feed)
+        opened = keyring.decrypt(row.secret_encrypted, row.key_version, row.user_id, kind)
+        sealed = keyring.encrypt(opened.plaintext, row.user_id, kind)
+        row.secret_encrypted = sealed.ciphertext
+        row.key_version = sealed.key_version
+    db.flush()
+    return len(stale)
 
 
 def reader(

@@ -156,6 +156,8 @@ def create_app(
     mail_registry.load()
     app.state.credential_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
     app.state.credential_checks = RateLimiter(agents_router.VERIFY_LIMIT, agents_router.WINDOW_S)
+    # The job feeds' keys (Adzuna's): saved under the same per user limit as a credential.
+    app.state.feed_key_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
 
     # Middleware added last runs first: request_log, then CSRF, then the cookie writer, then the
     # body limits closest to the router (app.body_limit, issue #100). Added first so that it is

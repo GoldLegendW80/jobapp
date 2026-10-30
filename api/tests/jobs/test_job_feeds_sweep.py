@@ -2,11 +2,13 @@
 of feeds alone starts and ends done, stores and scores what they keep, dedupes against the
 person's rows and its own earlier postings, marks never apply roles skipped, records one stats
 entry per feed, reads the previous sweep's cursor and reads Adzuna's key from the encrypted store.
-Also the feeds setting of the search section and the key routes. The APIs are the fake of
-test_job_feeds.py: no network."""
+Also the feeds setting of the search section, a website only sweep freezing no feed key, the
+feeds' total time leaving the websites their share, and the key routes (rate limited, each
+person's own). The APIs are the fake of test_job_feeds.py: no network."""
 
 import asyncio
 import os
+import time
 import uuid
 from typing import Any
 
@@ -16,13 +18,14 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.crypto import Keyring
+from app.agents.ratelimit import RateLimiter
 from app.jobs import feeds, sweep
 from app.jobs.feeds import keys
 from app.jobs.models import ContractType, Job, JobEvent, JobStatus, SweepStatus
 from tests.identity.api_helpers import Api
 from tests.jobs.sweep_helpers import jobs_of, new_sweep, read_sweep, search, set_profile
 from tests.jobs.test_api import Signed, sign_in
-from tests.jobs.test_job_feeds import APP_ID, APP_KEY, NOW, fixture, stamp
+from tests.jobs.test_job_feeds import APP_ID, APP_KEY, NOW, Slow, fixture, stamp
 from tests.jobs.test_job_feeds import Api as FakeApi
 
 KEYRING = Keyring(os.urandom(32))
@@ -209,6 +212,51 @@ def test_no_website_and_no_feed_still_fails_with_the_message(
     assert api.requests == []
 
 
+def test_a_website_only_sweep_freezes_no_feed_key(
+    factory: sessionmaker[Session], alice: uuid.UUID, bob: uuid.UUID
+) -> None:
+    # The release before refuses the key: a sweep queued before a rollback must still validate.
+    set_profile(factory, alice, search())
+    frozen = read_sweep(factory, new_sweep(factory, alice)).stats["search_scope"]
+    assert "job_feeds" not in frozen["search"]
+    assert all(source.get("mode") != "api" for source in frozen["sources"])
+    set_profile(factory, bob, search(job_feeds=["himalayas"]))
+    frozen = read_sweep(factory, new_sweep(factory, bob)).stats["search_scope"]
+    assert frozen["search"]["job_feeds"] == ["himalayas"]
+
+
+def test_feeds_leave_the_websites_their_share_of_the_sweep(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, search(job_feeds=["arbeitnow", "himalayas"]))
+    sweep_id = new_sweep(factory, alice)
+    api = fake_api()
+    never = Slow(api.handler, lambda request: True)  # feeds that never answer
+    left_for_websites: list[float] = []
+
+    async def websites(plan: Any, stats: Any, progress: Any, deadline: float) -> None:
+        left_for_websites.append(deadline - time.monotonic())
+
+    async def sleep(seconds: float) -> None:
+        return None
+
+    runner = feeds.FeedRunner(
+        factory, transport=never, sleep=sleep, clock=lambda: NOW, feed_time_s=0.3,
+        feeds_time_s=0.5,
+    )  # fmt: skip
+    asyncio.run(
+        sweep.run_sweep(
+            factory, sweep_id, lambda: NOW, feeds=runner, browser=websites, timeout_s=60.0
+        )
+    )
+    row = read_sweep(factory, sweep_id)
+    entries = [e for e in row.stats["sources"] if e.get("mode") == "api"]
+    assert [e["reason"] for e in entries] == ["time_budget", "time_budget"]
+    # The feeds spent their total, 0.5 s, and the website gets the rest of the sweep.
+    [left] = left_for_websites
+    assert left > 60.0 - 0.5 - 1.0
+
+
 # --- the setting and the key routes ---------------------------------------------------------------
 
 
@@ -297,3 +345,51 @@ def test_the_adzuna_key_routes(app: FastAPI, api: Api, owner: Signed) -> None:
     adzuna = api.get("/api/jobs/feeds", token=owner.token).json()["feeds"][2]
     assert adzuna["key_stored"] is False
     assert adzuna["key_last4"] is None
+
+
+def test_the_adzuna_key_save_is_rate_limited(app: FastAPI, api: Api, owner: Signed) -> None:
+    app.state.credentials_keyring = KEYRING
+    app.state.feed_key_saves = RateLimiter(1, 900.0)
+    body = {"app_id": APP_ID, "app_key": APP_KEY}
+    first = api.request("PUT", "/api/jobs/feeds/adzuna/key", token=owner.token, json=body)
+    assert first.status_code == 200, first.text
+    again = api.request("PUT", "/api/jobs/feeds/adzuna/key", token=owner.token, json=body)
+    assert again.status_code == 429
+    assert int(again.headers["Retry-After"]) > 0
+    assert APP_KEY not in again.text
+    # A refused shape is answered before the limit is spent, as for the model credential.
+    shape = api.request(
+        "PUT", "/api/jobs/feeds/adzuna/key", token=owner.token,
+        json={"app_id": APP_ID, "app_key": "short"},
+    )  # fmt: skip
+    assert shape.status_code == 422
+
+
+def test_the_adzuna_key_routes_touch_only_the_callers_key(
+    factory: sessionmaker[Session], app: FastAPI, api: Api, owner: Signed
+) -> None:
+    other = sign_in(factory, api, "e2e-feeds-other@example.org")
+    app.state.credentials_keyring = KEYRING
+    mine = {"app_id": APP_ID, "app_key": APP_KEY}
+    saved = api.request("PUT", "/api/jobs/feeds/adzuna/key", token=owner.token, json=mine)
+    assert saved.status_code == 200, saved.text
+
+    def adzuna(token: str) -> dict[str, Any]:
+        found: dict[str, Any] = api.get("/api/jobs/feeds", token=token).json()["feeds"][2]
+        return found
+
+    # The other person sees no key, removing hers leaves the owner's, saving hers is her own.
+    assert adzuna(other.token)["key_stored"] is False
+    removed = api.request("DELETE", "/api/jobs/feeds/adzuna/key", token=other.token)
+    assert removed.status_code == 204
+    assert adzuna(owner.token)["key_stored"] is True
+    theirs = {"app_id": "cd" * 4, "app_key": "y" * 28 + "7777"}
+    assert (
+        api.request("PUT", "/api/jobs/feeds/adzuna/key", token=other.token, json=theirs).status_code
+        == 200
+    )
+    assert adzuna(owner.token)["key_last4"] == APP_KEY[-4:]
+    assert adzuna(other.token)["key_last4"] == "7777"
+    with factory() as db:
+        assert keys.reveal(db, KEYRING, owner.id, "adzuna") == mine
+        assert keys.reveal(db, KEYRING, other.id, "adzuna") == theirs
