@@ -10,6 +10,7 @@ import { Building2, Globe } from "lucide-react";
 import { isFeedKind } from "@/features/opportunities/sources/source-words";
 import { SweepFeeds } from "@/features/opportunities/sources/sweep-feeds";
 
+import { SweepJobFeeds } from "./job-feeds-ui";
 import {
   SOURCE_PROBLEMS,
   leftOutSentence,
@@ -32,6 +33,7 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
     <>
       <BrowserSites sources={sites} />
       <CompanyBoardSources sources={boards} />
+      <SweepJobFeeds sources={sources} />
       <SweepFeeds feeds={feeds} />
     </>
   );

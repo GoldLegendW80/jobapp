@@ -33,6 +33,7 @@ import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
 import { formatDateTime } from "./format";
+import { isJobFeed } from "./job-feeds";
 import { plural } from "./selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "./labels";
@@ -83,8 +84,8 @@ function readingName(sweep: Sweep): string {
   return source ? sourceName(source) : sourceLabel(current);
 }
 
-/** What the sweep's sources are called: "website", or "source" once company job boards (mode
- * "api", owner 2026-10-30) are among them. */
+/** What the sweep's sources are called: "website", or "source" once job feeds or company job
+ * boards (mode "api", owner 2026-10-30) are among them. */
 function sourceWord(sweep: Sweep): string {
   return sweep.sources.some((source) => source.mode === "api")
     ? "source"
@@ -97,6 +98,8 @@ function sourceWord(sweep: Sweep): string {
 export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const sweep = runner.running;
   if (!sweep) return null;
+  // The ticked job feeds and the company boards (mode "api") count with the websites: read
+  // first, one source each.
   const websites = sweep.sources.filter((source) => source.host);
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
@@ -144,13 +147,31 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   );
 }
 
+/** The job feeds a sweep read (api app/jobs/feeds), as a part of its summary line. */
+function feedsRead(sweep: Sweep): string[] {
+  const feeds = sweep.sources.filter(
+    (source) => source.mode === "api" && isJobFeed(source.kind),
+  );
+  return feeds.length ? [`${plural(feeds.length, "job feed")} read`] : [];
+}
+
+/** The company job boards a sweep read (api app/jobs/boards), as a part of its summary line. */
+function boardsRead(sweep: Sweep): string[] {
+  const boards = sweep.sources.filter((source) => source.kind === "board");
+  return boards.length
+    ? [`${plural(boards.length, "company board")} read`]
+    : [];
+}
+
 function summaryLine(sweep: Sweep): string {
   const parts = [
     // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
       ? `${plural(sweep.boards_ok, "board")} read`
-      : `${plural(sweep.sources.filter((source) => source.host).length, sourceWord(sweep))} searched`,
+      : `${plural(sweep.sources.filter((source) => source.host && source.mode !== "api").length, "website")} searched`,
+    ...feedsRead(sweep),
+    ...boardsRead(sweep),
     `${plural(sweep.seen, "posting")} seen`,
     `${sweep.matched.toLocaleString("en-GB")} matched your search`,
     plural(sweep.new, "new posting"),

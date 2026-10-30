@@ -297,6 +297,8 @@ export interface Search {
   interactive_instructions?: string | null;
   /** Company job boards (owner, 2026-10-30), edited in Find jobs; null or absent: never saved */
   company_boards?: CompanyBoard[] | null;
+  /** the job feeds ticked in Find jobs (api app/jobs/feeds); absent until one is ticked */
+  job_feeds?: string[];
   /** when the search runs automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */

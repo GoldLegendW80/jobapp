@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { ModelAccessCard } from "@/features/agents/model-access-card";
 import { useMe } from "@/features/auth/auth-context";
 import { BrowserCard } from "@/features/browser/browser-card";
+import { AdzunaKeyCard } from "@/features/jobs/job-feeds-ui";
 import { GmailCard } from "@/features/mail/gmail-card";
 import { WELCOME } from "@/features/onboarding/onboarding-gate";
 import { useTitle } from "@/lib/use-title";
@@ -35,6 +36,7 @@ export function AccountPage() {
       <ModelAccessCard />
       <GmailCard />
       <BrowserCard />
+      <AdzunaKeyCard />
     </div>
   );
 }

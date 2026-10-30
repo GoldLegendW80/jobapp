@@ -3,9 +3,9 @@
     python -m app.agents.cli rotate
     python -m app.agents.cli start triage|chat <job-id> --role <role> --credential-kind <kind>
 
-rotate re-encrypts with CREDENTIALS_KEY every model credential and every Gmail refresh token
-(mail M4) written by another key (the one
-in CREDENTIALS_KEY_PREVIOUS during a rotation), in one transaction, and prints how many rows
+rotate re-encrypts with CREDENTIALS_KEY every model credential, every Gmail refresh token
+(mail M4) and every job feed key (Adzuna's, app/jobs/feeds/keys.py) written by another key (the
+one in CREDENTIALS_KEY_PREVIOUS during a rotation), in one transaction, and prints how many rows
 changed. Afterwards CREDENTIALS_KEY_PREVIOUS can be removed from .env.
 
 Exit codes: 0 done, 2 configuration error (no CREDENTIALS_KEY), 1 a row could not be decrypted
@@ -45,6 +45,7 @@ from app.config import ConfigError, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import service as identity_service
 from app.identity.models import Role
+from app.jobs.feeds import keys as feed_keys
 from app.logging_config import configure_logging
 from app.mail import accounts as mail_accounts
 from app.main import credentials_keyring
@@ -83,6 +84,7 @@ def rotate() -> int:
         with build_sessionmaker(engine)() as session, session.begin():
             changed = credentials.rotate_all(session, keyring)
             changed += mail_accounts.rotate_all(session, keyring)
+            changed += feed_keys.rotate_all(session, keyring)
     except DecryptError:
         print(
             "A credential was written by a key this server does not hold (set it as "

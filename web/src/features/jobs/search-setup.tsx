@@ -57,6 +57,8 @@ import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { getStarterBoards, savedBoard, starterKey } from "./boards-api";
 import { CompanyBoards } from "./company-boards";
 import { formatDateTime } from "./format";
+import { isJobFeed, type JobFeed } from "./job-feeds";
+import { JobFeedsChoice } from "./job-feeds-ui";
 import {
   PROTECTED,
   READERS,
@@ -259,6 +261,10 @@ function SetupForm({
   );
   const [instructions, setInstructions] = useState(
     profile.sections.search.interactive_instructions ?? "",
+  );
+  // The job feeds ticked (api app/jobs/feeds), saved with the search.
+  const [feeds, setFeeds] = useState<JobFeed[]>(() =>
+    (profile.sections.search.job_feeds ?? []).filter(isJobFeed),
   );
   const [custom, setCustom] = useState("");
   // Company job boards (owner, 2026-10-30): never saved, the starter list is shown ticked as a
@@ -472,6 +478,7 @@ function SetupForm({
       const saved = await saveSection("search", revision, {
         ...draft,
         ...settings.data,
+        job_feeds: feeds,
         ...(edited !== null ? { company_boards: edited } : {}),
       });
       if (!isMounted()) return;
@@ -741,6 +748,7 @@ function SetupForm({
               </div>
             </div>
           </section>
+          <JobFeedsChoice value={feeds} onChange={setFeeds} />
           <CompanyBoards
             boards={boards}
             onChange={setEdited}
