@@ -14,6 +14,8 @@ Start the build of task $ARGUMENTS, as the orchestrator of `docs/agents/orchestr
    and no more than three other agents running.
 4. Move the card: `ops/card.sh <issue url> doing <module> now`.
 5. Spawn the `implementer` subagent (Opus; Sonnet when the argument says `sonnet` or the task is
-   small) with the builder brief of `docs/agents/orchestration.md`, every placeholder filled.
+   small) with the builder brief of `docs/agents/orchestration.md`, every placeholder filled, the
+   "Decisions:" line included (the headings of docs/decisions.md for the module and for each other
+   module the task touches).
 6. When it hands back: put its pull request on the board (`ops/card.sh <pr url> doing <module> now`),
    then start a first review with `/review-pr <pr>`.

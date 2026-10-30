@@ -17,8 +17,8 @@ suggestion used a here string to avoid `grep -q` in a pipe, #334). They were unb
 calls (#501), a scope mapper that narrows on what it cannot read (#554, 10 items over 3 rounds;
 #676), teardown and locks after a kill (#292, #434), ship logic (#284, 8 items) and claims of read
 only (#556)
-verdict: no observed effect (the item names traps that no longer occur; the bash 3.2 notes stay
-in orchestration.md, Lessons learned)
+verdict: no observed effect (the item names traps that no longer occur; the bash 3.2 notes are
+in when/shell-scripts.md)
 
 component: reviewer.md rule 7 (a gate change is read as such)
 candidates: reviewer.md since 2026-10-14

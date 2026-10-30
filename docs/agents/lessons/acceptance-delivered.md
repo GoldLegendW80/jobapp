@@ -18,8 +18,8 @@ the misses were lines whose test was absent (a failure path, hostile text, a ver
 issue requires), owner decisions posted after the plan, and `Closes` on a partial delivery
 verdict: no observed effect
 
-component: implementer.md, "Heuristic code" ("List what it still misses under 'Declared open
-points'")
+component: implementer.md, "Heuristic code", now when/heuristic-code.md ("List what it still
+misses under 'Declared open points'")
 candidates: implementer.md since 2026-10-14
 change: named residue is not re-blocked
 observed: builders also declared acceptance lines open, and reviewers blocked them: #453 (a plan
@@ -42,7 +42,7 @@ verdict: hurt, in 2 cases (read as covering acceptance lines too)
   drives the ended login path the plan names); B19 ("The three api changes that feed
   `interactive.outcome` are untested"); J11.
 - **confidence**: high: 7 merged pull requests and three parts of the open branch.
-- **supports**: review-checklist.md item 8; implementer.md, "Heuristic code" (open points are for
+- **supports**: review-checklist.md item 8; when/heuristic-code.md (open points are for
   residue only).
 
 ## Entry ACC-2

@@ -3,7 +3,8 @@
 What the reviews of jobapp's pull requests taught the agents that build it, one file per family
 of blocking item, written so that the next builder, reviewer and fix agent can read the family
 that applies to their diff. [review-checklist.md](../review-checklist.md) is the short always on
-list; these files are the cases behind each item, read on demand.
+list; the checks behind each item are in [../when/](../when/) and these files are the cases, both
+read on demand.
 
 The idea and the record format come from harness2 (google-research/harness2, Apache 2.0): its
 reflector writes, after each improvement round, what each harness edit did and at most one
@@ -97,6 +98,91 @@ The next comparison: the same numbers over the 10 to 15 pull requests merged aft
 checklist, per family, from the ledger. A family whose rounds per pull request do not fall is a
 lesson the checklist does not deliver.
 
+## Context per start
+
+What an agent reads at every start, before its brief, in characters of each file (Python `len` of
+the text) and tokens estimated as characters / 4. Taken on 2026-10-29 for harness2 step 2 (trim the
+always on text without losing a rule). "Before" is the tree of the lessons pull request (#723),
+"after" the trim. The brief, the task's plan section and the spec lines vary per task and are not
+counted. The owner's target was at least 30% less for the implementer and for the reviewer;
+reached: -30.4% and -41.9% (the figures after round 1 of the review, which added the
+"Decisions:" line and moved two rules to where a reviewer reads them).
+
+Implementer (the files `.claude/agents/implementer.md` tells it to read first, and CLAUDE.md):
+
+| File | Before | After |
+|---|---|---|
+| `.claude/agents/implementer.md` | 1383 | 1318 |
+| `CLAUDE.md` | 7501 | 6008 |
+| `docs/agents/implementer.md` | 11100 | 6138 |
+| `docs/agents/shared-rules.md` | 0 | 3365 |
+| `docs/agents/review-checklist.md` | 8870 | 3247 |
+| **Characters** | **28854** | **20076** |
+| Tokens (characters / 4) | 7213 | 5019 |
+| Change | | -30.4% |
+
+Reviewer (the files `.claude/agents/reviewer.md` tells it to read first, and CLAUDE.md; before, it
+read all of implementer.md for the shared rules, after, only `shared-rules.md`, so implementer.md
+counts 0):
+
+| File | Before | After |
+|---|---|---|
+| `.claude/agents/reviewer.md` | 1600 | 1812 |
+| `CLAUDE.md` | 7501 | 6008 |
+| `docs/agents/reviewer.md` | 4566 | 5104 |
+| `docs/agents/implementer.md` | 11100 | 0 |
+| `docs/agents/shared-rules.md` | 0 | 3365 |
+| `docs/agents/review-checklist.md` | 8870 | 3247 |
+| **Characters** | **33637** | **19536** |
+| Tokens (characters / 4) | 8409 | 4884 |
+| Change | | -41.9% |
+
+Named by CLAUDE.md but not counted above: before, "Start here" sent every agent through
+`docs/STATUS.md` (9234 characters) and `docs/decisions.md` (34926 characters at the lessons pull
+request, 35204 with the reading rule row) whole, 44160 characters or about 11040 tokens. After,
+STATUS.md is the orchestrator's, and decisions.md is read as "Standing rules" (946 characters)
+plus the sections the "Decisions:" line of the brief names: the module's and those of the other
+modules the task touches (owner, 2026-10-29, "Module + cross refs"; decisions.md is grouped by
+topic, not by module, so the orchestrator names headings). By characters the sections are 221 to
+4215, mostly 1287 to 4215, the longest 12176 ("Interactive job search"). The section sizes
+are counts of characters (Python `len`), not UTF-8 bytes.
+
+Read only when a trigger line says so (the situational text, moved out of the tables above; a task
+reads one to three of these):
+
+| File | Characters | Tokens |
+|---|---|---|
+| `docs/agents/when/contracts-and-plans.md` | 1505 | 376 |
+| `docs/agents/when/every-pull-request.md` | 1942 | 485 |
+| `docs/agents/when/gate-and-ship.md` | 3058 | 764 |
+| `docs/agents/when/heuristic-code.md` | 2248 | 562 |
+| `docs/agents/when/journeys.md` | 2482 | 620 |
+| `docs/agents/when/migrations.md` | 1318 | 329 |
+| `docs/agents/when/shell-scripts.md` | 1474 | 368 |
+| `docs/agents/when/state-and-approval.md` | 2454 | 613 |
+| `docs/agents/when/tests-and-fakes.md` | 1467 | 366 |
+| `docs/agents/when/untrusted-input.md` | 2362 | 590 |
+| `docs/agents/when/web-ui.md` | 998 | 249 |
+
+Together 21308 characters, 5327 tokens. Each file starts with its trigger, who reads it and where
+its text came from. The trigger lines are the checklist items and the "read when/<file>.md first"
+lines of implementer.md, reviewer.md and CLAUDE.md.
+
+To measure again, from the repository root:
+
+```bash
+python3 -I -c 'import sys;[print(len(open(p,encoding="utf-8").read()),p) for p in sys.argv[1:]]' \
+  .claude/agents/implementer.md CLAUDE.md docs/agents/implementer.md docs/agents/shared-rules.md \
+  docs/agents/review-checklist.md
+```
+
+For the reviewer, use `.claude/agents/reviewer.md` and `docs/agents/reviewer.md` in place of the
+two implementer files. Compare the totals with the "After" columns: a new rule goes to a `when/`
+file behind a trigger line, and an always on file that grows needs these figures updated in the
+same change. Kept here from the old checklist header: no review has blocked since 2026-10-14 on
+the shell traps of the old item 8 or the external facts of the old item 15, and both live in their
+lessons files.
+
 ## How the counts were made
 
 Every REQUEST CHANGES verdict of the corpus was read and each of its blocking items given one
@@ -129,10 +215,11 @@ adds the shipped pull requests to this library:
 5. When an entry's evidence supports it, propose the edit of
    [review-checklist.md](../review-checklist.md) or [implementer.md](../implementer.md) in the same
    change: add an item for a rising family, merge or drop one that no longer fires, keep each item
-   short, and keep the joint size of those two files from growing. KEEP_BASE (no edit) is a valid
-   outcome. Never change the hard rules, the deny list, the verdict format, the gate or an owner
-   decision.
+   to its rule and a pointer, put its check in a `when/` file, and keep the always on files
+   ("Context per start" above) from growing. KEEP_BASE (no edit) is a valid outcome. Never change
+   the hard rules, the deny list, the verdict format, the gate or an owner decision.
 6. Split edits as harness2 does: how the builder works (tests, worktree, merges, token economy)
-   goes to implementer.md or orchestration.md; module knowledge (a parser's vocabulary, a site's
-   quirks) goes to the module's plan section, not to the always on files.
+   goes to implementer.md or orchestration.md, and what only some diffs need to a `when/` file
+   behind a trigger line; module knowledge (a parser's vocabulary, a site's quirks) goes to the
+   module's plan section, not to the always on files.
 7. Commit on a branch of its own; the orchestrator opens a docs pull request, reviewed on Sonnet.
