@@ -123,8 +123,11 @@ class NoPause:
     """A pacer with no pause: many pages fit in the lease's own 900 s (a real lease's maximum
     stays a bound, test_selected_interactive)."""
 
-    async def reserve(self, host: str, pause: float) -> float:
+    async def reserve(self, host: str, pause: float, holder: str) -> float:
         return 0.0
+
+    async def release(self, host: str, holder: str) -> None:
+        return None
 
 
 def run(search: SearchSection, site: SearchSite, agent: Any, **kw: Any):

@@ -153,14 +153,23 @@ CHOICE_REFUSED = (
 MODEL_VALUE = "model_value"
 # Why the agent of a job website reports no posting (`report_no_postings`, 2026-10-28), and the
 # code each reason ends the website with (interactive.outcome): "no_match" is a website that ran
-# the search and listed no matching job, a success only after a search the session saw.
+# the search and listed no matching job, a success only after a search the session saw;
+# "app_refused" is the app refusing its search (B19, 2026-10-29), which a refusal the session
+# counted says too, whatever other reason the agent gave.
 NO_POSTINGS = {
     "no_match": None,
     "no_list": "no_job_list",
     "cookie_wall": "cookie_wall",
     "signin_wall": "signin_wall",
     "no_search_control": "no_search_box",
+    "app_refused": "search_refused",
 }
+# What browserd answers when it refused a navigation or an action of the agent's (B19): counted
+# as the app's refusal (`refused["unsupported_interaction"]`), never a page that did not load.
+APP_REFUSED = frozenset(
+    {"host_not_allowed", "unsupported_discovery", "refused_scheme", "bad_url", "submit", "danger"}
+)
+NAVIGATION_REFUSED = "Refused: the app does not open this address. Go on another way."
 # What browserd answers when an action could not finish on the page (routes.call_tool's
 # `page_error`: Playwright gave up, often because a cookie banner covers the element;
 # `element_covered`: browserd saw another element over it; `stale_ref`: the element is gone):
@@ -256,23 +265,25 @@ d'emploi") or open its usual address, such as /jobs or /fr/jobs, with browser_na
 2. A cookie banner may cover the page. Close it by clicking its decline button only ("No,
 thanks", "Reject all", "Refuser", "Continuer sans accepter"); never accept cookies, never
 open its settings. If a click does not finish, read the page again: something may cover it.
-3. Search one saved title at a time: type it in the search box, leave or set the place box,
-then click the search button. Decide the order and the searches: usually one per wanted
-title, and per wanted place when the website has a place field, until the website is covered
-for this person.
+3. Search one saved title at a time: type it in the website's own search box, leave or set
+the place box, then press Enter in the box (browser_type with submit) or click its search
+button. Decide the order and the searches: usually one per wanted title, and per wanted place
+when the website has a place field, until the website is covered for this person.
 4. Read the result list. Open the postings that fit the criteria, read each one, and report
 it with report_postings right after opening it.
 5. When the website shows no list of postings, say so with report_no_postings and its
 reason: no_match (the search ran and listed no matching job), no_list (only a count or a push
 to sign up, no list), cookie_wall (a banner you could not decline), signin_wall (the postings
-need a sign in), no_search_control (no search box anywhere). Never report a reason you did
+need a sign in), no_search_control (no search box anywhere), app_refused (the app refused
+your typing, your Enter or your click on the search button). Never report a reason you did
 not see.
 
 With browser_type you may type one of `titles` in a search box or one of `places` in the place
 box, as written there or with another case or accents when the website wants it ("GenAI
-Engineer" for "genai engineer"), or nothing. Leaving a box empty is always allowed.
-browser_select_option sets a native filter only to a value of `filters` or a place of
-`places`; browser_click submits a search, opens a link or the next page, or declines cookies.
+Engineer" for "genai engineer"), or nothing, and with submit press Enter after it.
+Leaving a box empty is always allowed. browser_select_option sets a native filter only to a
+value of `filters` or a place of `places`; browser_click presses a search button, opens a
+posting, a result list or the next page, or declines cookies.
 Any other value, a translation included, is refused.
 Unwanted titles and unwanted places are context: never type them; postings that match them
 are left out after reading. Use the other criteria and the person's instructions to choose
@@ -357,9 +368,6 @@ class InteractiveScope:
     instructions: str = ""
     # B17: the person signed in to this website: browserd reads it in their persisted context.
     signed_in: bool = False
-    # The Indeed platform (owner, 2026-10-28): its start page may land on one of its own
-    # country sites (`country_site`), where the search continues.
-    country: bool = False
 
     def tool_scope(self) -> dict[str, Any]:
         scope: dict[str, Any] = {
@@ -370,8 +378,6 @@ class InteractiveScope:
         }
         if self.signed_in:
             scope["signed_in"] = True
-        if self.country:
-            scope["country"] = True
         return scope
 
     def __post_init__(self) -> None:
@@ -496,38 +502,72 @@ def same_origin(url: str, other: str) -> bool:
     return first is not None and first == second
 
 
-# Owner, 2026-10-28: "Follow its own country sites. A redirect from www.indeed.com to any
-# xx.indeed.com is followed, and the search continues there. Redirects to any other domain stay
-# refused." As browserd's discovery.COUNTRY_HOMES: the home host of each platform with country
-# sites and their scheme; `www.indeed.test:8080` is the fixture server's stand in for the tests
-# (`.test` is reserved, RFC 2606), as platform_policy.test_start maps a platform there.
-COUNTRY_HOMES = {"www.indeed.com": "https", "www.indeed.test:8080": "http"}
+# Owner, 2026-10-29 (B19, "Let it use the search boxes"): each website's own hosts are allowed.
+# A platform's hosts are a family, as browserd's discovery.FAMILIES: its domain, the domain's
+# `www.` host and, with `countries`, every host of two lowercase ASCII letters under it
+# (`fr.indeed.com`), on https and its default port; each has a `.test` stand in on http and port
+# 8080 for the tests (`.test` is reserved, RFC 2606), as platform_policy.test_start maps a
+# platform there. The lease opens the family (`lease_hosts`), and every page must be on it
+# (`on_family`).
 COUNTRY_LABEL = re.compile(r"[a-z]{2}")
-
-
-def country_site(start: str, url: str) -> bool:
-    """Whether `url` is the start page on a country site of the home host `start` is on
-    (https://www.indeed.com/ to https://fr.indeed.com/), as browserd's discovery.country_site:
-    the home's scheme, two lowercase ASCII letters then the home's domain and port, the start's
-    own path and query, nothing else."""
-    if not isinstance(start, str) or not isinstance(url, str):
-        return False
-    try:
-        home, there = urlsplit(start), urlsplit(url)
-    except ValueError:
-        return False
-    scheme = COUNTRY_HOMES.get(home.netloc)
-    label, dot, rest = there.netloc.partition(".")
-    return (
-        scheme is not None
-        and home.scheme == there.scheme == scheme
-        and bool(dot)
-        and rest == home.netloc[4:]
-        and COUNTRY_LABEL.fullmatch(label) is not None
-        and (there.path, there.query) == (home.path, home.query)
-        and not there.fragment
-        and url == urlunsplit((scheme, there.netloc, there.path, there.query, ""))
+PLATFORM_FAMILIES = (
+    ("indeed.com", True),
+    ("linkedin.com", True),
+    ("welcometothejungle.com", False),
+)
+FAMILIES = tuple(
+    family
+    for domain, countries in PLATFORM_FAMILIES
+    for family in (
+        (domain, countries, "https", 443),
+        (domain.rsplit(".", 1)[0] + ".test", countries, "http", 8080),
     )
+)
+
+
+def family_of(url: str) -> tuple[str, bool, str, int] | None:
+    """The family a canonical address is on: its scheme and port, its host the domain, the
+    domain's `www.` host or, with countries, two lowercase letters under the domain."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.username or parts.password:
+        return None
+    host = parts.hostname or ""
+    port = {"http": 80, "https": 443}.get(parts.scheme) if port is None else port
+    for family in FAMILIES:
+        domain, countries, scheme, family_port = family
+        if (parts.scheme, port) != (scheme, family_port):
+            continue
+        label, dot, rest = host.partition(".")
+        if host in (domain, "www." + domain) or (
+            countries and dot and rest == domain and COUNTRY_LABEL.fullmatch(label)
+        ):
+            return family
+    return None
+
+
+def on_family(url: str, start: str) -> bool:
+    """Whether `url` is on the start's website: the start's family when it is on one, else the
+    start's own origin (`same_origin`)."""
+    family = family_of(canonical(start))
+    if family is None:
+        return same_origin(url, start)
+    landed = canonical(url)
+    return bool(landed) and family_of(landed) == family
+
+
+def lease_hosts(start: str) -> list[str]:
+    """The hosts a job website's lease opens: its family's (the domain, and every name under it
+    or its `www.` host; browserd narrows them to the family, discovery.on_site), else the
+    start's host alone."""
+    family = family_of(canonical(start))
+    if family is None:
+        return [urlsplit(canonical(start)).hostname or ""]
+    domain, countries = family[0], family[1]
+    return [domain, f"*.{domain}" if countries else f"www.{domain}"]
 
 
 def host_pair(host: str) -> list[str]:
@@ -855,14 +895,10 @@ class FinderSession:
             canonical(self.landed) != self.landed
             or not (
                 same_origin(self.landed, self.start)
-                or (
-                    self.interactive is not None
-                    and self.interactive.country
-                    and country_site(self.start, self.landed)
-                )
+                or (self.interactive is not None and on_family(self.landed, self.start))
             )
         ):
-            raise ValueError("the start page landed on another origin")
+            raise ValueError("the start page landed on another website")
         self.current = self.landed or self.start
         self._read(self.current, self.first)
         if self.interactive:
@@ -870,11 +906,14 @@ class FinderSession:
 
     @property
     def site(self) -> tuple[str, str] | None:
-        """The website the session reads: the start's, or the country site it landed on."""
+        """The website the session reads: the start's, or the address it landed on."""
         return site_of(self.landed or self.start)
 
     def on_site(self, url: str) -> bool:
-        """Same scheme, same host or its `www.` twin, same port (`site_of`)."""
+        """Same scheme, same host or its `www.` twin, same port (`site_of`); a job website on a
+        platform's family (B19): any host of the family (`on_family`)."""
+        if self.interactive is not None and family_of(self.start) is not None:
+            return bool(url) and on_family(url, self.start)
         return bool(url) and site_of(url) == self.site
 
     def _read(self, url: str, text: str) -> None:
@@ -939,6 +978,11 @@ class FinderSession:
                 self.typed_title = title
             elif (place := saved_as(text, scope.places)) is not None:
                 self.typed_place = place
+            if args.get("submit") is True:  # Enter in the box (B19): a search, as a button's
+                if self._shows_typed(canonical(self.pages.last_url)):
+                    self.searches.setdefault((self.typed_title, self.typed_place), None)
+                else:
+                    self._searched_at(canonical(self.pages.last_url))
         elif name == "browser_select_option":
             values = args.get("values")
             if isinstance(values, list) and len(values) == 1:
@@ -991,6 +1035,7 @@ class FinderSession:
             self.refused["other_host"] += 1
             return "Refused: only this site's own pages can be opened. Go on with this site.", True
         if self.interactive and url not in self.seen and not search_page(url):
+            self.refused["unobserved_address"] += 1  # the app's refusal (B19, outcome)
             return (
                 "Refused: open only an observed link of this site, or its job search page "
                 "at its root or under a language, such as /jobs or /fr/jobs, with no query.",
@@ -1020,6 +1065,13 @@ class FinderSession:
         except SourceError as exc:
             if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
                 return self._stop(GUARD_FAILED)  # as in `interact`: no page to recover on
+            if (
+                exc.code == "page_failed"
+                and self.interactive
+                and result.get("error") in APP_REFUSED
+            ):
+                self.refused["unsupported_interaction"] += 1
+                return NAVIGATION_REFUSED, True
             if exc.code == "page_failed":
                 return "The page did not load.", True
             return self._stop(exc.code)

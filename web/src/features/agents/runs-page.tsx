@@ -39,6 +39,7 @@ import {
   formatDuration,
   formatTokens,
 } from "./format";
+import { RunLiveView } from "./run-live-view";
 import { RunPanel, StatusBadge } from "./run-panel";
 import { useNow } from "./use-now";
 import {
@@ -292,7 +293,7 @@ export function RunsPage() {
   );
 }
 
-/** /runs/:id: one run, live. */
+/** /runs/:id: one run, live; a website search's also shows the browser it reads (browser B18). */
 export function RunPage() {
   useTitle("Agent run");
   const { id = "" } = useParams();
@@ -313,6 +314,7 @@ export function RunPage() {
         </Link>
         {detail.data ? <RunJobLink run={detail.data} /> : null}
       </div>
+      <RunLiveView run={detail.data} />
       <RunPanel key={id} runId={id} />
     </div>
   );

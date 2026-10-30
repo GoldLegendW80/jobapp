@@ -57,7 +57,7 @@ function sentence(error: unknown): string {
  * view has the keyboard and the mouse from the start and there is nothing to take over or give
  * back. `watchOnly`: the person only watches, with no Take over and no keyboard (the submit lease,
  * whose read back a person's input would void). Used by Account's "Your browser" card and by the
- * apply module's job page.
+ * apply module's job page, and by the page of a website search run (browser B18).
  */
 export function LiveBrowser({
   status,

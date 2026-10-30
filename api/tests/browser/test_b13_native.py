@@ -35,7 +35,7 @@ from tests.browser.test_browser_container import ROOT, Stack
 pytestmark = pytest.mark.docker
 START = "http://pages:8080/b13/"
 # The fixture server's names: `elsewhere`, and Indeed's home and a country site under `.test`
-# (discovery.COUNTRY_HOMES, owner 2026-10-28), so a request to any of them is in its log.
+# (discovery.FAMILIES, owner 2026-10-28 and 2026-10-29), so a request to any of them is in its log.
 PRIVATE = ["pages", "elsewhere", "www.indeed.test", "fr.indeed.test"]
 INDEED = "http://www.indeed.test:8080/b13/indeed"
 
@@ -363,18 +363,23 @@ def test_native_start_page_redirect_on_its_own_host_is_followed(native):
 
 
 def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
-    """Owner, 2026-10-28: Indeed's home sends the start page to the person's country site, and
-    the search continues there. A redirect to another domain, or of another platform's search,
-    is refused and its target never requested (test_j18_country holds the rest)."""
+    """Owner, 2026-10-28 and 2026-10-29 (B19): Indeed's home sends the start page to the
+    person's country site, a host of its family, and the search continues there. A redirect to
+    another domain is refused and its target never requested, and so is one to a host the
+    lease's list does not hold (test_b19_families holds the rest)."""
     answers = {}
-    for path, country in (("indeed", True), ("indeed-off", True), ("indeed", False)):
+    family = ["indeed.test", "*.indeed.test"]
+    for path, hosts in (
+        ("indeed", family),
+        ("indeed-off", family),
+        ("indeed", ["www.indeed.test"]),
+    ):
         start = INDEED + path.removeprefix("indeed")
-        lease = Lease(native, "sweep", hosts=["www.indeed.test"])
+        lease = Lease(native, "sweep", hosts=hosts)
         native.redactions.append(lease.token)
         scope = {"start": start, "titles": ["robot"], "places": [], "filters": {"remote": "0"}}
-        if country:
-            scope["country"] = True
         marker = {"_discovery": "native_get", "_discovery_scope": scope}
+        country = hosts is family
         try:
             opened = lease.tool("browser_navigate", url=start, **marker)
             answers[path, country] = opened
@@ -390,13 +395,13 @@ def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
         finally:
             lease.end()
     assert not answers["indeed-off", True]["ok"]
-    assert not answers["indeed", False]["ok"]  # another platform's scope never moves
+    assert not answers["indeed", False]["ok"]  # the lease's list still bounds the family
     observed = json.loads(fetched(native, "http://pages:8080/observed"))
     hosts = [(p.get("host"), p["path"], p.get("query")) for p in observed]
     assert ("fr.indeed.test:8080", "/b13/search", {"q": ["robot"], "remote": ["0"]}) in hosts
     # The redirect to another domain was made (its page was requested), its target never was
     # (`elsewhere` is in this log, test_native_start_page_redirect_on_its_own_host_is_followed);
-    # the other platform's run never reached the country site (one request there, the first).
+    # the run whose list holds the home alone never reached the country site (one request there).
     assert ("www.indeed.test:8080", "/b13/indeed-off") in [(h, p) for h, p, _ in hosts]
     assert not any(host.startswith("elsewhere") for host, _, _ in hosts if host), hosts
     assert [h for h, p, _ in hosts if p == "/b13/indeed"].count("fr.indeed.test:8080") == 1

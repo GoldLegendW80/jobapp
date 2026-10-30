@@ -509,9 +509,12 @@ def test_fresh_permission_is_checked_after_pacing_and_before_initial_navigation(
     policy = Policy()
 
     class Pacer:
-        async def reserve(self, host, pause):
+        async def reserve(self, host, pause, holder):
             policy.allowed = False
             return 0
+
+        async def release(self, host, holder):
+            return None
 
     entries, _, leases, tools, _ = asyncio.run(
         execute(
@@ -607,6 +610,22 @@ def test_a_shorter_lease_cannot_be_widened_by_the_interactive_source():
     assert entries[0]["reason"] == "lease_budget"
     assert not tools.actions
     assert leases.released == ["lease-1"]
+
+
+def test_a_longer_lease_is_cut_at_the_website_cap_the_pace_hold_is_sized_on():
+    """PACE_HOLD_S is the cap plus a margin: a search is cut at the cap of its lease's request,
+    however long the lease may run."""
+    ends = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        ends.append(session.pages.lease_until)
+        return finder.Ran()
+
+    asyncio.run(
+        execute(selected(), "e2e-person", ScriptedFinder(script), leases=FakeLeases(max_s=5000))
+    )
+    assert ends == [sources.WEBSITE_CAP_S] == [900]
+    assert sources.PACE_HOLD_S > sources.WEBSITE_CAP_S
 
 
 def test_model_does_not_get_an_empty_success_without_executing_search():

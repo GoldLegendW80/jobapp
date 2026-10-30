@@ -60,7 +60,14 @@ from urllib.parse import urlsplit
 from app.browser import finder
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
-from app.browser.sources import ERRORS, PAGE_BUDGET_S, STOPS_SWEEP, Pages, SourceError
+from app.browser.sources import (
+    ERRORS,
+    PAGE_BUDGET_S,
+    STOPS_SWEEP,
+    WEBSITE_CAP_S,
+    Pages,
+    SourceError,
+)
 from app.jobs import sweep
 from app.jobs.importer import kind
 from app.jobs.schemas import SEARCHES_LISTED
@@ -137,10 +144,6 @@ class GuardedTools:
         self.tools, self.policy, self.context = tools, policy, context
         self.logins = logins  # B17: set only when the website is read signed in
         self.reserved = False
-        # The origin every page must show: the start's, or Indeed's country site its first
-        # page landed on (owner, 2026-10-28; browserd moved its scope there, once).
-        self.origin = finder.origin(context.url)
-        self.first_page = True
 
     async def _before(self, name: str) -> None:
         await _permit(self.policy, self.context)
@@ -163,20 +166,14 @@ class GuardedTools:
         shot = await self.tools.snapshot()
         if shot.get("ok"):
             url, text = shot.get("url"), shot.get("snapshot")
-            first, self.first_page = self.first_page, False
-            landed = finder.canonical(url) if isinstance(url, str) else ""
-            if (
-                first
-                and self.context.platform == "indeed"
-                and finder.country_site(self.context.url, landed)
-            ):
-                self.origin = finder.origin(landed)
+            # Every page is on the start's website: its origin, or its platform's family (B19:
+            # `fr.indeed.com` for `www.indeed.com`, finder.on_family), as browserd holds it.
             if (
                 not isinstance(url, str)
                 or len(url) > 2000
                 or not isinstance(text, str)
                 or len(text) > finder.SNAPSHOT_MAX
-                or finder.origin(landed) != self.origin
+                or not finder.on_family(url, self.context.url)
             ):
                 raise SourceError("page_failed")
             code = await self.policy.observe(self.context, url, text) if self.policy else None
@@ -500,10 +497,7 @@ async def _one(
         host=entry.get("host") or "",
     )
     try:
-        scope = planned.scope
-        if platform == "indeed":  # its home may send the search to a country site (owner)
-            scope = dataclasses.replace(scope, country=True)
-        code = await _website(runner, plan, context, scope, site, deadline)
+        code = await _website(runner, plan, context, planned.scope, site, deadline)
     finally:
         site.write(entry)
     return code or ("finding_persistence_pending" if site.found else None)
@@ -529,7 +523,9 @@ async def _website(
         scope = dataclasses.replace(scope, signed_in=True)
     else:
         logins = None
-    got = await runner.leases.acquire(str(plan.user_id), "sweep", automation=True, hosts=[host])
+    # The website's hosts: its platform's family (B19, finder.lease_hosts), else its own host.
+    hosts = finder.lease_hosts(scope.start)
+    got = await runner.leases.acquire(str(plan.user_id), "sweep", automation=True, hosts=hosts)
     if got.lease is None or got.token is None:
         await runner._give_back(str(plan.user_id), None if got.lease is None else "")
         return "browser_busy"
@@ -550,31 +546,43 @@ async def _website(
             # One pace per platform, shared by all its addresses (B14), else per host.
             host=platform_policy.pace_key(paced, host, runner.base_url),
             pacer=runner.pacer,
-            lease_until=asked + min(got.lease.max_s, 900),
+            lease_until=asked + min(got.lease.max_s, WEBSITE_CAP_S),
             pause=platform_policy.pause_for(paced),
+            idle_s=got.lease.idle_s,
         )
         return await _search(runner.finder, pages, scope, str(plan.user_id), site)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
 
 
+# The app's own refusals of an agent's search (B19): browserd's, and the api's of an address
+# that is no observed link. A model's slip (`model_value`) is its own, never one of them.
+APP_REFUSALS = ("unsupported_interaction", "unobserved_address")
+
+
 def outcome(session: finder.FinderSession) -> str | None:
     """How a website the agent ran ends (2026-10-28, issue 716). It was searched when the agent
     reported a posting code verified, or said after a search the session saw that the website
     listed no matching job (`report_no_postings` no_match). Else the blocker it named (a cookie
-    wall, a sign in wall, no search control, a page with no list); else `unsupported_interaction`
-    when browserd or the website refused one of its actions; else `nothing_reported`. Opening a
-    search page by its address, pressing a link or a failed click that it recovered from are
-    how a person searches too: no kind of action is required, and nothing read is no success."""
+    wall, a sign in wall, no search control, a page with no list), but when the app refused one
+    of its actions (B19, 2026-10-29: "The app refused the search on this website."), the
+    refusal wins, `search_refused`; else `unsupported_interaction` when browserd or the website
+    refused one of its actions, `search_refused` when the api refused an address; else
+    `nothing_reported`. Opening a search page by its address, pressing a link or a failed click
+    that it recovered from are how a person searches too: no kind of action is required, and
+    nothing read is no success."""
     if session.found or session.verified_count:
         return None
+    refused = any(session.refused[name] for name in APP_REFUSALS)
     if session.outcome:
         code = finder.NO_POSTINGS[session.outcome]
-        if code is not None or session.searches:
-            return code
+        if code is not None:
+            return "search_refused" if refused else code
+        if session.searches:
+            return None
     if session.refused["unsupported_interaction"]:
         return "unsupported_interaction"
-    return "nothing_reported"
+    return "search_refused" if refused else "nothing_reported"
 
 
 async def _search(
@@ -611,14 +619,11 @@ async def _search(
                 if exc.code == "page_failed" and result.get("error") == "unsupported_discovery":
                     return "unsupported_interaction"
                 return exc.code
-            # The start page may land on another address of its own origin (Welcome to the
-            # Jungle answers `/` on `/en`), or Indeed's on the person's country site (owner,
-            # 2026-10-28); browserd held that redirect to the frozen scope.
+            # The start page may land on another address of its own website (Welcome to the
+            # Jungle answers `/` on `/en`, Indeed's on the person's country site, B19's family);
+            # browserd held that redirect to the frozen scope.
             landed = finder.canonical(pages.last_url)
-            if not landed or not (
-                finder.same_origin(landed, scope.start)
-                or (scope.country and finder.country_site(scope.start, landed))
-            ):
+            if not landed or not finder.on_family(landed, scope.start):
                 return "unsupported_interaction"
             site.started = True
             session = finder.FinderSession(
