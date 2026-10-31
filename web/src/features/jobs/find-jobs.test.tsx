@@ -422,6 +422,19 @@ describe("Find jobs", () => {
               places_left_out: 1,
               error: "page_budget",
             }),
+            // LinkedIn's public job search stopped by its own time cap (2026-10-31).
+            source("linkedin", {
+              mode: "api",
+              query: "",
+              host: "www.linkedin.com",
+              phase: "done",
+              outcome: "partial",
+              found: 4,
+              new: 4,
+              searches: 11,
+              planned: 21,
+              error: "time_budget",
+            }),
             source("remoteok", { mode: "feed", query: "", found: 2, new: 1 }),
           ],
         }),
@@ -447,6 +460,7 @@ describe("Find jobs", () => {
       "LinkedIn, searched: 0 postings found, 0 new.",
       "Indeed: 3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
       "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 20 saved titles and 1 saved place were left out: a website's search types plain words, the first ones that fit. 1 posting found, 0 new. The app read as many pages of this website as it may this time. What was read is kept.",
+      "LinkedIn: 11 of 21 searches ran. 4 postings found, 4 new. LinkedIn is read slowly, about one request every 10 seconds, so its time in this search ran out. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,

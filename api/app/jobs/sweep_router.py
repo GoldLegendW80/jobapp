@@ -131,6 +131,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             items_skipped=max(0, count(item, "items_skipped")),
             searches=max(0, count(item, "searches")),
             searched=searched(item.get("searched")),
+            planned=max(0, count(item, "planned")),
             titles_left_out=max(0, count(item, "titles_left_out")),
             places_left_out=max(0, count(item, "places_left_out")),
             error=item["error"] if isinstance(item.get("error"), str) else None,

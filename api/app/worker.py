@@ -238,8 +238,9 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     # with its own cap: the alert e-mails (app/mail/alerts, at most ALERTS_TIME_S), the ticked
     # job feeds (app/jobs/feeds, at most FEEDS_TIME_S), the company boards (app/jobs/boards, at
     # most BUDGET_S and never closer than 30 s to the deadline) and LinkedIn's public job search
-    # (app/browser/sources/linkedin_guest.py, its share of the time); then the job websites read
-    # in the browser with the time left.
+    # (app/browser/sources/linkedin_guest.py, at most LINKEDIN_TIME_S and never closer than
+    # WEBSITES_MIN_S to the deadline when a website read in the browser is ticked); then the job
+    # websites read in the browser with the time left.
     linkedin, websites = split_websites(browser_sources(ctx))
     await sweep.run_sweep(
         sessions_of(ctx),

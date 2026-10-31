@@ -21,16 +21,20 @@ gives its one permission (linkedin_guard), which this source checks too.
   time, so `f_JT=T` alone would miss them. VIE has no code either:
   with VIE saved each title is also searched as "<title> VIE", without `f_JT` and checked the
   same way; with VIE alone saved, only those searches run. Pages: `start=0, 10, 20`, at most
-  PAGES_PER_SEARCH a search, in rounds (the first page of every search, then the second ...), a
-  search ending at a short or a stale page.
+  PAGES_PER_SEARCH a search, in rounds, breadth first: the first page of every search, then
+  the details of that round, then the second page of the searches that go on, and so on; a
+  search ends at a short or a stale page. The entry counts the searches that ran (`searches`)
+  against the ones planned (`planned`): a time cap that stops it shows as "11 of 21".
 - Filter before any detail request: the saved titles to include (a card whose title matches
   none is left out: LinkedIn's relevance is loose), the unwanted titles and places, the never
   apply rules with the app's own rule against cybersecurity, and the person's postings (same
   LinkedIn id or address: counted found and duplicate, never fetched again).
 - Detail: `GET <base>/jobs-guest/jobs/api/jobPosting/<id>`, only for a new card that passed the
-  filter, at most DETAILS_PER_PAGE after each page and the rest at the end while the budget
-  holds: the description and the criteria (seniority, employment type, job function,
-  industries) become the posting's text, so the normal scoring applies; the employment type
+  filter, at most DETAILS_PER_ROUND after each round, taken in turn from each search (its
+  first card, then its second ...), so one search's full page never takes the round's details
+  from the others, and the rest at the end while the budget holds: the description and the
+  criteria (seniority, employment type, job function, industries) become the posting's text,
+  so the normal scoring applies; the employment type
   gives the contract type when the title says none (`contract_of`). The posting is stored as
   `https://www.linkedin.com/jobs/view/<id>/` through the run's commits (sweep.Commits), source
   `www.linkedin.com`, as the browser's LinkedIn postings are.
@@ -38,7 +42,10 @@ gives its one permission (linkedin_guard), which this source checks too.
   PAUSE_S[0] seconds after the previous one of that host ended, browser pages included (the
   shared per host pacer, RedisPacer, key `www.linkedin.com`). A proof of concept of 2026-10-30
   got HTTP 429 for a request 4 s after another, and none at 8 s between pages and 6 s between
-  postings. At most REQUESTS_MAX requests a sweep, and the source's share of the sweep's time.
+  postings. At most REQUESTS_MAX requests a sweep, within its own time cap (`time_limit`):
+  LINKEDIN_TIME_S from its start, and never closer to the sweep's deadline than
+  WEBSITES_MIN_S when a website read in the browser is ticked (they start after the sources
+  that make no browser call, so they keep that much), whatever the number of those websites.
 - Stop: HTTP 429 or 999, or a redirect to LinkedIn's sign in or security pages, ends the source
   at once `linkedin_rate_limited`, with what was stored kept; no retry. It also starts
   LinkedIn's cooldown: for COOLDOWN_S no sweep of any person sends LinkedIn a request (a Redis
@@ -113,8 +120,14 @@ WORLDWIDE_LOCATION, WORLDWIDE_GEO_ID = "Worldwide", "92000000"
 PAUSE_S = (8.0, 12.0)  # between two requests of LinkedIn's host (module docstring, Pace)
 PAGES_PER_SEARCH = 3
 PAGE_SIZE = 10  # cards LinkedIn gives a page
-DETAILS_PER_PAGE = 5
-REQUESTS_MAX = 30
+DETAILS_PER_ROUND = 15  # details fetched after a round of pages, the rest later
+REQUESTS_MAX = 45  # about 7.5 minutes at 10 s apart: LINKEDIN_TIME_S stops it first, mostly
+# The source's own time cap (`time_limit`), beside the sweep's other sources that make no
+# browser call (alerts 120 s, feeds 180 s, boards 300 s): 420 s of the sweep's 900 s fit 21
+# first pages (3 titles in 7 places, about 220 s at 10 s apart) and their details. The websites
+# read in the browser start once all of those ended and keep at least WEBSITES_MIN_S.
+LINKEDIN_TIME_S = 420.0
+WEBSITES_MIN_S = 240.0
 SEARCHES_MAX = 30  # searches built from the saved titles and places, in saved order
 CARDS_MAX = 25  # cards read from one page, whatever it holds
 BODY_MAX = 2_000_000  # bytes read of one answer
@@ -759,6 +772,7 @@ class _Run:
     other_contract: int = 0
     duplicates: int = 0
     found: int = 0  # findings counted without the run's commits
+    planned: int = 0  # the searches built (`searches` counts the ones that ran)
 
 
 async def run(
@@ -771,10 +785,8 @@ async def run(
     """Search every LinkedIn address in API mode (the first one runs the search, any other one
     ends `linkedin_searched_once`). Returns the code that stops the later websites (a commit
     that did not settle), else None. The sweep runs it beside its other sources that make no
-    browser call (Runner.linkedin), the browser's websites after them (`without_api`).
-
-    Its share of the sweep's time is what is left divided by the browser's websites plus one,
-    as when it ran first of the websites: they start after it and get the rest."""
+    browser call (Runner.linkedin), the browser's websites after them (`without_api`), within
+    its own time cap (`time_limit`)."""
     search = getattr(plan, "search", None)
     if search is None:
         return None
@@ -804,14 +816,13 @@ async def run(
         else:
             stats.current_board = entry["source_id"]
             await progress()
-            now = runner.monotonic()
-            share = now + max(0.0, deadline - now) / (len(sites) - len(api) + 1)
+            limit = time_limit(runner.monotonic(), deadline, len(sites) - len(api))
             commits = getattr(plan, "commits", None)
             if commits is not None:
                 commits.admit(entry["source_id"])
             try:
                 entry["error"] = await _search(
-                    runner, plan, search, site, entry, stats, progress, min(deadline, share)
+                    runner, plan, search, site, entry, stats, progress, limit
                 )
             except Exception:
                 logger.exception("linkedin guest search failed")
@@ -824,6 +835,16 @@ async def run(
         sweep.release_board(stats, entry["source_id"])
         await progress()
     return stop
+
+
+def time_limit(now: float, deadline: float, websites: int) -> float:
+    """When the public job search stops (module docstring, Pace): LINKEDIN_TIME_S from `now`,
+    whatever the number of `websites` read in the browser; with any of them ticked, never closer
+    to the sweep's `deadline` than WEBSITES_MIN_S, or half the time left when less than twice
+    that is left (a shorter sweep still gives both some)."""
+    left = max(0.0, deadline - now)
+    keep = min(WEBSITES_MIN_S, left / 2) if websites > 0 else 0.0
+    return min(now + LINKEDIN_TIME_S, deadline - keep)
 
 
 def without_api(plan: Any) -> Any:
@@ -891,7 +912,7 @@ async def _search(
     transport = runner.guest_http() if runner.guest_http is not None else None
     if transport is None:
         return "page_failed"  # no way out configured: no request at all
-    done = _Run()
+    done = _Run(planned=len({(q.title, q.place) for q in queries}))
     try:
         async with httpx.AsyncClient(
             transport=transport,
@@ -929,7 +950,9 @@ async def _rounds(
     progress: Callable[[], Awaitable[None]],
     done: _Run,
 ) -> None:
-    """The pages in rounds, the details of new cards after each page, the rest at the end."""
+    """The pages in rounds, breadth first: the first page of every search, then up to
+    DETAILS_PER_ROUND details of new cards taken in turn from each search, then the next page
+    of the searches that go on; the details left at the end."""
     host = urlsplit(base).hostname or linkedin.HOST
     # The person's postings when the search starts. One a source beside this one (LinkedIn's
     # alert e-mails) stores meanwhile is fetched and then found a duplicate by the commits,
@@ -966,12 +989,29 @@ async def _rounds(
                     pending.append((card, query))
             if len(cards) >= PAGE_SIZE and new:
                 still.append(query)
-            await _details(guest, base, plan, search, pending, entry, done, DETAILS_PER_PAGE)
             await progress()
+        _in_turn(pending)
+        await _details(guest, base, plan, search, pending, entry, done, DETAILS_PER_ROUND)
+        await progress()
         active = still
         if not active:
             break
     await _details(guest, base, plan, search, pending, entry, done, len(pending))
+
+
+def _in_turn(pending: deque[tuple[Card, Query]]) -> None:
+    """Reorder `pending` in place: the first card of each search, then the second of each, and
+    so on, each search's cards in the order read and the searches in their order."""
+    by_query: dict[Query, deque[tuple[Card, Query]]] = {}
+    for item in pending:
+        by_query.setdefault(item[1], deque()).append(item)
+    pending.clear()
+    while by_query:
+        for query in list(by_query):
+            cards = by_query[query]
+            pending.append(cards.popleft())
+            if not cards:
+                del by_query[query]
 
 
 def _duplicate(stats: sweep.Stats, entry: dict[str, Any], done: _Run) -> None:
@@ -1084,6 +1124,7 @@ def _write(entry: dict[str, Any], done: _Run, plan: Any) -> None:
     entry["result_pages"] = done.pages
     entry["details"] = done.details
     entry["searches"] = len(done.searches)
+    entry["planned"] = done.planned
     entry["searched"] = [
         {"title": title, "place": place} for title, place in list(done.searches)[:SEARCHES_LISTED]
     ]

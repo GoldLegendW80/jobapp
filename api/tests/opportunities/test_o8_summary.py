@@ -83,6 +83,8 @@ def test_the_summary_answer_names_the_counter() -> None:
         # A website searched in the browser (jobs J18): the searches its agent ran.
         "searches",
         "searched",
+        # LinkedIn's public job search: the searches it built (2026-10-31).
+        "planned",
         # And the saved titles and places its search could not carry (jobs J18).
         "titles_left_out",
         "places_left_out",
@@ -98,6 +100,18 @@ def test_the_summary_answer_names_the_counter() -> None:
     }
     metadata = ("source_id", "mode", "host", "phase", "action", "outcome", "reason")
     assert {key: body["sources"][0][key] for key in metadata} == dict.fromkeys(metadata)
+
+
+@pytest.mark.parametrize(("value", "read"), [(21, 21), (None, 0), ("21", 0), (True, 0), (-1, 0)])
+def test_linkedin_searches_planned_read_through_and_a_bad_count_reads_zero(
+    value: Any, read: int
+) -> None:
+    """LinkedIn's public job search (2026-10-31): the searches it built beside the ones that ran,
+    so the summary says "11 of 21 searches ran"; an older row without the count reads 0."""
+    entry = {"kind": "linkedin", "mode": "api", "query": "", "found": 4, "postings": 4,
+             "searches": 11, "planned": value, "error": "time_budget"}  # fmt: skip
+    source = sweep_router.sweep_out(row([entry])).sources[0]
+    assert (source.searches, source.planned) == (11, read)
 
 
 @pytest.mark.parametrize("value", [None, "2", True, False, -1.5, [1], -1])
@@ -126,6 +140,7 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "items_skipped": 2,
         "searches": 0,
         "searched": [],
+        "planned": 0,
         "titles_left_out": 0,
         "places_left_out": 0,
         "error": "store_failed",
