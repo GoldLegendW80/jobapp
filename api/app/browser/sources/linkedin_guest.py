@@ -765,18 +765,21 @@ async def run(
     stats: sweep.Stats,
     progress: Callable[[], Awaitable[None]],
     deadline: float,
-) -> tuple[Any, str | None]:
+) -> str | None:
     """Search every LinkedIn address in API mode (the first one runs the search, any other one
-    ends `linkedin_searched_once`), then the plan the browser's websites run with: the same,
-    without those addresses. The second value is the code that stops the later websites (a
-    commit that did not settle), else None."""
+    ends `linkedin_searched_once`). Returns the code that stops the later websites (a commit
+    that did not settle), else None. The sweep runs it beside its other sources that make no
+    browser call (Runner.linkedin), the browser's websites after them (`without_api`).
+
+    Its share of the sweep's time is what is left divided by the browser's websites plus one,
+    as when it ran first of the websites: they start after it and get the rest."""
     search = getattr(plan, "search", None)
     if search is None:
-        return plan, None
+        return None
     sites = [s for s in search.interactive_sites if s.enabled]
     api = [s for s in sites if by_api(plan, s)]
     if not api:
-        return plan, None
+        return None
     stop: str | None = None
     for index, site in enumerate(api):
         entry = sweep.bind_source(
@@ -811,16 +814,28 @@ async def run(
             except Exception:
                 logger.exception("linkedin guest search failed")
                 entry["error"] = "page_failed"
-            if commits is not None and not await commits.settle():
+            if commits is not None and not await commits.settle(entry["source_id"]):
                 entry["error"] = entry["error"] or "store_failed"
                 stop = "store_failed"
         sweep.finish_source(entry)
         await progress()
+    return stop
+
+
+def without_api(plan: Any) -> Any:
+    """The plan the browser's websites run with: the same, without the LinkedIn addresses
+    searched in API mode (`run`)."""
+    search = getattr(plan, "search", None)
+    if search is None:
+        return plan
+    api = [s for s in search.interactive_sites if s.enabled and by_api(plan, s)]
+    if not api:
+        return plan
     rest = copy.copy(plan)
     rest.search = search.model_copy(
         update={"interactive_sites": [s for s in search.interactive_sites if s not in api]}
     )
-    return rest, stop
+    return rest
 
 
 async def _search(
@@ -908,6 +923,9 @@ async def _rounds(
 ) -> None:
     """The pages in rounds, the details of new cards after each page, the rest at the end."""
     host = urlsplit(base).hostname or linkedin.HOST
+    # The person's postings when the search starts. One a source beside this one (LinkedIn's
+    # alert e-mails) stores meanwhile is fetched and then found a duplicate by the commits,
+    # which name both sources on the row (browser B10).
     known = _known_ids(plan, host)
     seen: set[str] = set()
     wanted = _Wanted(search, getattr(plan, "rules", None))
@@ -920,8 +938,10 @@ async def _rounds(
             done.pages += 1
             entry["result_pages"] = done.pages
             done.searches.setdefault((query.title, query.place), None)
-            # Parsed off the event loop: the worker's other jobs go on meanwhile.
-            cards = await asyncio.to_thread(parse_cards, body) if status == 200 else []
+            # Parsed off the event loop: the worker's other jobs go on meanwhile, and one
+            # parse at a time with the sweep's other sources (sweep.parse_one).
+            parsing = getattr(plan, "parsing", None)
+            cards = await sweep.parse_one(parsing, parse_cards, body) if status == 200 else []
             if status == 200 and not cards and page == 0 and looks_like_cards(body):
                 raise StopError("layout_changed")
             new = 0
@@ -1000,7 +1020,7 @@ async def _details(
             status, body = await guest.get(posting_url(base, card.job_id))
             if status != 200:
                 continue  # the posting is gone
-            detail = await asyncio.to_thread(parse_posting, body)
+            detail = await sweep.parse_one(getattr(plan, "parsing", None), parse_posting, body)
             if detail is None:
                 continue
             done.details += 1

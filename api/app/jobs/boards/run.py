@@ -1,9 +1,11 @@
 """The company boards' part of a sweep (sweep.BrowserHook): every enabled board of the frozen
 search, read through its ATS's public API (client.py), filtered (filters.py) and stored through
-the run's commits (sweep.Commits), before the job websites, which then get the time left.
+the run's commits (sweep.Commits), beside the sweep's other sources that make no browser call
+(sweep.run_sweep's `apis`), before the job websites, which then get the time left.
 
 - Reading: the boards of one ATS one after the other, paced (client.py); different ATSs side by
-  side. Storing: one board at a time, in the saved order, since the commits admit one source.
+  side. Storing: one board at a time, in the saved order (the commits store one batch at a time
+  for the whole run anyway).
 - Each board is one source of the sweep's stats: `mode` "api", `kind` "board", `host` the ATS's
   API host, `query` "<ats>:<board>" (also the stored job's `source`), `company` the board's
   company name as saved (frozen with the scope, so the summary names it), `result_pages` the
@@ -18,8 +20,9 @@ the run's commits (sweep.Commits), before the job websites, which then get the t
 - A posting is stored with the board's company name, the ATS's date, the text the API gives,
   its one contract (filters.contract_of, the one the filter used), and in its `sweep` event's
   discovery the time the API was read (`detail_read_at`) and no page evidence.
-- Memory: a board's answer is parsed one at a time across the ATSs (client.py), and its postings
-  are let go once stored (`reads[i] = None`), so what waits is only the boards read ahead.
+- Memory: a board's answer is parsed one at a time across the ATSs and the sweep's other sources
+  (client.py, on the plan's `parsing`, sweep.parse_one), and its postings are let go once stored
+  (`reads[i] = None`), so what waits is only the boards read ahead.
 """
 
 import asyncio
@@ -90,22 +93,6 @@ def _settle(future: "asyncio.Future[Read] | None", outcome: Read | ats.BoardErro
         future.set_result(outcome)
 
 
-Hook = Callable[[Any, sweep.Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
-
-
-def chain(*hooks: Hook | None) -> Hook:
-    """One sweep hook running `hooks` in order (None skipped): the boards, then the websites."""
-
-    async def run(
-        plan: Any, stats: sweep.Stats, progress: Callable[[], Awaitable[None]], deadline: float
-    ) -> None:
-        for hook in hooks:
-            if hook is not None:
-                await hook(plan, stats, progress, deadline)
-
-    return run
-
-
 class Boards:
     """The hook. `transport`, `sleep` and `monotonic` replace the network and the clocks in
     tests."""
@@ -142,7 +129,11 @@ class Boards:
         today = commits.clock().astimezone(sweep.SWEEP_TZ).date()
         wanted = BoardFilter.of(search, today)
         client = BoardClient(
-            self.transport, pause_s=self.pause_s, sleep=self.sleep, monotonic=self.monotonic
+            self.transport,
+            pause_s=self.pause_s,
+            sleep=self.sleep,
+            monotonic=self.monotonic,
+            parsing=getattr(plan, "parsing", None),
         )
         async with client:
             reads, tasks = self._read_all(client, boards)
@@ -289,7 +280,7 @@ class Boards:
             stop = "store_refused"
         except Exception:
             entry["error"] = "store_failed"
-        if not await commits.settle():
+        if not await commits.settle(entry["source_id"]):
             entry["error"] = entry["error"] or "store_failed"
             stop = stop or "store_failed"
         sweep.finish_source(entry)

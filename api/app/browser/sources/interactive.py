@@ -465,7 +465,7 @@ async def run_selected(
                 entry["error"] = "agent_failed"
             if entry["error"] in STOPS_SWEEP:
                 stop = entry["error"]
-            if commits is not None and not await commits.settle():
+            if commits is not None and not await commits.settle(entry["source_id"]):
                 # A commit outlived the wait: no later source runs, the row is left as it is.
                 entry["error"] = entry["error"] or "store_failed"
                 stop = stop or "store_failed"

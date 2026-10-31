@@ -9,25 +9,34 @@ One sweep, `run_sweep(sweep_id)`:
    profile row lock at creation; pre-v1 rows without `stats.search_scope` explicitly retain
    claim-time profile reads. Without a ticked website, company board, alert e-mail or job feed,
    or with a search section that no longer validates, the sweep fails with a clear message.
-2. Search. The alerts hook (app/mail/alerts/source.py) first reads the job alert e-mails of
-   every provider turned on (SPEC-mail.md), then the feed hook (app/jobs/feeds, `FeedRunner`)
-   reads every ticked job feed (Arbeitnow, Himalayas, Adzuna: official APIs, owner
-   2026-10-30), then the company boards hook (app/jobs/boards/run.py, chained before the
-   website Runner) reads every enabled company board, then the browser hook
-   (app/browser/sources, `Runner`) runs every ticked website through the bounded interactive
-   finder (app/browser/finder.py), one website after the other, all within the sweep's one
-   deadline.
+2. Search, in two steps within the sweep's one deadline (owner, 2026-10-31: "Run sources in
+   parallel"). First the sources that make no browser call run side by side (`_side_by_side`),
+   each with its own time cap and politeness: the alerts hook (app/mail/alerts/source.py, the
+   job alert e-mails of every provider turned on, SPEC-mail.md), the feed hook (app/jobs/feeds,
+   `FeedRunner`: Arbeitnow, Himalayas, Adzuna), and the `apis` hooks the worker gives (the
+   company boards, app/jobs/boards/run.py, and LinkedIn's public job search,
+   app/browser/sources `Runner.linkedin`). Then, once they all ended, the browser hook
+   (app/browser/sources, `Runner.websites`) runs every ticked website through the bounded
+   interactive finder (app/browser/finder.py), one website after the other, with the time
+   left. A hook that raises ends alone: the others run to their end, then the sweep fails as it
+   did when that hook ran alone, and the websites do not start.
 3. Store. Each batch of findings the finder verified on its detail page is stored as it is
    reported (`Commits`, jobs J11 and J11b, below): scored against the user's skills, moved to
-   `skipped` when a never apply rule matches, counted as a duplicate when the user has it.
+   `skipped` when a never apply rule matches, counted as a duplicate when the user has it. The
+   sources running side by side store through the same `Commits`, one commit at a time, so two
+   of them finding the same posting at the same moment make one row.
 4. Progress. The sweep row's `stats` is rewritten as the run goes, so GET /api/jobs/sweeps/{id}
-   and its event stream show it live; `heartbeat_at` moves with it.
+   and its event stream show it live; `heartbeat_at` moves with it. Each source writes its own
+   entry of `stats.sources`; a write takes a copy of the whole stats on the event loop and
+   writes it under the commits' lock, so concurrent sources never clobber one another. Big
+   answers (a company board, a job feed page, a LinkedIn page) are parsed one at a time per
+   sweep (`Plan.parsing`, `parse_one`), whatever source they come from.
 5. End. `done` with the duration, or `failed` with a short error (time limit, cancellation, a
    bug); the row is never left running by a sweep that returns.
 
 Company job boards are back (owner, 2026-10-30, reversing "Delete it" of 2026-10-28), rebuilt
 in app/jobs/boards: the person's `company_boards`, read through their ATS's public API before
-the websites (worker.run_sweep chains app/jobs/boards/run.py's hook before the website Runner),
+the websites (worker.run_sweep gives app/jobs/boards/run.py's hook among the `apis`),
 one source of the frozen scope and of `stats.sources` per board (`mode` "api", `kind` "board").
 The freelance feeds and the fixed browser readers stay deleted (owner, 2026-10-28), and the old
 `boards` key of the profile stays dropped on the next read or save (app/profile/schemas.py). A
@@ -293,16 +302,17 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             for site in search.interactive_sites
             if site.enabled
         )
-        # The ticked alert e-mails (app/mail/alerts), read first.
+        # The ticked alert e-mails (app/mail/alerts). The entries keep this order; the sources
+        # that make no browser call are read side by side (run_sweep).
         sources.extend(alert_entry(key) for key in alert_keys(search))
-        # The ticked job feeds (app/jobs/feeds), read after the alert e-mails, in their own order.
+        # The ticked job feeds (app/jobs/feeds), in their own order.
         from app.jobs import feeds
 
         sources.extend(
             feeds.scope_entry(name) for name in feeds.FEED_NAMES if name in search.job_feeds
         )
-        # The company boards (app/jobs/boards/run.py `entry_of`, the same identity), read after
-        # the feeds and before the websites.
+        # The company boards (app/jobs/boards/run.py `entry_of`, the same identity), read before
+        # the websites.
         sources.extend(
             {
                 "source_id": _source_id("api", board.ats, board.board),
@@ -372,6 +382,11 @@ class Stats:
 
     def as_json(self) -> dict[str, Any]:
         return asdict(self)
+
+    def copy(self) -> "Stats":
+        """An independent copy, taken on the event loop: what a write carries to its thread
+        while the sources go on updating these stats."""
+        return Stats(**copy.deepcopy(self.as_json()))
 
 
 def bind_source(
@@ -515,6 +530,8 @@ class Plan:
     search_scope: dict[str, Any] | None = None
     # The run's commits of verified findings (jobs J11b), set by run_sweep.
     commits: "Commits | None" = None
+    # One parse of a big answer at a time for the whole run (`parse_one`), set by run_sweep.
+    parsing: asyncio.Semaphore | None = None
 
 
 @dataclass
@@ -769,13 +786,28 @@ def finish_done(
 
 
 Clock = Callable[[], datetime]
-# The job websites' run (app/browser/sources, `Runner`): given the plan, the stats, the progress
-# save and the sweep's monotonic deadline. It stores what it finds through `plan.commits`. The
-# alert e-mails' run (app/mail/alerts/source.py) has the same shape and runs first.
+# A source's run (the job websites' `Runner.websites`, the alert e-mails' run of
+# app/mail/alerts/source.py, the job feeds' `FeedRunner`, the company boards' `Boards`, LinkedIn's
+# public job search `Runner.linkedin`): given the plan, the stats, the progress save and the
+# sweep's monotonic deadline. It stores what it finds through `plan.commits`.
 BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
-# The job feeds' run (app/jobs/feeds, `FeedRunner`), the same shape, run after the alert e-mails
-# and before the company boards and the websites (both in `browser`, boards.chain).
 FeedHook = BrowserHook
+
+# How many big answers a sweep parses at once (`parse_one`).
+PARSES_AT_ONCE = 1
+
+
+async def parse_one[R](
+    parsing: asyncio.Semaphore | None, function: Callable[..., R], *args: Any
+) -> R:
+    """`function(*args)` off the event loop, one at a time per sweep when `parsing` (the plan's)
+    is given: a company board's answer, a job feed's page and a LinkedIn page, parsed by sources
+    that run side by side, are never all in memory at once (the worker's mem_limit, SPEC-jobs,
+    Sweep). A parse whose caller is cancelled ends in its thread after the slot is given back."""
+    if parsing is None:
+        return await asyncio.to_thread(function, *args)
+    async with parsing:
+        return await asyncio.to_thread(function, *args)
 
 
 async def run_sweep(
@@ -788,9 +820,11 @@ async def run_sweep(
     browser: BrowserHook | None = None,
     alerts: BrowserHook | None = None,
     feeds: FeedHook | None = None,
+    apis: Sequence[BrowserHook | None] = (),
 ) -> None:
-    """Run one sweep to its end (module docstring). Never raises for a website's failure; any
-    other error fails the sweep and is re-raised only for cancellation."""
+    """Run one sweep to its end (module docstring): `alerts`, `feeds` and the `apis` side by
+    side, then `browser` with the time left. Never raises for a website's failure; any other
+    error fails the sweep and is re-raised only for cancellation."""
     plan = await asyncio.to_thread(claim, sessions, sweep_id, clock())
     if plan is None:
         return
@@ -801,11 +835,17 @@ async def run_sweep(
         sources=initial_sources(plan.search_scope),
     )
     commits = plan.commits = Commits(sessions, plan, stats, clock)
+    plan.parsing = asyncio.Semaphore(PARSES_AT_ONCE)
+
+    def write() -> Awaitable[None]:
+        # Called under the commits' lock, on the event loop: the copy holds every source's
+        # entry as it is now, and no source changes it while the thread writes it.
+        now = clock()
+        stats.heartbeat_at = now.isoformat()
+        return asyncio.to_thread(save_progress, sessions, sweep_id, stats.copy(), now)
 
     async def progress() -> None:
-        await commits.progress(
-            lambda: asyncio.to_thread(save_progress, sessions, sweep_id, stats, clock())
-        )
+        await commits.progress(write)
 
     try:
         async with asyncio.timeout(timeout_s):
@@ -817,14 +857,13 @@ async def run_sweep(
 
             beating = asyncio.create_task(beat())
             try:
-                # The alert e-mails, then the job feeds, then the company boards and the job
-                # websites (`browser`, chained in app/worker.py), one shared deadline.
-                if alerts is not None:
-                    await alerts(plan, stats, progress, started + timeout_s)
-                if feeds is not None:
-                    await feeds(plan, stats, progress, started + timeout_s)
-                if browser is not None:
-                    await browser(plan, stats, progress, started + timeout_s)
+                deadline = started + timeout_s
+                # The sources that make no browser call side by side, then the job websites
+                # with the time left; one shared deadline.
+                await _side_by_side([alerts, feeds, *apis], plan, stats, progress, deadline)
+                # A commit that outlived its wait let go of the row: no website starts.
+                if browser is not None and not commits.unsettled:
+                    await browser(plan, stats, progress, deadline)
             finally:
                 beating.cancel()
         stats.duration = round(time.monotonic() - started, 2)
@@ -857,6 +896,33 @@ async def run_sweep(
         stats.duration = round(time.monotonic() - started, 2)
         if await _settled(commits, sweep_id):
             await asyncio.to_thread(fail_sweep, sessions, sweep_id, INTERNAL, clock(), stats)
+
+
+async def _side_by_side(
+    hooks: Sequence[BrowserHook | None],
+    plan: Plan,
+    stats: Stats,
+    progress: Callable[[], Awaitable[None]],
+    deadline: float,
+) -> None:
+    """Run `hooks` (None skipped) at the same time, each to its own end: one that raises never
+    stops the others, and the first error is raised once they all ended (the sweep then fails as
+    when that hook ran alone). A cancellation (the sweep's time limit, the worker stopping)
+    cancels every one of them and returns only once they all ended: no task outlives the run."""
+    errors: list[Exception] = []
+
+    async def one(hook: BrowserHook) -> None:
+        try:
+            await hook(plan, stats, progress, deadline)
+        except Exception as error:  # raised below, once the others ended
+            errors.append(error)
+
+    async with asyncio.TaskGroup() as group:
+        for hook in hooks:
+            if hook is not None:
+                group.create_task(one(hook))
+    if errors:
+        raise errors[0]
 
 
 async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
@@ -922,14 +988,20 @@ def _summary(stats: Stats) -> dict[str, Any]:
 #   criteria guided the browsing, and an unknown date or location is not a mismatch.
 #
 # `Commits` is the run's one path to that transaction. A batch is admitted only while its
-# source is the one running; it then runs as a task of its own, so a cancelled caller (the
-# model's tool call torn down, the source's time limit) does not abandon a commit half way:
-# the commit runs to its end and its counters are published to the run's Stats and Known on the
-# event loop, after it. Commits and the run's progress writes run one at a time, so a progress
-# write never carries counts older than a commit it follows. Before the next source, and before
-# the end of the sweep, `settle` closes admission and waits up to DRAIN_S for what was admitted.
-# A commit still running then leaves the sweep row as it is (running, with the counts committed
-# so far) for `reap_stale`: no progress, no end is written that the commit could contradict.
+# source runs (several sources run side by side, each admitted on its own); it then runs as a
+# task of its own, so a cancelled caller (the model's tool call torn down, the source's time
+# limit) does not abandon a commit half way: the commit runs to its end and its counters are
+# published to the run's Stats and Known on the event loop, after it. Commits and the run's
+# progress writes run one at a time, whatever source they come from, and each commit starts
+# from the Known the commit before published: two sources finding the same posting at the same
+# moment store one row, the second one counted a duplicate. A progress write never carries
+# counts older than a commit it follows. When a source ends, `settle(source_id)` closes its
+# admission and waits for its commits; before the end of the sweep, `settle(close=True)` closes
+# every admission and waits for them all. The wait gives up once DRAIN_S passed with no write
+# of the run ending (a commit queued behind another source's commits is not stuck; one the
+# database holds is). A commit still running then leaves the sweep row as it is (running, with
+# the counts committed so far) for `reap_stale`: no progress, no end is written that the commit
+# could contradict, and no later source starts.
 # A commit that fails may still have landed (its COMMIT reached the database, the answer was
 # lost): it is never retried, and `recover_verified` reads the row and the person's list again,
 # so the run's counts and duplicates are those stored.
@@ -1072,8 +1144,9 @@ def _store_finding(
 
 
 class Commits:
-    """The run's commits of verified batches (above): admitted per source, one at a time, each
-    finished and published even when its caller is cancelled."""
+    """The run's commits of verified batches (above): admitted per source, several sources at
+    once, stored one at a time, each finished and published even when its caller is
+    cancelled."""
 
     def __init__(
         self,
@@ -1086,29 +1159,37 @@ class Commits:
         self.sessions, self.plan, self.stats, self.clock = sessions, plan, stats, clock
         self.drain_s = DRAIN_S if drain_s is None else drain_s
         self._lock = asyncio.Lock()
-        self._admitted: str | None = None
+        self._admitted: set[str] = set()
         self._closed = False
-        self._running: set[asyncio.Task[None]] = set()
+        # Each commit task and the source it stores for.
+        self._running: dict[asyncio.Task[None], str] = {}
+        self._writes = 0  # writes of the run ended (commits and progress): what `settle` watches
         self.unsettled = False  # a commit outlived `settle`: the row is left to reap_stale
 
     def admit(self, source_id: str) -> None:
         if not self._closed:
-            self._admitted = source_id
+            self._admitted.add(source_id)
 
     async def save(self, source_id: str, source: str, batch: Any) -> None:
         """Store `batch` for the running source `source_id`; StoreRefusedError when it is not
         admitted or the row refused it. A cancelled caller leaves the commit running."""
-        if self._closed or source_id != self._admitted:
+        if self._closed or source_id not in self._admitted:
             raise StoreRefusedError
         task = asyncio.get_running_loop().create_task(self._commit(source_id, source, batch))
-        self._running.add(task)
-        task.add_done_callback(self._running.discard)
+        self._running[task] = source_id
+        task.add_done_callback(self._ended)
         task.add_done_callback(_retrieved)  # a caller cancelled meanwhile never reads it
         await asyncio.shield(task)
 
+    def _ended(self, task: "asyncio.Task[None]") -> None:
+        self._running.pop(task, None)
+        self._writes += 1
+
     async def _commit(self, source_id: str, source: str, batch: Any) -> None:
         async with self._lock:
-            snapshot = Stats(**copy.deepcopy(self.stats.as_json()))
+            # Taken under the lock: the Known the commit before published, and every source's
+            # counters as they are now.
+            snapshot = self.stats.copy()
             known = self.plan.known.copy()
             try:
                 delta = await asyncio.to_thread(
@@ -1149,7 +1230,7 @@ class Commits:
 
     def abandon(self) -> None:
         """Let go of the row: no batch is admitted, nothing is published or written again."""
-        self._admitted = None
+        self._admitted.clear()
         self._closed = self.unsettled = True
 
     async def progress(self, write: Callable[[], Awaitable[None]]) -> None:
@@ -1167,17 +1248,29 @@ class Commits:
             except asyncio.CancelledError:
                 await asyncio.wait([task])  # its thread ends before another write starts
                 raise
+            finally:
+                self._writes += 1
 
-    async def settle(self, *, close: bool = False) -> bool:
-        """Stop admitting (for good with `close`) and wait up to drain_s for the commits
-        admitted. False when one is still running: the run must not write the row's end."""
-        self._admitted = None
+    async def settle(self, source_id: str | None = None, *, close: bool = False) -> bool:
+        """Stop admitting `source_id` (every source when None, for good with `close`) and wait
+        for its commits (all of them when None) while the run's writes move: False once
+        drain_s passed with none ending and one still running. The run must not write the
+        row's end then, and no later source starts."""
+        if source_id is None:
+            self._admitted.clear()
+        else:
+            self._admitted.discard(source_id)
         self._closed = self._closed or close
-        pending = set(self._running)
-        if pending:
-            _, left = await asyncio.wait(pending, timeout=self.drain_s)
-            if left:
+        while pending := {
+            task
+            for task, of in self._running.items()
+            if not task.done() and (source_id is None or of == source_id)
+        }:
+            writes = self._writes
+            await asyncio.wait(pending, timeout=self.drain_s)
+            if self._writes == writes and not all(task.done() for task in pending):
                 self.abandon()
+                break
         return not self.unsettled
 
 

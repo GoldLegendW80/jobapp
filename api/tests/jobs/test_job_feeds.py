@@ -137,7 +137,7 @@ class Commits:
             if entry["source_id"] == source_id:
                 entry["found"] += len(batch.findings)
 
-    async def settle(self) -> bool:
+    async def settle(self, source_id: str | None = None) -> bool:
         return True
 
 
@@ -151,7 +151,7 @@ class RefusingCommits(Commits):
 class UnsettledCommits(Commits):
     """The run's commits with a commit still running when the feed ends."""
 
-    async def settle(self) -> bool:
+    async def settle(self, source_id: str | None = None) -> bool:
         return False
 
 

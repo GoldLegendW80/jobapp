@@ -105,6 +105,17 @@ function readingName(sweep: Sweep): string {
   return source ? sourceName(source) : sourceLabel(current);
 }
 
+/** The "Reading" part of the live line, null when nothing is read. The sources that make no
+ * browser call run side by side (owner, 2026-10-31): several running at once are counted,
+ * "Reading 3 sources"; else the one of `current_board`, else the one running. */
+function readingLine(sweep: Sweep): string | null {
+  const running = sweep.sources.filter((source) => source.phase === "running");
+  if (running.length > 1) return `Reading ${String(running.length)} sources`;
+  if (sweep.current_board) return `Reading ${readingName(sweep)}`;
+  const [only] = running;
+  return only ? `Reading ${sourceName(only)}` : null;
+}
+
 /** What the sweep's sources are called: "website", or "source" once job feeds or company job
  * boards (mode "api", owner 2026-10-30) are among them. */
 function sourceWord(sweep: Sweep): string {
@@ -127,6 +138,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const total = websites.length;
   const done = websites.filter((source) => source.phase === "done").length;
   const percent = total ? Math.round((100 * done) / total) : 0;
+  const reading = readingLine(sweep);
   return (
     <section
       aria-label="Sweep in progress"
@@ -140,13 +152,13 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
         <span className="font-medium">
           {total
             ? `${String(done)} of ${plural(total, sourceWord(sweep))} searched`
-            : sweep.current_board
+            : reading
               ? "Searching job websites"
               : "Waiting for the worker"}
         </span>
-        {sweep.current_board ? (
+        {reading ? (
           <span className="min-w-0 truncate text-muted-foreground">
-            Reading {readingName(sweep)}
+            {reading}
           </span>
         ) : null}
         <span className="tabular-nums text-muted-foreground">

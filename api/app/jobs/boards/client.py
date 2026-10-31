@@ -11,7 +11,8 @@
   at most MAX_REDIRECTS; any other target (http, another host, a port, a malformed address) ends
   the board `upstream_error`.
 - Memory: an answer is read into one growing buffer (no list of chunks joined into a copy), and
-  one answer is parsed at a time across the ATSs (`_parsing`), its buffer let go right after.
+  one answer is parsed at a time across the ATSs (`parsing`, the sweep's when it gives one, so
+  also across the sweep's other sources, sweep.parse_one), its buffer let go right after.
 - No cookie, no proxy from the environment, a User-Agent naming the app.
 
 Error codes (`ats.BoardError.code`, then the board's `reason` in the sweep's stats): not_found
@@ -61,7 +62,8 @@ class BoardClient:
     _last: dict[str, float] = field(default_factory=dict)
     stopped: set[str] = field(default_factory=set)  # ATSs that answered 429 in this sweep
     # One parse at a time for the whole sweep: a parsed answer can be several times its size.
-    _parsing: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
+    # The sweep's own (Plan.parsing) when given, shared with its other sources.
+    parsing: asyncio.Semaphore | None = None
 
     async def __aenter__(self) -> "BoardClient":
         self._client = httpx.AsyncClient(
@@ -85,7 +87,9 @@ class BoardClient:
         for page in range(ats.PAGES_MAX):
             body = await self._paced(kind, ats.api_url(kind, board, page))
             requests += 1
-            async with self._parsing:
+            if self.parsing is None:
+                self.parsing = asyncio.Semaphore(1)
+            async with self.parsing:
                 one = await asyncio.to_thread(ats.parse, kind, board, body)
             del body
             parsed.postings += one.postings

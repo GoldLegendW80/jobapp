@@ -845,6 +845,71 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
   });
 });
 
+describe("Find jobs with sources read side by side", () => {
+  it("counts the sources running at once in the live line", async () => {
+    // Owner, 2026-10-31: the alert e-mails, job feeds, company boards and LinkedIn's public job
+    // search run at the same time; the websites in the browser start after them.
+    const api = (host: string, kind: string, phase: string) => ({
+      ...searching(host, phase),
+      kind,
+      mode: "api",
+    });
+    fakeSweeps({
+      states: [
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: "feed",
+            sources: [
+              api("www.arbeitnow.com", "arbeitnow", "running"),
+              api("boards-api.greenhouse.io", "board", "running"),
+              api("www.linkedin.com", "linkedin", "running"),
+              searching("jobs.example.org", "pending"),
+            ],
+          }),
+        ),
+        finished(),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading 3 sources");
+    expect(progress).toHaveTextContent(/0 of 4 sources searched/);
+    await screen.findByRole("dialog", { name: "2 new postings found" });
+  });
+
+  it("names the one source running when the sweep names none", async () => {
+    fakeSweeps({
+      states: [
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: null,
+            sources: [
+              searching("jobs.example.org", "done"),
+              searching("careers.example.org", "running"),
+            ],
+          }),
+        ),
+        finished(),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading careers.example.org");
+    expect(progress).not.toHaveTextContent(/Reading \d+ sources/);
+    await screen.findByRole("dialog", { name: "2 new postings found" });
+  });
+});
+
 describe("Find jobs with job feeds", () => {
   it("counts the job feeds with the websites and lists them in the summary", async () => {
     const feed = (

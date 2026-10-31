@@ -544,10 +544,12 @@ def test_a_commit_whose_tool_call_is_cancelled_finishes_before_the_next_source(
     original_settle = sweep.Commits.settle
     stats_of: dict[str, sweep.Stats] = {}
 
-    async def settle(self: sweep.Commits, *, close: bool = False) -> bool:
+    async def settle(
+        self: sweep.Commits, source_id: str | None = None, *, close: bool = False
+    ) -> bool:
         stats_of["run"] = self.stats
         held.release.set()  # the commit's thread may now end
-        return await original_settle(self, close=close)
+        return await original_settle(self, source_id, close=close)
 
     monkeypatch.setattr(sweep.Commits, "settle", settle)
     tools = SiteTools()
@@ -698,9 +700,11 @@ def test_a_commit_whose_answer_was_lost_is_read_again_never_stored_twice(
     original_settle = sweep.Commits.settle
     known: list[set[str]] = []
 
-    async def settle(self: sweep.Commits, *, close: bool = False) -> bool:
+    async def settle(
+        self: sweep.Commits, source_id: str | None = None, *, close: bool = False
+    ) -> bool:
         known.append(set(self.plan.known.urls))
-        return await original_settle(self, close=close)
+        return await original_settle(self, source_id, close=close)
 
     monkeypatch.setattr(sweep.Commits, "settle", settle)
     row = run(factory, new_sweep(factory, alice), runner(reports("jobs/robot", "jobs/arm")))
@@ -766,10 +770,12 @@ def test_a_second_cancellation_during_the_drain_leaves_the_row_to_recovery(
     runs: list[sweep.Commits] = []
     draining = asyncio.Event()
 
-    async def settle(self: sweep.Commits, *, close: bool = False) -> bool:
+    async def settle(
+        self: sweep.Commits, source_id: str | None = None, *, close: bool = False
+    ) -> bool:
         runs.append(self)
         draining.set()
-        return await original_settle(self, close=close)
+        return await original_settle(self, source_id, close=close)
 
     monkeypatch.setattr(sweep.Commits, "settle", settle)
 
