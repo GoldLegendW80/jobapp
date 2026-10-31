@@ -12,6 +12,7 @@ import { SweepFeeds } from "@/features/opportunities/sources/sweep-feeds";
 
 import { SweepJobFeeds } from "./job-feeds-ui";
 import {
+  LINKEDIN_TIME_BUDGET,
   SOURCE_PROBLEMS,
   leftOutSentence,
   searchesSentence,
@@ -100,9 +101,19 @@ function sourceStatus(source: SweepSource): string {
   const counts = [searches, leftOutSentence(source), found]
     .filter((part) => part !== "")
     .join(" ");
-  return source.error
-    ? `${counts} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
-    : counts;
+  return source.error ? `${counts} ${problemOf(source, source.error)}` : counts;
+}
+
+/** Why a job site stopped early, in words: LinkedIn's public job search says its own time cap
+ * plainly (2026-10-31). */
+function problemOf(source: SweepSource, error: string): string {
+  if (
+    source.mode === "api" &&
+    source.kind === "linkedin" &&
+    error === "time_budget"
+  )
+    return LINKEDIN_TIME_BUDGET;
+  return SOURCE_PROBLEMS[error] ?? "It stopped early.";
 }
 
 function BrowserSites({ sources }: { sources: SweepSource[] }) {

@@ -172,6 +172,26 @@ describe("searchesSentence (one agent per website, owner 2026-10-27)", () => {
       "1,234 searches ran.",
     );
   });
+
+  it("says how many of the planned searches ran when a cap stopped LinkedIn's public job search", () => {
+    expect(searchesSentence({ searches: 11, planned: 21 })).toBe(
+      "11 of 21 searches ran.",
+    );
+    expect(
+      searchesSentence({
+        searches: 1,
+        planned: 2,
+        searched: [{ title: "engineer", place: "Paris" }],
+      }),
+    ).toBe("1 of 2 searches ran: engineer in Paris.");
+    // All planned ran, or an older row without the count: the count alone.
+    expect(searchesSentence({ searches: 21, planned: 21 })).toBe(
+      "21 searches ran.",
+    );
+    expect(searchesSentence({ searches: 3, planned: 0 })).toBe(
+      "3 searches ran.",
+    );
+  });
 });
 
 describe("leftOutSentence (more saved values than a website's search takes)", () => {

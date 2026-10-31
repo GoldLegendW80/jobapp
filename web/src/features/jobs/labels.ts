@@ -249,16 +249,28 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "The assistant used all it may read on this site this time. What was read is kept.",
 };
 
+/** LinkedIn's public job search stopped by its own time cap (its `time_budget`, 2026-10-31):
+ * LinkedIn is read about one request every 10 seconds. */
+export const LINKEDIN_TIME_BUDGET =
+  "LinkedIn is read slowly, about one request every 10 seconds, so its time in this search ran out. What was read is kept.";
+
 /** The searches the agent of a website ran (jobs J18, owner 2026-10-27), from its own tool
  * calls: how many, and which, each a saved title, in the saved place it chose if any. Empty
- * when it ran none or the api is older. */
+ * when it ran none or the api is older. LinkedIn's public job search also says how many it
+ * planned when its caps stopped it before the end ("11 of 21 searches ran", 2026-10-31). */
 export function searchesSentence(source: {
   searches?: number;
   searched?: { title: string; place: string | null }[];
+  planned?: number;
 }): string {
   const ran = source.searches ?? 0;
   if (ran <= 0) return "";
-  const head = `${ran.toLocaleString("en-GB")} ${ran === 1 ? "search" : "searches"} ran`;
+  const planned = source.planned ?? 0;
+  const count =
+    planned > ran
+      ? `${ran.toLocaleString("en-GB")} of ${planned.toLocaleString("en-GB")}`
+      : ran.toLocaleString("en-GB");
+  const head = `${count} ${(planned > ran ? planned : ran) === 1 ? "search" : "searches"} ran`;
   const named = (source.searched ?? []).map((one) =>
     one.place ? `${one.title} in ${one.place}` : one.title,
   );

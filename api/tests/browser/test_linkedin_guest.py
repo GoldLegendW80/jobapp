@@ -14,6 +14,8 @@ import random
 import threading
 import time
 import uuid
+import zlib
+from collections import deque
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -447,6 +449,7 @@ def test_linkedin_ticked_is_searched_through_the_api_without_the_browser() -> No
         "error": "finding_persistence_pending",
         "details": 2,
         "searches": 1,
+        "planned": 1,
         "searched": [{"title": "GenAI Engineer", "place": None}],
         "unwanted": 1,  # "Senior Algorithm Engineer" matches no saved title
         "requests": 3,
@@ -566,17 +569,150 @@ def full_page(first: int, title: str = "GenAI Engineer") -> str:
     return "".join(card(str(first + n), f"{title} {n}") for n in range(guest.PAGE_SIZE))
 
 
-def test_pages_per_search_and_requests_per_sweep_are_capped() -> None:
-    pages = {start: full_page(4100001000 + start) for start in range(0, 100, 10)}
+def test_pages_per_search_and_requests_per_sweep_are_capped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(guest, "LINKEDIN_TIME_S", 10_000.0)  # the request cap alone
     search = section(title_include={"terms": ["GenAI Engineer", "AI Engineer", "ML Engineer"]})
-    entries, fake, _, _ = execute(search, lambda now: LinkedInFake(now, pages=pages))
+    entries, fake, _, _ = execute(search, ManySearches, deadline=10_000.0)
     [entry] = entries
+    assert guest.REQUESTS_MAX == 45
     assert len(fake.requests) == guest.REQUESTS_MAX == entry["requests"]
     starts = [r.url.params["start"] for r in fake.requests if "start" in r.url.params]
     assert max(int(s) for s in starts) <= (guest.PAGES_PER_SEARCH - 1) * guest.PAGE_SIZE
     # Rounds: the first page of every search before any second page.
     assert starts[:3] == ["0", "0", "0"]
     assert entry["error"] is None or entry["error"] == "finding_persistence_pending"
+
+
+# Run 8 of 2026-10-31: 3 saved titles in 7 saved places, 21 searches.
+TITLES = ["GenAI Engineer", "AI Engineer", "ML Engineer"]
+PLACES = ["bordeaux", "paris", "remote", "new york", "london", "vancouver", "singapour"]
+
+
+class ManySearches(LinkedInFake):
+    """A full page of new cards for every search and page: ids from the keywords, the place and
+    the start, titles that match the search's saved title."""
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/seeMoreJobPostings/search"):
+            return super().handler(request)
+        self.requests.append(request)
+        self.times.append(self.now[0])
+        params = request.url.params
+        key = f"{params['keywords']}|{params['location']}|{params['start']}"
+        first = 4200000000 + (zlib.crc32(key.encode()) % 10_000_000) * 100
+        page = "".join(
+            card(str(first + n), f"{params['keywords']} {n}") for n in range(guest.PAGE_SIZE)
+        )
+        return answer(200, page)
+
+
+def many(**fields: Any) -> SearchSection:
+    return section(title_include={"terms": TITLES}, location={"terms": PLACES}, **fields)
+
+
+def search_of(request: httpx.Request) -> tuple[str, str]:
+    return request.url.params["keywords"], request.url.params["location"]
+
+
+def test_the_time_cap_stops_it_before_the_request_cap_with_every_first_page_read() -> None:
+    """Run 8's search (21 searches, two websites read in the browser ticked) at the sweep's 900
+    s: all 21 first pages are read, then details, until LINKEDIN_TIME_S stops it; the entry
+    says how many of the planned searches ran."""
+    sites = [LINKEDIN, CUSTOM, {**CUSTOM, "url": "https://jobs-two.example.test/"}]
+    entries, fake, _, _ = execute(many(interactive_sites=sites), ManySearches, deadline=900.0)
+    entry = next(e for e in entries if e["mode"] == "api")
+    firsts = [search_of(r) for r in fake.requests if r.url.params.get("start") == "0"]
+    assert len(set(firsts)) == len(firsts) == 21
+    assert (entry["searches"], entry["planned"]) == (21, 21)
+    assert entry["error"] == "time_budget"
+    assert entry["requests"] < guest.REQUESTS_MAX
+    assert max(fake.times) + guest.REQUEST_S <= guest.LINKEDIN_TIME_S
+
+
+def test_breadth_first_every_first_page_before_any_second_and_details_in_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(guest, "LINKEDIN_TIME_S", 10_000.0)  # the request cap alone
+    entries, fake, _, _ = execute(many(), ManySearches, deadline=10_000.0)
+    [entry] = entries
+    kinds = ["page" if "start" in r.url.params else "detail" for r in fake.requests]
+    starts = [r.url.params["start"] for r in fake.requests if "start" in r.url.params]
+    # The 21 first pages, then the round's details, then second pages.
+    assert kinds[:21] == ["page"] * 21
+    assert starts[:21] == ["0"] * 21
+    rounds = 21 + guest.DETAILS_PER_ROUND
+    assert kinds[21:rounds] == ["detail"] * guest.DETAILS_PER_ROUND
+    assert starts[21:]
+    assert set(starts[21:]) == {"10"}
+    assert len(fake.requests) == guest.REQUESTS_MAX
+    # The round's details take one card of each search in turn: the first card of 15 searches.
+    ids = [int(r.url.path.rsplit("/", 1)[1]) for r in fake.requests[21:rounds]]
+    assert all(job_id % 100 == 0 for job_id in ids)  # each search's first card
+    assert len({job_id // 100 for job_id in ids}) == guest.DETAILS_PER_ROUND
+    assert (entry["searches"], entry["planned"]) == (21, 21)
+
+
+def test_cards_are_fetched_in_turn_across_searches() -> None:
+    def item(job_id: str, keywords: str) -> tuple[guest.Card, guest.Query]:
+        query = guest.Query(keywords, None, guest.WORLDWIDE_LOCATION, title=keywords)
+        return guest.Card(job_id, keywords, "", "", ""), query
+
+    pending = deque([item("a1", "A"), item("a2", "A"), item("a3", "A"), item("b1", "B"),
+                     item("c1", "C"), item("c2", "C")])  # fmt: skip
+    guest._in_turn(pending)
+    assert [card.job_id for card, _ in pending] == ["a1", "b1", "c1", "a2", "c2", "a3"]
+
+
+@pytest.mark.parametrize("websites", [0, 1, 2])
+def test_the_time_cap_does_not_depend_on_the_websites_read_in_the_browser(
+    websites: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before 2026-10-31 the public job search had the time left divided by the browser's
+    websites plus one: a third of it with two websites ticked."""
+    limits: list[float] = []
+
+    async def record(*args: Any) -> str | None:
+        limits.append(args[-1])
+        return None
+
+    monkeypatch.setattr(guest, "_search", record)
+    others = [{**CUSTOM, "url": f"https://jobs-{n}.example.test/"} for n in range(websites)]
+    execute(section(interactive_sites=[LINKEDIN, *others]), deadline=900.0)
+    assert limits == [guest.LINKEDIN_TIME_S]
+
+
+@pytest.mark.parametrize(
+    ("now", "deadline", "websites", "limit"),
+    [
+        (0.0, 900.0, 0, 420.0),
+        (0.0, 900.0, 1, 420.0),
+        (0.0, 900.0, 2, 420.0),
+        # Started late: the websites read in the browser keep WEBSITES_MIN_S.
+        (300.0, 900.0, 2, 660.0),
+        (500.0, 900.0, 0, 900.0),  # none ticked: up to the sweep's own deadline
+        # Less than twice WEBSITES_MIN_S left: half each.
+        (500.0, 900.0, 1, 700.0),
+        (600.0, 900.0, 3, 750.0),
+        (0.0, 60.0, 1, 30.0),
+        (0.0, 60.0, 0, 60.0),
+        (900.0, 900.0, 1, 900.0),
+    ],
+)
+def test_the_time_limit_keeps_a_minimum_for_the_websites_read_in_the_browser(
+    now: float, deadline: float, websites: int, limit: float
+) -> None:
+    assert guest.time_limit(now, deadline, websites) == limit
+
+
+def test_the_caps_fit_the_sweep() -> None:
+    """LINKEDIN_TIME_S plus the websites' minimum fits the sweep's deadline; every first page
+    fits the time cap at the slowest pace; the request cap binds only at a fast pace."""
+    assert guest.LINKEDIN_TIME_S + guest.WEBSITES_MIN_S <= sweep.SWEEP_TIMEOUT_S
+    assert 21 * guest.PAUSE_S[1] + guest.REQUEST_S <= guest.LINKEDIN_TIME_S
+    assert guest.SEARCHES_MAX * guest.PAUSE_S[0] + guest.REQUEST_S <= guest.LINKEDIN_TIME_S
+    assert guest.REQUESTS_MAX * sum(guest.PAUSE_S) / 2 > guest.LINKEDIN_TIME_S - guest.REQUEST_S
 
 
 def test_a_search_stops_at_a_short_page_and_never_asks_more_than_three_pages() -> None:

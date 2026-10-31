@@ -735,6 +735,9 @@ class SourceOut(BaseModel):
     # and the first SEARCHES_LISTED of them.
     searches: int = Field(default=0, ge=0)
     searched: list[SearchRanOut] = Field(default_factory=list)
+    # LinkedIn's public job search: the searches it built from the saved titles and places, of
+    # which `searches` ran before its caps (0 from an older sweep or another source).
+    planned: int = Field(default=0, ge=0)
     # Saved titles and places its frozen scope could not carry (more than 100 of one, or more
     # than 32 KiB in all): the first ones that fit were searched, these were left out.
     titles_left_out: int = Field(default=0, ge=0)
