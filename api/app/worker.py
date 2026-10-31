@@ -234,18 +234,35 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     from app.jobs.boards import run as boards
 
-    # One shared deadline, in this order: the alert e-mails (app/mail/alerts, at most
-    # ALERTS_TIME_S), the ticked job feeds (app/jobs/feeds, at most FEEDS_TIME_S), the company
-    # boards (app/jobs/boards, at most BUDGET_S and never closer than 30 s to the deadline), then
-    # the job websites with the time left.
+    # One shared deadline (owner, 2026-10-31: "Run sources in parallel"). Side by side, each
+    # with its own cap: the alert e-mails (app/mail/alerts, at most ALERTS_TIME_S), the ticked
+    # job feeds (app/jobs/feeds, at most FEEDS_TIME_S), the company boards (app/jobs/boards, at
+    # most BUDGET_S and never closer than 30 s to the deadline) and LinkedIn's public job search
+    # (app/browser/sources/linkedin_guest.py, its share of the time); then the job websites read
+    # in the browser with the time left.
+    linkedin, websites = split_websites(browser_sources(ctx))
     await sweep.run_sweep(
         sessions_of(ctx),
         uuid.UUID(sweep_id),
         clock_of(ctx),
         alerts=alert_sources(ctx),
-        browser=boards.chain(boards.Boards(ctx.get("boards_transport")), browser_sources(ctx)),
         feeds=feed_sources(ctx),
+        apis=(boards.Boards(ctx.get("boards_transport")), linkedin),
+        browser=websites,
     )
+
+
+def split_websites(
+    hook: sweep.BrowserHook | None,
+) -> tuple[sweep.BrowserHook | None, sweep.BrowserHook | None]:
+    """The websites' Runner as its two hooks: LinkedIn's public job search (no browser call, run
+    beside the other API sources) and the websites read in the browser (after them). A test's
+    own hook stays one hook, run after the API sources."""
+    from app.browser.sources import Runner
+
+    if isinstance(hook, Runner):
+        return hook.linkedin, hook.websites
+    return None, hook
 
 
 def alert_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:

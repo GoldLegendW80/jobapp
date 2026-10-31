@@ -8,12 +8,17 @@ whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of t
 
 - What a sweep reads. The person ticks feeds in Find jobs (`search.job_feeds`); the sweep freezes
   them with the websites (`sweep.freeze_scope`, one `stats.sources` entry each, mode "api") and
-  `FeedRunner`, the sweep's feed hook, reads them one after the other before the websites.
+  `FeedRunner`, the sweep's feed hook, reads them one after the other, beside the sweep's other
+  sources that make no browser call (alert e-mails, company boards, LinkedIn's public job
+  search), before the websites. An answer is decoded off the event loop, one parse at a time
+  with those sources (sweep.parse_one).
 - Politeness. One request at a time per feed, PAUSE_S apart, at most the feed's own request
   budget per sweep (a few), a User-Agent naming the app, FEED_TIME_S per feed and FEEDS_TIME_S
   for all the ticked feeds together, so the websites read after them keep most of the sweep's
   time. A 429 stops that feed for this sweep (`rate_limited`), whatever Retry-After says: the
-  next sweep reads it again. Requests go straight to the transport, never through httpx's
+  next sweep reads it again. Once the run let go of its row (a commit of any source that did
+  not settle, `sweep.abandoned`), no further request is sent (`store_failed`) and no later feed
+  starts. Requests go straight to the transport, never through httpx's
   Client, whose INFO log line would carry the address, and Adzuna's key is in its query; they
   ask for an uncompressed answer (`Accept-Encoding: identity`) and a compressed one is still
   decoded.
@@ -181,8 +186,13 @@ class Http:
         budget: int,
         sleep: Sleep = asyncio.sleep,
         pause_s: float = PAUSE_S,
+        parsing: asyncio.Semaphore | None = None,
+        stopped: Callable[[], bool] | None = None,
     ) -> None:
         self.transport, self.budget, self.sleep, self.pause_s = transport, budget, sleep, pause_s
+        self.parsing = parsing  # the sweep's one parse at a time (Plan.parsing), when given
+        # True once the sweep let go of its row (sweep.abandoned): no request is sent after.
+        self.stopped = stopped
         self.requests = 0
 
     @property
@@ -192,8 +202,12 @@ class Http:
     async def get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
         if self.requests >= self.budget:
             raise RuntimeError("request budget spent")  # a source bug: it checks `left` first
+        if self.stopped is not None and self.stopped():
+            raise FeedError("store_failed")
         if self.requests:
             await self.sleep(self.pause_s)
+            if self.stopped is not None and self.stopped():
+                raise FeedError("store_failed")
         self.requests += 1
         request = httpx.Request(
             "GET",
@@ -250,7 +264,8 @@ class Http:
             with contextlib.suppress(Exception):
                 await response.aclose()
         try:
-            return json.loads(bytes(body))
+            # Off the event loop, one parse at a time with the sweep's other sources.
+            return await sweep.parse_one(self.parsing, json.loads, bytes(body))
         except ValueError:
             raise FeedError("invalid_response") from None
 
@@ -510,6 +525,8 @@ class FeedRunner:
         deadline = min(deadline, self.monotonic() + self.feeds_time_s + DEADLINE_MARGIN_S)
         try:
             for name, source in sources.items():
+                if sweep.abandoned(plan):
+                    break  # the run let go of the row: nothing read now could be stored
                 if name in ticked:
                     await self._one(plan, stats, progress, deadline, search, source, transport)
         finally:
@@ -556,7 +573,7 @@ class FeedRunner:
             logger.exception("job feed failed", extra={"feed": source.name})
             entry["error"] = "feed_failed"
         # Always settled first; a store failure then replaces only a lesser reason.
-        unsettled = commits is not None and not await commits.settle()
+        unsettled = commits is not None and not await commits.settle(entry["source_id"])
         if unsettled and entry["error"] in STORE_OVERRIDES:
             entry["error"] = "store_failed"
         # The cursor moves only once everything read was stored (module docstring, Cursor).
@@ -567,6 +584,7 @@ class FeedRunner:
             entry["outcome"] = "not_attempted"  # skipped, never a failure (owner brief)
         elif entry["error"] == "page_cap":
             entry["outcome"] = "partial"  # pages were read, the window's end was not reached
+        sweep.release_board(stats, entry["source_id"])  # unless a source beside took it
         await progress()
 
     async def _read(
@@ -595,7 +613,14 @@ class FeedRunner:
                 return "no_key", None
         cursor = await asyncio.to_thread(self._cursor, plan, source.name)
         now = self.clock()
-        ctx = FeedContext(Http(transport, budget=source.budget, sleep=self.sleep), now, key, cursor)
+        http = Http(
+            transport,
+            budget=source.budget,
+            sleep=self.sleep,
+            parsing=getattr(plan, "parsing", None),
+            stopped=lambda: sweep.abandoned(plan),
+        )
+        ctx = FeedContext(http, now, key, cursor)
         left = min(self.feed_time_s, deadline - self.monotonic() - DEADLINE_MARGIN_S)
         if left <= 0:
             return "time_budget", None

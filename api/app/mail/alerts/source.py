@@ -1,7 +1,7 @@
 """Job alert e-mails in a sweep (SPEC-mail.md, "Job alert e-mails: a narrow exception").
 
-The sweep's hook (`sweep.run_sweep(alerts=...)`, run before the job feeds and the job
-websites) reads, for each
+The sweep's hook (`sweep.run_sweep(alerts=...)`, run beside the job feeds, the company boards
+and LinkedIn's public job search, before the job websites) reads, for each
 provider the person turned on in Find jobs setup (`search.alert_emails`, frozen in the sweep's
 scope), the alert e-mails received since that provider's cursor, and stores the postings they
 list through the run's commits (`sweep.Commits`): the same never apply rules, duplicates and
@@ -51,9 +51,12 @@ stops before it reads (a connection to renew, no OAuth client) still writes the 
 A listing cut at MAX_LIST_PAGES lacks the oldest messages (Gmail lists the newest first): its
 messages are read, but the cursor stays where it was (`listing_truncated`), so none is skipped.
 
-**Time.** The alert e-mails of every provider share ALERTS_TIME_S of the sweep, so they never
-starve the job feeds and the job websites that run after them; a provider out of time ends
-`time_limit` with the cursor on its last mail handled.
+**Time.** The alert e-mails of every provider share ALERTS_TIME_S of the sweep, so the job
+websites, which start once the sources beside them ended, keep most of the sweep's time; a
+provider out of time ends
+`time_limit` with the cursor on its last mail handled. Once the run let go of the row (a commit
+of any source that did not settle, `sweep.abandoned`), a provider stops at its next listing page
+or message (`store_failed`) and no later provider starts.
 
 **The stats entry** of each provider: host "mail:<key>", kind "alerts", mode "mail", the
 outcome of `sweep.finish_source`, `found` and `postings` as the commits count them, `messages`,
@@ -365,11 +368,13 @@ class Reader:
         keys = [key for key in sweep.alert_keys(getattr(plan, "search", None)) if key in PROVIDERS]
         if not keys:
             return
-        # Every provider together: the job websites run after them (ALERTS_TIME_S).
+        # Every provider together: the job websites start after them (ALERTS_TIME_S).
         deadline = min(deadline, self.monotonic() + ALERTS_TIME_S)
         account = await asyncio.to_thread(load_account, self.sessions, plan.user_id)
         filters = _Filters.of(plan.search)
         for key in keys:
+            if sweep.abandoned(plan):
+                return  # the run let go of the row: nothing read now could be stored
             provider = PROVIDERS[key]
             entry = sweep.bind_source(
                 stats,
@@ -424,10 +429,10 @@ class Reader:
             except Exception as error:
                 _log_failure(plan, provider, error, "alert e-mails failed")
                 entry["error"] = "mail_failed"
-            if commits is not None and not await commits.settle():
+            if commits is not None and not await commits.settle(entry["source_id"]):
                 entry["error"] = entry["error"] or "store_failed"
             sweep.finish_source(entry)
-            stats.current_board = None
+            sweep.release_board(stats, entry["source_id"])  # unless a source beside took it
             await progress()
 
     async def _provider(
@@ -446,6 +451,8 @@ class Reader:
         for _ in range(MAX_LIST_PAGES):
             if self.monotonic() >= deadline:
                 raise _StopError("time_limit")
+            if sweep.abandoned(plan):
+                raise _StopError("store_failed")
             listed = _answer(
                 await mailbox.list_messages(
                     account, q=query(provider, after), page_token=page, max_results=LIST_PAGE
@@ -481,6 +488,8 @@ class Reader:
                 break
             if self.monotonic() >= deadline:
                 raise _StopError("time_limit")
+            if sweep.abandoned(plan):
+                raise _StopError("store_failed")
             raw = _answer(await mailbox.get_message(account, message_id, format="full"))
             try:
                 message = await _pure(parse.parse, raw, account.email)

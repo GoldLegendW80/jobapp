@@ -215,7 +215,10 @@ describe("Find jobs", () => {
       name: "Sweep in progress",
     });
     await waitFor(() => {
-      expect(progress).toHaveTextContent(/Reading (Mistral AI|Anthropic)/);
+      // The one source running is named, whatever `current_board` still says.
+      expect(progress).toHaveTextContent(
+        /Reading (careers\.example\.org|jobs\.example\.net)/,
+      );
     });
     expect(
       within(progress).getByRole("progressbar", { name: "Websites searched" }),
@@ -842,6 +845,112 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     });
     expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
     expect(summary).not.toHaveTextContent("websites searched");
+  });
+});
+
+describe("Find jobs with sources read side by side", () => {
+  it("counts the sources running at once in the live line", async () => {
+    // Owner, 2026-10-31: the alert e-mails, job feeds, company boards and LinkedIn's public job
+    // search run at the same time; the websites in the browser start after them.
+    const api = (host: string, kind: string, phase: string) => ({
+      ...searching(host, phase),
+      kind,
+      mode: "api",
+    });
+    fakeSweeps({
+      states: [
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: "feed",
+            sources: [
+              api("www.arbeitnow.com", "arbeitnow", "running"),
+              api("boards-api.greenhouse.io", "board", "running"),
+              api("www.linkedin.com", "linkedin", "running"),
+              searching("jobs.example.org", "pending"),
+            ],
+          }),
+        ),
+        finished(),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading 3 sources");
+    expect(progress).toHaveTextContent(/0 of 4 sources searched/);
+    await screen.findByRole("dialog", { name: "2 new postings found" });
+  });
+
+  it("names the one source running when the sweep names none", async () => {
+    fakeSweeps({
+      states: [
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: null,
+            sources: [
+              searching("jobs.example.org", "done"),
+              searching("careers.example.org", "running"),
+            ],
+          }),
+        ),
+        finished(),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading careers.example.org");
+    expect(progress).not.toHaveTextContent(/Reading \d+ sources/);
+    await screen.findByRole("dialog", { name: "2 new postings found" });
+  });
+
+  it("names the one source running, not a board that already ended", async () => {
+    // `current_board` still names the board (a row written before it cleared it, or between
+    // two writes) while LinkedIn's public job search is the one source running.
+    fakeSweeps({
+      states: [
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: "api:greenhouse:examplelabs",
+            sources: [
+              {
+                ...searching("boards-api.greenhouse.io", "done"),
+                source_id: "api:greenhouse:examplelabs",
+                kind: "board",
+                mode: "api",
+                query: "greenhouse:examplelabs",
+                company: "Example Labs",
+              },
+              {
+                ...searching("www.linkedin.com", "running"),
+                source_id: "linkedin_api:www.linkedin.com",
+                kind: "linkedin",
+                mode: "linkedin_api",
+              },
+            ],
+          }),
+        ),
+        finished(),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading LinkedIn");
+    expect(progress).not.toHaveTextContent("Example Labs");
+    await screen.findByRole("dialog", { name: "2 new postings found" });
   });
 });
 

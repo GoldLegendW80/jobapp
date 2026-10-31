@@ -1,10 +1,12 @@
 """The job websites of the sweep (SPEC-browser "The second use", jobs J9 to J18): the websites
 the person ticked in Find jobs, each searched by the interactive finder in the person's browser
 (app/browser/sources/interactive.py, `run_selected`). A ticked LinkedIn whose search mode is
-`api` (owner, 2026-10-30, the default) is searched first, through LinkedIn's public job search,
-with no lease (app/browser/sources/linkedin_guest.py); the other websites then run as before.
+`api` (owner, 2026-10-30, the default) is searched through LinkedIn's public job search, with no
+lease (app/browser/sources/linkedin_guest.py, `Runner.linkedin`), beside the sweep's other
+sources that make no browser call (owner, 2026-10-31); the other websites run after them, as
+before (`Runner.websites`).
 
-`Runner` is the hook of app/jobs/sweep.py's `run_sweep`: it holds what a website's search needs
+`Runner` gives app/jobs/sweep.py's `run_sweep` its hooks and holds what a website's search needs
 (the lease store, browserd's tools, the pacer, the finder agent, the platform policy and the
 websites the person signed in to) and hands over to `run_selected`, which takes a `sweep` lease
 of the person's browser per website, paces its pages and stores the verified findings through
@@ -546,6 +548,34 @@ class Runner:
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
 
+    async def linkedin(
+        self,
+        plan: Any,
+        stats: Any,
+        progress: Callable[[], Awaitable[None]],
+        deadline: float,
+    ) -> None:
+        """LinkedIn in API mode alone (no lease, no browser call): the sweep runs it beside its
+        other API sources (sweep.run_sweep's `apis`, worker.run_sweep)."""
+        from app.browser.sources import linkedin_guest
+
+        await linkedin_guest.run(self, plan, stats, progress, deadline)
+
+    async def websites(
+        self,
+        plan: Any,
+        stats: Any,
+        progress: Callable[[], Awaitable[None]],
+        deadline: float,
+        stop: str | None = None,
+    ) -> None:
+        """The websites read in the browser, LinkedIn in API mode left out (`linkedin` searched
+        it): the sweep runs them after its API sources, with the time left."""
+        from app.browser.sources import linkedin_guest
+        from app.browser.sources.interactive import run_selected
+
+        await run_selected(self, linkedin_guest.without_api(plan), stats, progress, deadline, stop)
+
     async def __call__(
         self,
         plan: Any,
@@ -553,12 +583,12 @@ class Runner:
         progress: Callable[[], Awaitable[None]],
         deadline: float,
     ) -> None:
+        """Both, one after the other: LinkedIn in API mode first, then the websites read in
+        the browser (a sweep given the Runner as its one `browser` hook)."""
         from app.browser.sources import linkedin_guest
-        from app.browser.sources.interactive import run_selected
 
-        # LinkedIn in API mode first (no lease), then the websites read in the browser.
-        rest, stop = await linkedin_guest.run(self, plan, stats, progress, deadline)
-        await run_selected(self, rest, stats, progress, deadline, stop)
+        stop = await linkedin_guest.run(self, plan, stats, progress, deadline)
+        await self.websites(plan, stats, progress, deadline, stop)
 
     async def _give_back(self, user: str, held: str | None) -> None:
         if held is None:

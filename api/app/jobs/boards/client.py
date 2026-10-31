@@ -11,7 +11,8 @@
   at most MAX_REDIRECTS; any other target (http, another host, a port, a malformed address) ends
   the board `upstream_error`.
 - Memory: an answer is read into one growing buffer (no list of chunks joined into a copy), and
-  one answer is parsed at a time across the ATSs (`_parsing`), its buffer let go right after.
+  one answer is parsed at a time across the ATSs (`parsing`, the sweep's when it gives one, so
+  also across the sweep's other sources, sweep.parse_one), its buffer let go right after.
 - No cookie, no proxy from the environment, a User-Agent naming the app.
 
 Error codes (`ats.BoardError.code`, then the board's `reason` in the sweep's stats): not_found
@@ -28,6 +29,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from app.jobs import sweep
 from app.jobs.boards import ats
 
 USER_AGENT = "jobapp/1.0 (personal job search app; public job board APIs only)"
@@ -61,7 +63,11 @@ class BoardClient:
     _last: dict[str, float] = field(default_factory=dict)
     stopped: set[str] = field(default_factory=set)  # ATSs that answered 429 in this sweep
     # One parse at a time for the whole sweep: a parsed answer can be several times its size.
-    _parsing: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
+    # The sweep's own (Plan.parsing) when given, shared with its other sources.
+    parsing: asyncio.Semaphore | None = None
+    # True once the sweep let go of its row (sweep.abandoned): no request is sent after, the
+    # board ends `store_failed`.
+    abandoned: Callable[[], bool] | None = None
 
     async def __aenter__(self) -> "BoardClient":
         self._client = httpx.AsyncClient(
@@ -85,8 +91,9 @@ class BoardClient:
         for page in range(ats.PAGES_MAX):
             body = await self._paced(kind, ats.api_url(kind, board, page))
             requests += 1
-            async with self._parsing:
-                one = await asyncio.to_thread(ats.parse, kind, board, body)
+            if self.parsing is None:
+                self.parsing = asyncio.Semaphore(1)
+            one = await sweep.parse_one(self.parsing, ats.parse, kind, board, body)
             del body
             parsed.postings += one.postings
             parsed.invalid += one.invalid
@@ -103,11 +110,13 @@ class BoardClient:
         async with lock:
             if key in self.stopped:
                 raise ats.BoardError("host_rate_limited")
+            self._check()
             last = self._last.get(key)
             if last is not None:
                 wait = last + self.pause_s - self.monotonic()
                 if wait > 0:
                     await self.sleep(wait)
+                    self._check()
             try:
                 return await self._follow(url)
             except ats.BoardError as exc:
@@ -116,6 +125,10 @@ class BoardClient:
                 raise
             finally:
                 self._last[key] = self.monotonic()
+
+    def _check(self) -> None:
+        if self.abandoned is not None and self.abandoned():
+            raise ats.BoardError("store_failed")
 
     async def _follow(self, url: str) -> bytearray:
         host = urlsplit(url).hostname

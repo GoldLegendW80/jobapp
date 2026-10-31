@@ -1,7 +1,7 @@
 """Company boards in a sweep (app/jobs/boards/run.py), against real Postgres, the ATSs replaced
 by httpx's MockTransport over the hand-made fixtures: what is stored and how, the frozen scope
 and the stats entries, duplicates, a 429, the boards' time share, a search with boards only, and
-the worker's chain (boards first, then the websites)."""
+the worker's wiring (the boards among the API sources, then the websites)."""
 
 import asyncio
 import uuid
@@ -81,8 +81,7 @@ def sweep_with(
     overrides.setdefault("interactive_sites", [])
     set_profile(factory, user, search(company_boards=the_boards, **overrides))
     sweep_id = new_sweep(factory, user)
-    chained = boards.chain(hook(transport), then)
-    asyncio.run(sweep.run_sweep(factory, sweep_id, clock, browser=chained))
+    asyncio.run(sweep.run_sweep(factory, sweep_id, clock, apis=(hook(transport),), browser=then))
     return sweep_id, read_sweep(factory, sweep_id).stats
 
 

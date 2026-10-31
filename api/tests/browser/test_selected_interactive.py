@@ -318,9 +318,9 @@ def test_a_registered_report_torn_down_during_its_commit_is_stored_and_counted_a
     settled_with: list[int] = []
     original_settle = sweep.Commits.settle
 
-    async def settle(self, *, close=False):
+    async def settle(self, source_id=None, *, close=False):
         release.set()  # the commit's thread may now end
-        result = await original_settle(self, close=close)
+        result = await original_settle(self, source_id, close=close)
         settled_with.append(self.stats.new)
         return result
 

@@ -143,7 +143,7 @@ def each_website(
             for first in range(0, len(mine), size):
                 batch = finder.VerifiedBatch(tuple(mine[first : first + size]))
                 await plan.commits.save(entry["source_id"], entry["host"], batch)
-            await plan.commits.settle()
+            await plan.commits.settle(entry["source_id"])
             await progress()
             if hang_s and index == range(len(sites))[hang_at]:
                 await asyncio.sleep(hang_s)
