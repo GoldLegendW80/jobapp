@@ -73,6 +73,8 @@ def test_the_summary_answer_names_the_counter() -> None:
         "kind",
         "query",
         "location",
+        # A company job board's company name (PR #734), absent from a feed's entry.
+        "company",
         "result_pages",
         "found",
         "new",
@@ -116,6 +118,7 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "kind": "remoteok",
         "query": "",
         "location": None,
+        "company": None,
         "result_pages": 0,
         "found": 4,
         "new": 2,

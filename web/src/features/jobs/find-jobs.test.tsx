@@ -215,7 +215,10 @@ describe("Find jobs", () => {
       name: "Sweep in progress",
     });
     await waitFor(() => {
-      expect(progress).toHaveTextContent(/Reading (Mistral AI|Anthropic)/);
+      // The one source running is named, whatever `current_board` still says.
+      expect(progress).toHaveTextContent(
+        /Reading (careers\.example\.org|jobs\.example\.net)/,
+      );
     });
     expect(
       within(progress).getByRole("progressbar", { name: "Websites searched" }),
@@ -906,6 +909,47 @@ describe("Find jobs with sources read side by side", () => {
     });
     expect(progress).toHaveTextContent("Reading careers.example.org");
     expect(progress).not.toHaveTextContent(/Reading \d+ sources/);
+    await screen.findByRole("dialog", { name: "2 new postings found" });
+  });
+
+  it("names the one source running, not a board that already ended", async () => {
+    // `current_board` still names the board (a row written before it cleared it, or between
+    // two writes) while LinkedIn's public job search is the one source running.
+    fakeSweeps({
+      states: [
+        ...Array.from({ length: 10 }, () =>
+          makeSweep({
+            boards_total: 0,
+            current_board: "api:greenhouse:examplelabs",
+            sources: [
+              {
+                ...searching("boards-api.greenhouse.io", "done"),
+                source_id: "api:greenhouse:examplelabs",
+                kind: "board",
+                mode: "api",
+                query: "greenhouse:examplelabs",
+                company: "Example Labs",
+              },
+              {
+                ...searching("www.linkedin.com", "running"),
+                source_id: "linkedin_api:www.linkedin.com",
+                kind: "linkedin",
+                mode: "linkedin_api",
+              },
+            ],
+          }),
+        ),
+        finished(),
+      ],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await startSearch(user);
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent("Reading LinkedIn");
+    expect(progress).not.toHaveTextContent("Example Labs");
     await screen.findByRole("dialog", { name: "2 new postings found" });
   });
 });

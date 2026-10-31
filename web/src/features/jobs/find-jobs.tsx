@@ -106,14 +106,16 @@ function readingName(sweep: Sweep): string {
 }
 
 /** The "Reading" part of the live line, null when nothing is read. The sources that make no
- * browser call run side by side (owner, 2026-10-31): several running at once are counted,
- * "Reading 3 sources"; else the one of `current_board`, else the one running. */
+ * browser call run side by side (owner, 2026-10-31) and each sets `current_board` when it
+ * starts, so it may name one that already ended: several running at once are counted,
+ * "Reading 3 sources"; one running is named; `current_board` is read only when no entry is
+ * running (an older row whose sources have no phase). */
 function readingLine(sweep: Sweep): string | null {
   const running = sweep.sources.filter((source) => source.phase === "running");
   if (running.length > 1) return `Reading ${String(running.length)} sources`;
-  if (sweep.current_board) return `Reading ${readingName(sweep)}`;
   const [only] = running;
-  return only ? `Reading ${sourceName(only)}` : null;
+  if (only) return `Reading ${sourceName(only)}`;
+  return sweep.current_board ? `Reading ${readingName(sweep)}` : null;
 }
 
 /** What the sweep's sources are called: "website", or "source" once job feeds or company job

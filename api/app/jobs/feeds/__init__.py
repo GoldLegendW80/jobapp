@@ -16,7 +16,9 @@ whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of t
   budget per sweep (a few), a User-Agent naming the app, FEED_TIME_S per feed and FEEDS_TIME_S
   for all the ticked feeds together, so the websites read after them keep most of the sweep's
   time. A 429 stops that feed for this sweep (`rate_limited`), whatever Retry-After says: the
-  next sweep reads it again. Requests go straight to the transport, never through httpx's
+  next sweep reads it again. Once the run let go of its row (a commit of any source that did
+  not settle, `sweep.abandoned`), no further request is sent (`store_failed`) and no later feed
+  starts. Requests go straight to the transport, never through httpx's
   Client, whose INFO log line would carry the address, and Adzuna's key is in its query; they
   ask for an uncompressed answer (`Accept-Encoding: identity`) and a compressed one is still
   decoded.
@@ -185,9 +187,12 @@ class Http:
         sleep: Sleep = asyncio.sleep,
         pause_s: float = PAUSE_S,
         parsing: asyncio.Semaphore | None = None,
+        stopped: Callable[[], bool] | None = None,
     ) -> None:
         self.transport, self.budget, self.sleep, self.pause_s = transport, budget, sleep, pause_s
         self.parsing = parsing  # the sweep's one parse at a time (Plan.parsing), when given
+        # True once the sweep let go of its row (sweep.abandoned): no request is sent after.
+        self.stopped = stopped
         self.requests = 0
 
     @property
@@ -197,8 +202,12 @@ class Http:
     async def get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
         if self.requests >= self.budget:
             raise RuntimeError("request budget spent")  # a source bug: it checks `left` first
+        if self.stopped is not None and self.stopped():
+            raise FeedError("store_failed")
         if self.requests:
             await self.sleep(self.pause_s)
+            if self.stopped is not None and self.stopped():
+                raise FeedError("store_failed")
         self.requests += 1
         request = httpx.Request(
             "GET",
@@ -516,6 +525,8 @@ class FeedRunner:
         deadline = min(deadline, self.monotonic() + self.feeds_time_s + DEADLINE_MARGIN_S)
         try:
             for name, source in sources.items():
+                if sweep.abandoned(plan):
+                    break  # the run let go of the row: nothing read now could be stored
                 if name in ticked:
                     await self._one(plan, stats, progress, deadline, search, source, transport)
         finally:
@@ -573,6 +584,7 @@ class FeedRunner:
             entry["outcome"] = "not_attempted"  # skipped, never a failure (owner brief)
         elif entry["error"] == "page_cap":
             entry["outcome"] = "partial"  # pages were read, the window's end was not reached
+        sweep.release_board(stats, entry["source_id"])  # unless a source beside took it
         await progress()
 
     async def _read(
@@ -606,6 +618,7 @@ class FeedRunner:
             budget=source.budget,
             sleep=self.sleep,
             parsing=getattr(plan, "parsing", None),
+            stopped=lambda: sweep.abandoned(plan),
         )
         ctx = FeedContext(http, now, key, cursor)
         left = min(self.feed_time_s, deadline - self.monotonic() - DEADLINE_MARGIN_S)

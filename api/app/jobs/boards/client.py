@@ -29,6 +29,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from app.jobs import sweep
 from app.jobs.boards import ats
 
 USER_AGENT = "jobapp/1.0 (personal job search app; public job board APIs only)"
@@ -64,6 +65,9 @@ class BoardClient:
     # One parse at a time for the whole sweep: a parsed answer can be several times its size.
     # The sweep's own (Plan.parsing) when given, shared with its other sources.
     parsing: asyncio.Semaphore | None = None
+    # True once the sweep let go of its row (sweep.abandoned): no request is sent after, the
+    # board ends `store_failed`.
+    abandoned: Callable[[], bool] | None = None
 
     async def __aenter__(self) -> "BoardClient":
         self._client = httpx.AsyncClient(
@@ -89,8 +93,7 @@ class BoardClient:
             requests += 1
             if self.parsing is None:
                 self.parsing = asyncio.Semaphore(1)
-            async with self.parsing:
-                one = await asyncio.to_thread(ats.parse, kind, board, body)
+            one = await sweep.parse_one(self.parsing, ats.parse, kind, board, body)
             del body
             parsed.postings += one.postings
             parsed.invalid += one.invalid
@@ -107,11 +110,13 @@ class BoardClient:
         async with lock:
             if key in self.stopped:
                 raise ats.BoardError("host_rate_limited")
+            self._check()
             last = self._last.get(key)
             if last is not None:
                 wait = last + self.pause_s - self.monotonic()
                 if wait > 0:
                     await self.sleep(wait)
+                    self._check()
             try:
                 return await self._follow(url)
             except ats.BoardError as exc:
@@ -120,6 +125,10 @@ class BoardClient:
                 raise
             finally:
                 self._last[key] = self.monotonic()
+
+    def _check(self) -> None:
+        if self.abandoned is not None and self.abandoned():
+            raise ats.BoardError("store_failed")
 
     async def _follow(self, url: str) -> bytearray:
         host = urlsplit(url).hostname

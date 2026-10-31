@@ -46,7 +46,9 @@ gives its one permission (linkedin_guard), which this source checks too.
   `linkedin_rate_limited` without a request. It records no LinkedIn checkpoint: the calls carry
   no account, so the 7 day pause of the person's account (and of Easy Apply) is not started by
   an anonymous refusal. Any other unexpected answer ends it `page_failed`, as does a request
-  that takes longer than REQUEST_S in all; a posting gone (404) is skipped.
+  that takes longer than REQUEST_S in all; a posting gone (404) is skipped. Once the sweep let
+  go of its row (a commit of any source beside it that did not settle, `sweep.abandoned`), no
+  further request is sent and the source ends `store_failed`.
 - Parsing: the standard library's parser on markup defused first (`_defused`), within bounds
   of elements, depth and searched elements (NODES_MAX and the others), in a thread: linear in
   the answer, never on the worker's event loop.
@@ -818,6 +820,8 @@ async def run(
                 entry["error"] = entry["error"] or "store_failed"
                 stop = "store_failed"
         sweep.finish_source(entry)
+        # Cleared only while it still names this search: a source beside may have taken it.
+        sweep.release_board(stats, entry["source_id"])
         await progress()
     return stop
 
@@ -866,6 +870,10 @@ async def _search(
     guest: Guest | None = None
 
     async def check() -> None:
+        if sweep.abandoned(plan):
+            # The run let go of the row (a commit of any source did not settle): nothing read
+            # now could be stored, so no further request is sent.
+            raise StopError("store_failed")
         if policy is None or context.sweep_id is None:
             raise StopError("permission_unavailable")
         code = await policy.check(context)

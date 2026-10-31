@@ -6,6 +6,7 @@ its own, one that fails ends alone, a cancellation or the time limit ends them a
 worker gives LinkedIn's public job search to the side by side step."""
 
 import asyncio
+import logging
 import threading
 import uuid
 from collections.abc import Awaitable, Callable
@@ -37,6 +38,7 @@ from tests.jobs.sweep_helpers import (
     website_runner,
     websites,
 )
+from tests.jobs.test_boards_sweep import FIXTURES as BOARD_FIXTURES
 from tests.jobs.test_boards_sweep import ROBOTICS, fixture_answers
 from tests.jobs.test_boards_sweep import hook as boards_hook
 from tests.jobs.test_job_feeds_sweep import KEYRING, fake_api, feeds_search
@@ -366,6 +368,78 @@ def test_real_feeds_and_boards_side_by_side_keep_their_own_entries(
     assert row.stats["new"] == board["postings"] + arbeitnow["postings"]
 
 
+# --- the source being read ---------------------------------------------------------------------
+
+
+def test_a_source_that_ends_clears_only_its_own_current_board() -> None:
+    stats = sweep.Stats(current_board="api:greenhouse:examplelabs")
+    sweep.release_board(stats, "api:arbeitnow")
+    assert stats.current_board == "api:greenhouse:examplelabs"
+    sweep.release_board(stats, None)
+    assert stats.current_board == "api:greenhouse:examplelabs"
+    sweep.release_board(stats, "api:greenhouse:examplelabs")
+    assert stats.current_board is None
+
+
+class Gated(httpx.AsyncBaseTransport):
+    """A fake API whose first request waits for `release` (and sets `asked` when it arrives);
+    every request is counted."""
+
+    def __init__(self, answer: Callable[[httpx.Request], httpx.Response]) -> None:
+        self.answer, self.requests = answer, []
+        self.asked, self.release = asyncio.Event(), asyncio.Event()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        self.asked.set()
+        await self.release.wait()
+        return self.answer(request)
+
+
+def ashby(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, content=(BOARD_FIXTURES / "ashby.json").read_bytes())
+
+
+def test_a_board_that_ends_leaves_current_board_to_the_source_beside_that_took_it(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real company boards' hook: a source beside it takes `current_board` while the board
+    is read, and keeps it once the board ended; a board still named clears it."""
+    set_profile(factory, alice, feeds_search(job_feeds=["arbeitnow"], company_boards=[ROBOTICS]))
+    written: list[tuple[str | None, str | None]] = []
+    original = sweep.save_progress
+
+    def recorded(sessions: Any, sweep_id_: uuid.UUID, stats: sweep.Stats, at: datetime) -> None:
+        written.append((stats.current_board, entry_of(stats, "board").get("phase")))
+        original(sessions, sweep_id_, stats, at)
+
+    monkeypatch.setattr(sweep, "save_progress", recorded)
+    gate = Gated(ashby)
+    named: dict[str, Any] = {}
+
+    async def feed(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float) -> None:
+        async with asyncio.timeout(TOGETHER_S):
+            await gate.asked.wait()  # the board is reading
+        named["board"] = entry_of(stats, "board")["source_id"]
+        named["while the board reads"] = stats.current_board
+        named["feed"] = stats.current_board = entry_of(stats, "arbeitnow")["source_id"]
+        gate.release.set()
+
+    sweep_id = new_sweep(factory, alice)
+    asyncio.run(sweep.run_sweep(factory, sweep_id, now, feeds=feed, apis=(boards_hook(gate),)))
+    assert named["while the board reads"] == named["board"]
+    ended = [current for current, phase in written if phase == "done"]
+    assert ended
+    assert set(ended) == {named["feed"]}
+
+    # Alone, the board names itself while it reads and clears it when it ends.
+    written.clear()
+    sweep_id = new_sweep(factory, alice)
+    asyncio.run(sweep.run_sweep(factory, sweep_id, now, apis=(boards_hook(fixture_answers()),)))
+    assert (named["board"], "running") in written
+    assert written[-1] == (None, "done")
+
+
 # --- failures, cancellation, the time limit ------------------------------------------------------
 
 
@@ -398,6 +472,35 @@ def test_a_source_that_fails_ends_alone_and_the_others_complete(
     assert entry_of(row.stats, "board")["outcome"] == "no_matches"
     assert entry_of(row.stats, "custom")["outcome"] == "complete"
     assert row.stats["new"] == 2
+
+
+def test_every_source_that_raises_is_logged_by_type_and_source(
+    factory: sessionmaker[Session], alice: uuid.UUID, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only the first error fails the sweep, but each one is logged: its type and its source,
+    never what the source read."""
+    sweep_id = profile(factory, alice)
+    together = asyncio.Barrier(2)
+
+    async def alerts(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float):
+        await meet(together)
+        raise RuntimeError("Senior GenAI Engineer at Example Robotics")
+
+    async def feed(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float):
+        await meet(together)
+        raise KeyError("posting text")
+
+    with caplog.at_level(logging.ERROR, logger="app.sweep"):
+        asyncio.run(sweep.run_sweep(factory, sweep_id, now, alerts=alerts, feeds=feed))
+    row = read_sweep(factory, sweep_id)
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.INTERNAL)
+    failed = [r for r in caplog.records if r.getMessage() == "sweep source failed"]
+    named = sorted(
+        (r.__dict__["source"].rsplit(".", 1)[-1], r.__dict__["error_type"]) for r in failed
+    )
+    assert named == [("alerts", "RuntimeError"), ("feed", "KeyError")]
+    assert all(r.__dict__["sweep_id"] == str(sweep_id) for r in failed)
+    assert all("Example Robotics" not in r.getMessage() for r in caplog.records)
 
 
 def test_a_source_that_raises_lets_the_others_end_then_fails_the_sweep(
@@ -620,6 +723,117 @@ def test_a_commit_the_database_holds_is_still_given_up_after_the_drain(
     finally:
         release.set()
     assert commits.unsettled
+
+
+def test_a_run_let_go_of_stops_the_other_api_sources_early(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """A settle gives the row up (`Commits.unsettled`) while a job feed, the company boards and
+    LinkedIn's public job search each wait on their first answer: none of them asks anything
+    more (no next page, board, posting or request), instead of reading to its cap."""
+    two = {"company": "Example Two", "ats": "ashby", "board": "example-two"}
+    data = linkedin_section(job_feeds=["arbeitnow"], company_boards=[ROBOTICS, two])
+    set_profile(factory, alice, data.model_dump(mode="json"))
+    sweep_id = new_sweep(factory, alice)
+    clock = [0.0]
+    page = "".join(card(f"41000000{n}", "GenAI Engineer") for n in range(40, 50))
+    linkedin_fake = LinkedInFake(clock, pages={0: page, 10: page})
+    feed_gate = Gated(fake_api().handler)
+    board_gate = Gated(ashby)
+    linkedin_gate = Gated(linkedin_fake.handler)
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    runner = sources.Runner(
+        None,  # type: ignore[arg-type]  no lease is ever asked for
+        lambda *_: None,
+        sleep=sleep,
+        monotonic=lambda: clock[0],
+        pacer=sources.MemoryPacer(lambda: clock[0]),
+        interactive_policy=Allow(),
+        guest_http=lambda: linkedin_gate,
+    )
+    feed = feeds.FeedRunner(factory, transport=feed_gate, sleep=sleep, clock=now)
+    held: dict[str, Any] = {}
+
+    async def give_up(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float):
+        """Waits until the three sources each wait on their first answer, then a settle that
+        outlived its wait lets go of the row."""
+        held["stats"] = stats
+        for gate in (feed_gate, board_gate, linkedin_gate):
+            async with asyncio.timeout(TOGETHER_S):
+                await gate.asked.wait()
+        assert plan.commits is not None
+        plan.commits.abandon()
+        for gate in (feed_gate, board_gate, linkedin_gate):
+            gate.release.set()
+
+    linkedin, _ = worker.split_websites(runner)
+    asyncio.run(
+        sweep.run_sweep(
+            factory,
+            sweep_id,
+            now,
+            alerts=give_up,
+            feeds=feed,
+            apis=(boards_hook(board_gate), linkedin),
+        )
+    )
+    # One request each: the one answered after the run let go of the row.
+    assert len(feed_gate.requests) == 1, [
+        (e["kind"], e.get("phase"), e.get("error")) for e in held["stats"].sources
+    ]
+    assert len(board_gate.requests) == 1
+    assert len(linkedin_gate.requests) == 1
+    stats = held["stats"]
+    assert entry_of(stats, "arbeitnow")["error"] == "store_failed"
+    assert entry_of(stats, "linkedin")["error"] == "store_failed"
+    errors = sorted(str(entry.get("error")) for entry in stats.sources if entry["kind"] == "board")
+    assert errors == ["not_started", "store_failed"] or errors == ["not_started", "store_refused"]
+    # The row is left to reap_stale, as for any run that let go of it.
+    assert read_sweep(factory, sweep_id).status is SweepStatus.running
+
+
+def test_a_cancelled_parse_keeps_its_slot_until_its_thread_ended() -> None:
+    """The caller of a parse is cancelled (its source stopped): the next parse of the sweep
+    still waits for the thread, so two parses never run at once."""
+    order: list[str] = []
+    inside, release = threading.Event(), threading.Event()
+
+    def first() -> str:
+        order.append("first starts")
+        inside.set()
+        release.wait(30)
+        order.append("first ends")
+        return "a"
+
+    def second() -> str:
+        order.append("second starts")
+        return "b"
+
+    async def scenario() -> str:
+        parsing = asyncio.Semaphore(sweep.PARSES_AT_ONCE)
+        one = asyncio.create_task(sweep.parse_one(parsing, first))
+        await asyncio.to_thread(inside.wait, 30)
+        one.cancel()
+        await asyncio.sleep(0.05)
+        one.cancel()  # cancelled again: the slot is still held
+        two = asyncio.create_task(sweep.parse_one(parsing, second))
+        await asyncio.sleep(0.05)
+        assert parsing.locked()
+        assert not two.done()
+        assert order == ["first starts"]
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await one
+        return await two
+
+    try:
+        assert asyncio.run(scenario()) == "b"
+    finally:
+        release.set()
+    assert order == ["first starts", "first ends", "second starts"]
 
 
 def test_parses_of_a_sweep_run_one_at_a_time() -> None:

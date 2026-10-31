@@ -20,6 +20,9 @@ the run's commits (sweep.Commits), beside the sweep's other sources that make no
 - A posting is stored with the board's company name, the ATS's date, the text the API gives,
   its one contract (filters.contract_of, the one the filter used), and in its `sweep` event's
   discovery the time the API was read (`detail_read_at`) and no page evidence.
+- Stop: once the run let go of its row (a commit of any source that did not settle,
+  `sweep.abandoned`), no board is asked again: the client sends no further request (the board
+  ends `store_failed`) and every board not yet stored is `not_started`.
 - Memory: a board's answer is parsed one at a time across the ATSs and the sweep's other sources
   (client.py, on the plan's `parsing`, sweep.parse_one), and its postings are let go once stored
   (`reads[i] = None`), so what waits is only the boards read ahead.
@@ -134,6 +137,7 @@ class Boards:
             sleep=self.sleep,
             monotonic=self.monotonic,
             parsing=getattr(plan, "parsing", None),
+            abandoned=lambda: sweep.abandoned(plan),
         )
         async with client:
             reads, tasks = self._read_all(client, boards)
@@ -141,6 +145,8 @@ class Boards:
                 stop: str | None = None
                 for index, board in enumerate(boards):
                     pending = cast("asyncio.Future[Read]", reads[index])  # set until here
+                    if stop is None and sweep.abandoned(plan):
+                        stop = "store_failed"  # the run let go of the row: no board is stored
                     if stop is None:
                         stop = await self._one(plan, board, pending, wanted, stats, progress, end)
                     else:
@@ -232,6 +238,7 @@ class Boards:
             entry["error"] = "not_started"
             sweep.finish_source(entry)
             entry["reason"] = "time_budget"
+            sweep.release_board(stats, entry["source_id"])
             await progress()
             return "time_budget"
         except ats.BoardError as exc:
@@ -239,6 +246,7 @@ class Boards:
             sweep.finish_source(entry)
             if exc.code == "host_rate_limited":
                 entry.update(outcome="not_attempted")
+            sweep.release_board(stats, entry["source_id"])
             await progress()
             return None
         entry["result_pages"] = read.requests
@@ -284,5 +292,7 @@ class Boards:
             entry["error"] = entry["error"] or "store_failed"
             stop = stop or "store_failed"
         sweep.finish_source(entry)
+        # Cleared only while it still names this board: a source beside may have taken it.
+        sweep.release_board(stats, entry["source_id"])
         await progress()
         return stop

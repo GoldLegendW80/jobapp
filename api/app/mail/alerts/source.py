@@ -54,7 +54,9 @@ messages are read, but the cursor stays where it was (`listing_truncated`), so n
 **Time.** The alert e-mails of every provider share ALERTS_TIME_S of the sweep, so the job
 websites, which start once the sources beside them ended, keep most of the sweep's time; a
 provider out of time ends
-`time_limit` with the cursor on its last mail handled.
+`time_limit` with the cursor on its last mail handled. Once the run let go of the row (a commit
+of any source that did not settle, `sweep.abandoned`), a provider stops at its next listing page
+or message (`store_failed`) and no later provider starts.
 
 **The stats entry** of each provider: host "mail:<key>", kind "alerts", mode "mail", the
 outcome of `sweep.finish_source`, `found` and `postings` as the commits count them, `messages`,
@@ -371,6 +373,8 @@ class Reader:
         account = await asyncio.to_thread(load_account, self.sessions, plan.user_id)
         filters = _Filters.of(plan.search)
         for key in keys:
+            if sweep.abandoned(plan):
+                return  # the run let go of the row: nothing read now could be stored
             provider = PROVIDERS[key]
             entry = sweep.bind_source(
                 stats,
@@ -428,7 +432,7 @@ class Reader:
             if commits is not None and not await commits.settle(entry["source_id"]):
                 entry["error"] = entry["error"] or "store_failed"
             sweep.finish_source(entry)
-            # `current_board` is left as it is: a source beside this one may be reading.
+            sweep.release_board(stats, entry["source_id"])  # unless a source beside took it
             await progress()
 
     async def _provider(
@@ -447,6 +451,8 @@ class Reader:
         for _ in range(MAX_LIST_PAGES):
             if self.monotonic() >= deadline:
                 raise _StopError("time_limit")
+            if sweep.abandoned(plan):
+                raise _StopError("store_failed")
             listed = _answer(
                 await mailbox.list_messages(
                     account, q=query(provider, after), page_token=page, max_results=LIST_PAGE
@@ -482,6 +488,8 @@ class Reader:
                 break
             if self.monotonic() >= deadline:
                 raise _StopError("time_limit")
+            if sweep.abandoned(plan):
+                raise _StopError("store_failed")
             raw = _answer(await mailbox.get_message(account, message_id, format="full"))
             try:
                 message = await _pure(parse.parse, raw, account.email)

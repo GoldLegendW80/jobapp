@@ -18,8 +18,12 @@ One sweep, `run_sweep(sweep_id)`:
    app/browser/sources `Runner.linkedin`). Then, once they all ended, the browser hook
    (app/browser/sources, `Runner.websites`) runs every ticked website through the bounded
    interactive finder (app/browser/finder.py), one website after the other, with the time
-   left. A hook that raises ends alone: the others run to their end, then the sweep fails as it
-   did when that hook ran alone, and the websites do not start.
+   left. A hook that raises ends alone (logged, each one): the others run to their end, then the
+   sweep fails as it did when that hook ran alone, and the websites do not start. A commit that
+   does not settle lets go of the row (`Commits.unsettled`): the others stop at their next page,
+   board, message or request (`abandoned`) instead of reading to their caps. Each source names
+   itself in `current_board` when it starts and clears it when it ends only while it still names
+   it (`release_board`).
 3. Store. Each batch of findings the finder verified on its detail page is stored as it is
    reported (`Commits`, jobs J11 and J11b, below): scored against the user's skills, moved to
    `skipped` when a never apply rule matches, counted as a duplicate when the user has it. The
@@ -416,6 +420,20 @@ def finish_source(entry: dict[str, Any]) -> None:
     entry.update(phase="done", outcome=outcome, reason=error)
 
 
+def release_board(stats: Stats, source_id: str | None) -> None:
+    """A source that ends clears `current_board` only while it still names that source: the
+    sources running side by side each set it when they start, so another one may be reading."""
+    if source_id is not None and stats.current_board == source_id:
+        stats.current_board = None
+
+
+def abandoned(plan: Any) -> bool:
+    """True once the run let go of the row (`Commits.unsettled`): nothing it reads can be
+    stored any more, so the sources running side by side stop at their next page, board,
+    message or request instead of reading to their caps."""
+    return getattr(getattr(plan, "commits", None), "unsettled", False) is True
+
+
 # --- duplicates ---------------------------------------------------------------------------------
 
 # The company of a posting a job website showed without naming its employer (jobs J11): stated
@@ -803,11 +821,23 @@ async def parse_one[R](
     """`function(*args)` off the event loop, one at a time per sweep when `parsing` (the plan's)
     is given: a company board's answer, a job feed's page and a LinkedIn page, parsed by sources
     that run side by side, are never all in memory at once (the worker's mem_limit, SPEC-jobs,
-    Sweep). A parse whose caller is cancelled ends in its thread after the slot is given back."""
+    Sweep). A parse whose caller is cancelled keeps the slot until its thread ended (as
+    `Commits.progress` holds its write), so no cancellation lets two parses run at once."""
     if parsing is None:
         return await asyncio.to_thread(function, *args)
     async with parsing:
-        return await asyncio.to_thread(function, *args)
+        task = asyncio.ensure_future(asyncio.to_thread(function, *args))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # The thread cannot be stopped: the slot is given back once it ended, even when
+            # the caller is cancelled again meanwhile.
+            while not task.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.wait([task])
+            if not task.cancelled():
+                task.exception()  # retrieved: the caller is gone
+            raise
 
 
 async def run_sweep(
@@ -914,7 +944,17 @@ async def _side_by_side(
     async def one(hook: BrowserHook) -> None:
         try:
             await hook(plan, stats, progress, deadline)
-        except Exception as error:  # raised below, once the others ended
+        except Exception as error:  # the first is raised below, once the others ended
+            # Every one is logged, not only the one raised: its type and its source, never a
+            # posting's text.
+            logger.exception(
+                "sweep source failed",
+                extra={
+                    "sweep_id": str(getattr(plan, "sweep_id", None)),
+                    "source": _hook_name(hook),
+                    "error_type": type(error).__name__,
+                },
+            )
             errors.append(error)
 
     async with asyncio.TaskGroup() as group:
@@ -923,6 +963,13 @@ async def _side_by_side(
                 group.create_task(one(hook))
     if errors:
         raise errors[0]
+
+
+def _hook_name(hook: BrowserHook) -> str:
+    """What a log line names a source hook by: its function or method (Runner.linkedin), else
+    its class (Boards, FeedRunner, Reader)."""
+    name = getattr(hook, "__qualname__", None)
+    return name if isinstance(name, str) else type(hook).__name__
 
 
 async def _settled(commits: "Commits", sweep_id: uuid.UUID) -> bool:
