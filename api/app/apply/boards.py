@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.apply.ats import base
-from app.browser.sources import Node, parse_snapshot
+from app.browser.sources import parse_snapshot as links_snapshot
 from app.browser.sources.linkedin import public_host
 from app.mail import hosts
 
@@ -134,21 +134,21 @@ def valid(candidate: str, page_url: str, stub_base: str | None) -> bool:
     )
 
 
-def _application_form(root: Node) -> bool:
+def _application_form(snapshot: str) -> bool:
     """A page with a file field (a CV upload) is an application form, not a listing."""
-    return any(field.kind == "file" for field in base.discover_fields(root, frozenset()).fields)
+    found = base.discover_fields(base.parse_snapshot(snapshot), frozenset())
+    return any(field.kind == "file" for field in found.fields)
 
 
 def listing_hop(snapshot: str, page_url: str, stub_base: str | None) -> Hop | None:
     """The hop of a listing page, or None when the page is not a listing to leave: it shows an
     application form, or it has no Apply control at all (the fill then goes on as before).
     A page counts as a listing on a known board's host, or when it shows no application form."""
-    root = parse_snapshot(snapshot)
-    if _application_form(root) and not is_board(page_url):
+    if _application_form(snapshot) and not is_board(page_url):
         return None
     links: set[str] = set()
     controls = 0
-    for node in root.walk():
+    for node in links_snapshot(snapshot).walk():
         if node.role not in ("link", "button") or base.fold(node.name) not in APPLY_NAMES:
             continue
         controls += 1
