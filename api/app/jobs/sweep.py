@@ -14,8 +14,9 @@ One sweep, `run_sweep(sweep_id)`:
    each with its own time cap and politeness: the alerts hook (app/mail/alerts/source.py, the
    job alert e-mails of every provider turned on, SPEC-mail.md), the feed hook (app/jobs/feeds,
    `FeedRunner`: Arbeitnow, Himalayas, Adzuna), and the `apis` hooks the worker gives (the
-   company boards, app/jobs/boards/run.py, and LinkedIn's public job search,
-   app/browser/sources `Runner.linkedin`). Then, once they all ended, the browser hook
+   company boards, app/jobs/boards/run.py, LinkedIn's public job search,
+   app/browser/sources `Runner.linkedin`, and Business France VIE's public search API,
+   `Runner.vie`, owner 2026-11-01). Then, once they all ended, the browser hook
    (app/browser/sources, `Runner.websites`) runs every ticked website through the bounded
    interactive finder (app/browser/finder.py), one website after the other, with the time
    left. A hook that raises ends alone (logged, each one): the others run to their end, then the
@@ -42,11 +43,14 @@ Company job boards are back (owner, 2026-10-30, reversing "Delete it" of 2026-10
 in app/jobs/boards: the person's `company_boards`, read through their ATS's public API before
 the websites (worker.run_sweep gives app/jobs/boards/run.py's hook among the `apis`),
 one source of the frozen scope and of `stats.sources` per board (`mode` "api", `kind` "board").
-The freelance feeds and the fixed browser readers stay deleted (owner, 2026-10-28), and the old
-`boards` key of the profile stays dropped on the next read or save (app/profile/schemas.py). A
-sweep row written before keeps its stats as stored (`boards_*`, the feed and reader entries of
-`sources`), and the history reads them; new rows still write `boards_total` and the other board
-counters, at zero (the boards are counted in `sources`), so an older release reads every row.
+Business France VIE is back as an API source (owner, 2026-11-01, reversing "Delete it" of
+2026-10-28 for the search): app/browser/sources/vie_businessfrance.py, mode "api", kind "vie".
+The freelance feeds and the other fixed browser readers stay deleted (owner, 2026-10-28), and
+the old `boards` key of the profile stays dropped on the next read or save
+(app/profile/schemas.py). A sweep row written before keeps its stats as stored (`boards_*`, the
+feed and reader entries of `sources`), and the history reads them; new rows still write
+`boards_total` and the other board counters, at zero (the boards are counted in `sources`), so
+an older release reads every row.
 
 never_apply rules are free text in the profile. A rule's terms are what follows its first colon,
 split on commas and semicolons, remarks in parentheses removed: "No cybersecurity roles: cyber,
@@ -231,13 +235,14 @@ def alert_entry(key: str) -> dict[str, Any]:
 
 def has_sources(search: SearchSection | None) -> bool:
     """Whether a sweep of `search` has something to read: an enabled website, an enabled company
-    board, the alert e-mails of a provider (app/mail/alerts), or a ticked job feed (app/jobs/feeds,
-    owner 2026-10-30)."""
+    board, the alert e-mails of a provider (app/mail/alerts), a ticked job feed (app/jobs/feeds,
+    owner 2026-10-30), or Business France VIE ticked (owner, 2026-11-01)."""
     return (
         has_websites(search)
         or bool(boards.enabled_boards(search))
         or bool(alert_keys(search))
         or bool(search and search.job_feeds)
+        or bool(search and search.vie_businessfrance)
     )
 
 
@@ -290,6 +295,9 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         # still validates under the release before, which refuses the key.
         if not raw.get("job_feeds"):
             raw.pop("job_feeds", None)
+        # Business France VIE off: no key either (the release before refuses it).
+        if not raw.get("vie_businessfrance"):
+            raw.pop("vie_businessfrance", None)
         # Every alert e-mail off: no key either, as the profile stores it (profile/service.py).
         alerts = raw.get("alert_emails")
         if isinstance(alerts, dict) and not any(alerts.values()):
@@ -315,6 +323,11 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         sources.extend(
             feeds.scope_entry(name) for name in feeds.FEED_NAMES if name in search.job_feeds
         )
+        # Business France VIE through its public search API (owner, 2026-11-01).
+        if search.vie_businessfrance:
+            from app.browser.sources import vie_businessfrance
+
+            sources.append(vie_businessfrance.scope_entry())
         # The company boards (app/jobs/boards/run.py `entry_of`, the same identity), read before
         # the websites.
         sources.extend(

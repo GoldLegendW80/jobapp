@@ -14,6 +14,7 @@ import { SweepJobFeeds } from "./job-feeds-ui";
 import {
   LINKEDIN_TIME_BUDGET,
   SOURCE_PROBLEMS,
+  VIE_TIME_BUDGET,
   leftOutSentence,
   searchesSentence,
   sourceName,
@@ -24,11 +25,14 @@ import type { SweepSource } from "./sweeps-api";
 export function SweepSources({ sources }: { sources: SweepSource[] }) {
   const feeds = sources.filter((source) => isFeedKind(source.kind));
   // The company boards and job feeds (mode api) have their own blocks below; LinkedIn's public
-  // job search (mode api, kind linkedin, owner 2026-10-30) is one of the job sites.
+  // job search (mode api, kind linkedin, owner 2026-10-30) and Business France VIE's (kind vie,
+  // owner 2026-11-01) are job sites.
   const sites = sources.filter(
     (source) =>
       !isFeedKind(source.kind) &&
-      (source.mode !== "api" || source.kind === "linkedin"),
+      (source.mode !== "api" ||
+        source.kind === "linkedin" ||
+        source.kind === "vie"),
   );
   // Company job boards (owner, 2026-10-30): one source each, read through the ATS's API.
   const boards = sources.filter(
@@ -113,6 +117,8 @@ function problemOf(source: SweepSource, error: string): string {
     error === "time_budget"
   )
     return LINKEDIN_TIME_BUDGET;
+  if (source.mode === "api" && source.kind === "vie" && error === "time_budget")
+    return VIE_TIME_BUDGET;
   return SOURCE_PROBLEMS[error] ?? "It stopped early.";
 }
 

@@ -1490,6 +1490,57 @@ it("saves no job feed when none is ticked", async () => {
   expect(sent.job_feeds).toEqual([]);
 });
 
+// --- Business France VIE (api app/browser/sources/vie_businessfrance.py, owner 2026-11-01) -----
+
+it("offers Business France VIE off by default and saves the tick with the search", async () => {
+  const { profile, starts, user, dialog } = await open();
+  const box = within(dialog).getByRole("checkbox", {
+    name: "Business France VIE",
+  });
+  expect(box).not.toBeChecked();
+  expect(box).toHaveAccessibleDescription(
+    "Reads the VIE offers of mon-vie-via.businessfrance.fr for your saved titles and countries, through the site's public search, without signing in.",
+  );
+  await user.click(box);
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  const sent = profile.saves[0]!.body.data as Record<string, unknown>;
+  expect(sent.vie_businessfrance).toBe(true);
+});
+
+it("sends no Business France VIE key while it was never ticked", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    interactive_sites: [site("custom", "https://careers.example.org/")],
+  });
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  expect(profile.saves[0]!.body.data).not.toHaveProperty("vie_businessfrance");
+});
+
+it("unticks a stored Business France VIE and sends it off", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    interactive_sites: [site("custom", "https://careers.example.org/")],
+    vie_businessfrance: true,
+  });
+  const box = within(dialog).getByRole("checkbox", {
+    name: "Business France VIE",
+  });
+  expect(box).toBeChecked();
+  await user.click(box);
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  const sent = profile.saves[0]!.body.data as Record<string, unknown>;
+  expect(sent.vie_businessfrance).toBe(false);
+});
+
 // LinkedIn searched through its public job search or the browser (owner, 2026-10-30: "Both,
 // switchable in setup"); Easy Apply uses the browser either way.
 const LINKEDIN_API = "Search with LinkedIn's public job search (no login)";

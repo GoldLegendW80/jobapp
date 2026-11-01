@@ -62,6 +62,7 @@ import { CompanyBoards } from "./company-boards";
 import { formatDateTime } from "./format";
 import { isJobFeed, type JobFeed } from "./job-feeds";
 import { JobFeedsChoice } from "./job-feeds-ui";
+import { VieChoice } from "./vie-businessfrance";
 import {
   PROTECTED,
   READERS,
@@ -273,6 +274,10 @@ function SetupForm({
   // The job feeds ticked (api app/jobs/feeds), saved with the search.
   const [feeds, setFeeds] = useState<JobFeed[]>(() =>
     (profile.sections.search.job_feeds ?? []).filter(isJobFeed),
+  );
+  // Business France VIE through its public search API (owner, 2026-11-01), off by default.
+  const [vie, setVie] = useState(
+    profile.sections.search.vie_businessfrance === true,
   );
   const [custom, setCustom] = useState("");
   // Company job boards (owner, 2026-10-30): never saved, the starter list is shown ticked as a
@@ -497,6 +502,10 @@ function SetupForm({
           : {}),
         alert_emails: alerts,
         job_feeds: feeds,
+        // The release before refuses the key: sent once ticked or already stored.
+        ...(vie || reviewed.vie_businessfrance !== undefined
+          ? { vie_businessfrance: vie }
+          : {}),
         ...(edited !== null ? { company_boards: edited } : {}),
       });
       if (!isMounted()) return;
@@ -775,6 +784,7 @@ function SetupForm({
           </section>
           <AlertEmailsGroup id={id} value={alerts} onChange={setAlerts} />
           <JobFeedsChoice value={feeds} onChange={setFeeds} />
+          <VieChoice value={vie} onChange={setVie} />
           <CompanyBoards
             boards={boards}
             onChange={setEdited}
