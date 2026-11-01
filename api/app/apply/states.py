@@ -35,6 +35,9 @@ Tightened by apply A6 (issue #296):
   records `submitted` from `queued`, `filling` or `needs_person` without `submitting` and
   without the gate (`MANUAL_SENT_FROM`), for a `manual` application only
   (test_the_manual_move_is_for_manual_applications_only).
+- "I applied" (`PERSON_SENT_FROM`, `move(..., by_person=True)`, `manual.applied`): in any mode,
+  an application the app could not take further (`queued` or `needs_person`) is recorded
+  `submitted` when the person says they sent it on the site themselves; the app clicked nothing.
 - Before the click the submit lease may stop: `approved` to `ready` (a difference on the read
   back, the approval spent), `needs_person` (a captcha on the refilled form), or an end.
 """
@@ -79,6 +82,10 @@ TRANSITIONS: dict[State, frozenset[State]] = {
 # Apply myself: the person sent it from the live view, the one way to `submitted` past the gate.
 MANUAL_SENT_FROM = frozenset({S.queued, S.filling, S.needs_person})
 
+# "I applied" (any mode): the person sent it on the site in their own browser while the app
+# could not go on alone, the app clicked nothing (`move(..., by_person=True)`, manual.applied).
+# Never from `filling` (a lease drives the page), `ready` or a decided state (the app may click).
+PERSON_SENT_FROM = frozenset({S.queued, S.needs_person})
 # Where a `submitting` with no click goes (`move(..., click_refused=True)`): back to `ready`, or
 # the end `recheck` gives the same refusal before the arm (never apply, a closed posting).
 NO_CLICK_TO = frozenset({S.ready, S.blocked, S.posting_closed})
@@ -104,6 +111,7 @@ def move(
     *,
     by_gate: bool = False,
     click_refused: bool = False,
+    by_person: bool = False,
 ) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
     commits. `submitted_at` is set when the move records the click, and kept after it. Only the
@@ -113,8 +121,9 @@ def move(
     click): `submitting` then moves to one of NO_CLICK_TO, the original approval stays spent, a
     fresh approval is required, and no version is frozen."""
     current = State(application.state)
-    sent_by_person = (
-        application.mode is Mode.manual and to is S.submitted and current in MANUAL_SENT_FROM
+    sent_by_person = to is S.submitted and (
+        (application.mode is Mode.manual and current in MANUAL_SENT_FROM)
+        or (by_person and current in PERSON_SENT_FROM)
     )
     no_click = click_refused and current is S.submitting and to in NO_CLICK_TO
     if not sent_by_person and not no_click and not allowed(current, to):

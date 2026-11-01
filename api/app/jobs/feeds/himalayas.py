@@ -4,10 +4,13 @@ first QUERIES_MAX saved titles (feeds.Criteria), one or two pages each within BU
 stopping a title at a page older than `search.days`. The country is the place: the saved places
 are not required to match (a city would never match "France"), the unwanted places still apply.
 Its terms: keep `applicationLink` unchanged (it is the posting's address here) and show a link to
-Himalayas ("via Himalayas")."""
+Himalayas ("via Himalayas"). An `applicationLink` to the employer's own site is kept unchanged as
+the posting's application address (`Finding.apply_url`, what the apply module opens), the posting
+link then being Himalayas' own page (`guid`)."""
 
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.jobs.feeds import (
     Criteria,
@@ -37,11 +40,32 @@ CONTRACTS = {
 }
 
 
+def employer_url(value: object) -> str | None:
+    """`value` when it is an https address of a public host other than Himalayas, else None."""
+    if not isinstance(value, str) or not value.startswith("https://") or len(value) > 2000:
+        return None
+    host = (urlsplit(value).hostname or "").lower()
+    if (
+        not host
+        or "." not in host
+        or any(host == h or host.endswith("." + h) for h in HOSTS)
+        or any(c.isspace() or ord(c) < 32 for c in value)
+    ):
+        return None
+    return value
+
+
 def finding_of(item: Any, now: datetime) -> Finding | None:
     if not isinstance(item, dict):
         return None
     title = line(item.get("title"))
     url = https_url(item.get("applicationLink"), HOSTS)
+    apply_url = None
+    if url is None and (page := https_url(item.get("guid"), HOSTS)):
+        # An application link to the employer's own site: the person keeps Himalayas' page
+        # (`guid`) as the posting link, the apply module opens the employer's form.
+        apply_url = employer_url(item.get("applicationLink"))
+        url = page if apply_url else None
     external = line(item.get("guid"), 500) or (url or "")
     if not title or url is None or not external:
         return None
@@ -60,6 +84,7 @@ def finding_of(item: Any, now: datetime) -> Finding | None:
         company=line(item.get("companyName")) or None,
         location=location,
         url=url,
+        apply_url=apply_url,
         text=plain_text(item.get("description")) or plain_text(item.get("excerpt")),
         posted_at=epoch(item.get("pubDate")),
         remote=True,

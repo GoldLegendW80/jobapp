@@ -133,7 +133,8 @@ def start(
 
     from app.apply.email import addresses, unsure
 
-    form_url = (posting.url or "").strip()
+    # The employer's form when the posting's source gave it (a board's listing is `url`).
+    form_url = (posting.apply_url or posting.url or "").strip()
     read_as = guardrails.unstub(form_url, stub_base)
     # An application by email only when the posting's address shows no form of its own
     # (email.addresses): an ATS page never becomes one. An address the text may say not to use

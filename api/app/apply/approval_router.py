@@ -22,6 +22,8 @@
 - POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
   an approval; cancel: anything before the click).
 - POST /api/applications/{id}/submitted: "It was submitted" on `submit_unknown`.
+- POST /api/applications/{id}/applied: "I applied" when the app could not go on alone
+  (`needs_person` or `queued`, any mode): `submitted` with no click by the app (manual.applied).
 - POST /api/applications/{id}/retry: "Try again" after `submit_unknown` or `refused_by_site`:
   back to `ready`, where a new approval is needed.
 
@@ -492,6 +494,20 @@ def submitted(
 
 
 @router.post(
+    "/api/applications/{application_id}/applied",
+    response_model=ApplicationOut,
+    responses={**_404, **_409},
+)
+def applied(
+    application_id: str, request: Request, user: CurrentUser, db: Db
+) -> ApplicationOut | JSONResponse:
+    """I applied: the person sent it on the site in their own browser; the app clicked nothing."""
+    from app.apply import manual
+
+    return _person(request, user, db, application_id, manual.applied)
+
+
+@router.post(
     "/api/applications/{application_id}/retry",
     response_model=ApplicationOut,
     responses={**_404, **_409},
@@ -499,5 +515,6 @@ def submitted(
 def retry(
     application_id: str, request: Request, user: CurrentUser, db: Db
 ) -> ApplicationOut | JSONResponse:
-    """Try again: back to the approval; nothing is sent without a new one."""
+    """Try again: back to the approval (nothing is sent without a new one), or, for an
+    application that stopped (`needs_person`), a new fill from the start."""
     return _person(request, user, db, application_id, gate.retry)
