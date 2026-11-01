@@ -352,3 +352,12 @@ def test_try_again_after_a_stop_queues_a_new_fill(
     found = application(db, app_id)
     assert (found.state, found.needs, found.mode) == (State.queued, None, Mode.direct)
     assert "person_retry" in kinds(db, app_id)
+
+
+def test_the_fake_board_listing_names_its_form_or_hides_it(forms: Any) -> None:
+    link = forms.get("/board/greenhouse/northwind-labs/4012350").body.decode()
+    assert '<a href="/greenhouse/northwind-labs/jobs/4012350">Apply now</a>' in link
+    button = forms.get("/board/greenhouse/northwind-labs/4012350?variant=button").body.decode()
+    assert "Apply now</button>" in button
+    assert 'href="/greenhouse' not in button
+    assert forms.get("/board/greenhouse/northwind-labs/1").status == 404

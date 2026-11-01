@@ -145,6 +145,12 @@ POSTINGS: dict[str, dict[str, dict[str, tuple[str, str, str]]]] = {
                 "Simulation Engineer",
                 "Remote, Europe",
             ),
+            # The employer's form behind the fake job board's listing (/board/..., no dead ends).
+            "4012350": (
+                "Northwind Labs",
+                "Localization Engineer",
+                "Paris, France",
+            ),
         }
     },
 }
@@ -996,11 +1002,47 @@ def make_handler(stub: Stub) -> type[BaseHTTPRequestHandler]:
                 return self._static("a16/modal.html")
             if path.startswith("/forms/"):
                 return self._static(path[len("/forms/") :])
+            board = re.fullmatch(
+                r"/board/(ashby|greenhouse)/([a-z0-9-]{1,40})/([0-9]{1,12})/?", path
+            )
+            if board:
+                return self._board(
+                    *board.groups(), (query.get("variant") or ["link"])[0]
+                )
             found_page = self._form_page(path, query)
             if found_page is None:
                 return self._html(404, page("Not found", "<h1>Not found</h1>"))
             status, text = found_page
             self._html(status, text)
+
+        def _board(self, ats: str, org: str, job: str, variant: str) -> None:
+            """A job board's listing of a catalogue posting (board/listing.html): its Apply link
+            names the posting's fake form (`link`), or its Apply button has no address and opens
+            the form by script only (`button`)."""
+            found = POSTINGS.get(ats, {}).get(org, {}).get(job)
+            if found is None or variant not in ("link", "button"):
+                return self._html(404, page("Not found", "<h1>Not found</h1>"))
+            company, title, location = found
+            form = (
+                f"/ashby/{org}/{job}/application"
+                if ats == "ashby"
+                else f"/greenhouse/{org}/jobs/{job}"
+            )
+            apply = (
+                f'<a href="{esc(form)}">Apply now</a>'
+                if variant == "link"
+                else f'<button type="button" onclick="location.assign(\'{esc(form)}\')">'
+                "Apply now</button>"
+            )
+            text = (FORMS_DIR / "board" / "listing.html").read_text()
+            for key, value in (
+                ("__TITLE__", esc(title)),
+                ("__COMPANY__", esc(company)),
+                ("__LOCATION__", esc(location)),
+                ("__APPLY__", apply),
+            ):
+                text = text.replace(key, value)
+            return self._html(200, text)
 
         def _static(self, relative: str) -> None:
             # resolve() and is_file() raise on a NUL byte or a name too long for the file system.
