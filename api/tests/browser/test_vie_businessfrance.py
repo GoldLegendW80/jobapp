@@ -509,3 +509,14 @@ def test_the_worker_runs_it_beside_the_other_api_sources() -> None:
     assert worker.vie_source(runner) == runner.vie
     assert worker.vie_source(None) is None
     assert worker.vie_source(copy.copy) is None
+
+
+def test_the_profile_stores_the_tick_only_once_on_and_keeps_it_when_omitted() -> None:
+    from app.profile.service import _keep_consent
+
+    assert "vie_businessfrance" not in _keep_consent(None, {"vie_businessfrance": False})
+    assert _keep_consent(None, {"vie_businessfrance": True})["vie_businessfrance"] is True
+    # An editor that does not know the key keeps the stored tick; sent off, it is removed.
+    stored = {"vie_businessfrance": True}
+    assert _keep_consent(stored, {})["vie_businessfrance"] is True
+    assert "vie_businessfrance" not in _keep_consent(stored, {"vie_businessfrance": False})

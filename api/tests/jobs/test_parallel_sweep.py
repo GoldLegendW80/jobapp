@@ -894,12 +894,15 @@ def test_the_worker_runs_linkedins_public_search_beside_the_api_sources(
     [options] = given
     assert options["alerts"] is alerts
     assert options["feeds"] is feed
-    board, linkedin = options["apis"]
+    board, linkedin, vie = options["apis"]
     assert isinstance(board, boards.Boards)
     assert linkedin == runner.linkedin
+    # Business France VIE's public search API (owner, 2026-11-01) runs beside them too.
+    assert vie == runner.vie
     assert options["browser"] == runner.websites
     # A test's own website hook stays one hook, run after the API sources.
     plain = websites()
     asyncio.run(worker.run_sweep(ctx | {"browser_sources": plain}, str(uuid.uuid4())))
     assert given[1]["apis"][1] is None
+    assert given[1]["apis"][2] is None
     assert given[1]["browser"] is plain

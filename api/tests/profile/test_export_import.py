@@ -164,11 +164,12 @@ def test_export_keys_follow_the_model_order_not_jsonb_order(api: Api, alice: str
     for name in SECTIONS:
         # The map of permissions is stored only once a dedicated writer records a decision, the
         # alert e-mails only once one is on (SPEC-mail.md, "Job alert e-mails"), the job feeds
-        # only once one is ticked.
+        # only once one is ticked, Business France VIE only once ticked.
         omitted = {
             ("search", "platform_consents"),
             ("search", "alert_emails"),
             ("search", "job_feeds"),
+            ("search", "vie_businessfrance"),
         }
         expected = [
             field for field in SECTION_MODELS[name].model_fields if (name, field) not in omitted
