@@ -158,12 +158,15 @@ export const getApproval = (
   });
 
 /**
- * Apply with Review first (the agent fills the form and stops for the person's approval) or Apply
- * myself (the person fills and sends it in the live view, A9).
+ * Apply (issue #738): the server reads the person's "Let me review each filled form before it is
+ * sent" box and answers an application of mode `direct` (the assistant fills the form and the
+ * apply gate sends it, the click being the approval) or `review` (the fill stops for Approve).
+ * `review` asks for Review first whatever the box; `manual` is Apply myself (the person fills and
+ * sends it in the live view, A9).
  */
 export const startApplication = (
   postingId: string,
-  mode: "review" | "manual" = "review",
+  mode: "apply" | "review" | "manual" = "apply",
 ): Promise<Started> =>
   request(`/postings/${id(postingId)}/applications`, {
     method: "POST",

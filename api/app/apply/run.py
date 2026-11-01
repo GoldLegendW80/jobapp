@@ -427,6 +427,8 @@ def prepare(
     )
     if application.mode is Mode.full_auto and getattr(known_adapter, "review_only", False):
         full_auto.hand_over(db, application, "unsupported_source", now)
+    if application.mode is Mode.direct and getattr(known_adapter, "review_only", False):
+        full_auto.hand_over(db, application, "review_only_site", now)
 
     current = documents.current(db, user_id, posting.id)
     if current.cv.version is None and current.cv.coming is None and not manual:
@@ -544,7 +546,7 @@ def still_needs(db: Session, application_id: uuid.UUID, reason: str) -> bool:
         application is not None
         and application.state is State.needs_person
         and application.needs == reason
-        and application.mode is Mode.review
+        and application.mode in (Mode.review, Mode.direct)
     )
 
 
@@ -757,6 +759,35 @@ def _record_bank_use(
             counted.add(row.field_key)
 
 
+# The hand overs that stay true across every fill of the application: the page keeps saying why.
+LASTING_REASONS = ("email_review", "review_only_site", "unsupported_source")
+
+
+def keep_reason(db: Session, application: Application) -> None:
+    """ "Why it waits for you" reads `error_code` of a `ready` review item. A fill or a recovery
+    clears it, so a hand over that holds whatever the fill finds (an e-mail posting, a review
+    only site) is written back from its `sent_to_review` event."""
+    if application.state is not State.ready or application.mode is not Mode.review:
+        return
+    if application.error_code is None:
+        application.error_code = _lasting_reason(db, application)
+
+
+def _lasting_reason(db: Session, application: Application) -> str | None:
+    """The code of the latest `sent_to_review` event, when it is one of LASTING_REASONS."""
+    code = db.execute(
+        sa.select(ApplicationEvent.data["code"].astext)
+        .where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "sent_to_review",
+        )
+        .order_by(ApplicationEvent.at.desc(), ApplicationEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return code if code in LASTING_REASONS else None
+
+
 def finish(
     db: Session,
     application_id: uuid.UUID,
@@ -854,7 +885,18 @@ def finish(
     )
     if result.state is State.needs_person or (result.state is State.ready and result.review_reason):
         # Full auto (A13a): what needs the person, a sign in wall included, is a review item.
-        full_auto.hand_over(db, application, result.review_reason or result.needs, now)
+        # One click Apply (owner, 2026-11-01): a stop the person clears in the live view keeps
+        # the item direct, so it is sent by itself once they are done; a review reason does not.
+        full_auto.hand_over(
+            db,
+            application,
+            result.review_reason or result.needs,
+            now,
+            keep_direct=result.state is State.needs_person and not result.review_reason,
+        )
+    if result.review_reason and to is State.ready and application.error_code is None:
+        application.error_code = result.review_reason
+    keep_reason(db, application)
     filled_any = counts["filled"] + counts["unverified"] > 0
     if result.state in (State.ready, State.needs_person) and filled_any:
         if posting.status in STAGE_FROM:
@@ -1133,7 +1175,9 @@ async def _drive_generic(
 ) -> Result:
     """Unknown forms require Review first. Known fallback keeps its remaining allowance,
     original lease and gate checks; an unverified frame is handed to Review."""
-    if strategy is None and (plan.mode is not Mode.review or services.form_agent is None):
+    if strategy is None and (
+        plan.mode not in (Mode.review, Mode.direct) or services.form_agent is None
+    ):
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
     adapter.person_answers = plan.person_answers
     factory = _FallbackSession if strategy is not None else forms.FormSession
@@ -1638,7 +1682,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             written = await asyncio.to_thread(_in_db, services.sessions, interrupted)
         if (
             written == State.needs_person.value
-            and plan.mode is Mode.review
+            and plan.mode in (Mode.review, Mode.direct)
             and result.needs in failures.WAIT_ON_PAGE
             and adapter is not None
             and (

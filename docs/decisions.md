@@ -296,3 +296,10 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
 - 2026-10-21 (#560): before an apply click, a 429 is a passing fault retried after 600 then
   3,600 seconds, then failed. A 403 is not retried: it waits as Needs you with the page in the
   live view. A step detected on that page still wins over the status.
+
+## Apply: one click Apply, review checkbox (2026-11-01, issue #738)
+
+- Owner: "I don't understand at all how to apply. It must be way more easy, when I click on apply, it open a browser, navigate to the job offer, fill in the form and click on apply. I want a checkbox in settings to set if I want to review the form filled. By default its no (full auto)".
+- Likes keep today's Full auto exactly as it is; only the Apply button of the job page changes.
+- Free text the assistant writes is sent without the person seeing it, after the check by model; it stays readable in the run report.
+- Built as the mode `direct` with the authorisation `apply_click` (the click is the approval, used once, 7 days at most) and the setting `apply_settings.review_before_send` (off by default). The global guards stay; the hold, the rehearsals, the fit threshold and the one per company rule do not apply to an explicit Apply click. The mode is fixed at the click (SPEC-apply, "Owner decision (taken on 2026-11-01)").

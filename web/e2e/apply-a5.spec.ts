@@ -12,12 +12,13 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Apply A5, the answer agent, against the real stack through Caddy plus the fake ATS forms
  * server. An invented person with a model credential (a made up key: the worker runs the fake
  * backend), the documents consent, a base CV and a posting whose address is the fake Ashby form
- * has its CV and letter written on the fake backend, clicks Apply (Review first), and the fill
+ * has its CV and letter written on the fake backend, ticks the review box and clicks Apply, and the fill
  * runs on the worker. The fake Ashby form asks an open question ("Why Example Robotics?"): the
  * `apply_answer` agent answers it in a run of the agents runtime (the recorded stream
  * `apply_answer`), the judge keeps it because the person's motivation says it, and the approval
@@ -112,7 +113,8 @@ test("an invented person has a credential, the consent, a base CV and an Ashby p
 test("the open question is answered by the agent, shown as its answer, and editable", async () => {
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
-  await section.getByRole("button", { name: "Apply (Review first)" }).click();
+  await reviewFirst(page.request);
+  await section.getByRole("button", { name: "Apply", exact: true }).click();
 
   // The worker's tick starts the fill within 30 seconds; the answer agent runs inside it.
   await expect(

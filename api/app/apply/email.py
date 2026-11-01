@@ -375,6 +375,7 @@ def recover(db: Session, application: Application, now: datetime, *, configured:
         return False
     states.move(application, State.ready, now)
     application.needs = application.error_code = None
+    run.keep_reason(db, application)
     gate._event(db, application, "person_done", now, needs="email_connection")
     return True
 
@@ -469,6 +470,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> str:
             full_auto.hand_over(db, application, reason, now)
         else:
             full_auto.to_review(db, application, reason, now)
+    run.keep_reason(db, application)
     gate._event(
         db,
         application,

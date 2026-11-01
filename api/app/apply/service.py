@@ -126,7 +126,7 @@ def start(
         posting,
         _rules(db, user_id),
         swept=guardrails.swept_never_apply(db, user_id, posting.id),
-        mode=mode,
+        mode=Mode.review if mode is Mode.direct else mode,
     )
     if code is not None:
         _refuse(code, mode, warnings)
@@ -145,6 +145,11 @@ def start(
     if not recipients and mode is not Mode.manual:
         recipients = unsure(posting, read_as)
     email_application = bool(recipients)
+    sent_to_review = None
+    if email_application and mode is Mode.direct:
+        # The app never sends mail by itself (CLAUDE.md rule 3): an e-mail application from the
+        # Apply button is Review first, and the job page says why.
+        mode, sent_to_review = Mode.review, "email_review"
     key = f"email:{posting.id}" if email_application else guardrails.canonical_key(read_as)
     if key is None:
         raise RefusedError(guardrails.Refusal("no_address"))
@@ -167,6 +172,7 @@ def start(
         canonical_key=key,
         created_at=now,
         updated_at=now,
+        error_code=sent_to_review,
     )
     db.add(application)
     try:
@@ -184,6 +190,12 @@ def start(
         dry_run=dry_run,
         warnings=warnings,
     )
+    if mode is Mode.direct:
+        # The person's click on Apply is the approval (owner, 2026-11-01): `created_at` is its
+        # time; `direct.decide` writes its `apply_click` authorisation once the fill is done.
+        _event(db, application, "apply_click", now)
+    elif sent_to_review:
+        _event(db, application, "sent_to_review", now, code=sent_to_review)
     db.commit()
     logger.info(
         "apply.started",

@@ -13,7 +13,8 @@
   answer, typed text or image (the run report reads them).
 - `application_screenshots`: JPEG images, 2 MB at most each, with their SHA-256.
 - `apply_answer_bank`: a person's own answers by question key (app/apply/bank.py).
-- `apply_authorisations`: what lets the gate click: a person's approval or a Like in Full auto,
+- `apply_authorisations`: what lets the gate click: a person's approval, a Like in Full auto or
+  the person's click on Apply with the review box unticked (`apply_click`, owner 2026-11-01),
   bound to the hash of the answers and documents it covered; or the approval of one section of
   "Complete my profile on this site". Exactly one of `application_id` and `site_run_id` is set,
   the second when the kind is `profile_section`.
@@ -48,6 +49,8 @@ class Mode(enum.StrEnum):
     manual = "manual"
     review = "review"
     full_auto = "full_auto"
+    # The Apply button with "Let me review each filled form" unticked (owner, 2026-11-01).
+    direct = "direct"
 
 
 class State(enum.StrEnum):
@@ -102,6 +105,7 @@ class ShotKind(enum.StrEnum):
 class AuthorisationKind(enum.StrEnum):
     person_approval = "person_approval"
     full_auto_like = "full_auto_like"
+    apply_click = "apply_click"
     profile_section = "profile_section"
 
 

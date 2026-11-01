@@ -130,6 +130,7 @@ export function fakeQueue(
         rehearsals: 3,
         rehearsals_done: 3,
         full_auto_since: null,
+        review_before_send: false,
       }),
     ),
     http.post(

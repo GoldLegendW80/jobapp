@@ -37,6 +37,7 @@ const defaults: ApplySettings = {
   rehearsals: 3,
   rehearsals_done: 0,
   full_auto_since: null,
+  review_before_send: false,
 };
 
 function fakeSettings(initial: Partial<ApplySettings> = {}) {
@@ -198,6 +199,55 @@ describe("the Applications page", () => {
     expect(
       screen.getByRole("heading", { name: "Application settings" }),
     ).toBeVisible();
+  });
+
+  it("leaves the review box unticked by default, and ticking it saves review_before_send", async () => {
+    const api = fakeSettings();
+    fakeCaps([]);
+    fakeBank([]);
+    const { user } = await openPage();
+    const card = cardOf("When you click Apply");
+    const box = within(card).getByRole("checkbox", {
+      name: "Let me review each filled form before it is sent",
+    });
+    expect(box).not.toBeChecked();
+    expect(box).toHaveAccessibleDescription(
+      "When it is off, Apply fills the form and sends it for you. When it is on, you check each filled form and send it yourself.",
+    );
+    // The box comes first: the Like card after it says it concerns Likes only.
+    const headings = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((one) => one.textContent);
+    expect(headings.indexOf("When you click Apply")).toBe(0);
+    expect(headings.indexOf("After a Like")).toBe(1);
+    expect(cardOf("After a Like")).toHaveTextContent(/Likes only/);
+    await user.click(box);
+    await waitFor(() => {
+      expect(api.puts).toEqual([{ review_before_send: true }]);
+    });
+    await waitFor(() => {
+      expect(box).toBeChecked();
+    });
+    await user.click(box);
+    await waitFor(() => {
+      expect(api.puts).toEqual([
+        { review_before_send: true },
+        { review_before_send: false },
+      ]);
+    });
+    expect(card.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("shows a ticked review box as the person saved it", async () => {
+    fakeSettings({ review_before_send: true });
+    fakeCaps([]);
+    fakeBank([]);
+    await openPage();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Let me review each filled form before it is sent",
+      }),
+    ).toBeChecked();
   });
 
   it("labels the three thresholds apart and changes only the third", async () => {

@@ -2,7 +2,7 @@ import { http, HttpResponse } from "msw";
 
 import type { Answer, Application } from "@/features/apply/apply-api";
 
-import { server } from "./server";
+import { defaultApplySettings, server } from "./server";
 
 export const APP_ID = "00000000-0000-4000-9000-0000000000a1";
 
@@ -61,15 +61,21 @@ export const leftAnswer = (
 /**
  * A fake of the apply routes the Apply section calls, in memory. `application` and `answers` are
  * changed by a test to move the run on; every write is recorded. An answer saved through PUT
- * becomes the person's and changes the hash, as the api does.
+ * becomes the person's and changes the hash, as the api does. `reviewBeforeSend` is the person's
+ * review box: an Apply (mode `apply`) starts a `review` application when it is ticked, else a
+ * `direct` one, as the api decides.
  */
 export function fakeApply(initial: {
   application: Application | null;
   answers?: Answer[];
+  reviewBeforeSend?: boolean;
 }) {
   const state = {
     application: initial.application,
     answers: initial.answers ?? [],
+    reviewBeforeSend: initial.reviewBeforeSend ?? false,
+    /** The body of every POST that started an application. */
+    starts: [] as { mode: string }[],
     version: 1,
     documents: {
       cv: {
@@ -141,7 +147,15 @@ export function fakeApply(initial: {
         ...state.detail,
       }),
     ),
-    http.post("*/api/postings/:id/applications", () => {
+    http.get("*/api/apply/settings", () =>
+      HttpResponse.json({
+        ...defaultApplySettings,
+        review_before_send: state.reviewBeforeSend,
+      }),
+    ),
+    http.post("*/api/postings/:id/applications", async ({ request }) => {
+      const body = (await request.json()) as { mode: string };
+      state.starts.push(body);
       if (state.startRefusal) {
         return HttpResponse.json(
           { ...state.startRefusal, application_id: null },
@@ -149,7 +163,13 @@ export function fakeApply(initial: {
         );
       }
       state.started += 1;
-      state.application = fakeApplication("queued");
+      const mode =
+        body.mode === "apply"
+          ? state.reviewBeforeSend
+            ? "review"
+            : "direct"
+          : body.mode;
+      state.application = fakeApplication("queued", { mode });
       return HttpResponse.json(
         { ...state.application, warnings: [] },
         { status: 201 },

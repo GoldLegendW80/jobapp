@@ -18,6 +18,25 @@ export const emptyJobsPage = {
   },
 };
 
+/** GET /api/apply/settings of a new account: Review first after a Like, the review box unticked. */
+export const defaultApplySettings = {
+  mode_after_like: "review",
+  full_auto_available: false,
+  paused: false,
+  min_fit: 80,
+  min_fit_chosen: false,
+  safety_ceiling: 30,
+  hold_s: 900,
+  hold_min_s: 900,
+  company_days: 30,
+  show_postings_from: null,
+  write_documents_from: null,
+  rehearsals: 3,
+  rehearsals_done: 0,
+  full_auto_since: null,
+  review_before_send: false,
+};
+
 /** No sweep yet, the automatic search off: what GET /api/jobs/sweeps answers a new account. */
 export const emptySweeps = {
   items: [],
@@ -149,6 +168,10 @@ export const handlers = [
   ),
   // No application started for a posting (job detail's Apply section).
   http.get("*/api/applications", () => HttpResponse.json({ items: [] })),
+  // A new account's apply settings (the job page's Apply line): the review box unticked.
+  http.get("*/api/apply/settings", () =>
+    HttpResponse.json(defaultApplySettings),
+  ),
   // Nothing waits in the review queue (the app shell's Applications count).
   http.get("*/api/apply/queue/count", () =>
     HttpResponse.json({ waiting_on_you: 0 }),

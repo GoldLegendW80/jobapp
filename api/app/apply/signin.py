@@ -164,7 +164,7 @@ def signed_in(db: Session, user_id: uuid.UUID, ref: uuid.UUID, now: datetime) ->
         or application.needs != "signin"
     ):
         return False
-    full_auto.hand_over(db, application, "signin", now)
+    full_auto.hand_over(db, application, "signin", now, keep_direct=True)
     states.move(application, State.queued, now)
     application.needs = None
     application.error_code = None

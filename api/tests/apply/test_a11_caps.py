@@ -815,6 +815,7 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
         "rehearsals": 3,
         "rehearsals_done": 0,
         "full_auto_since": None,
+        "review_before_send": False,
     }
     a11.search(db, person_a.user_id, {"min_fit": 60, "documents": {"min_fit": 65}})
     db.commit()

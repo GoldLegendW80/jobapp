@@ -18,6 +18,7 @@ import {
   setPassword,
   watchErrors,
 } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Browser B10's guards on LinkedIn searched as a job website (owner, 2026-10-28: every search
@@ -255,7 +256,8 @@ test("C meets LinkedIn's security check: paused with its date, not searched agai
   const id = ((await created.json()) as { id: string }).id;
   await page.goto(`/jobs/${id}`);
   const apply = page.getByRole("region", { name: "Apply", exact: true });
-  await apply.getByRole("button", { name: "Apply (Review first)" }).click();
+  await reviewFirst(page.request);
+  await apply.getByRole("button", { name: "Apply", exact: true }).click();
   await expect
     .poll(
       async () => {

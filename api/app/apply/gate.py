@@ -37,7 +37,10 @@ A refusal by a kill switch, the authorisation, the caps or the documents leaves 
 `ready`; a refusal by never apply or a duplicate ends it `blocked` with the code
 (`posting_closed` for a closed posting), as at the start (A2). In Full auto (`full_auto_like`,
 written by `full_auto.decide`) a pass moves the item to `held` with the end of its hold, and a
-refusal that leaves it `ready` sends it to the review queue (`full_auto.to_review`).
+refusal that leaves it `ready` sends it to the review queue (`full_auto.to_review`). One click
+Apply (`apply_click`, written by `direct.decide`, owner 2026-11-01) passes the same checks and
+`direct.checks`, then moves to `approved` at once, with no hold; a refusal that leaves it `ready`
+sends it to the review queue the same way, with its reason.
 
 The decision is not the last word: the submit lease runs the checks that can change after it
 again under the same locks, when it starts and just before the click (`submit.recheck`: the
@@ -58,7 +61,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.apply import caps, full_auto, guardrails, service, states
+from app.apply import caps, direct, full_auto, guardrails, service, states
 from app.apply.answer_limits import ANSWER_MAX, LETTER_MAX, letter_issue
 from app.apply.ats import base as ats_base
 from app.apply.models import (
@@ -141,6 +144,7 @@ SENTENCES = {
     **guardrails.SENTENCES,
     **caps.SENTENCES,
     **full_auto.SENTENCES,
+    **direct.SENTENCES,
 }
 # Refusals that leave the application as it is (`ready`): the person may approve again later.
 KEEP = frozenset(
@@ -156,11 +160,12 @@ KEEP = frozenset(
         "documents_review",
         "manual",
     }
-).union(caps.KEEP, full_auto.SENTENCES)
+).union(caps.KEEP, full_auto.SENTENCES, direct.SENTENCES)
 # The authorisation each mode needs.
 KIND_OF_MODE = {
     Mode.review: AuthorisationKind.person_approval,
     Mode.full_auto: AuthorisationKind.full_auto_like,
+    Mode.direct: AuthorisationKind.apply_click,
 }
 
 
@@ -425,7 +430,8 @@ def documents_code(db: Session, application: Application) -> str | None:
 
 
 def documents_need_review(versions: dict[str, Any]) -> bool:
-    """Full auto's own rule on the documents (SPEC-apply, guardrail 6): a version that overflows
+    """The rule on the documents of every send no person looked at, Full auto and one click
+    Apply (SPEC-apply, guardrail 6): a version that overflows
     its page or carries corrections goes to the person. Unknown fit counts as an overflow."""
     for record in (versions or {}).values():
         if not isinstance(record, dict):
@@ -468,8 +474,8 @@ def decide(
             states.move(application, to, now)
             application.error_code = code
         elif (
-            authorisation.kind is AuthorisationKind.full_auto_like
-            and application.mode is Mode.full_auto
+            authorisation.kind is KIND_OF_MODE.get(application.mode)
+            and application.mode in (Mode.full_auto, Mode.direct)
             and application.state is State.ready
         ):
             full_auto.to_review(db, application, code, now)
@@ -507,11 +513,17 @@ def decide(
         return refused(code)
     if code := documents_code(db, application):
         return refused(code)
-    if application.mode is Mode.full_auto:
-        if documents_need_review(application.document_versions):
-            return refused("documents_review")
-        if code := full_auto.checks(db, application, posting, now):
-            return refused(code)
+    # Guardrail 6 holds for every send no person looked at: Full auto and one click Apply.
+    if application.mode in (Mode.full_auto, Mode.direct) and documents_need_review(
+        application.document_versions
+    ):
+        return refused("documents_review")
+    if application.mode is Mode.full_auto and (
+        code := full_auto.checks(db, application, posting, now)
+    ):
+        return refused(code)
+    if application.mode is Mode.direct and (code := direct.checks(db, application, posting, now)):
+        return refused(code)
 
     authorisation.used_at = now
     db.execute(

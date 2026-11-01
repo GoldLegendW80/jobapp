@@ -5,7 +5,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { browserQueryKey } from "@/features/browser/browser-api";
-import { server } from "@/test/server";
+import { defaultApplySettings, server } from "@/test/server";
 import { fakeSession, member } from "@/test/auth";
 import {
   APP_ID,
@@ -102,9 +102,7 @@ describe("starting", () => {
     expect(
       await within(section).findByText(/Turn on LinkedIn in Account/),
     ).toBeInTheDocument();
-    expect(
-      within(section).queryByRole("button", { name: "Apply (Review first)" }),
-    ).toBeNull();
+    expect(within(section).queryByRole("button", { name: "Apply" })).toBeNull();
     expect(
       within(section).queryByRole("button", { name: "Apply myself" }),
     ).toBeNull();
@@ -148,12 +146,10 @@ describe("starting", () => {
       await within(section).findByText(/Turn on LinkedIn in Account/),
     ).toBeInTheDocument();
     expect(within(section).queryByRole("link")).toBeNull();
-    expect(
-      within(section).queryByRole("button", { name: "Apply (Review first)" }),
-    ).toBeNull();
+    expect(within(section).queryByRole("button", { name: "Apply" })).toBeNull();
   });
 
-  it("offers Apply (Review first) on LinkedIn once the person has accepted", async () => {
+  it("offers Apply on LinkedIn once the person has accepted", async () => {
     const api = fakeApply({ application: null });
     fakeJobDetail(
       makeDetail({
@@ -164,7 +160,7 @@ describe("starting", () => {
     linkedinState(true);
     const { user, section } = await openSection();
     const review = await within(section).findByRole("button", {
-      name: "Apply (Review first)",
+      name: "Apply",
     });
     expect(
       within(section).queryByText(/Turn on LinkedIn in Account/),
@@ -180,7 +176,7 @@ describe("starting", () => {
     });
   });
 
-  it("offers Apply (Review first) and Apply myself, and starts a Review first application", async () => {
+  it("offers Apply and Apply myself, and starts an application", async () => {
     const api = fakeApply({ application: null });
     const { user, section } = await openSection();
     expect(
@@ -189,9 +185,7 @@ describe("starting", () => {
     expect(
       within(section).getByRole("button", { name: "Apply myself" }),
     ).toBeEnabled();
-    await user.click(
-      within(section).getByRole("button", { name: "Apply (Review first)" }),
-    );
+    await user.click(within(section).getByRole("button", { name: "Apply" }));
     expect(
       await within(section).findByText(/Waiting for a browser/),
     ).toBeInTheDocument();
@@ -209,7 +203,7 @@ describe("starting", () => {
     const { user, section } = await openSection();
     await user.click(
       await within(section).findByRole("button", {
-        name: "Apply (Review first)",
+        name: "Apply",
       }),
     );
     expect(
@@ -458,7 +452,7 @@ describe("the review", () => {
     });
     expect(
       await within(section).findByRole("button", {
-        name: "Apply (Review first)",
+        name: "Apply",
       }),
     ).toBeInTheDocument();
   });
@@ -986,7 +980,7 @@ describe("other states", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      within(section).getByRole("button", { name: "Apply (Review first)" }),
+      within(section).getByRole("button", { name: "Apply" }),
     ).toBeEnabled();
   });
 
@@ -1276,5 +1270,255 @@ describe("the submit lease on the job page", () => {
     expect(await within(section).findByText(/Approved\./)).toBeInTheDocument();
     expect(within(section).queryByTestId("live-view-slot")).toBeNull();
     expect(opened).toHaveLength(0);
+  });
+});
+
+describe("one click Apply (issue #738)", () => {
+  it("says Apply sends the form when the review box is unticked, and starts with mode apply", async () => {
+    const api = fakeApply({ application: null });
+    const { user, section } = await openSection();
+    const line = await within(section).findByTestId("apply-mode-line");
+    expect(line).toHaveTextContent(
+      "The assistant fills the form and sends it. You can watch it live here.",
+    );
+    expect(
+      within(line).getByRole("link", { name: "Change it in Settings" }),
+    ).toHaveAttribute("href", "/settings/applications");
+    expect(
+      within(section).queryByRole("button", { name: "Apply (Review first)" }),
+    ).toBeNull();
+    expect(
+      within(section).getByRole("button", { name: "Apply myself" }),
+    ).toBeEnabled();
+    await user.click(within(section).getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(api.starts).toEqual([{ mode: "apply" }]);
+    });
+    expect(api.application?.mode).toBe("direct");
+    expect(section.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("keeps Apply disabled until the apply settings are read", async () => {
+    const api = fakeApply({ application: null });
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/apply/settings", async () => {
+        await held;
+        return HttpResponse.json({
+          ...defaultApplySettings,
+          review_before_send: false,
+        });
+      }),
+    );
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByTestId("apply-mode-pending"),
+    ).toHaveTextContent("Reading your apply settings");
+    const apply = within(section).getByRole("button", { name: "Apply" });
+    expect(apply).toBeDisabled();
+    await user.click(apply);
+    expect(api.starts).toEqual([]);
+    release();
+    expect(
+      await within(section).findByTestId("apply-mode-line"),
+    ).toHaveTextContent("The assistant fills the form and sends it.");
+    await waitFor(() => {
+      expect(
+        within(section).getByRole("button", { name: "Apply" }),
+      ).toBeEnabled();
+    });
+    await user.click(within(section).getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(api.starts).toEqual([{ mode: "apply" }]);
+    });
+  });
+
+  it("keeps Apply disabled and offers a retry when the apply settings fail", async () => {
+    const api = fakeApply({ application: null });
+    let fail = true;
+    server.use(
+      http.get("*/api/apply/settings", () =>
+        fail
+          ? HttpResponse.json({ detail: "unavailable" }, { status: 503 })
+          : HttpResponse.json({
+              ...defaultApplySettings,
+              review_before_send: true,
+            }),
+      ),
+    );
+    const { user, section } = await openSection();
+    const pending = await within(section).findByText(
+      /Your apply settings could not be read, so Apply waits\./,
+      undefined,
+      { timeout: 5000 },
+    );
+    expect(
+      within(section).getByRole("button", { name: "Apply" }),
+    ).toBeDisabled();
+    expect(pending.textContent).not.toMatch(SEPARATOR);
+    fail = false;
+    await user.click(
+      within(pending).getByRole("button", { name: "Try again" }),
+    );
+    expect(
+      await within(section).findByTestId("apply-mode-line"),
+    ).toHaveTextContent(
+      "The assistant fills the form, then you check it and send it.",
+    );
+    expect(
+      within(section).getByRole("button", { name: "Apply" }),
+    ).toBeEnabled();
+    expect(api.starts).toEqual([]);
+  });
+
+  it("says the person checks the form when the review box is ticked, and still starts with mode apply", async () => {
+    const api = fakeApply({ application: null, reviewBeforeSend: true });
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByTestId("apply-mode-line"),
+    ).toHaveTextContent(
+      "The assistant fills the form, then you check it and send it.",
+    );
+    await user.click(within(section).getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(api.starts).toEqual([{ mode: "apply" }]);
+    });
+    expect(api.application?.mode).toBe("review");
+  });
+
+  it("follows a direct fill live and says it sends it by itself", async () => {
+    fakeApply({ application: fakeApplication("filling", { mode: "direct" }) });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(
+        "The assistant is filling the form. It sends it by itself once it is filled.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(section).getByTestId("live-view-slot")).toBeInTheDocument();
+  });
+
+  it("checks a filled direct form with no Approve and submit and no Reject", async () => {
+    fakeApply({
+      application: fakeApplication("ready", { mode: "direct" }),
+      answers: filled().slice(0, 2),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText("Checking the form before sending it."),
+    ).toBeInTheDocument();
+    for (const name of ["Approve and submit", "Reject"]) {
+      expect(within(section).queryByRole("button", { name })).toBeNull();
+    }
+    expect(
+      within(section).getByRole("button", { name: "Cancel application" }),
+    ).toBeInTheDocument();
+    expect(within(section).queryByRole("textbox")).toBeNull();
+  });
+
+  it("says Sending the form while the direct form is sent", async () => {
+    fakeApply({
+      application: fakeApplication("submitting", { mode: "direct" }),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText("Sending the form."),
+    ).toBeInTheDocument();
+    expect(
+      within(section).queryByRole("button", { name: "Approve and submit" }),
+    ).toBeNull();
+  });
+
+  it("says Sent with what was sent once a direct form is submitted", async () => {
+    const api = fakeApply({
+      application: fakeApplication("submitted", {
+        mode: "direct",
+        submitted_at: "2026-10-15T08:02:30Z",
+      }),
+      answers: filled().slice(0, 2),
+    });
+    api.screenshots.push({
+      id: "shot-after",
+      kind: "after",
+      created_at: "2026-10-15T08:02:30Z",
+    });
+    const { section } = await openSection();
+    expect(await within(section).findByText(/^Sent\./)).toBeInTheDocument();
+    expect(
+      await within(section).findByRole("img", {
+        name: "The page after the click",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByRole("list", { name: "Fields filled" }),
+    ).toHaveTextContent("Harald");
+    expect(
+      within(section).queryByRole("button", { name: "Approve and submit" }),
+    ).toBeNull();
+    expect(section.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("asks for the person in a direct fill and says it goes on by itself", async () => {
+    fakeApply({
+      application: fakeApplication("needs_person", {
+        mode: "direct",
+        needs: "captcha",
+      }),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(
+        /captcha.*When you are done, the assistant goes on and sends it by itself\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "email_review",
+      "This posting asks for an application by e-mail, and the app never sends mail by itself, so it waits for you.",
+    ],
+    [
+      "review_only_site",
+      "The app does not send this site's form by itself yet, so you check it and send it.",
+    ],
+    [
+      "a_code_this_page_does_not_know",
+      "The app stopped before sending it, so you check it and send it.",
+    ],
+  ])(
+    "says in words why a form handed back to review waits (%s), and offers Approve",
+    async (code, sentence) => {
+      fakeApply({
+        application: fakeApplication("ready", {
+          mode: "review",
+          error_code: code,
+        }),
+        answers: filled().slice(0, 2),
+      });
+      const { section } = await openSection();
+      expect(
+        await within(section).findByText(`Why it waits for you: ${sentence}`),
+      ).toBeInTheDocument();
+      expect(
+        await within(section).findByRole("button", {
+          name: "Approve and submit",
+        }),
+      ).toBeInTheDocument();
+      expect(section.textContent).not.toContain(code);
+      expect(section.textContent).not.toMatch(SEPARATOR);
+    },
+  );
+
+  it("shows no reason on a plain Review first form", async () => {
+    fakeApply({
+      application: fakeApplication("ready"),
+      answers: filled().slice(0, 2),
+    });
+    const { section } = await openSection();
+    await within(section).findByRole("button", { name: "Approve and submit" });
+    expect(within(section).queryByText(/Why it waits for you/)).toBeNull();
   });
 });

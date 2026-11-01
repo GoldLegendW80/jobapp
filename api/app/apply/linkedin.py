@@ -141,7 +141,7 @@ def follow_company(
     application.answers_hash = None
     application.needs = None
     states.move(application, State.queued, now)
-    if application.mode is Mode.full_auto and not own_company(posting.company, url):
+    if application.mode in (Mode.full_auto, Mode.direct) and not own_company(posting.company, url):
         # Full auto continues only on the posting's own company's form; any other site is
         # followed in Review first, so the person approves what is sent.
         full_auto.hand_over(db, application, NOT_OWN_COMPANY, now)

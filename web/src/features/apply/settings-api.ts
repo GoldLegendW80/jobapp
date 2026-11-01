@@ -33,6 +33,9 @@ const settingsSchema = z.object({
   rehearsals: z.number().int(),
   rehearsals_done: z.number().int(),
   full_auto_since: z.string().nullable(),
+  // "Let me review each filled form before it is sent" (issue #738): off, the job page's Apply
+  // fills the form and sends it; on, it stops for the person's Approve. Off by default.
+  review_before_send: z.boolean().default(false),
 });
 export type ApplySettings = z.infer<typeof settingsSchema>;
 
@@ -86,8 +89,12 @@ export const getApplySettings = (
     validate: (body) => settingsSchema.parse(body),
   });
 
-/** The mode, the pause switch, "Apply automatically from" and the hold; a field left out is not changed. */
+/**
+ * The review box, the mode after a Like, the pause switch, "Apply automatically from" and the
+ * hold; a field left out is not changed.
+ */
 export const saveApplySettings = (change: {
+  review_before_send?: boolean;
   mode_after_like?: "review" | "full_auto";
   paused?: boolean;
   min_fit?: number;

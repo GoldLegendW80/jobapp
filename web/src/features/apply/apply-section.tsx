@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -30,12 +31,14 @@ import {
 import {
   APPLY_POLL_MS,
   blockingFields,
+  decidedByApp,
   documentLine,
   hasForm,
   hasReport,
   lastShot,
   phaseOf,
   pollInterval,
+  reviewReason,
   statusLine,
 } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
@@ -49,6 +52,7 @@ import { ManualPanel } from "./manual-panel";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
+import { applySettingsKey, getApplySettings } from "./settings-api";
 import { ShotView } from "./shot-view";
 
 /** The decisions that need a second click, each with its own sentence and the call it makes. */
@@ -101,13 +105,25 @@ const SUBMIT_WAITS =
   "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn. Then you can watch the assistant fill the form again here.";
 const HOLD_WAITS =
   "After the hold, you can watch the assistant fill the form again here.";
+/** One click Apply's submit lease (mode `direct`): the click on Apply was the approval. */
+const DIRECT_SUBMIT_STATUS =
+  "The assistant fills the form again with the same answers, then sends it.";
+
+/** What Apply does, by the person's "Let me review each filled form before it is sent" box. */
+const APPLY_SENDS =
+  "The assistant fills the form and sends it. You can watch it live here.";
+const APPLY_REVIEWS =
+  "The assistant fills the form, then you check it and send it.";
 
 /**
- * The "Apply" section of the job page (SPEC-apply.md, "Frontend"): Apply with Review first, the
- * state of the fill, the answers and what is left for the person, the screenshots and documents,
- * then Approve and submit behind a confirmation. Nothing is sent without that approval; the page
- * only sends the hash of the form it showed, and the api refuses a form that moved. Everything
- * that matters lives on the server, so leaving the page and coming back shows the same state.
+ * The "Apply" section of the job page (SPEC-apply.md, "Frontend"; issue #738): one Apply button.
+ * With the person's review box unticked (the default) the assistant fills the form and the app
+ * sends it, the click on Apply being the approval, and the page follows it live; ticked, the fill
+ * stops and the page shows the answers, what is left for the person, the screenshots and the
+ * documents, then Approve and submit behind a confirmation, which only sends the hash of the
+ * form it showed (the api refuses a form that moved). A form the app hands back to the person
+ * says why. Everything that matters lives on the server, so leaving the page and coming back
+ * shows the same state.
  */
 export function ApplySection({ job }: { job: JobDetail }) {
   const queryClient = useQueryClient();
@@ -156,6 +172,14 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const phase = phaseOf(application);
   const id = application?.id;
   const manual = application?.mode === "manual";
+  const direct = application?.mode === "direct";
+  const reason = reviewReason(application);
+  // What Apply does is the person's setting; the line under the button says it once it is read.
+  const settings = useQuery({
+    queryKey: applySettingsKey,
+    queryFn: ({ signal }) => getApplySettings(signal),
+    enabled: phase === "idle",
+  });
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(id ?? ""),
@@ -241,7 +265,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   };
 
   const start = useMutation({
-    mutationFn: (mode: "review" | "manual") => startApplication(job.id, mode),
+    mutationFn: (mode: "apply" | "manual") => startApplication(job.id, mode),
     onMutate: () => {
       setNotice(null);
     },
@@ -377,6 +401,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <p role="status" className="text-sm text-muted-foreground">
             {statusLine(application)}
           </p>
+          {reason ? (
+            <Alert>
+              <AlertDescription>
+                Why it waits for you: {reason}
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {holdUntil && id ? (
             <HeldCountdown
               applicationId={id}
@@ -408,7 +439,11 @@ export function ApplySection({ job }: { job: JobDetail }) {
           ) : null}
           {phase === "filling" && !manual ? (
             <LiveViewSlot
-              idle="The assistant is filling the form. A screenshot of the filled form appears here when it is done."
+              idle={
+                direct
+                  ? "The assistant is filling the form. You can watch it live here, then it sends it."
+                  : "The assistant is filling the form. A screenshot of the filled form appears here when it is done."
+              }
               leaseOf="any"
             />
           ) : null}
@@ -428,7 +463,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
             <LiveViewSlot
               idle={application?.state === "held" ? HOLD_WAITS : SUBMIT_WAITS}
               leaseOf={submitLease}
-              status={application?.dry_run ? REHEARSAL_STATUS : SUBMIT_STATUS}
+              status={
+                application?.dry_run
+                  ? REHEARSAL_STATUS
+                  : direct
+                    ? DIRECT_SUBMIT_STATUS
+                    : SUBMIT_STATUS
+              }
               stopped={application?.state === "held"}
               submit
             />
@@ -497,18 +538,19 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 ) : (
                   <Button
                     className="w-full sm:w-fit"
-                    disabled={busy}
+                    // What a click does is the person's setting: never before it is read.
+                    disabled={busy || settings.data === undefined}
                     onClick={() => {
-                      start.mutate("review");
+                      start.mutate("apply");
                     }}
                   >
-                    {start.isPending && start.variables === "review" ? (
+                    {start.isPending && start.variables === "apply" ? (
                       <LoaderCircle
                         aria-hidden="true"
                         className="animate-spin"
                       />
                     ) : null}
-                    Apply (Review first)
+                    Apply
                   </Button>
                 )}
                 {linkedinBlocked ? (
@@ -608,12 +650,43 @@ export function ApplySection({ job }: { job: JobDetail }) {
               </Button>
             ) : null}
           </div>
-          {phase === "idle" ? (
-            <p className="text-sm text-muted-foreground">
-              The assistant fills the form and stops. You look at every answer,
-              then approve. With Apply myself, you fill and send the form
-              yourself in your browser here.
-            </p>
+          {phase === "idle" && !linkedinBlocked ? (
+            <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+              {settings.data ? (
+                <p data-testid="apply-mode-line">
+                  {settings.data.review_before_send
+                    ? APPLY_REVIEWS
+                    : APPLY_SENDS}{" "}
+                  <Link
+                    to="/settings/applications"
+                    className="font-medium text-foreground underline underline-offset-4"
+                  >
+                    Change it in Settings
+                  </Link>
+                </p>
+              ) : settings.isError ? (
+                <p data-testid="apply-mode-pending">
+                  Your apply settings could not be read, so Apply waits.{" "}
+                  <button
+                    type="button"
+                    className="font-medium text-foreground underline underline-offset-4"
+                    onClick={() => {
+                      void settings.refetch();
+                    }}
+                  >
+                    Try again
+                  </button>
+                </p>
+              ) : (
+                <p data-testid="apply-mode-pending">
+                  Reading your apply settings
+                </p>
+              )}
+              <p>
+                With Apply myself, you fill and send the form yourself in your
+                browser here.
+              </p>
+            </div>
           ) : null}
 
           <ConfirmDialog
@@ -647,12 +720,12 @@ export function ApplySection({ job }: { job: JobDetail }) {
 }
 
 /**
- * Cancel is offered where the api accepts it and no click happened yet, a Full auto item the app
- * still decides on included (a `ready` one in Review first has Reject instead).
+ * Cancel is offered where the api accepts it and no click happened yet, a Full auto or one click
+ * Apply item the app still decides on included (a `ready` one in Review first has Reject instead).
  */
 function canCancel(application: Application | null): boolean {
   if (!application) return false;
-  if (application.state === "ready") return application.mode === "full_auto";
+  if (application.state === "ready") return decidedByApp(application);
   return ["queued", "filling", "needs_person", "approved", "held"].includes(
     application.state,
   );

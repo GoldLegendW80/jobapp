@@ -88,7 +88,8 @@ export function FullAutoModeCard({ settings }: { settings: ApplySettings }) {
           </h2>
         </CardTitle>
         <CardDescription>
-          What the app does with a posting you like.
+          What the app does with a posting you like. This concerns Likes only:
+          the Apply button of a posting follows the box above.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
