@@ -35,7 +35,7 @@ This distinction follows [LinkedIn's public Help](https://www.linkedin.com/help/
 checked on 2026-10-22: the opener leads to popup screens, then Review and a separate final
 submission. No real posting was visited during implementation.
 
-A company-site link is parsed and validated without clicking it. The restricted LinkedIn
+A company-site link is parsed and validated without clicking it. The same follow serves a job board's own Apply link (`kind="board_link"`, SPEC-apply.md, "no dead ends"), at most 2 hops per application, then `needs_person` `board_hops`. The restricted LinkedIn
 lease ends first. The application is queued with the new address and canonical key, and the
 next fill rechecks posting, documents, duplicates, and site guards before requesting its own
 lease. No host is appended to the LinkedIn lease. In Full auto the followed site keeps Full
