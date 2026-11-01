@@ -134,6 +134,14 @@ const REASONS: Record<string, string> = {
   required_left: "A required question was left for you to answer.",
   payment_requested: "The site asked for a payment, so it waits for you.",
   no_adapter: "The app does not know this form yet, so it waits for you.",
+  submit_not_designated:
+    "The app found no Submit button on the page, so it waits for you.",
+  forbidden:
+    "The site refused the page to the app's browser, so it waits for you.",
+  board_link_missing:
+    "The job board's Apply button gives no address to follow, so it waits for you.",
+  board_hops:
+    "Two job boards' Apply links did not reach the employer's form, so it waits for you.",
   needs_person: "The form needed you before it could go on.",
   form_changed: "The form changed since it was filled, so it waits for you.",
   no_documents:

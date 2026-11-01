@@ -206,7 +206,16 @@ export const cancelApplication = (applicationId: string) =>
 /** "It was submitted": the person confirms what the app could not. */
 export const confirmSubmitted = (applicationId: string) =>
   decide(applicationId, "submitted");
-/** "Try again": back to the approval, nothing is sent without a new one. */
+/**
+ * "I applied": the person sent it on the site in their own browser while the app could not go
+ * on alone; recorded as sent, the posting applied, no click by the app.
+ */
+export const appliedMyself = (applicationId: string) =>
+  decide(applicationId, "applied");
+/**
+ * "Try again": back to the approval, nothing is sent without a new one; on a stop
+ * (`needs_person`), a new fill from the start.
+ */
 export const retryApplication = (applicationId: string) =>
   decide(applicationId, "retry");
 

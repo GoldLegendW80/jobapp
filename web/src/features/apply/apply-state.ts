@@ -101,7 +101,26 @@ const NEEDS: Record<string, string> = {
     "The assistant could not identify the form's Submit button.",
   submit_not_highlighted:
     "The assistant could not show the Submit button for your review.",
+  forbidden: "The site refused the page to the assistant's browser.",
+  board_link_missing:
+    "This is a job board's page, and its Apply button gives no address the assistant can follow.",
+  board_hops:
+    "The assistant followed two job boards' Apply links without reaching the employer's form.",
+  company_site_changed:
+    "The link to the company's form could not be followed safely.",
 };
+
+/**
+ * The stops the person clears in the live view or the form (a sign in, a captcha, an e-mail
+ * code, a missing answer): one click Apply then goes on and sends by itself (owner, 2026-11-01).
+ * Any other stop needs the person to apply on the site, try again or reject it.
+ */
+export const PERSON_CLEARS: ReadonlySet<string> = new Set([
+  "signin",
+  "captcha",
+  "email_code",
+  "required_left",
+]);
 
 const FAILURES: Record<string, string> = {
   documents_rendering:
@@ -167,7 +186,8 @@ export function statusLine(application: Application | null | undefined) {
       return "Filling the form. You can leave this page: the fill goes on, and you will find the result here.";
     case "needs_person": {
       const line = `${NEEDS[application.needs ?? ""] ?? "The form needs you before it can go on."} Nothing was sent.`;
-      return application.mode === "direct"
+      return application.mode === "direct" &&
+        PERSON_CLEARS.has(application.needs ?? "")
         ? `${line} When you are done, the assistant goes on and sends it by itself.`
         : line;
     }

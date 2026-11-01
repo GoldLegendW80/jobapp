@@ -21,6 +21,7 @@ import {
   waitOf,
 } from "./needs-person-state";
 import { COUNT_POLL_MS } from "./queue-state";
+import { StopActions } from "./stop-actions";
 
 /**
  * "Needs you" (SPEC-apply.md, "Failures and retries"; apply A10a): what an application waits for
@@ -62,6 +63,11 @@ export function NeedsPerson({
       {ON_PAGE.has(application.needs ?? "") ? (
         <OnPageSlot events={events} />
       ) : null}
+      <StopActions
+        application={application}
+        postingId={job.id}
+        postingUrl={job.url}
+      />
     </div>
   );
 }
