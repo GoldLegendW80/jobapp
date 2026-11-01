@@ -1147,6 +1147,8 @@ def _store_finding(
             getattr(finding, "contract", None),
             getattr(finding, "work_mode", None),
         )
+        if getattr(finding, "apply_url", None):
+            new.row["apply_url"] = finding.apply_url
         new.events[1]["data"]["discovery"] = {
             "source_id": source_id,
             "detail_read_at": finding.detail_read_at,

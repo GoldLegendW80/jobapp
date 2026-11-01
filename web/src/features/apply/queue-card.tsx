@@ -33,6 +33,7 @@ import {
   type Approval,
 } from "./apply-api";
 import { blockingFields, statusLine } from "./apply-state";
+import { StopActions } from "./stop-actions";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
@@ -437,6 +438,26 @@ export function QueueCard({
             )}
           </div>
         </div>
+      ) : null}
+
+      {item.state === "needs_person" && item.mode !== "manual" ? (
+        <StopActions
+          application={item}
+          postingId={item.posting_id}
+          onDone={(_changed, action) => {
+            if (action === "applied") {
+              toast.success(
+                `Recorded ${item.title} at ${item.company} as applied by you.`,
+              );
+              leaving.current = true;
+            } else {
+              toast.success(
+                `The assistant tries ${item.title} at ${item.company} again.`,
+              );
+            }
+            refresh();
+          }}
+        />
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start">

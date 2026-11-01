@@ -46,8 +46,34 @@ export function needOf(application: Application): Need {
       };
     case "forbidden":
       return {
-        title: "The site blocked this page",
-        what: "The site refused the page. Open it in the live view to see what it needs from you.",
+        title: "The site blocked the assistant",
+        what: `The site refused the page to the assistant's browser, so nothing was sent. If the live view shows a check you can pass, pass it and the assistant goes on. ${ELSEWHERE}`,
+      };
+    case "submit_not_designated":
+    case "submit_not_highlighted":
+      return {
+        title: "No Submit button found",
+        what: `The assistant could not find where to send this form, so nothing was sent. This page may be a job board's listing: Try again lets the assistant look for the employer's form. ${ELSEWHERE}`,
+      };
+    case "no_adapter":
+      return {
+        title: "The assistant cannot fill this page",
+        what: `The assistant found no application form it can fill on this page, so nothing was sent. Try again lets it look for the employer's form. ${ELSEWHERE}`,
+      };
+    case "board_link_missing":
+      return {
+        title: "Apply from the job board's page",
+        what: `This is a job board's listing, and its Apply button gives no address the assistant can follow safely, so nothing was sent. ${ELSEWHERE}`,
+      };
+    case "board_hops":
+      return {
+        title: "The employer's form is too many links away",
+        what: `The assistant followed the Apply links of two job boards without reaching the employer's form, so it stopped. Nothing was sent. ${ELSEWHERE}`,
+      };
+    case "company_site_changed":
+      return {
+        title: "The company's form could not be followed",
+        what: `The link to the company's form could not be followed safely, so nothing was sent. ${ELSEWHERE}`,
       };
     case "required_left":
       return {
@@ -67,10 +93,53 @@ export function needOf(application: Application): Need {
     default:
       return {
         title: "The form needs you",
-        what: "The assistant could not go on with this form. Look at it below, then approve or reject it.",
+        what: `The assistant could not go on with this form, so nothing was sent. ${ELSEWHERE}`,
       };
   }
 }
+
+/** What the person can do on any stop the app cannot get past alone. */
+const ELSEWHERE = "You can apply on the site yourself, then click I applied.";
+
+/**
+ * Where "Apply on the site myself" goes: the application's form address (the employer's, once a
+ * board's Apply link was followed), else the posting's address; only an http or https one.
+ */
+export function siteAddress(
+  application: Pick<Application, "form_url">,
+  postingUrl?: string | null,
+): string | null {
+  for (const candidate of [application.form_url, postingUrl]) {
+    try {
+      const url = new URL(candidate ?? "");
+      if (url.protocol === "https:" || url.protocol === "http:")
+        return url.href;
+    } catch {
+      /* not an address: the next one */
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether "Try again" can help: a new fill from the start (the api's retry of a `needs_person`)
+ * reads the page again, and may find the employer's form. Not when the stop is the person's to
+ * clear (sign in, captcha, code, answer), a payment, LinkedIn's pause, or a board the assistant
+ * already found no way past.
+ */
+const NO_RETRY: ReadonlySet<string> = new Set([
+  "signin",
+  "captcha",
+  "email_code",
+  "required_left",
+  "payment_requested",
+  "linkedin_paused",
+  "board_link_missing",
+  "board_hops",
+]);
+
+export const canRetryStop = (application: Pick<Application, "needs" | "ats">) =>
+  application.ats !== "email" && !NO_RETRY.has(application.needs ?? "");
 
 /**
  * The run's wait for the person on the page (api run._wait_for_person), from the application's

@@ -132,6 +132,8 @@ class Finding:
     remote: bool | None = None
     contract: ContractType | None = None
     read_at: datetime | None = None
+    # The employer's application address, when the payload gives one apart from `url`.
+    apply_url: str | None = None
 
     @property
     def published_on(self) -> str | None:

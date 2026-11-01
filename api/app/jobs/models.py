@@ -193,6 +193,9 @@ class Job(Base):
         server_default=ContractType.CDI.value,
     )
     url: Mapped[str | None] = mapped_column(sa.Text)
+    # The employer's application form, when the source gives it apart from `url` (a board's
+    # listing): the apply module opens it; the person's posting link stays `url`.
+    apply_url: Mapped[str | None] = mapped_column(sa.Text)
     # Where the posting came from: a job website's host, "manual", "import", or a board
     # ("ashby:mistral") or feed of before 2026-10-28, ...
     source: Mapped[str | None] = mapped_column(sa.Text)

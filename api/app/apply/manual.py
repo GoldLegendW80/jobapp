@@ -269,6 +269,26 @@ def is_open(db: Session, application_id: uuid.UUID) -> bool:
     return state is State.filling
 
 
+def applied(
+    db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime
+) -> Application:
+    """ "I applied", in any mode: the app could not go on alone (`needs_person`, or `queued`
+    again), the person sent the form on the site in their own browser. `submitted` without the
+    gate and without a click, the posting `applied`, the placed versions frozen, as Apply
+    myself's "I submitted it" (`record`). Raises gate.NotFoundError and gate.RefusedError:
+    `already_recorded`, `not_open` (the app may still click: `filling`, `ready`, decided, or an
+    end), `email_application` (an e-mail application is recorded by the mail module)."""
+    application, posting = gate.lock(db, user_id, application_id)
+    if application.state is State.submitted:
+        raise gate.RefusedError("already_recorded")
+    if application.ats == "email":
+        raise gate.RefusedError("email_application")
+    if application.state not in states.PERSON_SENT_FROM:
+        raise gate.RefusedError("not_open")
+    _sent(db, application, posting, now, "person_elsewhere")
+    return application
+
+
 def _sent(db: Session, application: Application, posting: Any, now: datetime, by: str) -> None:
     frozen = gate.freeze_sent(db, application, now)
     if JobStatus(posting.status) not in guardrails.APPLIED_STATUSES:
@@ -280,7 +300,7 @@ def _sent(db: Session, application: Application, posting: Any, now: datetime, by
             via="apply",
             extra={"application_id": str(application.id)},
         )
-    states.move(application, State.submitted, now)
+    states.move(application, State.submitted, now, by_person=True)
     application.error_code = None
     application.needs = None
     run._event(db, application, "recorded", now, by=by, frozen=frozen)

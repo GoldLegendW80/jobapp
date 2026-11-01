@@ -111,13 +111,36 @@ def own_company(company: str, url: str) -> bool:
 
 
 def follow_company(
-    db: Session, application: Application, posting: Job, url: str, now: datetime
+    db: Session,
+    application: Application,
+    posting: Job,
+    url: str,
+    now: datetime,
+    *,
+    kind: str = "company_site",
 ) -> str:
-    """Queue a new fill with its own restricted lease. The caller releases LinkedIn's lease.
+    """Queue a new fill with its own restricted lease. The caller releases the current lease.
 
-    No host is appended to the current lease, and prepare rechecks all posting, document and
-    site guards before another lease can start. The discovered address never enters an event.
+    `kind` is what the address was read from: a LinkedIn company-site link, or a job board's
+    Apply link (`boards`). No host is appended to the current lease, and prepare rechecks all
+    posting, document and site guards before another lease can start. At most
+    `boards.HOPS_MAX` follows per application, then the person applies on the site. The
+    discovered address never enters an event.
     """
+    from app.apply import boards
+
+    hops = db.scalar(
+        sa.select(sa.func.count(ApplicationEvent.id)).where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind.in_(boards.FOLLOW_KINDS),
+        )
+    )
+    if (hops or 0) >= boards.HOPS_MAX:
+        states.move(application, State.needs_person, now)
+        application.needs = boards.HOPS
+        full_auto.hand_over(db, application, application.needs, now)
+        return State.needs_person.value
     key = guardrails.canonical_key(guardrails.unstub(url, caps._setting("apply_stub_base_url")))
     duplicate = (
         guardrails.duplicates(db, application.user_id, posting, key, now, exclude=application.id)
@@ -131,7 +154,8 @@ def follow_company(
         or duplicate
     ):
         states.move(application, State.needs_person, now)
-        application.needs = duplicate.code if duplicate else "company_site_changed"
+        changed = "company_site_changed" if kind == "company_site" else boards.NO_LINK
+        application.needs = duplicate.code if duplicate else changed
         full_auto.hand_over(db, application, application.needs, now)
         return State.needs_person.value
     application.form_url, application.canonical_key = url, key
@@ -150,7 +174,7 @@ def follow_company(
             application_id=application.id,
             user_id=application.user_id,
             at=now,
-            kind="company_site",
+            kind=kind,
             data={},
         )
     )

@@ -109,6 +109,7 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
         "location",
         "contract_type",
         "url",
+        "apply_url",
         "source",
         "status",
         "fit",

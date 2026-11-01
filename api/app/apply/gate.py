@@ -119,7 +119,14 @@ SENTENCES = {
     "linkedin_paused": "LinkedIn is paused for a week after a security check. Nothing was sent.",
     "not_cancellable": "This application can no longer be stopped or rejected.",
     "not_unknown": "This application is not waiting for you to confirm it.",
-    "not_retryable": "Only an unconfirmed or refused application can be tried again.",
+    "not_retryable": (
+        "Only an application that stopped, or one that is unconfirmed or refused, can be tried "
+        "again."
+    ),
+    # "I applied" (manual.applied).
+    "already_recorded": "This application is already recorded as sent.",
+    "not_open": "The assistant is still working on this application, or it has ended.",
+    "email_application": "This is an application by e-mail: send it from its draft.",
     "busy": "This posting is busy with another change. Try again in a moment.",
     "not_editable": "The answers of this application can no longer be changed.",
     "signin_first": (
@@ -841,6 +848,17 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
 
         lock_send(db, user_id)
     application, _ = lock(db, user_id, application_id)
+    if application.state is State.needs_person and application.ats != "email":
+        # A stop the app could not get past (no Submit found, a board's Apply link, a page the
+        # site refused): a new fill from the start, which checks the posting, the documents and
+        # the site guards again. Nothing was clicked, so nothing is spent; the mode stays.
+        states.move(application, State.queued, now)
+        _event(
+            db, application, "person_retry", now, previous="needs_person", needs=application.needs
+        )
+        application.needs = None
+        application.error_code = None
+        return application
     if application.state not in (State.submit_unknown, State.refused_by_site):
         raise RefusedError("not_retryable")
     previous = application.state.value

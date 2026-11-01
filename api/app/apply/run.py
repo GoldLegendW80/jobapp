@@ -75,6 +75,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import (
     agent,
+    boards,
     caps,
     failures,
     fallback,
@@ -199,6 +200,8 @@ class Result:
     company_url: str | None = None
     strategy: dict[str, Any] | None = None
     review_reason: str | None = None
+    # What `company_url` was read from: a LinkedIn company-site link, or a job board's Apply link.
+    follow: str = "company_site"
 
 
 class _Watched:
@@ -809,7 +812,7 @@ def finish(
     if result.company_url:
         from app.apply.linkedin import follow_company
 
-        return follow_company(db, application, posting, result.company_url, now)
+        return follow_company(db, application, posting, result.company_url, now, kind=result.follow)
     # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
     # replaces them, for a field the form still has.
     mine = (
@@ -1404,6 +1407,18 @@ async def _drive(
         adapter = adapter_for(
             plan.form_url, str(shot.get("snapshot") or ""), stub_base=services.stub_base
         )
+        if adapter is None or not isinstance(adapter, generic.Deterministic):
+            # A job board's listing, not the employer's form: follow its Apply link (read, never
+            # clicked) with a lease of its own, or stop with a reason the person can act on.
+            hop = boards.listing_hop(
+                str(shot.get("snapshot") or ""), plan.form_url, services.stub_base
+            )
+            if hop is not None and hop.url:
+                return Result(State.queued, company_url=hop.url, follow="board_link")
+            if hop is not None:
+                return Result(
+                    State.needs_person, needs=boards.NO_LINK, shot=await shots.take(tools)
+                )
         if adapter is None:
             return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
         if isinstance(adapter, generic.Generic):
