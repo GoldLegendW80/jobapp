@@ -111,4 +111,9 @@ class ApplySettings(Base):
     company_days: Mapped[int | None] = mapped_column(sa.Integer)
     safety_ceiling: Mapped[int | None] = mapped_column(sa.Integer)
     hold_s: Mapped[int | None] = mapped_column(sa.Integer)
+    # "Let me review each filled form before it is sent" (owner, 2026-11-01): off by default, so
+    # the Apply button fills and sends (`Mode.direct`); on, it starts Review first.
+    review_before_send: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
     updated_at: Mapped[datetime] = _now()

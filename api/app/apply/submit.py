@@ -50,6 +50,9 @@ application to `approved`. No model is called anywhere here.
    (the freeze rolls back with it), a second one records `submit_unknown` with `record_failed`,
    its freeze included.
 
+One click Apply (`direct.py`, owner 2026-11-01) goes the same way as Full auto below, with
+`direct.decide` and `direct.recheck`, no hold and no rehearsal.
+
 Full auto (A13a, `full_auto.py`): the job of a `ready` Full auto item (`decision`, which the
 worker runs on the agents queue) runs the check by model of the agent's free text first when it
 needs one (A13c, `model_check.before_decision`), then its decision (`full_auto.decide`), and
@@ -89,7 +92,18 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, fallback, full_auto, gate, guardrails, model_check, run, shots, states
+from app.apply import (
+    caps,
+    direct,
+    fallback,
+    full_auto,
+    gate,
+    guardrails,
+    model_check,
+    run,
+    shots,
+    states,
+)
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
@@ -104,6 +118,9 @@ from app.jobs.models import Job, JobStatus
 logger = logging.getLogger(__name__)
 
 PURPOSE = "apply_submit"
+# The modes whose `ready` items the app decides itself, and whose every stop goes to the review
+# queue: Full auto, and one click Apply (`direct`, owner 2026-11-01).
+AUTOMATIC = (Mode.full_auto, Mode.direct)
 DWELL_S = 4.0
 POLL_S = 2.0
 CONFIRM_WAIT_S = 60
@@ -276,10 +293,12 @@ def _checks(db: Session, application: Application, posting: Job, now: datetime) 
         code = gate.documents_code(db, application)
     if code is None and application.mode is Mode.full_auto:
         code = full_auto.recheck(db, application, posting, now)
+    if code is None and application.mode is Mode.direct:
+        code = direct.recheck(db, application, posting, now)
     if code is None:
         return None
     if code in gate.KEEP or (
-        application.mode is Mode.full_auto
+        application.mode in AUTOMATIC
         and code in ("linkedin_off", "linkedin_paused", "linkedin_daily")
     ):
         return Stop(State.ready, code)
@@ -396,7 +415,7 @@ def arm(
         gate._event(db, application, "screenshot_failed", now)
     switches = switches_for() if switches_for else switches
     now = clock() if clock else now
-    if (code := gate.switch_code(switches)) and application.mode is Mode.full_auto:
+    if (code := gate.switch_code(switches)) and application.mode in AUTOMATIC:
         _stop(db, application, Stop(State.ready, code), now)
         return State.ready.value
     if code:
@@ -415,7 +434,7 @@ def arm(
     switches = switches_for() if switches_for else switches
     now = clock() if clock else now
     if code := gate.switch_code(switches):
-        target = State.ready if application.mode is Mode.full_auto else State.cancelled
+        target = State.ready if application.mode in AUTOMATIC else State.cancelled
         _stop(db, application, Stop(target, code), now)
         return target.value
     if refused := recheck(db, application, posting, now):
@@ -519,7 +538,7 @@ def due(db: Session, now: datetime | None = None) -> list[uuid.UUID]:
                 sa.or_(
                     Application.state == State.approved,
                     Application.id.in_(full_auto.held_over(now)),
-                    sa.and_(Application.state == State.ready, Application.mode == Mode.full_auto),
+                    sa.and_(Application.state == State.ready, Application.mode.in_(AUTOMATIC)),
                 )
             )
             .order_by(Application.updated_at, Application.id)
@@ -537,7 +556,7 @@ def undecided_of(db: Session, ids: list[uuid.UUID]) -> set[uuid.UUID]:
             sa.select(Application.id).where(
                 Application.id.in_(ids),
                 Application.state == State.ready,
-                Application.mode == Mode.full_auto,
+                Application.mode.in_(AUTOMATIC),
             )
         ).scalars()
     )
@@ -978,6 +997,18 @@ async def _drive(
     return await _after_arm(services, plan, read, tools, capability)
 
 
+def _undecided(db: Session, application_id: uuid.UUID) -> bool:
+    """A `ready` item the app decides itself: Full auto's or one click Apply's (`direct`)."""
+    return full_auto.undecided(db, application_id) or direct.undecided(db, application_id)
+
+
+def _decision(db: Session, application_id: uuid.UUID, now: datetime, switches: Any) -> str:
+    """The decision of the `ready` item's mode, read when the job runs."""
+    if direct.undecided(db, application_id):
+        return direct.decide(db, application_id, now, switches)
+    return full_auto.decide(db, application_id, now, switches)
+
+
 async def _decide(services: Services, application_id: uuid.UUID) -> str:
     if services.check is not None:
         waiting = await model_check.before_decision(
@@ -990,7 +1021,7 @@ async def _decide(services: Services, application_id: uuid.UUID) -> str:
         return await asyncio.to_thread(
             _in_db,
             services.sessions,
-            lambda db: full_auto.decide(db, application_id, services.clock(), switches),
+            lambda db: _decision(db, application_id, services.clock(), switches),
         )
     except jobs_service.JobBusyError:
         return "busy"
@@ -1000,7 +1031,7 @@ async def decision(services: Services, application_id: uuid.UUID) -> str:
     """The job of a `ready` Full auto item's decision alone, its check by model included, never a
     lease: the worker runs it on the agents queue, so the call never holds the browser's queue."""
     undecided = await asyncio.to_thread(
-        _in_db, services.sessions, lambda db: full_auto.undecided(db, application_id)
+        _in_db, services.sessions, lambda db: _undecided(db, application_id)
     )
     if not undecided:
         return "not_undecided"
@@ -1012,7 +1043,7 @@ async def submit(services: Services, application_id: uuid.UUID) -> str:
     to `decision`, which the tick queues: a submit job queued for it before that job existed makes
     no second model call. Returns a code for the log (no value of the person's)."""
     undecided = await asyncio.to_thread(
-        _in_db, services.sessions, lambda db: full_auto.undecided(db, application_id)
+        _in_db, services.sessions, lambda db: _undecided(db, application_id)
     )
     if undecided:
         return "undecided"

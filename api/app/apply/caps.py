@@ -11,8 +11,10 @@ the code of the first refusal, or None; every code leaves the application `ready
    in its last `window_days` days; `company_cap_role`: the same role (the company and the
    normalised title) was counted in its last `same_role_days` days.
 3. Full auto only: `full_auto_company`, one application per company in `company_days` days unless
-   a cap of the person names the company; `safety_ceiling`, the person's submissions since
-   midnight in the time zone of `search.sweep_schedule.timezone`.
+   a cap of the person names the company. Full auto and one click Apply (`direct`, owner
+   2026-11-01): `safety_ceiling`, the person's submissions since midnight in the time zone of
+   `search.sweep_schedule.timezone`. Review first never meets the ceiling: each click is the
+   person's own Approve.
 
 What is counted: the person's other applications the app clicked (`submitted`, `submit_unknown`,
 at `submitted_at`) or is clicking (`submitting`, at `now`). At the decision (the application not
@@ -285,6 +287,7 @@ class Values:
     timezone: str
     show_postings_from: int | None
     write_documents_from: int | None
+    review_before_send: bool = False
 
 
 def settings_of(db: Session, user_id: uuid.UUID) -> Values:
@@ -314,6 +317,7 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
         timezone=(search.sweep_schedule if search else SweepSchedule()).timezone,
         show_postings_from=search.min_fit if search is not None else None,
         write_documents_from=write_from,
+        review_before_send=bool(row and row.review_before_send),
     )
 
 
@@ -325,6 +329,7 @@ def save_settings(
     paused: bool | None,
     min_fit: int | None,
     hold_s: int | None = None,
+    review_before_send: bool | None = None,
 ) -> None:
     """The person's changes (None leaves a value as it is), in the caller's transaction."""
     values: dict[str, Any] = {"updated_at": now}
@@ -334,6 +339,8 @@ def save_settings(
         values["min_fit"] = min_fit
     if hold_s is not None:
         values["hold_s"] = hold_s
+    if review_before_send is not None:
+        values["review_before_send"] = review_before_send
     row = insert(ApplySettings).values(user_id=user_id, **values)
     db.execute(row.on_conflict_do_update(index_elements=["user_id"], set_=values))
 
@@ -416,6 +423,7 @@ def _admitted_click(db: Session, application: Application) -> int | None:
     kind = {
         Mode.review: AuthorisationKind.person_approval,
         Mode.full_auto: AuthorisationKind.full_auto_like,
+        Mode.direct: AuthorisationKind.apply_click,
     }.get(application.mode)
     if kind is None:
         return None
@@ -456,10 +464,11 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
     named = [(cap, cap_names(cap)) for cap in caps_of(db, application.user_id)]
     caps = [(cap, capped) for cap, capped in named if same_company(capped, names)]
     full_auto = application.mode is Mode.full_auto
-    if not caps and not full_auto:
+    ceiling = full_auto or application.mode is Mode.direct
+    if not caps and not ceiling:
         return None
     days = [cap.window_days for cap, _ in caps] + [cap.same_role_days or 0 for cap, _ in caps]
-    days += [values.company_days] if full_auto else []
+    days += [values.company_days] if full_auto else [1] if ceiling else []
     # Two days more than the longest window: a day of the person's time zone can last 25 hours.
     others = counted(
         db,
@@ -477,10 +486,14 @@ def check(db: Session, application: Application, now: datetime) -> str | None:
         role_since = now - timedelta(days=cap.same_role_days or 0)
         if cap.same_role_days and any(o.role == role and o.at >= role_since for o in mine):
             return "company_cap_role"
-    if not full_auto:
+    if not ceiling:
         return None
     company_since = now - timedelta(days=values.company_days)
-    if not caps and any(same_company(o.names, names) and o.at >= company_since for o in others):
+    if (
+        full_auto
+        and not caps
+        and any(same_company(o.names, names) and o.at >= company_since for o in others)
+    ):
         return "full_auto_company"
     today = day_start(now, values.timezone)
     if sum(o.at >= today for o in others) >= values.safety_ceiling:

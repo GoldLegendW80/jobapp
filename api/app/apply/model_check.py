@@ -524,28 +524,34 @@ def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[
     """What one run reads, with the answers hash it covers, both from one read of the answers,
     or why no run is needed. The cheap refusals of the decision come first: no call is spent on
     an item the decision refuses anyway."""
-    from app.apply import caps, full_auto, gate  # gate and full_auto import this module
+    from app.apply import caps, direct, full_auto, gate  # they import this module
 
     application = db.get(Application, application_id)
     if application is None:
         return "gone"
-    if application.state is not AppState.ready or application.mode is not Mode.full_auto:
+    if application.state is not AppState.ready or application.mode not in (
+        Mode.full_auto,
+        Mode.direct,
+    ):
         return "superseded"
+    lane: Any = direct if application.mode is Mode.direct else full_auto
     posting = db.execute(
         sa.select(Job).where(Job.id == application.posting_id, Job.user_id == application.user_id)
     ).scalar_one_or_none()
     if posting is None:
         return "gone"
-    if full_auto.before_gate(db, application, now) is not None:
+    if lane.before_gate(db, application, now) is not None:
         return "refused_anyway"
     # Read without the gate's locks: it only spares a call, the decision checks again under them.
     if caps.check(db, application, now) is not None:
         return "refused_anyway"
     if caps.linkedin_refusal(db, application, now) is not None:
         return "refused_anyway"
-    if gate.documents_need_review(application.document_versions):
+    if application.mode is Mode.full_auto and gate.documents_need_review(
+        application.document_versions
+    ):
         return "refused_anyway"
-    if full_auto.checks(db, application, posting) != NOT_RUN_CODE:
+    if lane.checks(db, application, posting) != NOT_RUN_CODE:
         return "not_needed"
     answers = gate.rows_of(db, application)
     texts = texts_of(answers)

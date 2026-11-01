@@ -1,6 +1,8 @@
 """The applications of a person (A2).
 
-- POST /api/postings/{posting_id}/applications `{mode: "manual" | "review", dry_run}` starts one:
+- POST /api/postings/{posting_id}/applications `{mode: "manual" | "review" | "apply", dry_run}`
+  starts one (`apply` is the Apply button: `direct` when the person's "Let me review each filled
+  form before it is sent" is unticked, the default, else `review`; issue #738):
   201 with the application and its warnings (`{code, sentence}`: Apply myself on a role the
   person's rules exclude), 409 `{detail, code, application_id}` for a refusal before anything is
   spent (app/apply/guardrails.py lists the codes), 409 `busy` when a lock is held past its
@@ -27,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.apply import full_auto, guardrails, service
+from app.apply import caps, full_auto, guardrails, service
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.db import get_session
 from app.identity import deps
@@ -54,7 +56,9 @@ CurrentUser = Annotated[User, Depends(deps.current_user)]
 class StartIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["manual", "review"] = "review"
+    # "apply": the Apply button. The person's setting decides (owner, 2026-11-01): one click
+    # Apply (`direct`) when "Let me review each filled form" is unticked, else Review first.
+    mode: Literal["manual", "review", "apply"] = "review"
     dry_run: bool = False
 
     @model_validator(mode="after")
@@ -137,6 +141,14 @@ def _out(application: Application) -> dict[str, Any]:
     return ApplicationOut.model_validate(application).model_dump()
 
 
+def _mode_of(db: Session, user: User, body: StartIn) -> Mode:
+    if body.mode != "apply":
+        return Mode(body.mode)
+    if body.dry_run or caps.settings_of(db, user.id).review_before_send:
+        return Mode.review
+    return Mode.direct
+
+
 @router.post(
     "/api/postings/{posting_id}/applications",
     status_code=status.HTTP_201_CREATED,
@@ -152,7 +164,7 @@ def start_application(
             db,
             user.id,
             _uuid_or_404(posting_id, NOT_FOUND),
-            Mode(body.mode),
+            _mode_of(db, user, body),
             body.dry_run,
             now=deps.clock(request),
             stub_base=request.app.state.settings.apply_stub_base_url,

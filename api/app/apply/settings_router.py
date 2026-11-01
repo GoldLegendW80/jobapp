@@ -6,8 +6,11 @@
   ("Show postings from", "Write documents from") from the person's search options. For the Full
   auto card (A13b): the hold in force (`hold_s`, never below the server's minimum `hold_min_s`),
   the rehearsals (`rehearsals`, how many the server asks for, and `rehearsals_done`) and
-  `full_auto_since`.
-  PUT changes `mode_after_like`, `paused`, `min_fit` and `hold_s` (never below the floor,
+  `full_auto_since`. `review_before_send` is "Let me review each filled form before it is sent"
+  (issue #738, off by default): unticked, the job page's Apply button fills and sends (`direct`);
+  ticked, it starts Review first. Likes keep `mode_after_like`.
+  PUT changes `mode_after_like`, `paused`, `min_fit`, `review_before_send` and `hold_s` (never
+  below the floor,
   `APPLY_HOLD_S`, at least 900 s: 422 `hold_too_short`); anything else is a 422. Turning Full
   auto on records the time (`full_auto_since`); turning it off sends the person's `held` items
   to the review queue (`full_auto.release`, each under the gate's locks after the switch is
@@ -83,6 +86,7 @@ class SettingsOut(BaseModel):
     rehearsals: int
     rehearsals_done: int
     full_auto_since: datetime | None
+    review_before_send: bool
 
 
 class SettingsIn(BaseModel):
@@ -92,6 +96,7 @@ class SettingsIn(BaseModel):
     paused: Annotated[bool, Field(strict=True)] | None = None
     min_fit: Annotated[int, Field(strict=True, ge=0, le=100)] | None = None
     hold_s: Annotated[int, Field(strict=True, le=86_400)] | None = None
+    review_before_send: Annotated[bool, Field(strict=True)] | None = None
 
 
 class CapIn(BaseModel):
@@ -177,6 +182,7 @@ def _settings_out(db: Session, user: User) -> SettingsOut:
         rehearsals=int(caps._setting("apply_rehearsals")),
         rehearsals_done=values.rehearsals_done,
         full_auto_since=values.full_auto_since,
+        review_before_send=values.review_before_send,
     )
 
 
@@ -221,7 +227,13 @@ def change_settings(
     if body.hold_s is not None and body.hold_s < request.app.state.settings.apply_hold_floor_s:
         return _refusal(422, "hold_too_short")
     caps.save_settings(
-        db, user.id, now, paused=body.paused, min_fit=body.min_fit, hold_s=body.hold_s
+        db,
+        user.id,
+        now,
+        paused=body.paused,
+        min_fit=body.min_fit,
+        hold_s=body.hold_s,
+        review_before_send=body.review_before_send,
     )
     held: list[Any] = []
     if body.mode_after_like is not None:

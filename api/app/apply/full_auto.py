@@ -168,9 +168,21 @@ def hold_s(values: caps.Values) -> int:
 # --- the review queue ----------------------------------------------------------------------------
 
 
-def hand_over(db: Session, application: Application, code: str | None, now: datetime) -> None:
-    """A Full auto item becomes a review item (module docstring), in the caller's transaction."""
-    if application.mode is not Mode.full_auto:
+def hand_over(
+    db: Session,
+    application: Application,
+    code: str | None,
+    now: datetime,
+    *,
+    keep_direct: bool = False,
+) -> None:
+    """A Full auto item, or a one click Apply item (`direct`), becomes a review item (module
+    docstring), in the caller's transaction. `keep_direct`: a stop the person clears in the live
+    view (a sign in, a captcha, a missing answer) keeps a `direct` item direct, so it goes on and
+    sends by itself once the person is done (owner, 2026-11-01)."""
+    if application.mode is Mode.direct and keep_direct:
+        return
+    if application.mode not in (Mode.full_auto, Mode.direct):
         return
     application.mode = Mode.review
     application.dry_run = False
@@ -284,6 +296,7 @@ def gate_kind(mode: Mode) -> AuthorisationKind | None:
     return {
         Mode.review: AuthorisationKind.person_approval,
         Mode.full_auto: AuthorisationKind.full_auto_like,
+        Mode.direct: AuthorisationKind.apply_click,
     }.get(mode)
 
 
