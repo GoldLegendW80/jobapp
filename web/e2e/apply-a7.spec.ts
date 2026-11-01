@@ -12,12 +12,13 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Apply A7 against the real stack through Caddy plus the fake ATS forms server: the first end to
  * end slice of the module. An invented person with the consent, a base CV and a posting whose
  * address is the fake Greenhouse posting (then the fake Ashby one) has its CV and letter written
- * by the documents pipeline on the fake backend, opens the job page, clicks Apply (Review first),
+ * by the documents pipeline on the fake backend, opens the job page, ticks the review box and clicks Apply,
  * waits for the fill (the worker's 30 second tick starts it), types an answer for every field
  * the assistant left for them, approves behind the confirmation that names the company, the role
  * and both documents, watches the submit lease fill the form again in the live view (watch only),
@@ -122,7 +123,8 @@ for (const ats of ["greenhouse", "ashby"] as const) {
     const job = await postingOn(ats);
     await page.goto(`/jobs/${job}`);
     const section = page.getByRole("region", { name: "Apply" });
-    await section.getByRole("button", { name: "Apply (Review first)" }).click();
+    await reviewFirst(page.request);
+    await section.getByRole("button", { name: "Apply", exact: true }).click();
     const fillStarted = Date.now();
 
     // The worker's tick starts the fill within 30 seconds; the page follows it by itself. The

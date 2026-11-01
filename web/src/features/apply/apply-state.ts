@@ -47,11 +47,16 @@ const PHASES: Record<string, Phase> = {
 /** A state this page does not know is never treated as a state where something can be clicked. */
 export function phaseOf(application: Application | null | undefined): Phase {
   if (!application) return "idle";
-  // Full auto's decision is the app's: nothing to approve, the page follows it.
-  if (application.state === "ready" && application.mode === "full_auto")
+  // Full auto's decision and one click Apply's (mode `direct`) are the app's: nothing to approve,
+  // the page follows it. A direct item the app hands to the person comes back as `review`.
+  if (application.state === "ready" && decidedByApp(application))
     return "submitting";
   return PHASES[application.state] ?? "other";
 }
+
+/** An application the app sends by itself once filled: Full auto, or one click Apply (`direct`). */
+export const decidedByApp = (application: Application) =>
+  application.mode === "full_auto" || application.mode === "direct";
 
 /** The phases in which the app works and the page reads again by itself. */
 const BUSY: ReadonlySet<Phase> = new Set(["waiting", "filling", "submitting"]);
@@ -129,6 +134,19 @@ const MANUAL_LINES: Record<string, string> = {
     "You closed the last session without recording it as sent. Nothing was submitted by the app.",
 };
 
+/**
+ * One click Apply (mode `direct`, issue #738): the assistant fills the form, the app checks it
+ * and sends it, with no Approve step. The other states read as for Review first.
+ */
+const DIRECT_LINES: Record<string, string> = {
+  filling:
+    "The assistant is filling the form. It sends it by itself once it is filled.",
+  ready: "Checking the form before sending it.",
+  approved: "Sending the form.",
+  submitting: "Sending the form.",
+  submitted: "Sent. Below is what the assistant sent.",
+};
+
 /** The status line under the section's title. */
 export function statusLine(application: Application | null | undefined) {
   if (!application)
@@ -141,13 +159,19 @@ export function statusLine(application: Application | null | undefined) {
     return "Your browser closed before the app saw the site's confirmation. Nothing is recorded as sent yet.";
   if (application.mode === "manual" && application.state in MANUAL_LINES)
     return MANUAL_LINES[application.state];
+  if (application.mode === "direct" && application.state in DIRECT_LINES)
+    return DIRECT_LINES[application.state];
   switch (application.state) {
     case "queued":
       return waitingLine(application.needs);
     case "filling":
       return "Filling the form. You can leave this page: the fill goes on, and you will find the result here.";
-    case "needs_person":
-      return `${NEEDS[application.needs ?? ""] ?? "The form needs you before it can go on."} Nothing was sent.`;
+    case "needs_person": {
+      const line = `${NEEDS[application.needs ?? ""] ?? "The form needs you before it can go on."} Nothing was sent.`;
+      return application.mode === "direct"
+        ? `${line} When you are done, the assistant goes on and sends it by itself.`
+        : line;
+    }
     case "ready":
       return application.mode === "full_auto"
         ? "Full auto: filled. The app checks it now, then holds it so you can cancel."
@@ -178,6 +202,92 @@ export function statusLine(application: Application | null | undefined) {
     default:
       return "This application is in a state this page does not know. Nothing more can be done here.";
   }
+}
+
+// --- why a filled form waits for the person -----------------------------------------------------
+
+/**
+ * Why a form the app would have sent by itself (one click Apply, Full auto) waits for the person:
+ * the api hands it to review (`mode` review, state `ready`) with the reason in `error_code`. The
+ * api's sentences (api/app/apply direct.py, full_auto.py, model_check.py, caps.py, gate.py), said
+ * for the job page. A code this page does not know is said in words, never shown raw.
+ */
+const REVIEW_REASONS: Record<string, string> = {
+  email_review:
+    "This posting asks for an application by e-mail, and the app never sends mail by itself, so it waits for you.",
+  review_only_site:
+    "The app does not send this site's form by itself yet, so you check it and send it.",
+  company_site_unverified:
+    "The LinkedIn posting links to a site the app cannot match to its company, so it waits for you.",
+  agent_designated:
+    "The app chose the submit button of this form itself, so you check it first.",
+  agent_text:
+    "The app wrote a free text answer on this form, so you check it first.",
+  model_check_flagged:
+    "The check of the app's free text answers found claims to look at, so you check them first.",
+  model_check_failed:
+    "The app could not finish checking its free text answers, so you check them first.",
+  model_check_not_run:
+    "The app's free text answers were not checked against your profile, so you check them first.",
+  fields_left: "Some questions of this form were left, so it waits for you.",
+  captcha_seen:
+    "A captcha showed up while filling this form, so it waits for you.",
+  never_apply_text:
+    "The posting's text mentions a term your rules exclude, so it waits for you.",
+  paused_by_you:
+    "You paused automatic applications, so it waits for you. Turn them back on in Settings, Applications.",
+  safety_ceiling:
+    "Today's safety ceiling of submissions is reached, so it waits for you.",
+  company_cap:
+    "You set a limit of applications for this company and it is reached, so it waits for you.",
+  company_cap_role:
+    "You chose to wait before applying again to this role at this company, so it waits for you.",
+  authorisation_expired:
+    "The approval to send it expired, so you check it and send it.",
+  authorisation_used:
+    "The approval to send it was already used once, so you check it and send it.",
+  submit_disabled:
+    "Submissions are switched off on this server for now, so it waits for you.",
+  paused:
+    "Submissions are paused by the administrator for now, so it waits for you.",
+  documents_changed:
+    "A newer version of your documents was written after this form was filled, so it waits for you.",
+  documents_review:
+    "Your documents need a look before they are sent, so it waits for you.",
+  linkedin_off: "LinkedIn is off for you, so it waits for you.",
+  linkedin_paused:
+    "LinkedIn is paused for a week after a security check, so it waits for you.",
+  linkedin_daily:
+    "LinkedIn's limit of applications in 24 hours is reached, so it waits for you.",
+  below_min_fit:
+    "This posting's fit is below your threshold for Full auto, so it waits for you.",
+  unsupported_source:
+    "Full auto does not apply on this site yet, so it waits for you.",
+  full_auto_off:
+    "Full auto was turned off after this Like, so it waits for you.",
+  full_auto_company:
+    "Full auto already applied to this company recently, so it waits for you.",
+  form_changed: "The form changed since it was filled, so it waits for you.",
+};
+
+export const OTHER_REVIEW_REASON =
+  "The app stopped before sending it, so you check it and send it.";
+
+/** The sentence of why a filled form waits for the person's approval, or null when none applies. */
+export function reviewReason(
+  application: Application | null | undefined,
+): string | null {
+  if (
+    !application ||
+    application.state !== "ready" ||
+    application.mode !== "review" ||
+    !application.error_code
+  )
+    return null;
+  const known = Object.hasOwn(REVIEW_REASONS, application.error_code)
+    ? REVIEW_REASONS[application.error_code]
+    : undefined;
+  return known ?? OTHER_REVIEW_REASON;
 }
 
 // --- the fields ---------------------------------------------------------------------------------

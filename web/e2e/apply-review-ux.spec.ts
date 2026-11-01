@@ -27,6 +27,7 @@ import {
   root,
   watchErrors,
 } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 /** Real Lever fill, real API edits and real browser counters for #581 and #594. The unusual
  * original letter and terminal render error are seeded only into this invented user's local
@@ -168,9 +169,8 @@ async function posting(variant = "normal"): Promise<string> {
 async function fill(job: string): Promise<string> {
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply", exact: true });
-  await section
-    .getByRole("button", { name: "Apply (Review first)", exact: true })
-    .click();
+  await reviewFirst(page.request);
+  await section.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(
     section.getByRole("img", { name: /before the click/ }),
   ).toBeVisible({ timeout: 180_000 });

@@ -12,6 +12,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 test.describe.configure({ mode: "serial", timeout: 600_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -195,9 +196,10 @@ test("heavy Workday account handoff and ordered wizard submit once after approva
   const job = await posting("workday", "1001");
   await page.goto(`/jobs/${job}`);
   const began = Date.now();
+  await reviewFirst(page.request);
   await page
     .getByRole("region", { name: "Apply", exact: true })
-    .getByRole("button", { name: "Apply (Review first)", exact: true })
+    .getByRole("button", { name: "Apply", exact: true })
     .click();
   await signIn(false);
   const activeSamples: number[] = [];
@@ -251,9 +253,10 @@ for (const kind of ["google_careers", "vie"]) {
     const before = (await stub.submissions()).length;
     const job = await posting(kind, kind === "vie" ? "1003" : "1002");
     await page.goto(`/jobs/${job}`);
+    await reviewFirst(page.request);
     await page
       .getByRole("region", { name: "Apply", exact: true })
-      .getByRole("button", { name: "Apply (Review first)", exact: true })
+      .getByRole("button", { name: "Apply", exact: true })
       .click();
     await expect
       .poll(async () => (await app(job))?.state, { timeout: 240_000 })
@@ -280,9 +283,10 @@ test("an unknown required early field resumes all remaining steps before approva
   const before = (await stub.submissions()).length;
   const job = await posting("workday", "1004", "required");
   await page.goto(`/jobs/${job}`);
+  await reviewFirst(page.request);
   await page
     .getByRole("region", { name: "Apply", exact: true })
-    .getByRole("button", { name: "Apply (Review first)", exact: true })
+    .getByRole("button", { name: "Apply", exact: true })
     .click();
   await expect
     .poll(async () => (await app(job))?.needs, { timeout: 180_000 })

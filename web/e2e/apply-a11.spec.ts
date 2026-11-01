@@ -18,6 +18,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Apply A11 against the real stack through Caddy plus the fake ATS forms server: a company cap
@@ -79,11 +80,12 @@ async function postingOn(variant: "" | "slow", role: string): Promise<string> {
   return job;
 }
 
-/** Apply (Review first), wait for the fill, answer what it left; the Apply section. */
+/** Apply with the review box ticked, wait for the fill, answer what it left; the Apply section. */
 async function fillForApproval(job: string) {
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
-  await section.getByRole("button", { name: "Apply (Review first)" }).click();
+  await reviewFirst(page.request);
+  await section.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(
     section.getByRole("img", { name: /before the click/ }),
   ).toBeVisible({ timeout: 240_000 });

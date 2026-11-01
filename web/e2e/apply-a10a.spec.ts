@@ -13,6 +13,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 test.describe.configure({ mode: "serial", timeout: 600_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -148,9 +149,8 @@ test("later Workday captcha: the person solves it in the live view; earlier answ
   const job = await posting(reason);
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply", exact: true });
-  await section
-    .getByRole("button", { name: "Apply (Review first)", exact: true })
-    .click();
+  await reviewFirst(page.request);
+  await section.getByRole("button", { name: "Apply", exact: true }).click();
   await expect
     .poll(async () => (await application(job))?.needs, { timeout: 180_000 })
     .toBe(reason);
@@ -283,9 +283,8 @@ test("later Workday e-mail code is a sign in wall: the sign in handoff, nothing 
   const job = await posting("email_code");
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply", exact: true });
-  await section
-    .getByRole("button", { name: "Apply (Review first)", exact: true })
-    .click();
+  await reviewFirst(page.request);
+  await section.getByRole("button", { name: "Apply", exact: true }).click();
   // Main's rule (base.secret): a code box on any adapter but Greenhouse is a sign in wall, so
   // the person gets the sign in handoff, never a wait on the page for the code.
   const banner = page.getByRole("region", {

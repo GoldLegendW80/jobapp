@@ -28,6 +28,7 @@ const applySettings = (values: Partial<ApplySettings>): ApplySettings => ({
   rehearsals: 3,
   rehearsals_done: 3,
   full_auto_since: null,
+  review_before_send: false,
   ...values,
 });
 

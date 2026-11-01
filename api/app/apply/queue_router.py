@@ -202,8 +202,11 @@ def _rehearsal_waiting() -> sa.ColumnElement[bool]:
 
 
 def _deciding() -> sa.ColumnElement[bool]:
-    """A Full auto item filled and `ready` for the app's decision: under way, not the person's."""
-    return sa.and_(Application.state == S.ready, Application.mode == Mode.full_auto)
+    """A Full auto or one click Apply (`direct`) item filled and `ready` for the app's decision:
+    under way, not the person's."""
+    return sa.and_(
+        Application.state == S.ready, Application.mode.in_((Mode.full_auto, Mode.direct))
+    )
 
 
 def _waiting() -> sa.ColumnElement[bool]:

@@ -30,8 +30,8 @@ import {
 } from "./settings-api";
 
 /**
- * /settings/applications, "Applications" (SPEC-apply.md, "Frontend", Settings): the mode after a
- * Like (Review first or Full auto, full-auto-settings.tsx), the pause switch, the three fit
+ * /settings/applications, "Applications" (SPEC-apply.md, "Frontend", Settings): what Apply does
+ * (the review box, issue #738), the mode after a Like (Review first or Full auto, full-auto-settings.tsx), the pause switch, the three fit
  * thresholds labelled apart (only "Apply automatically from" is changed here), the Advanced
  * values (the hold length is changed there), the company caps and the saved answers.
  */
@@ -50,8 +50,9 @@ export function ApplicationsSettingsPage() {
           Application settings
         </h1>
         <p className="text-muted-foreground">
-          How the app applies for you: the mode, the pause switch, your fit
-          thresholds, your company caps and your saved answers.
+          How the app applies for you: what Apply does, what a Like does, the
+          pause switch, your fit thresholds, your company caps and your saved
+          answers.
         </p>
       </header>
       {query.isPending ? (
@@ -74,6 +75,7 @@ export function ApplicationsSettingsPage() {
         </Alert>
       ) : (
         <>
+          <ReviewBeforeSendCard settings={query.data} />
           <FullAutoModeCard settings={query.data} />
           <PauseCard settings={query.data} />
           <ThresholdCard
@@ -107,6 +109,74 @@ function useSaveSettings() {
       client.setQueryData<ApplySettings>(applySettingsKey, saved);
     },
   });
+}
+
+/**
+ * "Let me review each filled form before it is sent" (issue #738), unticked by default: the job
+ * page's Apply then fills the form and sends it; ticked, the fill stops for Approve and submit.
+ * Likes follow "After a Like" below, not this box.
+ */
+function ReviewBeforeSendCard({ settings }: { settings: ApplySettings }) {
+  const id = useId();
+  const save = useSaveSettings();
+  const [problem, setProblem] = useState<string | null>(null);
+  return (
+    <Card aria-labelledby={`${id}-title`}>
+      <CardHeader>
+        <CardTitle>
+          <h2 id={`${id}-title`} className="text-lg">
+            When you click Apply
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {problem ? (
+          <Alert variant="destructive">
+            <CircleAlert aria-hidden="true" />
+            <AlertDescription>{problem}</AlertDescription>
+          </Alert>
+        ) : null}
+        <div className="flex items-start gap-2">
+          <input
+            id={`${id}-box`}
+            type="checkbox"
+            className="mt-0.5 size-4 shrink-0 accent-primary"
+            checked={settings.review_before_send}
+            disabled={save.isPending}
+            aria-describedby={`${id}-text`}
+            onChange={(event) => {
+              const review = event.target.checked;
+              setProblem(null);
+              save.mutate(
+                { review_before_send: review },
+                {
+                  onSuccess: () => {
+                    toast.success(
+                      review
+                        ? "You check each filled form before it is sent."
+                        : "Apply now fills the form and sends it for you.",
+                    );
+                  },
+                  onError: (error) => {
+                    setProblem(message(error));
+                  },
+                },
+              );
+            }}
+          />
+          <div className="flex flex-col gap-0.5">
+            <Label htmlFor={`${id}-box`}>
+              Let me review each filled form before it is sent
+            </Label>
+            <p id={`${id}-text`} className="text-sm text-muted-foreground">
+              When it is off, Apply fills the form and sends it for you. When it
+              is on, you check each filled form and send it yourself.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function PauseCard({ settings }: { settings: ApplySettings }) {

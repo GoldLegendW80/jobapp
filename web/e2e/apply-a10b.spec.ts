@@ -12,6 +12,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
+import { reviewFirst } from "./apply-one-click-helpers";
 
 test.describe.configure({ mode: "serial", timeout: 600_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -160,9 +161,8 @@ test("a watched login wall resumes and submits only after approval", async () =>
   const job = await posting("4012345");
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply", exact: true });
-  await section
-    .getByRole("button", { name: "Apply (Review first)", exact: true })
-    .click();
+  await reviewFirst(page.request);
+  await section.getByRole("button", { name: "Apply", exact: true }).click();
   await signIn(false);
   await expect
     .poll(async () => (await app(job)).state, { timeout: 180_000 })
