@@ -561,6 +561,19 @@ class Runner:
 
         await linkedin_guest.run(self, plan, stats, progress, deadline)
 
+    async def vie(
+        self,
+        plan: Any,
+        stats: Any,
+        progress: Callable[[], Awaitable[None]],
+        deadline: float,
+    ) -> None:
+        """Business France VIE through its public search API when ticked (no lease, no browser
+        call, owner 2026-11-01): the sweep runs it beside its other API sources."""
+        from app.browser.sources import vie_businessfrance
+
+        await vie_businessfrance.run(self, plan, stats, progress, deadline)
+
     async def websites(
         self,
         plan: Any,
@@ -583,11 +596,13 @@ class Runner:
         progress: Callable[[], Awaitable[None]],
         deadline: float,
     ) -> None:
-        """Both, one after the other: LinkedIn in API mode first, then the websites read in
-        the browser (a sweep given the Runner as its one `browser` hook)."""
+        """All, one after the other: LinkedIn in API mode first, Business France VIE when
+        ticked, then the websites read in the browser (a sweep given the Runner as its one
+        `browser` hook)."""
         from app.browser.sources import linkedin_guest
 
         stop = await linkedin_guest.run(self, plan, stats, progress, deadline)
+        await self.vie(plan, stats, progress, deadline)
         await self.websites(plan, stats, progress, deadline, stop)
 
     async def _give_back(self, user: str, held: str | None) -> None:

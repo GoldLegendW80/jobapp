@@ -241,14 +241,17 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     # (app/browser/sources/linkedin_guest.py, at most LINKEDIN_TIME_S and never closer than
     # WEBSITES_MIN_S to the deadline when a website read in the browser is ticked); then the job
     # websites read in the browser with the time left.
-    linkedin, websites = split_websites(browser_sources(ctx))
+    # Business France VIE's public search API (app/browser/sources/vie_businessfrance.py, owner
+    # 2026-11-01) runs beside them too, at most VIE_TIME_S, with the same rule as LinkedIn's.
+    hook = browser_sources(ctx)
+    linkedin, websites = split_websites(hook)
     await sweep.run_sweep(
         sessions_of(ctx),
         uuid.UUID(sweep_id),
         clock_of(ctx),
         alerts=alert_sources(ctx),
         feeds=feed_sources(ctx),
-        apis=(boards.Boards(ctx.get("boards_transport")), linkedin),
+        apis=(boards.Boards(ctx.get("boards_transport")), linkedin, vie_source(hook)),
         browser=websites,
     )
 
@@ -264,6 +267,14 @@ def split_websites(
     if isinstance(hook, Runner):
         return hook.linkedin, hook.websites
     return None, hook
+
+
+def vie_source(hook: sweep.BrowserHook | None) -> sweep.BrowserHook | None:
+    """Business France VIE's hook (Runner.vie) of the websites' Runner; a test's own hook has
+    none."""
+    from app.browser.sources import Runner
+
+    return hook.vie if isinstance(hook, Runner) else None
 
 
 def alert_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:

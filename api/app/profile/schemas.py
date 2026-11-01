@@ -824,6 +824,7 @@ KEPT_WHEN_OMITTED = (
     "job_feeds",
     "company_boards",
     "linkedin_search",
+    "vie_businessfrance",
 )
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
@@ -1037,6 +1038,9 @@ class SearchSection(_Section):
     # Job alert e-mails read from the connected mailbox (owner, 2026-10-30); off when absent.
     alert_emails: AlertEmails = Field(default_factory=lambda: AlertEmails())
     job_feeds: Annotated[list[JobFeed], Field(max_length=3)] = Field(default_factory=list)
+    # Business France VIE offers through the site's public search API (owner, 2026-11-01,
+    # app/browser/sources/vie_businessfrance.py); off unless ticked, stored only once ticked.
+    vie_businessfrance: bool = False
     # When the job websites are searched automatically (jobs J5 schedules it and edits it next
     # to Find jobs). Off unless the user turns it on; a section saved before this field existed
     # reads as off.
