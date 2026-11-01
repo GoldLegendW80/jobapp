@@ -180,7 +180,7 @@ describe("starting", () => {
     const api = fakeApply({ application: null });
     const { user, section } = await openSection();
     expect(
-      await within(section).findByText(/Nothing is sent without your approval/),
+      await within(section).findByText(/^No application yet\.$/),
     ).toBeInTheDocument();
     expect(
       within(section).getByRole("button", { name: "Apply myself" }),
