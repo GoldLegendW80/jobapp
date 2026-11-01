@@ -197,6 +197,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   // app/browser/sources/vie_businessfrance.py).
   vie_rate_limited:
     "Business France asked the app to slow down, so its search stopped for this time. Postings saved before are kept.",
+  vie_key_refused:
+    "Business France did not accept the app's request, so its search stopped for now and will be tried again later.",
+  vie_no_country:
+    "Business France lists offers by country, and your saved places name only cities, so it was not searched. Add a country in Find jobs.",
   vie_key_missing:
     "The Business France search page changed, so its offers could not be read this time.",
   linkedin_searched_once:

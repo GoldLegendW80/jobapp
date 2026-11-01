@@ -124,10 +124,10 @@ def test_offers_are_stored_as_vie_postings_with_the_employer_address_kept(
         ("https://mon-vie-via.businessfrance.fr/offres/900001", "Example Aero",
          "Munich, Germany", "mon-vie-via.businessfrance.fr", JobStatus.found),
         ("https://mon-vie-via.businessfrance.fr/offres/900002", "Example Logistics",
-         "Charleston -Sc-, United States", "mon-vie-via.businessfrance.fr", JobStatus.found),
+         "Charleston, SC, United States", "mon-vie-via.businessfrance.fr", JobStatus.found),
         # The app's own rule against cybersecurity marks it skipped, as for every source.
         ("https://mon-vie-via.businessfrance.fr/offres/900020", "Example Logistics",
-         "Charleston -Sc-, United States", "mon-vie-via.businessfrance.fr", JobStatus.skipped),
+         "Charleston, SC, United States", "mon-vie-via.businessfrance.fr", JobStatus.skipped),
     ]  # fmt: skip
     assert all(j.contract_type is ContractType.VIE for j in jobs)
     assert jobs[0].published_on == date(2026, 10, 28)

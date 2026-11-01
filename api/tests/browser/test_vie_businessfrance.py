@@ -187,6 +187,14 @@ def test_the_key_is_read_from_the_public_page_and_its_escapes_undone() -> None:
     assert vie.public_key('API_KEY:""') is None
 
 
+def test_the_key_name_needs_a_left_boundary() -> None:
+    maps = 'GOOGLE_MAPS_API_KEY:"AIzaSyFAKEFAKEFAKE1234", '
+    assert vie.public_key(maps) is None
+    assert vie.public_key(maps + 'API_KEY:"' + KEY + '"') == KEY
+    assert vie.public_key('$API_KEY:"' + KEY + '"') is None
+    assert vie.public_key('{"API_KEY": "' + KEY + '"}') == KEY
+
+
 def test_a_page_without_key_ends_vie_key_missing_after_one_request() -> None:
     entries, fake, _, _ = execute(section(), lambda now: VieFake(now, key_page="<html></html>"))
     [entry] = entries
@@ -227,11 +235,26 @@ def test_no_place_or_a_place_without_limit_sends_no_country(places: list[str]) -
     assert skipped == []
 
 
-def test_places_naming_no_country_send_no_country_and_are_listed() -> None:
-    entries, fake, _, _ = execute(section(location={"terms": ["Bordeaux", "Remote"]}))
-    assert fake.bodies[0]["countriesIds"] == []
-    assert entries[0]["places_skipped"] == ["Bordeaux", "Remote"]
-    assert "countries" not in entries[0]
+def test_places_naming_no_country_alongside_a_country_are_listed() -> None:
+    entries, fake, _, _ = execute(section(location={"terms": ["Bordeaux", "Germany"]}))
+    assert fake.bodies[0]["countriesIds"] == ["DE"]
+    assert entries[0]["places_skipped"] == ["Bordeaux"]
+
+
+def test_only_cities_skip_the_source_instead_of_searching_the_world() -> None:
+    entries, fake, _, _ = execute(section(location={"terms": ["Munich", "London"]}))
+    assert entries[0]["error"] == "vie_no_country"
+    assert fake.requests == []
+
+
+@pytest.mark.parametrize("place", ["Atlanta, Georgia", "Georgia", "Seattle, Washington"])
+def test_a_place_that_is_a_us_state_is_no_country(place: str) -> None:
+    assert vie.countries_of(section(location={"terms": [place]})) == ([], [place])
+
+
+def test_a_us_city_with_its_country_still_maps() -> None:
+    codes, _ = vie.countries_of(section(location={"terms": ["Atlanta, United States"]}))
+    assert codes == ["US"]
 
 
 def test_titles_are_capped_and_none_is_unsupported() -> None:
@@ -287,8 +310,39 @@ def test_recruiter_names_e_mails_and_phone_numbers_are_dropped() -> None:
     assert "[phone removed]" in found.text
 
 
+def test_us_phone_formats_are_removed() -> None:
+    numbers = (
+        "(843) 555-1234",
+        "843-555-1234",
+        "843.555.1234",
+        "+1 843 555 1234",
+        "1-843-555-1234",
+    )
+    for number in numbers:
+        text = vie._private(f"Call {number} today")
+        assert "555" not in text, number
+        assert "[phone removed]" in text
+    dated = "Posted 2026-10-28, 18 months, 3 121 EUR"
+    assert vie._private(dated) == dated
+
+
+def test_the_site_state_suffix_is_cleaned_from_a_place() -> None:
+    offer = {**SEARCH["result"][0], "cityName": "CHARLESTON      -SC-",
+             "cityNameEn": "CHARLESTON      -SC-", "countryNameEn": "UNITED STATES"}  # fmt: skip
+    found = vie.finding_of(offer, vie.SITE_URL, NOW)
+    assert found is not None
+    assert found.location == "Charleston, SC, United States"
+    assert vie._place("Munich") == "Munich"
+    assert "," not in vie._place("-SC-")  # no city before it: left as written
+
+
 def test_an_unusable_contact_address_is_not_kept() -> None:
-    for link in ["", "javascript:alert(1)", "http://careers.example.test/x", "https://x"]:
+    bad = ["", "javascript:alert(1)", "http://careers.example.test/x", "https://x",
+           "https://careers.example.test/a\x00b", "https://careers.example.test/a\tb",
+           "https://careers.example.test/a b", "https://careers.example.test/\x7f",
+           "https://careers.example.test/?to=jane@example.org",
+           "https://careers.example.test/?to=jane%40example.org"]  # fmt: skip
+    for link in bad:
         offer = {**SEARCH["result"][0], "contactURL": link}
         found = vie.finding_of(offer, vie.SITE_URL, NOW)
         assert found is not None
@@ -401,7 +455,7 @@ def test_the_source_stops_at_its_own_time_cap() -> None:
 # --- stops ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [401, 403, 429])
+@pytest.mark.parametrize("status", [403, 429])
 def test_a_refusal_ends_the_source_and_cools_the_host_for_every_sweep(status: int) -> None:
     now = [0.0]
     cooldown = linkedin_guest.MemoryCooldown(lambda: now[0])
@@ -409,7 +463,8 @@ def test_a_refusal_ends_the_source_and_cools_the_host_for_every_sweep(status: in
                                   now=now, cooldown=cooldown)  # fmt: skip
     assert entries[0]["error"] == "vie_rate_limited"
     assert len(fake.requests) == 2
-    assert asyncio.run(cooldown.active(vie.API_HOST))
+    assert asyncio.run(cooldown.active(vie.COOLDOWN_NAME + vie.API_HOST))
+    assert not asyncio.run(cooldown.active(vie.API_HOST))  # LinkedIn's key is untouched
     # A second sweep within the cooldown sends nothing.
     again, fake2, _, _ = execute(section(), now=now, cooldown=cooldown)
     assert again[0]["error"] == "vie_rate_limited"
@@ -421,6 +476,23 @@ def test_a_refusal_ends_the_source_and_cools_the_host_for_every_sweep(status: in
     assert len(fake3.requests) == 3  # the key page and one page of each title
 
 
+def test_a_401_is_a_refused_key_with_a_short_cooldown() -> None:
+    now = [0.0]
+    cooldown = linkedin_guest.MemoryCooldown(lambda: now[0])
+    entries, fake, _, _ = execute(section(), lambda clock: VieFake(clock, answers={2: 401}),
+                                  now=now, cooldown=cooldown)  # fmt: skip
+    assert entries[0]["error"] == "vie_key_refused"
+    assert len(fake.requests) == 2
+    assert not asyncio.run(cooldown.active(vie.COOLDOWN_NAME + vie.API_HOST))
+    again, fake2, _, _ = execute(section(), now=now, cooldown=cooldown)
+    assert again[0]["error"] == "vie_key_refused"
+    assert fake2.requests == []
+    now[0] += vie.REFUSED_COOLDOWN_S + 1
+    after, _, _, _ = execute(section(), now=now, cooldown=cooldown, deadline=now[0] + 1000)
+    assert after[0]["error"] == "finding_persistence_pending"
+    assert vie.REFUSED_COOLDOWN_S < vie.COOLDOWN_S
+
+
 @pytest.mark.parametrize("status", [500, 302, 404])
 def test_any_other_answer_ends_page_failed_without_cooldown(status: int) -> None:
     now = [0.0]
@@ -428,7 +500,8 @@ def test_any_other_answer_ends_page_failed_without_cooldown(status: int) -> None
     entries, _, _, _ = execute(section(), lambda clock: VieFake(clock, answers={2: status}),
                                now=now, cooldown=cooldown)  # fmt: skip
     assert entries[0]["error"] == "page_failed"
-    assert not asyncio.run(cooldown.active(vie.API_HOST))
+    assert not asyncio.run(cooldown.active(vie.COOLDOWN_NAME + vie.API_HOST))
+    assert not asyncio.run(cooldown.active(vie.REFUSED_NAME + vie.API_HOST))
 
 
 def test_an_answer_that_is_no_search_answer_ends_page_failed() -> None:

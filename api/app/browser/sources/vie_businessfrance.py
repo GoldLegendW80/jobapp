@@ -27,8 +27,10 @@ redirect of BROWSER_SOURCES_BASE_URL, and a POST with a header read from a page 
   the app's gazetteer; "London, United Kingdom" reads its last part; a saved place that says no
   limit means no country filter; a place that names no country, a city alone for instance, is
   skipped and listed in the entry's `places_skipped`, since the app's place data gives no city's
-  country; when no saved place names a country, no country filter is sent: every VIE mission is
-  abroad, and the saved titles still filter). PAGE_SIZE offers a page, at most PAGES_PER_QUERY
+  country; when only such places are saved and none names a country, the source is skipped
+  `vie_no_country` rather than searching the world; no saved place or one that says no limit
+  sends no country filter. "Atlanta, Georgia" is not the country Georgia: a name that is also
+  a US state never maps to a country). PAGE_SIZE offers a page, at most PAGES_PER_QUERY
   pages a search, in rounds (the first page of every search, then the second of those that go
   on), a search ending at a short page or its count.
 - Filters, after reading (the API's `query` is a substring match over the whole text, words
@@ -44,17 +46,20 @@ redirect of BROWSER_SOURCES_BASE_URL, and a POST with a header read from a page 
   city, duration, start, monthly allowance, telework). `contactURL`, the employer's own
   application site when the offer has one, is kept as the finding's `apply_url` and in the sweep
   event's evidence. Privacy: the recruiter's civility, names, e-mail and phone fields are never
-  read, and e-mail addresses and phone numbers in the text are replaced.
+  read, and e-mail addresses and phone numbers in the text are replaced (French, international
+  and North American formats); names written in the free text cannot be recognised and stay.
 - Pace. One request of the API's host at a time across people and workers, PAUSE_S after the
   previous one ended (RedisPacer, key the API host). At most REQUESTS_MAX requests a sweep, the
   key page included, within VIE_TIME_S from its start and never closer to the sweep's deadline
   than linkedin_guest.WEBSITES_MIN_S when a website read in the browser is ticked.
-- Stop. HTTP 401, 403 or 429 ends the source at once `vie_rate_limited`, what was stored kept,
-  no retry, and starts a cooldown: for COOLDOWN_S no sweep of any person sends the host a
-  request (the Runner's guest cooldown, one Redis key per host). Any other unexpected answer, a
-  redirect, an answer that is no JSON or too big, or a request longer than REQUEST_S ends it
-  `page_failed`. Once the sweep let go of its row (`sweep.abandoned`), no further request is
-  sent (`store_failed`).
+- Stop. HTTP 401 ends the source at once `vie_key_refused` (the key was just read from the page,
+  so it is no rate limit) with a short cooldown, REFUSED_COOLDOWN_S. HTTP 403 or 429 ends it at
+  once `vie_rate_limited`, what was stored kept,
+  no retry, and starts a cooldown (its own Redis key, apart from LinkedIn's): for COOLDOWN_S no
+  sweep of any person sends the host a request (the Runner's guest cooldown, one Redis key per
+  host). Any other unexpected answer, a redirect, an answer that is no JSON or too big, or a
+  request longer than REQUEST_S ends it `page_failed`. Once the sweep let go of its row
+  (`sweep.abandoned`), no further request is sent (`store_failed`).
 
 The site's legal notice limits users to its free zone and protects its database (Code de la
 propriété intellectuelle, L. 341-1): the search API is what the free zone itself calls, with the
@@ -82,7 +87,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -127,7 +132,18 @@ BATCH = 20  # findings per commit
 STOPPED = frozenset({401, 403, 429})
 RATE_LIMITED = "vie_rate_limited"
 KEY_MISSING = "vie_key_missing"
+KEY_REFUSED = "vie_key_refused"
+NO_COUNTRY = "vie_no_country"
 COOLDOWN_S = 1800.0
+# A 401 comes right after the key was read from the page in this very sweep, so the site is not
+# slowing anyone down: its front end changed what it accepts. Another try next sweep costs two
+# requests, so the pause is short (the site is not asked again within the next few minutes by
+# any person) and the wording says the key was refused.
+REFUSED_COOLDOWN_S = 600.0
+# The cooldown keys are VIE's own, apart from LinkedIn's (they share the stub host under
+# BROWSER_SOURCES_BASE_URL): the Runner's cooldown puts its own prefix before these.
+COOLDOWN_NAME = "vie:"
+REFUSED_NAME = "vie-refused:"
 PLACES_LISTED = 10
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -142,13 +158,15 @@ HEADERS = {
     "Referer": SITE_URL + "/",
 }
 COUNTRIES_PATH = Path(__file__).with_name("vie_countries.json")
-_KEY = re.compile(r'API_KEY\s*:\s*"((?:[^"\\]|\\.){1,400})"')
+_KEY = re.compile(r'(?<![A-Za-z0-9_$])API_KEY["\']?\s*:\s*"((?:[^"\\]|\\.){1,400})"')
 _KEY_SHAPE = re.compile(r"[A-Za-z0-9+/=_\-.]{8,200}")
 _OFFER_ID = re.compile(r"[0-9]{1,12}")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _PHONE = re.compile(
     r"(?:(?<![\w+])(?:\+|00)\d{1,3}[\s.-]?(?:\(?\d{1,4}\)?[\s.-]?){2,5}\d{2,4}(?!\d))"
     r"|(?:(?<!\d)0\d(?:[\s.-]?\d{2}){4}(?!\d))"
+    # North American: (843) 555-1234, 843-555-1234, 843.555.1234, optionally after 1
+    r"|(?:(?<![\w+])(?:1[\s.-])?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?!\d))"
 )
 
 
@@ -194,16 +212,78 @@ def country_names() -> dict[str, str]:
     return names
 
 
+US_STATES = frozenset(
+    _fold(n)
+    for n in (
+        "Alabama",
+        "Alaska",
+        "Arizona",
+        "Arkansas",
+        "California",
+        "Colorado",
+        "Connecticut",
+        "Delaware",
+        "Florida",
+        "Georgia",
+        "Hawaii",
+        "Idaho",
+        "Illinois",
+        "Indiana",
+        "Iowa",
+        "Kansas",
+        "Kentucky",
+        "Louisiana",
+        "Maine",
+        "Maryland",
+        "Massachusetts",
+        "Michigan",
+        "Minnesota",
+        "Mississippi",
+        "Missouri",
+        "Montana",
+        "Nebraska",
+        "Nevada",
+        "New Hampshire",
+        "New Jersey",
+        "New Mexico",
+        "New York",
+        "North Carolina",
+        "North Dakota",
+        "Ohio",
+        "Oklahoma",
+        "Oregon",
+        "Pennsylvania",
+        "Rhode Island",
+        "South Carolina",
+        "South Dakota",
+        "Tennessee",
+        "Texas",
+        "Utah",
+        "Vermont",
+        "Virginia",
+        "Washington",
+        "West Virginia",
+        "Wisconsin",
+        "Wyoming",
+        "District of Columbia",
+    )
+)
+
+
 def _country(place: str) -> str | None:
+    """The site's country a saved place names: the whole place or its last comma part, and
+    never a name that is also a US state ("Atlanta, Georgia" is no visit to the country)."""
     names = country_names()
     folded = _fold(place)
+    if folded in US_STATES:
+        return None
     if folded in names:
         return names[folded]
     if re.fullmatch(r"[A-Za-z]{2}", place.strip()):
         code = place.strip().upper()
         return code if code in names.values() else None
     last = place.rsplit(",", 1)
-    if len(last) == 2:
+    if len(last) == 2 and _fold(last[1]) not in US_STATES:
         return names.get(_fold(last[1]))
     return None
 
@@ -311,14 +391,25 @@ def _private(text: str) -> str:
     return _PHONE.sub("[phone removed]", _EMAIL.sub("[e-mail removed]", text))
 
 
+_STATE_SUFFIX = re.compile(r"(.*?)\s*-([A-Za-z]{2})-")
+
+
 def _place(value: object) -> str:
+    """A city or country as the site writes it: "CHARLESTON      -SC-" reads "Charleston, SC"."""
     text = _line(value)
-    return text.title() if text.isupper() else text
+    state = ""
+    found = _STATE_SUFFIX.fullmatch(text)
+    if found and found.group(1):
+        text, state = found.group(1), found.group(2).upper()
+    text = text.title() if text.isupper() else text
+    return f"{text}, {state}" if state else text
 
 
 def _https(value: object) -> str | None:
     """`contactURL` when it is a plain https address, else None."""
     if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+        return None
+    if any(ord(c) < 32 or ord(c) == 127 or c.isspace() for c in value.strip()):
         return None
     value = value.strip()
     try:
@@ -327,7 +418,7 @@ def _https(value: object) -> str | None:
         return None
     if parts.scheme != "https" or not parts.hostname or "." not in parts.hostname:
         return None
-    if parts.username or parts.password or any(c.isspace() for c in value):
+    if parts.username or parts.password or _EMAIL.search(unquote(value)):
         return None
     return value
 
@@ -418,8 +509,10 @@ class Client:
 
     async def _ready(self) -> None:
         await self.check()
-        if await self.cooldown.active(self.key):
+        if await self.cooldown.active(COOLDOWN_NAME + self.key):
             raise StopError(RATE_LIMITED)
+        if await self.cooldown.active(REFUSED_NAME + self.key):
+            raise StopError(KEY_REFUSED)
 
     async def send(self, method: str, url: str, **kw: Any) -> str:
         """The body of a 200 answer. Raises StopError for a refusal, any other answer, the
@@ -450,8 +543,8 @@ class Client:
                 except TimeoutError:
                     raise StopError("page_failed") from None
                 except StopError as stop:
-                    if stop.code == RATE_LIMITED:
-                        await self._cool()
+                    if stop.code in (RATE_LIMITED, KEY_REFUSED):
+                        await self._cool(stop.code)
                     raise
             finally:
                 try:
@@ -461,9 +554,13 @@ class Client:
         except StoreUnavailableError:
             raise StopError("page_failed") from None
 
-    async def _cool(self) -> None:
+    async def _cool(self, code: str) -> None:
+        refused = code == KEY_REFUSED
+        name, seconds = (
+            (REFUSED_NAME, REFUSED_COOLDOWN_S) if refused else (COOLDOWN_NAME, COOLDOWN_S)
+        )
         try:
-            await self.cooldown.start(self.key, COOLDOWN_S)
+            await self.cooldown.start(name + self.key, seconds)
         except StoreUnavailableError:
             logger.warning("vie cooldown not recorded")
 
@@ -473,7 +570,7 @@ class Client:
             async with self.client.stream(method, url, **kw) as answer:
                 status = answer.status_code
                 if status in STOPPED:
-                    raise StopError(RATE_LIMITED)
+                    raise StopError(KEY_REFUSED if status == 401 else RATE_LIMITED)
                 if status != 200 or answer.headers.get("content-encoding", "identity").strip(
                 ).casefold() not in ("", "identity"):  # fmt: skip
                     raise StopError("page_failed")
@@ -605,6 +702,10 @@ async def _search(
     transport = runner.guest_http() if runner.guest_http is not None else None
     if transport is None:
         return "page_failed"  # no way out configured: no request at all
+    if skipped and not queries[0].countries:
+        # Only cities were saved: a search without a country would read the whole world, which
+        # is not what "Munich" asked for.
+        return NO_COUNTRY
     done = _Run(planned=len(queries), places_skipped=skipped[:PLACES_LISTED])
     done.countries = list(queries[0].countries)
     criteria = dataclasses.replace(_criteria(search), contracts=frozenset())
