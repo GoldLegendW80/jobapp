@@ -759,6 +759,35 @@ def _record_bank_use(
             counted.add(row.field_key)
 
 
+# The hand overs that stay true across every fill of the application: the page keeps saying why.
+LASTING_REASONS = ("email_review", "review_only_site", "unsupported_source")
+
+
+def keep_reason(db: Session, application: Application) -> None:
+    """ "Why it waits for you" reads `error_code` of a `ready` review item. A fill or a recovery
+    clears it, so a hand over that holds whatever the fill finds (an e-mail posting, a review
+    only site) is written back from its `sent_to_review` event."""
+    if application.state is not State.ready or application.mode is not Mode.review:
+        return
+    if application.error_code is None:
+        application.error_code = _lasting_reason(db, application)
+
+
+def _lasting_reason(db: Session, application: Application) -> str | None:
+    """The code of the latest `sent_to_review` event, when it is one of LASTING_REASONS."""
+    code = db.execute(
+        sa.select(ApplicationEvent.data["code"].astext)
+        .where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "sent_to_review",
+        )
+        .order_by(ApplicationEvent.at.desc(), ApplicationEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return code if code in LASTING_REASONS else None
+
+
 def finish(
     db: Session,
     application_id: uuid.UUID,
@@ -865,6 +894,9 @@ def finish(
             now,
             keep_direct=result.state is State.needs_person and not result.review_reason,
         )
+    if result.review_reason and to is State.ready and application.error_code is None:
+        application.error_code = result.review_reason
+    keep_reason(db, application)
     filled_any = counts["filled"] + counts["unverified"] > 0
     if result.state in (State.ready, State.needs_person) and filled_any:
         if posting.status in STAGE_FROM:

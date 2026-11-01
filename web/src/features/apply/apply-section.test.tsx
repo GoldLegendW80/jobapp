@@ -5,7 +5,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { browserQueryKey } from "@/features/browser/browser-api";
-import { server } from "@/test/server";
+import { defaultApplySettings, server } from "@/test/server";
 import { fakeSession, member } from "@/test/auth";
 import {
   APP_ID,
@@ -1296,6 +1296,82 @@ describe("one click Apply (issue #738)", () => {
     });
     expect(api.application?.mode).toBe("direct");
     expect(section.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("keeps Apply disabled until the apply settings are read", async () => {
+    const api = fakeApply({ application: null });
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/apply/settings", async () => {
+        await held;
+        return HttpResponse.json({
+          ...defaultApplySettings,
+          review_before_send: false,
+        });
+      }),
+    );
+    const { user, section } = await openSection();
+    expect(
+      await within(section).findByTestId("apply-mode-pending"),
+    ).toHaveTextContent("Reading your apply settings");
+    const apply = within(section).getByRole("button", { name: "Apply" });
+    expect(apply).toBeDisabled();
+    await user.click(apply);
+    expect(api.starts).toEqual([]);
+    release();
+    expect(
+      await within(section).findByTestId("apply-mode-line"),
+    ).toHaveTextContent("The assistant fills the form and sends it.");
+    await waitFor(() => {
+      expect(
+        within(section).getByRole("button", { name: "Apply" }),
+      ).toBeEnabled();
+    });
+    await user.click(within(section).getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(api.starts).toEqual([{ mode: "apply" }]);
+    });
+  });
+
+  it("keeps Apply disabled and offers a retry when the apply settings fail", async () => {
+    const api = fakeApply({ application: null });
+    let fail = true;
+    server.use(
+      http.get("*/api/apply/settings", () =>
+        fail
+          ? HttpResponse.json({ detail: "unavailable" }, { status: 503 })
+          : HttpResponse.json({
+              ...defaultApplySettings,
+              review_before_send: true,
+            }),
+      ),
+    );
+    const { user, section } = await openSection();
+    const pending = await within(section).findByText(
+      /Your apply settings could not be read, so Apply waits\./,
+      undefined,
+      { timeout: 5000 },
+    );
+    expect(
+      within(section).getByRole("button", { name: "Apply" }),
+    ).toBeDisabled();
+    expect(pending.textContent).not.toMatch(SEPARATOR);
+    fail = false;
+    await user.click(
+      within(pending).getByRole("button", { name: "Try again" }),
+    );
+    expect(
+      await within(section).findByTestId("apply-mode-line"),
+    ).toHaveTextContent(
+      "The assistant fills the form, then you check it and send it.",
+    );
+    expect(
+      within(section).getByRole("button", { name: "Apply" }),
+    ).toBeEnabled();
+    expect(api.starts).toEqual([]);
   });
 
   it("says the person checks the form when the review box is ticked, and still starts with mode apply", async () => {

@@ -8,16 +8,18 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import direct, full_auto, model_check, signin, submit
+from app.apply import direct, email, full_auto, gate, model_check, signin, submit
 from app.apply.caps_models import ApplySettings
 from app.apply.models import Application, ApplicationAnswer, AuthorisationKind, Mode, State
 from app.jobs.models import Job
 from tests.apply import a11_support as a11
+from tests.apply import test_a14_email as a14
 from tests.apply.a5_support import FakeAgent
 from tests.apply.conftest import AT, Person
 from tests.apply.test_a5_run import WHY, application, events, fill, run_ashby, services, started
@@ -33,6 +35,8 @@ from tests.apply.test_a13_full_auto import (
     reviewed,
 )
 from tests.identity.api_helpers import Api
+from tests.mail import canary
+from tests.mail.fake_gmail import FakeGoogle
 
 __all__ = ["api", "stub"]
 
@@ -346,3 +350,77 @@ def test_a_sign_in_then_the_application_goes_on_and_is_sent(
 def test_the_decision_refuses_another_mode() -> None:
     assert direct.CLICK_VALID == WEEK
     assert full_auto.gate_kind(Mode.direct) is AuthorisationKind.apply_click
+
+
+# --- the documents and the reasons the job page gives (review of #739) -------------------------
+
+
+def _overflowing(db: Session, app_id: uuid.UUID) -> None:
+    found = application(db, app_id)
+    found.document_versions = {
+        k: {**v, "fit": "overflow"} for k, v in found.document_versions.items()
+    }
+    db.commit()
+
+
+def _corrected(db: Session, app_id: uuid.UUID) -> None:
+    found = application(db, app_id)
+    found.document_versions = {
+        k: {**v, "corrections": ["A claim the fact check changed"]}
+        for k, v in found.document_versions.items()
+    }
+    db.commit()
+
+
+@pytest.mark.parametrize("spoil", [_overflowing, _corrected])
+def test_documents_that_need_a_look_are_never_sent_by_one_click(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, spoil: Any
+) -> None:
+    """Guardrail 6 holds for `direct`: the item goes to review with its reason, no click."""
+    low_fit(db, person_a)
+    app_id = filled(db, factory, person_a, stub)
+    spoil(db, app_id)
+    assert model_check.request_for(db, app_id, AT + HOUR) == "refused_anyway"
+    db.rollback()
+    written, form = job(factory, stub, app_id, AT + HOUR)
+    assert (written, form.gate_clicks) == ("documents_review", [])
+    reviewed(db, app_id, "documents_review")
+    assert gate.SENTENCES["documents_review"]
+    written, form = job(factory, stub, app_id, AT + 2 * HOUR)
+    assert form.gate_clicks == []
+    assert written != "submitted"
+
+
+def test_a_review_only_site_says_why_once_the_form_is_filled(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    """The hand over before the fill (run.py, `review_only_site`) survives the fill's own write."""
+    app_id = started(db, person_a, Mode.direct)
+    full_auto.hand_over(db, application(db, app_id), "review_only_site", AT)
+    db.commit()
+    agent = FakeAgent(lambda q: (WHY_TEXT, "motivation") if q.label == WHY else ("leave", ""))
+    assert fill(services(factory, run_ashby(), None, agent, stub_base=stub), app_id) == "ready"
+    reviewed(db, app_id, "review_only_site")
+    assert direct.SENTENCES["review_only_site"]
+
+
+def test_an_email_posting_says_why_after_the_connection(db: Session, person_a: Person) -> None:
+    restore = canary.block_google()
+    try:
+        found = a14.prepare(db, person_a, mode=Mode.direct)
+        assert (found.mode, found.state) == (Mode.review, State.needs_person)
+        fake = FakeGoogle()
+        fake.seed("alice")
+        a14.connect(db, person_a, fake)
+        assert email.recover(db, found, AT, configured=True)
+        db.commit()
+        reviewed(db, found.id, "email_review")
+        assert direct.SENTENCES["email_review"]
+    finally:
+        restore()
+
+
+def test_the_apply_mode_is_the_only_way_to_direct(api: Api, person_a: Person) -> None:
+    token = api.login_token(person_a.email)
+    path = f"/api/postings/{person_a.posting_id}/applications"
+    assert api.post(path, token=token, json={"mode": "direct"}).status_code == 422

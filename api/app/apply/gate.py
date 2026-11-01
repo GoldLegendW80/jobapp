@@ -430,7 +430,8 @@ def documents_code(db: Session, application: Application) -> str | None:
 
 
 def documents_need_review(versions: dict[str, Any]) -> bool:
-    """Full auto's own rule on the documents (SPEC-apply, guardrail 6): a version that overflows
+    """The rule on the documents of every send no person looked at, Full auto and one click
+    Apply (SPEC-apply, guardrail 6): a version that overflows
     its page or carries corrections goes to the person. Unknown fit counts as an overflow."""
     for record in (versions or {}).values():
         if not isinstance(record, dict):
@@ -512,11 +513,15 @@ def decide(
         return refused(code)
     if code := documents_code(db, application):
         return refused(code)
-    if application.mode is Mode.full_auto:
-        if documents_need_review(application.document_versions):
-            return refused("documents_review")
-        if code := full_auto.checks(db, application, posting, now):
-            return refused(code)
+    # Guardrail 6 holds for every send no person looked at: Full auto and one click Apply.
+    if application.mode in (Mode.full_auto, Mode.direct) and documents_need_review(
+        application.document_versions
+    ):
+        return refused("documents_review")
+    if application.mode is Mode.full_auto and (
+        code := full_auto.checks(db, application, posting, now)
+    ):
+        return refused(code)
     if application.mode is Mode.direct and (code := direct.checks(db, application, posting, now)):
         return refused(code)
 

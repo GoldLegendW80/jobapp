@@ -547,7 +547,7 @@ def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[
         return "refused_anyway"
     if caps.linkedin_refusal(db, application, now) is not None:
         return "refused_anyway"
-    if application.mode is Mode.full_auto and gate.documents_need_review(
+    if application.mode in (Mode.full_auto, Mode.direct) and gate.documents_need_review(
         application.document_versions
     ):
         return "refused_anyway"

@@ -538,7 +538,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 ) : (
                   <Button
                     className="w-full sm:w-fit"
-                    disabled={busy}
+                    // What a click does is the person's setting: never before it is read.
+                    disabled={busy || settings.data === undefined}
                     onClick={() => {
                       start.mutate("apply");
                     }}
@@ -663,7 +664,24 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     Change it in Settings
                   </Link>
                 </p>
-              ) : null}
+              ) : settings.isError ? (
+                <p data-testid="apply-mode-pending">
+                  Your apply settings could not be read, so Apply waits.{" "}
+                  <button
+                    type="button"
+                    className="font-medium text-foreground underline underline-offset-4"
+                    onClick={() => {
+                      void settings.refetch();
+                    }}
+                  >
+                    Try again
+                  </button>
+                </p>
+              ) : (
+                <p data-testid="apply-mode-pending">
+                  Reading your apply settings
+                </p>
+              )}
               <p>
                 With Apply myself, you fill and send the form yourself in your
                 browser here.
