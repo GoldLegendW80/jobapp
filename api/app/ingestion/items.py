@@ -89,7 +89,7 @@ start, and a school with no date at all last. Every other list appends.
 document supports: a gate's `penalty`, every `advanced_regex`, `search.min_fit`,
 `search.days`, `search.browser_sources`, `search.sweep_schedule`, `search.documents`,
 `search.interactive_sites`, `search.interactive_instructions`, `search.linkedin_search`,
-`search.company_boards`, `search.alert_emails`, `search.company_types` and
+`search.company_boards`, `search.job_feeds`, `search.alert_emails`, `search.company_types` and
 `search.compensation` (wishes and pay a document does not state for the person), the whole
 `preferences` section (how the app behaves, and the wizard's dates), and the apply fields of
 `answers` (EEO, salary stance and ranges, consents, preferred name and the like). They are typed
@@ -365,6 +365,8 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.company_boards[].ats": _T.SETTING,
         "search.company_boards[].board": _T.SETTING,
         "search.company_boards[].enabled": _T.SETTING,
+        # Free job feeds (Arbeitnow, Himalayas, Adzuna): the person's choice of feeds.
+        "search.job_feeds[]": _T.SETTING,
         # The permission map is written only by its dedicated route, never read from a document.
         "search.platform_consents": _T.SETTING,
         # Which alert e-mails a sweep reads (SPEC-mail.md): the person's switch, never a document's.
