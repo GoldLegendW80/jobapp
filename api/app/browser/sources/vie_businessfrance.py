@@ -152,6 +152,11 @@ _PHONE = re.compile(
 )
 
 
+def now() -> datetime:
+    """The time the age filter reads (tests replace it)."""
+    return datetime.now(UTC)
+
+
 class StopError(Exception):
     """The source ends with this code (sweep's `reason`)."""
 
@@ -619,7 +624,8 @@ async def _search(
                     return KEY_MISSING
                 await _rounds(http, api, site, key, plan, queries, criteria, entry, done, progress)
             except StopError as stop:
-                return None if stop.code == "request_cap" else stop.code
+                if stop.code != "request_cap":  # the cap ends the reading, not in error
+                    return stop.code
             finally:
                 done.requests = http.requests
     finally:
@@ -685,10 +691,10 @@ def _kept(
     criteria: feeds.Criteria,
     done: _Run,
 ) -> list[VieFinding]:
-    now = datetime.now(UTC)
+    at = now()
     kept: list[VieFinding] = []
     for offer in offers:
-        found = finding_of(offer, site, now)
+        found = finding_of(offer, site, at)
         if found is None:
             done.left_out["invalid"] = done.left_out.get("invalid", 0) + 1
             continue
@@ -699,7 +705,7 @@ def _kept(
         if str(offer.get("missionType") or "VIE").upper() not in MISSION_TYPES:
             reason = "contract"
         else:
-            reason = criteria.left_out(found, now, place_filter=False)
+            reason = criteria.left_out(found, at, place_filter=False)
         if reason is not None:
             done.left_out[reason] = done.left_out.get(reason, 0) + 1
             continue

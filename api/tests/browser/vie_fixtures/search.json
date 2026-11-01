@@ -1,0 +1,42 @@
+{
+ "count": 3,
+ "result": [
+  {
+   "id": 900001, "reference": "VIE900001", "missionType": "VIE",
+   "missionTitle": "GENAI ENGINEER (H/F)", "organizationName": "Example Aero",
+   "cityName": "MUNICH          ", "cityNameEn": "MUNICH          ",
+   "countryId": "DE", "countryName": "ALLEMAGNE", "countryNameEn": "GERMANY",
+   "missionDuration": 18, "missionStartDate": "2027-03-01T00:00:00", "missionEndDate": "2028-09-01T00:00:00",
+   "creationDate": "2026-10-28T09:00:00Z", "startBroadcastDate": "2026-10-29T00:00:00",
+   "endBroadcastDate": "2026-11-28T00:00:00", "indemnite": 3120.55, "teleworkingAvailable": true,
+   "viewCounter": 12, "candidateCounter": 3,
+   "missionDescription": "<p>Build <b>LLM agents</b> for the flight test team.</p><ul><li>Python</li><li>Evaluation</li></ul><p>Questions: e2e-recruiter-one@example.org or +49 89 1234 5678.</p>",
+   "missionProfile": "Engineering degree. Call 06 12 34 56 78 for details.",
+   "contactURL": "https://careers.example-aero.test/jobs/123",
+   "externalJobId": null,
+   "contactCivility": "Mme", "contactFirstName": "Jane", "contactLastName": "Doe",
+   "contactName": "Jane Doe", "contactEmail": "e2e-recruiter-one@example.org"
+  },
+  {
+   "id": 900002, "reference": "VIE900002", "missionType": "VIE",
+   "missionTitle": "Data Engineer GenAI", "organizationName": "Example Logistics",
+   "cityName": "CHARLESTON      -SC-", "cityNameEn": "CHARLESTON      -SC-",
+   "countryId": "US", "countryName": "ETATS-UNIS", "countryNameEn": "UNITED STATES",
+   "missionDuration": 12, "missionStartDate": "2027-01-01T00:00:00",
+   "creationDate": "2025-10-01T09:00:00Z", "startBroadcastDate": "2026-10-30T00:00:00",
+   "indemnite": 3430.07, "teleworkingAvailable": false,
+   "missionDescription": "Data pipelines and GenAI assistants for the warehouse.",
+   "missionProfile": "", "contactURL": "",
+   "contactCivility": "M.", "contactFirstName": "John", "contactLastName": "Roe",
+   "contactName": "John Roe", "contactEmail": "e2e-recruiter-two@example.org"
+  },
+  {
+   "id": 900003, "reference": "VIE900003", "missionType": "VIE",
+   "missionTitle": "Maintenance Technician", "organizationName": "Example Rail",
+   "cityName": "MONTREAL", "countryId": "CA", "countryName": "CANADA", "countryNameEn": "CANADA",
+   "creationDate": "2026-10-30T09:00:00Z",
+   "missionDescription": "Maintenance of the fleet, email reports, AI mentioned in passing.",
+   "contactURL": "javascript:alert(1)"
+  }
+ ]
+}
