@@ -46,7 +46,7 @@ describe("phaseOf and what each phase reads", () => {
 
   it("is idle with no application", () => {
     expect(phaseOf(null)).toBe("idle");
-    expect(statusLine(null)).toMatch(/Nothing is sent without your approval/);
+    expect(statusLine(null)).toBe("No application yet.");
   });
 
   it("says a queued fill waits for the person's own sign in, not for a free browser", () => {

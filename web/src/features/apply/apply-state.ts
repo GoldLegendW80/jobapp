@@ -149,8 +149,7 @@ const DIRECT_LINES: Record<string, string> = {
 
 /** The status line under the section's title. */
 export function statusLine(application: Application | null | undefined) {
-  if (!application)
-    return "No application yet. Nothing is sent without your approval.";
+  if (!application) return "No application yet.";
   if (
     application.mode === "manual" &&
     application.state === "queued" &&
