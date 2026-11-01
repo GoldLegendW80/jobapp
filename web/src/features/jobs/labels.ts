@@ -193,6 +193,12 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   // LinkedIn's public job search (owner, 2026-10-30, app/browser/sources/linkedin_guest.py).
   linkedin_rate_limited:
     "LinkedIn asked the app to slow down, so its search stopped for this time. Postings saved before are kept.",
+  // Business France VIE's public search API (owner, 2026-11-01,
+  // app/browser/sources/vie_businessfrance.py).
+  vie_rate_limited:
+    "Business France asked the app to slow down, so its search stopped for this time. Postings saved before are kept.",
+  vie_key_missing:
+    "The Business France search page changed, so its offers could not be read this time.",
   linkedin_searched_once:
     "LinkedIn was searched once through its public job search for all your LinkedIn addresses.",
   // The job websites searched in the person's browser (jobs J10, app/browser/sources/interactive.py).
@@ -253,6 +259,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
  * LinkedIn is read about one request every 10 seconds. */
 export const LINKEDIN_TIME_BUDGET =
   "LinkedIn is read slowly, about one request every 10 seconds, so its time in this search ran out. What was read is kept.";
+
+/** Business France VIE's public search stopped by its own time cap (its `time_budget`). */
+export const VIE_TIME_BUDGET =
+  "Business France is read slowly, a few seconds between requests, so its time in this search ran out. What was read is kept.";
 
 /** The searches the agent of a website ran (jobs J18, owner 2026-10-27), from its own tool
  * calls: how many, and which, each a saved title, in the saved place it chose if any. Empty

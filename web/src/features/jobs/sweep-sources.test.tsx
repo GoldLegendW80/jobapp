@@ -132,3 +132,67 @@ it("keeps LinkedIn's public job search among the job sites beside boards and fee
     "Arbeitnow",
   );
 });
+
+// Business France VIE through its public search API (owner, 2026-11-01) is shown like
+// LinkedIn's public job search, with its own words when it stops.
+it("lists Business France VIE's public search with its searches and its stops", () => {
+  render(
+    <SweepSources
+      sources={[
+        source({
+          mode: "api",
+          kind: "vie",
+          host: "mon-vie-via.businessfrance.fr",
+          phase: "done",
+          outcome: "complete",
+          found: 4,
+          new: 3,
+          searches: 2,
+          planned: 2,
+          searched: [
+            { title: "GenAI Engineer", place: null },
+            { title: "Data Engineer", place: null },
+          ],
+        }),
+        source({
+          mode: "api",
+          kind: "vie",
+          host: "mon-vie-via.businessfrance.fr",
+          phase: "done",
+          reason: "vie_rate_limited",
+          error: "vie_rate_limited",
+        }),
+        source({
+          mode: "api",
+          kind: "vie",
+          host: "mon-vie-via.businessfrance.fr",
+          phase: "done",
+          reason: "time_budget",
+          error: "time_budget",
+        }),
+        source({
+          mode: "api",
+          kind: "vie",
+          host: "mon-vie-via.businessfrance.fr",
+          phase: "done",
+          reason: "vie_key_missing",
+          error: "vie_key_missing",
+        }),
+      ]}
+    />,
+  );
+  const items = screen.getAllByRole("listitem");
+  expect(items[0]).toHaveTextContent(
+    "Business France VIE: 2 searches ran: GenAI Engineer; Data Engineer. 4 postings found, 3 new.",
+  );
+  expect(items[1]).toHaveTextContent(
+    "Business France asked the app to slow down, so its search stopped for this time.",
+  );
+  expect(items[2]).toHaveTextContent(
+    "Business France is read slowly, a few seconds between requests, so its time in this search ran out.",
+  );
+  expect(items[3]).toHaveTextContent(
+    "The Business France search page changed, so its offers could not be read this time.",
+  );
+  for (const item of items) expect(item.textContent).not.toMatch(/[–—]| - /);
+});
