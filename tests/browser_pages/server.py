@@ -52,7 +52,10 @@ the page with a cookie banner whose form POSTs /consent (a 303 back with a cooki
 `careers.b20-robotics.test` links its job search on another host of the company,
 `search.b20-robotics.test` (b20/search.html: a GET form to /results, a POST form to /search);
 `ats.b20-hire.test` shows the posting (b20/ats.html) with Save job, Follow, Send message, Easy
-Apply and an application form posted to the posting's address. Any other POST to these hosts is
+Apply and an application form posted to the posting's address, and a sign in page
+(b20/signin.html, /checkpoint/lg/login) whose own script POSTs its form to
+/checkpoint/lg/login-submit once GET /b20/person says the person submits it (GET /b20/posted?path=
+waits until a POST to that path is logged, 30 s at most). Any other POST to these hosts is
 answered 200 and logged: GET /b20/log answers what they saw (method, host, path, an Upgrade
 header), so a test shows that what the line refuses never reached them.
 
@@ -112,6 +115,8 @@ B20_HOSTS = {
     "ats.b20-hire.test",
 }
 B20_LOG = []
+B20_SEEN = threading.Condition(J15_LOCK)  # a request logged on a B20 host
+B20_PERSON = threading.Event()  # GET /b20/person: the sign in page's own submit goes
 B20_ATS = "http://ats.b20-hire.test:8080/example-robotics/jobs/42"
 B20_JOB = re.compile(r"/jobs/([0-9]{1,3})")
 
@@ -335,6 +340,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "upgrade": self.headers.get("Upgrade", ""),
                 }
             )
+            B20_SEEN.notify_all()
         return host
 
     def b20_file(self, name: str) -> None:
@@ -363,6 +369,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send(b20_results(query.get("q", [""])[0]), "text/html")
         if host == "ats.b20-hire.test" and url.path == "/example-robotics/jobs/42":
             return self.b20_file("ats.html")
+        if host == "ats.b20-hire.test" and url.path == "/checkpoint/lg/login":
+            return self.b20_file("signin.html")
+        if host == "ats.b20-hire.test" and url.path == "/b20-person":
+            # The sign in page waits here for the person's own submit (GET /b20/person).
+            went = B20_PERSON.wait(60)
+            B20_PERSON.clear()
+            return self.send(json.dumps({"go": went}))
         return self.send(J15_PAGE.format(title="Not found", body=""), "text/html")
 
     def b20_post(self, host: str, url) -> None:
@@ -494,6 +507,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if url.path == "/b20/log":
             with J15_LOCK:
                 return self.send(json.dumps(B20_LOG))
+        if url.path == "/b20/person":  # the person submits the sign in page's form
+            B20_PERSON.set()
+            return self.send(json.dumps({"person": True}))
+        if url.path == "/b20/posted":  # waits for a POST to that path on a B20 host
+            path = query.get("path", [""])[0]
+            with B20_SEEN:
+                seen = B20_SEEN.wait_for(
+                    lambda: any(
+                        s["method"] == "POST" and s["path"] == path for s in B20_LOG
+                    ),
+                    timeout=30,
+                )
+            return self.send(json.dumps({"seen": seen}))
         if url.path == "/b19/log":
             with J15_LOCK:
                 return self.send(json.dumps(B19_LOG))

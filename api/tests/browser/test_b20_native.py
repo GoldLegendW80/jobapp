@@ -427,6 +427,51 @@ def test_what_code_cannot_see_inside_a_script_and_the_floor_that_holds(b20, sear
     assert [s["upgrade"].lower() for s in sockets] == ["websocket"], answers["socket"]
 
 
+SIGN_IN = "http://ats.b20-hire.test:8080/checkpoint/lg/login"
+SIGN_IN_SUBMIT = "/checkpoint/lg/login-submit"
+
+
+def test_the_person_holding_the_input_signs_in_past_the_floor_on_real_chromium(b20, search):
+    """Review of B20, round 2 (spec item 3, "Who's there"): while the person holds the input of
+    the sweep lease (Take over, through browserd's control route as the api's Take over calls
+    it), the sign in page's own document POST, which the line refuses in the agent's turn
+    (`line_post`), reaches the website; after Give back the agent is told the person used the
+    browser, and the same POST from the page is refused again."""
+    page = search(SIGN_IN)
+    lease = page.lease
+
+    def take(viewer: str | None) -> str:
+        answer = lease.raw(
+            "POST",
+            f"/leases/{lease.id}/live/input",
+            json.dumps({"viewer": viewer}),
+            **{"Content-Type": "application/json"},
+        )
+        assert answer["status"] == 200, answer
+        return answer["body"]["input"]
+
+    def posts() -> list[dict]:
+        return [s for s in seen(b20) if s["method"] == "POST" and s["path"] == SIGN_IN_SUBMIT]
+
+    assert posts() == []
+    # No viewer is open: the takeover lasts HOLDER_GRACE_S (10 s), far longer than this step.
+    assert take(str(uuid.uuid4())) == "person"
+    fetched(b20, "http://pages:8080/b20/person")  # the person clicks Sign in
+    waited = json.loads(fetched(b20, f"http://pages:8080/b20/posted?path={SIGN_IN_SUBMIT}"))
+    assert waited["seen"] is True, seen(b20)[-5:]
+    assert take(None) == "agent"
+    told = page("browser_snapshot")
+    assert told.get("error") == "person_used", told
+    script = (
+        "async () => { try { await fetch('/checkpoint/lg/login-submit', "
+        "{method: 'POST', body: 'session_key=x'}); return 'sent'; } "
+        "catch (e) { return 'refused'; } }"
+    )
+    after = page.evaluate(script)
+    assert after.get("result") == '"refused"', after
+    assert len(posts()) == 1
+
+
 def test_the_jungle_s_algolia_search_leaves_now_anonymous(b20, search):
     """B19's stand in for Welcome to the Jungle: its search service's client says "connect" in
     `x-algolia-agent` and "application" in `x-algolia-application-id`; read as metadata, never
