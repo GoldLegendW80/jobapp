@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -56,6 +56,7 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
       properties: { request: { type: "string" } },
     },
     first_message: "For a website search, a JSON object search_scope.",
+    uses_default_message: false,
     tools: [
       {
         name: "browser_snapshot",
@@ -85,6 +86,8 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
     skills: "None: setting_sources is empty and the Skill tool is denied.",
     guards: "Whatever a saved prompt says, the code keeps its guards.",
     version: null,
+    code_changed: [],
+    code_prompt_then: null,
     versions: [],
     runs: [
       {
@@ -114,7 +117,7 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
     ],
     choices: {
       models: ["claude-opus-5-5", "claude-sonnet-5-5"],
-      efforts: ["low", "medium", "high", "max"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
       credential_kinds: ["claude_subscription", "anthropic_api_key"],
       turns_max: 10000,
       wall_time_min_s: 10,
@@ -138,6 +141,7 @@ const SUMMARY: AgentSummary = {
   private_io: true,
   version: null,
   overridden: false,
+  code_changed: [],
   last_run_at: null,
 };
 
@@ -149,11 +153,12 @@ const noDashes = (text: string | null) => {
 function fakeAgents(
   page: AgentPage = makePage(),
   save?: (body: Record<string, unknown>) => Response | undefined,
+  summary: AgentSummary = SUMMARY,
 ) {
   const state = { page, saves: [] as Array<Record<string, unknown>>, reads: 0 };
   server.use(
     http.get("*/api/admin/agents", () =>
-      HttpResponse.json({ items: [SUMMARY] }),
+      HttpResponse.json({ items: [summary] }),
     ),
     http.get("*/api/admin/agents/:name", ({ params }) => {
       state.reads += 1;
@@ -175,6 +180,8 @@ function fakeAgents(
         ...state.page,
         saved: changes,
         effective: { ...CODE, ...changes },
+        code_changed: [],
+        code_prompt_then: null,
         version,
         versions: [
           {
@@ -216,6 +223,24 @@ describe("the list", () => {
     // Phone width: each cell carries its label for the stacked layout.
     expect(container.querySelector('[data-label="Model"]')).not.toBeNull();
     noDashes(container.textContent);
+  });
+
+  it("says when the code changed a field since the version that runs was saved", async () => {
+    fakeSession(admin);
+    fakeAgents(makePage(), undefined, {
+      ...SUMMARY,
+      version: 2,
+      overridden: true,
+      code_changed: ["system_prompt"],
+    });
+    renderApp("/admin/agents");
+    const table = await screen.findByRole("table", { name: "Agents, by name" });
+    const row = within(table).getByRole("row", { name: /browser_discovery/ });
+    expect(within(row).getByText("Version 2")).toBeInTheDocument();
+    expect(
+      within(row).getByText("The code's prompt changed since it was saved"),
+    ).toBeInTheDocument();
+    noDashes(table.textContent);
   });
 
   it("a member gets the not found page and the agents are never asked for", async () => {
@@ -283,6 +308,136 @@ describe("an agent's page", () => {
     expect(container.innerHTML).not.toMatch(
       /(bg|text|border)-(white|black|gray|slate|zinc)\b|#[0-9a-f]{6}/i,
     );
+  });
+
+  it("shows the default message only for an agent whose first message reads it", async () => {
+    fakeSession(admin);
+    fakeAgents();
+    const { unmount } = renderApp("/admin/agents/browser_discovery");
+    expect(
+      await screen.findByText(
+        "For a website search, a JSON object search_scope.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Default message")).toBeNull();
+    unmount();
+
+    fakeAgents(
+      makePage({
+        uses_default_message: true,
+        first_message: "The input's message, else the default message below.",
+      }),
+    );
+    renderApp("/admin/agents/browser_discovery");
+    expect(await screen.findByLabelText("Default message")).toHaveValue("");
+    expect(
+      screen.getByText(
+        "Used when a run's input carries no message of its own.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says what the code changed since the version that runs, with the code's own diff, and reverts", async () => {
+    fakeSession(admin);
+    const saved = { system_prompt: "Saved prompt.", max_turns: 30 };
+    const state = fakeAgents(
+      makePage({
+        saved,
+        effective: { ...CODE, ...saved },
+        version: 2,
+        code_changed: ["system_prompt", "max_turns", "tools"],
+        code_prompt_then: "You search one job website.\nReport the postings.",
+      }),
+    );
+    const user = userEvent.setup();
+    const { container } = renderApp("/admin/agents/browser_discovery");
+    const notice = (
+      await screen.findByText(
+        "The code's prompt changed since you saved this version.",
+      )
+    ).closest('[role="alert"]');
+    expect(notice).not.toBeNull();
+    const scope = within(notice as HTMLElement);
+    const diff = scope.getByRole("list", {
+      name: "What the code changed in its prompt",
+    });
+    expect(
+      within(diff).getByText("Report what you verified.").closest("li"),
+    ).toHaveAttribute("data-kind", "added");
+    expect(
+      within(diff).getByText("Report the postings.").closest("li"),
+    ).toHaveAttribute("data-kind", "removed");
+    expect(
+      scope.getByText(
+        "The code's max turns changed since you saved this version. The code's value now: 10000.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      scope.getByText(/The code's tools changed since you saved this version/),
+    ).toHaveTextContent("browser_snapshot, report_postings.");
+    expect(scope.getByText(/Runs still use version 2/)).toBeInTheDocument();
+    // The run's prompt is still the saved one until a new version is saved.
+    expect(screen.getByRole("textbox", { name: "System prompt" })).toHaveValue(
+      "Saved prompt.",
+    );
+    noDashes(container.textContent);
+
+    await user.click(
+      scope.getByRole("button", { name: "Revert to the code's version" }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(state.saves).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Revert" }));
+    await waitFor(() => {
+      expect(state.saves).toEqual([
+        { changes: {}, note: REVERT_NOTE, base_version: 2 },
+      ]);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByText(
+          "The code's prompt changed since you saved this version.",
+        ),
+      ).toBeNull();
+    });
+  });
+
+  it("starts another agent's page from its own values, not from the last page's draft", async () => {
+    fakeSession(admin);
+    const triage = makePage({
+      name: "triage",
+      code: { ...CODE, description: "Assesses one posting." },
+      effective: { ...CODE, description: "Assesses one posting." },
+    });
+    const pages: Record<string, AgentPage> = {
+      browser_discovery: makePage(),
+      triage,
+    };
+    server.use(
+      http.get("*/api/admin/agents/:name", ({ params }) =>
+        HttpResponse.json(pages[String(params.name)]),
+      ),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp("/admin/agents/triage");
+    expect(await screen.findByLabelText("Description")).toHaveValue(
+      "Assesses one posting.",
+    );
+    await act(() => router.navigate("/admin/agents/browser_discovery"));
+    const description = await screen.findByDisplayValue(CODE.description);
+    await user.clear(description);
+    await user.type(description, "A draft of the other agent.");
+    // Straight to the cached page of triage, as a jump in the history does.
+    await act(() => router.navigate("/admin/agents/triage"));
+    expect(
+      await screen.findByRole("heading", { name: "triage", level: 1 }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Description")).toHaveValue(
+      "Assesses one posting.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Save as a new version" }),
+    ).toBeDisabled();
   });
 
   it("an unknown agent says so", async () => {

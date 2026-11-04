@@ -2,11 +2,14 @@
 save writes, the runner using the latest version at the next run on the fake backend, and
 migration 0031."""
 
+import asyncio
+import dataclasses
 import logging
 import re
 import secrets
 import sys
 import threading
+import typing
 import uuid
 from pathlib import Path
 from typing import Any
@@ -19,11 +22,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import catalog, definitions, overrides, runner
 from app.agents.crypto import Keyring
-from app.agents.models import AgentEvent, AgentOverride, AgentRun, RunStatus
+from app.agents.models import AgentEvent, AgentOverride, AgentRun, CredentialKind, RunStatus
 from app.config import Settings
 from app.identity.models import Role
+from tests.agents.conftest import OAUTH
 from tests.agents.run_helpers import (
     Backends,
+    add_job,
     add_user,
     context,
     execute,
@@ -258,6 +263,160 @@ def test_two_saves_at_once_write_one_version(factory: sessionmaker[Session]) -> 
     thread.join()
     assert isinstance(outcome[0], overrides.StaleVersionError)
     assert [row.changes for row in versions(factory, "triage")] == [{"effort": "high"}]
+
+
+def test_the_efforts_offered_are_the_ones_the_sdk_takes() -> None:
+    sdk_types = pytest.importorskip("claude_agent_sdk.types")
+    assert typing.get_args(sdk_types.EffortLevel) == definitions.EFFORTS
+
+
+def test_a_default_message_is_editable_only_where_a_first_message_reads_it(
+    api: Api, admin: str, factory: sessionmaker[Session]
+) -> None:
+    """Saved for an agent whose first message is built in code, it would reach no run: 422."""
+    agents = catalog.load()
+    canary = f"canary-{secrets.token_hex(8)}"
+    used, refused = set(), set()
+    for name, agent in agents.items():
+        page = api.get(f"{AGENTS}/{name}", token=admin).json()
+        assert page["uses_default_message"] is agent.uses_default_message, name
+        # The class's own prompt says whether a run reads the default message, not the flag.
+        planted = dataclasses.replace(agent, default_message=canary)
+        try:
+            text = planted.prompt({}, None)
+        except Exception:
+            text = ""
+        if not agent.chat:
+            assert (canary in text) is agent.uses_default_message, name
+        answer = save(api, admin, name, {"default_message": "Search only remote jobs."})
+        if agent.uses_default_message:
+            assert answer.status_code == 201, (name, answer.text)
+            assert answer.json()["saved"] == {"default_message": "Search only remote jobs."}
+            used.add(name)
+        else:
+            assert answer.status_code == 422, (name, answer.text)
+            assert answer.json()["detail"] == (
+                "default_message: this agent builds its first message in code"
+            )
+            assert versions(factory, name) == [], name
+            # The code's own value is no change, as for every field.
+            same = save(api, admin, name, {"default_message": agent.default_message})
+            assert same.status_code == 201, (name, same.text)
+            assert same.json()["saved"] == {}
+            refused.add(name)
+    assert {"triage", "echo"} <= used
+    assert {"browser_discovery", "job_chat", "apply_form", "documents_cv"} <= refused
+    # A version saved before that rule still runs the code's value there.
+    finder = agents["browser_discovery"]
+    assert overrides.apply(finder, {"default_message": "Remote only."}) is finder
+
+
+def test_a_saved_default_message_is_the_first_message_of_the_next_run(
+    api: Api,
+    admin: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+) -> None:
+    message = "Assess this posting for a remote role only."
+    assert save(api, admin, "triage", {"default_message": message}).status_code == 201
+    user = add_user(factory, f"e2e-{secrets.token_hex(3)}@example.org")
+    save_credential(factory, keyring, user)
+    job = add_job(factory, user)
+    run_id = new_run(factory, user, {}, job_id=job, agent="triage")
+    backends = Backends()
+    assert execute(context(settings, factory, keyring, backends), run_id) is RunStatus.done
+    assert backends.made[0].seen_prompt == f"{message}\n\nJob id: {job}"
+    assert run_row(factory, run_id).agent_version == 1
+
+
+def test_a_saved_wall_time_and_model_per_credential_reach_the_run(
+    api: Api,
+    admin: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = definitions.ECHO
+    lowered = code.wall_time_s / 4
+    changes = {
+        "wall_time_s": lowered,
+        "model_by_credential": {"anthropic_api_key": "claude-sonnet-5-5"},
+    }
+    assert not code.model_by_credential
+    assert code.model == "claude-opus-5-5"
+    assert save(api, admin, "echo", changes).status_code == 201
+    timeouts: list[float | None] = []
+    wait = asyncio.wait
+
+    def watched(tasks: Any, *, timeout: float | None = None, **kwargs: Any) -> Any:
+        if kwargs.get("return_when") == asyncio.FIRST_COMPLETED:
+            timeouts.append(timeout)  # the runner's clock on the stream (runner._run_stream)
+        return wait(tasks, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(runner.asyncio, "wait", watched)
+    on_key, options, _ = _run_echo(settings, factory, keyring, monkeypatch)
+    assert timeouts == [lowered]
+    assert options.model == "claude-sonnet-5-5"
+    assert run_row(factory, on_key).model == "claude-sonnet-5-5"
+    assert run_row(factory, on_key).agent_version == 1
+
+    # A credential kind the version does not name runs on the default model.
+    user = add_user(factory, f"e2e-{secrets.token_hex(3)}@example.org")
+    save_credential(factory, keyring, user, OAUTH, CredentialKind.claude_subscription)
+    on_plan = new_run(factory, user)
+    backends = Backends()
+    assert execute(context(settings, factory, keyring, backends), on_plan) is RunStatus.done
+    assert backends.made[0].seen_options.model == "claude-opus-5-5"
+    assert run_row(factory, on_plan).model == "claude-opus-5-5"
+    assert timeouts == [lowered, lowered]
+
+
+def test_the_page_and_the_list_say_when_the_code_changed_a_saved_field(
+    api: Api, admin: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code = definitions.TRIAGE
+    saved = save(api, admin, "triage", {"system_prompt": "Be brief.", "max_turns": 5})
+    assert saved.status_code == 201
+    assert saved.json()["code_changed"] == []
+    assert saved.json()["code_prompt_then"] is None
+    [row] = versions(factory, "triage")
+    assert row.code_hashes == {
+        "max_turns": overrides.code_hash(code.max_turns),
+        "system_prompt": overrides.code_hash(code.system_prompt),
+    }
+    assert row.code_prompt == code.system_prompt
+
+    def listed() -> list[str]:
+        [item] = [a for a in api.get(AGENTS, token=admin).json()["items"] if a["name"] == "triage"]
+        return list(item["code_changed"])
+
+    assert listed() == []
+    # The code's prompt changes after the version was saved (a new release).
+    newer = dataclasses.replace(code, system_prompt=code.system_prompt + "\nA new rule.")
+    monkeypatch.setitem(definitions.AGENTS, "triage", newer)
+    page = api.get(f"{AGENTS}/triage", token=admin).json()
+    assert page["code_changed"] == ["system_prompt"]
+    assert page["code_prompt_then"] == code.system_prompt
+    assert page["code"]["system_prompt"] == newer.system_prompt
+    assert page["effective"]["system_prompt"] == "Be brief."  # the run still uses the saved one
+    assert listed() == ["system_prompt"]
+    monkeypatch.setitem(definitions.AGENTS, "triage", dataclasses.replace(newer, max_turns=20))
+    page = api.get(f"{AGENTS}/triage", token=admin).json()
+    assert page["code_changed"] == ["system_prompt", "max_turns"]
+    # Saved again against the new code: nothing to report until the code changes again.
+    again = save(api, admin, "triage", {"system_prompt": "Be brief."}, base_version=1)
+    assert again.status_code == 201
+    assert again.json()["code_changed"] == []
+    assert again.json()["code_prompt_then"] is None
+    assert listed() == []
+    # A version that changes nothing has nothing the code could change under it.
+    monkeypatch.setitem(definitions.AGENTS, "triage", code)
+    assert listed() == ["system_prompt"]
+    reverted = save(api, admin, "triage", {}, base_version=2)
+    assert reverted.json()["code_changed"] == []
+    assert listed() == []
 
 
 # --- the next run uses it ----------------------------------------------------------------------

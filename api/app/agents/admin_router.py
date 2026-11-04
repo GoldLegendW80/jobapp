@@ -108,6 +108,8 @@ class AgentSummary(BaseModel):
     private_io: bool
     version: int | None
     overridden: bool
+    # The fields of that version whose code value changed since it was saved.
+    code_changed: list[str]
     last_run_at: datetime | None
 
 
@@ -129,6 +131,8 @@ class AgentPage(BaseModel):
     input_fields: list[InputField]
     input_schema: dict[str, Any]
     first_message: str
+    # Whether a run's first message can be the default message: the field is editable only then.
+    uses_default_message: bool
     tools: list[ToolOut]
     turn_budgeted: bool
     ends: list[str]
@@ -138,6 +142,10 @@ class AgentPage(BaseModel):
     skills: str
     guards: str
     version: int | None
+    # The fields of the version that runs whose code value changed since it was saved, and the
+    # code's prompt of then when the prompt is one of them.
+    code_changed: list[str]
+    code_prompt_then: str | None
     versions: list[VersionOut]
     runs: list[RunRow]
     choices: dict[str, Any]
@@ -393,6 +401,7 @@ def _page(db: Session, agent: definitions.AgentDefinition, admin_id: uuid.UUID) 
     effective = overrides.apply(agent, saved)
     described = catalog.tools_described(db, agent.tools)
     fields, schema = _input(agent)
+    changed = overrides.code_changed(agent, current)
     tools = [
         ToolOut(
             name=name,
@@ -419,6 +428,7 @@ def _page(db: Session, agent: definitions.AgentDefinition, admin_id: uuid.UUID) 
         input_fields=fields,
         input_schema=schema,
         first_message=catalog.first_message(agent),
+        uses_default_message=agent.uses_default_message,
         tools=tools,
         turn_budgeted=agent.name in sdk_options.TURN_BUDGETED,
         ends=_ends(effective),
@@ -428,6 +438,10 @@ def _page(db: Session, agent: definitions.AgentDefinition, admin_id: uuid.UUID) 
         skills=SKILLS,
         guards=GUARDS,
         version=current.version if current is not None else None,
+        code_changed=changed,
+        code_prompt_then=(
+            current.code_prompt if current is not None and "system_prompt" in changed else None
+        ),
         versions=_versions(db, agent.name),
         runs=_runs(db, agent.name, admin_id),
         choices=_choices(agent),
@@ -469,6 +483,7 @@ def list_agents(request: Request, response: Response, db: Db) -> AgentList:
                 private_io=agent.private_io,
                 version=found.version if found is not None else None,
                 overridden=bool(saved),
+                code_changed=overrides.code_changed(agents[name], found),
                 last_run_at=last.get(name),
             )
         )

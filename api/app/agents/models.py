@@ -376,8 +376,11 @@ class AgentMessage(Base):
 class AgentOverride(Base):
     """One saved version of an agent's overrides (agents A6): `changes` holds the editable fields
     that differ from the code (app/agents/overrides.py), `{}` for a version that goes back to the
-    code's definition. Versions count from 1 per agent and are never changed or deleted, so the
-    history stays whole. `saved_by` is null once that account is gone."""
+    code's definition. `code_hashes` holds the hash of the code's value of each of those fields
+    when it was saved, and `code_prompt` the code's prompt then when the version changes the
+    prompt, so the tab can say what the code changed since. Versions count from 1 per agent and
+    are never changed or deleted, so the history stays whole. `saved_by` is null once that
+    account is gone."""
 
     __tablename__ = "agent_overrides"
     __table_args__ = (
@@ -388,6 +391,7 @@ class AgentOverride(Base):
         ),
         sa.CheckConstraint("version >= 1", name="version_positive"),
         sa.CheckConstraint("jsonb_typeof(changes) = 'object'", name="changes_is_object"),
+        sa.CheckConstraint("jsonb_typeof(code_hashes) = 'object'", name="code_hashes_is_object"),
         sa.CheckConstraint("note IS NULL OR char_length(note) <= 500", name="note_length"),
     )
 
@@ -397,6 +401,10 @@ class AgentOverride(Base):
     changes: Mapped[dict[str, Any]] = mapped_column(
         pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
     )
+    code_hashes: Mapped[dict[str, str]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    code_prompt: Mapped[str | None] = mapped_column(sa.Text)
     saved_by: Mapped[uuid.UUID | None] = mapped_column(
         pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
     )

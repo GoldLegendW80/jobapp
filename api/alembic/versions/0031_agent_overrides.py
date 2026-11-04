@@ -1,6 +1,7 @@
 """The Agents tab of Admin (agents A6): `agent_overrides`, the saved versions of what an admin
-changed in an agent's definition; `agent_tools`, the app tools as the worker describes them; and
-`agent_runs.agent_version`, the version a run used.
+changed in an agent's definition, with what the code said when each was saved; `agent_tools`,
+the app tools as the worker describes them; and `agent_runs.agent_version`, the version a run
+used.
 
 Revision ID: 0031
 Revises: 0030
@@ -26,6 +27,8 @@ def upgrade() -> None:
         sa.Column("agent", sa.Text(), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("changes", pg.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("code_hashes", pg.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("code_prompt", sa.Text(), nullable=True),
         sa.Column("saved_by", pg.UUID(as_uuid=True), nullable=True),
         sa.Column("saved_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("note", sa.Text(), nullable=True),
@@ -44,6 +47,9 @@ def upgrade() -> None:
         sa.CheckConstraint("version >= 1", name="ck_agent_overrides_version_positive"),
         sa.CheckConstraint(
             "jsonb_typeof(changes) = 'object'", name="ck_agent_overrides_changes_is_object"
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(code_hashes) = 'object'", name="ck_agent_overrides_code_hashes_is_object"
         ),
         sa.CheckConstraint(
             "note IS NULL OR char_length(note) <= 500", name="ck_agent_overrides_note_length"

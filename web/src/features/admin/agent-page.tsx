@@ -44,6 +44,7 @@ import {
   saveVersion,
   type AgentPage,
   type Editable,
+  type EditableField,
   type NewVersion,
 } from "./agents-api";
 import { message } from "./errors";
@@ -54,6 +55,32 @@ const KIND_LABEL: Record<string, string> = {
   anthropic_api_key: "With an API key",
   claude_subscription: "With a Claude subscription",
 };
+
+/** How "The code's <field> changed" names each editable field. */
+const FIELD_LABEL: Record<EditableField, string> = {
+  description: "description",
+  system_prompt: "prompt",
+  default_message: "default message",
+  model: "model",
+  model_by_credential: "model per credential kind",
+  effort: "effort",
+  max_turns: "max turns",
+  wall_time_s: "wall time",
+  tools: "tools",
+};
+
+/** A code's value in words, for the notice of a field the code changed. */
+function shown(value: Editable[EditableField]): string {
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "none";
+  if (value === null) return "Claude Code's default";
+  if (typeof value === "object") {
+    const kinds = Object.entries(value).map(
+      ([kind, model]) => `${KIND_LABEL[kind] ?? kind}, ${model}`,
+    );
+    return kinds.length ? kinds.join("; ") : "the default model";
+  }
+  return value === "" ? "none" : String(value);
+}
 
 /** Admin, Agents, one agent: everything that makes it, and its editable parts. */
 export function AdminAgentPage() {
@@ -85,7 +112,9 @@ export function AdminAgentPage() {
           </span>
         </p>
       ) : agent.data ? (
-        <AgentView page={agent.data} />
+        // Keyed by agent: the draft is set from the page once, so another agent's page
+        // starts from its own values, never from the last one's draft.
+        <AgentView key={agent.data.name} page={agent.data} />
       ) : (
         <Alert variant="destructive">
           <CircleAlert aria-hidden="true" />
@@ -167,6 +196,17 @@ function AgentView({ page }: { page: AgentPage }) {
           </Badge>
         </div>
       </header>
+
+      {page.code_changed.length ? (
+        <CodeChanged
+          page={page}
+          onRevert={() => {
+            setError(undefined);
+            setReverting(true);
+          }}
+          busy={mutation.isPending}
+        />
+      ) : null}
 
       <Alert>
         <ShieldCheck aria-hidden="true" />
@@ -293,25 +333,27 @@ function AgentView({ page }: { page: AgentPage }) {
 
       <Section id="first-message" title="First message">
         <p className="text-sm">{page.first_message}</p>
-        <Field
-          label="Default message"
-          error={problems.default_message}
-          hint="Used when a run's input carries no message of its own."
-          code={page.code.default_message || "None"}
-          changed={draft.default_message !== page.code.default_message}
-        >
-          {(id, described) => (
-            <Textarea
-              id={id}
-              aria-describedby={described}
-              rows={3}
-              value={draft.default_message}
-              onChange={(event) => {
-                set({ default_message: event.target.value });
-              }}
-            />
-          )}
-        </Field>
+        {page.uses_default_message ? (
+          <Field
+            label="Default message"
+            error={problems.default_message}
+            hint="Used when a run's input carries no message of its own."
+            code={page.code.default_message || "None"}
+            changed={draft.default_message !== page.code.default_message}
+          >
+            {(id, described) => (
+              <Textarea
+                id={id}
+                aria-describedby={described}
+                rows={3}
+                value={draft.default_message}
+                onChange={(event) => {
+                  set({ default_message: event.target.value });
+                }}
+              />
+            )}
+          </Field>
+        ) : null}
       </Section>
 
       <Section id="tools" title="Tools">
@@ -854,7 +896,71 @@ function Json({
   );
 }
 
-function PromptDiff({ from, to }: { from: string; to: string }) {
+/** The notice of the fields the code changed since the version that runs was saved. */
+function CodeChanged({
+  page,
+  onRevert,
+  busy,
+}: {
+  page: AgentPage;
+  onRevert: () => void;
+  busy: boolean;
+}) {
+  const fields = page.code_changed.filter(
+    (field): field is EditableField => field in FIELD_LABEL,
+  );
+  return (
+    <Alert>
+      <CircleAlert aria-hidden="true" />
+      <AlertDescription className="flex min-w-0 flex-col gap-3">
+        {fields.map((field) =>
+          field === "system_prompt" ? (
+            <div key={field} className="flex min-w-0 flex-col gap-2">
+              <p>
+                The code&apos;s prompt changed since you saved this version.
+              </p>
+              {page.code_prompt_then !== null ? (
+                <PromptDiff
+                  from={page.code_prompt_then}
+                  to={page.code.system_prompt}
+                  title="What the code changed in its prompt"
+                />
+              ) : null}
+            </div>
+          ) : (
+            <p key={field} className="[overflow-wrap:anywhere]">
+              The code&apos;s {FIELD_LABEL[field]} changed since you saved this
+              version. The code&apos;s value now: {shown(page.code[field])}.
+            </p>
+          ),
+        )}
+        <p>
+          Runs still use version {String(page.version)}. Edit it below, or go
+          back to the code&apos;s version.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="self-start"
+          disabled={busy}
+          onClick={onRevert}
+        >
+          Revert to the code&apos;s version
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function PromptDiff({
+  from,
+  to,
+  title = "Changes from the code's prompt",
+}: {
+  from: string;
+  to: string;
+  title?: string;
+}) {
   if (from === to)
     return (
       <p className="text-sm text-muted-foreground">
@@ -863,12 +969,10 @@ function PromptDiff({ from, to }: { from: string; to: string }) {
     );
   const ops = diffLines(from, to).filter((op) => op.kind !== "same");
   return (
-    <div className="flex flex-col gap-1">
-      <h3 className="text-sm font-medium">
-        Changes from the code&apos;s prompt
-      </h3>
+    <div className="flex min-w-0 flex-col gap-1">
+      <h3 className="text-sm font-medium">{title}</h3>
       <ul
-        aria-label="Changes from the code's prompt"
+        aria-label={title}
         className="max-h-96 overflow-auto rounded-md border font-mono text-xs"
       >
         {ops.map((op, index) => (

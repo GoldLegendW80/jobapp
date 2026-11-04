@@ -17,6 +17,8 @@ export const agentSummarySchema = z.object({
   private_io: z.boolean(),
   version: z.number().int().nullable(),
   overridden: z.boolean(),
+  /** The fields of that version whose code value changed since it was saved. */
+  code_changed: z.array(z.string()),
   last_run_at: z.string().nullable(),
 });
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
@@ -58,6 +60,8 @@ export const agentPageSchema = z.object({
   ),
   input_schema: z.record(z.string(), z.unknown()),
   first_message: z.string(),
+  /** Whether a run's first message can be the default message: editable only then. */
+  uses_default_message: z.boolean(),
   tools: z.array(
     z.object({
       name: z.string(),
@@ -77,6 +81,10 @@ export const agentPageSchema = z.object({
   skills: z.string(),
   guards: z.string(),
   version: z.number().int().nullable(),
+  /** The fields of the version that runs whose code value changed since it was saved. */
+  code_changed: z.array(z.string()),
+  /** The code's prompt when that version was saved, when the code's prompt changed since. */
+  code_prompt_then: z.string().nullable(),
   versions: z.array(
     z.object({
       version: z.number().int(),

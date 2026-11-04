@@ -9,7 +9,6 @@ import {
   makeShots,
   newContext,
   setPassword,
-  signIn,
   watchErrors,
 } from "./stack";
 
@@ -142,7 +141,14 @@ test("a signed out visitor is sent to sign in", async ({ browser }) => {
   const visitor = await other.newPage();
   await visitor.goto(`/admin/agents/${AGENT}`);
   await expect(visitor.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await signIn(visitor, ADMIN, PASSWORD);
+  await expect(visitor).toHaveURL(
+    /\/login\?next=\/admin\/agents\/browser_discovery$/,
+  );
+  // The form of the redirected page, which keeps `next` (stack.ts signIn opens /login afresh).
+  await visitor.getByLabel("Email").fill(ADMIN);
+  await visitor.getByLabel("Password").fill(PASSWORD);
+  await visitor.getByRole("button", { name: "Sign in" }).click();
+  await expect(visitor).toHaveURL(/\/admin\/agents\/browser_discovery$/);
   await expect(
     visitor.getByRole("heading", { name: AGENT, level: 1 }),
   ).toBeVisible();

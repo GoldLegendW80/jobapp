@@ -129,6 +129,15 @@ function AgentsTable({ items, now }: { items: AgentSummary[]; now: Date }) {
               {agent.overridden && agent.version !== null
                 ? `Version ${String(agent.version)}`
                 : "The code's"}
+              {agent.code_changed.length ? (
+                <span className="mt-1 flex">
+                  <Badge variant="outline">
+                    {agent.code_changed.includes("system_prompt")
+                      ? "The code's prompt changed since it was saved"
+                      : "The code changed since it was saved"}
+                  </Badge>
+                </span>
+              ) : null}
             </td>
             <td {...cell("Last run")}>
               {agent.last_run_at ? (

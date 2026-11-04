@@ -15,12 +15,24 @@ sources). So do the guards enforced in code whatever a prompt says: browserd's p
 gate and its approval, no mail sent by itself, the cybersecurity rule. A saved prompt is checked
 for its size only, never for what it says.
 
+The default message is editable only for an agent whose first message can be it
+(`AgentDefinition.uses_default_message`); the others refuse it, so nothing is saved that no run
+reads.
+
+Each version also keeps what the code said when it was saved: a hash of the code's value of each
+field it overrides (`code_hashes`), and the code's prompt itself when it overrides the prompt
+(`code_prompt`). The page and the list then say when the code changed a field since the version
+that runs was saved (`code_changed`): a saved prompt would otherwise hide every later change of
+the code's prompt.
+
 The runner reads the latest version when a run starts (`for_run`: one read, no cache) and
 records the version on the run (`agent_runs.agent_version`). When that read fails, the run goes
 on with the code's definition and a warning names the error's type.
 """
 
 import dataclasses
+import hashlib
+import json
 import logging
 import uuid
 from collections.abc import Mapping
@@ -147,7 +159,38 @@ def check(definition: definitions.AgentDefinition, raw: Mapping[str, Any]) -> di
         given["tools"] = [name for name in definition.tools if name in set(given["tools"])]
     if "wall_time_s" in given and given["wall_time_s"] > definition.wall_time_s:
         raise OverrideError(f"wall_time_s: at most the code's {definition.wall_time_s:g} seconds")
+    if "default_message" in given and not definition.uses_default_message:
+        raise OverrideError("default_message: this agent builds its first message in code")
     return {name: value for name, value in given.items() if value != code[name]}
+
+
+def code_hash(value: Any) -> str:
+    """The hash of a code's value as `code_values` gives it, keys sorted."""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def code_hashes(
+    definition: definitions.AgentDefinition, changes: Mapping[str, Any]
+) -> dict[str, str]:
+    """What a version keeps of the code it was saved against: the hash of the code's value of
+    each field it changes."""
+    code = code_values(definition)
+    return {name: code_hash(code[name]) for name in sorted(changes) if name in code}
+
+
+def code_changed(definition: definitions.AgentDefinition, row: AgentOverride | None) -> list[str]:
+    """The fields of this version whose code value is no longer the one it was saved against.
+    A field saved with no hash is not named: nothing says what the code was."""
+    if row is None:
+        return []
+    code = code_values(definition)
+    kept = dict(row.code_hashes or {})
+    return [
+        name
+        for name in EDITABLE
+        if name in (row.changes or {}) and name in kept and kept[name] != code_hash(code[name])
+    ]
 
 
 def apply(
@@ -155,8 +198,9 @@ def apply(
 ) -> definitions.AgentDefinition:
     """The definition a run uses: the code's, with the saved changes on top. A version saved
     against an older code is read the same way, field by field: a field the agent cannot take
-    any more (a tool the code removed, a wall time above the code's new one) falls back to the
-    code's value, and the others still apply."""
+    any more (a tool the code removed, a wall time above the code's new one, a default message
+    its first message no longer reads) falls back to the code's value, and the others still
+    apply."""
     fields: dict[str, Any] = {}
     for name in EDITABLE:
         if name not in changes:
@@ -167,6 +211,8 @@ def apply(
             continue
         value = getattr(parsed, name)
         if value is None:
+            continue
+        if name == "default_message" and not definition.uses_default_message:
             continue
         if name == "tools":
             value = tuple(tool for tool in definition.tools if tool in set(value))
@@ -244,6 +290,8 @@ def save(
         agent=definition.name,
         version=(current.version if current is not None else 0) + 1,
         changes=changes,
+        code_hashes=code_hashes(definition, changes),
+        code_prompt=definition.system_prompt if "system_prompt" in changes else None,
         saved_by=user_id,
         saved_at=now,
         note=(note or "").strip() or None,
