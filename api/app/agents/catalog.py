@@ -11,10 +11,8 @@ data: `FIRST_MESSAGES` says in words what each kind of definition builds and fro
 the dynamic parts named, never a value of a person's data.
 """
 
-import importlib
-import importlib.util
+import inspect
 import logging
-import sys
 import threading
 import uuid
 from datetime import datetime
@@ -28,21 +26,6 @@ from app.agents import definitions
 from app.agents.models import AgentTool
 
 logger = logging.getLogger("app.agents.catalog")
-
-# The modules that register agents (definitions.register), app/agents/definitions.py aside. A
-# module that is not there is skipped; tests/agents/test_admin_agents.py fails when a module of
-# app/ registers an agent and is not reached from this list.
-AGENT_MODULES = (
-    "app.ingestion.agents",  # profile_extract, document_transcribe (G6, G14)
-    "app.apply.agents",  # apply_answer, and through it apply_form and apply_check
-    "app.browser.finder",  # browser_finder, browser_discovery (B13, J18)
-    "app.documents.writer_cv",
-    "app.documents.writer_letter",
-    "app.documents.writer_proposal",
-    "app.documents.writer_base",
-    "app.documents.writer_design",
-    "app.documents.chat",  # documents_chat_<kind>
-)
 
 # Who starts an agent's runs, by the package that registered it (an internal agent is started
 # by its module only).
@@ -113,10 +96,20 @@ CHAT_MESSAGE = (
 
 
 def load() -> dict[str, definitions.AgentDefinition]:
-    """Every registered agent, after importing the modules that register them."""
-    for name in AGENT_MODULES:
-        if importlib.util.find_spec(name) is not None:
-            importlib.import_module(name)
+    """Every registered agent, after importing the modules that register them (here, not at the
+    top: only the tab needs them all in the api). Each one registers its definition without the
+    Claude Agent SDK. tests/agents/test_admin_agents.py fails when a module of app/ registers an
+    agent and is not reached from here."""
+    from app.apply import agents as _apply  # noqa: F401  (apply_answer, apply_form, apply_check)
+    from app.browser import finder as _finder  # noqa: F401  (browser_finder, browser_discovery)
+    from app.documents import chat as _chat  # noqa: F401  (documents_chat_<kind>)
+    from app.documents import writer_base as _base  # noqa: F401
+    from app.documents import writer_cv as _cv  # noqa: F401
+    from app.documents import writer_design as _design  # noqa: F401
+    from app.documents import writer_letter as _letter  # noqa: F401
+    from app.documents import writer_proposal as _proposal  # noqa: F401
+    from app.ingestion import agents as _ingestion  # noqa: F401  (profile_extract, transcribe)
+
     return dict(definitions.AGENTS)
 
 
@@ -143,7 +136,7 @@ def first_message(definition: definitions.AgentDefinition) -> str:
     text = FIRST_MESSAGES.get(f"{cls.__module__}.{cls.__qualname__}")
     if text is None:
         return f"Built per run by {cls.__qualname__}.prompt in {cls.__module__}."
-    fixed = getattr(sys.modules.get(cls.__module__), "FIRST_MESSAGE", "")
+    fixed = getattr(inspect.getmodule(cls), "FIRST_MESSAGE", "")
     return text.replace("{FIRST_MESSAGE}", str(fixed))
 
 

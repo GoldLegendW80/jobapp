@@ -1,0 +1,487 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { describe, expect, it } from "vitest";
+
+import { admin, fakeSession, member } from "@/test/auth";
+import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
+
+import {
+  changesOf,
+  REVERT_NOTE,
+  type AgentPage,
+  type AgentSummary,
+  type Editable,
+} from "./agents-api";
+
+const CODE: Editable = {
+  description: "Searches one job website with the browser, as a person would.",
+  system_prompt: "You search one job website.\nReport what you verified.",
+  default_message: "",
+  model: "claude-sonnet-5-5",
+  model_by_credential: { anthropic_api_key: "claude-sonnet-5-5" },
+  effort: "low",
+  max_turns: 10000,
+  wall_time_s: 86400,
+  tools: ["browser_snapshot", "report_postings"],
+};
+
+function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
+  return {
+    name: "browser_discovery",
+    module: "app.browser.finder",
+    starter: "A job search sweep, one website or careers page at a time",
+    flags: [
+      "Private: its inputs and outputs are never stored, only their sizes and counts.",
+    ],
+    test_only: false,
+    internal: true,
+    private_io: true,
+    code: CODE,
+    saved: {},
+    effective: CODE,
+    input_fields: [
+      {
+        name: "request",
+        type: "string",
+        required: true,
+        default: null,
+        limits: "at most 64 characters",
+        description: "",
+      },
+    ],
+    input_schema: {
+      type: "object",
+      properties: { request: { type: "string" } },
+    },
+    first_message: "For a website search, a JSON object search_scope.",
+    tools: [
+      {
+        name: "browser_snapshot",
+        full_name: "mcp__app__browser_snapshot",
+        module: "app.browser.finder_tools",
+        description: "Read the page as an accessibility snapshot.",
+        input_schema: { type: "object", properties: {} },
+        described_at: "2026-11-04T10:00:00Z",
+        on: true,
+      },
+      {
+        name: "report_postings",
+        full_name: "mcp__app__report_postings",
+        module: null,
+        description: null,
+        input_schema: null,
+        described_at: null,
+        on: true,
+      },
+    ],
+    turn_budgeted: false,
+    ends: ["The model gives its final answer."],
+    claude_code: { permission_mode: "dontAsk", setting_sources: [], tools: [] },
+    environment:
+      "The credential in ANTHROPIC_API_KEY (an API key). Values are never shown.",
+    gate: "A PreToolUse hook denies any tool outside allowed_tools.",
+    skills: "None: setting_sources is empty and the Skill tool is denied.",
+    guards: "Whatever a saved prompt says, the code keeps its guards.",
+    version: null,
+    versions: [],
+    runs: [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        status: "done",
+        model: "claude-sonnet-5-5",
+        version: null,
+        turns: 12,
+        input_tokens: 900,
+        output_tokens: 40,
+        created_at: "2026-11-04T09:00:00Z",
+        finished_at: "2026-11-04T09:10:00Z",
+        mine: true,
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        status: "failed",
+        model: null,
+        version: 1,
+        turns: null,
+        input_tokens: null,
+        output_tokens: null,
+        created_at: "2026-11-04T08:00:00Z",
+        finished_at: null,
+        mine: false,
+      },
+    ],
+    choices: {
+      models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+      efforts: ["low", "medium", "high", "max"],
+      credential_kinds: ["claude_subscription", "anthropic_api_key"],
+      turns_max: 10000,
+      wall_time_min_s: 10,
+      wall_time_max_s: 86400,
+      prompt_max: 100000,
+      description_max: 300,
+      message_max: 4000,
+      note_max: 500,
+    },
+    ...overrides,
+  };
+}
+
+const SUMMARY: AgentSummary = {
+  name: "browser_discovery",
+  description: CODE.description,
+  module: "app.browser.finder",
+  model: "claude-sonnet-5-5",
+  test_only: false,
+  internal: true,
+  private_io: true,
+  version: null,
+  overridden: false,
+  last_run_at: null,
+};
+
+const noDashes = (text: string | null) => {
+  expect(text ?? "").not.toMatch(/[–—]| - /);
+};
+
+/** A fake /api/admin/agents holding one page, recording the saves it gets. */
+function fakeAgents(
+  page: AgentPage = makePage(),
+  save?: (body: Record<string, unknown>) => Response | undefined,
+) {
+  const state = { page, saves: [] as Array<Record<string, unknown>>, reads: 0 };
+  server.use(
+    http.get("*/api/admin/agents", () =>
+      HttpResponse.json({ items: [SUMMARY] }),
+    ),
+    http.get("*/api/admin/agents/:name", ({ params }) => {
+      state.reads += 1;
+      if (params.name !== state.page.name)
+        return HttpResponse.json(
+          { detail: "No agent has this name." },
+          { status: 404 },
+        );
+      return HttpResponse.json(state.page);
+    }),
+    http.post("*/api/admin/agents/:name/versions", async ({ request }) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      state.saves.push(body);
+      const override = save?.(body);
+      if (override) return override;
+      const changes = body.changes as Partial<Editable>;
+      const version = (state.page.version ?? 0) + 1;
+      state.page = {
+        ...state.page,
+        saved: changes,
+        effective: { ...CODE, ...changes },
+        version,
+        versions: [
+          {
+            version,
+            fields: Object.keys(changes).sort(),
+            saved_by: "E2E Admin",
+            saved_at: new Date().toISOString(),
+            note: (body.note as string | null) ?? null,
+          },
+          ...state.page.versions,
+        ],
+      };
+      return HttpResponse.json(state.page, { status: 201 });
+    }),
+  );
+  return state;
+}
+
+describe("the list", () => {
+  it("shows every agent with its module, model, version and last run", async () => {
+    fakeSession(admin);
+    fakeAgents();
+    const { container } = renderApp("/admin/agents");
+    const table = await screen.findByRole("table", { name: "Agents, by name" });
+    const row = within(table).getByRole("row", { name: /browser_discovery/ });
+    expect(
+      within(row).getByRole("link", { name: "browser_discovery" }),
+    ).toHaveAttribute("href", "/admin/agents/browser_discovery");
+    expect(within(row).getByText("app.browser.finder")).toBeInTheDocument();
+    expect(within(row).getByText("Internal")).toBeInTheDocument();
+    expect(within(row).getByText("Private")).toBeInTheDocument();
+    expect(within(row).getByText("The code's")).toBeInTheDocument();
+    expect(within(row).getByText("Never")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(document.title).toBe("Agents · jobapp");
+    // Phone width: each cell carries its label for the stacked layout.
+    expect(container.querySelector('[data-label="Model"]')).not.toBeNull();
+    noDashes(container.textContent);
+  });
+
+  it("a member gets the not found page and the agents are never asked for", async () => {
+    fakeSession(member);
+    const state = fakeAgents();
+    renderApp("/admin/agents/browser_discovery");
+    expect(
+      await screen.findByRole("heading", { name: "Page not found" }),
+    ).toBeInTheDocument();
+    expect(state.reads).toBe(0);
+  });
+});
+
+describe("an agent's page", () => {
+  it("shows every section, the guards and the options, and links only the admin's own runs", async () => {
+    fakeSession(admin);
+    fakeAgents();
+    const { container } = renderApp("/admin/agents/browser_discovery");
+    expect(
+      await screen.findByRole("heading", {
+        name: "browser_discovery",
+        level: 1,
+      }),
+    ).toBeInTheDocument();
+    for (const title of [
+      "Identity",
+      "Parameters it takes",
+      "System prompt",
+      "First message",
+      "Tools",
+      "Model and limits",
+      "How Claude Code is run for it",
+      "Recent runs",
+      "History of versions",
+    ])
+      expect(
+        screen.getByRole("heading", { name: title, level: 2 }),
+      ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Whatever a saved prompt says, the code keeps its guards.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Claude Agent SDK options")).toHaveTextContent(
+      '"permission_mode": "dontAsk"',
+    );
+    expect(screen.getByText(/Not described yet/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Runs use the code's definition"),
+    ).toBeInTheDocument();
+    const runs = screen.getByRole("table", {
+      name: "Recent runs, newest first",
+    });
+    expect(within(runs).getAllByRole("link")).toHaveLength(1);
+    expect(within(runs).getByRole("link")).toHaveAttribute(
+      "href",
+      "/runs/00000000-0000-4000-8000-000000000001",
+    );
+    expect(within(runs).getByText("Version 1")).toBeInTheDocument();
+    expect(
+      screen.getByText(/A private agent's runs keep their numbers only/),
+    ).toBeInTheDocument();
+    noDashes(container.textContent);
+    // Light and dark come from the theme tokens: no fixed colour outside the prompt's diff.
+    expect(container.innerHTML).not.toMatch(
+      /(bg|text|border)-(white|black|gray|slate|zinc)\b|#[0-9a-f]{6}/i,
+    );
+  });
+
+  it("an unknown agent says so", async () => {
+    fakeSession(admin);
+    fakeAgents();
+    renderApp("/admin/agents/nobody");
+    expect(
+      await screen.findByText("No agent has this name."),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("editing", () => {
+  it("refuses an empty prompt and a wall time above the code's, then saves the changed fields only", async () => {
+    fakeSession(admin);
+    const state = fakeAgents();
+    const user = userEvent.setup();
+    renderApp("/admin/agents/browser_discovery");
+    const prompt = await screen.findByRole("textbox", {
+      name: "System prompt",
+    });
+    const save = screen.getByRole("button", { name: "Save as a new version" });
+    expect(save).toBeDisabled(); // nothing to save yet
+    await user.clear(prompt);
+    expect(screen.getByText("The prompt cannot be empty.")).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    await user.type(
+      prompt,
+      "You search one job website.{Enter}Stay on the site.",
+    );
+    const diff = screen.getByRole("list", {
+      name: "Changes from the code's prompt",
+    });
+    expect(
+      within(diff).getByText("Stay on the site.").closest("li"),
+    ).toHaveAttribute("data-kind", "added");
+    expect(
+      within(diff).getByText("Report what you verified.").closest("li"),
+    ).toHaveAttribute("data-kind", "removed");
+
+    const wall = screen.getByLabelText("Wall time, in seconds");
+    await user.clear(wall);
+    await user.type(wall, "90000");
+    expect(
+      screen.getByText(/never more than the code gives/),
+    ).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    await user.clear(wall);
+    await user.type(wall, "600");
+    expect(screen.getByText("The code's: 86400")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: /report_postings/ }));
+    await user.type(
+      screen.getByLabelText("Note, optional"),
+      "Stay on the site",
+    );
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    expect(state.saves[0]).toEqual({
+      changes: {
+        system_prompt: "You search one job website.\nStay on the site.",
+        wall_time_s: 600,
+        tools: ["browser_snapshot"],
+      },
+      note: "Stay on the site",
+      base_version: null,
+    });
+    const history = await screen.findByRole("list", {
+      name: "Versions, newest first",
+    });
+    expect(within(history).getByText(/Version 1/)).toHaveTextContent(
+      "Version 1 (runs use it)",
+    );
+    expect(
+      within(history).getByText(/Changes system_prompt, tools, wall_time_s/),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Version 1 saved. The next run of browser_discovery uses it.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Runs use version 1")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save as a new version" }),
+    ).toBeDisabled();
+  });
+
+  it("keeps the typing when the page is read again, and says when another version came in", async () => {
+    fakeSession(admin);
+    const state = fakeAgents();
+    const user = userEvent.setup();
+    const { client } = renderApp("/admin/agents/browser_discovery");
+    const description = await screen.findByLabelText("Description");
+    await user.clear(description);
+    await user.type(description, "Searches a website.");
+    state.page = {
+      ...state.page,
+      version: 4,
+      saved: { effort: "high" },
+      effective: { ...CODE, effort: "high" },
+    };
+    await client.invalidateQueries({
+      queryKey: ["admin", "agents", "browser_discovery"],
+    });
+    expect(
+      await screen.findByText(/Version 4 was saved since you opened this page/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Description")).toHaveValue(
+      "Searches a website.",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save as a new version" }),
+    );
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    expect(state.saves[0]?.base_version).toBeNull(); // the version the draft started from
+  });
+
+  it("shows the api's refusal of a stale save", async () => {
+    fakeSession(admin);
+    const stale =
+      "Another version was saved since this page was read. Reload it, then save again.";
+    fakeAgents(makePage(), () =>
+      HttpResponse.json({ detail: stale }, { status: 409 }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/agents/browser_discovery");
+    await user.selectOptions(await screen.findByLabelText("Effort"), "high");
+    await user.click(
+      screen.getByRole("button", { name: "Save as a new version" }),
+    );
+    expect(await screen.findByText(stale)).toBeInTheDocument();
+    expect(screen.getByLabelText("Effort")).toHaveValue("high");
+  });
+
+  it("reverts to the code's version after a confirmation, as a new version", async () => {
+    fakeSession(admin);
+    const saved = { system_prompt: "Saved prompt." };
+    const state = fakeAgents(
+      makePage({
+        saved,
+        effective: { ...CODE, ...saved },
+        version: 2,
+        versions: [
+          {
+            version: 2,
+            fields: ["system_prompt"],
+            saved_by: "E2E Admin",
+            saved_at: "2026-11-04T09:00:00Z",
+            note: null,
+          },
+          {
+            version: 1,
+            fields: [],
+            saved_by: null,
+            saved_at: "2026-11-03T09:00:00Z",
+            note: "First",
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/agents/browser_discovery");
+    expect(await screen.findByText("Runs use version 2")).toBeInTheDocument();
+    expect(screen.getByText(/an account that is gone/)).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Revert to the code's version" }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(state.saves).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Revert" }));
+    await waitFor(() => {
+      expect(state.saves).toEqual([
+        { changes: {}, note: REVERT_NOTE, base_version: 2 },
+      ]);
+    });
+    expect(
+      await screen.findByRole("textbox", { name: "System prompt" }),
+    ).toHaveValue(CODE.system_prompt);
+  });
+});
+
+describe("changesOf", () => {
+  it("sends the fields that differ from the code, mappings compared by content", () => {
+    expect(
+      changesOf(CODE, {
+        ...CODE,
+        model_by_credential: { anthropic_api_key: "claude-sonnet-5-5" },
+      }),
+    ).toEqual({});
+    expect(
+      changesOf(CODE, { ...CODE, effort: "high", model_by_credential: {} }),
+    ).toEqual({
+      effort: "high",
+      model_by_credential: {},
+    });
+  });
+});
