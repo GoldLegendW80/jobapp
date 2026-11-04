@@ -263,12 +263,12 @@ place box empty or choose the website's worldwide place.
 The wanted titles are where to start searching, not a filter: the person wants every posting
 that fits their profile, not only the exact titles. Run a search for each wanted title, and for
 the related terms the profile suggests (other names of the same work, in the website's
-language too). Type what you judge right in a search box: a saved title, a translation or a
-synonym the website understands, as the person would. Read every result: load more, open the
-next pages, scroll. Open every posting that could fit the person's profile, and report each one
-that fits. When in doubt, report it: the app scores every posting against the profile
-afterwards and the person sees the score. Do not report a posting whose title or place the
-person does not want, nor a cybersecurity role: the app drops them.
+language too). Type what you judge right in a search box: a saved title,
+a translation or a synonym the website understands, as the person would. Read every result:
+load more, open the next pages, scroll. Open every posting that could fit the person's profile,
+and report each one that fits. When in doubt, report it: the app scores every posting against
+the profile afterwards and the person sees the score. Do not report a posting whose title or
+place the person does not want, nor a cybersecurity role: the app drops them.
 
 You have the browser commands of a person: browser_navigate (any public address), back and
 forward, browser_snapshot (the page's elements, with refs), browser_take_screenshot (an image
@@ -675,14 +675,16 @@ def _on_page(text: str, page: PageRead) -> bool:
 
 def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
     """The title a reported posting is stored with, and the rule that accepted it (B21): a
-    heading of the page it equals (case, accents, spacing and punctuation aside), as the page
-    shows it; else the title as reported when its words are in the page's visible text, with a
+    heading of the page it equals (case, accents, spacing and punctuation aside, then a gender
+    marker at the end of either set aside), as the page shows it; else the title as reported when its words are in the page's visible text, with a
     gender marker at its end set aside when the page has none; else the page's one clear
     primary heading. None when none of them holds."""
-    words = _words(title)
-    if not words:
-        return None
-    heading = next((h for h in page.headings if _words(h) == words), None)
+    words, bare_words = _words(title), _words(GENDER_MARK.sub("", title))
+    if not words or not bare_words:
+        return None  # no word, or a gender marker alone
+    heading = next((h for h in page.headings if _words(h) == words), None) or next(
+        (h for h in page.headings if _words(GENDER_MARK.sub("", h)) == bare_words), None
+    )
     if heading is not None:
         return heading, "heading"
     if _on_page(title, page):
@@ -1385,8 +1387,8 @@ class FinderSession:
             return None, "missing_field"
         if len(item["url"]) > 2000 or len(item["text"]) > TEXT_MAX:
             return None, "field_too_long"
-        if not _words(title):
-            return None, "missing_field"
+        if not _words(GENDER_MARK.sub("", title)):
+            return None, "missing_field"  # no word, or a gender marker alone (B21)
         url = canonical(urljoin(self.current, item["url"]))
         if not self.on_site(url):
             return None, "other_host"
@@ -1399,11 +1401,11 @@ class FinderSession:
             return None, "detail_not_opened" if url in self.seen else "not_seen"
         if url in self.reported_urls or url in pending:
             return None, "duplicate"
-        if not page.text.strip():
-            return None, "missing_field"
         found = title_on(page, title)
         if found is None:
             return None, "title_not_on_page"
+        if not page.text.strip():
+            return None, "missing_field"
         actual, rule = found
         evidence = {"title": actual, "rule": rule}
         values: dict[str, str | None] = {}

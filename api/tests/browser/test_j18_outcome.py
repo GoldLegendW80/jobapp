@@ -394,7 +394,7 @@ def test_the_prompt_states_every_criterion_the_tools_the_reasons_and_the_line():
         "as the person meant",
         "everywhere",
         "partout",
-        "leave the place\nbox empty",
+        "leave the\nplace box empty",
         "a translation or a synonym",
         "browser_take_screenshot",
         "browser_evaluate",
