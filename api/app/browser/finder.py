@@ -153,7 +153,7 @@ SEEN_MAX = 2000
 # read, each with its posting text, its visible lines, their words, its headings' words and its
 # fields. The text, the lines and the words can each reach one snapshot, and the headings' words
 # (with a gender marker and without) two: every record holds about five times SNAPSHOT_MAX
-# characters at most, in practice far less.
+# characters (more only for characters whose fold is longer, `_words`), in practice far less.
 OPENED_MAX = 200
 # The places of a reported title in a page's words that `title_on` compares, the first ones: the
 # smallest span of lines among them is stored (B21).

@@ -344,8 +344,9 @@ def test_the_marker_is_set_aside_only_at_the_end_and_after_a_separator():
 
 
 def test_a_page_read_holds_no_link_or_button_text():
-    """The titles of other postings a page lists are links: never the visible text a title is
-    verified on (an agent reporting a listed title for the page it is on)."""
+    """A link or a button is never the visible text a title is verified on (an agent reporting
+    a listed title for the page it is on). A heading that wraps a link keeps its own name: it
+    is a heading of the page (declared open point 1), after the primary heading."""
     root = sources.parse_snapshot(
         page(
             '- heading "Data Engineer" [level=1]',
@@ -356,6 +357,16 @@ def test_a_page_read_holds_no_link_or_button_text():
     )
     lines, headings = finder._seen_text(root)
     assert (lines, headings) == (["Data Engineer"], ["Data Engineer"])
+    wrapped = read(
+        '- heading "Data Analyst" [level=1]',
+        "- complementary:",
+        '  - heading "Senior GenAI Engineer" [level=3]:',
+        '    - link "Senior GenAI Engineer":',
+        "      - /url: /offres/9",
+    )
+    assert wrapped.headings == ("Data Analyst", "Senior GenAI Engineer")
+    assert finder.title_on(wrapped, "Senior GenAI Engineer") == ("Senior GenAI Engineer", "heading")
+    assert finder.title_on(wrapped, "Analyst") == ("Data Analyst", "heading")
 
 
 # --- review of B21, round 1 -------------------------------------------------------------------
