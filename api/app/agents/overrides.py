@@ -187,10 +187,18 @@ def latest(db: Session, agent: str) -> AgentOverride | None:
 
 def latest_of_all(db: Session) -> dict[str, AgentOverride]:
     """The latest version of every agent that has one."""
+    newest = (
+        sa.select(AgentOverride.agent, sa.func.max(AgentOverride.version).label("version"))
+        .group_by(AgentOverride.agent)
+        .subquery()
+    )
     rows = db.scalars(
-        sa.select(AgentOverride)
-        .distinct(AgentOverride.agent)
-        .order_by(AgentOverride.agent, AgentOverride.version.desc())
+        sa.select(AgentOverride).join(
+            newest,
+            sa.and_(
+                AgentOverride.agent == newest.c.agent, AgentOverride.version == newest.c.version
+            ),
+        )
     )
     return {row.agent: row for row in rows}
 
@@ -288,12 +296,9 @@ def effective(
     lists the code's definitions, with a warning that names the error's type."""
     try:
         with sessions() as db:
-            latest = latest_of_all(db)
+            saved = {name: dict(row.changes or {}) for name, row in latest_of_all(db).items()}
             db.rollback()
     except Exception as exc:
         logger.warning("agent overrides not read", extra={"error": type(exc).__name__})
         return agents
-    return [
-        apply(agent, dict(latest[agent.name].changes or {})) if agent.name in latest else agent
-        for agent in agents
-    ]
+    return [apply(agent, saved.get(agent.name, {})) for agent in agents]

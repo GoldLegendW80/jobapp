@@ -302,11 +302,12 @@ def _environment() -> str:
 def _versions(db: Session, agent: str) -> list[VersionOut]:
     rows = overrides.history(db, agent)
     ids = {row.saved_by for row in rows if row.saved_by is not None}
-    names = (
-        dict(db.execute(sa.select(User.id, User.name).where(User.id.in_(ids))).tuples().all())
-        if ids
-        else {}
-    )
+    names: dict[uuid.UUID, str] = {}
+    if ids:
+        names = {
+            row.id: row.name
+            for row in db.execute(sa.select(User.id, User.name).where(User.id.in_(ids)))
+        }
     return [
         VersionOut(
             version=row.version,
@@ -443,13 +444,14 @@ def list_agents(request: Request, response: Response, db: Db) -> AgentList:
     agents = _agents(request)
     read_snapshot(db)
     latest = overrides.latest_of_all(db)
-    last = dict(
-        db.execute(
-            sa.select(AgentRun.agent, sa.func.max(AgentRun.created_at)).group_by(AgentRun.agent)
+    last = {
+        row.agent: row.last
+        for row in db.execute(
+            sa.select(AgentRun.agent, sa.func.max(AgentRun.created_at).label("last")).group_by(
+                AgentRun.agent
+            )
         )
-        .tuples()
-        .all()
-    )
+    }
     _no_store(response)
     items = []
     for name in sorted(agents):
