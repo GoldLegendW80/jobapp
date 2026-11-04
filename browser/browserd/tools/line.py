@@ -16,28 +16,32 @@ Two floors hold it in code:
 - **Controls** (`control`): before a click, a double click, Enter, Space or a typing, the facts of
   the element (detect.FACTS_JS) go to browserd's own detectors (detect.verdict: submit, danger,
   card fields, credentials), then to the words of the line (LINE_STEMS, LINE_PHRASES: apply,
-  message, connect, invite, comment, post, sign out, account, in English, French and German). A
+  message, connect, invite, comment, post, sign out, account, in English, French and German; on
+  a link, signing out, Connect and the account's own pages: LINK_STEMS, LINK_PHRASES). A
   submit the detector sees only by structure (a `type=submit` button, Enter in a form's field) is
   let through in a search or consent form: a GET form, or a form holding no field a person writes
   to someone or applies with (no multi line text, no file, no e-mail, telephone or password box,
   no editable region) and whose control's names say no submit word. Save job, Follow, Accept
   cookies, Search and Next page pass (the tables of api/tests/browser/test_b20_line.py).
 - **Requests** (`request_refused`): every request of a sweep's context goes through browserd's
-  route. A document (a navigation, a form's submission) is refused when it is a POST, unless its
-  address says a search or a consent choice (`search_or_consent`); a fetch, an XHR, a beacon or
+  route. A sign out address is refused whatever the method and kind (`signs_out`), and a DELETE,
+  a PUT or a PATCH to a session or a token. A document (a navigation, a form's submission) is
+  refused when it is a POST, unless its path says a search or a consent choice
+  (`search_or_consent`); a fetch, an XHR, a beacon or
   any other POST is refused when its address says apply, submit, message, invite, connect,
   comment, payment, sign out or account change (POST_INSIDE, POST_STEMS: its path, query keys
-  and query values, a search client's metadata aside), or is too long to be read whole. A GET
-  or a HEAD always leaves (any public host: browserd's egress proxy and the host firewall keep
+  and query values, a search client's metadata aside), or is too long to be read whole. Any
+  other GET or HEAD leaves (any public host: browserd's egress proxy and the host firewall keep
   private, loopback, tailnet and link local addresses out).
 
 What code cannot see is declared: a script that builds its own request by a means the route
 does not see (a WebSocket, a service worker's own fetch, which only the site's code can start)
 leaves; a POST body is never read, only its address; a control with no word of the line in any
 name, outside a form, whose script sends a message (an icon only button) is clicked. The
-agent's own scripts (`browser_evaluate`) run inside SCRIPT_GUARD_JS, which refuses
-`element.click()`, `form.submit()` and `form.requestSubmit()` on what these rules refuse, and
-whose requests meet the same route: that, not the script, is the last line.
+agent's own scripts (`browser_evaluate`) run inside SCRIPT_GUARD_JS, which judges
+`element.click()` on detect.FACTS_JS's facts by these rules and words, refuses `form.submit()`
+and `form.requestSubmit()` on a form that is no search form, and whose requests meet the same
+route: that, not the script, is the last line.
 """
 
 import re

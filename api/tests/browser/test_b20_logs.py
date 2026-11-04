@@ -159,6 +159,17 @@ def test_a_refused_request_is_logged_by_why_host_and_kind_never_its_path_or_quer
     assert found.state.stopped_kind == "document:document_post"  # what settle() logs, no path
 
 
+def test_a_link_or_a_popup_to_a_sign_out_address_is_a_stopped_navigation() -> None:
+    """A main frame GET to a sign out address (a link, `location.href`, a popup's first load) is
+    answered 204, so the tab stays where it was, and settle() answers `line`."""
+    found = tab()
+    url = f"https://www.linkedin.test/m/logout/?u={TOKEN}"
+    assert routed(found, request(url, "GET", frame="main")) == ["fulfill"]
+    assert found.state.blocked == [url]
+    assert found.state.stopped_kind == "document:sign_out"
+    assert routed(found, request(f"{JOBS}/jobs/42", "GET", frame="main")) == ["fallback"]
+
+
 def test_the_route_s_refusals_logged_are_bounded_per_lease(caplog) -> None:
     found = tab()
     with caplog.at_level(logging.WARNING, logger="browserd"):
@@ -228,6 +239,7 @@ def test_a_page_that_did_not_load_logs_why_and_its_host_never_its_path_or_query(
         f"https://secure.indeed.test/auth/logout?continue={TOKEN}",
         f"{JOBS}/de/abmelden",
     ],
+    ids=["linkedin", "indeed", "german"],  # a planted token never names a test (xdist)
 )
 def test_a_typed_navigation_to_a_sign_out_address_is_refused_before_the_dwell(
     url, monkeypatch, caplog
@@ -381,6 +393,7 @@ def test_a_transparent_layer_is_told_by_where_the_click_lands(caplog) -> None:
         ("Timeout 5000ms exceeded. element is not enabled", "disabled"),
         (f"Timeout 5000ms exceeded. {TOKEN}", "unknown"),
     ],
+    ids=["not_visible", "outside_viewport", "disabled", "unknown"],
 )
 def test_an_element_that_never_gets_ready_says_why(message, reason, caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="browserd"):

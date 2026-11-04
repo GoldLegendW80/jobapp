@@ -33,7 +33,8 @@ import {
  *   Worker and an image at /j15/logout, and adds a hidden inline sandboxed frame that tries a
  *   POST, a WebSocket and a WebSocketStream: the search runs a normal browser (B20), so the
  *   script is not restricted and its own requests reach the site as in A's sign in session;
- *   only a POST to an address that says apply, message, payment or sign out is refused.
+ *   only a POST to an address that says apply, message or payment, and any request to a sign
+ *   out address (the image at /j15/logout), are refused.
  * - The site ends every login (GET /b17/expire): the next search meets the sign in page. That no
  *   longer ends the website by itself (B20: the agent asks the person, and nobody watches here),
  *   so no member page is read and the row keeps its state.
