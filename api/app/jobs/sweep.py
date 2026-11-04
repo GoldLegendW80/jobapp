@@ -9,16 +9,18 @@ One sweep, `run_sweep(sweep_id)`:
    profile row lock at creation; pre-v1 rows without `stats.search_scope` explicitly retain
    claim-time profile reads. Without a ticked website, company board, alert e-mail or job feed,
    or with a search section that no longer validates, the sweep fails with a clear message.
-2. Search, in two steps within the sweep's one deadline (owner, 2026-10-31: "Run sources in
-   parallel"). First the sources that make no browser call run side by side (`_side_by_side`),
-   each with its own time cap and politeness: the alerts hook (app/mail/alerts/source.py, the
-   job alert e-mails of every provider turned on, SPEC-mail.md), the feed hook (app/jobs/feeds,
-   `FeedRunner`: Arbeitnow, Himalayas, Adzuna), and the `apis` hooks the worker gives (the
-   company boards, app/jobs/boards/run.py, and LinkedIn's public job search,
-   app/browser/sources `Runner.linkedin`). Then, once they all ended, the browser hook
-   (app/browser/sources, `Runner.websites`) runs every ticked website through the bounded
-   interactive finder (app/browser/finder.py), one website after the other, with the time
-   left. A hook that raises ends alone (logged, each one): the others run to their end, then the
+2. Search, in two steps (owner, 2026-10-31: "Run sources in parallel"). First the sources that
+   make no browser call run side by side (`_side_by_side`), each with its own time cap and
+   politeness, all within SWEEP_TIMEOUT_S of the sweep's start: the alerts hook
+   (app/mail/alerts/source.py, the job alert e-mails of every provider turned on, SPEC-mail.md),
+   the feed hook (app/jobs/feeds, `FeedRunner`: Arbeitnow, Himalayas, Adzuna), and the `apis`
+   hooks the worker gives (the company boards, app/jobs/boards/run.py, and LinkedIn's public
+   job search, app/browser/sources `Runner.linkedin`). Then, once they all ended, the browser
+   hook (app/browser/sources, `Runner.websites`) runs every ticked website through the
+   interactive finder (app/browser/finder.py), one website after the other, as long as they
+   take (B20, owner 2026-11-04): only BROWSER_SEARCH_MAX_S from the sweep's start, the guard
+   against a dead process below arq's own timeout, and the run's Cancel end them. A hook that
+   raises ends alone (logged, each one): the others run to their end, then the
    sweep fails as it did when that hook ran alone, and the websites do not start. A commit that
    does not settle lets go of the row (`Commits.unsettled`): the others stop at their next page,
    board, message or request (`abandoned`) instead of reading to their caps. Each source names
@@ -119,9 +121,11 @@ SWEEP_TZ = ZoneInfo("Europe/Paris")
 HEARTBEAT_S = 15.0
 STALE_AFTER = timedelta(minutes=2)
 NOT_PICKED_AFTER = timedelta(minutes=20)
+# The sources that make no browser call, from the sweep's start (each has its own cap within).
 SWEEP_TIMEOUT_S = 15 * 60
-# B20 (owner, 2026-11-04): the job websites read in the browser run as long as they take; this
-# outer bound of the sweep job (arq's timeout, worker.py) only ends a dead process.
+# B20 (owner, 2026-11-04): the job websites read in the browser run as long as they take; the
+# whole sweep's bound from its start, below the sweep job's (arq's timeout, worker.py), only ends
+# a dead process.
 BROWSER_SEARCH_MAX_S = 24 * 60 * 60
 DESCRIPTION_CHARS = 300  # engine: description=text[:300]
 POSTING_TEXT_MAX = 200_000
@@ -849,6 +853,7 @@ async def run_sweep(
     clock: Clock,
     *,
     timeout_s: float = SWEEP_TIMEOUT_S,
+    browser_s: float = BROWSER_SEARCH_MAX_S,
     heartbeat_s: float = HEARTBEAT_S,
     browser: BrowserHook | None = None,
     alerts: BrowserHook | None = None,
@@ -856,8 +861,9 @@ async def run_sweep(
     apis: Sequence[BrowserHook | None] = (),
 ) -> None:
     """Run one sweep to its end (module docstring): `alerts`, `feeds` and the `apis` side by
-    side, then `browser` with the time left. Never raises for a website's failure; any other
-    error fails the sweep and is re-raised only for cancellation."""
+    side within `timeout_s` of the start, then `browser` until `browser_s` from the start (B20:
+    no time cap of its own). Never raises for a website's failure; any other error fails the
+    sweep and is re-raised only for cancellation."""
     plan = await asyncio.to_thread(claim, sessions, sweep_id, clock())
     if plan is None:
         return
@@ -881,7 +887,8 @@ async def run_sweep(
         await commits.progress(write)
 
     try:
-        async with asyncio.timeout(timeout_s):
+        # The whole sweep: BROWSER_SEARCH_MAX_S, a guard against a dead process (B20).
+        async with asyncio.timeout(browser_s):
 
             async def beat() -> None:
                 while True:
@@ -890,13 +897,17 @@ async def run_sweep(
 
             beating = asyncio.create_task(beat())
             try:
-                deadline = started + timeout_s
-                # The sources that make no browser call side by side, then the job websites
-                # with the time left; one shared deadline.
-                await _side_by_side([alerts, feeds, *apis], plan, stats, progress, deadline)
-                # A commit that outlived its wait let go of the row: no website starts.
+                # The sources that make no browser call side by side, within their own
+                # deadline; a source still running at it fails the sweep, as before B20.
+                async with asyncio.timeout(timeout_s):
+                    await _side_by_side(
+                        [alerts, feeds, *apis], plan, stats, progress, started + timeout_s
+                    )
+                # Then the job websites, as long as they take (B20, owner 2026-11-04), told the
+                # sweep's own bound. A commit that outlived its wait let go of the row: no
+                # website starts.
                 if browser is not None and not commits.unsettled:
-                    await browser(plan, stats, progress, deadline)
+                    await browser(plan, stats, progress, started + browser_s)
             finally:
                 beating.cancel()
         stats.duration = round(time.monotonic() - started, 2)

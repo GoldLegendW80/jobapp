@@ -135,7 +135,8 @@ SCHEDULE_MINUTES = set(range(0, 60, 5))  # schedule.TICK
 # does not prove the five minute tick: the unit tests of tests/jobs do.
 FAST_SCHEDULE_MINUTES = set(range(60))
 HEALTH_INTERVAL_S = 10
-SWEEP_JOB_TIMEOUT_S = sweep.BROWSER_SEARCH_MAX_S + 60  # B20: the website search has no cap
+# B20: the website search has no cap; the sweep's own bound (BROWSER_SEARCH_MAX_S) ends first.
+SWEEP_JOB_TIMEOUT_S = sweep.BROWSER_SEARCH_MAX_S + 60
 MAX_AGENT_RUNS = 2
 # The runner stops a run at its wall time and gives the stream its grace to end; arq's own timeout
 # only catches a runner stuck beyond that.
@@ -234,13 +235,14 @@ def clock_of(ctx: dict[str, Any]) -> Callable[[], datetime]:
 async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
     from app.jobs.boards import run as boards
 
-    # One shared deadline (owner, 2026-10-31: "Run sources in parallel"). Side by side, each
-    # with its own cap: the alert e-mails (app/mail/alerts, at most ALERTS_TIME_S), the ticked
-    # job feeds (app/jobs/feeds, at most FEEDS_TIME_S), the company boards (app/jobs/boards, at
-    # most BUDGET_S and never closer than 30 s to the deadline) and LinkedIn's public job search
-    # (app/browser/sources/linkedin_guest.py, at most LINKEDIN_TIME_S and never closer than
-    # WEBSITES_MIN_S to the deadline when a website read in the browser is ticked); then the job
-    # websites read in the browser with the time left.
+    # Side by side (owner, 2026-10-31: "Run sources in parallel"), within the deadline of
+    # sweep.SWEEP_TIMEOUT_S, each with its own cap: the alert e-mails (app/mail/alerts, at most
+    # ALERTS_TIME_S), the ticked job feeds (app/jobs/feeds, at most FEEDS_TIME_S), the company
+    # boards (app/jobs/boards, at most BUDGET_S and never closer than 30 s to the deadline) and
+    # LinkedIn's public job search (app/browser/sources/linkedin_guest.py, at most
+    # LINKEDIN_TIME_S and never closer than WEBSITES_MIN_S to the deadline when a website read in
+    # the browser is ticked); then the job websites read in the browser, as long as they take
+    # (B20: sweep.BROWSER_SEARCH_MAX_S from the start, a guard against a dead process).
     linkedin, websites = split_websites(browser_sources(ctx))
     await sweep.run_sweep(
         sessions_of(ctx),
