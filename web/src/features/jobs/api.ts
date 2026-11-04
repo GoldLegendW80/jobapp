@@ -125,6 +125,17 @@ export function listJobs(
   });
 }
 
+/** How many postings the person has, all statuses: one row asked for, only the total read. */
+export const jobCountKey = [...jobsKey, "count"] as const;
+export async function countJobs(signal?: AbortSignal): Promise<number> {
+  const page = await request(`/jobs?limit=1`, {
+    signal,
+    timeoutMs: 15_000,
+    validate: (data) => jobListPageSchema.parse(data),
+  });
+  return page.total;
+}
+
 export function getJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
   return request(`/jobs/${encodeURIComponent(id)}`, {
     signal,

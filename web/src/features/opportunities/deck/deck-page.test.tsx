@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
-import { makeDetail } from "@/test/jobs";
+import { fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
+import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -35,10 +36,17 @@ const likeButton = () => screen.getByRole("button", { name: "Like" });
 const passButton = () => screen.getByRole("button", { name: "Pass" });
 const undoButton = () => screen.getByRole("button", { name: /Undo last/ });
 
+/** A person with postings and skills: an empty deck then means "under the threshold". */
+function withPostingsAndSkills() {
+  fakeJobsApi([makeJob(1)]);
+  fakeProfile();
+}
+
 async function open(
   cards = [makeCard(1), makeCard(2), makeCard(3)],
   options = {},
 ) {
+  withPostingsAndSkills();
   const deck = fakeDeck(cards, options);
   const app = renderApp("/discover");
   await card();
@@ -372,6 +380,7 @@ describe("pages and the empty deck", () => {
   });
 
   it("names the person's threshold with the two links", async () => {
+    withPostingsAndSkills();
     fakeDeck([], { minFit: 82 });
     renderApp("/discover");
     expect(
@@ -379,10 +388,41 @@ describe("pages and the empty deck", () => {
     ).toBeVisible();
     expect(
       screen.getByRole("link", { name: "Find new postings" }),
-    ).toHaveAttribute("href", "/jobs");
+    ).toHaveAttribute("href", "/jobs?find=1");
     expect(
       screen.getByRole("link", { name: "Search options" }),
     ).toHaveAttribute("href", "/profile?tab=search");
+  });
+
+  it("says there is no posting yet and opens Find jobs", async () => {
+    fakeJobsApi([]);
+    fakeProfile();
+    fakeDeck([]);
+    renderApp("/discover");
+    expect(await screen.findByText("No postings yet.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Find jobs" })).toHaveAttribute(
+      "href",
+      "/jobs?find=1",
+    );
+    expect(
+      screen.queryByText(/Nothing new above your threshold/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says a profile without skills keeps every posting under the threshold", async () => {
+    fakeJobsApi([makeJob(1)]);
+    fakeProfile({});
+    fakeDeck([], { minFit: 70 });
+    renderApp("/discover");
+    expect(
+      await screen.findByText(
+        "Your profile has no skills yet, so new postings score close to 0 and stay under your threshold of 70.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Add your skills" }),
+    ).toHaveAttribute("href", "/profile?tab=skills");
+    expect(screen.getByText(/Rescore all postings/)).toBeVisible();
   });
 
   it("empties while open when the last card is swiped", async () => {

@@ -169,14 +169,17 @@ describe("the Gmail card, not connected", () => {
     expect(window.sessionStorage.getItem("jobapp.gmail.consent")).toBeNull();
   });
 
-  it("says so when the server is not set up for Gmail", async () => {
+  it("shows no Gmail card when the server is not set up for Gmail", async () => {
     gmail({ ...none, available: false });
     renderApp("/account");
-    const found = await card();
+    // The page is there (its other cards load), the Gmail card is not.
     expect(
-      await found.findByText("Gmail cannot be connected on this server yet."),
+      await screen.findByRole("heading", { name: "Account", level: 1 }),
     ).toBeInTheDocument();
-    expect(found.getByRole("button", { name: "Connect Gmail" })).toBeDisabled();
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull();
   });
 });
 

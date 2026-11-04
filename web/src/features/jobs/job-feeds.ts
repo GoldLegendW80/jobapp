@@ -20,13 +20,6 @@ export const FEED_NAMES: Record<JobFeed, string> = {
   adzuna: "Adzuna",
 };
 
-/** The label beside a feed's box in Find jobs. */
-export const FEED_LABELS: Record<JobFeed, string> = {
-  arbeitnow: "Arbeitnow (jobs in Europe)",
-  himalayas: "Himalayas (remote jobs open to France)",
-  adzuna: "Adzuna (jobs in France, needs a free key)",
-};
-
 export const ADZUNA_SIGNUP = "https://developer.adzuna.com/signup";
 /** Where the person stores Adzuna's key: a card of the Account page. */
 export const ADZUNA_KEY_PLACE = "/account#adzuna-key";

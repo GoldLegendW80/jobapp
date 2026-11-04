@@ -37,10 +37,10 @@ import {
  * sent, sees it converted on the fake model backend, then fills the roles, the places and the
  * contracts; Back shows every value typed. N's account is then given skills. A reload, a fresh visit of /welcome and a
  * second device (a new browser context signed in as N) open the step left, since the steps
- * passed are kept in the profile. The pay is "Rather not say", Full auto shows as "Available
- * soon" and cannot be chosen, and "Start" on the summary opens Discover with the sentence that
- * asks to tick job websites in Find jobs, and starts no sweep: every search runs the ticked
- * websites alone (owner, 2026-10-28), and N has no website. The profile holds the
+ * passed are kept in the profile. N skips Websites to search, the pay is "Rather not say", Full
+ * auto points to Application settings and cannot be chosen here, and "Start" on the summary,
+ * which warns that the list is empty, opens Find jobs with the sentence that asks to add
+ * websites, and starts no sweep: N has no website. The profile holds the
  * answers and apply's mode is still Review first. Signing in again lands on the home page with
  * no card. Person B, beside N, still gets the wizard, puts it off with "Skip for now", and after
  * signing in again is not sent to it but sees the card; B has no website either, so B's
@@ -90,10 +90,10 @@ const SKILLS = {
   none: [],
   gates: [],
 };
-// Every search runs the ticked job websites alone (owner, 2026-10-28): with none ticked, Start
-// ends the wizard without a sweep and says why.
+// With an empty list of websites, Start ends the wizard without a sweep, says why and opens
+// Find jobs on the list (product audit, chapter 1, 2026-11-04).
 const NO_WEBSITES =
-  "Tick the job websites to search in Find jobs, then find new postings.";
+  "Your list of websites is empty. Add a few, then start your first search.";
 
 let admin: Person;
 let adminContext: BrowserContext;
@@ -170,7 +170,7 @@ const step = (page: Page, number: number) =>
   expect(
     page.getByRole("heading", {
       level: 2,
-      name: new RegExp(`^Step ${number} of 7`),
+      name: new RegExp(`^Step ${number} of 8`),
     }),
   ).toBeVisible();
 const next = (page: Page) =>
@@ -308,7 +308,7 @@ test("a new member lands on the wizard and imports an invented CV in step 1", as
   await next(pageN);
 });
 
-test("steps 2 to 4 by keyboard, and Back keeps every value", async () => {
+test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
   await step(pageN, 2);
   await expect(
     pageN.getByRole("button", { name: "Skip this step" }),
@@ -342,16 +342,26 @@ test("steps 2 to 4 by keyboard, and Back keeps every value", async () => {
   await step(pageN, 3);
   await next(pageN);
 
+  // Websites to search: the list, its examples, and what an address can be.
   await step(pageN, 4);
+  await expect(
+    pageN.getByRole("button", { name: "Add LinkedIn", exact: true }),
+  ).toBeVisible();
+  await expect(pageN.getByText(/A company job board, like/)).toBeVisible();
+  await noDash(pageN);
+  await shots(pageN, "step-4");
+  await press(pageN.getByRole("button", { name: "Skip this step" }), "Enter");
+
+  await step(pageN, 5);
   await press(
     pageN.getByRole("checkbox", { name: "Freelance mission" }),
     "Space",
   );
   await press(pageN.getByRole("checkbox", { name: "Permanent" }), "Space");
   await noDash(pageN);
-  await shots(pageN, "step-4");
+  await shots(pageN, "step-5");
   await next(pageN);
-  await step(pageN, 5);
+  await step(pageN, 6);
 });
 
 test("a reload, a fresh visit of /welcome and another device open the step left", async ({
@@ -360,9 +370,9 @@ test("a reload, a fresh visit of /welcome and another device open the step left"
   // The account's skills.
   await putSection(pageN, "skills", () => SKILLS);
   await pageN.reload();
-  await step(pageN, 5);
+  await step(pageN, 6);
   await pageN.goto("/welcome");
-  await step(pageN, 5);
+  await step(pageN, 6);
   expect((await stateOf(pageN)).passed).toEqual([
     "profile",
     "looking",
@@ -376,49 +386,52 @@ test("a reload, a fresh visit of /welcome and another device open the step left"
     await signIn(page, N.email, PASSWORD);
     await expect(page).toHaveURL(/\/jobs$/);
     await page.goto("/welcome");
-    await step(page, 5);
+    await step(page, 6);
   } finally {
     await other.close();
   }
 });
 
-test("pay, how the app applies, the summary, and Start opens Discover", async () => {
+test("pay, how the app applies, the summary, and Start opens Find jobs on an empty list", async () => {
   await press(pageN.getByRole("checkbox", { name: "Rather not say" }), "Space");
   await noDash(pageN);
   await next(pageN);
 
-  await step(pageN, 6);
+  await step(pageN, 7);
   const full = pageN.getByRole("radio", { name: /Full auto/ });
   await expect(full).toBeDisabled();
   await expect(full).not.toBeChecked();
-  await expect(pageN.getByText("Available soon")).toBeVisible();
+  await expect(
+    pageN.getByRole("link", { name: "Application settings" }),
+  ).toHaveAttribute("href", "/settings/applications");
   await expect(
     pageN.getByRole("radio", { name: /Review first/ }),
   ).toBeChecked();
   await press(pageN.getByRole("radio", { name: "Warm" }), "Space");
   await noDash(pageN);
-  await shots(pageN, "step-6");
+  await shots(pageN, "step-7");
   await next(pageN);
 
-  await step(pageN, 7);
+  await step(pageN, 8);
   const summary = pageN.locator("dl");
   await expect(summary).toContainText("AI engineer, Applied AI engineer");
   await expect(summary).toContainText("Paris; Hybrid");
   await expect(summary).toContainText("Freelance mission, Permanent");
   await expect(summary).toContainText("Rather not say");
-  // Every search runs the job websites ticked in Find jobs alone (owner, 2026-10-28): N ticked
-  // none, so the first search covers no website.
+  // N skipped Websites to search: the summary says the list is empty.
+  await expect(summary).toContainText("Nothing yet");
   await expect(
-    pageN.getByText(/covers 0 job websites ticked in Find jobs/),
+    pageN.getByText(/Your list of websites is empty, so the first search/),
   ).toBeVisible();
   await noDash(pageN);
   await shots(pageN, "summary");
   await press(pageN.getByRole("button", { name: "Start" }), "Enter");
   await expect(pageN.getByText(NO_WEBSITES)).toBeVisible();
-  await expect(pageN).toHaveURL(/\/discover$/);
-  await expect(
-    pageN.getByRole("heading", { level: 1, name: "Discover" }),
-  ).toBeVisible();
+  await expect(pageN).toHaveURL(/\/jobs$/);
+  const findJobs = pageN.getByRole("dialog", { name: "Find jobs" });
+  await expect(findJobs).toBeVisible();
+  await press(findJobs.getByRole("button", { name: "Cancel" }), "Enter");
+  await expect(findJobs).toBeHidden();
   const sweeps = await pageN.request.get("/api/jobs/sweeps?limit=1");
   expect(((await sweeps.json()) as { items: unknown[] }).items).toEqual([]);
 
@@ -495,13 +508,13 @@ test("B, with roles and no website, ends the wizard without a sweep", async () =
     title_include: { terms: ["Analytics engineer"], advanced_regex: false },
   }));
   await pageB.goto("/welcome?step=summary");
-  await step(pageB, 7);
+  await step(pageB, 8);
   await expect(
-    pageB.getByText(/covers 0 job websites ticked in Find jobs/),
+    pageB.getByText(/Your list of websites is empty, so the first search/),
   ).toBeVisible();
   await press(pageB.getByRole("button", { name: "Start" }), "Enter");
   await expect(pageB.getByText(NO_WEBSITES)).toBeVisible();
-  await expect(pageB).toHaveURL(/\/discover$/);
+  await expect(pageB).toHaveURL(/\/jobs$/);
   expect((await stateOf(pageB)).completed_at).not.toBeNull();
   const sweeps = await pageB.request.get("/api/jobs/sweeps?limit=1");
   expect(((await sweeps.json()) as { items: unknown[] }).items).toEqual([]);

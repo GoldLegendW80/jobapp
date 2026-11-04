@@ -224,11 +224,11 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
     /\/api\/jobs\/sweeps\/[0-9a-f-]{36}\/events$/,
   );
   await page.getByRole("button", { name: "Find jobs" }).click();
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
-  await setup.getByLabel("Custom website URL").fill(SITE);
-  await setup.getByRole("button", { name: "Add website" }).click();
-  await expect(setup).toContainText(SITE);
-  await setup.getByRole("button", { name: "Save and Start" }).click();
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
+  await setup.getByLabel("Website address").fill(SITE);
+  await setup.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(setup).toContainText(SITE_HOST);
+  await setup.getByRole("button", { name: "Save and start search" }).click();
   expect((await stream).headers()["content-type"]).toContain(
     "text/event-stream",
   );

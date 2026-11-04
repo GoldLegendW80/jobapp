@@ -24,7 +24,7 @@ import {
  * - Person A adds it in Find jobs and clicks its Sign in: the live view opens on its sign in page
  *   in her own browser, she has the keyboard, there is no debugging port; she types a name with
  *   the live view's keyboard (Tab, the name, Enter) and clicks Done: the row says Signed in.
- * - Save and Start: the interactive finder (app/agents/fake_streams/browser_discovery.json, J15's
+ * - Save and start search: the interactive finder (app/agents/fake_streams/browser_discovery.json, J15's
  *   recorded model) searches the website in A's own browser, signed in: every page it opened came
  *   with her member's cookie, the site saw GET requests only, and the posting's Send application
  *   button was refused by the line of the search (B20), as on the anonymous website; the address
@@ -142,14 +142,14 @@ async function lastSweep(page: Page, after: string | null): Promise<Sweep> {
 async function openSetup(page: Page) {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
   return setup;
 }
 
 async function saveAndStart(page: Page, after: string | null) {
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
-  await setup.getByRole("button", { name: "Save and Start" }).click();
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
+  await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
   const sweep = await lastSweep(page, after);
   const summary = page.getByRole("dialog", { name: /new posting/ });
@@ -212,9 +212,9 @@ test.afterAll(async () => {
 
 test("A signs in to the members website from its row in Find jobs", async () => {
   const setup = await openSetup(page);
-  await setup.getByLabel("Custom website URL").fill(SITE);
-  await setup.getByRole("button", { name: "Add website" }).click();
-  const row = setup.getByRole("listitem").filter({ hasText: SITE });
+  await setup.getByLabel("Website address").fill(SITE);
+  await setup.getByRole("button", { name: "Add", exact: true }).click();
+  const row = setup.getByRole("listitem").filter({ hasText: HOST });
   await expect(row).toBeVisible();
   expect(await sites(page)).toEqual([]);
   await expect(row).not.toContainText("Signed in");
