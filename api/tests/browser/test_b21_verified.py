@@ -311,7 +311,7 @@ def test_titles_whose_words_are_on_the_page_are_accepted(title):
         "",
         " ",
         "(H/F)",  # the marker alone has words not on the page as a whole title
-        "Rоbot",  # Cyrillic о
+        "R\u043ebot",  # a Cyrillic o
         "Data Scientist (H/F)",
         "GenAI Solution Architect Lead",
         "Senior GenAI Solution Architect",

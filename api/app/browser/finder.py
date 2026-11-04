@@ -676,9 +676,10 @@ def _on_page(text: str, page: PageRead) -> bool:
 def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
     """The title a reported posting is stored with, and the rule that accepted it (B21): a
     heading of the page it equals (case, accents, spacing and punctuation aside, then a gender
-    marker at the end of either set aside), as the page shows it; else the title as reported when its words are in the page's visible text, with a
-    gender marker at its end set aside when the page has none; else the page's one clear
-    primary heading. None when none of them holds."""
+    marker at the end of either set aside), as the page shows it; else the title as reported
+    when its words are in the page's visible text, with a gender marker at its end set aside
+    when the page has none; else the page's one clear primary heading. None when none of them
+    holds."""
     words, bare_words = _words(title), _words(GENDER_MARK.sub("", title))
     if not words or not bare_words:
         return None  # no word, or a gender marker alone

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Offres VIE (invented stand in)</title></head>
+<body>
+<header><h1>Mon Volontariat International (stand in)</h1></header>
+<main>
+  <form method="get" action="/offres/recherche">
+    <input type="search" name="query" aria-label="Rechercher une offre" value="genai">
+    <button type="submit">Rechercher</button>
+  </form>
+  <h1>9 offres</h1>
+  <ul id="offres">
+    <li><a href="/offres/246286">AI Engineer Consultant (H/F)</a><p>Offre n° 246286</p></li>
+    <li><a href="/offres/246285">AI Engineer Consultant (H/F)</a><p>Offre n° 246285</p></li>
+    <li><a href="/offres/246290">Business Developer (H/F)</a><p>Offre n° 246290</p></li>
+    <li hidden><a href="/offres/246281">Data Scientist GenAI Sales (H/F)</a><p>Offre n° 246281</p></li>
+  </ul>
+  <button type="button" id="plus">Voir plus d'offres</button>
+</main>
+<script>
+  document.getElementById("plus").addEventListener("click", (event) => {
+    document.querySelectorAll("#offres li[hidden]").forEach((item) => item.removeAttribute("hidden"));
+    event.target.remove();
+  });
+</script>
+</body>
+</html>

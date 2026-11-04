@@ -174,19 +174,22 @@ def test_an_address_never_opened_cannot_cross_the_callback_boundary(claims, reas
     asyncio.run(scenario())
 
 
+SHOWN = ("Robot Engineer", "Example Robotics", "2026-10-20", "")
+
+
 @pytest.mark.parametrize(
     ("claims", "stored"),
     [
         # B21: an invented title or field is never stored: the page's own words are.
-        ({"title": "Invented role"}, ("Robot Engineer", "Example Robotics", "2026-10-20", "")),
-        ({"title": "Robot"}, ("Robot", "Example Robotics", "2026-10-20", "")),
+        ({"title": "Invented role"}, SHOWN),
+        ({"title": "Robot"}, ("Robot", *SHOWN[1:])),
         (
             {"company": "Invented Employer"},
-            ("Robot Engineer", "Example Robotics", "2026-10-20", ""),
+            SHOWN,
         ),
-        ({"published_on": "2026-10-24"}, ("Robot Engineer", "Example Robotics", "2026-10-20", "")),
-        ({"published_on": "2026-02-30"}, ("Robot Engineer", "Example Robotics", "2026-10-20", "")),
-        ({"location": "Invented City"}, ("Robot Engineer", "Example Robotics", "2026-10-20", "")),
+        ({"published_on": "2026-10-24"}, SHOWN),
+        ({"published_on": "2026-02-30"}, SHOWN),
+        ({"location": "Invented City"}, SHOWN),
     ],
 )
 def test_invented_claims_store_what_the_page_shows(claims, stored):
