@@ -5,7 +5,8 @@ changed in an agent's definition; `agent_tools`, the app tools as the worker des
 Revision ID: 0031
 Revises: 0030
 
-Expand only: two new tables, a nullable column and an index (an agent's last runs). The previous release never reads them.
+Expand only: two new tables, a nullable column and an index (an agent's last runs). The
+previous release never reads them.
 """
 
 import sqlalchemy as sa
