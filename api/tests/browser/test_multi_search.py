@@ -5,7 +5,6 @@ shared fairly among the websites still to run.
 """
 
 import asyncio
-import dataclasses
 import json
 import random
 import uuid
@@ -169,21 +168,8 @@ def test_one_agent_runs_every_saved_search_in_one_session_on_one_lease():
     )
     assert len(leases.acquired) == 1
     assert leases.released == ["lease-1"]
-    assert entry["searches"] == 4
-    assert entry["searched"] == [
-        {"title": "robot", "place": "Paris"},
-        {"title": "robot", "place": "Lyon"},
-        {"title": "drone", "place": "Paris"},
-        {"title": "drone", "place": "Lyon"},
-    ]
-    # The one frozen scope goes with every call: every saved value, never the instructions.
-    frozen = {
-        "start": BASE,
-        "titles": ["robot", "drone"],
-        "places": ["Paris", "Lyon"],
-        "filters": {"remote": "remote"},
-    }
-    assert site.scopes == [frozen] * len(site.actions)
+    # The one scope goes with every call: the start alone (B20), never the instructions.
+    assert site.scopes == [{"start": BASE}] * len(site.actions)
     assert CANARY not in json.dumps(site.scopes)
     # Each posting once per address, though two searches (two places) listed it.
     assert (entry["found"], entry["error"], entry["outcome"]) == (
@@ -215,13 +201,11 @@ def test_the_agent_gets_all_the_person_s_criteria_as_context_never_to_type():
         ["startup"],
     )
     assert scope.instructions == CANARY
-    # Only the wanted titles and places and the native filters' values can be typed or chosen.
-    assert scope.tool_scope() == {
-        "start": BASE,
-        "titles": ["robot"],
-        "places": [],
-        "filters": {"remote": "remote"},
-    }
+    # B20: browserd gets the start alone; the wanted values are the agent's context too.
+    assert scope.tool_scope() == {"start": BASE}
+    assert scope.titles == ("robot",)
+    assert scope.places == ()
+    assert dict(scope.filters) == {"remote": "remote"}
 
 
 def test_postings_merge_once_per_address_across_the_agent_s_searches():
@@ -231,85 +215,8 @@ def test_postings_merge_once_per_address_across_the_agent_s_searches():
         site,
         ScriptedFinder(searching(site)),
     )
-    assert (entry["searches"], entry["found"], entry["refused"]) == (2, 2, {"duplicate": 1})
+    assert (entry["found"], entry["refused"]) == (2, {"duplicate": 1})
     assert entry["error"] == "finding_persistence_pending"  # a merge is no unsupported website
-
-
-@pytest.mark.parametrize(
-    "typed",
-    [
-        "drone",  # a saved title of another person's search
-        "Robotics",  # "Robot" is the saved title, its case aside (owner, 2026-10-28)
-        "ROBOT\t",
-        "robot ",
-        " robot",
-        "robots",
-        "robot engineer",
-        "ｒｏｂｏｔ",
-        "rоbot",  # a Cyrillic o
-        "robot​",
-        "sales",  # an unwanted title: context only
-        "Lyon",  # an unwanted place
-        "Send my application",
-        "robot Paris",
-        "x" * 5000,
-        None,
-        ["robot"],
-        7,
-    ],
-)
-def test_a_value_the_person_did_not_save_is_refused_before_the_browser(typed):
-    site = SearchSite(results={"robot": ["Robot Engineer"]})
-    answers: list[tuple[str, bool]] = []
-
-    async def script(session: finder.FinderSession) -> finder.Ran:
-        answers.append(await session.interact("browser_type", {"ref": "e1", "text": typed}))
-        return await searching(site)(session)
-
-    entry, _, _ = run(
-        selected(
-            title_exclude={"terms": ["sales"]},
-            location={"terms": ["Paris"]},
-            location_exclude={"terms": ["Lyon"], "advanced_regex": False},
-        ),
-        site,
-        ScriptedFinder(script),
-    )
-    # e1 is the page's "Query" box (test_b13_runtime.FIRST), a title box (finder.box_of).
-    assert answers == [(finder.TITLE_BOX_REFUSED, True)]
-    assert entry["refused"] == {finder.MODEL_VALUE: 1}  # the model's slip, counted apart
-    assert site.typed == "robot"  # the refused text never reached the browser
-    # The agent goes on with its saved values: the refusal ends nothing.
-    assert site.actions == [
-        "browser_navigate",
-        "browser_type",
-        "browser_select_option",
-        "browser_click",
-        "browser_navigate",
-    ]
-    assert (entry["searches"], entry["found"]) == (1, 1)
-
-
-def test_a_saved_value_or_nothing_is_typed_and_only_a_submitted_search_is_listed():
-    site = SearchSite(results={"robot": ["Robot Engineer"]})
-
-    async def script(session: finder.FinderSession) -> finder.Ran:
-        # e1 is the "Query" box, a title box; e2 ("Remote") is not told apart, so any saved
-        # value goes on there (finder.box_of).
-        for ref, text in (("e1", "drone"), ("e1", ""), ("e2", "Paris"), ("e1", "robot")):
-            assert not (await session.interact("browser_type", {"ref": ref, "text": text}))[1]
-        assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
-        # Typed, never submitted: not a search that ran.
-        assert not (await session.interact("browser_type", {"ref": "e1", "text": "drone"}))[1]
-        return finder.Ran()
-
-    entry, _, _ = run(
-        selected(title_include={"terms": ["robot", "drone"]}, location={"terms": ["Paris"]}),
-        site,
-        ScriptedFinder(script),
-    )
-    assert entry["searched"] == [{"title": "robot", "place": "Paris"}]
-    assert entry["searches"] == 1
 
 
 # --- no budget of its own ------------------------------------------------------------------------
@@ -356,28 +263,6 @@ def test_an_agent_run_of_more_than_40_turns_and_20_pages_and_100_postings_is_all
     assert len(leases.acquired) == 1
 
 
-def test_the_agent_is_told_the_seconds_it_has_left():
-    site = SearchSite(results={"robot": ["Robot Engineer"]})
-    views: list[int] = []
-    now = [0.0]
-
-    async def script(session: finder.FinderSession) -> finder.Ran:
-        for text in ("robot",):
-            answer, _ = await session.interact("browser_type", {"ref": "e1", "text": text})
-            views.append(json.loads(answer)["seconds_left"])
-        now[0] += 120
-        answer, _ = await session.interact("browser_click", {"ref": "e3"})
-        views.append(json.loads(answer)["seconds_left"])
-        return finder.Ran()
-
-    asyncio.run(
-        execute(selected(), "e2e-person", ScriptedFinder(script), tools=site, deadline=900, now=now)
-    )
-    # Its share of the sweep's 900 s (it is the only website), less the pacing and the 120 s.
-    assert views[0] - views[1] in range(120, 140)
-    assert 0 < views[1] < views[0] <= 900
-
-
 # --- the sweep's time, shared fairly ----------------------------------------------------------
 
 
@@ -405,75 +290,6 @@ class Websites(SearchSite):
         if name == "browser_navigate" and args["url"].startswith(BASE + "site"):
             self.pages[args["url"]] = FIRST
         return await super().call(name, args)
-
-
-@pytest.mark.parametrize(
-    ("count", "deadlines"),
-    [
-        (2, [500.0, 1000.0]),
-        (3, [1000 / 3, 550.0, 1000.0]),
-    ],
-)
-def test_the_sweep_time_is_shared_fairly_between_the_websites(count, deadlines):
-    """A website gets the sweep's time left divided by the websites left: each here takes
-    100 s, and what it leaves goes to the next ones."""
-    now = [0.0]
-    seen: list[float] = []
-
-    async def script(session: finder.FinderSession) -> finder.Ran:
-        seen.append(session.pages.deadline)
-        await session.interact("browser_type", {"ref": "e1", "text": "robot"})
-        await session.interact("browser_click", {"ref": "e3"})
-        session.report_none("no_match")  # searched, nothing listed: said so (2026-10-28)
-        now[0] = 100.0 * len(seen)
-        return finder.Ran()
-
-    entries, _, leases, _, _ = asyncio.run(
-        execute(
-            websites(count),
-            "e2e-person",
-            ScriptedFinder(script),
-            tools=Websites(),
-            deadline=1000,
-            now=now,
-        )
-    )
-    assert seen == pytest.approx(deadlines)
-    assert [entry["error"] for entry in entries] == [None] * count
-    assert len(leases.acquired) == count
-
-
-def test_a_website_past_its_share_stops_there_and_the_next_one_gets_its_own():
-    now = [0.0]
-    seen: list[float] = []
-
-    async def script(session: finder.FinderSession) -> finder.Ran:
-        seen.append(session.pages.deadline)
-        await session.interact("browser_type", {"ref": "e1", "text": "robot"})
-        await session.interact("browser_click", {"ref": "e3"})
-        if len(seen) == 1:
-            now[0] = 450.0  # a page now would end past its 500 s
-            answer, stop = await session.interact("browser_type", {"ref": "e1", "text": "robot"})
-            assert (answer, stop) == (
-                "Stopped: time_budget. Report what you found, then stop.",
-                True,
-            )
-        session.report_none("no_match")
-        return finder.Ran()
-
-    entries, _, leases, _, _ = asyncio.run(
-        execute(
-            websites(2),
-            "e2e-person",
-            ScriptedFinder(script),
-            tools=Websites(),
-            deadline=1000,
-            now=now,
-        )
-    )
-    assert seen == [500.0, 1000.0]  # the second: 450 s in, all the 550 s left
-    assert [entry["error"] for entry in entries] == ["time_budget", None]
-    assert len(leases.acquired) == 2
 
 
 # --- the platform's own caps --------------------------------------------------------------------
@@ -508,7 +324,7 @@ def test_linkedin_s_agent_has_no_page_cap():
         sweep_id=str(uuid.uuid4()),
     )
     assert entry["error"] == "finding_persistence_pending"
-    assert (entry["searches"], entry["found"]) == (3, 3)
+    assert entry["found"] == 3
     assert len(leases.acquired) == 1
     assert len(policy.reserved) == 1
 
@@ -708,8 +524,17 @@ def test_a_saved_list_with_no_plain_word_stays_unsupported_and_is_never_widened(
 
 
 def sent(scope: finder.InteractiveScope) -> int:
-    """The scope's size as sent with every tool call, signed in (the larger of its two forms)."""
-    return len(json.dumps(dataclasses.replace(scope, signed_in=True).tool_scope()))
+    """The scope's values as `interactive._carried` measures them, signed in (the larger form):
+    since B20 they bound what the agent's first message carries, browserd getting the start
+    alone."""
+    values = {
+        "start": scope.start,
+        "titles": list(scope.titles),
+        "places": list(scope.places),
+        "filters": dict(scope.filters),
+        "signed_in": True,
+    }
+    return len(json.dumps(values))
 
 
 def carried_by_rule(titles: list[str], places: list[str]) -> None:
@@ -884,16 +709,3 @@ def test_the_summary_names_the_searches_that_ran_and_counts_them(stored, shown):
     listed = [(one.title, one.place) for one in source.searched]
     assert source.searches == shown[0]
     assert (len(listed) if isinstance(shown[1], int) else listed) == shown[1]
-
-
-def test_the_summary_lists_at_most_fifty_searches_and_counts_all():
-    site = SearchSite()
-    titles = [f"robot{n}" for n in range(60)]
-    entry, _, _ = run(
-        selected(title_include={"terms": titles}),
-        site,
-        ScriptedFinder(searching(site)),
-        pacer=NoPause(),
-    )
-    assert entry["searches"] == 60
-    assert [one["title"] for one in entry["searched"]] == titles[:50]

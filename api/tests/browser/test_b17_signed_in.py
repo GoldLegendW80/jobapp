@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "browser"))
 import pytest  # noqa: E402
 import sqlalchemy as sa  # noqa: E402
 from browserd import prep, signin  # noqa: E402
-from browserd.tools import discovery  # noqa: E402
+from browserd.tools import discovery, line  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
 from app.browser import site_logins, sources  # noqa: E402
@@ -44,12 +44,7 @@ user_a, user_b, redis_url = b7.user_a, b7.user_b, b3_support.redis_url
 Volume, row, start = b7.Volume, b7.row, b7.start
 
 SITE = "https://members.example.test/jobs/search"
-SCOPE = {
-    "start": "https://jobs.example.test/search",
-    "titles": ["robot"],
-    "places": [],
-    "filters": {},
-}
+SCOPE = {"start": "https://jobs.example.test/search"}  # B20: the start alone
 
 # --- browserd: the signed in scope and its request rule --------------------------------------
 
@@ -63,57 +58,6 @@ def test_scope_parse_takes_signed_in_as_a_strict_boolean() -> None:
 
 
 SIGNED = discovery.Scope.parse({**SCOPE, "signed_in": True})
-
-
-@pytest.mark.parametrize(
-    ("url", "method", "document", "allowed"),
-    [
-        ("https://jobs.example.test/search?q=robot", "GET", True, True),
-        ("https://jobs.example.test/jobs/42", "GET", True, True),
-        ("https://jobs.example.test/jobs/42", "HEAD", True, True),
-        ("https://jobs.example.test/search?q=robot", "POST", True, False),
-        ("https://jobs.example.test/search?q=other", "GET", True, False),
-        ("https://jobs.example.test/login?next=/search", "GET", True, False),
-        ("https://jobs.example.test/jobs/42/apply", "GET", True, False),
-        ("https://elsewhere.example.test/search?q=robot", "GET", True, False),
-        ("https://cdn.example.net/app.js", "GET", False, True),
-        ("https://jobs.example.test/api/me", "GET", False, True),
-        ("https://jobs.example.test/api/account", "GET", False, True),
-        ("https://jobs.example.test/api/search", "POST", False, False),
-        ("https://jobs.example.test/api/track", "PUT", False, False),
-        ("https://jobs.example.test/api/x", "DELETE", False, False),
-        ("https://jobs.example.test/api/x", "PATCH", False, False),
-        ("https://jobs.example.test/jobs/42/easyapply", "GET", False, False),
-        ("https://api.example.test/jobs/42/candidater", "GET", False, False),
-        ("https://api.example.test/v1/postuler", "GET", False, False),
-        ("https://api.example.test/v1/submit", "GET", False, False),
-        ("https://api.example.test/v1/delete", "GET", False, False),
-        ("https://u:p@cdn.example.net/app.js", "GET", False, False),
-        ("javascript:alert(1)", "GET", False, False),
-        ("https://cdn.example.net/" + "a" * 9000, "GET", False, False),
-    ],
-)
-def test_signed_request_lets_only_reads_leave(url, method, document, allowed) -> None:
-    assert discovery.signed_request(url, method, document, SIGNED) is allowed
-
-
-@pytest.mark.parametrize(
-    ("url", "signin"),
-    [
-        ("https://jobs.example.test/login", True),
-        ("https://jobs.example.test/Login?next=/search", True),
-        ("https://jobs.example.test/sign-in", True),
-        ("https://jobs.example.test/fr/connexion", True),
-        ("https://jobs.example.test/auth/callback", True),
-        ("https://jobs.example.test/sso/start", True),
-        ("https://jobs.example.test/jobs/42", False),
-        ("https://jobs.example.test/search?q=login", False),
-        ("https://jobs.example.test/", False),
-        ("not a url", False),
-    ],
-)
-def test_signin_url_reads_the_path_only(url, signin) -> None:
-    assert discovery.signin_url(url) is signin
 
 
 def get_form(native: bool) -> dict[str, Any]:
@@ -134,32 +78,17 @@ def get_form(native: bool) -> dict[str, Any]:
     }
 
 
-def test_a_page_with_scripts_is_refused_unless_signed_in() -> None:
-    anonymous = discovery.Scope.parse(SCOPE)
-    args = {"text": "robot"}
-    current = SCOPE["start"]
-    assert discovery.verdict(get_form(False), "browser_type", current, scope=anonymous, args=args)
-    assert (
-        discovery.verdict(get_form(True), "browser_type", current, scope=anonymous, args=args)
-        is None
-    )
-    assert (
-        discovery.verdict(get_form(False), "browser_type", current, scope=SIGNED, args=args) is None
-    )
-    # The query is still the frozen one, signed in or not.
-    other = {"text": "anything"}
-    assert discovery.verdict(get_form(False), "browser_type", current, scope=SIGNED, args=other)
-
-
-@pytest.mark.parametrize("label", ["Postuler", "Candidater", "Easy Apply", "Apply now", "Contact"])
+@pytest.mark.parametrize(
+    "label",
+    ["Postuler", "Candidater", "Easy Apply", "Apply now", "Bewerben", "Send message", "Connect"],
+)
 def test_apply_and_contact_buttons_stay_refused_signed_in(label: str) -> None:
-    facts = {
-        "tag": "button",
-        "type": "submit",
-        "names": [label],
-        "discovery": {**get_form(False)["discovery"], "name": ""},
-    }
-    assert discovery.verdict(facts, "browser_click", SCOPE["start"], scope=SIGNED) is not None
+    """The line (B20) holds signed in as anonymous: a button of a search form (GET) that applies
+    or writes to someone is refused, whatever the form."""
+    facts = {"tag": "button", "type": "submit", "names": [label], "native": {"method": "get"}}
+    assert line.control(facts, "click") is not None
+    search = {**facts, "names": ["Search"]}
+    assert line.control(search, "click") is None  # the same button that searches goes
 
 
 # --- browserd: the cookie store check ---------------------------------------------------------
@@ -392,13 +321,15 @@ def test_only_the_person_who_signed_in_reads_the_site_signed_in(monkeypatch) -> 
     assert logins.expired == []
 
 
-def test_a_sign_in_page_while_signed_in_ends_platform_signin_and_expires(monkeypatch) -> None:
+def test_a_sign_in_page_while_signed_in_no_longer_ends_the_website_nor_expires(monkeypatch) -> None:
+    """B20 (owner, 2026-11-04): a sign in wall no longer ends the website by itself; the agent
+    asks the person to sign in again (browser_ask_person), and the search marks no login."""
     alice = str(uuid.uuid4())
     logins = Logins({alice: {HOST}})
     tools = ScopeTools({"ok": False, "error": "signin_required", "message": "x"})
     [entry] = run_for(alice, logins, tools, monkeypatch)
-    assert entry["error"] == "platform_signin"
-    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] != "platform_signin"
+    assert logins.expired == []
     assert tools.actions == ["browser_navigate"]
 
 
@@ -419,12 +350,15 @@ class SignInPage(ScopeTools):
         self.pages[BASE] = '- heading "Sign in"\n- textbox "Email" [ref=e1]'
 
 
-def test_a_sign_in_heading_while_signed_in_ends_platform_signin_and_expires(monkeypatch) -> None:
+def test_a_sign_in_heading_while_signed_in_reaches_the_agent(monkeypatch) -> None:
+    """B20: the sign in page is the agent's to read; it asks the person, the login stays."""
     alice = str(uuid.uuid4())
     logins = Logins({alice: {HOST}})
-    [entry] = run_for(alice, logins, SignInPage(), monkeypatch)
-    assert entry["error"] == "platform_signin"
-    assert logins.expired == [(alice, HOST)]
+    tools = SignInPage()
+    [entry] = run_for(alice, logins, tools, monkeypatch)
+    assert entry["error"] != "platform_signin"
+    assert logins.expired == []
+    assert all(s.get("signed_in") is True for s in tools.scopes)
 
 
 def test_a_sign_in_heading_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
