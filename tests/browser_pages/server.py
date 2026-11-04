@@ -477,6 +477,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(url.query)
+        # J15's website lives on its own hosts only (the log is read on 127.0.0.1).
+        if (
+            url.path.startswith("/j15/")
+            and url.path != "/j15/log"
+            and self.headers.get("Host", "").split(":")[0].lower()
+            not in ("jobs.example-robotics.test", MEMBERS_HOST)
+        ):
+            return self.send_error(404)
         b20 = self.b20()
         if b20:
             return self.b20_page(b20, url, query)
