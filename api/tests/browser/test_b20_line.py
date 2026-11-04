@@ -63,7 +63,9 @@ def test_a_submit_passes_in_a_search_or_consent_form_only(
     kinds: list[str], method: str, allowed: bool
 ) -> None:
     # FACTS_JS's shape: the form's method is `discovery.method` (part B: `native` was read).
-    facts = button("Go", type="submit", in_form=True, form_kinds=kinds, discovery={"method": method})
+    facts = button(
+        "Go", type="submit", in_form=True, form_kinds=kinds, discovery={"method": method}
+    )
     assert (line.control(facts, "click") is None) is allowed
 
 

@@ -27,8 +27,9 @@ Two floors hold it in code:
   address says a search or a consent choice (`search_or_consent`); a fetch, an XHR, a beacon or
   any other POST is refused when its address says apply, submit, message, invite, connect,
   comment, payment, sign out or account change (POST_INSIDE, POST_STEMS: its path, query keys
-  and query values, a search client's metadata aside), or is too long to be read whole. A GET or a HEAD always leaves (any public host: browserd's egress proxy and the
-  host firewall keep private, loopback, tailnet and link local addresses out).
+  and query values, a search client's metadata aside), or is too long to be read whole. A GET
+  or a HEAD always leaves (any public host: browserd's egress proxy and the host firewall keep
+  private, loopback, tailnet and link local addresses out).
 
 What code cannot see is declared: a script that builds its own request by a means the route
 does not see (a WebSocket, a service worker's own fetch, which only the site's code can start)

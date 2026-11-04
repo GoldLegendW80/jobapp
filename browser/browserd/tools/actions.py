@@ -272,7 +272,10 @@ class Tab:
     async def _line_route(self, route: Any, request: Any) -> None:
         """The request floor of the line (line.request_refused): a refused document of the
         tab's main frame is a stopped navigation (settle() says so); any other refused request
-        fails alone and the page goes on without it."""
+        fails alone and the page goes on without it. A refused document (a form's POST) is
+        answered 204 No Content, which Chromium never commits, so the tab stays on the page it
+        was on: an abort committed Chromium's own error page, `chrome-error://`, and the
+        agent's next call was refused off the list (part B of B20, test_b20_native)."""
         try:
             frame = request.frame if request.is_navigation_request() else None
             main = frame is not None and frame.parent_frame is None
@@ -300,6 +303,9 @@ class Tab:
                 host_of(request.url),
                 KIND_LOGGED.sub("", kind)[:20] or "unknown",
             )
+        if frame is not None:
+            await route.fulfill(status=204, body="")
+            return
         await route.abort("blockedbyclient")
 
     async def close_discovery(self) -> None:
@@ -1114,20 +1120,51 @@ async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 
 async def navigate_history(tab: Tab, args: dict[str, Any], back: bool) -> dict[str, Any]:
     """browser_navigate_back and browser_navigate_forward (B20): the tab's history, paced as a
-    navigation; the page it lands on meets the route of the line as any load."""
+    navigation; the page it lands on meets the route of the line as any load. Waited until the
+    entry commits: a page Chromium restores from its back and forward cache fires no
+    DOMContentLoaded, so Playwright's "domcontentloaded" timed out on every such Back (part B of
+    B20, measured on real Chromium, test_b20_native)."""
     page = await tab.page()
+    place = await history_of(page)
+    if place is not None and not (place[0] > 0 if back else place[0] < place[1] - 1):
+        return failure("no_history", "There is no page to go to in this tab's history.")
     await tab.pacer.dwell()
     tab.require_input()
     try:
         moved = await (page.go_back if back else page.go_forward)(
-            timeout=NAVIGATION_S * 1000, wait_until="domcontentloaded"
+            timeout=NAVIGATION_S * 1000, wait_until="commit"
         )
-    except Exception:
+    except Exception as exc:
+        # Why, as navigate logs it: the error's type and Chromium's net error, never the address.
+        found = NET_ERROR.search(str(exc))
+        log.warning(
+            "lease %s: %s failed: %s net=%s",
+            tab.lease_tag,
+            "browser_navigate_back" if back else "browser_navigate_forward",
+            type(exc).__name__,
+            found.group(0) if found else "-",
+        )
         return failure("navigation_failed", "The page did not let this navigation finish.")
-    if moved is None:
+    if moved is None and place is None:  # a restore from the cache answers None as well
         return failure("no_history", "There is no page to go to in this tab's history.")
     await tab.pacer.read()
     return await tab.settle(await _here(tab))
+
+
+async def history_of(page: Any) -> tuple[int, int] | None:
+    """The tab's place in its history and the number of its entries (CDP), None when unread:
+    Playwright's go_back answers None both with no entry and for a page restored from the back
+    and forward cache, so it cannot tell them apart."""
+    try:
+        client = await page.context.new_cdp_session(page)
+        try:
+            found = await asyncio.wait_for(client.send("Page.getNavigationHistory"), ACTION_S)
+        finally:
+            with contextlib.suppress(Exception):
+                await client.detach()
+        return int(found["currentIndex"]), len(found["entries"])
+    except Exception:
+        return None
 
 
 async def navigate_back(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:

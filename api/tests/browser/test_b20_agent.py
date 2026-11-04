@@ -361,7 +361,8 @@ def test_nobody_watching_answers_at_once_and_the_agent_goes_on():
     entry, elapsed, _ = run(selected(), site, script)
     assert text_of(seen[0]).startswith("Nobody is watching")
     assert seen[0].get("is_error") is not True
-    assert site.client.polls == 0 and site.leases.calls == []  # nothing waited
+    assert site.client.polls == 0  # nothing waited
+    assert site.leases.calls == []
     assert ("browser_ask_person", {"reason": "Please solve the check."}) in site.calls
     assert elapsed == 0.0
     assert entry["error"] == "finding_persistence_pending"
@@ -591,6 +592,7 @@ def test_every_playwright_cli_tool_is_registered_with_a_schema_and_a_description
 
     for name in finder.INTERACTIVE_TOOLS:
         assert name in registry.FACTORIES, name
-        assert name in finder_tools.SCHEMAS and name in finder_tools.DESCRIPTIONS, name
+        assert name in finder_tools.SCHEMAS, name
+        assert name in finder_tools.DESCRIPTIONS, name
     assert "browser_file_upload" not in finder.INTERACTIVE_TOOLS  # no upload for the search
     assert set(finder.ACTIONS) <= set(finder.INTERACTIVE_TOOLS)
