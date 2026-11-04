@@ -29,7 +29,8 @@ words. A view gets no byte once its lease is no longer the current one, whatever
 
 The agent's side (`agent_turn`, for B5's tool calls): while the person holds the input the call
 waits, until Give back or TAKEOVER_S, then learns that the person used the browser, so the
-person's keys and the agent's never mix.
+person's keys and the agent's never mix. While the person holds the input of a sweep lease, its
+request floor does not apply (`person_holds`, B20): the person signs in or solves a check there.
 
 A person's own session (a lease without automation, browser B7: `look` and `signin`) has no
 agent: every viewer of it forwards the keyboard and the mouse from its start to its end, and Take
@@ -392,6 +393,20 @@ class Live:
         if self.input_lease == lease_id and lease_id == self._lease_id():
             return self.input_viewer
         return None
+
+    def person_holds(self, lease_id: str) -> bool:
+        """B20: the person holds the input of that lease at this moment: it is the current lease,
+        taken over, before its deadline (TAKEOVER_S), and its holder's view is open or away less
+        than HOLDER_GRACE_S. A sweep lease's request floor (actions.Tab._line_route) does not
+        apply then: the agent's calls wait (`agent_turn`), so every request is the person's or
+        the page's (their sign in, a security check's verify). Read again for each request, so
+        the floor is back from the moment the input goes back, before tick() has run."""
+        if self.holder(lease_id) is None:
+            return False
+        now = self.manager.clock()
+        if now >= self.input_until:
+            return False
+        return self.absent_since is None or now - self.absent_since < HOLDER_GRACE_S
 
     def person(self, lease_id: str) -> bool:
         """That lease is the current one and a person's own session: the person holds the

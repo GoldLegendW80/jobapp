@@ -461,6 +461,23 @@ def test_the_person_who_signs_in_when_asked_keeps_the_login(monkeypatch) -> None
     assert entry["error"] != "signin_wall"
 
 
+@pytest.mark.parametrize("signs_in", [True, False], ids=["signed_in", "gave_back"])
+def test_a_report_with_no_new_read_after_the_person_had_the_browser_marks_nothing(
+    monkeypatch, signs_in: bool
+) -> None:
+    """Review of B20, round 2: the person had the browser through browser_ask_person (signed in
+    again, or gave it back), and the agent reports without reading the page again. The sign in
+    page read before the ask is no longer the browser's page: nothing is marked."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    tools.watching, tools.signs_in = True, signs_in
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "no_match"))
+    assert tools.polls == 2
+    assert logins.expired == []
+    assert entry["error"] != "signin_wall"
+
+
 def test_the_person_had_the_browser_so_the_agent_s_word_alone_marks_nothing(monkeypatch) -> None:
     """After the person had the browser, a sign in wall the agent reports on a page that code
     does not tell as one is the agent's word only: nothing is marked."""

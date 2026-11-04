@@ -151,7 +151,9 @@ class GuardedTools:
         self.tools, self.policy, self.context = tools, policy, context
         self.logins = logins  # B17: set only when the website is read signed in
         self.reserved = False
-        self.page = ("", "")  # the last page a snapshot read: its address and its text
+        # The last page a snapshot read, its address and its text; forgotten when the person
+        # had the browser (ask_person).
+        self.page = ("", "")
         self.helped = False  # B20: the person had the browser through browser_ask_person
 
     async def _before(self, name: str) -> None:
@@ -600,8 +602,10 @@ async def _signed_out(
     search read is a sign in page (platform_policy.wall: the agent asked and nobody was
     watching, or it ended there), or when the agent reported a sign in wall (`signin_wall`) and
     the person never had the browser through browser_ask_person. A person who signs in again
-    when asked leaves the search on a page that is no sign in page: nothing is marked. A mark
-    that cannot be written is logged and the website ends as it would."""
+    when asked leaves the search on a page that is no sign in page: nothing is marked. The page
+    read before the person had the browser counts no more (`ask_person` forgets it): only a page
+    read after it does. A mark that cannot be written is logged and the website ends as it
+    would."""
     from app.browser import platform_policy
 
     guarded = pages.tools
@@ -740,6 +744,8 @@ async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> s
                     if synced:
                         await tools.leases.resume(tools.user_id, tools.lease_id)
                     guarded.helped = True
+                    # The page read before the ask is no longer the browser's (`_signed_out`).
+                    guarded.page = ("", "")
                     return "The person had the browser: read the page again (browser_snapshot)."
             except StoreUnavailableError:
                 pass  # Redis away: the api's copy is set on the next round

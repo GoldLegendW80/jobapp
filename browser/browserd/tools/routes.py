@@ -120,6 +120,7 @@ def _tab(svc: Any, lease: Lease, *, gate: bool = False) -> actions.Tab:
             and lease.scratch.get("input_epoch", 0) == epoch
             and (lease.request.purpose != MANUAL_PURPOSE or lease.app_turn)
         ),
+        person_holds=lambda: svc.manager.current() is lease and live.person_holds(lease.lease_id),
     )
 
 

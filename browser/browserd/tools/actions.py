@@ -23,8 +23,10 @@ click, Enter, key and typing through `line.control`, and a route on the context
 (`Tab._line_route`) refuses a document POST that is no search and a POST whose address applies,
 submits, writes to someone, pays, signs out or changes the account; every page of the context
 bypasses service workers (CDP `Network.setBypassServiceWorker`), so the page's requests reach
-the route while a worker may still register. browserd's egress proxy keeps every request to a
-public address.
+the route while a worker may still register. While the person holds the input (Take over, an
+ask's too: live.Live.person_holds, read for each request), the request floor does not apply: the
+agent's calls wait, and the person signs in or solves a check. browserd's egress proxy keeps
+every request to a public address.
 
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
@@ -193,10 +195,20 @@ class Tab:
     lease_tag: str = ""
     discovery: bool = False
     input_allowed: Callable[[], bool] | None = None
+    # B20: the person holds the input of this lease now (live.Live.person_holds): the request
+    # floor of a discovery does not apply. None, or a call that raises, is the agent's turn.
+    person_holds: Callable[[], bool] | None = None
 
     def require_input(self) -> None:
         if self.input_allowed is not None and not self.input_allowed():
             raise PersonInput
+
+    def held(self) -> bool:
+        """The person holds the input now, read at each request (fail closed: False)."""
+        try:
+            return self.person_holds is not None and self.person_holds() is True
+        except Exception:
+            return False
 
     @property
     def hosts(self) -> tuple[str, ...]:
@@ -280,6 +292,14 @@ class Tab:
         # kind, its address for the log) can keep it from being refused (part A of B20 found an
         # unbound `kind` there).
         kind = "unknown"
+        if not self.state.native_failed and self.held():
+            # The person holds the input (Take over, an ask's included): their own sign in, a
+            # check's verify POST. The control floor and the script guard are the agent's tools
+            # only, and its calls wait meanwhile. Read again for each request: from the moment
+            # the input goes back (Give back, TAKEOVER_S, the holder's view gone past the grace,
+            # the lease's end), the floor applies, to requests queued before it too.
+            await route.fallback()
+            return
         try:
             frame = request.frame if request.is_navigation_request() else None
             main = frame is not None and frame.parent_frame is None
@@ -354,7 +374,8 @@ class Tab:
         # sees it (Playwright routes the first address of a chain only), so its load is stopped
         # here and settle() takes the tab back. A discovery's hop to any public address goes on,
         # but to a sign out address (line.signs_out): stopped and answered `line`, though the
-        # hop has left by then (declared: a redirect is seen after it is sent).
+        # hop has left by then (declared: a redirect is seen after it is sent); not while the
+        # person holds the input (Tab.held), as the route.
         try:
             if request.redirected_from is None or not request.is_navigation_request():
                 return
@@ -362,7 +383,7 @@ class Tab:
             if frame.parent_frame is not None:
                 return
             if self.allowed(request.url) and not (
-                self.state.discovery and line.signs_out(request.url)
+                self.state.discovery and line.signs_out(request.url) and not self.held()
             ):
                 return
         except Exception:
