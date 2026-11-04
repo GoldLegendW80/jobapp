@@ -492,7 +492,7 @@ test("reopened by keyboard at 375 px in the dark, the setup holds her choices", 
   expect(((await answer.json()) as { items: Sweep[] }).items[0]?.status).toBe(
     "done",
   );
-  expect(siteLog().length - before).toBe(4);
+  expect(siteLog().length - before).toBe(5);
   await page.emulateMedia({ colorScheme: "light" });
   expect(errors).toEqual([]);
 });

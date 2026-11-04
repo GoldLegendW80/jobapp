@@ -282,7 +282,12 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
   // What the website saw: its members only pages, each with A's member's cookie; the refused
   // Send application button sent nothing (the line), the asked address was a plain GET.
   const seen = siteLog().slice(before);
-  const read = seen.filter((item) => item.path.startsWith("/j15/"));
+  const read = seen.filter(
+    (item) =>
+      item.path.startsWith("/j15/") &&
+      !probed([item]).length &&
+      !item.path.startsWith(PROBE_RAN),
+  );
   expect(read.map((item) => item.path)).toEqual(
     expect.arrayContaining([
       "/j15/search?q=engineer&location=Paris&page=2",
