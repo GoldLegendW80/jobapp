@@ -6,6 +6,7 @@ runs is test_container.py and tests/compose_smoke.sh). A line removed from compo
 here before any stack is started."""
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -219,10 +220,14 @@ def test_the_ci_stack_probes_the_parser_as_soon_as_it_starts() -> None:
 
 
 def test_the_memory_limits_keep_the_core_and_optional_mail_cost_within_the_budget() -> None:
-    """Keep the 6 GiB target (5 GiB until the browser's 1536m, 2026-10-30); mail adds 128 MiB.
-    Declared limits do not establish physical Jetson capacity acceptance."""
+    """Keep the 6.5 GiB target (6 GiB until the browser's 2048m, browser B20 on 2026-11-04;
+    5 GiB until its 1536m, 2026-10-30); mail adds 128 MiB. Declared limits do not establish
+    physical Jetson capacity acceptance. The browser's limit is BROWSER_MEM_LIMIT's default."""
     services = compose()["services"]
-    limits = {name: service["mem_limit"] for name, service in services.items()}
+    limits = {
+        name: re.sub(r"^\$\{BROWSER_MEM_LIMIT:-(\w+)\}$", r"\1", service["mem_limit"])
+        for name, service in services.items()
+    }
     core_limits = {name: limit for name, limit in limits.items() if name != "gmailmcp"}
     assert core_limits == {
         "caddy": "128m",
@@ -233,14 +238,15 @@ def test_the_memory_limits_keep_the_core_and_optional_mail_cost_within_the_budge
         "db": "768m",
         "redis": "256m",
         "renderer": "256m",
-        "browser": "1536m",
+        "browser": "2048m",
     }
-    # 384m under the 6G budget: the browser at 1536m since LinkedIn's signed in search passed
-    # the guard of its 1024m (compose.yml, budget comment).
-    assert sum(int(limit[:-1]) for limit in core_limits.values()) == 5760 == 6 * 1024 - 384
+    assert services["browser"]["mem_limit"] == "${BROWSER_MEM_LIMIT:-2048m}"
+    # 384m under the 6.5G budget: the browser at 2048m by default since B20 (JavaScript and
+    # WebGL on for every sweep), 1536m before (compose.yml, budget comment).
+    assert sum(int(limit[:-1]) for limit in core_limits.values()) == 6272 == 6656 - 384
     assert services["gmailmcp"]["profiles"] == ["mail"]
     assert limits["gmailmcp"] == "128m"
-    assert sum(int(limit[:-1]) for limit in limits.values()) == 5888 == 6 * 1024 - 256
+    assert sum(int(limit[:-1]) for limit in limits.values()) == 6400 == 6656 - 256
 
 
 def test_the_test_stack_takes_the_service_from_compose_yml_and_adds_no_privilege() -> None:

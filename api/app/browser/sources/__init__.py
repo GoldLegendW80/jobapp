@@ -35,7 +35,9 @@ lease's next ask for the host, a call already polling included (`Pages.unrelease
 dead worker left ends after PACE_HOLD_S. A host idle for longer than the pause is opened at once.
 A page is not started when the lease's remaining active time cannot hold its wait plus
 PAGE_LOAD_S (`lease_budget`), nor this close to the sweep's time limit (PAGE_BUDGET_S,
-`time_budget`).
+`time_budget`). Since B20 (owner, 2026-11-04) the websites read in the browser have a zero pause
+(platform_policy.pause_for), no lease maximum and no time limit, so only the hold across people
+stays for them; LinkedIn's public job search keeps its own pause and caps.
 
 The fixed readers of Google Careers, Business France VIE, company career pages (`site`) and
 LinkedIn's own reader were deleted with the company boards and the freelance feeds (owner,
@@ -74,18 +76,16 @@ PAGE_BUDGET_S = 60.0  # a page is not started this close to the sweep's time lim
 PAGE_LOAD_S = 45.0
 PACE_TTL_S = 3600  # a host's last page time is forgotten after an hour without a page
 PACE_POLL_S = 1.0  # how often a page asks again while another page of its host has not ended
-# The longest a website's search runs, its wait for the pace included (SPEC-browser: the sweep's
-# outer limit of 900 s, jobs J18): interactive._search cancels a search at this age of its lease.
-WEBSITE_CAP_S = 900
-# How long a page may hold its host in Redis. A live worker's page is cancelled at the latest
-# when its website's search is (WEBSITE_CAP_S from the lease's start, the wait included), and a
-# cancelled page gives its host back, so the hold needs that cap plus a margin for the release
-# and the clocks. What the hold covers is a page that outlives its lease, concurrent tool calls
-# of one finder session, and a cancel that lands in the store's reply (the hold taken, the page
-# never told). A page gives the host back whether it ends, fails or is cancelled, so a hold
-# stays when a worker died with its page, Redis refused the release twice, or a second cancel
-# landed in the release itself: then for this long.
-PACE_HOLD_S = WEBSITE_CAP_S + 100.0
+# How long a page may hold its host in Redis. A website's search has no time cap since B20
+# (owner, 2026-11-04), so no search cancels its page any more: a live page is its action and its
+# snapshot, two browserd calls the client gives up on after TOOL_TIMEOUT_S each (the person's
+# takeover pause aside, app/browser/client.py), and gives its host back when it ends, fails or is
+# cancelled. What the hold covers is a page that outlives its lease, concurrent tool calls of one
+# finder session, and a cancel that lands in the store's reply (the hold taken, the page never
+# told). So a hold stays only when a worker died with its page, Redis refused the release twice,
+# or a second cancel landed in the release itself: then for this long (the 900 s a website's
+# search had until B20, plus a margin for the release and the clocks).
+PACE_HOLD_S = 1000.0
 
 ERRORS = (
     "layout_changed",

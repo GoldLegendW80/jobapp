@@ -27,7 +27,7 @@ import pytest
 from redis.exceptions import RedisError
 
 from app.browser import sources
-from app.browser.client import BrowserError
+from app.browser.client import TOOL_TIMEOUT_S, BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.browser.sources import (
     HOLD_KEY,
@@ -35,8 +35,8 @@ from app.browser.sources import (
     PACE_KEY,
     PACE_POLL_S,
     PACE_TTL_S,
+    PAGE_LOAD_S,
     PAGE_PAUSE_S,
-    WEBSITE_CAP_S,
     MemoryPacer,
     Pages,
     RedisPacer,
@@ -554,12 +554,12 @@ def test_both_pacers_count_the_pause_from_the_end_and_hold_the_host(store):
     asyncio.run(go())
 
 
-def test_a_hold_is_bounded_by_the_website_s_cap_and_a_margin():
-    """A live worker's page is cancelled at the website's cap at the latest (interactive._search,
-    its wait included) and gives the host back: the hold outlives that cap by a margin only, so
-    a leaked one costs the platform's other pages about 17 minutes, not 36."""
-    assert WEBSITE_CAP_S == 900
-    assert WEBSITE_CAP_S < PACE_HOLD_S <= WEBSITE_CAP_S + 120
+def test_a_hold_outlives_a_live_page_and_ends_a_leaked_one_in_17_minutes():
+    """B20: a website's search has no time cap, so the hold no longer rests on one. A live page
+    is two browserd calls the client gives up on after TOOL_TIMEOUT_S each, and gives the host
+    back when it ends: the hold outlives them, and a leaked one costs the platform's other pages
+    about 17 minutes, not 36."""
+    assert 2 * TOOL_TIMEOUT_S + PAGE_LOAD_S < PACE_HOLD_S <= 1020
     assert PACE_HOLD_S < PACE_TTL_S
 
 

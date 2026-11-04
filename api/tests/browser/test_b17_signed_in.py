@@ -262,10 +262,20 @@ class Logins:
 
 
 class ScopeTools(InteractiveTools):
+    """browserd's tools of the website (InteractiveTools) that note each call's scope; the
+    signed in flag is checked here, the rest of the scope by InteractiveTools (the start
+    alone). `answer` answers every call instead."""
+
     def __init__(self, answer: dict[str, Any] | None = None) -> None:
         super().__init__()
         self.scopes: list[dict[str, Any]] = []
         self.answer = answer
+        # browser_ask_person (B20): `watching` someone has the live view open; when asked,
+        # the person signs in (`signs_in`: the page becomes a member's) or gives the browser
+        # back as it was. browserd's lease, as interactive.ask_person polls it.
+        self.watching = self.signs_in = False
+        self.client, self.leases = Browserd(self), self
+        self.lease_id, self.user_id = "lease-1", ""
 
     async def call(self, name, args):
         scope = args["_discovery_scope"]
@@ -273,25 +283,60 @@ class ScopeTools(InteractiveTools):
         if self.answer is not None:
             self.actions.append(name)
             return self.answer
+        if name == "browser_ask_person":
+            self.actions.append(name)
+            if not self.watching:
+                return {"ok": False, "error": "nobody_watching"}
+            return {"ok": False, "error": "waiting_person", "left_s": 900}
         plain = {k: v for k, v in scope.items() if k != "signed_in"}
-        return await super().call(
-            name, {**args, "_discovery_scope": {**plain, "filters": {"remote": "1"}}}
-        )
+        return await super().call(name, {**args, "_discovery_scope": plain})
+
+    @property
+    def polls(self) -> int:
+        return self.client.polls
+
+    async def wait_person(self, *_args: Any) -> object:
+        return object()
+
+    async def resume(self, *_args: Any) -> object:
+        return object()
 
 
-def run_for(user: str, logins: Logins, tools: ScopeTools, monkeypatch) -> list[dict[str, Any]]:
+class Browserd:
+    """browserd's current lease while the person is asked: waiting for them on the first poll,
+    then given back (with a member's page when they signed in)."""
+
+    def __init__(self, site: ScopeTools) -> None:
+        self.site, self.polls = site, 0
+
+    async def current(self) -> dict[str, Any]:
+        self.polls += 1
+        lease_id = self.site.lease_id
+        if self.polls == 1:
+            return {"lease": {"lease_id": lease_id, "state": "waiting_person", "wait_host": HOST}}
+        if self.site.signs_in:
+            self.site.pages[self.site.current] = MEMBER_PAGE
+        return {"lease": {"lease_id": lease_id, "state": "active"}}
+
+
+MEMBER_PAGE = '- heading "Robot jobs for members"\n- searchbox "Query" [ref=e1]'
+
+
+async def nothing(_session):
+    return finder_ran()
+
+
+def run_for(
+    user: str, logins: Logins, tools: ScopeTools, monkeypatch, script: Any = nothing
+) -> list[dict[str, Any]]:
     class Runner(RUNNER):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **{**kwargs, "site_logins": logins})
 
     monkeypatch.setattr(selected_module.sources, "Runner", Runner)
-
-    async def nothing(_session):
-        return finder_ran()
-
     entries, *_ = asyncio.run(
         selected_module.execute(
-            selected_module.selected(), user, ScriptedFinder(nothing), tools=tools
+            selected_module.selected(), user, ScriptedFinder(script), tools=tools
         )
     )
     return entries
@@ -321,9 +366,9 @@ def test_only_the_person_who_signed_in_reads_the_site_signed_in(monkeypatch) -> 
     assert logins.expired == []
 
 
-def test_a_sign_in_page_while_signed_in_no_longer_ends_the_website_nor_expires(monkeypatch) -> None:
-    """B20 (owner, 2026-11-04): a sign in wall no longer ends the website by itself; the agent
-    asks the person to sign in again (browser_ask_person), and the search marks no login."""
+def test_a_start_that_reads_no_page_marks_no_login(monkeypatch) -> None:
+    """A start browserd refused reads no page: the search ends there and no login is marked
+    (B20: only a sign in wall the search ended on marks it, below)."""
     alice = str(uuid.uuid4())
     logins = Logins({alice: {HOST}})
     tools = ScopeTools({"ok": False, "error": "signin_required", "message": "x"})
@@ -342,31 +387,123 @@ def test_signin_required_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
     assert logins.expired == []
 
 
+SIGN_IN = '- heading "Sign in"\n- textbox "Email" [ref=e1]'
+# A sign in page platform_policy.wall does not tell (its heading is no sign in heading).
+UNTOLD = '- heading "Members area"\n- textbox "Email" [ref=e1]'
+
+
 class SignInPage(ScopeTools):
     """The website answers its sign in page at the search's own address: a heading, no redirect."""
 
-    def __init__(self) -> None:
+    def __init__(self, page: str = SIGN_IN) -> None:
         super().__init__()
-        self.pages[BASE] = '- heading "Sign in"\n- textbox "Email" [ref=e1]'
+        self.pages[BASE] = page
 
 
-def test_a_sign_in_heading_while_signed_in_reaches_the_agent(monkeypatch) -> None:
-    """B20: the sign in page is the agent's to read; it asks the person, the login stays."""
+def reports(*steps: str) -> Any:
+    """The agent's script: ask the person ("ask"), read the page again ("read"), then report
+    no posting with the last step's reason."""
+
+    async def script(session):
+        for step in steps[:-1]:
+            if step == "ask":
+                await session.ask_person("Please sign in again on this website.")
+            elif step == "read":
+                await session.snapshot()
+        session.report_none(steps[-1])
+        return finder_ran()
+
+    return script
+
+
+def test_a_sign_in_page_the_search_ends_on_while_signed_in_expires_the_login(monkeypatch) -> None:
+    """B20 keeps B17's mark: the agent read the sign in page and ended there, nobody solved it,
+    so the login is marked expired (Account and Find jobs say Sign in again)."""
     alice = str(uuid.uuid4())
     logins = Logins({alice: {HOST}})
     tools = SignInPage()
     [entry] = run_for(alice, logins, tools, monkeypatch)
-    assert entry["error"] != "platform_signin"
-    assert logins.expired == []
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
     assert all(s.get("signed_in") is True for s in tools.scopes)
+
+
+def test_asked_with_nobody_watching_the_login_is_marked_expired(monkeypatch) -> None:
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "signin_wall"))
+    assert "browser_ask_person" in tools.actions
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
+
+
+def test_a_sign_in_wall_the_agent_reports_marks_it_on_a_page_code_does_not_tell(
+    monkeypatch,
+) -> None:
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    [entry] = run_for(alice, logins, SignInPage(UNTOLD), monkeypatch, reports("signin_wall"))
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
+
+
+def test_the_person_who_signs_in_when_asked_keeps_the_login(monkeypatch) -> None:
+    """The person watches, signs in again in the live view and gives the browser back: the
+    search goes on from a member's page, so nothing is marked."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    tools.watching = tools.signs_in = True
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "read", "no_match"))
+    assert tools.polls == 2
+    assert logins.expired == []
+    assert entry["error"] != "signin_wall"
+
+
+def test_the_person_had_the_browser_so_the_agent_s_word_alone_marks_nothing(monkeypatch) -> None:
+    """After the person had the browser, a sign in wall the agent reports on a page that code
+    does not tell as one is the agent's word only: nothing is marked."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage(UNTOLD)
+    tools.watching = True
+    run_for(alice, logins, tools, monkeypatch, reports("ask", "read", "signin_wall"))
+    assert tools.polls == 2
+    assert logins.expired == []
+
+
+def test_the_person_watching_who_does_not_sign_in_leaves_the_login_marked(monkeypatch) -> None:
+    """The person had the browser and gave it back on the sign in page: nobody solved it."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    tools.watching = True
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "read", "signin_wall"))
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
 
 
 def test_a_sign_in_heading_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
     bob = str(uuid.uuid4())
     logins = Logins({})
-    [entry] = run_for(bob, logins, SignInPage(), monkeypatch)
-    assert entry["error"] != "platform_signin"
+    [entry] = run_for(bob, logins, SignInPage(), monkeypatch, reports("ask", "signin_wall"))
+    assert entry["error"] == "signin_wall"  # the agent's own reason, as any website's
     assert logins.expired == []
+
+
+def test_a_mark_that_cannot_be_written_is_logged_and_the_website_ends_as_it_would(
+    monkeypatch, caplog
+) -> None:
+    class Down(Logins):
+        async def expire(self, user_id: str, host: str) -> None:
+            raise RuntimeError("database away")
+
+    alice = str(uuid.uuid4())
+    with caplog.at_level("WARNING", logger="app.browser.sources.interactive"):
+        [entry] = run_for(alice, Down({alice: {HOST}}), SignInPage(), monkeypatch)
+    assert entry["error"] == "signin_wall"
+    assert "could not be marked expired: error=RuntimeError" in caplog.text
 
 
 def test_the_migration_is_in_step(factory) -> None:

@@ -192,8 +192,9 @@ def test_the_api_sources_run_side_by_side_then_the_websites_with_the_time_left(
     assert sorted(log[:3]) == ["alerts started", "arbeitnow started", "board started"]
     assert sorted(log[3:6]) == ["alerts ended", "arbeitnow ended", "board ended"]
     assert log[6:] == ["websites started", "custom started", "custom ended"]
-    # The websites get what the slowest source left (900 s less 300), not 900 s less the sum.
-    assert seen["left"] == sweep.SWEEP_TIMEOUT_S - 300
+    # The websites have no time cap (B20): they are told the sweep's own bound from its start,
+    # whatever the slowest source took (300 s here), not what is left of the 900 s.
+    assert seen["left"] == sweep.BROWSER_SEARCH_MAX_S - 300
     assert row.stats["duration"] == 300
     assert isinstance(seen["parsing"], asyncio.Semaphore)
     assert {(s["kind"], s["phase"], s["outcome"]) for s in row.stats["sources"]} == {

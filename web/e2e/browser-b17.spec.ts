@@ -313,7 +313,7 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
   before = siteLog().length;
 });
 
-test("an ended login no longer ends the website by itself: the search reads no member page", async () => {
+test("an ended login the search cannot get past asks A to sign in again, and reads no member page", async () => {
   pages("/b17/expire");
   await openSetup(page);
   const { sweep, summary } = await saveAndStart(page, sweepId);
@@ -329,6 +329,9 @@ test("an ended login no longer ends the website by itself: the search reads no m
     found: 0,
   });
   expect(own?.error, JSON.stringify(sweep.sources)).not.toBe("platform_signin");
+  // It ended on the sign in page nobody solved (B20 keeps B17's mark): the login is marked
+  // expired, so the row says Sign in again (interactive._signed_out).
+  expect(await sites(page)).toMatchObject([{ host: HOST, state: "expired" }]);
   // The search met the sign in page: nothing read as a member, nothing sent to a send address.
   const seen = siteLog().slice(before);
   expect(seen.some((item) => item.member === true)).toBe(false);
@@ -364,6 +367,6 @@ test("B has no login of the website, and B's Done reads only B's browser", async
   };
   expect(mine.profile.exists).toBe(false);
   expect(await sites(pageB)).toEqual([]);
-  expect(await sites(page)).toMatchObject([{ host: HOST, state: "signed_in" }]);
+  expect(await sites(page)).toMatchObject([{ host: HOST, state: "expired" }]);
   await other.close();
 });

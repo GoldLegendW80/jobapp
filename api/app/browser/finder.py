@@ -137,6 +137,17 @@ SCOPE_VALUE_MAX = 300
 SCOPE_BYTES_MAX = 32_768
 SEEN_MAX = 2000
 WAIT_MAX_S = 5.0
+# A job website's summary of its searches (B20, `FinderSession._note_search`): the searches it
+# counts, the characters of each name, the boxes and choices one search holds.
+SEARCHES_MAX = 1000
+SEARCH_NAME_MAX = 200
+SEARCH_PARTS_MAX = 10
+# The actions after typing that leave what was typed waiting for its submit (a choice, a tick, a
+# hover, a scroll, a key other than Enter); any other action on the page drops it.
+KEEPS_TYPED = frozenset(
+    {"browser_select_option", "browser_check", "browser_hover", "browser_scroll",
+     "browser_press_key"}
+)  # fmt: skip
 FIRST_MESSAGE = (
     "The careers page is open in the browser. Find the job postings it lists, open the pages "
     "you need, and report them with report_postings. Start with browser_snapshot."
@@ -355,6 +366,15 @@ class FinderInput(BaseModel):
 
 def _norm(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def _words(text: str) -> str:
+    """A text as its words, case and accents aside, any other character a space: how a saved
+    title is looked for in an address's query (`FinderSession._note_address`)."""
+    plain = "".join(
+        c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
+    ).casefold()
+    return " ".join("".join(c if c.isalnum() else " " for c in plain).split())
 
 
 def _utcnow() -> datetime:
@@ -772,10 +792,13 @@ class FinderSession:
     detail_fields: dict[str, tuple[str, str]] = field(default_factory=dict)
     detail_read_at: str = ""
     clock: Callable[[], datetime] = _utcnow
-    # A job website's searches by saved title and place (jobs J18), read by the summary
-    # (interactive.Site). B20: the agent types what it judges right, so none is told apart from
-    # its tool calls any more and this stays empty.
+    # A job website's searches (B20), read by the summary (interactive._Site): (what was typed,
+    # what was chosen) once submitted, or (a saved title, a saved place) an address it opened
+    # holds (`_note_search`, `_note_address`), each once.
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
+    _typed: dict[str, str] = field(default_factory=dict, repr=False)  # ref: its last text
+    _chosen: dict[str, str] = field(default_factory=dict, repr=False)  # ref: its options
+    _search_keys: set[tuple[str, str | None]] = field(default_factory=set, repr=False)
     _report_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # Where the start page landed, when its website redirected it on its own origin (a locale
     # path, `/` to `/en`, jobs J18): its links are read from there.
@@ -893,8 +916,78 @@ class FinderSession:
         self.current = opened
         if self.interactive:
             self.interactions["browser_navigate"] += 1
+            self._note_address(url)
         self._read(opened, self.pages.last_text)
         return self._view(opened, self.pages.last_text), False
+
+    def _searched(self, title: str, place: str | None) -> None:
+        """Count one search of the website (B20), once per title and place (case and spacing
+        aside), at most SEARCHES_MAX."""
+        title, place = title[:SEARCH_NAME_MAX], place[:SEARCH_NAME_MAX] if place else None
+        key = (_norm(title), _norm(place) if place else None)
+        if key[0] and key not in self._search_keys and len(self.searches) < SEARCHES_MAX:
+            self._search_keys.add(key)
+            self.searches[(title, place)] = None
+
+    def _note_search(self, name: str, args: dict[str, Any]) -> None:
+        """A search typed on the page (B20): what the agent typed into boxes counts once it is
+        submitted, by browser_type with `submit`, or by a click or Enter as its next action
+        (choosing an option, ticking, hovering, scrolling or another key in between keep it).
+        Named by the texts typed (the last of each box) and the options chosen with them. Any
+        other action drops what was typed; a choice with nothing typed is no search."""
+        ref = str(args.get("ref") or "")
+        if name == "browser_type":
+            text = " ".join(str(args.get("text") or "").split())
+            self._typed.pop(ref, None)
+            if text and len(self._typed) < SEARCH_PARTS_MAX:
+                self._typed[ref] = text
+            if args.get("submit") is not True:
+                return
+        elif name == "browser_select_option":
+            values = args.get("values")
+            chosen = [" ".join(v.split()) for v in values if isinstance(v, str) and v.strip()]
+            self._chosen.pop(ref, None)
+            if chosen and len(self._chosen) < SEARCH_PARTS_MAX:
+                self._chosen[ref] = ", ".join(chosen)
+            return
+        elif name in KEEPS_TYPED and not (
+            name == "browser_press_key" and args.get("key") == "Enter"
+        ):
+            return
+        elif name not in ("browser_click", "browser_press_key"):
+            self._typed.clear()
+            self._chosen.clear()
+            return
+        if self._typed:
+            self._searched(", ".join(self._typed.values()), ", ".join(self._chosen.values()))
+        self._typed.clear()
+        self._chosen.clear()
+
+    def _note_address(self, url: str) -> None:
+        """A search by address (B20): an address the agent opened whose query holds one of the
+        saved titles, as whole words, case and accents aside, is a search by that title and the
+        first saved place it holds, unless a search of that title was counted already (its
+        next page, its place changed). Opening an address drops what was typed."""
+        from urllib.parse import parse_qsl
+
+        self._typed.clear()
+        self._chosen.clear()
+        if self.interactive is None:
+            return
+        try:
+            pairs = parse_qsl(urlsplit(url).query, max_num_fields=100)
+        except ValueError:
+            return
+        values = [f" {_words(value)} " for _, value in pairs]
+
+        def held(saved: str) -> bool:
+            words = _words(saved)
+            return bool(words) and any(f" {words} " in value for value in values)
+
+        title = next((t for t in self.interactive.titles if held(t)), None)
+        if title is None or any(_norm(title) in key[0].split(", ") for key in self._search_keys):
+            return
+        self._searched(title, next((p for p in self.interactive.places if held(p)), None))
 
     async def interact(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Only trusted interactive sessions can add browserd's discovery discriminator."""
@@ -940,6 +1033,7 @@ class FinderSession:
             return "Refused: the page went to another site.", True
         self.current = url
         self.interactions[name] += 1
+        self._note_search(name, args)
         self._read(url, self.pages.last_text)
         view = json.loads(self._view(url, self.pages.last_text))
         if name == "browser_evaluate":  # the script's own result, bounded by browserd

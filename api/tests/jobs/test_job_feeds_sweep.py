@@ -252,9 +252,10 @@ def test_feeds_leave_the_websites_their_share_of_the_sweep(
     row = read_sweep(factory, sweep_id)
     entries = [e for e in row.stats["sources"] if e.get("mode") == "api"]
     assert [e["reason"] for e in entries] == ["time_budget", "time_budget"]
-    # The feeds spent their total, 0.5 s, and the website gets the rest of the sweep.
+    # The feeds spent their total, 0.5 s; the website has no time cap (B20) and is told the
+    # sweep's own bound, a day from its start.
     [left] = left_for_websites
-    assert left > 60.0 - 0.5 - 1.0
+    assert left > sweep.BROWSER_SEARCH_MAX_S - 0.5 - 1.0
 
 
 # --- the setting and the key routes ---------------------------------------------------------------
