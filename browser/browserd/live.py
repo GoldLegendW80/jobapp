@@ -398,9 +398,11 @@ class Live:
         """B20: the person holds the input of that lease at this moment: it is the current lease,
         taken over, before its deadline (TAKEOVER_S), and its holder's view is open or away less
         than HOLDER_GRACE_S. A sweep lease's request floor (actions.Tab._line_route) does not
-        apply then: the agent's calls wait (`agent_turn`), so every request is the person's or
-        the page's (their sign in, a security check's verify). Read again for each request, so
-        the floor is back from the moment the input goes back, before tick() has run."""
+        apply then: the agent's calls wait (`agent_turn`), so a request is the person's or the
+        page's (their sign in, a security check's verify; a timer or a listener an earlier
+        script of the agent left on the page runs too: declared). Read again for each request,
+        so the floor is back from the moment the input goes back, before tick() has run
+        (test_b20_person_holds.py)."""
         if self.holder(lease_id) is None:
             return False
         now = self.manager.clock()
