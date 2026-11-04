@@ -111,6 +111,7 @@ LINE_WORDS = frozenset(
 LINE_PHRASES = (
     ("sign", "out"),
     ("log", "out"),
+    ("sign", "off"),  # a button or a menu item only: on a link, a title ("Sign-off Engineer")
     ("candidature", "simplifi"),
     ("delete", "account"),
     ("supprimer", "compte"),
@@ -128,13 +129,17 @@ LINE_PHRASES = (
 # with one of LEAVE_STEMS, a whole word of LINK_WORDS (LinkedIn's Connect link, "Invite Jane Roe
 # to connect"), or the whole words of a phrase side by side, one word between at most ("Supprimer
 # le compte", "Change your password"). Never a word's start in a phrase: "Logistics Outbound",
-# "Sign Language Interpreter, Outreach" and "Blog Outreach" are posting titles.
-LEAVE_STEMS = ("logout", "signout", "deconnex", "deconnect", "abmeld", "auslogg")
+# "Sign Language Interpreter, Outreach" and "Blog Outreach" are posting titles. "Log off" too
+# (review of B20, round 2), but not "Sign off", a posting's title on a link ("Sign-off
+# Engineer"): read on a button or a menu item only (LINE_PHRASES), and a link's address is read.
+LEAVE_STEMS = ("logout", "signout", "logoff", "deconnex", "deconnect", "abmeld", "auslogg")
 LINK_STEMS = (*LEAVE_STEMS, "kontoeinstellung")
 LINK_WORDS = frozenset({"connect"})
 LINK_PHRASES = (
     ("sign", "out"),
     ("log", "out"),
+    ("log", "off"),
+    ("fermer", "session"),  # Windows' French Log off, "Fermer la session"
     ("candidature", "simplifiee"),
     ("close", "account"),
     ("delete", "account"),
@@ -362,11 +367,15 @@ def search_or_consent(url: str) -> bool:
 # segments, query keys and query values, decoded up to DECODED times (a redirect's target is
 # often encoded twice), as words: one starting with LEAVE_STEMS, or "sign out" or "log out"
 # side by side (`/m/logout/`, `/auth/logout`, `/sign-out`, `/log/out`, `signOut`,
-# `?continue=%2Flogout`), never inside a glued word (`/blog-outreach-manager`). A DELETE, a PUT
+# `?continue=%2Flogout`, `/Account/LogOff`, `/log-off`), or a word ending with LEAVE_ENDS
+# (`/dologout`, `/userlogout`, `/applogoff.aspx`), never inside a glued word
+# (`/blog-outreach-manager`, `/blogoutreach-lead`). Never "sign off" side by side or glued: a
+# posting's address says `/jobs/sign-off-engineer-42` or `sta-signoff-engineer`. A DELETE, a PUT
 # or a PATCH may not say a session or a token either (`DELETE /api/v1/sessions`, Welcome to the
 # Jungle's way out). An address past READ_MAX characters is refused (a server answers 414 far
 # below it).
-LEAVE_PHRASES = (("sign", "out"), ("log", "out"))
+LEAVE_PHRASES = (("sign", "out"), ("log", "out"), ("log", "off"))
+LEAVE_ENDS = ("logout", "signout", "logoff")
 SESSION_STEMS = ("session", "token")
 READ_MAX = 32768
 DECODED = 3
@@ -390,13 +399,18 @@ def address_words(url: str) -> list[str] | None:
 
 
 def signs_out(url: object) -> bool:
-    """The address signs out (LEAVE_STEMS, LEAVE_PHRASES), or cannot be read to tell."""
+    """The address signs out (LEAVE_STEMS, LEAVE_ENDS, LEAVE_PHRASES), or cannot be read to
+    tell."""
     if not isinstance(url, str):
         return True
     words = address_words(url)
     if words is None:
         return True
-    return _starts(words, LEAVE_STEMS) or any(detect._phrase(words, p) for p in LEAVE_PHRASES)
+    return (
+        _starts(words, LEAVE_STEMS)
+        or any(word.endswith(LEAVE_ENDS) for word in words)
+        or any(detect._phrase(words, p) for p in LEAVE_PHRASES)
+    )
 
 
 def request_refused(method: object, url: object, kind: object) -> str | None:

@@ -77,6 +77,49 @@ def test_a_sign_out_or_account_link_is_the_line(name: str, action: str) -> None:
     assert line.control(link(name, role="menuitem"), action) in ("line", "danger")
 
 
+# Log off and its spellings (review of B20, round 2), on a link and on a button: "Log off",
+# ASP.NET's "LogOff", Windows' French "Fermer la session" (German says "Abmelden", above).
+LOG_OFF = [
+    "Log off", "Log Off", "LOG OFF", "Log-off", "Logoff", "LogOff", "Log off of Example",
+    "Log\u200boff", "Ｌｏｇ ｏｆｆ", "Fermer la session", "Fermer ma session",
+]  # fmt: skip
+# "Sign off" is a way out on a button or a menu item that is no link; never read on a link,
+# whose name is a posting's title ("Sign-off Engineer"): a link's address is read instead.
+SIGN_OFF = ["Sign off", "Sign Off", "SIGN OFF", "Sign-off", "Sign off now"]
+# Posting titles beside these words: never read as a way out on a link.
+OFF_TITLES = [
+    "Sign-off Engineer", "Physical Design Sign Off Lead", "STA Signoff Engineer",
+    "Timing Sign-off Engineer, Offshore Wind", "Backlog Officer", "Logistics Officer",
+    "Catalog Offer Manager", "Change Log Office Assistant", "Log Analyst, Office Team",
+    "Responsable de session de formation", "Sitzungsleiter Offshore",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name", LOG_OFF)
+@pytest.mark.parametrize("action", ["click", "key"])
+def test_log_off_is_the_line_on_a_link_and_a_button(name: str, action: str) -> None:
+    assert line.control(link(name), action) == "line"
+    assert line.control(link(name, role="menuitem"), action) == "line"
+    assert line.control(button(name), action) == "line"
+
+
+@pytest.mark.parametrize("name", SIGN_OFF)
+@pytest.mark.parametrize("action", ["click", "key"])
+def test_sign_off_is_the_line_on_a_button_and_a_menu_item_never_on_a_link(
+    name: str, action: str
+) -> None:
+    assert line.control(button(name), action) == "line"
+    menu = {**button(name), "tag": "div", "role": "menuitem"}
+    assert line.control(menu, action) == "line"
+    assert line.control(link(name), action) is None
+
+
+@pytest.mark.parametrize("name", OFF_TITLES)
+@pytest.mark.parametrize("action", ["click", "key"])
+def test_a_posting_title_beside_log_or_sign_off_opens(name: str, action: str) -> None:
+    assert line.control(link(name), action) is None
+
+
 @pytest.mark.parametrize("name", POSTING_LINKS)
 @pytest.mark.parametrize("action", ["click", "key"])
 def test_a_posting_link_s_title_is_no_word_of_the_line(name: str, action: str) -> None:
@@ -94,9 +137,57 @@ SIGN_OUT_ADDRESSES = [
     "https://jobs.example.test/uas/logoutUser",
     "https://jobs.example.test/auth?continue=%2Flogout",
     "https://jobs.example.test/r?to=https%253A%252F%252Fjobs.example.test%252Fm%252Flogout",
-    "https://jobs.example.fr/deconnexion",
-    "https://jobs.example.de/abmelden",
+    "https://emplois.example.test/deconnexion",
+    "https://stellen.example.test/abmelden",
 ]
+
+
+# Log off and a way out glued to another word (review of B20, round 2): read at a word's end too.
+LOG_OFF_ADDRESSES = [
+    "https://jobs.example.test/logoff",
+    "https://jobs.example.test/Account/LogOff",
+    "https://jobs.example.test/account/logoff?returnUrl=%2Fjobs",
+    "https://jobs.example.test/LogOff.aspx",
+    "https://jobs.example.test/log-off",
+    "https://jobs.example.test/log_off",
+    "https://jobs.example.test/user?action=logoff",
+    "https://jobs.example.test/dologout",
+    "https://jobs.example.test/userlogout",
+    "https://jobs.example.test/dologout.php?x=1",
+    "https://jobs.example.test/sso/ssologout",
+    "https://jobs.example.test/user/dologoff",
+    "https://jobs.example.test/applogoff.aspx",
+    "https://jobs.example.test/api/usersignout",
+    "https://jobs.example.test/r?to=%252Fdologout",
+    "https://jobs.example.test/ＬＯＧＯＦＦ",
+]
+# Postings and pages beside these words: they open.
+OFF_ADDRESSES = [
+    "https://jobs.example.test/jobs/sign-off-engineer-42",
+    "https://jobs.example.test/jobs/sta-signoff-engineer-42",
+    "https://jobs.example.test/jobs/physical-design-signoff-lead",
+    "https://jobs.example.test/jobs/backlog-officer-7",
+    "https://jobs.example.test/jobs/logistics-officer",
+    "https://jobs.example.test/jobs/catalog-offer-manager",
+    "https://jobs.example.test/jobs/blogoutreach-lead",
+    "https://jobs.example.test/catalogoutput",
+    "https://jobs.example.test/blog/office-tour",
+    "https://jobs.example.test/jobs?q=log+offload",
+]
+
+
+@pytest.mark.parametrize("url", LOG_OFF_ADDRESSES)
+@pytest.mark.parametrize(
+    ("method", "kind"), [("GET", "document"), ("GET", "fetch"), ("POST", "fetch")]
+)
+def test_a_log_off_address_never_leaves(url: str, method: str, kind: str) -> None:
+    assert line.request_refused(method, url, kind) == "sign_out"
+
+
+@pytest.mark.parametrize("url", OFF_ADDRESSES)
+def test_a_posting_beside_log_or_sign_off_is_no_sign_out(url: str) -> None:
+    assert not line.signs_out(url)
+    assert line.request_refused("GET", url, "document") is None
 
 
 @pytest.mark.parametrize("url", SIGN_OUT_ADDRESSES)
