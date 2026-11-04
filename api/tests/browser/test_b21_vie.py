@@ -17,7 +17,7 @@ import pytest
 
 from app.browser import finder, sources
 from app.browser.sources import interactive
-from app.jobs import sweep
+from app.jobs import never_apply, sweep
 from app.profile.schemas import SearchSection
 from tests.browser.fakes import FakeLeases, ScriptedFinder
 
@@ -26,6 +26,8 @@ LIST = VIE + "offres/recherche?query=genai"
 OFFER_1 = VIE + "offres/246286"
 OFFER_2 = VIE + "offres/246285"
 OFFER_3 = VIE + "offres/246281"
+OFFER_4 = VIE + "offres/246270"
+OFFER_5 = VIE + "offres/246271"
 HOME = '- searchbox "Rechercher une offre" [ref=e1]\n- button "Rechercher" [ref=e2]'
 
 
@@ -73,6 +75,10 @@ OFFER_PAGE_2 = "\n".join(
     ]
 )
 OFFER_PAGE_3 = '- main:\n  - heading "Data Scientist GenAI Sales (H/F)" [level=2]\n  - paragraph: x'
+OFFER_PAGE_4 = (
+    '- main:\n  - heading "Stage - Data Scientist GenAI (F/H)" [level=1]\n  - paragraph: x'
+)
+OFFER_PAGE_5 = '- main:\n  - heading "Cybersecurity: AI Engineer" [level=1]\n  - paragraph: x'
 
 
 class Vie:
@@ -86,7 +92,8 @@ class Vie:
 
     def pages(self) -> dict[str, str]:
         found = {self.start: HOME, LIST: offers(self.more), OFFER_1: OFFER_PAGE_1}
-        return {**found, OFFER_2: OFFER_PAGE_2, OFFER_3: OFFER_PAGE_3}
+        found |= {OFFER_2: OFFER_PAGE_2, OFFER_3: OFFER_PAGE_3, OFFER_4: OFFER_PAGE_4}
+        return {**found, OFFER_5: OFFER_PAGE_5}
 
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         assert args.pop("_discovery") == "native_get"
@@ -205,7 +212,7 @@ def test_a_posting_whose_title_is_no_saved_title_is_stored_on_the_vie_website():
     entry, commits = run(saved(), site, search_like_the_owner)
     assert [(f.url, f.title, f.evidence["rule"]) for f in commits.stored] == [
         (OFFER_1, "AI Engineer Consultant (H/F)", "heading"),  # the h2, two h1 on the page
-        (OFFER_2, "ai engineer consultant (h/f)", "page_text"),  # a div, no heading
+        (OFFER_2, "AI Engineer Consultant (H/F)", "page_text"),  # a div, as the page shows it
     ]
     assert "assist the GenAI Solution Architect" in commits.stored[0].text
     assert "Python, LLM." in commits.stored[1].text
@@ -230,6 +237,44 @@ def test_unwanted_titles_still_drop_a_vie_posting_after_reading():
     entry, commits = run(saved(title_exclude={"terms": ["sales"]}), Vie(), script)
     assert [f.url for f in commits.stored] == [OFFER_1]
     assert entry["unwanted"] == 1
+
+
+@pytest.mark.parametrize(
+    ("url", "title", "unwanted"),
+    [
+        (OFFER_3, "Data Scientist GenAI", "sales"),  # the h2 holds the reported words
+        (OFFER_4, "Data Scientist GenAI", "stage"),
+        (OFFER_4, "Data Scientist GenAI (H/F)", "stage"),
+    ],
+)
+def test_a_shortened_title_is_still_dropped_as_unwanted(url, title, unwanted):
+    """Review of B21: the agent reports the page's heading shortened; the heading is stored, so
+    the unwanted title still drops it."""
+
+    async def script(session):
+        await session.navigate(url)
+        await session.report_verified([{"title": title, "url": url, "text": "x"}])
+        return finder.Ran()
+
+    entry, commits = run(saved(title_exclude={"terms": [unwanted]}), Vie(), script)
+    assert commits.stored == []
+    assert entry["unwanted"] == 1
+
+
+def test_a_shortened_title_still_meets_the_cybersecurity_rule():
+    """The heading "Cybersecurity: AI Engineer" reported as "AI Engineer": the heading is
+    stored, and the store's cybersecurity rule (sweep.commit_verified) skips it."""
+
+    async def script(session):
+        await session.navigate(OFFER_5)
+        await session.report_verified([{"title": "AI Engineer", "url": OFFER_5, "text": "x"}])
+        return finder.Ran()
+
+    _, commits = run(saved(), Vie(), script)
+    [finding] = commits.stored
+    assert (finding.title, finding.evidence["rule"]) == ("Cybersecurity: AI Engineer", "heading")
+    rule = never_apply.matching_rule([never_apply.CYBER_RULE], finding.company or "", finding.title)
+    assert rule is never_apply.CYBER_RULE
 
 
 def test_elsewhere_a_posting_of_another_contract_is_still_dropped():
@@ -273,6 +318,12 @@ def test_elsewhere_a_posting_of_another_contract_is_still_dropped():
         ("https://www.example.fr/assurance-vie/emplois", None),
         ("https://www.welcometothejungle.test/fr/jobs?query=vie", None),
         ("https://jobs.example.test/vie/", None),
+        # Lookalike hosts: the two hosts exactly, nothing that begins or ends like them.
+        ("https://mon-vie-via.businessfrance.evil.test/", None),
+        ("https://mon-vie-via.businessfrance.com/", None),
+        ("https://mon-vie-via.businessfrance.fr.evil.test/", None),
+        ("https://evil.mon-vie-via.businessfrance.fr/", None),
+        ("https://mon-vie-via.businessfrance.test.example/", None),
         ("not an address", None),
         ("https://[::1/", None),
     ],

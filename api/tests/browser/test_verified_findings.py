@@ -180,9 +180,12 @@ SHOWN = ("Robot Engineer", "Example Robotics", "2026-10-20", "")
 @pytest.mark.parametrize(
     ("claims", "stored"),
     [
-        # B21: an invented title or field is never stored: the page's own words are.
-        ({"title": "Invented role"}, SHOWN),
-        ({"title": "Robot"}, ("Robot", *SHOWN[1:])),
+        # B21: an invented title or field is never stored: the page's own words are. A title
+        # the heading holds stores the heading, never shorter than the page says; one that shares
+        # no word with the heading is refused (an error page's heading is no title).
+        ({"title": "Invented role"}, None),
+        ({"title": "Robot"}, SHOWN),
+        ({"title": "Invented Robot role"}, SHOWN),
         (
             {"company": "Invented Employer"},
             SHOWN,
@@ -204,6 +207,10 @@ def test_invented_claims_store_what_the_page_shows(claims, stored):
             commit,
         )
         answer, _ = await one.report_verified([report(**claims)])
+        if stored is None:
+            assert json.loads(answer)["refused"][0]["reason"] == "title_not_on_page"
+            assert not batches
+            return
         assert json.loads(answer)["kept"] == 1
         [finding] = batches[0].findings
         assert (finding.title, finding.company, finding.published_on, finding.location) == stored
@@ -377,14 +384,16 @@ def test_unsupported_or_ambiguous_dates_stay_unknown(line):
 @pytest.mark.parametrize(
     ("snapshot", "stored"),
     [
-        # B21: the title as a person sees it on the page (its words in the visible text, or a
-        # heading it equals), else the page's one clear primary heading, else refused.
+        # B21: the title as a person sees it on the page, never shorter than the page says (a
+        # heading that holds it, else the lines of the visible text that hold it), else the
+        # page's one clear primary heading when it shares a word with it, else refused.
         ("- paragraph: Robot Engineer", ("Robot Engineer", "page_text")),
+        ("- paragraph: robot engineer (h/f)", ("robot engineer (h/f)", "page_text")),
         ('- heading "Robot Engineering" [level=1]', ("Robot Engineering", "primary_heading")),
-        ('- heading "Senior Robot Engineer" [level=1]', ("Robot Engineer", "page_text")),
-        ('- heading "Robot Engineer Jobs" [level=1]', ("Robot Engineer", "page_text")),
-        ('- heading "Not Robot Engineer" [level=1]', ("Robot Engineer", "page_text")),
-        ('- heading "robotengineer" [level=1]', ("robotengineer", "primary_heading")),
+        ('- heading "Senior Robot Engineer" [level=1]', ("Senior Robot Engineer", "heading")),
+        ('- heading "Robot Engineer Jobs" [level=1]', ("Robot Engineer Jobs", "heading")),
+        ('- heading "Not Robot Engineer" [level=1]', ("Not Robot Engineer", "heading")),
+        ('- heading "robotengineer" [level=1]', None),
         ('- heading "Robot\u200b Engineer" [level=1]', ("Robot\u200b Engineer", "heading")),
         ('- heading "Rоbot Engineer" [level=1]', ("Rоbot Engineer", "primary_heading")),
         (

@@ -225,20 +225,22 @@ class Searches:
 
 
 # Job websites whose every posting has one contract by nature (B21, owner 2026-11-04), by the
-# first two labels of the start's host: the VIE website (`mon-vie-via.businessfrance.fr`, whose
-# postings `kind` reads as VIE from their address). Ticking one is the person's choice of that
-# contract, so its postings are never dropped as of another contract.
-NATURE_CONTRACTS = {("mon-vie-via", "businessfrance"): ContractType.VIE.value}
+# start's exact host: the VIE website (`mon-vie-via.businessfrance.fr`, whose postings `kind`
+# reads as VIE from their address), and its stand in for the tests on `.test`, a name reserved
+# by RFC 6761 that is never a public host. Ticking one is the person's choice of that contract,
+# so its postings are never dropped as of another contract.
+NATURE_CONTRACTS = {
+    "mon-vie-via.businessfrance.fr": ContractType.VIE.value,
+    "mon-vie-via.businessfrance.test": ContractType.VIE.value,
+}
 
 
 def nature_contract(start: str) -> str | None:
     """The contract a website's postings have by nature, read from its start address."""
     try:
-        host = (urlsplit(start).hostname or "").rstrip(".")
+        return NATURE_CONTRACTS.get((urlsplit(start).hostname or "").rstrip("."))
     except ValueError:
         return None
-    labels = tuple(host.split("."))
-    return NATURE_CONTRACTS.get(labels[:2]) if len(labels) >= 3 else None
 
 
 def _carried(

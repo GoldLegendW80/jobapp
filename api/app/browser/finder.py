@@ -35,12 +35,14 @@ What code enforces, whatever the model asks (`FinderSession`):
   collapsed). Declared: this is a containment test, so a one word title passes on most pages;
   the address rules above are what bind the posting to the site.
 - a job website's posting (B21, owner 2026-11-04) is kept when its address is a page the agent
-  opened in this session (any of the last OPENED_MAX it read, `pages_read`) and its title equals
-  one of that page's headings or its words are in that page's visible text (case, accents,
-  spacing and punctuation aside, `title_on`), else the page's one clear primary heading is its
-  title; its company, location and date are the labelled ones, else the agent's when their words
-  are on the page, else none. An address it never opened is refused; the answer tells it what
-  to do (REPORT_ADVICE). The evidence stored names the rule that accepted the title.
+  opened in this session (any of the last OPENED_MAX it read, `pages_read`) and that page holds
+  its title's words (case, accents, spacing and punctuation aside, `title_on`): a heading or the
+  lines of the visible text that hold them are stored as its title, as the page shows them and
+  never shorter, else the page's one clear primary heading when it shares a word with the title;
+  its company, location and date are the labelled ones, else the agent's when their words are
+  on the page, else none. An address it never opened, or that browserd's navigate answered with
+  an HTTP error status (`error_pages`), is refused; the answer tells it what to do
+  (REPORT_ADVICE). The evidence stored names the rule that accepted the title.
 
 Nothing of a page or a posting goes into a log or the run's events.
 """
@@ -57,6 +59,7 @@ import secrets
 import threading
 import unicodedata
 import uuid
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -147,9 +150,14 @@ SCOPE_VALUE_MAX = 300
 SCOPE_BYTES_MAX = 32_768
 SEEN_MAX = 2000
 # The pages a job website's agent opened that its reports are verified on (B21): the last ones
-# read, each with its posting text, its visible words, its headings and fields; every record
-# holds at most about twice SNAPSHOT_MAX characters.
+# read, each with its posting text, its visible lines, their words, its headings' words and its
+# fields. The text, the lines and the words can each reach one snapshot, and the headings' words
+# (with a gender marker and without) two: every record holds about five times SNAPSHOT_MAX
+# characters at most, in practice far less.
 OPENED_MAX = 200
+# The places of a reported title in a page's words that `title_on` compares, the first ones: the
+# smallest span of lines among them is stored (B21).
+SPANS_MAX = 8
 PROFILE_MAX = 10_000  # characters of the person's profile summary (app/profile/fit_summary.py)
 WAIT_MAX_S = 5.0
 # A job website's summary of its searches (B20, `FinderSession._note_search`): the searches it
@@ -224,6 +232,10 @@ REPORT_ADVICE = {
         "shows it."
     ),
     "duplicate": "Already reported: go on with the next posting.",
+    "page_error": (
+        "This address answered an error, so it is no posting: report only postings whose page "
+        "loaded."
+    ),
     "postings_max": "Enough postings for this report: report the next ones in another call.",
 }
 # What browserd answers when it refused a navigation or an action of the agent's (B19): counted
@@ -626,28 +638,136 @@ class VerifiedBatch:
             raise ValueError("invalid verified batch size")
 
 
-@dataclass(frozen=True)
-class PageRead:
-    """What code read on a page the agent of a job website opened (B21), kept for its reports."""
-
-    text: str  # the posting's text: the detail's (`_detail`), else the page's visible lines
-    words: str  # the page's visible text as its words (`_words`), one space at each end
-    headings: tuple[str, ...]  # every visible heading, as the page shows it
-    primary: str  # the page's one clear primary heading (`_detail`), else ""
-    fields: dict[str, tuple[str, str]]  # the labelled company, date and location (`_detail`)
-    read_at: str
-
-
 # A gender marker at the end of a reported title ("(H/F)", "F/H", "(m/w/d)", "(f/m/x)"): when
-# the title is not on the page with it, it is looked for without it (B21).
+# the title is not on the page with it, it is looked for without it (B21). It is read in the
+# last MARK_TAIL characters of a text only (`_bare`): the longest marker with its separator fits
+# in them, and the rule's work then never grows with a title or a heading.
 GENDER_MARK = re.compile(
     r"(?:[\s,\u2013\u2014-]+|(?=[(\[]))[(\[]?\s*(?:[hfmwdx]\s*/\s*){1,2}[hfmwdx]\s*[)\]]?\s*$", re.I
 )
+MARK_TAIL = 32
+# Words a title shares with any heading, never a sign that the heading is its title (B21, the
+# primary heading rule of `title_on`); a word of one letter (a gender marker's) neither.
+_STOP = """an and as at by for from in into of on or the to with au aux avec dans de des du en et la
+le les ou par pour sur un une das der die fur im mit und zu con del el los las y da di il per"""
+STOP_WORDS = frozenset(_STOP.split())
+# A control character other than a line break or a tab, or a lone surrogate, in a reported text:
+# Postgres refuses a NUL and a surrogate does not encode, so such a posting is refused alone
+# before it reaches the store (B21).
+CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff]")
+
+
+def _bare(text: str) -> str:
+    """A text without a gender marker at its end (GENDER_MARK), else the text itself; only its
+    last MARK_TAIL characters are read (a separator run before the marker may stay)."""
+    found = GENDER_MARK.search(text, max(0, len(text) - MARK_TAIL))
+    return text[: found.start()] if found else text
+
+
+def _meaningful(words: str) -> frozenset[str]:
+    """The words of a folded text (`_words`) that can tell a title: neither a stop word nor a
+    word of one letter."""
+    return frozenset(w for w in words.split() if len(w) > 1 and w not in STOP_WORDS)
+
+
+@dataclass(frozen=True)
+class PageRead:
+    """What code read on a page the agent of a job website opened (B21), kept for its reports.
+    Its lines and headings are folded into words once, when it is read: a report then costs a
+    few searches in them, never a fold of the page (`title_on`)."""
+
+    text: str  # the posting's text: the detail's (`_detail`), else the page's visible lines
+    lines: tuple[str, ...]  # the page's visible lines, as the page shows them (`_seen_text`)
+    headings: tuple[str, ...]  # its visible headings, as the page shows them (lines too)
+    primary: str  # the page's one clear primary heading (`_detail`), else ""
+    fields: dict[str, tuple[str, str]]  # the labelled company, date and location (`_detail`)
+    read_at: str
+    # Folded once (__post_init__): the lines' words, one space at each end, and where each
+    # line's words start in them; the headings' words, the primary heading first, each also
+    # without its gender marker, one per line of `heads`, with where each starts and the heading
+    # it is of; how many of them are the primary heading's, and its meaningful words.
+    words: str = field(init=False)
+    starts: tuple[int, ...] = field(init=False)
+    heads: str = field(init=False)
+    head_starts: tuple[int, ...] = field(init=False)
+    head_shown: tuple[str, ...] = field(init=False)
+    primary_heads: int = field(init=False)
+    primary_words: frozenset[str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        parts: list[str] = []
+        starts: list[int] = []
+        at = 1
+        for line in self.lines:
+            starts.append(at)
+            folded = _words(line)
+            if folded:
+                parts.append(folded)
+                at += len(folded) + 1
+        primary = " ".join(self.primary.split())
+        primary = primary if len(primary) <= TITLE_MAX else ""
+        entries: list[str] = []
+        head_starts: list[int] = []
+        shown: list[str] = []
+        primary_heads, primary_words, at = 0, frozenset[str](), 2
+        for index, heading in enumerate(([primary] if primary else []) + list(self.headings)):
+            folded = _words(heading)
+            bare = _bare(heading)
+            for entry in (folded, _words(bare)) if bare is not heading else (folded,):
+                if entry:
+                    entries.append(entry)
+                    head_starts.append(at)
+                    shown.append(heading)
+                    at += len(entry) + 3
+                    primary_heads += bool(primary) and index == 0
+            if primary and index == 0:
+                primary_words = _meaningful(folded)
+        put = object.__setattr__
+        put(self, "words", f" {' '.join(parts)} ")
+        put(self, "starts", tuple(starts))
+        put(self, "heads", "\n" + "".join(f" {entry} \n" for entry in entries))
+        put(self, "head_starts", tuple(head_starts))
+        put(self, "head_shown", tuple(shown))
+        put(self, "primary_heads", primary_heads)
+        put(self, "primary_words", primary_words)
+
+    def heading(self, keys: tuple[str, ...], *, equal: bool) -> int | None:
+        """The first of the headings' words (`heads`) that equals one of `keys`, or holds it as a
+        sequence of whole words: its index, else None. Two searches of `heads` at most."""
+        found: int | None = None
+        for key in keys:
+            at = self.heads.find(f"\n {key} \n" if equal else f" {key} ")
+            if at >= 0:
+                index = bisect_right(self.head_starts, at + (2 if equal else 1)) - 1
+                found = index if found is None else min(found, index)
+        return found
+
+    def span(self, key: str) -> str:
+        """The smallest run of the page's lines whose words hold `key` (folded words) as a
+        sequence of whole words, as the page shows it, among its first SPANS_MAX places in the
+        page's words; "" when none fits in TITLE_MAX characters."""
+        best: tuple[int, int, int] | None = None
+        needle = f" {key} "
+        at = self.words.find(needle)
+        for _ in range(SPANS_MAX):
+            if at < 0:
+                break
+            first = bisect_right(self.starts, at + 1) - 1
+            last = bisect_right(self.starts, at + len(key)) - 1
+            size, index = -1, first
+            while index <= last and size <= TITLE_MAX:
+                size += len(self.lines[index]) + 1
+                index += 1
+            if size <= TITLE_MAX and (best is None or size < best[0]):
+                best = (size, first, last)
+            at = self.words.find(needle, at + 1)
+        return " ".join(self.lines[best[1] : best[2] + 1]) if best else ""
 
 
 def _seen_text(root: Any) -> tuple[list[str], list[str]]:
     """A page as a person reads it (B21): its visible lines and its headings, without hidden
-    elements, buttons, images and links (the titles of other postings a page lists are links)."""
+    elements, buttons, images and links. A heading that wraps a link keeps its own name, so the
+    title of another posting a page lists in such a heading is a heading here too."""
     from app.browser.sources import SKIPPED_ROLES
 
     lines: list[str] = []
@@ -674,27 +794,37 @@ def _on_page(text: str, page: PageRead) -> bool:
 
 
 def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
-    """The title a reported posting is stored with, and the rule that accepted it (B21): a
-    heading of the page it equals (case, accents, spacing and punctuation aside, then a gender
-    marker at the end of either set aside), as the page shows it; else the title as reported
-    when its words are in the page's visible text, with a gender marker at its end set aside
-    when the page has none; else the page's one clear primary heading. None when none of them
-    holds."""
-    words, bare_words = _words(title), _words(GENDER_MARK.sub("", title))
-    if not words or not bare_words:
+    """The title a reported posting is stored with, and the rule that accepted it (B21), always
+    as the page shows it and never shorter than what the page says, so the unwanted titles and
+    the cybersecurity rule read the page's own words. The reported words are compared case,
+    accents, spacing and punctuation aside, with a gender marker at the end set aside too
+    (`_bare`), as a sequence of whole words:
+    - the page's one clear primary heading when it holds them; else a heading that equals them;
+      else the first heading that holds them, in page order (rule `heading`);
+    - else the smallest run of the page's visible lines that holds them (`PageRead.span`, rule
+      `page_text`);
+    - else the primary heading when it shares a meaningful word with them (`_meaningful`, rule
+      `primary_heading`).
+    None when none of them holds: an error page's heading, or any other one, never stands for
+    a title it shares no word with."""
+    words = _words(title)
+    bare_title = _bare(title)
+    bare = words if bare_title is title else _words(bare_title)
+    if not words or not bare:
         return None  # no word, or a gender marker alone
-    heading = next((h for h in page.headings if _words(h) == words), None) or next(
-        (h for h in page.headings if _words(GENDER_MARK.sub("", h)) == bare_words), None
-    )
-    if heading is not None:
-        return heading, "heading"
-    if _on_page(title, page):
-        return title, "page_text"
-    bare = GENDER_MARK.sub("", title).strip()
-    if bare and bare != title and _on_page(bare, page):
-        return bare, "page_text"
-    if page.primary and len(page.primary) <= TITLE_MAX:
-        return page.primary, "primary_heading"
+    keys = (words,) if bare == words else (words, bare)
+    held = page.heading(keys, equal=False)
+    if held is not None and held < page.primary_heads:
+        return page.head_shown[held], "heading"
+    same = page.heading(keys, equal=True)
+    if same is not None or held is not None:
+        return page.head_shown[held if same is None else same], "heading"
+    for key in keys:
+        span = page.span(key)
+        if span:
+            return span, "page_text"
+    if page.primary_heads and page.primary_words & _meaningful(bare):
+        return page.head_shown[0], "primary_heading"
     return None
 
 
@@ -942,6 +1072,10 @@ class FinderSession:
     # A job website's pages opened in this session, oldest first, at most OPENED_MAX (B21): its
     # reports are verified on any of them, not only the last one read.
     pages_read: dict[str, PageRead] = field(default_factory=dict)
+    # The addresses browserd's navigate answered with an HTTP error status (4xx, 5xx), oldest
+    # first, at most OPENED_MAX: read for their links, never a posting's page (B21: an error
+    # page's heading is no title).
+    error_pages: dict[str, None] = field(default_factory=dict)
     clock: Callable[[], datetime] = _utcnow
     # A job website's searches (B20), read by the summary (interactive._Site): (what was typed,
     # what was chosen) once submitted, or (a saved title, a saved place) an address it opened
@@ -997,12 +1131,13 @@ class FinderSession:
             if self.interactive:
                 if key not in self.seen and len(self.seen) >= SEEN_MAX:
                     self.seen.pop()
+                self.pages_read.pop(key, None)  # read again: the newest record
+            if self.interactive and key not in self.error_pages:
                 body, titles, fields = _detail(root)
                 lines, headings = _seen_text(root)
-                self.pages_read.pop(key, None)  # read again: the newest record
                 self.pages_read[key] = PageRead(
                     (body or "\n".join(lines))[:TEXT_MAX],
-                    f" {_words(' '.join(lines))} ",
+                    tuple(lines),
                     tuple(headings),
                     titles[0] if titles else "",
                     fields,
@@ -1077,6 +1212,12 @@ class FinderSession:
         if self.interactive:
             self.interactions["browser_navigate"] += 1
             self._note_address(url)
+            status = result.get("status")
+            self.error_pages.pop(opened, None)
+            if isinstance(status, int) and status >= 400:
+                self.error_pages[opened] = None  # `_read` keeps no record of it
+                while len(self.error_pages) > OPENED_MAX:
+                    del self.error_pages[next(iter(self.error_pages))]
         self._read(opened, self.pages.last_text)
         return self._view(opened, self.pages.last_text), False
 
@@ -1388,7 +1529,9 @@ class FinderSession:
             return None, "missing_field"
         if len(item["url"]) > 2000 or len(item["text"]) > TEXT_MAX:
             return None, "field_too_long"
-        if not _words(GENDER_MARK.sub("", title)):
+        if any(CONTROLS.search(text) for text in (title, item["url"], item["text"])):
+            return None, "missing_field"  # a NUL, a control or a lone surrogate (B21)
+        if not _words(_bare(title)):
             return None, "missing_field"  # no word, or a gender marker alone (B21)
         url = canonical(urljoin(self.current, item["url"]))
         if not self.on_site(url):
@@ -1398,6 +1541,8 @@ class FinderSession:
         # B21: any page the agent opened in this session (the last OPENED_MAX), never one it
         # did not open; a job website's verified postings have no cap (J18).
         page = self.pages_read.get(url)
+        if page is None and url in self.error_pages:
+            return None, "page_error"
         if page is None:
             return None, "detail_not_opened" if url in self.seen else "not_seen"
         if url in self.reported_urls or url in pending:
@@ -1445,6 +1590,8 @@ class FinderSession:
             return "missing_field"
         if len(title) > TITLE_MAX:
             return "title_too_long"
+        if any(CONTROLS.search(v) for v in (title, values["url"], text, location)):
+            return "missing_field"  # a NUL, a control or a lone surrogate (B21)
         url = canonical(urljoin(self.current, values["url"]))
         if not url:
             return "not_an_address"
@@ -1461,7 +1608,7 @@ class FinderSession:
             return "postings_max"
         if self.interactive:  # B21: as `_verified`, on any page opened in this session
             if read is None:
-                return "detail_not_opened"
+                return "page_error" if url in self.error_pages else "detail_not_opened"
             found = title_on(read, title)
             if found is None:
                 return "title_not_on_page"

@@ -207,6 +207,14 @@ def test_a_labelled_field_wins_over_the_claim():
         ({"title": "(H/F)", "text": "x"}, "missing_field"),  # a marker alone
         ({"title": "R" * (finder.TITLE_MAX + 1), "text": "x"}, "missing_field"),
         ({"title": "Robot Engineer", "text": "x", "url": BASE}, "not_a_posting_page"),
+        # A NUL, a control or a lone surrogate: Postgres would refuse the whole batch.
+        ({"title": "Robot Engineer\x00", "text": "x"}, "missing_field"),
+        ({"title": "Robot\x07 Engineer", "text": "x"}, "missing_field"),
+        ({"title": "Robot Engineer\x9b", "text": "x"}, "missing_field"),
+        ({"title": "Robot\ud800 Engineer", "text": "x"}, "missing_field"),
+        ({"title": "Robot Engineer", "text": "Build\x00robots"}, "missing_field"),
+        ({"title": "Robot Engineer", "text": "Build \udfff robots"}, "missing_field"),
+        ({"title": "Robot Engineer", "text": "x", "url": JOB + "\x00"}, "missing_field"),
     ],
 )
 def test_empty_titles_texts_and_field_limits_stay_refused(item, reason):
@@ -252,13 +260,17 @@ def test_the_report_path_without_commits_reads_any_opened_page_too():
 
 # --- the title rule's accept and refuse table (a word sequence, never a pattern) ----------------
 
-SHOWN = finder.PageRead(
-    "text",
-    f" {finder._words('Ingénieur IA (H/F) GenAI Solution Architect, Paris 75001 C++ & R&D')} ",
-    ("Ingénieur IA (H/F)",),
-    "",
-    {},
-    "",
+
+def read(*lines: str) -> finder.PageRead:
+    """The record code keeps of a page read (`FinderSession._read`)."""
+    one, _ = opened((JOB, page(*lines)))
+    return one.pages_read[JOB]
+
+
+SHOWN = read(  # two h1: no clear primary heading
+    '- heading "Offres" [level=1]',
+    '- heading "Ingénieur IA (H/F)" [level=1]',
+    "- paragraph: GenAI Solution Architect, Paris 75001 C++ & R&D",
 )
 
 
@@ -344,3 +356,378 @@ def test_a_page_read_holds_no_link_or_button_text():
     )
     lines, headings = finder._seen_text(root)
     assert (lines, headings) == (["Data Engineer"], ["Data Engineer"])
+
+
+# --- review of B21, round 1 -------------------------------------------------------------------
+# A shortened title never gets past the unwanted titles or the cybersecurity rule: the title
+# stored is the page's own, never shorter than what the page says (`finder.title_on`).
+
+
+@pytest.mark.parametrize(
+    ("lines", "title", "stored"),
+    [
+        (
+            ['- heading "Stage - Data Scientist GenAI (F/H)" [level=1]'],
+            "Data Scientist GenAI",
+            ("Stage - Data Scientist GenAI (F/H)", "heading"),
+        ),
+        (
+            ['- heading "Cybersecurity: AI Engineer" [level=1]'],
+            "AI Engineer",
+            ("Cybersecurity: AI Engineer", "heading"),
+        ),
+        (
+            ['- heading "Cybersecurity: AI Engineer" [level=1]'],
+            "AI Engineer (H/F)",  # the marker set aside, then held by the heading
+            ("Cybersecurity: AI Engineer", "heading"),
+        ),
+        (
+            ['- heading "Senior Robot Engineer" [level=1]'],
+            "robot ENGINEER",
+            ("Senior Robot Engineer", "heading"),
+        ),
+        (  # the primary heading first, before a listed posting's heading that wraps a link
+            [
+                "- main:",
+                '  - heading "Cybersecurity: AI Engineer" [level=1]',
+                "- complementary:",
+                '  - heading "AI Engineer" [level=3]:',
+                '    - link "AI Engineer":',
+                "      - /url: /offres/9",
+            ],
+            "AI Engineer",
+            ("Cybersecurity: AI Engineer", "heading"),
+        ),
+        (  # no primary heading: the first heading holding it, in page order
+            [
+                '- heading "Offres" [level=1]',
+                '- heading "Stage: Data Scientist" [level=1]',
+                '- heading "Data Scientist (Paris)" [level=2]',
+            ],
+            "Data Scientist",
+            ("Stage: Data Scientist", "heading"),
+        ),
+        (  # no primary heading: a heading equal to it before one holding it
+            [
+                '- heading "Offres" [level=1]',
+                '- heading "Senior AI Engineer Lead" [level=1]',
+                '- heading "AI Engineer" [level=2]',
+            ],
+            "AI Engineer",
+            ("AI Engineer", "heading"),
+        ),
+        (
+            ["- generic: Cybersecurity: AI Engineer", "- paragraph: Build agents."],
+            "AI Engineer",
+            ("Cybersecurity: AI Engineer", "page_text"),
+        ),
+        (  # the page's own case and marker, not the agent's
+            ["- generic: AI Engineer Consultant (H/F)", "- paragraph: Sydney."],
+            "ai engineer consultant",
+            ("AI Engineer Consultant (H/F)", "page_text"),
+        ),
+        (
+            ["- generic: AI Engineer Consultant", "- paragraph: Sydney."],
+            "AI ENGINEER CONSULTANT (H/F)",
+            ("AI Engineer Consultant", "page_text"),
+        ),
+        (  # a title over two lines of the page
+            ["- generic: AI Engineer", "- generic: Consultant (H/F)", "- paragraph: Sydney."],
+            "AI Engineer Consultant",
+            ("AI Engineer Consultant (H/F)", "page_text"),
+        ),
+        (  # a line without words inside it is kept as shown
+            ["- generic: Stage", "- generic: ·", "- generic: Data Scientist"],
+            "Stage Data Scientist",
+            ("Stage · Data Scientist", "page_text"),
+        ),
+        (  # the smallest run of lines that holds it
+            ["- paragraph: We hire an AI Engineer for our Sydney team.", "- generic: AI Engineer"],
+            "AI Engineer",
+            ("AI Engineer", "page_text"),
+        ),
+        (
+            ["- paragraph: We hire a Cybersecurity AI Engineer for our Sydney team."],
+            "AI Engineer",
+            ("We hire a Cybersecurity AI Engineer for our Sydney team.", "page_text"),
+        ),
+        (  # only a line longer than a title holds it, and no primary heading: refused
+            ["- paragraph: " + "Cybersecurity " * 25 + "AI Engineer"],
+            "AI Engineer",
+            None,
+        ),
+    ],
+)
+def test_a_shortened_title_stores_what_the_page_shows(lines, title, stored):
+    assert finder.title_on(read(*lines), title) == stored
+
+
+def test_a_shortened_title_reaches_the_cybersecurity_rule_with_the_page_s_heading():
+    from app.jobs.never_apply import CYBER_RULE, matching_rule
+
+    one, batches = opened(
+        (JOB, page('- heading "Cybersecurity: AI Engineer" [level=1]', "- paragraph: x")),
+    )
+    assert reported(one, title="AI Engineer")["kept"] == 1
+    [finding] = batches[0].findings
+    assert finding.title == "Cybersecurity: AI Engineer"
+    # What the store applies to every verified posting (sweep.commit_verified).
+    assert matching_rule([CYBER_RULE], finding.company or "", finding.title) is CYBER_RULE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "AI Engineer (H/F)",
+        "AI Engineer(m/w/d)",
+        "AI Engineer, F/H",
+        "AI Engineer - h/f",
+        "AI Engineer [f / m / x]",
+        "Engineer 3D/X",
+        "H/F Engineer",
+        "Engineer (A/B)",
+        "(H/F)",
+        "AI Engineer" + " -" * 40 + " (H/F)",  # a separator run longer than the tail
+        "AI Engineer" + " -" * 40 + " x",
+        "x" * 1000 + " (H/F)",
+        "x" * 1000,
+    ],
+)
+def test_the_marker_rule_reads_a_bounded_tail_and_sets_aside_what_the_whole_rule_does(text):
+    assert finder._words(finder._bare(text)) == finder._words(finder.GENDER_MARK.sub("", text))
+
+
+# A heading of a separator run with no marker after it: the marker rule's worst case.
+HOSTILE = "a" + " -" * 139 + " x"
+
+
+def test_a_hostile_page_of_the_largest_size_costs_a_report_what_a_plain_page_does(monkeypatch):
+    """128 such headings at the snapshot's size, and one report of POSTINGS_MAX refused
+    postings with that page's address: the work counted (the folds of `_words`, the calls of the
+    marker rule and what it reads) is done once per page read, and a report folds its own titles
+    only, whatever the page's headings."""
+    from collections import Counter
+
+    hostile = page(*[f'- heading "{HOSTILE}" [level=2]'] * 128)
+    assert finder.SNAPSHOT_MAX - 2000 < len(hostile) <= finder.SNAPSHOT_MAX
+    plain = page('- heading "Data Engineer" [level=2]', '- heading "Offres" [level=2]')
+    titles = [f"Invented Role {index} (H/F)" for index in range(finder.POSTINGS_MAX)]
+    items = [{"title": title, "url": JOB, "text": "x"} for title in titles]
+    work: Counter[str] = Counter()
+    words, mark = finder._words, finder.GENDER_MARK
+
+    def folded(text):
+        work["folds"] += 1
+        work["folded"] += len(text)
+        return words(text)
+
+    class Marks:
+        def search(self, text, pos=0):
+            work["marks"] += 1
+            work["mark_read"] = max(work["mark_read"], len(text) - pos)
+            return mark.search(text, pos)
+
+        def sub(self, repl, text, count=0):
+            work["marks"] += 1
+            work["mark_read"] = max(work["mark_read"], len(text))
+            return mark.sub(repl, text, count)
+
+    monkeypatch.setattr(finder, "_words", folded)
+    monkeypatch.setattr(finder, "GENDER_MARK", Marks())
+
+    def report_on(snapshot):
+        work.clear()
+        one, batches = opened((JOB, snapshot))
+        read_work = dict(work)
+        work.clear()
+        answer, _ = asyncio.run(one.report_verified(items))
+        assert json.loads(answer)["kept"] == 0
+        assert one.refused == {"title_not_on_page": finder.POSTINGS_MAX}
+        assert not batches
+        return read_work, dict(work)
+
+    read_hostile, report_hostile = report_on(hostile)
+    _, report_plain = report_on(plain)
+    assert report_hostile == report_plain  # nothing per heading
+    assert report_hostile["folds"] <= 3 * len(items)
+    assert report_hostile["folded"] <= 3 * sum(len(title) for title in titles)
+    assert report_hostile["marks"] <= 2 * len(items)
+    assert report_hostile["mark_read"] <= finder.MARK_TAIL
+    # The page read folds each line and heading once.
+    assert read_hostile["folded"] <= 3 * len(hostile)
+    assert read_hostile["marks"] <= 128
+    assert read_hostile["mark_read"] <= finder.MARK_TAIL
+
+
+def test_a_text_s_line_breaks_and_tabs_are_no_control():
+    one, _ = opened((JOB, OFFER))
+    text = "Line one\nLine two\r\n\tIndented"
+    assert reported(one, title="AI Engineer Consultant", text=text)["kept"] == 1
+
+
+ADVICE = finder.REPORT_ADVICE["missing_field"]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"title": "AI Engineer Consultant\x00"},
+        {"title": "AI Engineer\ud800 Consultant"},
+        {"text": "Sydney\x00"},
+        {"location": "Sydney\x1b"},
+        {"url": JOB + "\x00"},
+    ],
+)
+@pytest.mark.parametrize("careers", [False, True])
+def test_the_path_without_commits_refuses_controls_too(item, careers):
+    """`report` (`_keep`): on a job website, and on a careers page, where the agent's own
+    text and location are kept when its posting's page was not opened."""
+    if careers:
+        from tests.browser.test_finder_session import posting_of, session_on, site_pages
+
+        one, _ = session_on(site_pages("AI Engineer Consultant"))
+        posting = posting_of("AI Engineer Consultant") | item
+        if "url" in item:
+            posting["url"] = posting_of("AI Engineer Consultant")["url"] + "\x00"
+    else:
+        one, _ = opened((JOB, OFFER))
+        one.on_verified = None
+        posting = {"title": "AI Engineer Consultant", "url": JOB, "text": "x", **item}
+    clean = {
+        k: v.replace("\x00", "").replace("\ud800", "").replace("\x1b", "")
+        for k, v in posting.items()
+    }
+    answer, _ = asyncio.run(one.report_verified([posting, clean]))
+    assert json.loads(answer)["refused"] == [
+        {"index": 0, "reason": "missing_field", **({} if careers else {"do": ADVICE})}
+    ]
+    assert json.loads(answer)["kept"] == 1  # the clean one: one bad item fails alone
+
+
+# An HTTP error page (the journeys' 404: Python http.server's own page, one h1 "Error response")
+# is never a posting.
+GONE = BASE + "j15/jobs/robot-engineer.html"
+ERROR_PAGE = page(
+    '- heading "Error response" [level=1]',
+    "- paragraph: Error code: 404",
+    "- paragraph: Message: File not found.",
+)
+ROBOT_PAGE = page('- heading "Robot Engineer" [level=1]', "- paragraph: Build robots.")
+
+
+class StatusTools(InteractiveTools):
+    """browserd's navigate answers GONE with an HTTP status, as browserd's `pages.navigate`
+    reports it (`status`), or with none (a page reached another way)."""
+
+    def __init__(self, status: int | None, snapshot: str) -> None:
+        super().__init__()
+        self.pages[GONE] = snapshot
+        self.status = status
+
+    async def navigate(self, url):
+        answer = await super().navigate(url)
+        if url == GONE and answer.get("ok") and self.status is not None:
+            answer = {**answer, "status": self.status}
+        return answer
+
+
+def gone(status: int | None, snapshot: str = ROBOT_PAGE, *, commits: bool = True):
+    batches: list = []
+
+    async def commit(batch):
+        batches.append(batch)
+
+    tools = StatusTools(status, snapshot)
+    one = session(tools, "e2e-person")
+    one.on_verified = commit if commits else None
+    assert not asyncio.run(one.navigate(GONE))[1]
+    return one, tools, batches
+
+
+def reported_gone(one, title: str = "Robot Engineer") -> dict:
+    answer, error = asyncio.run(
+        one.report_verified([{"url": GONE, "title": title, "text": "Invented model text"}])
+    )
+    assert not error
+    return json.loads(answer)
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 410, 429, 500, 503])
+@pytest.mark.parametrize("commits", [True, False])
+def test_a_page_answered_with_an_error_status_is_no_posting(status, commits):
+    one, _, batches = gone(status, commits=commits)  # its title is on it, yet refused
+    answer = reported_gone(one)
+    assert answer["kept"] == 0
+    [refusal] = answer["refused"]
+    assert refusal["reason"] == "page_error"
+    assert "loaded" in refusal["do"]
+    assert not batches
+    assert not one.found
+    assert GONE not in one.pages_read  # never a posting's page
+    assert GONE in one.seen  # its links are still read
+
+
+@pytest.mark.parametrize("status", [None, 200, 203, 304, 399])
+def test_a_page_answered_without_an_error_status_keeps_the_title_rule(status):
+    one, _, batches = gone(status)
+    assert reported_gone(one)["kept"] == 1
+    assert batches[0].findings[0].title == "Robot Engineer"
+
+
+def test_an_error_page_read_again_stays_no_posting_until_it_loads():
+    one, tools, batches = gone(404)
+    assert not asyncio.run(one.snapshot())[1]  # read again: still the error page
+    assert reported_gone(one)["refused"][0]["reason"] == "page_error"
+    assert not batches
+    tools.status = 200
+    assert not asyncio.run(one.navigate(GONE))[1]  # it loads now
+    assert reported_gone(one)["kept"] == 1
+    assert batches[0].findings[0].title == "Robot Engineer"
+    assert not one.error_pages
+
+
+def test_the_error_pages_noted_are_bounded_oldest_first():
+    one, _, _ = gone(404)
+    for index in range(finder.OPENED_MAX):
+        one.error_pages[BASE + f"gone/{index}"] = None
+        assert not asyncio.run(one.navigate(GONE))[1]  # the newest again
+    assert len(one.error_pages) == finder.OPENED_MAX
+    assert next(reversed(one.error_pages)) == GONE
+    assert BASE + "gone/0" not in one.error_pages  # the oldest went first
+
+
+# The page's one primary heading stands for a title that is not on the page only when it shares
+# a meaningful word with it: an error page answered without a status, a "not found" page or any
+# other page's heading never becomes a posting's title it has nothing in common with.
+
+
+@pytest.mark.parametrize(
+    ("lines", "title", "stored"),
+    [
+        (ERROR_PAGE.splitlines(), "Robot Engineer", None),
+        (['- heading "Page not found" [level=1]'], "Data Engineer", None),
+        (['- heading "Offre introuvable" [level=1]'], "Ingénieur Données", None),
+        (['- heading "Offre n° 246286" [level=1]'], "AI Engineer Consultant", None),
+        (['- heading "Welcome (H/F)" [level=1]'], "Robot Engineer (H/F)", None),  # a marker
+        (['- heading "The Team of the Year" [level=1]'], "Head of the Lab", None),  # stop words
+        (['- heading "Offres de la semaine" [level=1]'], "Chef de projet", None),
+        (['- heading "Data Engineer" [level=1]'], "Invented role", None),
+        (
+            ['- heading "Data Engineer" [level=1]'],
+            "GenAI Forward Deployed Engineer",
+            "Data Engineer",
+        ),
+        (['- heading "Ingénieur Données" [level=1]'], "Data INGENIEUR", "Ingénieur Données"),
+        (['- heading "Robot Engineering" [level=1]'], "Robot Engineer", "Robot Engineering"),
+        (['- heading "Offre n° 246286" [level=1]'], "Offre 246286 VIE", "Offre n° 246286"),
+    ],
+)
+def test_the_primary_heading_stands_for_a_title_only_when_they_share_a_word(lines, title, stored):
+    found = finder.title_on(read(*lines), title)
+    assert found == (None if stored is None else (stored, "primary_heading"))
+
+
+def test_an_error_page_answered_without_a_status_is_refused_by_its_heading():
+    one, _, batches = gone(None, ERROR_PAGE)
+    assert reported_gone(one)["refused"][0]["reason"] == "title_not_on_page"
+    assert not batches
