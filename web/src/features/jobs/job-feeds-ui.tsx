@@ -1,11 +1,10 @@
 /**
- * The job feeds in the interface: their boxes in Find jobs (`JobFeedsChoice`), their lines in a
- * sweep's summary (`SweepJobFeeds`) and Adzuna's key on the Account page (`AdzunaKeyCard`).
+ * The job feeds in the interface: their lines in a sweep's summary (`SweepJobFeeds`) and Adzuna's
+ * key on the Account page (`AdzunaKeyCard`). Find jobs lists a feed like any address (sources.ts).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Rss } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
-import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -21,11 +20,8 @@ import { describeError, errorDetail } from "@/lib/api";
 
 import { formatDateTime } from "./format";
 import {
-  ADZUNA_KEY_PLACE,
   ADZUNA_SIGNUP,
-  FEED_LABELS,
   FEED_NAMES,
-  JOB_FEEDS,
   adzunaOf,
   feedWords,
   getJobFeeds,
@@ -33,7 +29,6 @@ import {
   jobFeedsKey,
   removeAdzunaKey,
   saveAdzunaKey,
-  type JobFeed,
 } from "./job-feeds";
 import { plural } from "./selection";
 import type { SweepSource } from "./sweeps-api";
@@ -44,92 +39,6 @@ function useJobFeeds() {
     queryFn: ({ signal }) => getJobFeeds(signal),
     retry: false,
   });
-}
-
-/** The feeds' boxes in Find jobs: ticking one and saving makes every search read it. */
-export function JobFeedsChoice({
-  value,
-  onChange,
-}: {
-  value: JobFeed[];
-  onChange: (next: JobFeed[]) => void;
-}) {
-  const id = useId();
-  const feeds = useJobFeeds();
-  const adzuna = adzunaOf(feeds.data);
-  const toggle = (feed: JobFeed, checked: boolean) => {
-    const next = new Set(value);
-    if (checked) next.add(feed);
-    else next.delete(feed);
-    onChange(JOB_FEEDS.filter((name) => next.has(name)));
-  };
-  return (
-    <section className="space-y-3" aria-labelledby={`${id}-feeds`}>
-      <h3 id={`${id}-feeds`} className="font-medium">
-        Job feeds
-      </h3>
-      <p className="text-sm text-muted-foreground">
-        Official job APIs, read by the app without a browser before the
-        websites. Each search asks them for a few pages only.
-      </p>
-      <ul aria-label="Job feeds" className="divide-y rounded-md border">
-        {JOB_FEEDS.map((feed) => (
-          <li key={feed} className="min-w-0 space-y-1 p-3 text-sm">
-            <label className="flex min-w-0 items-center gap-2 font-medium">
-              <input
-                type="checkbox"
-                className="size-4 shrink-0 accent-primary"
-                checked={value.includes(feed)}
-                aria-describedby={
-                  feed === "adzuna" ? `${id}-adzuna-key` : undefined
-                }
-                onChange={(event) => {
-                  toggle(feed, event.target.checked);
-                }}
-              />
-              {FEED_LABELS[feed]}
-            </label>
-            {feed === "adzuna" ? (
-              <p id={`${id}-adzuna-key`} className="text-xs">
-                {feeds.isPending ? (
-                  <span className="text-muted-foreground">
-                    Checking whether your Adzuna key is stored…
-                  </span>
-                ) : adzuna?.key_stored ? (
-                  <span>
-                    Your Adzuna key ending in {adzuna.key_last4} is stored.{" "}
-                    <Link className="underline" to={ADZUNA_KEY_PLACE}>
-                      Change it in Account
-                    </Link>
-                  </span>
-                ) : (
-                  <span>
-                    {feeds.isError
-                      ? "Whether your Adzuna key is stored could not be checked. "
-                      : "No Adzuna key is stored, so Adzuna is skipped. "}
-                    Create a free key at{" "}
-                    <a
-                      className="underline"
-                      href={ADZUNA_SIGNUP}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      developer.adzuna.com
-                    </a>
-                    , then store it in{" "}
-                    <Link className="underline" to={ADZUNA_KEY_PLACE}>
-                      Account
-                    </Link>
-                    .
-                  </span>
-                )}
-              </p>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
 }
 
 function feedLine(source: SweepSource): string {

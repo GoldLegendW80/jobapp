@@ -6,7 +6,30 @@ Updated by the orchestrator after every shipped batch; the live truth is always
 GoldLegendW80, "Jobapp roadmap"). How work flows: [agents/orchestration.md](agents/orchestration.md).
 What the owner decided (latest: 2026-10-21): [decisions.md](decisions.md).
 
-Last updated: 2026-10-15.
+Last updated: 2026-10-15, with the corrections of 2026-11-04 below.
+
+## Corrections of 2026-11-04 (product audit, chapter 1)
+
+The sections after this one date from 2026-10-15 and are partly out of date. What the repository
+and the live pages show on 2026-11-04:
+
+- `main` is at `b1cd2ad` (the merge of #744); the alembic head on `main` is `0030`. Which commit
+  runs on the Jetson is not recorded here: the app shows no version. The live pages checked on
+  2026-11-04 matched the current source.
+- Mail: the pause of 2026-10-14 was lifted on 2026-10-20 (#357, decisions.md). Production has no
+  Google sign in configured: the Account page said "Gmail cannot be connected on this server yet."
+- Search sources: the company job boards came back on 2026-10-30, beside three job feeds
+  (Arbeitnow, Himalayas, Adzuna). "The board and feed engine deleted" below is superseded on those
+  points (decisions.md, Interactive job search).
+- The chapter 1 changes of the audit (not deployed yet): Find jobs shows every source as one list
+  of addresses and no longer offers the job alert e-mails, the first login wizard has a step
+  "Websites to search", the Gmail card hides itself on a server without Gmail, and Discover's
+  empty deck names its cause.
+- Apply: one click Apply (#738, 2026-11-01) is built: the Apply button of a posting fills and sends
+  the form, unless the person ticks the review box in Application settings.
+- Browser: on 2026-11-04 the Account page of a test account offered "Look at my browser", so the
+  browser service looked started; nothing more was checked.
+- The open pull requests table below is the one of 2026-10-15: read `gh pr list --state open`.
 
 ## In production
 

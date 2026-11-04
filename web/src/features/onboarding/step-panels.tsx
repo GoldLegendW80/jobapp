@@ -1,16 +1,25 @@
+import { useQuery } from "@tanstack/react-query";
+import { KeyRound, TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 
 import { AdvancedSection } from "@/components/advanced-section";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import {
+  getModelCredential,
+  modelCredentialQueryKey,
+} from "@/features/agents/api";
 import { holdText, type ApplySettings } from "@/features/apply/settings-api";
 import { UploadPanel } from "@/features/documents/upload-panel";
 import { RunProgress } from "@/features/ingestion/run-progress";
 import { RunStart } from "@/features/ingestion/run-start";
 import { StepDocuments } from "@/features/ingestion/step-documents";
+import { SourcesEditor } from "@/features/jobs/sources-editor";
+import type { Sources } from "@/features/jobs/use-sources";
 import {
   COMPANY_TYPES,
   CONTRACT_TYPES,
@@ -179,12 +188,48 @@ function Radios<T extends string>({
   );
 }
 
+// --- the model key ------------------------------------------------------------------------------
+
+/**
+ * Said once while no model credential is saved: reading the CV, the website search, the CV and
+ * letter writers and applying all run on the person's own key (SPEC-agents, Credentials). Says
+ * nothing while the credential loads or when it cannot be read.
+ */
+export function ModelKeyNotice() {
+  const credential = useQuery({
+    queryKey: modelCredentialQueryKey,
+    queryFn: ({ signal }) => getModelCredential(signal),
+    retry: false,
+  });
+  if (credential.data !== null) return null;
+  return (
+    <Alert>
+      <KeyRound aria-hidden="true" />
+      <AlertDescription>
+        <p>
+          Reading your CV, searching websites, writing your CVs and letters and
+          applying use your own Anthropic API key, billed to your Anthropic
+          account. No key is saved yet.{" "}
+          <Link
+            className="font-medium underline underline-offset-4"
+            to="/account"
+          >
+            {WORDING.addModelKey}
+          </Link>
+          .
+        </p>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 // --- 1. Your profile ----------------------------------------------------------------------------
 
 export function StepProfile() {
   // The run part asks the api only once the person opens the disclosure.
   return (
     <div className="flex flex-col gap-6">
+      <ModelKeyNotice />
       <p className="text-sm text-muted-foreground">
         Upload your CV: the app keeps it as your base CV, and can fill your
         profile from it. You review every proposal before it is written. The
@@ -364,7 +409,7 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
   );
 }
 
-// --- 4. How you want to work --------------------------------------------------------------------
+// --- 5. How you want to work --------------------------------------------------------------------
 
 export function StepWork({ draft, change }: PanelProps) {
   return (
@@ -397,7 +442,7 @@ export function StepWork({ draft, change }: PanelProps) {
   );
 }
 
-// --- 5. Pay -------------------------------------------------------------------------------------
+// --- 6. Pay -------------------------------------------------------------------------------------
 
 function PayFields({
   id,
@@ -522,7 +567,7 @@ export function StepPay({ draft, change, problem }: PanelProps) {
   );
 }
 
-// --- 6. How the app applies ---------------------------------------------------------------------
+// --- 7. How the app applies ---------------------------------------------------------------------
 
 export function StepApply({
   draft,
@@ -578,16 +623,17 @@ export function StepApply({
             aria-describedby={`${id}-full-text`}
           />
           <span className="flex flex-col">
-            <span className="font-medium opacity-70">
-              {WORDING.fullAuto}{" "}
-              <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-xs font-normal">
-                {WORDING.availableSoon}
-              </span>
-            </span>
+            <span className="font-medium">{WORDING.fullAuto}</span>
             <span id={`${id}-full-text`} className="text-muted-foreground">
               A Like is enough. The app applies after a hold of at least {hold},
-              only above your threshold. Once available, it is turned on in
-              Applications settings, with its own checks.
+              only above your threshold. It is turned on in{" "}
+              <Link
+                className="font-medium text-foreground underline underline-offset-4"
+                to="/settings/applications"
+              >
+                {WORDING.applicationSettings}
+              </Link>
+              , with its own checks.
             </span>
           </span>
         </label>
@@ -614,7 +660,27 @@ export function StepApply({
   );
 }
 
-// --- 7. Summary ---------------------------------------------------------------------------------
+// --- 4. Websites to search ---------------------------------------------------------------------
+
+export function StepSites({
+  sources,
+  reviewed,
+}: {
+  sources: Sources;
+  reviewed: Search;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted-foreground">
+        Tell the app where to look for postings: add a few websites now. You can
+        change the list any time from Jobs, Find jobs.
+      </p>
+      <SourcesEditor sources={sources} reviewed={reviewed} showTitle={false} />
+    </div>
+  );
+}
+
+// --- 8. Summary ---------------------------------------------------------------------------------
 
 export function StepSummary({
   draft,
@@ -627,7 +693,8 @@ export function StepSummary({
   search: Search;
   onChange: (step: StepId) => void;
 }) {
-  const rows = summaryRows(draft, settings);
+  const rows = summaryRows(draft, settings, search);
+  const places = sweepCoverage(search);
   return (
     <div className="flex flex-col gap-4">
       <dl className="flex flex-col gap-3">
@@ -656,9 +723,34 @@ export function StepSummary({
           </div>
         ))}
       </dl>
-      <p className="text-sm text-muted-foreground">
-        The first search covers {sweepCoverage(search)} ticked in Find jobs.
-      </p>
+      {places ? (
+        <p className="text-sm text-muted-foreground">
+          Start runs your first search on{" "}
+          {places === 1 ? "1 place" : `${String(places)} places`} from your
+          list.
+        </p>
+      ) : (
+        <Alert>
+          <TriangleAlert aria-hidden="true" />
+          <AlertDescription>
+            <p>
+              Your list of websites is empty, so the first search has nowhere to
+              look and finds no postings.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              onClick={() => {
+                onChange("sites");
+              }}
+            >
+              {WORDING.addWebsites}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <ModelKeyNotice />
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { draftOfSearch, rowsOf, sourceCount } from "@/features/jobs/sources";
 import { type Search } from "@/features/profile/api";
 import { type ApplySettings } from "@/features/apply/settings-api";
 import {
@@ -33,6 +34,7 @@ function payLine(pay: PayDraft): string | null {
 export function summaryRows(
   draft: Draft,
   settings: ApplySettings | undefined,
+  search: Search,
 ): Record<Exclude<StepId, "summary">, string> {
   const pays = [payLine(draft.salary), payLine(draft.daily)];
   const fullAuto =
@@ -50,6 +52,12 @@ export function summaryRows(
     where: `${draft.anywhere ? "Anywhere" : listOr(splitTerms(draft.locations), "No place yet")}; ${
       draft.remote ? REMOTE_WORDS[draft.remote] : "no preference given"
     }`,
+    sites: listOr(
+      rowsOf(draftOfSearch(search))
+        .filter((row) => row.enabled)
+        .map((row) => row.name),
+      "Nothing yet",
+    ),
     work: listOr(draft.contracts.map(contractWord), "Any contract"),
     pay: draft.ratherNotSay
       ? "Rather not say"
@@ -66,10 +74,8 @@ export function summaryRows(
   };
 }
 
-/** What the first search reads: the job websites ticked in Find jobs, alone (owner, 2026-10-28). */
-export function sweepCoverage(search: Search): string {
-  const websites = (search.interactive_sites ?? []).filter(
-    (site) => site.enabled,
-  ).length;
-  return `${websites} ${websites === 1 ? "job website" : "job websites"}`;
+/** How many places the first search reads: the websites, job feeds and company boards of the
+ * list (jobs/sources.ts). */
+export function sweepCoverage(search: Search): number {
+  return sourceCount(draftOfSearch(search));
 }

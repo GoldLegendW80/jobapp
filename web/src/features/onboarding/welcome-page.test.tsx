@@ -142,7 +142,7 @@ const withRoles: OnboardingState = { ...fresh, done: ["looking"] };
 
 const next = () => screen.getByRole("button", { name: /^Next/ });
 const stepHeading = () =>
-  screen.getByRole("heading", { level: 2, name: /^Step \d of 7/ });
+  screen.getByRole("heading", { level: 2, name: /^Step \d of 8/ });
 
 describe("the first login redirect", () => {
   it.each([
@@ -268,7 +268,7 @@ describe("the wizard", () => {
     fakeOnboarding(withRoles);
     const user = userEvent.setup();
     renderApp("/welcome?step=pay");
-    await screen.findByText(/Step 5 of 7/);
+    await screen.findByText(/Step 6 of 8/);
     const advanced = screen.getByRole("button", { name: "Advanced" });
     expect(advanced).toHaveAttribute("aria-expanded", "false");
     await user.click(advanced);
@@ -289,7 +289,7 @@ describe("the wizard", () => {
     await user.clear(within(reopened).getByLabelText("To"));
     await user.type(within(reopened).getByLabelText("To"), "100000");
     await user.click(next());
-    await screen.findByText(/Step 6 of 7/);
+    await screen.findByText(/Step 7 of 8/);
     expect(profile.saves.at(-1)?.body.data).toMatchObject({
       compensation: {
         salary: { min: 90000, max: 100000, currency: "EUR" },
@@ -311,7 +311,7 @@ describe("the wizard", () => {
     const app = renderApp("/welcome?step=looking");
     await screen.findByLabelText("Roles");
     expect(stepHeading()).toHaveTextContent(
-      "Step 2 of 7: What you are looking for",
+      "Step 2 of 8: What you are looking for",
     );
     expect(screen.queryByRole("button", { name: "Skip this step" })).toBeNull();
 
@@ -328,7 +328,7 @@ describe("the wizard", () => {
     await user.click(screen.getByRole("button", { name: "Advanced" }));
     await user.click(screen.getByRole("checkbox", { name: "Senior" }));
     await user.click(next());
-    await screen.findByText(/Step 3 of 7/);
+    await screen.findByText(/Step 3 of 8/);
     expect(profile.saves).toHaveLength(1);
     expect(profile.saves[0]?.section).toBe("search");
     expect(profile.saves[0]?.body.base_revision).toBe(0);
@@ -340,7 +340,10 @@ describe("the wizard", () => {
     await user.click(screen.getByRole("checkbox", { name: "Anywhere" }));
     await user.click(screen.getByRole("radio", { name: "Hybrid" }));
     await user.click(next());
-    await screen.findByText(/Step 4 of 7/);
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Step 4 of 8: Websites to search",
+    });
     // each step passed is kept in the profile without a revision: the next save starts from
     // the revision the last save gave, with no read of the profile in between
     expect(calls.steps).toEqual(["looking", "where"]);
@@ -356,7 +359,10 @@ describe("the wizard", () => {
 
     // A closed tab, or another device, a new visit to /welcome: it opens at the first step left.
     const back = renderApp("/welcome");
-    await screen.findByText(/Step 4 of 7/);
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Step 4 of 8: Websites to search",
+    });
     expect(back.location()).toBe("/welcome");
   });
 
@@ -366,7 +372,7 @@ describe("the wizard", () => {
     fakeOnboarding(withRoles);
     const user = userEvent.setup();
     renderApp("/welcome?step=work");
-    await screen.findByText(/Step 4 of 7/);
+    await screen.findByText(/Step 5 of 8/);
     profile.revision = 3; // saved from another tab
     await user.click(
       screen.getByRole("checkbox", { name: "Freelance mission" }),
@@ -381,26 +387,29 @@ describe("the wizard", () => {
       screen.getByRole("checkbox", { name: "Freelance mission" }),
     ).toBeChecked();
     await user.click(next());
-    await screen.findByText(/Step 5 of 7/);
+    await screen.findByText(/Step 6 of 8/);
     expect(profile.saves.at(-1)?.body.base_revision).toBe(3);
   });
 
-  it("offers Full auto only as Available soon and never turns it on", async () => {
+  it("points to Application settings for Full auto and never turns it on", async () => {
     fakeSession(member);
     const profile = fakeProfile(null);
     const calls = fakeOnboarding(withRoles);
     const user = userEvent.setup();
     renderApp("/welcome?step=apply");
-    await screen.findByText(/Step 6 of 7/);
+    await screen.findByText(/Step 7 of 8/);
     const full = screen.getByRole("radio", { name: /Full auto/ });
     expect(full).toBeDisabled();
     expect(full).not.toBeChecked();
-    expect(screen.getByText("Available soon")).toBeInTheDocument();
+    expect(screen.queryByText("Available soon")).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Application settings" }),
+    ).toHaveAttribute("href", "/settings/applications");
     expect(screen.getByText(/hold of at least 15 minutes/)).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Review first/ })).toBeChecked();
     await user.click(screen.getByRole("radio", { name: "Warm" }));
     await user.click(next());
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     expect(calls.settings).toEqual([]); // the mode was not changed: nothing sent
     expect(profile.saves.at(-1)?.section).toBe("preferences");
     expect(profile.saves.at(-1)?.body.data).toMatchObject({
@@ -417,35 +426,63 @@ describe("the wizard", () => {
     });
     const user = userEvent.setup();
     renderApp("/welcome?step=apply");
-    await screen.findByText(/Step 6 of 7/);
+    await screen.findByText(/Step 7 of 8/);
     await waitFor(() => {
       expect(screen.getByRole("radio", { name: /Full auto/ })).toBeChecked();
     });
     await user.click(next());
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     expect(calls.settings).toEqual([]);
   });
 
-  it("ends on Start with the summary, and opens Discover", async () => {
+  it("warns on the summary while the list is empty, and opens Find jobs on Start", async () => {
     fakeSession(member);
     fakeProfile(null);
     const calls = fakeOnboarding(withRoles);
     fakeDeck([]);
     const user = userEvent.setup();
     const app = renderApp("/welcome?step=summary");
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     expect(screen.queryByRole("button", { name: "Skip this step" })).toBeNull();
     expect(
-      screen.getByText(/covers 0 job websites ticked in Find jobs/),
+      screen.getByText(/Your list of websites is empty/),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Change Where" }));
-    await screen.findByText(/Step 3 of 7/);
-    await user.click(screen.getByRole("button", { name: /Next/ }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/place/);
+    await user.click(screen.getByRole("button", { name: "Add websites" }));
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Step 4 of 8: Websites to search",
+    });
     app.unmount();
 
     const end = renderApp("/welcome?step=summary");
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    // Nothing to search (the api answers no_websites): Find jobs opens, not an empty deck.
+    expect(
+      await screen.findByRole("dialog", { name: "Find jobs" }),
+    ).toBeVisible();
+    expect(end.location()).toBe("/jobs");
+    expect(calls.complete).toBe(1);
+  });
+
+  it("opens Discover on Start once a search started", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    const calls = fakeOnboarding(withRoles);
+    server.use(
+      http.post("*/api/opportunities/onboarding/complete", () => {
+        calls.complete += 1;
+        return HttpResponse.json({
+          state: { ...withRoles, completed_at: "2026-10-20T08:00:00+00:00" },
+          sweep: "started",
+          sweep_id: "00000000-0000-4000-8000-000000000001",
+        });
+      }),
+    );
+    fakeDeck([]);
+    const user = userEvent.setup();
+    const end = renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 8 of 8/);
     await user.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => {
       expect(end.location()).toBe("/discover");
@@ -453,9 +490,47 @@ describe("the wizard", () => {
     expect(calls.complete).toBe(1);
   });
 
-  // Owner, 2026-10-28: every search runs the job websites ticked in Find jobs alone, so the
-  // summary offers no starter list of boards and counts the websites.
-  it("offers no starter list on the summary, and counts the ticked job websites", async () => {
+  it("adds a website in Websites to search and saves it on Next, without telling the api the step", async () => {
+    fakeSession(member);
+    const profile = fakeProfile(null);
+    const calls = fakeOnboarding(withRoles, SETTINGS, profile);
+    server.use(
+      http.get("*/api/browser/sites", () => HttpResponse.json({ sites: [] })),
+    );
+    const user = userEvent.setup();
+    renderApp("/welcome?step=sites");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Step 4 of 8: Websites to search",
+    });
+    const region = screen.getByRole("region", { name: "Where to search" });
+    await user.type(
+      within(region).getByLabelText("Website address"),
+      "careers.example.org",
+    );
+    await user.click(within(region).getByRole("button", { name: "Add" }));
+    expect(
+      await within(region).findByRole("button", {
+        name: "Remove careers.example.org",
+      }),
+    ).toBeVisible();
+    await user.click(next());
+    await screen.findByText(/Step 5 of 8/);
+    expect(profile.saves.at(-1)?.section).toBe("search");
+    expect(profile.saves.at(-1)?.body.data).toMatchObject({
+      interactive_sites: [
+        {
+          platform: "custom",
+          url: "https://careers.example.org",
+          enabled: true,
+          mode: "llm_browser",
+        },
+      ],
+    });
+    expect(calls.steps).not.toContain("sites");
+  });
+
+  it("offers no starter list on the summary, and counts the places of the list", async () => {
     fakeSession(member);
     const profile = fakeProfile(null);
     profile.sections.search = {
@@ -490,9 +565,11 @@ describe("the wizard", () => {
       }),
     );
     renderApp("/welcome?step=summary");
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     expect(
-      await screen.findByText(/covers 2 job websites ticked in Find jobs/),
+      await screen.findByText(
+        /Start runs your first search on 2 places from your list/,
+      ),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "Boards and sites to search" }),
@@ -532,12 +609,17 @@ describe("the wizard", () => {
     fakeOnboarding(withRoles, SETTINGS, profile);
     const user = userEvent.setup();
     renderApp("/welcome?step=where");
-    await screen.findByText(/Step 3 of 7/);
+    await screen.findByText(/Step 3 of 8/);
     await user.type(screen.getByLabelText("Places"), "Lyon");
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
-    await screen.findByText(/Step 4 of 7/);
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Step 4 of 8: Websites to search",
+    });
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
-    await screen.findByText(/Step 5 of 7/);
+    await screen.findByText(/Step 5 of 8/);
+    await user.click(screen.getByRole("button", { name: "Skip this step" }));
+    await screen.findByText(/Step 6 of 8/);
     await user.click(screen.getByRole("button", { name: "Advanced" }));
     const [from] = screen.getAllByLabelText("From");
     const [to] = screen.getAllByLabelText("To");
@@ -545,9 +627,9 @@ describe("the wizard", () => {
     await user.type(from, "50000");
     await user.type(to, "60000");
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
-    await screen.findByText(/Step 6 of 7/);
+    await screen.findByText(/Step 7 of 8/);
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     const summary = screen.getByRole("region", { name: /Summary/ });
     expect(summary).toHaveTextContent("Not given");
     expect(summary).not.toHaveTextContent("50000");
@@ -564,13 +646,13 @@ describe("the wizard", () => {
     fakeOnboarding(withRoles, SETTINGS, profile);
     const user = userEvent.setup();
     renderApp("/welcome?step=summary");
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     await user.click(screen.getByRole("button", { name: "Change Where" }));
-    await screen.findByText(/Step 3 of 7/);
+    await screen.findByText(/Step 3 of 8/);
     await user.click(screen.getByRole("checkbox", { name: "Anywhere" }));
     await user.click(screen.getByRole("radio", { name: "Remote" }));
     await user.click(next());
-    await screen.findByText(/Step 7 of 7/);
+    await screen.findByText(/Step 8 of 8/);
     expect(screen.getByRole("region", { name: /Summary/ })).toHaveTextContent(
       "Anywhere; Remote",
     );
@@ -581,7 +663,7 @@ describe("the wizard", () => {
     fakeProfile(null);
     fakeOnboarding({ ...fresh, passed: ["profile"] });
     renderApp("/welcome?step=summary");
-    await screen.findByText(/Step 2 of 7/);
+    await screen.findByText(/Step 2 of 8/);
     expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
   });
 
@@ -601,7 +683,7 @@ describe("the wizard", () => {
     await user.click(
       await screen.findByRole("button", { name: "Skip this step" }),
     );
-    await screen.findByText(/Step 2 of 7/);
+    await screen.findByText(/Step 2 of 8/);
     expect(app.location()).toContain("next=%2Fapplications%3Ftab%3Dsent");
     await user.click(screen.getByRole("button", { name: "Skip for now" }));
     await waitFor(() => {
@@ -629,7 +711,7 @@ describe("the wizard", () => {
     });
     const user = userEvent.setup();
     renderApp("/welcome?step=profile");
-    await screen.findByText(/Step 1 of 7/);
+    await screen.findByText(/Step 1 of 8/);
     // nothing of the run is asked for while the disclosure is closed
     expect(runs.calls).toEqual([]);
     await user.click(screen.getByRole("button", { name: "Advanced" }));
@@ -656,7 +738,7 @@ describe("the wizard", () => {
       document_ids: ["d1"],
     });
     // the wizard stays on its step, the next steps can be answered meanwhile
-    expect(stepHeading()).toHaveTextContent("Step 1 of 7");
+    expect(stepHeading()).toHaveTextContent("Step 1 of 8");
     expect(next()).toBeEnabled();
   });
 
@@ -667,13 +749,14 @@ describe("the wizard", () => {
     for (const step of [
       "looking",
       "where",
+      "sites",
       "work",
       "pay",
       "apply",
       "summary",
     ]) {
       const app = renderApp(`/welcome?step=${step}`);
-      await screen.findByText(/Step \d of 7/);
+      await screen.findByText(/Step \d of 8/);
       expect(document.body.textContent).not.toMatch(/[–—]| - /);
       app.unmount();
     }

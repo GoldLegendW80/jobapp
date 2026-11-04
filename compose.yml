@@ -66,6 +66,9 @@ services:
       target: caddy
       additional_contexts:
         caddy-config: ./caddy
+      # The public contact address of /privacy, baked into the web build (.env.example).
+      args:
+        VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-}
     image: jobapp-caddy:latest
     depends_on:
       api:

@@ -152,6 +152,11 @@ Forgot your password? Ask the admin for a reset link (Admin, Invite someone, kin
 reset"): it is valid 1 hour, opens `/reset/<token>`, and setting a new password there signs out
 every browser of the account.
 
+The sign in page says so too. Where people write to the admin (for help, or to have an account
+deleted) is the Contact section of the public `/privacy` page: set `VITE_CONTACT_EMAIL` in the
+Jetson's `.env` (never in a committed file) and deploy, which rebuilds the web image with it.
+Empty, the page says that no contact address is published yet.
+
 The API, for the signed in user only (401 without a session, 403 without the CSRF header):
 `PATCH /api/auth/me` `{name}` (200 with the user, 422 `name: <rule>`) and `POST /api/auth/password`
 `{current_password, new_password}` (204). A wrong current password is a 400

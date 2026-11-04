@@ -36,6 +36,9 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     && pnpm config set store-dir /pnpm/store \
     && pnpm install --frozen-lockfile
 COPY . .
+# The contact address of /privacy (web/src/features/public/texts.ts contactEmail), set in the
+# Jetson's .env as VITE_CONTACT_EMAIL and passed by compose.yml. Empty: no address is published.
+ARG VITE_CONTACT_EMAIL=""
 RUN pnpm build
 
 FROM ${CADDY_BUILDER_IMAGE} AS caddy-bin

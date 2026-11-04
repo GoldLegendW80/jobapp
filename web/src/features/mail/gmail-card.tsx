@@ -219,6 +219,11 @@ export function GmailCard() {
     account !== undefined &&
     account.consent.current_version !== CONSENT_VERSION;
 
+  // A server without Gmail shows no Gmail card at all (owner, 2026-11-04: "hide"), unless the
+  // person is still connected and may want to disconnect.
+  if (query.isPending || (account && !account.available && !connected))
+    return null;
+
   return (
     <Card aria-labelledby="gmail-card-title">
       <CardHeader>
@@ -241,8 +246,8 @@ export function GmailCard() {
           ) : null}
         </CardTitle>
         <CardDescription>
-          The mails about your job postings, next to each posting. Nothing is
-          ever sent without your click.
+          Lets the app read the mail about your job postings. Nothing is ever
+          sent without your click.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -261,20 +266,15 @@ export function GmailCard() {
             <AlertDescription>{notice.text}</AlertDescription>
           </Alert>
         ) : null}
-        {query.isPending ? (
-          <p className="text-sm text-muted-foreground" role="status">
-            Loading
-          </p>
-        ) : query.isError || !account ? (
+        {query.isError || !account ? (
           <Alert variant="destructive">
             <CircleAlert aria-hidden="true" />
             <AlertDescription>{message(query.error)}</AlertDescription>
           </Alert>
         ) : !connected ? (
           <p className="text-sm text-muted-foreground">
-            {account.available
-              ? "Connect your Gmail to see, on each posting, the mails that belong to it."
-              : "Gmail cannot be connected on this server yet."}
+            Connect your Gmail so the app can read the mail about your job
+            postings.
           </p>
         ) : (
           <>

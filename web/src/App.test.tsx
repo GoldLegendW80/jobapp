@@ -49,6 +49,10 @@ describe("App shell", () => {
     renderApp("/");
     const footer = await screen.findByRole("contentinfo");
     expect(await within(footer).findByText("API ok")).toBeInTheDocument();
+    // Help and contact are one click away from every signed in page.
+    expect(
+      within(footer).getByRole("link", { name: "Privacy and contact" }),
+    ).toHaveAttribute("href", "/privacy");
   });
 
   it("uses no dash separators in visible text", async () => {

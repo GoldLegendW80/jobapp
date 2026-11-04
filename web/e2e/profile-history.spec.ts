@@ -155,11 +155,11 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   // DNS answers it); the search it starts on this stack, which has no browser, finds nothing.
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
-  await setup.getByLabel("Custom website URL").fill(WEBSITE);
-  await setup.getByRole("button", { name: "Add website" }).click();
-  await expect(setup).toContainText(WEBSITE);
+  await setup.getByLabel("Website address").fill(WEBSITE);
+  await setup.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(setup).toContainText("jobs.example-robotics.test");
   for (const [label, term] of [
     ["Job titles", "ai engineer"],
     ["Places", "Paris"],
@@ -171,9 +171,11 @@ test("a new account fills its profile from empty to 100% in the browser", async 
       setup.getByRole("list", { name: `Terms of ${label}` }),
     ).toContainText(term);
   }
-  await setup.getByRole("checkbox", { name: "CDI", exact: true }).check();
+  // Contract and remote preference sit under More options.
+  await setup.getByRole("button", { name: "More options" }).click();
+  await setup.getByRole("checkbox", { name: "Permanent", exact: true }).check();
   await setup.getByLabel("Remote preference").selectOption("hybrid");
-  await setup.getByRole("button", { name: "Save and Start" }).click();
+  await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
   await page.goto("/profile");
   await expect(tab(page, "Search")).toHaveAccessibleName(

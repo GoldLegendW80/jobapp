@@ -51,7 +51,7 @@ async function open(
   await screen.findByRole("table", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
-  const dialog = await screen.findByRole("dialog", { name: "Find jobs setup" });
+  const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
   return {
     profile,
     starts,
@@ -214,21 +214,93 @@ async function saveAndStart(
   dialog: HTMLElement,
 ) {
   await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   );
+}
+
+/** The list of addresses, once it has a line. */
+function listOf(dialog: HTMLElement) {
+  return within(dialog).getByRole("list", { name: "Your list" });
+}
+
+/** Whether a line named `name` is in the list (its Remove button is there). */
+function inList(dialog: HTMLElement, name: string): boolean {
+  const list = within(dialog).queryByRole("list", { name: "Your list" });
+  return (
+    list !== null &&
+    within(list).queryByRole("button", { name: `Remove ${name}` }) !== null
+  );
+}
+
+/** The line of the list named `name`. */
+function rowOf(dialog: HTMLElement, name: string): HTMLElement {
+  const button = within(listOf(dialog)).getByRole("button", {
+    name: `Remove ${name}`,
+  });
+  const row = button.closest("li");
+  if (!row) throw new Error(`no line for ${name}`);
+  return row;
+}
+
+/** What a tick of the old box did: adds the website from its example, or removes its line. */
+async function toggle(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  name: string,
+) {
+  if (inList(dialog, name)) {
+    await user.click(
+      within(listOf(dialog)).getByRole("button", { name: `Remove ${name}` }),
+    );
+    return;
+  }
+  await user.click(within(dialog).getByRole("button", { name: `Add ${name}` }));
+}
+
+/** Opens "More options" when folded. */
+async function openMore(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
+  const more = within(dialog).getByRole("button", { name: "More options" });
+  if (more.getAttribute("aria-expanded") !== "true") await user.click(more);
+}
+
+async function instructionsBox(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
+  await openMore(user, dialog);
+  return within(dialog).getByRole("textbox", {
+    name: "Instructions for the assistant",
+  });
 }
 
 it("opens setup before any save or start and closes without saving", async () => {
   const { profile, starts, user, dialog } = await open();
+  // An empty list, the examples of every kind, and what an address can be.
+  expect(
+    within(dialog).getByText(/Nothing yet\. Add an address above/),
+  ).toBeVisible();
   for (const name of [
     "LinkedIn",
     "Welcome to the Jungle",
     "Indeed",
     "Free-Work",
+    "Arbeitnow",
+    "Doctolib on Ashby",
   ])
-    expect(within(dialog).getByRole("checkbox", { name })).not.toBeChecked();
-  expect(dialog).toHaveTextContent("LLM with Playwright");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+    expect(
+      within(dialog).getByRole("button", { name: `Add ${name}` }),
+    ).toBeVisible();
+  expect(dialog).toHaveTextContent(
+    "A company job board, like jobs.ashbyhq.com/doctolib",
+  );
+  expect(dialog).toHaveTextContent(
+    "Any careers page, like https://www.example.com/careers",
+  );
+  await toggle(user, dialog, "Indeed");
+  expect(inList(dialog, "Indeed")).toBe(true);
   await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
   expect(profile.saves).toEqual([]);
   expect(starts).toEqual([]);
@@ -239,15 +311,13 @@ it("saves the reviewed sites and criteria before starting with the returned revi
   const existing = structuredClone(EMPTY.search);
   existing.sweep_schedule.enabled = true;
   const { profile, starts, writes, user, dialog } = await open(existing);
-  await user.click(within(dialog).getByRole("checkbox", { name: "Free-Work" }));
+  await toggle(user, dialog, "Free-Work");
   await user.type(
-    within(dialog).getByRole("textbox", {
-      name: "Instructions for this search",
-    }),
+    await instructionsBox(user, dialog),
     "Read junior roles carefully.",
   );
   await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   );
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 8 }]);
@@ -283,18 +353,22 @@ it("saves the reviewed sites and criteria before starting with the returned revi
     "Browser permission is required.",
   );
   expect(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   ).toBeEnabled();
 });
 
-it("shows the four plain lists and saves the unwanted places before starting", async () => {
+it("shows the four plain lists, the unwanted ones under More options, and saves the unwanted places", async () => {
   const { profile, starts, user, dialog } = await open();
-  for (const label of [
-    "Job titles",
-    "Unwanted titles",
-    "Places",
-    "Unwanted places",
-  ])
+  for (const label of ["Job titles", "Places"])
+    expect(
+      within(dialog).getByRole("textbox", { name: `New term for ${label}` }),
+    ).toBeVisible();
+  for (const label of ["Unwanted titles", "Unwanted places"])
+    expect(
+      within(dialog).queryByRole("textbox", { name: `New term for ${label}` }),
+    ).toBeNull();
+  await openMore(user, dialog);
+  for (const label of ["Unwanted titles", "Unwanted places"])
     expect(
       within(dialog).getByRole("textbox", { name: `New term for ${label}` }),
     ).toBeVisible();
@@ -303,20 +377,15 @@ it("shows the four plain lists and saves the unwanted places before starting", a
     within(dialog).queryByRole("switch", { name: /^Regular expressions for/ }),
   ).toBeNull();
   expect(within(dialog).queryByText(/regular expression/i)).toBeNull();
-  expect(
-    within(dialog).queryByRole("switch", { name: /regular expressions\) for/ }),
-  ).toBeNull();
   await user.type(
     within(dialog).getByRole("textbox", {
       name: "New term for Unwanted places",
     }),
     "Canada{enter}",
   );
-  await user.click(within(dialog).getByRole("checkbox", { name: "Free-Work" }));
-  await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
-  );
-  // Revision 7 is the save; the ticked Free-Work's permission (jobs J17) makes 8.
+  await toggle(user, dialog, "Free-Work");
+  await saveAndStart(user, dialog);
+  // Revision 7 is the save; Free-Work's permission (jobs J17) makes 8.
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 8 }]);
   });
@@ -329,24 +398,20 @@ it("shows the four plain lists and saves the unwanted places before starting", a
 it("keeps a conflicting draft editable and requires reviewing the current profile", async () => {
   const { profile, starts, user, dialog } = await open();
   profile.revision += 1;
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await toggle(user, dialog, "LinkedIn");
   await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   );
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("changed");
-  expect(
-    within(dialog).getByRole("checkbox", { name: "LinkedIn" }),
-  ).toBeChecked();
+  expect(inList(dialog, "LinkedIn")).toBe(true);
   expect(starts).toEqual([]);
   expect(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   ).toBeDisabled();
   await user.click(
     within(dialog).getByRole("button", { name: "Load current settings" }),
   );
-  expect(
-    within(dialog).getByRole("checkbox", { name: "LinkedIn" }),
-  ).not.toBeChecked();
+  expect(inList(dialog, "LinkedIn")).toBe(false);
 });
 
 it("does not save or start while loading the profile fails", async () => {
@@ -359,12 +424,12 @@ it("does not save or start while loading the profile fails", async () => {
   renderApp("/jobs");
   await screen.findByRole("table", { name: "Postings" });
   await userEvent.click(screen.getByRole("button", { name: "Find jobs" }));
-  const dialog = await screen.findByRole("dialog", { name: "Find jobs setup" });
+  const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
     "could not",
   );
   expect(
-    within(dialog).queryByRole("button", { name: "Save and Start" }),
+    within(dialog).queryByRole("button", { name: "Save and start search" }),
   ).not.toBeInTheDocument();
 });
 
@@ -493,21 +558,19 @@ it.each([422, 503])(
         ),
       ),
     );
-    await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
+    await toggle(user, dialog, "Indeed");
     await user.click(
-      within(dialog).getByRole("button", { name: "Save and Start" }),
+      within(dialog).getByRole("button", { name: "Save and start search" }),
     );
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "could not be saved",
     );
     expect(starts).toEqual([]);
-    expect(
-      within(dialog).getByRole("checkbox", { name: "Indeed" }),
-    ).toBeChecked();
+    expect(inList(dialog, "Indeed")).toBe(true);
   },
 );
 
-it("reopens saved sites and instructions and refuses an unadded custom draft", async () => {
+it("reopens saved sites and instructions and refuses an address typed and not added", async () => {
   const settings: Search = {
     ...EMPTY.search,
     interactive_sites: [
@@ -521,23 +584,15 @@ it("reopens saved sites and instructions and refuses an unadded custom draft", a
     interactive_instructions: "Junior roles only.",
   };
   const { starts, user, dialog } = await open(settings);
-  expect(
-    within(dialog).getByText("https://careers.example.org/"),
-  ).toBeVisible();
-  expect(
-    within(dialog).getByRole("textbox", {
-      name: "Instructions for this search",
-    }),
-  ).toHaveValue("Junior roles only.");
+  expect(inList(dialog, "careers.example.org")).toBe(true);
+  expect(await instructionsBox(user, dialog)).toHaveValue("Junior roles only.");
   await user.type(
-    within(dialog).getByRole("textbox", { name: "Custom website URL" }),
+    within(dialog).getByRole("textbox", { name: "Website address" }),
     "https://another.example.org/",
   );
-  await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
-  );
+  await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "Add the custom website",
+    "Add the address you typed, or clear it, before saving.",
   );
   expect(starts).toEqual([]);
 });
@@ -577,7 +632,7 @@ it.each(["linkedin", "freework"] as const)(
       within(dialog).queryByText(`${label} (existing reader)`),
     ).not.toBeInTheDocument();
     await user.click(
-      within(dialog).getByRole("button", { name: "Save and Start" }),
+      within(dialog).getByRole("button", { name: "Save and start search" }),
     );
     await waitFor(() => {
       expect(starts).toEqual([{ profile_revision: 7 }]);
@@ -592,19 +647,18 @@ it.each(["linkedin", "freework"] as const)(
 // it, written by the platform's own consent route after the reviewed profile save.
 
 const EASY_APPLY =
-  "Ticking LinkedIn also allows Easy Apply with your LinkedIn account. Each application still needs your approval before it is sent.";
+  "Adding LinkedIn also allows Easy Apply with your LinkedIn account. Each application still needs your approval before it is sent.";
 
-it("shows each job website's current risk sentence beside its box and no separate permission step", async () => {
-  const { dialog } = await open();
+it("shows each job website's current risk sentence in its line once added, and no separate permission step", async () => {
+  const { user, dialog } = await open();
   for (const kind of PROTECTED) {
-    const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
-    await waitFor(() => {
-      expect(box).toHaveAccessibleDescription(
-        kind === "linkedin"
-          ? `Current ${kind} risk sentence, version 4. ${EASY_APPLY}`
-          : `Current ${kind} risk sentence, version 4.`,
-      );
-    });
+    await toggle(user, dialog, LABELS[kind]);
+    const row = rowOf(dialog, LABELS[kind]);
+    expect(
+      await within(row).findByText(`Current ${kind} risk sentence, version 4.`),
+    ).toBeVisible();
+    if (kind === "linkedin") expect(row).toHaveTextContent(EASY_APPLY);
+    else expect(row).not.toHaveTextContent(/Easy Apply/);
   }
   expect(
     within(dialog).queryByRole("button", {
@@ -612,15 +666,12 @@ it("shows each job website's current risk sentence beside its box and no separat
     }),
   ).not.toBeInTheDocument();
   expect(
-    within(dialog).queryByRole("button", { name: /Enable .* browsing/ }),
-  ).not.toBeInTheDocument();
-  expect(
     within(dialog).queryByRole("checkbox", { name: /I accept/ }),
   ).not.toBeInTheDocument();
   expect(dialog).not.toHaveTextContent(/[–—]| - /);
 });
 
-it("says beside LinkedIn's box, and only there, that ticking it also allows Easy Apply", async () => {
+it("says in a LinkedIn line, and only there, that adding it also allows Easy Apply", async () => {
   const { dialog } = await open({
     ...EMPTY.search,
     interactive_sites: [
@@ -629,44 +680,29 @@ it("says beside LinkedIn's box, and only there, that ticking it also allows Easy
       site("custom", "https://careers.example.org/"),
     ],
   });
-  const linkedin = within(dialog).getByRole("checkbox", { name: "LinkedIn" });
-  // The line is there while the server's sentence loads, and once it is shown.
-  expect(linkedin).toHaveAccessibleDescription(new RegExp(EASY_APPLY));
   await within(dialog).findAllByText(
     "Current linkedin risk sentence, version 4.",
   );
-  for (const name of ["LinkedIn", "https://fr.linkedin.com/jobs/"])
-    expect(
-      within(dialog).getByRole("checkbox", { name }),
-    ).toHaveAccessibleDescription(
-      new RegExp(
-        `^Current linkedin risk sentence, version 4\\. .*${EASY_APPLY}`,
-      ),
-    );
-  for (const name of [
-    "Welcome to the Jungle",
-    "Indeed",
-    "Free-Work",
-    "https://fr.indeed.com/emplois",
-    "https://careers.example.org/",
-  ])
-    expect(
-      within(dialog).getByRole("checkbox", { name }),
-    ).not.toHaveAccessibleDescription(/Easy Apply/);
+  expect(rowOf(dialog, "fr.linkedin.com/jobs")).toHaveTextContent(EASY_APPLY);
+  for (const name of ["fr.indeed.com/emplois", "careers.example.org"])
+    expect(rowOf(dialog, name)).not.toHaveTextContent(/Easy Apply/);
+  // An address of hers at LinkedIn is LinkedIn: the example is not offered again.
+  expect(
+    within(dialog).queryByRole("button", { name: "Add LinkedIn" }),
+  ).toBeNull();
   expect(dialog).not.toHaveTextContent(/[–—]| - /);
 });
 
 it.each(PROTECTED)(
-  "records the %s permission of a ticked website after the reviewed save",
+  "records the %s permission of a website added to the list after the reviewed save",
   async (kind) => {
     const { profile, starts, writes, user, dialog } = await open();
-    const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
+    await toggle(user, dialog, LABELS[kind]);
     await within(dialog).findByText(
       `Current ${kind} risk sentence, version 4.`,
     );
-    await user.click(box);
     expect(dialog).toHaveTextContent(
-      "Saving with this box ticked gives this permission.",
+      "Saving with this website in your list gives this permission.",
     );
     expect(writes).toEqual([]);
     await saveAndStart(user, dialog);
@@ -694,17 +730,17 @@ it.each(PROTECTED)(
 );
 
 it.each(PROTECTED)(
-  "takes the %s permission back when its ticked box is unticked and saved",
+  "takes the %s permission back when its line is removed and saved",
   async (kind) => {
     const { starts, writes, user, dialog } = await open(
       { ...EMPTY.search, interactive_sites: [site(kind, PRESET_URLS[kind])] },
       { [kind]: { enabled: true, accepted: true } },
     );
     await within(dialog).findByText("Permission given.");
-    await user.click(
-      within(dialog).getByRole("checkbox", { name: LABELS[kind] }),
+    await toggle(user, dialog, LABELS[kind]);
+    expect(dialog).toHaveTextContent(
+      `Saving takes back your permission to search ${LABELS[kind]}.`,
     );
-    expect(dialog).toHaveTextContent("Saving removes this permission.");
     await saveAndStart(user, dialog);
     await waitFor(() => {
       expect(starts).toEqual([{ profile_revision: 8 }]);
@@ -724,8 +760,8 @@ it("takes a permission back before it gives one", async () => {
     { indeed: { enabled: true, accepted: true } },
   );
   await within(dialog).findByText("Permission given.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await toggle(user, dialog, "Indeed");
+  await toggle(user, dialog, "LinkedIn");
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 9 }]);
@@ -758,8 +794,8 @@ it("leaves Indeed taken back and LinkedIn off when LinkedIn's grant after it fai
     ),
   );
   await within(dialog).findByText("Permission given.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await toggle(user, dialog, "Indeed");
+  await toggle(user, dialog, "LinkedIn");
   await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
     "The LinkedIn permission was not confirmed.",
@@ -788,8 +824,8 @@ it("gives LinkedIn no permission when taking Indeed's back fails first", async (
     }),
   );
   await within(dialog).findByText("Permission given.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await toggle(user, dialog, "Indeed");
+  await toggle(user, dialog, "LinkedIn");
   await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
     "The Indeed permission was not confirmed.",
@@ -817,7 +853,7 @@ it("writes nothing for a ticked website whose permission is current", async () =
 });
 
 it.each(READERS)(
-  "leaves a %s permission given for its reader alone when its box was never ticked",
+  "leaves a %s permission given for its reader alone when it was never in the list",
   async (kind) => {
     const { starts, writes, user, dialog } = await open(
       structuredClone(EMPTY.search),
@@ -825,9 +861,7 @@ it.each(READERS)(
         [kind]: { enabled: true, accepted: true },
       },
     );
-    await within(dialog).findByText(
-      "Your permission given elsewhere stays on.",
-    );
+    expect(dialog).not.toHaveTextContent(/Saving takes back/);
     await saveAndStart(user, dialog);
     await waitFor(() => {
       expect(starts).toEqual([{ profile_revision: 7 }]);
@@ -836,7 +870,7 @@ it.each(READERS)(
   },
 );
 
-it("takes back a websites only LinkedIn permission whose box is unticked", async () => {
+it("takes back a websites only LinkedIn permission when LinkedIn is not in the list", async () => {
   const { starts, writes, user, dialog } = await open(
     {
       ...EMPTY.search,
@@ -852,7 +886,9 @@ it("takes back a websites only LinkedIn permission whose box is unticked", async
     },
     { linkedin: { enabled: true, accepted: true } },
   );
-  await within(dialog).findByText("Saving removes this permission.");
+  await within(dialog).findByText(
+    "Saving takes back your permission to search LinkedIn.",
+  );
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 8 }]);
@@ -870,11 +906,9 @@ it.each(READERS)(
     const { starts, writes, user, dialog } = await open(search, {
       [kind]: { query: null },
     });
+    await toggle(user, dialog, LABELS[kind]);
     await within(dialog).findByText(
       `Current ${kind} risk sentence, version 4.`,
-    );
-    await user.click(
-      within(dialog).getByRole("checkbox", { name: LABELS[kind] }),
     );
     await saveAndStart(user, dialog);
     await waitFor(() => {
@@ -890,16 +924,16 @@ it.each(READERS)(
   },
 );
 
-it("refuses to save a LinkedIn tick without words for its reader row", async () => {
+it("refuses to save LinkedIn in the list without words for its reader row", async () => {
   const { profile, starts, writes, user, dialog } = await open(
     structuredClone(EMPTY.search),
     { linkedin: { query: null } },
   );
+  await toggle(user, dialog, "LinkedIn");
   await within(dialog).findByText("Current linkedin risk sentence, version 4.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
   await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "LinkedIn needs words to search: add a title to include",
+    "LinkedIn needs words to search: add a job title you want",
   );
   expect(profile.saves).toEqual([]);
   expect(writes).toEqual([]);
@@ -908,12 +942,12 @@ it("refuses to save a LinkedIn tick without words for its reader row", async () 
 
 it("asks to read a risk sentence that changed after it was shown, then gives the new version", async () => {
   const { profile, starts, writes, states, user, dialog } = await open();
+  await toggle(user, dialog, "Indeed");
   await within(dialog).findByText("Current indeed risk sentence, version 4.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
   states.indeed.version = 5;
   await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "The Indeed risk sentence beside its box is new. Read it, then Save and Start again.",
+    "The Indeed risk sentence in your list is new. Read it, then save again.",
   );
   expect(
     within(dialog).getByText("Current indeed risk sentence, version 5."),
@@ -933,27 +967,24 @@ it("asks to read a risk sentence that changed after it was shown, then gives the
   ]);
 });
 
-it("refuses a ticked website whose risk sentence cannot be loaded, and saves once it is unticked", async () => {
+it("refuses a website in the list whose risk sentence cannot be loaded, and saves once it is removed", async () => {
   const { profile, starts, writes, user, dialog } = await open(
     structuredClone(EMPTY.search),
     { welcome_to_the_jungle: { fails: 503 } },
   );
-  const box = within(dialog).getByRole("checkbox", {
-    name: "Welcome to the Jungle",
-  });
-  await waitFor(() => {
-    expect(box).toHaveAccessibleDescription(
+  await toggle(user, dialog, "Welcome to the Jungle");
+  expect(
+    await within(rowOf(dialog, "Welcome to the Jungle")).findByText(
       "The Welcome to the Jungle risk sentence could not be loaded, so its permission cannot be given now.",
-    );
-  });
-  await user.click(box);
+    ),
+  ).toBeVisible();
   await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "Untick Welcome to the Jungle or try again later.",
+    "Remove Welcome to the Jungle from your list or try again later.",
   );
   expect(profile.saves).toEqual([]);
   expect(starts).toEqual([]);
-  await user.click(box);
+  await toggle(user, dialog, "Welcome to the Jungle");
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
@@ -963,8 +994,8 @@ it("refuses a ticked website whose risk sentence cannot be loaded, and saves onc
 
 it("makes a stale consent revision a conflict, never a silent retry", async () => {
   const { profile, starts, writes, user, dialog } = await open();
+  await toggle(user, dialog, "Indeed");
   await within(dialog).findByText("Current indeed risk sentence, version 4.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
   server.use(
     http.put("*/api/profile/search", async ({ request }) => {
       const body = (await request.json()) as {
@@ -986,14 +1017,12 @@ it("makes a stale consent revision a conflict, never a silent retry", async () =
   expect(writes).toHaveLength(1);
   expect(starts).toEqual([]);
   expect(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   ).toBeDisabled();
   expect(
     within(dialog).getByRole("button", { name: "Load current settings" }),
   ).toBeVisible();
-  expect(
-    within(dialog).getByRole("checkbox", { name: "Indeed" }),
-  ).toBeChecked();
+  expect(inList(dialog, "Indeed")).toBe(true);
 });
 
 const OTHER_TAB_EDITS: [string, (search: Search) => void][] = [
@@ -1033,11 +1062,9 @@ it.each(OTHER_TAB_EDITS)(
   "keeps the draft and starts nothing when %s changes in another tab while a permission is saved",
   async (_name, edit) => {
     const { profile, starts, writes, user, dialog } = await open();
+    await toggle(user, dialog, "Indeed");
     await within(dialog).findByText("Current indeed risk sentence, version 4.");
-    await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
-    const instructions = within(dialog).getByRole("textbox", {
-      name: "Instructions for this search",
-    });
+    const instructions = await instructionsBox(user, dialog);
     await user.type(instructions, "Keep my draft.");
     const entered = deferred();
     const release = deferred();
@@ -1058,11 +1085,9 @@ it.each(OTHER_TAB_EDITS)(
       "Your search settings changed in another tab while a website permission was saved.",
     );
     expect(instructions).toHaveValue("Keep my draft.");
+    expect(inList(dialog, "Indeed")).toBe(true);
     expect(
-      within(dialog).getByRole("checkbox", { name: "Indeed" }),
-    ).toBeChecked();
-    expect(
-      within(dialog).getByRole("button", { name: "Save and Start" }),
+      within(dialog).getByRole("button", { name: "Save and start search" }),
     ).toBeDisabled();
     expect(starts).toEqual([]);
   },
@@ -1072,8 +1097,8 @@ it.each(["network", "malformed shape", "server error"])(
   "blocks Start after an unconfirmed %s consent answer",
   async (fault) => {
     const { profile, starts, user, dialog } = await open();
+    await toggle(user, dialog, "Indeed");
     await within(dialog).findByText("Current indeed risk sentence, version 4.");
-    await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
     server.use(
       http.put(permissionPath("indeed"), () => {
         profile.revision += 1; // it may have committed before its answer was lost
@@ -1088,7 +1113,7 @@ it.each(["network", "malformed shape", "server error"])(
       "The Indeed permission was not confirmed.",
     );
     expect(
-      within(dialog).getByRole("button", { name: "Save and Start" }),
+      within(dialog).getByRole("button", { name: "Save and start search" }),
     ).toBeDisabled();
     expect(starts).toEqual([]);
   },
@@ -1096,8 +1121,8 @@ it.each(["network", "malformed shape", "server error"])(
 
 it("keeps the draft editable after a consent route refuses its body", async () => {
   const { starts, user, dialog } = await open();
+  await toggle(user, dialog, "Indeed");
   await within(dialog).findByText("Current indeed risk sentence, version 4.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
   server.use(
     http.put(permissionPath("indeed"), () =>
       HttpResponse.json(
@@ -1115,14 +1140,14 @@ it("keeps the draft editable after a consent route refuses its body", async () =
   );
   expect(starts).toEqual([]);
   expect(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   ).toBeEnabled();
 });
 
 it("writes no permission when the reviewed profile save is stale", async () => {
   const { profile, starts, writes, user, dialog } = await open();
+  await toggle(user, dialog, "Indeed");
   await within(dialog).findByText("Current indeed risk sentence, version 4.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
   profile.revision += 1;
   await saveAndStart(user, dialog);
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
@@ -1132,32 +1157,26 @@ it("writes no permission when the reviewed profile save is stale", async () => {
   expect(starts).toEqual([]);
 });
 
-it("gives the platform's permission for a website of her own at its address, once for two rows", async () => {
+it("gives the platform's permission for a website of her own at its address, once for two lines", async () => {
   const { profile, starts, writes, user, dialog } = await open();
+  await toggle(user, dialog, "Indeed");
   await within(dialog).findByText("Current indeed risk sentence, version 4.");
-  await user.click(within(dialog).getByRole("checkbox", { name: "Indeed" }));
-  await user.type(
-    within(dialog).getByRole("textbox", { name: "Custom website URL" }),
-    "https://fr.indeed.com/emplois",
-  );
-  await user.click(within(dialog).getByRole("button", { name: "Add website" }));
-  const row = within(dialog)
-    .getAllByRole("listitem")
-    .find((item) => item.textContent.includes("https://fr.indeed.com/"));
-  expect(row).toBeDefined();
+  const address = within(dialog).getByRole("textbox", {
+    name: "Website address",
+  });
+  await user.type(address, "https://fr.indeed.com/emplois");
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  const row = rowOf(dialog, "fr.indeed.com/emplois");
   expect(row).toHaveTextContent(
-    "This address is Indeed's: its search needs Indeed's permission. Saving with this box ticked gives this permission.",
+    "This address is Indeed's: its search needs Indeed's permission.",
   );
   expect(row).toHaveTextContent("Current indeed risk sentence, version 4.");
   // An address of no job website has no sentence and needs no permission.
-  await user.type(
-    within(dialog).getByRole("textbox", { name: "Custom website URL" }),
-    "https://careers.example.org/",
+  await user.type(address, "https://careers.example.org/");
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  expect(rowOf(dialog, "careers.example.org")).not.toHaveTextContent(
+    /risk sentence/,
   );
-  await user.click(within(dialog).getByRole("button", { name: "Add website" }));
-  expect(
-    within(dialog).getByRole("checkbox", { name: "Indeed" }),
-  ).toBeChecked();
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 8 }]);
@@ -1190,7 +1209,7 @@ const OWN_ADDRESSES: [Protected, string, string][] = [
   ["freework", "https://fr.free-work.com/jobs", "https://www.freework.fr/"],
 ];
 
-it("unticks her own Indeed address with Indeed's box and takes the permission back", async () => {
+it("removes her own Indeed address and takes the permission back", async () => {
   const { profile, starts, writes, user, dialog } = await open(
     {
       ...EMPTY.search,
@@ -1201,31 +1220,19 @@ it("unticks her own Indeed address with Indeed's box and takes the permission ba
     },
     { indeed: { enabled: true, accepted: true } },
   );
-  const box = within(dialog).getByRole("checkbox", { name: "Indeed" });
-  const own = within(dialog).getByRole("checkbox", {
-    name: "https://fr.indeed.com/",
-  });
-  expect(box).toBeChecked();
-  expect(own).toBeChecked();
   await within(dialog).findAllByText(/Permission given\./);
-  await user.click(box);
-  expect(box).not.toBeChecked();
-  expect(own).not.toBeChecked();
-  expect(
-    within(dialog).getByRole("checkbox", {
-      name: "https://careers.example.org/",
-    }),
-  ).toBeChecked();
-  expect(dialog).toHaveTextContent("Saving removes this permission.");
+  await toggle(user, dialog, "fr.indeed.com");
+  expect(inList(dialog, "fr.indeed.com")).toBe(false);
+  expect(inList(dialog, "careers.example.org")).toBe(true);
+  expect(dialog).toHaveTextContent(
+    "Saving takes back your permission to search Indeed.",
+  );
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 8 }]);
   });
   expect(profile.saves[0]!.body.data).toMatchObject({
-    interactive_sites: [
-      site("custom", "https://fr.indeed.com/", false),
-      site("custom", "https://careers.example.org/"),
-    ],
+    interactive_sites: [site("custom", "https://careers.example.org/")],
   });
   expect(writes).toEqual([
     { kind: "indeed", body: { enabled: false, base_revision: 7 } },
@@ -1233,8 +1240,10 @@ it("unticks her own Indeed address with Indeed's box and takes the permission ba
 });
 
 it.each(OWN_ADDRESSES)(
-  "unticks the %s row and every address of hers there with its box: %s, %s",
+  "keeps the %s permission while an address of hers there is listed, and takes it back once none is: %s, %s",
   async (kind, first, second) => {
+    const short = (url: string) =>
+      url.replace(/^https:\/\/(www\.)?/, "").replace(/\/$/, "");
     const { profile, starts, writes, user, dialog } = await open(
       {
         ...EMPTY.search,
@@ -1247,27 +1256,22 @@ it.each(OWN_ADDRESSES)(
       },
       { [kind]: { enabled: true, accepted: true } },
     );
-    const box = within(dialog).getByRole("checkbox", { name: LABELS[kind] });
     await within(dialog).findAllByText(/Permission given\./);
-    await user.click(box);
-    expect(box).not.toBeChecked();
-    for (const name of [first, second])
-      expect(within(dialog).getByRole("checkbox", { name })).not.toBeChecked();
-    expect(
-      within(dialog).getByRole("checkbox", {
-        name: "https://careers.example.org/",
-      }),
-    ).toBeChecked();
+    await toggle(user, dialog, LABELS[kind]);
+    expect(dialog).not.toHaveTextContent(/Saving takes back/);
+    await toggle(user, dialog, short(first));
+    expect(dialog).not.toHaveTextContent(/Saving takes back/);
+    await toggle(user, dialog, short(second));
+    expect(dialog).toHaveTextContent(
+      `Saving takes back your permission to search ${LABELS[kind]}.`,
+    );
+    expect(inList(dialog, "careers.example.org")).toBe(true);
     await saveAndStart(user, dialog);
     await waitFor(() => {
       expect(starts).toEqual([{ profile_revision: 8 }]);
     });
     expect(profile.saves[0]!.body.data).toMatchObject({
-      interactive_sites: [
-        site("custom", first, false),
-        site("custom", second, false),
-        site("custom", "https://careers.example.org/"),
-      ],
+      interactive_sites: [site("custom", "https://careers.example.org/")],
     });
     expect(writes).toEqual([
       { kind, body: { enabled: false, base_revision: 7 } },
@@ -1275,7 +1279,7 @@ it.each(OWN_ADDRESSES)(
   },
 );
 
-it("adds www.indeed.com when Indeed's box is ticked again after unticking her own Indeed address", async () => {
+it("offers Indeed again once her own Indeed address is removed, and adds www.indeed.com", async () => {
   const { profile, starts, writes, user, dialog } = await open(
     {
       ...EMPTY.search,
@@ -1283,44 +1287,44 @@ it("adds www.indeed.com when Indeed's box is ticked again after unticking her ow
     },
     { indeed: { enabled: true, accepted: true } },
   );
-  const box = within(dialog).getByRole("checkbox", { name: "Indeed" });
   await within(dialog).findAllByText(/Permission given\./);
-  await user.click(box);
-  expect(box).not.toBeChecked();
-  await user.click(box);
-  expect(box).toBeChecked();
   expect(
-    within(dialog).getByRole("checkbox", { name: "https://fr.indeed.com/" }),
-  ).not.toBeChecked();
+    within(dialog).queryByRole("button", { name: "Add Indeed" }),
+  ).toBeNull();
+  await toggle(user, dialog, "fr.indeed.com");
+  await toggle(user, dialog, "Indeed");
+  expect(inList(dialog, "Indeed")).toBe(true);
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
   });
   expect(profile.saves[0]!.body.data).toMatchObject({
-    interactive_sites: [
-      site("custom", "https://fr.indeed.com/", false),
-      site("indeed", PRESET_URLS.indeed),
-    ],
+    interactive_sites: [site("indeed", PRESET_URLS.indeed)],
   });
   expect(writes).toEqual([]);
 });
 
-it("turns a website of her own off and on with its box", async () => {
+it("removes a website of her own, and searches a paused one again on request", async () => {
   const { profile, starts, user, dialog } = await open({
     ...EMPTY.search,
-    interactive_sites: [site("custom", "https://careers.example.org/")],
+    interactive_sites: [
+      site("custom", "https://careers.example.org/"),
+      site("custom", "https://jobs.example.net/", false),
+    ],
   });
-  const box = within(dialog).getByRole("checkbox", {
-    name: "https://careers.example.org/",
-  });
-  expect(box).toBeChecked();
-  await user.click(box);
+  const paused = rowOf(dialog, "jobs.example.net");
+  expect(paused).toHaveTextContent("Paused");
+  await user.click(
+    within(paused).getByRole("button", { name: "Search it again" }),
+  );
+  expect(rowOf(dialog, "jobs.example.net")).not.toHaveTextContent("Paused");
+  await toggle(user, dialog, "careers.example.org");
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toHaveLength(1);
   });
   expect(profile.saves[0]!.body.data).toMatchObject({
-    interactive_sites: [site("custom", "https://careers.example.org/", false)],
+    interactive_sites: [site("custom", "https://jobs.example.net/")],
   });
 });
 
@@ -1361,12 +1365,8 @@ it("shows no other search source, no Websites only and no link, and sends none b
   ).toBeNull();
   for (const text of [/API board/, /\(feed\)/, /fixed reader/, /Remote OK/])
     expect(within(dialog).queryByText(text)).toBeNull();
-  // The only links are the job feeds' way to Adzuna's key, never the old boards' page.
-  expect(
-    within(dialog)
-      .queryAllByRole("link")
-      .map((link) => link.textContent),
-  ).toEqual(["developer.adzuna.com", "Account"]);
+  // No link at all: the old boards' page is gone and no feed asks for a key here.
+  expect(within(dialog).queryAllByRole("link")).toEqual([]);
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
@@ -1377,67 +1377,51 @@ it("shows no other search source, no Websites only and no link, and sends none b
   expect(sent.browser_sources ?? []).toEqual([]);
 });
 
-it("saves the ticked alert e-mails with the search and reopens them ticked", async () => {
+it("shows no alert e-mails and keeps the stored ones as they are", async () => {
   const { profile, starts, user, dialog } = await open({
     ...structuredClone(EMPTY.search),
     alert_emails: { indeed: false, linkedin: true },
   });
-  const group = within(dialog).getByRole("region", { name: "Alert e-mails" });
   expect(
-    within(group).getByRole("checkbox", { name: "LinkedIn alert e-mails" }),
-  ).toBeChecked();
-  await user.click(
-    within(group).getByRole("checkbox", { name: "Indeed alert e-mails" }),
-  );
+    within(dialog).queryByRole("region", { name: "Alert e-mails" }),
+  ).toBeNull();
+  expect(within(dialog).queryByText(/alert e-mails/i)).toBeNull();
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
   });
-  expect(profile.saves[0]!.body.data).toMatchObject({
-    alert_emails: { indeed: true, linkedin: true },
-  });
-});
-
-it("a search saved before the alert e-mails sends every one off", async () => {
-  const { profile, user, dialog } = await open();
-  await saveAndStart(user, dialog);
-  await waitFor(() => {
-    expect(profile.saves).toHaveLength(1);
-  });
-  expect(profile.saves[0]!.body.data).toMatchObject({
-    alert_emails: { indeed: false, linkedin: false },
-  });
+  // Left out of the save, so the server keeps them (schemas.py KEPT_WHEN_OMITTED).
+  expect(profile.saves[0]!.body.data).not.toHaveProperty("alert_emails");
 });
 
 // --- job feeds (api app/jobs/feeds, owner 2026-10-30) ------------------------------------------
 
-it("ticks job feeds beside the websites and saves them with the search", async () => {
+it("lists job feeds like any address and saves them with the search", async () => {
   const { profile, starts, user, dialog } = await open({
     ...structuredClone(EMPTY.search),
     job_feeds: ["himalayas"],
   });
-  const feeds = within(dialog).getByRole("list", { name: "Job feeds" });
-  const box = (name: string) => within(feeds).getByRole("checkbox", { name });
-  expect(box("Arbeitnow (jobs in Europe)")).not.toBeChecked();
-  expect(box("Himalayas (remote jobs open to France)")).toBeChecked();
-  const adzuna = box("Adzuna (jobs in France, needs a free key)");
-  expect(adzuna).not.toBeChecked();
-  // No key stored: the box says so, and where to get and store one.
-  await waitFor(() => {
-    expect(adzuna).toHaveAccessibleDescription(
-      "No Adzuna key is stored, so Adzuna is skipped. Create a free key at developer.adzuna.com, then store it in Account.",
-    );
-  });
-  expect(
-    within(feeds).getByRole("link", { name: "developer.adzuna.com" }),
-  ).toHaveAttribute("href", "https://developer.adzuna.com/signup");
-  expect(within(feeds).getByRole("link", { name: "Account" })).toHaveAttribute(
-    "href",
-    "/account#adzuna-key",
+  const himalayas = rowOf(dialog, "Himalayas");
+  expect(himalayas).toHaveTextContent(
+    "Remote jobs open to France, read through its official feed",
   );
-  await user.click(box("Arbeitnow (jobs in Europe)"));
-  await user.click(adzuna);
-  await user.click(box("Himalayas (remote jobs open to France)"));
+  expect(inList(dialog, "Arbeitnow")).toBe(false);
+  await toggle(user, dialog, "Arbeitnow");
+  // A feed's own website is the feed: typed, Adzuna joins the list.
+  await user.type(
+    within(dialog).getByRole("textbox", { name: "Website address" }),
+    "adzuna.fr",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  const adzuna = rowOf(dialog, "Adzuna");
+  // No key stored: the line says so, and where to store one.
+  expect(
+    await within(adzuna).findByText(/Adzuna needs your own free key/),
+  ).toBeVisible();
+  expect(
+    within(adzuna).getByRole("link", { name: "Add it in Account" }),
+  ).toHaveAttribute("href", "/account#adzuna-key");
+  await toggle(user, dialog, "Himalayas");
   await saveAndStart(user, dialog);
   await waitFor(() => {
     expect(starts).toEqual([{ profile_revision: 7 }]);
@@ -1446,7 +1430,7 @@ it("ticks job feeds beside the websites and saves them with the search", async (
   expect(sent.job_feeds).toEqual(["arbeitnow", "adzuna"]);
 });
 
-it("says when the Adzuna key is stored", async () => {
+it("says nothing about the key once the Adzuna key is stored", async () => {
   server.use(
     http.get("*/api/jobs/feeds", () =>
       HttpResponse.json({
@@ -1465,16 +1449,19 @@ it("says when the Adzuna key is stored", async () => {
       }),
     ),
   );
-  const { dialog } = await open();
-  const feeds = within(dialog).getByRole("list", { name: "Job feeds" });
-  expect(
-    await within(feeds).findByText(
-      /Your Adzuna key ending in k042 is stored\./,
-    ),
-  ).toBeInTheDocument();
-  expect(
-    within(feeds).getByRole("link", { name: "Change it in Account" }),
-  ).toHaveAttribute("href", "/account#adzuna-key");
+  const { dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    job_feeds: ["adzuna"],
+  });
+  const adzuna = rowOf(dialog, "Adzuna");
+  await waitFor(() => {
+    expect(adzuna).toHaveTextContent(
+      "Jobs in France, read through its official feed",
+    );
+  });
+  await waitFor(() => {
+    expect(within(adzuna).queryByText(/needs your own free key/)).toBeNull();
+  });
 });
 
 it("saves no job feed when none is ticked", async () => {
@@ -1492,21 +1479,21 @@ it("saves no job feed when none is ticked", async () => {
 
 // LinkedIn searched through its public job search or the browser (owner, 2026-10-30: "Both,
 // switchable in setup"); Easy Apply uses the browser either way.
-const LINKEDIN_API = "Search with LinkedIn's public job search (no login)";
-const LINKEDIN_BROWSER = "Search with the browser, signed in";
+const LINKEDIN_API = "Without signing in, through LinkedIn's public job search";
+const LINKEDIN_BROWSER = "Signed in, in your own browser";
 const LINKEDIN_TICKED: Search = {
   ...EMPTY.search,
   interactive_sites: [site("linkedin", PRESET_URLS.linkedin)],
 };
 
-it("shows LinkedIn's search choice only while LinkedIn is ticked, the public job search first and chosen", async () => {
+it("shows LinkedIn's search choice only while LinkedIn is in the list, the public job search first and chosen", async () => {
   const { user, dialog } = await open(structuredClone(EMPTY.search), {
     linkedin: { enabled: true, accepted: true },
   });
   expect(
     within(dialog).queryByRole("radio", { name: LINKEDIN_API }),
   ).not.toBeInTheDocument();
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await toggle(user, dialog, "LinkedIn");
   const choice = within(dialog).getByRole("group", {
     name: "How LinkedIn is searched",
   });
@@ -1521,10 +1508,10 @@ it("shows LinkedIn's search choice only while LinkedIn is ticked, the public job
   expect(
     within(choice).getByRole("radio", { name: LINKEDIN_BROWSER }),
   ).not.toBeChecked();
-  expect(choice).toHaveTextContent("Easy Apply always uses the browser.");
+  expect(choice).toHaveTextContent("Easy Apply always uses your browser.");
   // No dash as a separator in what the person reads.
   expect(choice.textContent).not.toMatch(/[–—]| - /);
-  await user.click(within(dialog).getByRole("checkbox", { name: "LinkedIn" }));
+  await toggle(user, dialog, "LinkedIn");
   expect(
     within(dialog).queryByRole("group", { name: "How LinkedIn is searched" }),
   ).not.toBeInTheDocument();

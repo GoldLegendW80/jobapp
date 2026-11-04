@@ -133,6 +133,6 @@ export const TERMS_RESPONSIBILITY =
 
 /** The public home page. */
 export const HOME_INTRO =
-  "jobapp is a private tool to follow a job search: the postings it finds and tracks, your profile and, when you connect Gmail, the mail that answers them.";
+  "jobapp is a private tool for your job search. It finds postings that fit your profile, writes a tailored CV and cover letter for each one, and applies for you when you say so.";
 export const HOME_INVITE =
   "It is open by invitation only. If you have an account, sign in.";

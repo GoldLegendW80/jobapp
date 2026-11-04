@@ -13,6 +13,7 @@ import {
   searchWith,
   splitTerms,
   stepProblem,
+  UNSTORED,
   type Draft,
 } from "./steps";
 
@@ -177,10 +178,17 @@ describe("searchWith", () => {
 describe("progress", () => {
   it("resumes at the first step neither done nor passed", () => {
     expect(resumeStep([], [])).toBe("profile");
-    expect(resumeStep([], ["profile", "looking", "where"])).toBe("work");
-    expect(resumeStep(["looking", "where", "work"], ["profile"])).toBe("pay");
+    expect(resumeStep([], ["profile", "looking", "where"])).toBe("sites");
+    // "Websites to search" is done once the list holds a place to search.
+    expect(resumeStep(["looking", "where", "work"], ["profile"])).toBe("sites");
+    expect(resumeStep(["looking", "where", "sites", "work"], ["profile"])).toBe(
+      "pay",
+    );
     expect(
-      resumeStep([], ["profile", "looking", "where", "work", "pay", "apply"]),
+      resumeStep(
+        [],
+        passedOf(["profile", "looking", "where", "work", "pay", "apply"]),
+      ),
     ).toBe("summary");
   });
   it("reads the steps passed from the profile, each once, in order", () => {
@@ -188,6 +196,11 @@ describe("progress", () => {
       "profile",
       "where",
     ]);
+  });
+  it("counts Websites to search as passed once a later step is, never sent to the api", () => {
+    expect(passedOf(["profile", "looking", "where"])).not.toContain("sites");
+    expect(passedOf(["where", "work"])).toEqual(["where", "sites", "work"]);
+    expect(UNSTORED.has("sites")).toBe(true);
   });
   it("opens the step asked for, never one after the roles while none is saved", () => {
     expect(openStep("pay", ["looking"], [])).toBe("pay");

@@ -81,7 +81,7 @@ async function open(
   await screen.findByRole("table", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
-  const dialog = await screen.findByRole("dialog", { name: "Find jobs setup" });
+  const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
   return { profile, user, dialog, detected };
 }
 
@@ -97,94 +97,76 @@ const STARTER_SAVED = STARTER.map(({ company, ats, board, enabled }) => ({
   enabled,
 }));
 
-it("offers the starter list ticked on first use without saving it unchosen", async () => {
-  const { profile, user, dialog } = await open(null);
-  const list = await within(dialog).findByRole("list", {
-    name: "Company job boards",
-  });
-  expect(
-    within(list)
-      .getAllByRole("checkbox")
-      .map((box) => (box as HTMLInputElement).checked),
-  ).toEqual([true, true]);
-  expect(within(list).getByRole("link", { name: "Ashby" })).toHaveAttribute(
-    "href",
-    "https://jobs.ashbyhq.com/example-robotics",
-  );
-  expect(
-    within(dialog).getByText(
-      "A starter list, not saved yet. Searches read these boards once you keep them or change the list.",
-    ),
-  ).toBeVisible();
-  expect(
-    within(dialog).getByText(/read up to its newest 200 postings/),
-  ).toBeVisible();
-  // Saving the other settings leaves the key out: the profile keeps no board list.
+function lastSearch(profile: { saves: { body: { data: unknown } }[] }) {
+  return profile.saves.at(-1)?.body.data as Search;
+}
+
+async function save(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  profile: { saves: unknown[] },
+) {
   await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "Save and start search" }),
   );
   await waitFor(() => {
     expect(profile.saves).toHaveLength(1);
   });
+}
+
+it("keeps no board list on first use: Save leaves the key out", async () => {
+  const { profile, user, dialog } = await open(null);
+  expect(
+    within(dialog).getByText(/Nothing yet\. Add an address above/),
+  ).toBeVisible();
+  // The popular boards are ideas, folded away, never in the list by themselves.
+  expect(
+    within(dialog).queryByRole("button", { name: /Add Example Robotics/ }),
+  ).not.toBeInTheDocument();
+  await save(user, dialog, profile);
   const sent = profile.saves[0]?.body.data as Record<string, unknown>;
   expect(sent).not.toHaveProperty("company_boards");
 });
 
-it("saves the starter list once the person keeps it", async () => {
+it("adds every popular board with one click and saves them", async () => {
   const { profile, user, dialog } = await open(null);
-  await within(dialog).findByRole("list", { name: "Company job boards" });
   await user.click(
-    within(dialog).getByRole("button", { name: "Keep these boards" }),
+    within(dialog).getByRole("button", { name: "More company job boards" }),
   );
+  await user.click(
+    await within(dialog).findByRole("button", { name: "Add all 2" }),
+  );
+  const list = within(dialog).getByRole("list", { name: "Your list" });
+  expect(within(list).getByText("Example Robotics")).toBeVisible();
   expect(
-    within(dialog).queryByRole("button", { name: "Keep these boards" }),
-  ).not.toBeInTheDocument();
-  await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
-  );
-  await waitFor(() => {
-    expect(profile.saves).toHaveLength(1);
-  });
+    within(list).getAllByText("Company job board on Greenhouse, read directly"),
+  ).toHaveLength(1);
+  await save(user, dialog, profile);
   expect(savedBoards(profile)).toEqual(STARTER_SAVED);
 });
 
-it("saves the starter list once the person changes it", async () => {
+it("adds one popular board, never the rest", async () => {
   const { profile, user, dialog } = await open(null);
-  const list = await within(dialog).findByRole("list", {
-    name: "Company job boards",
-  });
-  await user.click(within(list).getAllByRole("checkbox")[1] as HTMLElement);
   await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
+    within(dialog).getByRole("button", { name: "More company job boards" }),
   );
-  await waitFor(() => {
-    expect(profile.saves).toHaveLength(1);
-  });
-  expect(savedBoards(profile)).toEqual([
-    STARTER_SAVED[0],
-    { ...STARTER_SAVED[1], enabled: false },
-  ]);
+  await user.click(
+    await within(dialog).findByRole("button", {
+      name: "Add Example Labs (Greenhouse)",
+    }),
+  );
+  await save(user, dialog, profile);
+  expect(savedBoards(profile)).toEqual([STARTER_SAVED[1]]);
 });
 
-it("never offers the starter list over a saved list", async () => {
+it("saves a list saved before as it is", async () => {
   const { profile, user, dialog } = await open([]);
-  expect(
-    within(dialog).getByText("No company board yet. Paste one below."),
-  ).toBeVisible();
-  expect(
-    within(dialog).queryByRole("button", { name: "Keep these boards" }),
-  ).not.toBeInTheDocument();
-  await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
-  );
-  await waitFor(() => {
-    expect(profile.saves).toHaveLength(1);
-  });
+  await save(user, dialog, profile);
   // A list saved before (here the empty one) is the person's own: it is saved as it is.
   expect(savedBoards(profile)).toEqual([]);
 });
 
-it("adds a pasted board, pauses and removes boards", async () => {
+it("reads a pasted board through its api, keeps a careers page as a website, and removes lines", async () => {
   const mine: CompanyBoard[] = [
     {
       company: "Example Labs",
@@ -200,50 +182,100 @@ it("adds a pasted board, pauses and removes boards", async () => {
     },
   ];
   const { profile, user, dialog, detected } = await open(mine);
-  const list = within(dialog).getByRole("list", { name: "Company job boards" });
-  const address = within(dialog).getByLabelText("Board address");
-  await user.type(address, "https://example.org/careers");
-  await user.click(within(dialog).getByRole("button", { name: "Add board" }));
-  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "not a company job board",
-  );
-  await user.clear(address);
+  const list = within(dialog).getByRole("list", { name: "Your list" });
+  const address = within(dialog).getByLabelText("Website address");
+  // Not a board: it becomes a website of her own, browsed by the assistant.
+  await user.type(address, "example.org/careers");
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  expect(await within(list).findByText("example.org/careers")).toBeVisible();
+  expect(
+    within(list).getByText("Website of your choice, browsed by the assistant"),
+  ).toBeVisible();
+  expect(address).toHaveValue("");
   await user.type(address, "https://jobs.lever.co/exampleworks/abc");
-  await user.click(within(dialog).getByRole("button", { name: "Add board" }));
-  await within(list).findByText("Exampleworks");
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  expect(await within(list).findByText("Exampleworks")).toBeVisible();
+  expect(
+    within(list).getByText("Company job board on Lever, read directly"),
+  ).toBeVisible();
   expect(detected).toEqual([
     "https://example.org/careers",
     "https://jobs.lever.co/exampleworks/abc",
   ]);
-  expect(address).toHaveValue("");
-  // The same board again is refused without asking the api.
+  // The same board again is refused.
   await user.type(address, "https://jobs.lever.co/exampleworks");
-  await user.click(within(dialog).getByRole("button", { name: "Add board" }));
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
     "Exampleworks is already in your list.",
   );
   await user.clear(address);
-  await user.click(within(list).getAllByRole("checkbox")[0] as HTMLElement);
   await user.click(
     within(list).getByRole("button", { name: "Remove Example Robotics" }),
   );
-  await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
-  );
-  await waitFor(() => {
-    expect(profile.saves).toHaveLength(1);
-  });
+  await save(user, dialog, profile);
   expect(savedBoards(profile)).toEqual([
+    {
+      company: "Example Labs",
+      ats: "greenhouse",
+      board: "examplelabs",
+      enabled: true,
+    },
+    {
+      company: "Exampleworks",
+      ats: "lever",
+      board: "exampleworks",
+      enabled: true,
+    },
+  ]);
+  expect(lastSearch(profile).interactive_sites).toEqual([
+    {
+      platform: "custom",
+      url: "https://example.org/careers",
+      mode: "llm_browser",
+      enabled: true,
+    },
+  ]);
+});
+
+it("refuses what is not an address before asking the api", async () => {
+  const { user, dialog, detected } = await open([]);
+  const address = within(dialog).getByLabelText("Website address");
+  await user.type(address, "not an address");
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "An address has no spaces.",
+  );
+  await user.clear(address);
+  await user.type(address, "localhost");
+  await user.click(within(dialog).getByRole("button", { name: "Add" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "This is not a website address.",
+  );
+  expect(address).toHaveAttribute("aria-invalid", "true");
+  expect(detected).toEqual([]);
+});
+
+it("shows a paused board and searches it again on request", async () => {
+  const { profile, user, dialog } = await open([
     {
       company: "Example Labs",
       ats: "greenhouse",
       board: "examplelabs",
       enabled: false,
     },
+  ]);
+  const list = within(dialog).getByRole("list", { name: "Your list" });
+  expect(within(list).getByText("Paused")).toBeVisible();
+  await user.click(
+    within(list).getByRole("button", { name: "Search it again" }),
+  );
+  expect(within(list).queryByText("Paused")).not.toBeInTheDocument();
+  await save(user, dialog, profile);
+  expect(savedBoards(profile)).toEqual([
     {
-      company: "Exampleworks",
-      ats: "lever",
-      board: "exampleworks",
+      company: "Example Labs",
+      ats: "greenhouse",
+      board: "examplelabs",
       enabled: true,
     },
   ]);
@@ -254,11 +286,14 @@ it("suggests boards from the person's postings, never adding them by itself", as
     [],
     [{ ...STARTER[0], postings: 3 }],
   );
+  await user.click(
+    within(dialog).getByRole("button", { name: "More company job boards" }),
+  );
   const suggested = await within(dialog).findByRole("list", {
-    name: "Suggested boards",
+    name: "From your postings",
   });
   expect(
-    within(dialog).getByText("No company board yet. Paste one below."),
+    within(dialog).getByText(/Nothing yet\. Add an address above/),
   ).toBeVisible();
   await user.click(
     within(suggested).getByRole("button", {
@@ -266,14 +301,9 @@ it("suggests boards from the person's postings, never adding them by itself", as
     }),
   );
   expect(
-    within(dialog).queryByRole("list", { name: "Suggested boards" }),
+    within(dialog).queryByRole("list", { name: "From your postings" }),
   ).not.toBeInTheDocument();
-  await user.click(
-    within(dialog).getByRole("button", { name: "Save and Start" }),
-  );
-  await waitFor(() => {
-    expect(profile.saves).toHaveLength(1);
-  });
+  await save(user, dialog, profile);
   expect(savedBoards(profile)).toEqual([
     {
       company: "Example Robotics",

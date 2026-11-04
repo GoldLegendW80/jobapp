@@ -11,7 +11,8 @@ import { useTitle } from "@/lib/use-title";
 import { NameCard } from "./name-card";
 import { PasswordCard } from "./password-card";
 
-/** /account: your name, your password, the model credential your agents use, and your Gmail. */
+/** /account: your name, your password, the model credential your agents use, your browser, your
+ * other keys, and your Gmail where the server offers it (GmailCard hides itself otherwise). */
 export function AccountPage() {
   useTitle("Account");
   const { data: user } = useMe();
@@ -22,8 +23,8 @@ export function AccountPage() {
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
         <p className="text-muted-foreground">
-          Your name, the password you sign in with, the model access your agents
-          run on, and your Gmail connection.
+          Your name, the password you sign in with, the model key the assistant
+          runs on, your browser and your other keys.
         </p>
         <p className="text-sm">
           <Link className="underline underline-offset-4" to={WELCOME}>

@@ -15,8 +15,8 @@ import {
   Search,
   TriangleAlert,
 } from "lucide-react";
-import { useRef, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -44,9 +44,24 @@ import { scheduleLine } from "./use-schedule";
 import type { SweepRunner } from "./use-sweep-runner";
 
 export function FindJobsButton({ runner }: { runner: SweepRunner }) {
-  const [setup, setSetup] = useState(false);
+  // `/jobs?find=1` (the wizard's Start with an empty list, Discover's empty deck) opens the
+  // setup at once; the word then leaves the address, so a reload does not open it again.
+  const [params, setParams] = useSearchParams();
+  const asked = params.get("find") === "1";
+  const [setup, setSetup] = useState(asked);
   const trigger = useRef<HTMLButtonElement>(null);
   const busy = runner.starting || runner.running !== null;
+  useEffect(() => {
+    if (!asked) return;
+    setParams(
+      (old) => {
+        const next = new URLSearchParams(old);
+        next.delete("find");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [asked, setParams]);
   return (
     <>
       <Button

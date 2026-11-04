@@ -38,17 +38,22 @@ const LISTS = [
   },
 ] as const;
 
+export type SearchListName = (typeof LISTS)[number]["name"];
+
 export function SearchLists({
   form,
   descriptions = true,
+  only,
 }: {
   form: UseFormReturn<SearchForm>;
   /** false in a dense dialog: the lists without their one line explanations */
   descriptions?: boolean;
+  /** the lists to show, in their usual order; all four when absent */
+  only?: readonly SearchListName[];
 }) {
   return (
     <div className="flex flex-col gap-4">
-      {LISTS.map((list) => (
+      {LISTS.filter((list) => !only || only.includes(list.name)).map((list) => (
         <TermChips
           key={list.name}
           form={form}

@@ -83,6 +83,19 @@ export const handlers = [
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
   // The job feeds, no Adzuna key stored (Find jobs and the Account page's Adzuna key card).
   http.get("*/api/jobs/feeds", () => HttpResponse.json(noFeedKeys)),
+  // Find jobs' list of addresses: no address is a company job board, and no board ideas.
+  http.post("*/api/jobs/boards/detect", () =>
+    HttpResponse.json(
+      { detail: "This address is not a company job board the app reads." },
+      { status: 422 },
+    ),
+  ),
+  http.get("*/api/jobs/boards/starter", () =>
+    HttpResponse.json({ checked_on: "2026-10-30", boards: [] }),
+  ),
+  http.get("*/api/jobs/boards/suggestions", () =>
+    HttpResponse.json({ boards: [] }),
+  ),
   http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
   // No model credential saved (the Account page's Model access card).
   http.get("*/api/me/model-credential", () =>

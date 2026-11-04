@@ -118,21 +118,23 @@ async function lastSources(request: APIRequestContext): Promise<Source[]> {
 }
 
 /**
- * Find jobs with LinkedIn ticked (the tick and the save are the permission, jobs J17), then the
+ * Find jobs with LinkedIn in the list (adding it and saving is the permission, jobs J17), then the
  * summary's dialog once the search ended.
  */
 async function findJobs(page: Page) {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
-  await setup.getByRole("checkbox", { name: "LinkedIn", exact: true }).check();
+  await setup
+    .getByRole("button", { name: "Add LinkedIn", exact: true })
+    .click();
   // These guards are the browser search's: LinkedIn's public job search is the default
   // (owner, 2026-10-30), so the journey chooses the browser.
   await setup
-    .getByRole("radio", { name: "Search with the browser, signed in" })
+    .getByRole("radio", { name: "Signed in, in your own browser" })
     .check();
-  await setup.getByRole("button", { name: "Save and Start" }).click();
+  await setup.getByRole("button", { name: "Save and start search" }).click();
   const dialog = page.getByRole("dialog", {
     name: /new postings? found|No new posting|The sweep stopped/,
   });

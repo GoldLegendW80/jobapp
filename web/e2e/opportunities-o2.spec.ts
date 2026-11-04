@@ -32,7 +32,11 @@ test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
 const CYBER = "Cyber­security Engineer";
-const EMPTY = /Nothing new above your threshold of \d+\./;
+// The empty deck names its cause (product audit, 2026-11-04): A's postings carry their fit and A
+// has no skills, B has no posting at all.
+const EMPTY =
+  /Nothing new above your threshold of \d+\.|Your profile has no skills yet/;
+const NO_POSTINGS = "No postings yet.";
 const shots = makeShots("opportunities-o2", "o2");
 
 let a: Person;
@@ -146,7 +150,7 @@ test("the Like is in the review queue", async () => {
 
 test("B sees none of A's cards and cannot swipe them", async () => {
   await pageB.goto("/discover");
-  await expect(pageB.getByText(EMPTY)).toBeVisible();
+  await expect(pageB.getByText(NO_POSTINGS)).toBeVisible();
   await expect(card(pageB)).toHaveCount(0);
   expect((await readDeck(pageB.request)).cards).toEqual([]);
   for (const method of ["post", "delete"] as const) {

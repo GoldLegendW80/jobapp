@@ -57,6 +57,10 @@ describe("login page", () => {
     ).toBeInTheDocument();
     expect(location()).toBe("/login?next=/jobs");
     expect(document.title).toBe("Sign in · jobapp");
+    // The way back in without a password is said where people look for it.
+    expect(
+      screen.getByText("Forgot your password? Ask the admin for a reset link."),
+    ).toBeVisible();
   });
 
   it("signs in and lands on the page in next, sending the CSRF header", async () => {

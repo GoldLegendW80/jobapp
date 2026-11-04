@@ -71,6 +71,7 @@ export const WIZARD_STEP_WORDS = {
   profile: "Your profile",
   looking: "What you are looking for",
   where: "Where",
+  sites: "Websites to search",
   work: "How you want to work",
   pay: "Pay",
   apply: "How the app applies",
@@ -127,7 +128,6 @@ export const WORDING = {
   afterLike: "After a Like",
   documentsLanguage: "Language of your CV and letters",
   tone: "Tone",
-  availableSoon: "Available soon",
   change: "Change",
   readProfile: "Read them into your profile",
   reviewProposals: "Review the proposals",
@@ -160,6 +160,14 @@ export const WORDING = {
   fullAuto: "Full auto",
   searchOptions: "Search options",
   deckEmptyHint: "Find new postings, or lower the threshold in Search options.",
+  deckNoPostings: "No postings yet.",
+  deckNoPostingsHint:
+    "Add a few websites to your list in Find jobs and start a search: what the app finds shows up here.",
+  findJobs: "Find jobs",
+  addSkills: "Add your skills",
+  addModelKey: "Add it in Account, Model access",
+  applicationSettings: "Application settings",
+  addWebsites: "Add websites",
   // Opportunities O3.
   pay: "Pay",
   workMode: "Work mode",
@@ -184,6 +192,13 @@ export const WORDING = {
   listUsesRegularExpressions:
     "This list was saved as patterns by an earlier version. They keep working as they are, and the search reads the words in each.",
 } as const;
+
+/** The empty deck line when the profile has no skill: every fit is near 0. */
+export function deckNoSkills(threshold: number): string {
+  return `Your profile has no skills yet, so new postings score close to 0 and stay under your threshold of ${threshold}.`;
+}
+export const DECK_NO_SKILLS_HINT =
+  "Add the skills you have in your profile, or let Fill my profile read your CV. Then choose Rescore all postings in the menu of the Jobs page.";
 
 /** The empty deck line; it names the fit threshold in force so the number is never a mystery. */
 export function deckEmpty(threshold: number): string {

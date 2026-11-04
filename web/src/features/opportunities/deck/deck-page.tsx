@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Heart, LoaderCircle, Undo2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
@@ -7,7 +8,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
-import { WORDING, deckEmpty } from "@/lib/wording";
+import { countJobs, jobCountKey } from "@/features/jobs/api";
+import { getProfile, profileKey } from "@/features/profile/api";
+import {
+  DECK_NO_SKILLS_HINT,
+  WORDING,
+  deckEmpty,
+  deckNoSkills,
+} from "@/lib/wording";
 
 import { NO_FILTERS, type DeckFilters } from "../opportunities-api";
 import { MODE_WORDS, SWIPE_TEXT } from "./card-text";
@@ -181,23 +189,14 @@ export function DeckPage() {
           Loading more postings
         </p>
       ) : (
-        <section
-          aria-label={WORDING.deck}
-          className="flex flex-col gap-3 rounded-2xl border border-dashed p-6"
-        >
-          <p className="font-medium">{deckEmpty(deck.minFit ?? 70)}</p>
-          <p className="text-sm text-muted-foreground">
-            {WORDING.deckEmptyHint}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild size="sm">
-              <Link to="/jobs">{WORDING.findNewPostings}</Link>
-            </Button>
-            <Button asChild size="sm" variant="outline">
-              <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
-            </Button>
-          </div>
-        </section>
+        <DeckEmpty
+          threshold={deck.minFit ?? 70}
+          filtered={
+            filters.types.length > 0 ||
+            filters.remote !== null ||
+            filters.source !== null
+          }
+        />
       )}
 
       <div className="flex items-center justify-center gap-4">
@@ -246,5 +245,86 @@ export function DeckPage() {
         Keys: left arrow to pass, right arrow to like, U to undo the last one.
       </p>
     </div>
+  );
+}
+
+/**
+ * The empty deck, said as its cause: no posting at all (the list of websites is the way in), a
+ * profile without any skill (every fit is near 0, under the threshold), or postings under the
+ * threshold. With a filter on, the threshold line stays, since the cause may be the filter. Each
+ * cause has the action that fixes it; while the counts load, the threshold line shows.
+ */
+function DeckEmpty({
+  threshold,
+  filtered,
+}: {
+  threshold: number;
+  filtered: boolean;
+}) {
+  const postings = useQuery({
+    queryKey: jobCountKey,
+    queryFn: ({ signal }) => countJobs(signal),
+    enabled: !filtered,
+  });
+  const profile = useQuery({
+    queryKey: profileKey,
+    queryFn: ({ signal }) => getProfile(signal),
+    enabled: !filtered,
+  });
+  const noPostings = !filtered && postings.data === 0;
+  const noSkills =
+    !filtered &&
+    !noPostings &&
+    profile.data !== undefined &&
+    profile.data.sections.skills.have.every(
+      (category) => category.terms.length === 0,
+    );
+  return (
+    <section
+      aria-label={WORDING.deck}
+      className="flex flex-col gap-3 rounded-2xl border border-dashed p-6"
+    >
+      {noPostings ? (
+        <>
+          <p className="font-medium">{WORDING.deckNoPostings}</p>
+          <p className="text-sm text-muted-foreground">
+            {WORDING.deckNoPostingsHint}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild size="sm">
+              <Link to="/jobs?find=1">{WORDING.findJobs}</Link>
+            </Button>
+          </div>
+        </>
+      ) : noSkills ? (
+        <>
+          <p className="font-medium">{deckNoSkills(threshold)}</p>
+          <p className="text-sm text-muted-foreground">{DECK_NO_SKILLS_HINT}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild size="sm">
+              <Link to="/profile?tab=skills">{WORDING.addSkills}</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="font-medium">{deckEmpty(threshold)}</p>
+          <p className="text-sm text-muted-foreground">
+            {WORDING.deckEmptyHint}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild size="sm">
+              <Link to="/jobs?find=1">{WORDING.findNewPostings}</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
