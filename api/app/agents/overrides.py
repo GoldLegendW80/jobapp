@@ -8,6 +8,10 @@ editable fields that differ from the code when it is saved (`check`):
   description, system_prompt, default_message, model, model_by_credential, effort, max_turns,
   wall_time_s, tools (the code's tools switched off: never one the code did not give the agent).
 
+A wall time may be lowered or raised (A7, owner 2026-11-04), from WALL_TIME_MIN_S up to the
+ceiling (`ceiling_s`): the longest wall time any agent has in code, which the agents queue's job
+timeout and the reaper's stale bound already cover, so a raised run is never cut by them first.
+
 Everything else stays the code's: the input model, the flags (internal, private_io, bind, chat,
 needs_job, bind_job, test_only, live_text), the tools' code and schemas, and what the runner
 sets for every agent (sdk_options.py: the denied built-ins, the permission mode, no settings
@@ -43,7 +47,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import definitions
+from app.agents import catalog, definitions
 from app.agents.models import AgentOverride, AgentRun, CredentialKind
 
 logger = logging.getLogger("app.agents.overrides")
@@ -53,8 +57,8 @@ DESCRIPTION_MAX = 300
 MESSAGE_MAX = 4_000
 NOTE_MAX = 500
 TURNS_MAX = 10_000
-# A run gets at least this long; never more than the code's own wall time (`check`): the
-# queue's job timeout is computed from the code's limits when the worker starts.
+# A run gets at least this long, and never more than the ceiling (`ceiling_s`): the queue's job
+# timeout is computed from the code's limits when the worker starts.
 WALL_TIME_MIN_S = 10.0
 EDITABLE = (
     "description",
@@ -95,7 +99,7 @@ class Changes(BaseModel):
     model_by_credential: dict[CredentialKind, str] | None = None
     effort: str | None = None
     max_turns: int | None = Field(default=None, ge=1, le=TURNS_MAX)
-    wall_time_s: float | None = Field(default=None, ge=WALL_TIME_MIN_S)
+    wall_time_s: float | None = Field(default=None, ge=WALL_TIME_MIN_S, allow_inf_nan=False)
     tools: list[str] | None = Field(default=None, max_length=64)
 
     _blank = field_validator("description", "system_prompt", "default_message")(_not_blank)
@@ -121,6 +125,13 @@ class Changes(BaseModel):
         if value is not None and value not in definitions.EFFORTS:
             raise ValueError(f"must be one of {', '.join(definitions.EFFORTS)}")
         return value
+
+
+def ceiling_s() -> float:
+    """The longest wall time a saved version may give a run: the longest the agents queue lets
+    any run take (catalog.longest_wall_time_s, the function the worker computes its job timeout
+    and stale bound from)."""
+    return catalog.longest_wall_time_s()
 
 
 def code_values(definition: definitions.AgentDefinition) -> dict[str, Any]:
@@ -157,8 +168,11 @@ def check(definition: definitions.AgentDefinition, raw: Mapping[str, Any]) -> di
             raise OverrideError(f"tools: not a tool of this agent: {', '.join(unknown)}")
         # Kept in the code's order, each once.
         given["tools"] = [name for name in definition.tools if name in set(given["tools"])]
-    if "wall_time_s" in given and given["wall_time_s"] > definition.wall_time_s:
-        raise OverrideError(f"wall_time_s: at most the code's {definition.wall_time_s:g} seconds")
+    if "wall_time_s" in given and given["wall_time_s"] > (ceiling := ceiling_s()):
+        raise OverrideError(
+            f"wall_time_s: at most {ceiling:g} seconds, "
+            "the longest the agents queue lets a run take"
+        )
     if "default_message" in given and not definition.uses_default_message:
         raise OverrideError("default_message: this agent builds its first message in code")
     return {name: value for name, value in given.items() if value != code[name]}
@@ -198,9 +212,9 @@ def apply(
 ) -> definitions.AgentDefinition:
     """The definition a run uses: the code's, with the saved changes on top. A version saved
     against an older code is read the same way, field by field: a field the agent cannot take
-    any more (a tool the code removed, a wall time above the code's new one, a default message
-    its first message no longer reads) falls back to the code's value, and the others still
-    apply."""
+    any more (a tool the code removed, a default message its first message no longer reads)
+    falls back to the code's value, a wall time above the ceiling of now is the ceiling, and the
+    others still apply."""
     fields: dict[str, Any] = {}
     for name in EDITABLE:
         if name not in changes:
@@ -219,7 +233,7 @@ def apply(
         elif name == "model_by_credential":
             value = {str(kind.value): model for kind, model in value.items()}
         elif name == "wall_time_s":
-            value = min(value, definition.wall_time_s)
+            value = min(value, ceiling_s())
         fields[name] = value
     return dataclasses.replace(definition, **fields) if fields else definition
 

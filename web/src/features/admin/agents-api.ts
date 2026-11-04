@@ -103,8 +103,14 @@ export const agentPageSchema = z.object({
       turns: z.number().int().nullable(),
       input_tokens: z.number().int().nullable(),
       output_tokens: z.number().int().nullable(),
+      /** When it was queued. */
       created_at: z.string(),
+      /** Null: not started yet. */
+      started_at: z.string().nullable(),
       finished_at: z.string().nullable(),
+      /** The person the run is for, as the Users page shows them: the name, else the e-mail. */
+      user_name: z.string(),
+      user_email: z.string(),
       mine: z.boolean(),
     }),
   ),
@@ -114,6 +120,7 @@ export const agentPageSchema = z.object({
     credential_kinds: z.array(z.string()),
     turns_max: z.number().int(),
     wall_time_min_s: z.number(),
+    /** The ceiling, the same for every agent: the longest the agents queue lets a run take. */
     wall_time_max_s: z.number(),
     prompt_max: z.number().int(),
     description_max: z.number().int(),
@@ -209,6 +216,18 @@ export function problemsOf(draft: Editable, choices: AgentPage["choices"]) {
     draft.wall_time_s < choices.wall_time_min_s ||
     draft.wall_time_s > choices.wall_time_max_s
   )
-    found.wall_time_s = `From ${String(choices.wall_time_min_s)} to ${String(choices.wall_time_max_s)} seconds: never more than the code gives.`;
+    found.wall_time_s = `From ${String(choices.wall_time_min_s)} to ${choices.wall_time_max_s.toLocaleString("en")} seconds: never more than the agents queue lets a run take.`;
   return found;
+}
+
+/** A number of seconds in words: "24 hours", "15 minutes", "45 seconds". */
+export function duration(seconds: number): string {
+  const [size, unit] =
+    seconds >= 3600
+      ? [seconds / 3600, "hour"]
+      : seconds >= 60
+        ? [seconds / 60, "minute"]
+        : [seconds, "second"];
+  const shown = Number(size.toFixed(2));
+  return `${shown.toLocaleString("en")} ${unit}${shown === 1 ? "" : "s"}`;
 }

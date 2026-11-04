@@ -113,6 +113,14 @@ def load() -> dict[str, definitions.AgentDefinition]:
     return dict(definitions.AGENTS)
 
 
+def longest_wall_time_s() -> float:
+    """The longest wall time any agent of the app has in code (`load`): what the agents queue's
+    job timeout and the reaper's stale bound are computed from (worker.longest_agent_s), and so
+    the ceiling of a saved wall time (overrides.py, agents A7). One function for the worker, the
+    check of a save, the page and the runner, so none of them allows a run longer than another."""
+    return max(agent.wall_time_s for agent in load().values())
+
+
 def package_of(definition: definitions.AgentDefinition) -> str:
     parts = definitions.module_of(definition.name).split(".")
     return parts[1] if len(parts) > 2 and parts[0] == "app" else ""
@@ -166,8 +174,8 @@ def publish(sessions: sessionmaker[Session], now: datetime) -> frozenset[str]:
     """Write every app tool this worker process knows, as the model sees it, to `agent_tools`, in
     one transaction. Worker only: it builds each tool with the SDK, for no run. A tool that
     cannot be built that way is skipped alone. Nothing is imported to find more tools: a module
-    that registers its own (the finder's, imported by the first sweep) is published once it is
-    there, and a row is never deleted here, so a tool another process described stays. Answers
+    that registers its own (the finder's, which `load` imports since agents A7) is published once
+    it is there, and a row is never deleted here, so a tool another process described stays. Answers
     the names written."""
     from app.agents import tools as app_tools
 

@@ -4,9 +4,11 @@ migration 0031."""
 
 import asyncio
 import dataclasses
+import json
 import logging
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import typing
@@ -24,7 +26,7 @@ from app.agents import catalog, definitions, overrides, runner
 from app.agents.crypto import Keyring
 from app.agents.models import AgentEvent, AgentOverride, AgentRun, CredentialKind, RunStatus
 from app.config import Settings
-from app.identity.models import Role
+from app.identity.models import Role, User
 from tests.agents.conftest import OAUTH
 from tests.agents.run_helpers import (
     Backends,
@@ -45,7 +47,8 @@ from tests.test_migrations import alembic_config
 __all__ = ["at_head"]
 
 AGENTS = "/api/admin/agents"
-APP_DIR = Path(__file__).resolve().parents[2] / "app"
+API_DIR = Path(__file__).resolve().parents[2]
+APP_DIR = API_DIR / "app"
 
 
 @pytest.fixture
@@ -207,7 +210,6 @@ def test_a_save_stores_only_what_differs_from_the_code(
         ({"model_by_credential": {"a_password": "claude-opus-5-5"}}, "model_by_credential"),
         ({"effort": "extreme"}, "effort"),
         ({"max_turns": 0}, "max_turns"),
-        ({"wall_time_s": definitions.TRIAGE.wall_time_s + 1}, "wall_time_s"),
         ({"wall_time_s": 1}, "wall_time_s"),
         ({"tools": ["get_job", "send_mail"]}, "tools"),  # never a tool the code did not give
         ({"private_io": False}, "private_io"),  # the flags are not editable
@@ -422,6 +424,184 @@ def test_the_page_and_the_list_say_when_the_code_changed_a_saved_field(
 # --- the next run uses it ----------------------------------------------------------------------
 
 
+def test_a_wall_time_may_be_raised_up_to_the_ceiling_and_never_above(
+    api: Api, admin: str, factory: sessionmaker[Session]
+) -> None:
+    ceiling = overrides.ceiling_s()
+    # Today the longest agent of the app is the website search (B20, a day).
+    assert ceiling == max(agent.wall_time_s for agent in catalog.load().values()) == 86_400
+    above = save(api, admin, "triage", {"wall_time_s": ceiling + 1})
+    assert above.status_code == 422
+    assert above.json()["detail"] == (
+        "wall_time_s: at most 86400 seconds, the longest the agents queue lets a run take"
+    )
+    for raw in ("Infinity", "NaN", "1e400"):
+        answer = api.post(
+            f"{AGENTS}/triage/versions",
+            token=admin,
+            content=f'{{"changes": {{"wall_time_s": {raw}}}}}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert answer.status_code == 422, (raw, answer.text)
+    assert versions(factory, "triage") == []
+
+    raised = save(api, admin, "triage", {"wall_time_s": ceiling})
+    assert raised.status_code == 201, raised.text
+    body = raised.json()
+    assert body["saved"] == {"wall_time_s": ceiling}
+    assert body["effective"]["wall_time_s"] == ceiling > definitions.TRIAGE.wall_time_s
+    assert body["code"]["wall_time_s"] == definitions.TRIAGE.wall_time_s
+    assert body["choices"]["wall_time_max_s"] == ceiling  # the page shows it by the field
+    assert "It has run for 24 hours (wall_time_s): the runner stops it." in body["ends"]
+    [triage] = [
+        a for a in api.get("/api/agents", token=admin).json()["items"] if a["name"] == "triage"
+    ]
+    assert triage["wall_time_s"] == ceiling
+
+
+def _watch_the_runs_clock(monkeypatch: pytest.MonkeyPatch, at_once: bool = False) -> list[Any]:
+    """The timeouts the runner's wait on the stream gets (runner._run_stream). `at_once`: that
+    clock then runs out at once, so the run ends on its time limit."""
+    timeouts: list[float | None] = []
+    wait = asyncio.wait
+
+    def watched(tasks: Any, *, timeout: float | None = None, **kwargs: Any) -> Any:
+        if kwargs.get("return_when") == asyncio.FIRST_COMPLETED:
+            timeouts.append(timeout)
+            if at_once:
+                timeout = 0
+        return wait(tasks, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(runner.asyncio, "wait", watched)
+    return timeouts
+
+
+def test_a_raised_wall_time_reaches_the_runs_clock_and_its_time_limit(
+    api: Api,
+    admin: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raised = overrides.ceiling_s()
+    assert raised > definitions.ECHO.wall_time_s
+    assert save(api, admin, "echo", {"wall_time_s": raised}).status_code == 201
+    timeouts = _watch_the_runs_clock(monkeypatch, at_once=True)
+    user = add_user(factory, f"e2e-{secrets.token_hex(3)}@example.org")
+    save_credential(factory, keyring, user)
+    run_id = new_run(factory, user, {"message": "x", "script": "stall"})
+    assert execute(context(settings, factory, keyring, Backends()), run_id) is RunStatus.failed
+    assert timeouts == [raised]
+    row = run_row(factory, run_id)
+    assert row.agent_version == 1
+    # What the run says of its limit is the raised one, not the code's 10 minutes.
+    assert row.error == "The run took longer than its limit of 1440 minutes and was stopped."
+
+
+def test_a_version_saved_above_a_lowered_ceiling_runs_at_the_ceiling(
+    api: Api,
+    admin: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ceiling = overrides.ceiling_s()
+    assert save(api, admin, "echo", {"wall_time_s": ceiling}).status_code == 201
+    # The code then shortens its longest agent: the ceiling comes down with it, and so do the
+    # worker's job timeout and stale bound (worker.longest_agent_s).
+    longest = max(catalog.load().values(), key=lambda agent: agent.wall_time_s)
+    shorter = dataclasses.replace(longest, wall_time_s=definitions.ECHO.wall_time_s)
+    monkeypatch.setitem(definitions.AGENTS, longest.name, shorter)
+    lowered = overrides.ceiling_s()
+    assert definitions.ECHO.wall_time_s < lowered < ceiling
+    timeouts = _watch_the_runs_clock(monkeypatch)
+    _run_echo(settings, factory, keyring, monkeypatch)
+    assert timeouts == [lowered]
+    page = api.get(f"{AGENTS}/echo", token=admin).json()
+    assert page["saved"] == {"wall_time_s": ceiling}
+    assert page["effective"]["wall_time_s"] == page["choices"]["wall_time_max_s"] == lowered
+
+
+def test_a_fresh_worker_lets_a_run_take_the_whole_ceiling() -> None:
+    """The agents queue a fresh worker builds covers the longest wall time a save may give, with
+    its margins: arq's job timeout never cuts such a run, nor does the reaper fail it as stale,
+    before its own clock stops it. The ceiling is computed as the api computes it, in another
+    fresh interpreter that never imports the worker."""
+
+    def fresh(script: str) -> Any:
+        ran = subprocess.run(
+            [sys.executable, "-c", "import json\n" + script],
+            cwd=API_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert ran.returncode == 0, ran.stderr[-2000:]
+        return json.loads(ran.stdout.strip().splitlines()[-1])
+
+    worker = fresh(
+        "from app import worker\n"
+        "spec = worker.agents_queue()\n"
+        "timeouts = {one.name: one.timeout_s for one in spec.functions}\n"
+        "print(json.dumps({'queue': spec.job_timeout_s, 'run_agent': timeouts['run_agent'],\n"
+        "    'apply_decide': timeouts['apply_decide'],\n"
+        "    'stale': worker.agent_stale_running().total_seconds(),\n"
+        "    'job_margin': worker.AGENT_JOB_MARGIN_S,\n"
+        "    'stale_margin': worker.AGENT_STALE_MARGIN_S}))\n"
+    )
+    api = fresh(
+        "from app.agents import definitions, overrides\n"
+        "used = overrides.apply(definitions.ECHO, {'wall_time_s': 10.0**9})\n"
+        "print(json.dumps({'ceiling': overrides.ceiling_s(), 'used': used.wall_time_s}))\n"
+    )
+    ceiling = api["ceiling"]
+    assert api["used"] == ceiling == 86_400
+    assert worker["queue"] == worker["run_agent"] == worker["apply_decide"]
+    assert worker["run_agent"] == ceiling + worker["job_margin"]
+    assert worker["stale"] == ceiling + worker["stale_margin"]
+
+
+def test_the_recent_runs_name_the_person_of_each_run_to_an_admin_only(
+    api: Api, admin: str, member: str, factory: sessionmaker[Session]
+) -> None:
+    with factory() as db:
+        ada = db.scalars(sa.select(User.id).where(User.email == "e2e-admin@example.org")).one()
+    other = add_user(factory, "e2e-other@example.org")
+    nameless = make_user(factory, email="e2e-nameless@example.org", name="", role=Role.member).id
+    own = new_run(factory, ada)
+    theirs = new_run(factory, other)
+    blank = new_run(factory, nameless)
+    started = now()
+    with factory() as db, db.begin():
+        db.execute(sa.update(AgentRun).where(AgentRun.id == theirs).values(started_at=started))
+    page = api.get(f"{AGENTS}/echo", token=admin)
+    assert page.status_code == 200
+    shown = {row["id"]: row for row in page.json()["runs"]}
+    assert (shown[str(own)]["user_name"], shown[str(own)]["user_email"]) == (
+        "Ada",
+        "e2e-admin@example.org",
+    )
+    assert shown[str(own)]["mine"] is True
+    assert shown[str(own)]["started_at"] is None  # queued, not started yet
+    assert (shown[str(theirs)]["user_name"], shown[str(theirs)]["user_email"]) == (
+        "e2e-other",
+        "e2e-other@example.org",
+    )
+    assert shown[str(theirs)]["mine"] is False  # their run: no link to its page
+    assert shown[str(theirs)]["started_at"] is not None
+    # A person without a name: the page shows the e-mail in its place, as the Users page does.
+    assert (shown[str(blank)]["user_name"], shown[str(blank)]["user_email"]) == (
+        "",
+        "e2e-nameless@example.org",
+    )
+    # A member never reads it.
+    refused = api.get(f"{AGENTS}/echo", token=member)
+    assert refused.status_code == 404
+    assert "e2e-other@example.org" not in refused.text
+
+
 def _run_echo(
     settings: Settings,
     factory: sessionmaker[Session],
@@ -548,10 +728,10 @@ def test_a_failed_read_runs_the_code_definition_and_warns_by_type(
 
 
 def test_a_version_saved_against_older_code_keeps_what_still_fits() -> None:
-    changes = {"tools": ["get_job", "gone_tool"], "wall_time_s": 10_000.0, "effort": "high"}
+    changes = {"tools": ["get_job", "gone_tool"], "wall_time_s": 10.0**9, "effort": "high"}
     used = overrides.apply(definitions.TRIAGE, changes)
     assert used.tools == ("get_job",)
-    assert used.wall_time_s == definitions.TRIAGE.wall_time_s
+    assert used.wall_time_s == overrides.ceiling_s()  # never above the ceiling of now
     assert used.effort == "high"
     assert used.private_io is definitions.TRIAGE.private_io
     assert overrides.apply(definitions.TRIAGE, {"model": "not-a-model"}) is definitions.TRIAGE
@@ -591,8 +771,10 @@ def test_a_private_agent_page_shows_numbers_only(
     assert shown["status"] == "failed"
     assert set(shown) == {
         "id", "status", "model", "version", "turns", "input_tokens", "output_tokens",
-        "created_at", "finished_at", "mine",
+        "created_at", "started_at", "finished_at", "user_name", "user_email", "mine",
     }  # fmt: skip
+    # The person it ran for is shown (A7), and nothing of what it read or wrote.
+    assert (shown["user_name"], shown["user_email"]) == ("e2e-owner", "e2e-owner@example.org")
     assert canary not in api.get(AGENTS, token=admin).text
 
 

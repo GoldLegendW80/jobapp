@@ -193,9 +193,12 @@ def register_modules() -> None:
 
 
 def longest_agent_s() -> float:
-    """The longest wall time of any registered agent. Computed when it is asked, never as a
-    module constant: an agent registered after this file was imported counts too."""
-    return max(agent.wall_time_s for agent in definitions.AGENTS.values())
+    """The longest wall time of any agent of the app (agent_catalog.longest_wall_time_s, which
+    imports every module that registers one). Computed when it is asked, never as a module
+    constant: an agent registered after this file was imported counts too. It is also the
+    ceiling of a wall time saved on the Agents tab (agents A7), so a raised run fits the job
+    timeout and the stale bound below."""
+    return agent_catalog.longest_wall_time_s()
 
 
 def agent_job_timeout_s() -> float:
@@ -469,8 +472,9 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
 
 
 def agents_queue() -> QueueSpec:
-    # The limits are computed here, after the imports that register the agents: a 15 minute
-    # step of ingestion under a timeout computed before it would be cut at 12 minutes.
+    # The limits are computed here, after the imports that register the agents (those of the
+    # catalog included, the finder's): a 15 minute step of ingestion under a timeout computed
+    # before it would be cut at 12 minutes, and so would a wall time raised on the Agents tab.
     register_modules()
     job_timeout_s = agent_job_timeout_s()
     return QueueSpec(

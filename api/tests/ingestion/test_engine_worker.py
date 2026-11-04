@@ -47,8 +47,9 @@ def test_the_cron_runs_every_minute_on_the_ingestion_queue_and_keeps_no_result()
 
 
 def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply() -> None:
-    """The agents queue's limit is the longest agent of the queue plus the margin, whichever
-    module registers it (today apply's form agent, whose run holds a sign in hand off's wait).
+    """The agents queue's limit is the longest agent of the app plus the margin, whichever
+    module registers it (today the website search's day, B20, also the ceiling of a wall time
+    saved on the Agents tab, agents A7; before it, apply's form agent and its sign in wait).
     The ingestion agents are counted in it and keep their own wall time: a longer agent elsewhere
     raises the queue's limit, never the extract step's."""
     spec = worker.agents_queue()
@@ -70,13 +71,13 @@ def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply
     assert definitions.AGENTS[form_agent.NAME].wall_time_s == 3600
     assert spec.name == queues.AGENTS
     assert spec.max_jobs == worker.MAX_AGENT_RUNS == 2
-    assert spec.job_timeout_s == 3720  # 3600 aggregate transport, 120 runner cleanup
+    assert spec.job_timeout_s == 86_520  # browser_discovery's 86,400, 120 runner cleanup
     assert spec.job_timeout_s == longest + worker.AGENT_JOB_MARGIN_S
     assert all(agent.wall_time_s <= spec.job_timeout_s for agent in definitions.AGENTS.values())
     (run_agent,) = [one for one in spec.functions if one.name == "run_agent"]
-    assert run_agent.timeout_s == spec.job_timeout_s == 3720
+    assert run_agent.timeout_s == spec.job_timeout_s == 86_520
     assert run_agent.max_tries == 1
-    assert worker.agent_stale_running().total_seconds() == 3900  # 3600 plus 300 stale grace
+    assert worker.agent_stale_running().total_seconds() == 86_700  # 86,400 plus 300 grace
     assert worker.agent_stale_running().total_seconds() == longest + worker.AGENT_STALE_MARGIN_S
 
 
