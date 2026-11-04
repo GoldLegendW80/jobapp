@@ -44,10 +44,11 @@
 #   browser (D3 measured a peak of 134 MiB on the Jetson); the parser's 640m is a starting figure
 #   (ingestion G2a) that G2b and G8 set from the peaks they measure. The browser's first 1024m
 #   was B1's measure (a Workday stand in with 3 tabs peaked at 499 MiB in the cgroup, 807 MiB of
-#   PSS); at 1536m its memory guard closes a tab at about 1380 MiB (BROWSER_MEM_GUARD_PCT 90).
+#   PSS); its memory guard closes a tab at 90 % (BROWSER_MEM_GUARD_PCT): about 1380 MiB at
+#   1536m, about 1840 MiB at 2048m.
 #   (SPEC-platform.md, SPEC-documents.md "Rendering on the Jetson", SPEC-browser.md.)
-#   The optional mail profile adds a separately limited 128m provider: 5888m total, 256m under
-#   the 6144m target. These declared limits do not prove physical Jetson capacity;
+#   The optional mail profile adds a separately limited 128m provider: 6400m total, 256m under
+#   the 6656m target. These declared limits do not prove physical Jetson capacity;
 #   docs/mail-application-setup.md records the fixture measurement and pending acceptance.
 
 name: jobapp
@@ -356,7 +357,8 @@ services:
   #   a page cannot reach the app's services on `browsing`, the LAN or the Docker host; the host
   #   firewall drops the same from the `egress` bridge (ops/browser-egress.sh, B6). Not on
   #   `default`: db, redis and the api's name do not resolve there. No published port;
-  # - 1536m of memory and as much with swap (memswap_limit equal: no swap, a fast OOM kill),
+  # - 2048m of memory by default (BROWSER_MEM_LIMIT, B20) and as much with swap (memswap_limit
+  #   equal: no swap, a fast OOM kill),
   #   128m of /dev/shm (B1: Chromium used none of it), 1024 processes and threads.
   # SIGTERM releases the lease and closes Chromium cleanly (the profile is flushed) within 15 s.
   # Never give it an env_file, a published port, `default`, a capability or `unconfined`.

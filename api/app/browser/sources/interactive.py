@@ -10,41 +10,40 @@ counted, as `finding_persistence_pending`.
 
 One agent per website (owner, 2026-10-27, jobs J18): "An LLM agent for each website that will
 search intelligently, just like a human, using all the parameters provided to it." A website is
-one lease and one finder run a sweep. Its frozen scope (`searches_for`) holds every saved title
-and place, or the first ones that fit when the person saved more than it carries (100 of each,
-32 KiB as sent: `_carried`), the rest counted in the summary as left out; the agent decides
-which searches to run, in which order, and when the website is covered, and browserd lets it
-type only one saved title in a search box or one saved place in the place box (or nothing, to
-clear one), and set a native filter only to its saved value (browser/browserd/tools/
-discovery.py). A value the model types that its box does not take, or a choice that is no saved
-value, is its own slip: told to it before the browser and counted apart, it is no reason to say
-the website unsupported (finder.FinderSession._slip). How the website ends is what the agent
-read and said, never which tools it used (`outcome`, 2026-10-28): a click the page did not let
-finish (a cookie banner over it) is told to it to recover from. Its budget a website is "no limit"
-(owner): no cap on its turns, pages, tokens or verified postings. What bounds it is not its
-budget: its share of the
-sweep's time (the sweep's time left divided by the websites left, `run_selected`, so one website
-never starves the next; a website with its own pace, LinkedIn, runs last, `run_order`, round 3),
-which it is told; the lease's own maximum; pacing per platform and the
-7 day pause (no daily limit and no page cap on any website, LinkedIn included, owner 2026-10-28).
+one lease and one finder run a sweep. Its scope (`searches_for`) holds every saved title and
+place, or the first ones that fit when the person saved more than it carries (100 of each,
+32 KiB: `_carried`), the rest counted in the summary as left out, and every other criterion:
+all of it is the agent's context. Since B20 (owner, 2026-11-04: the search works as Claude Code
+with Playwright CLI on the owner's Mac) the agent types what it judges right (a saved title, a
+translation, a synonym) and opens any public address; browserd gets the start alone and holds
+only the line (browser/browserd/tools/line.py: never apply, submit a form that is no search,
+write to anyone, pay, sign out or change the account) and its egress proxy. How the website
+ends is what the agent read and said, never which tools it used (`outcome`, 2026-10-28): a
+click the page did not let finish (a cookie banner over it) is told to it to recover from. Its
+budget a website is "no limit" (owner): no cap on its turns, pages, tokens or verified postings,
+and no time cap (B20: "as long as it takes"): no share of the sweep's time, no lease maximum, no
+page pause and no 7 day pause; the run's Cancel stops it and the lease's idle timer ends one
+nobody uses. LinkedIn still runs last (`run_order`).
 Its postings merge into the website's one result, counted once per canonical address, in one
 place only: an unwanted reading wins over another contract, which wins over a kept one
-(`_Site.place`). One contract type is the website's own filter; several are checked on what
-was read (the engine's `kind` of the title, location and address), as a native filter takes one
-value. Places are typed as the person wrote them, never mapped to a website's own codes.
-The other criteria (unwanted titles and places, seniority, industries, company types, pay, the
-days) reach the agent as plain context (`criteria`), never typed; unwanted titles and unwanted
-places are dropped after reading.
+(`_Site.place`). Several contract types are checked on what was read (the engine's `kind` of
+the title, location and address), as a website's own filter takes one value. Unwanted titles
+and unwanted places are dropped after reading.
 With the run's commits, the verified batches go through the website's `_Site.verified` on their
 way to the store: a posting given before, an unwanted one and one of another contract are
 counted there and never stored, so a website stores a posting once. An address stored stays
 stored and counted once, whatever a later reading of it says. The summary names the searches
-the agent ran, from its own tool calls (`FinderSession.searches`), and counts them.
+the agent ran and counts them, from its own tool calls (`FinderSession.searches`): what it typed
+into boxes once it submitted them (browser_type with submit, or a click or Enter next), named by
+the texts typed and the options chosen with them, or an address it opened whose query holds a
+saved title.
 
 A website the person signed in to (B17, app/browser/site_logins.py) is read signed in: the
 scope says so and browserd runs it in the person's own persisted context, the lease being that
-person's as every lease is. A sign in page met then ends the source `platform_signin` and marks
-the login expired, so the card asks the person to sign in again.
+person's as every lease is. A sign in wall no longer ends the website by itself (B20): the agent
+asks the person (browser_ask_person). When the search still ends on a sign in wall nobody
+solved, the login is marked expired, so Account and Find jobs ask the person to sign in again,
+and the website ends `signin_wall` when it found nothing (`_signed_out`).
 """
 
 from __future__ import annotations
@@ -52,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import math
 import re
 from collections import Counter
@@ -81,9 +81,15 @@ if TYPE_CHECKING:
 
     from app.browser.sources import Runner
 
+logger = logging.getLogger("app.browser.sources.interactive")
+
 SIGNIN_CODE = "platform_signin"  # guard.SIGNIN, the sources' code of a sign in page
-# All the person's criteria, the agent's context (jobs J18); only titles, places and the native
-# filters' values can be typed or chosen.
+# What a sign in page is told by (platform_policy.wall), and the code of a website whose search
+# ended on one nobody solved while it was read signed in (`_signed_out`).
+SIGNIN_WALLS = frozenset({SIGNIN_CODE, "linkedin_signin"})
+SIGNIN_WALL = "signin_wall"
+# All the person's criteria, the agent's context (jobs J18); since B20 it types what it judges
+# right.
 CRITERIA = frozenset(
     {
         "title_include",
@@ -145,6 +151,8 @@ class GuardedTools:
         self.tools, self.policy, self.context = tools, policy, context
         self.logins = logins  # B17: set only when the website is read signed in
         self.reserved = False
+        self.page = ("", "")  # the last page a snapshot read: its address and its text
+        self.helped = False  # B20: the person had the browser through browser_ask_person
 
     async def _before(self, name: str) -> None:
         await _permit(self.policy, self.context)
@@ -174,6 +182,7 @@ class GuardedTools:
                 or not finder.canonical(url)
             ):
                 raise SourceError("page_failed")
+            self.page = (url, text)
         return shot
 
     async def wait_for(self, **args: Any) -> dict[str, Any]:
@@ -208,10 +217,11 @@ class Searches:
 def _carried(
     titles: list[str], places: list[str], start: str, filters: list[tuple[str, str]]
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The saved titles and places a website's frozen scope carries (jobs J18): the first ones
-    that fit, in saved order, taken a title then a place in turn, so a long list of one leaves
-    room for the other. A value fits when it is at most finder.SCOPE_VALUE_MAX characters, its
-    list holds fewer than finder.SCOPE_VALUES_MAX, and the scope as sent stays within
+    """The saved titles and places a website's scope carries into the agent's context (jobs
+    J18; since B20 browserd gets the start alone): the first ones that fit, in saved order,
+    taken a title then a place in turn, so a long list of one leaves room for the other. A value
+    fits when it is at most finder.SCOPE_VALUE_MAX characters, its list holds fewer than
+    finder.SCOPE_VALUES_MAX, and the scope measured as JSON stays within
     finder.SCOPE_BYTES_MAX, room kept for the signed in flag (B17). The rest is left out."""
     size = len(
         json.dumps(
@@ -248,13 +258,12 @@ def _unwanted(terms: Any) -> re.Pattern[str] | None:
 
 
 def searches_for(search: SearchSection, start: str = "") -> Searches:
-    """Use the saved values (typed as saved, or with another case or accents, browserd's
-    discovery.saved_as), with no inferred website-specific filter encoding: the saved
-    titles and places the scope carries (`_carried`: all of them, or the first ones that fit,
-    the rest counted as left out), the agent typing one at a time (ValueError when one cannot
-    be typed or no title fits, `unsupported_criteria` before a lease).
-
-    Other preferences remain private context, not permission to vary the native request.
+    """The website's search from the saved values, with no inferred website-specific filter
+    encoding: the saved titles and places the scope carries (`_carried`: all of them, or the
+    first ones that fit, the rest counted as left out), the filters' saved values and every
+    criterion, all the agent's context (B20: it types what it judges right). ValueError
+    (`unsupported_criteria` before a lease) when a list holds terms and gives no plain word,
+    or no title fits.
     """
     titles, titles_dropped = _plain(search.title_include)
     places, places_dropped = _plain(search.location)
@@ -363,7 +372,7 @@ class _Site:
         for name in ("titles_left_out", "places_left_out"):
             if getattr(self.planned, name):
                 entry[name] = getattr(self.planned, name)
-        # The person's own saved values only (FinderSession.searches), as the summary names them.
+        # The searches the agent ran (FinderSession.searches), as the summary names them.
         entry["searched"] = [
             {"title": title, "place": place}
             for title, place in list(self.searches)[:SEARCHES_LISTED]
@@ -386,7 +395,8 @@ def run_order[T](sites: list[T]) -> list[T]:
     to 30 s), so its agent ran out of time after one title of three. A website with a pace of
     its own (platform_policy.PAUSES: LinkedIn) runs after the others, in saved order otherwise:
     its share is never smaller than before (a share is the time left divided by the websites
-    left, so the first websites' shares are the same), and the time the others leave is its."""
+    left, so the first websites' shares are the same), and the time the others leave is its.
+    Since B20 no website has a share of the time nor a page pause; the order stays."""
     from app.browser import platform_policy
 
     return sorted(
@@ -502,7 +512,8 @@ async def _website(
     site: _Site,
     deadline: float,
 ) -> str | None:
-    """The website's one agent run on one lease, until its share of the sweep's time ends."""
+    """The website's one agent run on one lease, until the agent ends or the run is cancelled
+    (B20: no time cap)."""
     from app.browser import platform_policy
 
     asked = runner.monotonic()
@@ -543,7 +554,7 @@ async def _website(
             pause=platform_policy.pause_for(paced),
             idle_s=got.lease.idle_s,
         )
-        return await _search(runner.finder, pages, scope, str(plan.user_id), site)
+        return await _search(runner.finder, pages, scope, str(plan.user_id), site, runner.base_url)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
 
@@ -580,15 +591,47 @@ def outcome(session: finder.FinderSession) -> str | None:
     return "search_refused" if refused else "nothing_reported"
 
 
+async def _signed_out(
+    pages: Pages, session: finder.FinderSession, base_url: str | None = None
+) -> bool:
+    """B17, kept by B20: a website read signed in whose search ended on a sign in wall nobody
+    solved has lost the person's login. It is marked expired, so Account and Find jobs ask the
+    person to sign in again, and True is returned. Nobody solved the wall when the last page the
+    search read is a sign in page (platform_policy.wall: the agent asked and nobody was
+    watching, or it ended there), or when the agent reported a sign in wall (`signin_wall`) and
+    the person never had the browser through browser_ask_person. A person who signs in again
+    when asked leaves the search on a page that is no sign in page: nothing is marked. A mark
+    that cannot be written is logged and the website ends as it would."""
+    from app.browser import platform_policy
+
+    guarded = pages.tools
+    if not isinstance(guarded, GuardedTools) or guarded.logins is None:
+        return False
+    url, text = guarded.page
+    platform = platform_policy.platform_for(guarded.context)
+    on_wall = bool(url) and platform_policy.wall(platform, url, text, base_url) in SIGNIN_WALLS
+    if not on_wall and (session.outcome != "signin_wall" or guarded.helped):
+        return False
+    try:
+        host = urlsplit(guarded.context.url).hostname or ""
+        await guarded.logins.expire(guarded.context.user_id, host)
+    except Exception as error:
+        logger.warning(
+            "the login of a website could not be marked expired: error=%s", type(error).__name__
+        )
+    return True
+
+
 async def _search(
     agent: finder.FinderAgent,
     pages: Pages,
     scope: finder.InteractiveScope,
     user: str,
     site: _Site,
+    base_url: str | None = None,
 ) -> str | None:
-    """Bound the complete run, including the first navigation, by the website's share of the
-    sweep's time and the lease's (no cap of its own, jobs J18)."""
+    """The complete run, the first navigation included, with no time cap (B20); a login the
+    search found ended is marked (`_signed_out`)."""
     session = None
     cap = asyncio.timeout(None)  # B20: no time cap; the run's Cancel stops it
     try:
@@ -613,9 +656,9 @@ async def _search(
                 if exc.code == "page_failed" and result.get("error") == "unsupported_discovery":
                     return "unsupported_interaction"
                 return exc.code
-            # The start page may land on another address of its own website (Welcome to the
-            # Jungle answers `/` on `/en`, Indeed's on the person's country site, B19's family);
-            # browserd held that redirect to the frozen scope.
+            # The start page may land on another address (Welcome to the Jungle answers `/` on
+            # `/en`, Indeed's on the person's country site): any public address since B20,
+            # browserd's egress proxy holding it.
             landed = finder.canonical(pages.last_url)
             if not landed:
                 return "unsupported_interaction"
@@ -633,11 +676,13 @@ async def _search(
             site.input_tokens += ran.input_tokens
             site.output_tokens += ran.output_tokens
             site.tokens_seen = True
+            signed_out = await _signed_out(pages, session, base_url)
             if session.stopped:
                 return session.stopped
             if ran.stopped:
                 return "no_credential" if ran.stopped == "no_credential" else "agent_failed"
-            return outcome(session)
+            code = outcome(session)
+            return SIGNIN_WALL if signed_out and code is not None else code
     except TimeoutError:
         return "time_budget" if cap.expired() else "agent_failed"
     except SourceError as exc:
@@ -694,6 +739,7 @@ async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> s
                 elif lease.get("state") == "active":
                     if synced:
                         await tools.leases.resume(tools.user_id, tools.lease_id)
+                    guarded.helped = True
                     return "The person had the browser: read the page again (browser_snapshot)."
             except StoreUnavailableError:
                 pass  # Redis away: the api's copy is set on the next round
