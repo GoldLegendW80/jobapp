@@ -408,4 +408,3 @@ Owner request of 2026-11-04, through the orchestrator; branch `browser/b21-profi
 6. The real VIE website was not exercised (hard rule 5); the Docker test of the stand in on real Chromium was not written: the sandbox's Docker daemon was down.
 
 **Not changed:** B20's line and request floor, browserd, the apply gate, the cybersecurity rule and the person's never apply rules (applied at the store), unwanted titles and places after reading, the consent of each website, the contract rule of every other source.
-
