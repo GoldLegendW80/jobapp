@@ -22,6 +22,7 @@ import {
   ELSEWHERE,
   STARTING,
   WEBSITE_AGENT,
+  askText,
   browserOfRun,
 } from "./run-browser";
 import type { Run, RunStatus } from "./runs-api";
@@ -162,6 +163,51 @@ describe("a running website search", () => {
       "GET /api/browser",
       "POST /api/browser/live/ticket",
     ]);
+  });
+
+  it("asks for help above the view while the sweep lease waits with ask_person, and drops it after", async () => {
+    const opened = fakeScreens();
+    const state = {
+      detail: run(),
+      browser: mine(
+        lease({
+          state: "waiting_person",
+          wait_reason: "ask_person",
+          wait_host: "jobs.example.org",
+        }),
+      ),
+    };
+    fakeApi(state);
+    const { client } = renderApp(`/runs/${ID}`);
+    await connected(opened);
+    const sentence =
+      "The assistant needs your help on jobs.example.org. Take over, do what the page asks, then Give back.";
+    const ask = await screen.findByText(sentence);
+    expect(ask).toHaveAttribute("role", "status");
+    expect(ask).toHaveClass("bg-muted", "text-foreground", "border-border");
+    expect(ask.className).not.toMatch(/#|rgb|\[/);
+    expect(screen.getByTestId("run-live-view")).toContainElement(ask);
+    expect(screen.getByRole("button", { name: "Take over" })).toBeEnabled();
+    state.browser = mine(lease());
+    await act(() => client.invalidateQueries({ queryKey: browserQueryKey }));
+    await waitFor(() => {
+      expect(screen.queryByText(sentence)).toBeNull();
+    });
+    expect(screen.getByTestId("live-screen")).toBeInTheDocument();
+  });
+
+  it("shows no ask for the other waits", async () => {
+    const opened = fakeScreens();
+    fakeApi({
+      detail: run(),
+      browser: mine(
+        lease({ state: "waiting_person", wait_reason: "takeover" }),
+      ),
+    });
+    renderApp(`/runs/${ID}`);
+    await connected(opened);
+    await panel();
+    expect(screen.queryByTestId("run-ask-person")).toBeNull();
   });
 
   it("takes the keyboard and gives it back as the Account card does", async () => {
@@ -531,5 +577,18 @@ describe("browserOfRun", () => {
     expect(browserOfRun(run({ started_at: null }), mine(lease())).show).toBe(
       "elsewhere",
     );
+  });
+});
+
+describe("askText", () => {
+  it("names the host, or the page without one, and only for ask_person", () => {
+    const waiting = { state: "waiting_person" as const };
+    expect(
+      askText(lease({ ...waiting, wait_reason: "ask_person", wait_host: "" })),
+    ).toBe(
+      "The assistant needs your help on this page. Take over, do what the page asks, then Give back.",
+    );
+    expect(askText(lease({ ...waiting, wait_reason: "signin" }))).toBeNull();
+    expect(askText(lease({ wait_reason: "ask_person" }))).toBeNull();
   });
 });
