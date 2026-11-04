@@ -27,8 +27,13 @@ nobody uses. LinkedIn still runs last (`run_order`).
 Its postings merge into the website's one result, counted once per canonical address, in one
 place only: an unwanted reading wins over another contract, which wins over a kept one
 (`_Site.place`). Several contract types are checked on what was read (the engine's `kind` of
-the title, location and address), as a website's own filter takes one value. Unwanted titles
-and unwanted places are dropped after reading.
+the title, location and address), as a website's own filter takes one value, but a posting of
+the contract a website has by nature (B21: the VIE website's) is never dropped as of another
+contract (`nature_contract`). Unwanted titles and unwanted places are dropped after reading, and
+the app's own rule against cybersecurity marks a stored one skipped (sweep.commit_verified).
+The agent's first message gets the summary of the person's profile (B21,
+app/profile/fit_summary.py, `FinderAgent.profile`): it reports what fits the profile, the saved
+titles being where it starts searching.
 With the run's commits, the verified batches go through the website's `_Site.verified` on their
 way to the store: a posting given before, an unwanted one and one of another contract are
 counted there and never stored, so a website stores a posting once. An address stored stays
@@ -71,6 +76,7 @@ from app.browser.sources import (
 )
 from app.jobs import sweep
 from app.jobs.importer import kind
+from app.jobs.models import ContractType
 from app.jobs.schemas import SEARCHES_LISTED
 from app.profile import matching
 from app.profile.plain_terms import typed_words
@@ -214,6 +220,27 @@ class Searches:
     # Saved titles and places the scope could not carry (`_carried`), told in the summary.
     titles_left_out: int = 0
     places_left_out: int = 0
+    # The contract every posting of the website has by nature (`nature_contract`, B21).
+    nature: str | None = None
+
+
+# Job websites whose every posting has one contract by nature (B21, owner 2026-11-04), by the
+# start's exact host: the VIE website (`mon-vie-via.businessfrance.fr`, whose postings `kind`
+# reads as VIE from their address), and its stand in for the tests on `.test`, a name reserved
+# by RFC 6761 that is never a public host. Ticking one is the person's choice of that contract,
+# so its postings are never dropped as of another contract.
+NATURE_CONTRACTS = {
+    "mon-vie-via.businessfrance.fr": ContractType.VIE.value,
+    "mon-vie-via.businessfrance.test": ContractType.VIE.value,
+}
+
+
+def nature_contract(start: str) -> str | None:
+    """The contract a website's postings have by nature, read from its start address."""
+    try:
+        return NATURE_CONTRACTS.get((urlsplit(start).hostname or "").rstrip("."))
+    except ValueError:
+        return None
 
 
 def _carried(
@@ -293,6 +320,7 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
         _unwanted(getattr(search, "location_exclude", None)),
         titles_dropped + len(titles) - len(carried_titles),
         places_dropped + len(places) - len(carried_places),
+        nature_contract(start),
     )
 
 
@@ -319,13 +347,16 @@ class _Site:
     sent: set[str] = field(default_factory=set)
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
-        """Where a posting read goes: unwanted, of another contract, or kept."""
+        """Where a posting read goes: unwanted, of another contract, or kept. A posting of the
+        contract the website has by nature (B21: the VIE website's) is of the person's choice."""
         titles, places = self.planned.unwanted_titles, self.planned.unwanted_places
         if (titles and titles.search(title)) or (places and places.search(location)):
             return self.unwanted
+        contract = kind(title, location, url).value if self.planned.contracts else None
         if (
-            self.planned.contracts
-            and kind(title, location, url).value not in self.planned.contracts
+            contract is not None
+            and contract not in self.planned.contracts
+            and contract != self.planned.nature
         ):
             return self.other_contract
         return self.found
@@ -493,6 +524,10 @@ async def _one(
         return "unsupported_criteria"
     if runner.finder is None or not await runner.finder.available(str(plan.user_id)):
         return "no_credential"
+    # B21: the agent's first message gets the summary of the person's profile.
+    profile = await runner.finder.profile(str(plan.user_id))
+    scope = dataclasses.replace(planned.scope, profile=profile)
+    planned = dataclasses.replace(planned, scope=scope)
     site = _Site(
         planned,
         commits=getattr(plan, "commits", None),

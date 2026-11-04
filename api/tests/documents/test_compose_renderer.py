@@ -51,6 +51,11 @@ def merged(files: tuple[str, ...]) -> dict[str, Any]:
 
 
 def size(value: str) -> int:
+    """A compose size, `${NAME:-default}` read as its default (the browser's BROWSER_MEM_LIMIT,
+    browser B20)."""
+    value = str(value)
+    if value.startswith("${") and ":-" in value and value.endswith("}"):
+        value = value[value.index(":-") + 2 : -1]
     units = {"k": 1024, "m": MIB, "g": 1024 * MIB}
     return int(value[:-1]) * units[value[-1].lower()] if value[-1].isalpha() else int(value)
 
@@ -137,10 +142,11 @@ def test_memory_accounting_keeps_the_core_and_mail_limits_explicit() -> None:
     services = load("compose.yml")["services"]
     total = sum(size(s["mem_limit"]) for s in services.values())
     core = sum(size(s["mem_limit"]) for name, s in services.items() if name != "gmailmcp")
-    target = 6 * 1024 * MIB  # 5G until the browser's 1536m (2026-10-30, compose.yml)
+    # 5G until the browser's 1536m (2026-10-30), 6G until its 2048m (browser B20, 2026-11-04)
+    target = 6656 * MIB  # 6.5G, SPEC-platform
     # Keep the core allowance and platform target explicit. Email's separately limited
     # provider adds 128MiB; this accounting does not claim Jetson capacity acceptance.
-    assert core == 5760 * MIB, core // MIB
+    assert core == 6272 * MIB, core // MIB
     assert services["gmailmcp"]["profiles"] == ["mail"]
     assert size(services["gmailmcp"]["mem_limit"]) == 128 * MIB
     assert total == core + 128 * MIB, total // MIB

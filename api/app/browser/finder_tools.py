@@ -151,8 +151,10 @@ DESCRIPTIONS = {
     "browser_ask_person": "Ask the person for help in one sentence: solve a security check or "
     "a captcha, accept something, sign in again. Answers when the person gave the browser back, "
     "or at once when nobody is watching.",
-    "report_postings": "Report job postings you read on their own page: title, location, the "
-    "address of the posting's page, and its text. The app checks each one; what it keeps stays.",
+    "report_postings": "Report job postings whose own page you opened in this search: the "
+    "title as the page shows it, location, company and published_on when the page shows them, "
+    "the address of the posting's page, and its text. The app checks each one against the "
+    "pages you opened; what it keeps stays, and a refusal says what to do.",
     "report_no_postings": "Say why this website gives no posting to report: no_match (the "
     "search ran and listed no matching job), no_list (a count or a push to sign up, no list), "
     "cookie_wall, signin_wall, no_search_control, app_refused (the app refused what you "
