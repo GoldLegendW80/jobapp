@@ -21,6 +21,8 @@ import {
   type Profile,
 } from "@/features/profile/api";
 import { ConflictDialog } from "@/features/profile/section-ui";
+import { draftOfSearch, sourceCount } from "@/features/jobs/sources";
+import { SourcesFailure, useSources } from "@/features/jobs/use-sources";
 import { PageLoading, PageUnavailable } from "@/features/shell/page-status";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
@@ -41,6 +43,7 @@ import {
   StepLooking,
   StepPay,
   StepProfile,
+  StepSites,
   StepSummary,
   StepWhere,
   StepWork,
@@ -58,19 +61,22 @@ import {
   STEP_IDS,
   STEP_NAMES,
   stepProblem,
+  UNSTORED,
   type Draft,
   type StepId,
 } from "./steps";
 
 /** Where "Start" leads: the deck. */
 export const DISCOVER = "/discover";
+/** Where "Start" leads when the list of websites is empty: Find jobs, open. */
+export const FIND_JOBS = "/jobs?find=1";
 
 const SWEEP_SENTENCE = {
   started:
     "Your first search has started. New postings appear as it finds them.",
   running: "A search was already running: it is your first one.",
   no_websites:
-    "Tick the job websites to search in Find jobs, then find new postings.",
+    "Your list of websites is empty. Add a few, then start your first search.",
   search_invalid:
     "Open Search options and save them again, then find new postings.",
   queue_down:
@@ -78,7 +84,7 @@ const SWEEP_SENTENCE = {
 } as const;
 
 /**
- * /welcome, the first login wizard (opportunities O5): seven steps with a progress bar, Back,
+ * /welcome, the first login wizard (opportunities O5): eight steps with a progress bar, Back,
  * Next and "Skip this step" (not on the roles nor the summary). Next saves the step through the
  * profile's own route with the revision this page read (a second tab's save shows the profile's
  * conflict dialog) and apply's settings route for the mode after a Like. What the person typed is
@@ -139,8 +145,17 @@ function Wizard({
   const [draft, setDraft] = useState<Draft>(() => draftOf(profile.sections));
   const [problem, setProblem] = useState<string | null>(null);
   const [conflict, setConflict] = useState<Conflict>();
+  // "Websites to search" is answered by the list itself (steps.ts UNSTORED).
+  const sources = useSources(profile.sections.search);
+  const listed =
+    sourceCount(
+      draftOfSearch(
+        (client.getQueryData<Profile>(profileKey) ?? profile).sections.search,
+      ),
+    ) > 0;
+  const done = listed ? [...state.done, "sites"] : state.done;
   const passed = passedOf(state.passed);
-  const step: StepId = openStep(params.get("step"), state.done, passed);
+  const step: StepId = openStep(params.get("step"), done, passed);
   const fromSummary = params.get("from") === "summary";
   const after = nextPage(params.get("next"));
   const index = STEP_IDS.indexOf(step);
@@ -176,6 +191,7 @@ function Wizard({
    * and a second tab editing the profile is not sent a 409 by it.
    */
   const recordPass = async (current: StepId) => {
+    if (UNSTORED.has(current)) return;
     const found = await passStep(current);
     client.setQueryData(onboardingKey, found);
   };
@@ -198,6 +214,12 @@ function Wizard({
           preferencesWith(cached.sections.preferences, draft),
         );
       }
+      if (current === "sites")
+        return sources.save({
+          base: cached,
+          body: cached.sections.search,
+          titles: cached.sections.search.title_include.terms,
+        });
       if (
         current === "looking" ||
         current === "where" ||
@@ -226,7 +248,11 @@ function Wizard({
     onError: (error) => {
       const stale = conflictOf(error);
       if (stale) setConflict(stale);
-      else setProblem(`This step was not saved. ${describeError(error)}`);
+      else if (error instanceof SourcesFailure) {
+        setProblem(error.message);
+        if (error.conflict)
+          void client.invalidateQueries({ queryKey: profileKey });
+      } else setProblem(`This step was not saved. ${describeError(error)}`);
     },
   });
 
@@ -248,7 +274,10 @@ function Wizard({
       // Recording the end is one revision of the profile.
       void client.invalidateQueries({ queryKey: profileKey });
       toast.success(SWEEP_SENTENCE[answer.sweep]);
-      void navigate(after ?? DISCOVER);
+      // Nothing to search: Find jobs opens on the list instead of an empty deck.
+      void navigate(
+        after ?? (answer.sweep === "no_websites" ? FIND_JOBS : DISCOVER),
+      );
     },
     onError: (error) => {
       setProblem(`The wizard could not finish. ${describeError(error)}`);
@@ -285,7 +314,11 @@ function Wizard({
     );
   };
   const busy =
-    save.isPending || skip.isPending || finish.isPending || later.isPending;
+    save.isPending ||
+    skip.isPending ||
+    finish.isPending ||
+    later.isPending ||
+    sources.saving;
   const stored = (client.getQueryData<Profile>(profileKey) ?? profile).sections;
   const panel: PanelProps = {
     draft,
@@ -354,6 +387,9 @@ function Wizard({
         {step === "profile" ? <StepProfile /> : null}
         {step === "looking" ? <StepLooking {...panel} /> : null}
         {step === "where" ? <StepWhere {...panel} /> : null}
+        {step === "sites" ? (
+          <StepSites sources={sources} reviewed={stored.search} />
+        ) : null}
         {step === "work" ? <StepWork {...panel} /> : null}
         {step === "pay" ? <StepPay {...panel} problem={problem} /> : null}
         {step === "apply" ? <StepApply {...panel} settings={settings} /> : null}
@@ -438,7 +474,7 @@ function Wizard({
   );
 }
 
-/** The progress bar: the seven names, the current one marked; a step already passed opens. */
+/** The progress bar: the eight names, the current one marked; a step already passed opens. */
 function Progress({
   current,
   reachable,

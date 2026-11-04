@@ -19,12 +19,12 @@ import {
  * tests/browser_pages/ (tests/browser-pages.compose.yml), no mocks: never a real job site.
  *
  * - Person A opens Find jobs, chooses the four job websites by name (LinkedIn, Welcome to the
- *   Jungle, Indeed, Free-Work) and a website of her own, the invented job website of
+ *   Jungle, Indeed, Free-Work) from the examples and a website of her own, the invented job website of
  *   tests/browser_pages/j15/ (http://jobs.example-robotics.test:8080/j15/, the pages service's
- *   alias). Each job website shows its risk sentence beside its box: ticking it and saving is
+ *   alias). Each job website shows its risk sentence in its line of the list: adding it and saving is
  *   her permission to search it (owner, 2026-10-27, jobs J17), so no permission prompt or card
  *   follows, and the save records the four permissions. She sets the criteria (engineer,
- *   Paris) and instructions, then Save and Start.
+ *   Paris) and instructions, then Save and start search.
  * - A website's run page (browser B18) shows the live view of the browser while that website is
  *   read, watching, with Take over, at 375 px and 1280 px, light and dark.
  * - The progress names the website being read. On her own website the interactive finder
@@ -176,34 +176,37 @@ test.afterAll(async () => {
   await context.close();
 });
 
-test("A ticks websites beside their risk sentences, sets criteria and starts Find jobs", async () => {
+test("A adds websites to the list beside their risk sentences, sets criteria and starts Find jobs", async () => {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
 
+  const list = setup.getByRole("list", { name: "Your list" });
+  const line = (name: string) =>
+    list.getByRole("listitem").filter({
+      has: page.getByRole("button", { name: `Remove ${name}`, exact: true }),
+    });
   for (const name of WEBSITES) {
-    const box = setup.getByRole("checkbox", { name, exact: true });
-    await box.check();
-    await expect(box).toBeChecked();
+    await setup
+      .getByRole("button", { name: `Add ${name}`, exact: true })
+      .click();
+    await expect(line(name)).toBeVisible();
   }
-  await setup.getByLabel("Custom website URL").fill(SITE);
-  await setup.getByRole("button", { name: "Add website" }).click();
-  await expect(setup).toContainText(SITE);
+  await setup.getByLabel("Website address").fill(SITE);
+  await setup.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(list).toContainText(SITE_HOST);
 
-  // Each job website's risk sentence is beside its box, and the tick is the permission:
+  // Each job website's risk sentence is in its line, and adding it is the permission:
   // no prompt, card or second step.
   for (const name of WEBSITES) {
-    const box = setup.getByRole("checkbox", { name, exact: true });
-    await expect(box).toHaveAccessibleDescription(/risk/);
-    await expect(box).toHaveAccessibleDescription(
-      /Saving with this box ticked gives this permission\./,
+    await expect(line(name)).toContainText(/risk/);
+    await expect(line(name)).toContainText(
+      "Saving with this website in your list gives this permission.",
     );
   }
-  // LinkedIn's one switch also covers Easy Apply, and its box says so (owner, 2026-10-27).
-  await expect(
-    setup.getByRole("checkbox", { name: "LinkedIn", exact: true }),
-  ).toHaveAccessibleDescription(/also allows Easy Apply/);
+  // LinkedIn's one switch also covers Easy Apply, and its line says so (owner, 2026-10-27).
+  await expect(line("LinkedIn")).toContainText(/also allows Easy Apply/);
   await expect(
     setup.getByRole("button", { name: "Review website permissions" }),
   ).toHaveCount(0);
@@ -223,11 +226,12 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
   await expect(
     setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
-  await setup.getByLabel("Instructions for this search").fill(INSTRUCTIONS);
+  await setup.getByRole("button", { name: "More options" }).click();
+  await setup.getByLabel("Instructions for the assistant").fill(INSTRUCTIONS);
   // The journey follows the browser agent on LinkedIn's fixture pages: LinkedIn's public job
   // search is the default (owner, 2026-10-30), so it chooses the browser.
   await setup
-    .getByRole("radio", { name: "Search with the browser, signed in" })
+    .getByRole("radio", { name: "Signed in, in your own browser" })
     .check();
   // Owner, 2026-10-28: the setup is the websites and the words. The company careers page she
   // sent (a deleted reader) is neither shown nor searched, and no switch asks for regular
@@ -243,9 +247,9 @@ test("A ticks websites beside their risk sentences, sets criteria and starts Fin
     setup.getByRole("switch", { name: /regular expressions/i }),
   ).toHaveCount(0);
   await shots(page, "setup");
-  await setup.getByRole("button", { name: "Save and Start" }).click();
+  await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
-  // The save recorded each ticked website's permission through its consent route.
+  // The save recorded each listed website's permission through its consent route.
   for (const [kind, path] of Object.entries(PERMISSIONS)) {
     const permission = await page.request.get(path);
     expect(permission.ok(), kind).toBe(true);
@@ -469,17 +473,18 @@ test("reopened by keyboard at 375 px in the dark, the setup holds her choices", 
   const open = page.getByRole("button", { name: "Find jobs" });
   await open.focus();
   await page.keyboard.press("Enter");
-  const setup = page.getByRole("dialog", { name: "Find jobs setup" });
+  const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
   for (const name of WEBSITES)
     await expect(
-      setup.getByRole("checkbox", { name, exact: true }),
-    ).toBeChecked();
-  await expect(setup).toContainText(SITE);
+      setup.getByRole("button", { name: `Remove ${name}`, exact: true }),
+    ).toBeVisible();
+  await expect(setup).toContainText(SITE_HOST);
   await expect(
     setup.getByRole("list", { name: "Terms of Places" }),
   ).toContainText("Paris");
-  await expect(setup.getByLabel("Instructions for this search")).toHaveValue(
+  await setup.getByRole("button", { name: "More options" }).click();
+  await expect(setup.getByLabel("Instructions for the assistant")).toHaveValue(
     INSTRUCTIONS,
   );
   const wide = await page.evaluate(() => document.documentElement.scrollWidth);

@@ -160,9 +160,9 @@ async function openJobs() {
 
 async function startSearch(user = userEvent.setup()) {
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
-  const setup = await screen.findByRole("dialog", { name: "Find jobs setup" });
+  const setup = await screen.findByRole("dialog", { name: "Find jobs" });
   await user.click(
-    within(setup).getByRole("button", { name: "Save and Start" }),
+    within(setup).getByRole("button", { name: "Save and start search" }),
   );
 }
 
@@ -601,7 +601,7 @@ describe("Find jobs", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Save and Start" }),
+      screen.getByRole("button", { name: "Save and start search" }),
     ).toBeEnabled();
     // The setup no longer offers boards, feeds or their link (owner, 2026-10-28).
     expect(
@@ -622,7 +622,7 @@ describe("Find jobs", () => {
       new RegExp("The search section of your profile no longer passes"),
     );
     expect(
-      screen.getByRole("button", { name: "Save and Start" }),
+      screen.getByRole("button", { name: "Save and start search" }),
     ).toBeEnabled();
   });
 
@@ -642,7 +642,7 @@ describe("Find jobs", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Save and Start" }),
+      screen.getByRole("button", { name: "Save and start search" }),
     ).toBeEnabled();
   });
 

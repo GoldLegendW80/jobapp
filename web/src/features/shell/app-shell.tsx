@@ -74,7 +74,13 @@ export function AppShell() {
         <Outlet />
       </main>
       <footer className="border-t">
-        <div className="mx-auto flex h-10 max-w-6xl items-center justify-end px-4">
+        <div className="mx-auto flex h-10 max-w-6xl items-center justify-between gap-4 px-4">
+          <Link
+            to="/privacy"
+            className="rounded-md text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          >
+            Privacy and contact
+          </Link>
           <HealthDot />
         </div>
       </footer>

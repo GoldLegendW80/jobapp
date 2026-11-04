@@ -15,7 +15,7 @@ import {
 } from "@/features/profile/api";
 
 /**
- * The seven steps of /welcome (SPEC-opportunities, "The first login wizard"), the answers the
+ * The eight steps of /welcome (SPEC-opportunities, "The first login wizard"), the answers the
  * person types (the draft, kept while they go back and forth), and how the draft reads from and
  * writes to the profile. Pure: the page (welcome-page.tsx) does the saving.
  */
@@ -23,6 +23,7 @@ export const STEP_IDS = [
   "profile",
   "looking",
   "where",
+  "sites",
   "work",
   "pay",
   "apply",
@@ -31,6 +32,13 @@ export const STEP_IDS = [
 export type StepId = (typeof STEP_IDS)[number];
 
 export const STEP_NAMES: Record<StepId, string> = WIZARD_STEP_WORDS;
+
+/**
+ * Steps the onboarding api does not keep among the steps passed: "Websites to search" (added on
+ * 2026-11-04) is answered by the list itself, so it is never sent to the api, and a release
+ * before it never reads a step it does not know. It counts as passed once a later step is.
+ */
+export const UNSTORED: ReadonlySet<StepId> = new Set(["sites"]);
 
 /** Steps that cannot be skipped: the roles, and the summary that ends the wizard. */
 export const ESSENTIAL: ReadonlySet<StepId> = new Set(["looking", "summary"]);
@@ -213,7 +221,14 @@ export function preferencesWith(
  * never seen, so this is what lets a closed tab, or another device, resume at the right step.
  */
 export function passedOf(values: readonly string[]): StepId[] {
-  return STEP_IDS.filter((step) => values.includes(step));
+  return STEP_IDS.filter(
+    (step) =>
+      values.includes(step) ||
+      (UNSTORED.has(step) &&
+        STEP_IDS.slice(STEP_IDS.indexOf(step) + 1).some((later) =>
+          values.includes(later),
+        )),
+  );
 }
 
 /** The first step neither answered by the profile (`done`) nor passed; the summary last. */

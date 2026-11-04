@@ -163,6 +163,9 @@ export function LoginPage() {
               <p className="text-center text-sm text-muted-foreground">
                 No account yet? Ask the admin for an invite link.
               </p>
+              <p className="text-center text-sm text-muted-foreground">
+                Forgot your password? Ask the admin for a reset link.
+              </p>
             </CardFooter>
           </form>
         </Form>
