@@ -135,7 +135,7 @@ SCHEDULE_MINUTES = set(range(0, 60, 5))  # schedule.TICK
 # does not prove the five minute tick: the unit tests of tests/jobs do.
 FAST_SCHEDULE_MINUTES = set(range(60))
 HEALTH_INTERVAL_S = 10
-SWEEP_JOB_TIMEOUT_S = sweep.SWEEP_TIMEOUT_S + 60
+SWEEP_JOB_TIMEOUT_S = sweep.BROWSER_SEARCH_MAX_S + 60  # B20: the website search has no cap
 MAX_AGENT_RUNS = 2
 # The runner stops a run at its wall time and gives the stream its grace to end; arq's own timeout
 # only catches a runner stuck beyond that.

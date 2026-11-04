@@ -31,11 +31,13 @@
 # shared with the api, the worker and caddy, which reach its control API and live view) and
 # `egress` (its own, the one network with a route out that no other service joins).
 #
-# Memory budget, 6G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
+# Memory budget, 6.5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
 #   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m, parser 640m,
-#   renderer 256m, browser 1536m              this file: 5760m
-#   5760m is 384m under the 6G budget (6144m), which leaves about 1.4G of the Jetson's 7619 MB
-#   to the OS. The budget was 5G until 2026-10-30: the browser then went from 1024m to 1536m
+#   renderer 256m, browser 2048m              this file: 6272m
+#   6272m is 384m under the 6.5G budget (6656m), which leaves about 0.9G of the Jetson's 7619 MB
+#   to the OS. B20 (owner, 2026-11-04: the website search as on the Mac, JavaScript and WebGL on
+#   for every sweep): the browser went from 1536m to 2048m by default (BROWSER_MEM_LIMIT
+#   overrides it) and the budget from 6G to 6.5G. The budget was 5G until 2026-10-30: the browser then went from 1024m to 1536m
 #   (LinkedIn's signed in job search reached 931 MiB of working set, past the guard's 920 MiB at
 #   1024m, and its tab was closed before the agent opened a posting; host at that moment about
 #   3.8G available, the browser idle at 299 MiB). The renderer went from 384m to 256m with the
@@ -399,8 +401,8 @@ services:
       retries: 3
     stop_grace_period: 15s
     shm_size: 128m
-    mem_limit: 1536m
-    memswap_limit: 1536m
+    mem_limit: ${BROWSER_MEM_LIMIT:-2048m}
+    memswap_limit: ${BROWSER_MEM_LIMIT:-2048m}
     expose:
       - "9300"
   # --- end of browser -------------------------------------------------------------------------

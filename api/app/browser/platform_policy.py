@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from app.browser import finder, linkedin_guard
-from app.browser.sources import PAGE_PAUSE_S, linkedin, parse_snapshot
+from app.browser.sources import linkedin, parse_snapshot
 from app.opportunities.platforms import guard
 
 if TYPE_CHECKING:
@@ -141,7 +141,10 @@ def platform_for(context: SourceContext) -> str:
 
 
 def pause_for(platform: str) -> tuple[float, float]:
-    return PAUSES.get(platform, PAGE_PAUSE_S)
+    """The page pause of the browser search: none (owner, 2026-11-04, B20: "as long as it
+    takes", the pace of the person's own browser). The pace hold across people stays
+    (sources.Pages), with this zero pause. PAUSES still orders the websites (interactive)."""
+    return (0.0, 0.0)
 
 
 def pace_key(platform: str, host: str, base_url: str | None = None) -> str:
@@ -204,6 +207,13 @@ def source_code(platform: str, refused: str, reserved: bool) -> str:
     return "permission_revoked" if reserved else "permission_unavailable"
 
 
+def _paused(refused: str | None) -> bool:
+    """No refusal, or only the 7 day pause after a security check, which the browser search no
+    longer keeps (owner, 2026-11-04, B20: the person solves the check). Consent stays: a
+    ticked website is its permission (J17)."""
+    return refused is None or refused.endswith("_paused") or refused == "permission_checkpoint"
+
+
 def refusal(
     db: Session, user_id: uuid.UUID, platform: str, sweep_id: uuid.UUID | None, now: datetime
 ) -> str | None:
@@ -250,7 +260,7 @@ class PlatformPolicy:
         except Exception as exc:
             logger.warning("platform check failed: error=%s", type(exc).__name__)
             return "permission_unavailable"
-        return None if refused is None else source_code(platform, refused, reserved)
+        return None if _paused(refused) else source_code(platform, refused, reserved)
 
     def _refusal(self, context: SourceContext, platform: str) -> str | None:
         with self.sessions() as db:
@@ -273,7 +283,7 @@ class PlatformPolicy:
         except Exception as exc:
             logger.warning("platform reservation failed: error=%s", type(exc).__name__)
             return "permission_unavailable"
-        if refused is not None:
+        if not _paused(refused):
             return source_code(platform, refused, False)
         self._run(context).reserved.add(context.source_id)
         return None
@@ -305,6 +315,11 @@ class PlatformPolicy:
                 raise
 
     async def observe(self, context: SourceContext, url: str, snapshot: str) -> str | None:
+        """B20: the browser search no longer ends on a wall nor records a checkpoint (the agent
+        asks the person, browser_ask_person); kept for a caller that still reads walls."""
+        return None
+
+    async def _observe_walls(self, context: SourceContext, url: str, snapshot: str) -> str | None:
         platform = platform_for(context)
         if platform == CUSTOM:
             return None

@@ -120,6 +120,9 @@ HEARTBEAT_S = 15.0
 STALE_AFTER = timedelta(minutes=2)
 NOT_PICKED_AFTER = timedelta(minutes=20)
 SWEEP_TIMEOUT_S = 15 * 60
+# B20 (owner, 2026-11-04): the job websites read in the browser run as long as they take; this
+# outer bound of the sweep job (arq's timeout, worker.py) only ends a dead process.
+BROWSER_SEARCH_MAX_S = 24 * 60 * 60
 DESCRIPTION_CHARS = 300  # engine: description=text[:300]
 POSTING_TEXT_MAX = 200_000
 NEW_JOBS_LISTED = 200

@@ -440,7 +440,7 @@ class Live:
         if (
             lease is not None
             and lease.lease_id == self.input_lease
-            and lease.wait_reason == "takeover"
+            and lease.wait_reason in ("takeover", "ask_person")
         ):
             lease.resume(self.manager.clock())
         self.input_lease = self.input_viewer = None
@@ -479,6 +479,16 @@ class Live:
                 or (self.absent_since is not None and now - self.absent_since >= HOLDER_GRACE_S)
             ):
                 self.give_back()
+        lease = self.manager.current()
+        if (  # B20: an ask nobody took over ends at its deadline, and the agent goes on
+            lease is not None
+            and lease.state == "waiting_person"
+            and lease.wait_reason == "ask_person"
+            and self.input_lease != lease.lease_id
+            and lease.wait_deadline is not None
+            and now >= lease.wait_deadline
+        ):
+            lease.resume(now)
         self.used &= {current} if current else set()
         wall = self.wall()
         self.nonces = {n: exp for n, exp in self.nonces.items() if exp >= wall}

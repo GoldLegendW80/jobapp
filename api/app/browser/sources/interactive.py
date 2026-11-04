@@ -52,6 +52,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -65,7 +66,6 @@ from app.browser.sources import (
     ERRORS,
     PAGE_BUDGET_S,
     STOPS_SWEEP,
-    WEBSITE_CAP_S,
     Pages,
     SourceError,
 )
@@ -157,43 +157,24 @@ class GuardedTools:
 
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._before(name)
-        result = await self.tools.call(name, args)
-        if self.logins is not None and result.get("error") == "signin_required":
-            await self._signed_out(SIGNIN_CODE, "", "")
-        return result
+        return await self.tools.call(name, args)
 
     async def snapshot(self) -> dict[str, Any]:
         await self._before("browser_snapshot")
         shot = await self.tools.snapshot()
         if shot.get("ok"):
             url, text = shot.get("url"), shot.get("snapshot")
-            # Every page is on the start's website: its origin, or its platform's family (B19:
-            # `fr.indeed.com` for `www.indeed.com`, finder.on_family), as browserd holds it.
+            # Any public address (B20): browserd's egress proxy holds it. A security check or a
+            # sign in wall no longer ends the website: the agent asks the person (B20).
             if (
                 not isinstance(url, str)
                 or len(url) > 2000
                 or not isinstance(text, str)
                 or len(text) > finder.SNAPSHOT_MAX
-                or not finder.on_family(url, self.context.url)
+                or not finder.canonical(url)
             ):
                 raise SourceError("page_failed")
-            code = await self.policy.observe(self.context, url, text) if self.policy else None
-            if self.logins is not None:
-                await self._signed_out(code, url, text)
-            _refuse(code)
         return shot
-
-    async def _signed_out(self, code: str | None, url: str, text: str) -> None:
-        """B17: a sign in page on a website read signed in (any platform, custom ones too): the
-        login is gone, so it is marked expired and the source ends `platform_signin`."""
-        from app.browser import platform_policy
-
-        if code is None and url:
-            code = platform_policy.wall("", url, text)
-        if code in {platform_policy.SIGNIN, "linkedin_signin"}:
-            host = urlsplit(self.context.url).hostname or ""
-            await self.logins.expire(self.context.user_id, host)
-            raise SourceError(code)
 
     async def wait_for(self, **args: Any) -> dict[str, Any]:
         await self._before("browser_wait_for")
@@ -425,7 +406,7 @@ async def run_selected(
     if search is None:
         return  # Pre-v1 legacy callers have no selected interactive sources.
     sites = run_order([source for source in search.interactive_sites if source.enabled])
-    for index, source in enumerate(sites):
+    for source in sites:
         entry = sweep.bind_source(
             stats,
             "llm_browser",
@@ -450,15 +431,10 @@ async def run_selected(
             commits = getattr(plan, "commits", None)
             if commits is not None:
                 commits.admit(entry["source_id"])
-            # The website's share of the sweep's time: what is left, divided by the websites left
-            # (jobs J18), so one website never starves the next; one that ends early leaves its
-            # rest to the next ones.
-            now = runner.monotonic()
-            share = now + max(0.0, deadline - now) / (len(sites) - index)
+            # No time cap (B20, owner 2026-11-04: "as long as it takes"): a website runs until its
+            # agent ends or the run is cancelled; the sweep's own deadline bounds its API sources.
             try:
-                entry["error"] = await _one(
-                    runner, plan, source, search, entry, min(deadline, share)
-                )
+                entry["error"] = await _one(runner, plan, source, search, entry, math.inf)
             except (BrowserError, StoreUnavailableError):
                 entry["error"] = "browser_unavailable"
             except Exception:
@@ -561,7 +537,9 @@ async def _website(
             # One pace per platform, shared by all its addresses (B14), else per host.
             host=platform_policy.pace_key(paced, host, runner.base_url),
             pacer=runner.pacer,
-            lease_until=asked + min(got.lease.max_s, WEBSITE_CAP_S),
+            # No lease maximum beyond the run, no page pause (B20): the pace hold across people
+            # stays, so two people's pages of one host never run at once.
+            lease_until=math.inf,
             pause=platform_policy.pause_for(paced),
             idle_s=got.lease.idle_s,
         )
@@ -572,7 +550,7 @@ async def _website(
 
 # The app's own refusals of an agent's search (B19): browserd's, and the api's of an address
 # that is no observed link. A model's slip (`model_value`) is its own, never one of them.
-APP_REFUSALS = ("unsupported_interaction", "unobserved_address")
+APP_REFUSALS = ("unsupported_interaction",)
 
 
 def outcome(session: finder.FinderSession) -> str | None:
@@ -595,7 +573,7 @@ def outcome(session: finder.FinderSession) -> str | None:
         code = finder.NO_POSTINGS[session.outcome]
         if code is not None:
             return "search_refused" if refused else code
-        if session.searches:
+        if session.interactions:  # no_match after the agent acted on the website (B20)
             return None
     if session.refused["unsupported_interaction"]:
         return "unsupported_interaction"
@@ -611,9 +589,8 @@ async def _search(
 ) -> str | None:
     """Bound the complete run, including the first navigation, by the website's share of the
     sweep's time and the lease's (no cap of its own, jobs J18)."""
-    remaining = min(pages.deadline - pages.monotonic(), pages.lease_until - pages.monotonic())
     session = None
-    cap = asyncio.timeout(max(0.0, remaining))
+    cap = asyncio.timeout(None)  # B20: no time cap; the run's Cancel stops it
     try:
         async with cap:
             result: dict[str, Any] = {}
@@ -640,7 +617,7 @@ async def _search(
             # Jungle answers `/` on `/en`, Indeed's on the person's country site, B19's family);
             # browserd held that redirect to the frozen scope.
             landed = finder.canonical(pages.last_url)
-            if not landed or not finder.on_family(landed, scope.start):
+            if not landed:
                 return "unsupported_interaction"
             site.started = True
             session = finder.FinderSession(
@@ -669,3 +646,56 @@ async def _search(
         site.pages = pages.count
         if session:
             site.keep(session)
+
+
+ASK_POLL_S = 2.0
+
+
+async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> str:
+    """browser_ask_person (B20, browserd/tools/ask_person.py): `nobody_watching` at once, or the
+    person is asked in the live view and this polls browserd until the lease is active again
+    (the person gave the browser back, or the ask's deadline passed) or it ended. The api's copy
+    of the lease waits with browserd's (`Leases.wait_person`), so it never ends it meanwhile.
+    The answer is the sentence the agent reads."""
+    from app.browser.leases import MAX_GRACE_S
+
+    guarded = pages.tools
+    answer = await guarded.call(
+        "browser_ask_person",
+        {"reason": reason, "_discovery": "native_get", "_discovery_scope": tool_scope},
+    )
+    code = answer.get("error")
+    if code == "nobody_watching":
+        return "Nobody is watching the browser now: go on another way, or end the website."
+    if code != "waiting_person":
+        return "The person could not be asked here: go on another way."
+    tools = guarded.tools
+    left = answer.get("left_s")
+    left = left if isinstance(left, int) and not isinstance(left, bool) and left > 0 else 900
+    end_at = pages.monotonic() + left + MAX_GRACE_S
+    synced = False
+    while pages.monotonic() < end_at:
+        try:
+            found = await tools.client.current()
+        except BrowserError:
+            found = None
+        lease = found.get("lease") if isinstance(found, dict) else None
+        mine = isinstance(lease, dict) and lease.get("lease_id") == tools.lease_id
+        if found is not None and not mine:
+            raise SourceError("lease_ended")
+        if isinstance(lease, dict):
+            try:
+                if lease.get("state") == "waiting_person" and not synced:
+                    host = str(lease.get("wait_host") or "")[:253]
+                    await tools.leases.wait_person(
+                        tools.user_id, tools.lease_id, "ask_person", host, left
+                    )
+                    synced = True
+                elif lease.get("state") == "active":
+                    if synced:
+                        await tools.leases.resume(tools.user_id, tools.lease_id)
+                    return "The person had the browser: read the page again (browser_snapshot)."
+            except StoreUnavailableError:
+                pass  # Redis away: the api's copy is set on the next round
+        await pages.sleep(ASK_POLL_S)
+    return "The person did not answer: go on another way, or end the website."
