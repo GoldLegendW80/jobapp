@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 
 from app import health
+from app.agents import admin_router as agents_admin_router
 from app.agents import chat_router, proposals_router
 from app.agents import router as agents_router
 from app.agents import runs_router as agent_runs_router
@@ -303,6 +304,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(auth_router)
     app.include_router(admin_router)
+    app.include_router(agents_admin_router.router)
     app.include_router(profile_router)
     # Before the jobs router: /api/jobs/sweeps, /api/jobs/boards and /api/jobs/feeds must not be
     # read as /api/jobs/{job_id}.

@@ -32,6 +32,7 @@ default stays `model`, which is what every agent defined in this file runs on.
 """
 
 import re
+import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -49,6 +50,11 @@ if TYPE_CHECKING:
     from app.config import Settings
 
 DEFAULT_MODEL = "claude-opus-5-5"
+# The models an agent may run on: the ones the code names and the Agents tab of Admin offers
+# (agents A6). Claude models only, by their current ids.
+MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")
+# The effort levels Claude Code takes (the SDK's EffortLevel).
+EFFORTS = ("low", "medium", "high", "max")
 DEFAULT_MAX_TURNS = 8
 DEFAULT_WALL_TIME_S = 600.0  # 10 minutes
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -336,6 +342,8 @@ AGENTS: dict[str, AgentDefinition] = {
     TRIAGE.name: TRIAGE,
     JOB_CHAT.name: JOB_CHAT,
 }
+# The module that registered each agent, for the Agents tab of Admin (agents A6).
+_MODULES: dict[str, str] = dict.fromkeys(AGENTS, __name__)
 
 
 def register(definition: AgentDefinition) -> AgentDefinition:
@@ -351,7 +359,14 @@ def register(definition: AgentDefinition) -> AgentDefinition:
     if existing is not None and existing != definition:
         raise ValueError(f"an agent named {name} is already registered")
     AGENTS[name] = definition
+    # The caller is the module body that registers its agent at import.
+    _MODULES.setdefault(name, str(sys._getframe(1).f_globals.get("__name__", "")))
     return definition
+
+
+def module_of(name: str) -> str:
+    """The Python module that registered the agent ("" when not known)."""
+    return _MODULES.get(name, "")
 
 
 def available(app_env: str) -> dict[str, AgentDefinition]:

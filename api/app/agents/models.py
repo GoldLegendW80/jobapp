@@ -4,9 +4,11 @@ and agent_events. A3: proposals. A4: agent_threads and agent_messages.
 The secret is stored only encrypted (`crypto.py`: AES-GCM, bound to the user id and the kind),
 with the version of the key that wrote it and its last four characters for display. It is
 deferred, so loading a row for GET never pulls the ciphertext along.
+A6: agent_overrides (the versions of what the Agents tab of Admin changed in a definition) and
+agent_tools (the app tools as the worker describes them).
 Migrations: alembic/versions/0006_model_credentials.py, 0007_agent_runs.py,
-0008_proposals.py and 0009_agent_threads.py, which must stay in step with this file
-(`alembic check` in the tests compares them).
+0008_proposals.py, 0009_agent_threads.py and 0031_agent_overrides.py, which must stay in step
+with this file (`alembic check` in the tests compares them).
 """
 
 import enum
@@ -114,6 +116,8 @@ class AgentRun(Base):
             postgresql_where="status IN ('queued', 'running')",
         ),
         sa.Index("ix_agent_runs_job_id", "job_id"),
+        # The Agents tab of Admin: an agent's last runs (A6).
+        sa.Index("ix_agent_runs_agent_created_at", "agent", sa.text("created_at DESC")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -142,6 +146,9 @@ class AgentRun(Base):
     output_tokens: Mapped[int | None] = mapped_column(sa.Integer)
     cost_usd: Mapped[Decimal | None] = mapped_column(sa.Numeric(12, 6))
     credential_kind: Mapped[CredentialKind | None] = mapped_column(CREDENTIAL_KIND_ENUM)
+    # The version of the agent's overrides the run used (agent_overrides.version, A6), written
+    # by the worker when the run starts; null: the code's definition as it is.
+    agent_version: Mapped[int | None] = mapped_column(sa.Integer)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
@@ -361,3 +368,54 @@ class AgentMessage(Base):
     at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
+
+
+# --- A6: the Agents tab of Admin ----------------------------------------------------------------
+
+
+class AgentOverride(Base):
+    """One saved version of an agent's overrides (agents A6): `changes` holds the editable fields
+    that differ from the code (app/agents/overrides.py), `{}` for a version that goes back to the
+    code's definition. Versions count from 1 per agent and are never changed or deleted, so the
+    history stays whole. `saved_by` is null once that account is gone."""
+
+    __tablename__ = "agent_overrides"
+    __table_args__ = (
+        sa.UniqueConstraint("agent", "version", name="uq_agent_overrides_agent_version"),
+        sa.CheckConstraint(
+            f"char_length(agent) >= 1 AND char_length(agent) <= {AGENT_NAME_MAX}",
+            name="agent_length",
+        ),
+        sa.CheckConstraint("version >= 1", name="version_positive"),
+        sa.CheckConstraint("jsonb_typeof(changes) = 'object'", name="changes_is_object"),
+        sa.CheckConstraint("note IS NULL OR char_length(note) <= 500", name="note_length"),
+    )
+
+    id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
+    agent: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    changes: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    saved_by: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    saved_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    note: Mapped[str | None] = mapped_column(sa.Text)
+
+
+class AgentTool(Base):
+    """An app tool as the worker builds it for the model: its description and input schema
+    (agents A6). The api holds no Claude Agent SDK and cannot build a tool, so the worker writes
+    these rows (app/agents/catalog.py `publish`) and the Agents tab reads them."""
+
+    __tablename__ = "agent_tools"
+    __table_args__ = (
+        sa.CheckConstraint("jsonb_typeof(input_schema) = 'object'", name="schema_is_object"),
+    )
+
+    name: Mapped[str] = mapped_column(sa.Text, primary_key=True)
+    module: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    description: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    input_schema: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)

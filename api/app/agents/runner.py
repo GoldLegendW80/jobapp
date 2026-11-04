@@ -1,7 +1,9 @@
 """One agent run, in the worker (SPEC-agents.md, Runtime; SDK facts in tasks/agents/todo.md).
 
 `execute(context, run_id)`:
-1. claims the run (queued -> running; a run cancelled while queued is skipped);
+1. claims the run (queued -> running; a run cancelled while queued is skipped), then reads the
+   agent's latest saved overrides once and records their version on the run (app/agents/
+   overrides.py, agents A6: the code's definition when none is saved or the read fails);
 2. reads the user's model credential and decrypts it in memory only;
 3. makes a scratch directory for the run (mode 0700, under AGENTS_SCRATCH_DIR or the system
    temporary directory, a tmpfs in the worker container) holding Claude Code's HOME, config
@@ -157,7 +159,7 @@ from claude_agent_sdk import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import chat, credentials, definitions, live, runs
+from app.agents import chat, credentials, definitions, live, overrides, runs, sdk_options
 from app.agents import tools as app_tools
 from app.agents.backend import Backend, BackendFactory, BackendRequest
 from app.agents.crypto import DecryptError, Keyring
@@ -189,6 +191,9 @@ from app.agents.failures import (
 from app.agents.failures import is_box_failure as is_box_failure
 from app.agents.failures import is_provider_failure as is_provider_failure
 from app.agents.models import CredentialKind, RunStatus
+from app.agents.sdk_options import ENV_KEEP as ENV_KEEP
+from app.agents.sdk_options import FORBIDDEN_TOOLS as FORBIDDEN_TOOLS
+from app.agents.sdk_options import TURN_BUDGETED as TURN_BUDGETED
 from app.config import Settings
 from app.logging_config import hidden as hidden_from_logs
 
@@ -221,74 +226,6 @@ NOT_STORED = "[not stored]"
 BUDGET_KEY = "token_budget"
 BUDGET_STOP = "The run reached its token budget."
 BUDGET_UNSURE = "The run's token count could not be confirmed."
-# The agents whose input may lower the run's max_turns (`turn_budget`, validated by their input
-# model, never above the definition's): a form fill's profile (apply A18). The agent of a job
-# website has no turn cap (jobs J18, app/browser/finder.py).
-TURN_BUDGETED = frozenset({"apply_form"})
-
-# Built-in Claude Code tools, denied by name on top of `tools=[]` (which already leaves the model
-# none) and of the PreToolUse gate (which denies anything outside the allow list): shell, files,
-# web, subagents and tasks, schedules, worktrees, skills, planning and user prompts. Best effort,
-# defense in depth only: CLI releases add built-ins, and a name the CLI does not know is ignored
-# (the real CLI 2.1.286 ran with this list).
-FORBIDDEN_TOOLS = (
-    "Agent",
-    "AskUserQuestion",
-    "Bash",
-    "BashOutput",
-    "CronCreate",
-    "CronDelete",
-    "CronList",
-    "Edit",
-    "EnterPlanMode",
-    "EnterWorktree",
-    "ExitPlanMode",
-    "ExitWorktree",
-    "Glob",
-    "Grep",
-    "KillShell",
-    "LS",
-    "LSP",
-    "Monitor",
-    "MultiEdit",
-    "NotebookEdit",
-    "NotebookRead",
-    "Read",
-    "SendMessage",
-    "Skill",
-    "SlashCommand",
-    "Task",
-    "TaskCreate",
-    "TaskGet",
-    "TaskList",
-    "TaskOutput",
-    "TaskStop",
-    "TaskUpdate",
-    "TodoWrite",
-    "ToolSearch",
-    "WebFetch",
-    "WebSearch",
-    "Write",
-)
-
-# Inherited variables the CLI process keeps; every other one is overridden with "".
-ENV_KEEP = frozenset(
-    {
-        "PATH",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TZ",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "NO_PROXY",
-        "https_proxy",
-        "http_proxy",
-        "no_proxy",
-    }
-)
 # Argument names whose values are never stored in a tool call event.
 _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorization", "cookie")
 
@@ -677,18 +614,15 @@ def build_options(
     if turn_budget is not None:
         turns = min(turns, turn_budget) if turns is not None else turn_budget
     return ClaudeAgentOptions(
+        # tools, disallowed_tools, permission_mode, strict_mcp_config, setting_sources and
+        # thinking: the same for every agent (sdk_options.py, shown by the Agents tab).
+        **sdk_options.fixed(),
         system_prompt=definition.system_prompt,
-        tools=[],
         allowed_tools=tools.allowed_names,
-        disallowed_tools=list(FORBIDDEN_TOOLS),
-        permission_mode="dontAsk",
         mcp_servers={app_tools.SERVER: tools.server},
-        strict_mcp_config=True,
-        setting_sources=[],
         model=model or definition.model,
         max_turns=turns,
         effort=definition.effort,  # type: ignore[arg-type]
-        thinking={"type": "adaptive"},
         cwd=str(workdir),
         env=env,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[gate])]},  # type: ignore[list-item]
@@ -1411,6 +1345,11 @@ async def _execute(
         except definitions.UnknownAgentError:
             outcome = runs.Outcome(status=RunStatus.failed, error=UNKNOWN_AGENT)
             return RunStatus.failed
+        # What the Agents tab of Admin saved for this agent, read once and recorded on the run
+        # (A6); the code's definition when nothing is saved or the read fails.
+        definition, version = await asyncio.to_thread(
+            overrides.for_run, context.sessions, run_id, definition
+        )
         recorder.private = definition.private_io
         # The definition's model until the credential says which one the run uses.
         model = definition.model
@@ -1456,7 +1395,7 @@ async def _execute(
                 return RunStatus.failed
             state.budget = recorder.budget = Budget(limit, context.gate_wait_s)
         scratch = await asyncio.to_thread(make_scratch, context.settings, run_id)
-        logger.info("agent run started", extra={**log, "model": model})
+        logger.info("agent run started", extra={**log, "model": model, "agent_version": version})
 
         async def denied(name: str) -> None:
             state.denied += 1
