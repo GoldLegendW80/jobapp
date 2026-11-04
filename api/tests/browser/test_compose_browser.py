@@ -10,6 +10,7 @@ really runs is test_browser_container.py.
 
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,13 @@ def browser_test_stack() -> dict[str, Any]:
     }
 
 
+# Compose's `${NAME:-default}`, read as a stack started without NAME reads it.
+DEFAULTED = re.compile(r"\$\{(?P<name>[A-Z_]+):-(?P<default>[^}]+)\}")
+
+
 def size(value: str) -> int:
+    if found := DEFAULTED.fullmatch(value):
+        value = found["default"]
     units = {"k": 1024, "m": MIB, "g": 1024 * MIB}
     return int(value[:-1]) * units[value[-1].lower()] if value[-1].isalpha() else int(value)
 
@@ -145,10 +152,13 @@ def test_no_app_secret_nor_env_file(stack: dict) -> None:
 
 
 def test_memory_swap_shm_and_pids(stack: dict) -> None:
-    """Items 6 and 9: 1536m (1024m until LinkedIn's signed in search passed its guard, 2026-10-30)
-    and no swap beyond it (memswap_limit equal), 128m of shm."""
+    """Items 6 and 9: 2048m by default, BROWSER_MEM_LIMIT overriding it (B20, owner 2026-11-04;
+    1536m until then, 1024m until LinkedIn's signed in search passed its guard, 2026-10-30), and
+    no swap beyond it (memswap_limit equal), 128m of shm."""
     browser = stack["services"]["browser"]
-    assert size(browser["mem_limit"]) == 1536 * MIB
+    assert browser["mem_limit"] == "${BROWSER_MEM_LIMIT:-2048m}"
+    assert size(browser["mem_limit"]) == 2048 * MIB
+    assert "# BROWSER_MEM_LIMIT=2048m" in (ROOT / ".env.example").read_text(encoding="utf-8")
     assert browser["memswap_limit"] == browser["mem_limit"]
     assert size(browser["shm_size"]) == 128 * MIB
     assert browser["pids_limit"] == 1024

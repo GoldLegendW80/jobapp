@@ -267,13 +267,15 @@ def test_bad_arguments_are_results_not_crashes(world: World) -> None:
             ("browser_type", {"ref": "e1", "text": "x" * 10_001}),
             ("browser_select_option", {"ref": "e1", "values": []}),
             ("browser_check", {"ref": "e1", "checked": "yes"}),
+            # B20: a website search's tool, refused on any other lease before the page is read.
+            ("browser_evaluate", {"function": "() => 1"}),
         ]
         for name, args in bad:
             result = await tools.call(name, args)
             assert result["ok"] is False, name
             assert result["error"] == "bad_args", (name, result)
         with pytest.raises(BrowserError) as unknown:
-            await tools.call("browser_evaluate", {"function": "() => 1"})
+            await tools.call("browser_run_code", {"code": "() => 1"})
         assert unknown.value.code == "ended"  # 404: no such tool on this lease
 
     run(world, go)

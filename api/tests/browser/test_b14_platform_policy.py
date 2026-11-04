@@ -8,7 +8,7 @@ import pytest
 
 from app.browser import finder, platform_policy
 from app.browser.platform_policy import CUSTOM, platform_of, wall
-from app.browser.sources import ERRORS, PAGE_PAUSE_S, linkedin
+from app.browser.sources import ERRORS, linkedin
 from app.browser.sources.interactive import SourceContext
 from tests.browser.test_selected_interactive import execute, selected
 
@@ -289,10 +289,11 @@ async def two_pages(session):
 @pytest.mark.parametrize(
     "second", ["https://fr.linkedin.com/jobs/", "https://linkedin.com/jobs/search/"]
 )
-def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
+def test_two_linkedin_addresses_of_one_sweep_share_one_pace_with_no_pause(second):
     """The preset LinkedIn address and a custom one of another spelling are paced as one
-    platform: no page of the sweep follows another LinkedIn page sooner than LinkedIn's
-    shortest pause, across the two sources too."""
+    platform (one pace key, so two people's pages of LinkedIn never run at once), and the
+    browser search waits no page pause between them (B20, owner 2026-11-04: "as long as it
+    takes", the pace of the person's own browser; 10 to 30 s until then)."""
     from tests.browser.fakes import ScriptedFinder
 
     now = [0.0]  # the runner's clock: its sleep, its pacer and the tools read the same time
@@ -320,18 +321,18 @@ def test_two_linkedin_addresses_of_one_sweep_share_linkedin_s_pace(second):
     assert len(leases.acquired) == 2, entries
     opened = [at for at, name, _ in tools.calls if name == "browser_navigate"]
     assert len(opened) == 4, tools.calls  # two pages per source
-    low = linkedin.PAUSE_S[0]
     gaps = [b - a for a, b in itertools.pairwise(opened)]
-    assert all(gap >= low for gap in gaps), gaps
+    assert gaps == [0.0, 0.0, 0.0], gaps
     assert platform_policy.pace_key("linkedin", "fr.linkedin.com") == (
         platform_policy.pace_key("linkedin", "www.linkedin.com")
     )
 
 
-def test_linkedin_keeps_its_slower_pace_and_has_no_page_cap():
-    """Owner, 2026-10-28: no page cap and no daily limit, LinkedIn too; its pace stays."""
-    assert platform_policy.pause_for("linkedin") == linkedin.PAUSE_S == (10.0, 30.0)
-    assert platform_policy.pause_for("indeed") == PAGE_PAUSE_S
+@pytest.mark.parametrize("platform", ["linkedin", "indeed", "freework", "custom"])
+def test_the_browser_search_has_no_page_pause_and_no_page_cap(platform):
+    """Owner, 2026-10-28: no page cap and no daily limit, LinkedIn too. B20 (owner, 2026-11-04):
+    no page pause either, LinkedIn's 10 to 30 s included; the pace hold across people stays."""
+    assert platform_policy.pause_for(platform) == (0.0, 0.0)
     assert not hasattr(platform_policy, "PAGES")
     assert not hasattr(linkedin, "RESULT_PAGES")
 

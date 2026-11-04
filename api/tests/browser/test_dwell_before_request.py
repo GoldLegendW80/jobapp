@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 )
 sys.path.insert(0, str(ROOT / "browser"))
 
-from browserd.tools import actions, pacing  # noqa: E402
+from browserd.tools import actions, line, pacing  # noqa: E402
 
 from tests.browser.test_b5_actions import ON, Browser, Context, Element, Page, facts  # noqa: E402
 
@@ -40,6 +40,9 @@ INPUTS = {
     "select",
     "upload",
     "write",
+    "history",  # B20: back and forward
+    "wheel",  # B20: a scroll
+    "script",  # B20: the agent's own script
 }
 # The tools that read the page, or are the app's own: none sends a request to the website.
 READS = {
@@ -49,6 +52,10 @@ READS = {
     "browser_take_screenshot",
     "browser_tabs",
     "browser_request_signin",
+    # B20: a pointer move over the element (the hand's own approach, as before a click), and the
+    # app's own question to the person: neither sends an input the website reads as a request.
+    "browser_hover",
+    "browser_ask_person",
 }
 
 
@@ -123,6 +130,27 @@ class Site(Page):
     def expect_file_chooser(self, **kw: Any) -> ChooserWait:
         return ChooserWait(self)
 
+    async def go_back(self, **kw: Any) -> object:
+        self.calls.append(("history", "back"))
+        return object()
+
+    async def go_forward(self, **kw: Any) -> object:
+        self.calls.append(("history", "forward"))
+        return object()
+
+    @property
+    def mouse(self) -> SimpleNamespace:
+        async def wheel(dx: int, dy: int) -> None:
+            self.calls.append(("wheel", dx, dy))
+
+        return SimpleNamespace(wheel=wheel)
+
+    async def evaluate(self, js: str, arg: Any = None) -> Any:
+        if js == line.SCRIPT_GUARD_JS:
+            self.calls.append(("script",))
+            return "1"
+        return await super().evaluate(js, arg)
+
 
 class Request:
     hosts = ("pages",)
@@ -132,6 +160,12 @@ class Request:
 
 class Editing(Request):
     purpose = "profile_edit"
+
+
+class Sweep(Request):
+    """A website search's lease (B20): its discovery is bound, so its own tools run."""
+
+    purpose = "sweep"
 
 
 class Timed(pacing.Pacer):
@@ -164,6 +198,7 @@ def run(
         browser=Browser(context),
         pacer=Timed(page),
     )
+    tab.discovery = request is Sweep
     result = asyncio.run(actions.run(tab, name, args))
     assert result["ok"] is True, result
     return page.calls
@@ -208,6 +243,11 @@ CASES = {
         Request,
     ),
     "press a key": ("browser_press_key", {"key": "Tab"}, None, Request),
+    "back": ("browser_navigate_back", {}, None, Request),
+    "forward": ("browser_navigate_forward", {}, None, Request),
+    "scroll the page": ("browser_scroll", {"dy": 600}, None, Request),
+    "scroll an element": ("browser_scroll", {"ref": "e5", "dy": -300}, NEXT, Request),
+    "evaluate": ("browser_evaluate", {"function": "() => 1"}, None, Sweep),
 }
 
 
