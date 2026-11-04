@@ -161,7 +161,8 @@ def test_any_typed_text_goes_to_browserd_and_unopened_reports_are_refused():
     tools = InteractiveTools()
     one = session(tools, "e2e-person")
     assert not asyncio.run(one.interact("browser_type", {"ref": "e1", "text": "Roboter"}))[1]
-    assert tools.actions == ["browser_type"] and tools.typed == "Roboter"
+    assert tools.actions == ["browser_type"]
+    assert tools.typed == "Roboter"
     one.seen.add(BASE + "unopened")
     one.report([{"title": "Robot Engineer", "url": "/unopened", "text": "invented"}])
     assert one.refused["detail_not_opened"] == 1

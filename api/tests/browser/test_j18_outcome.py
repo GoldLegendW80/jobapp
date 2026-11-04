@@ -324,6 +324,7 @@ def test_a_page_that_shows_only_a_count_is_reported_as_no_list():
         ("cookie_wall", "cookie_wall"),
         ("signin_wall", "signin_wall"),
         ("no_search_control", "no_search_box"),
+        ("security_check", "security_check"),  # 2026-10-30, kept by B20: the agent says it
     ],
 )
 def test_a_blocker_the_agent_names_ends_the_website_with_its_own_code(reason, code):

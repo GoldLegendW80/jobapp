@@ -66,7 +66,7 @@ def b19(tmp_path):
 
 
 def signed(start: str) -> dict:
-    scope = {"start": start, "titles": ["genai engineer"], "places": ["Paris"], "filters": {}}
+    scope = {"start": start}  # B20: browserd gets the start alone
     return {"_discovery": "native_get", "_discovery_scope": {**scope, "signed_in": True}}
 
 

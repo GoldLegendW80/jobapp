@@ -1187,3 +1187,16 @@ def test_uid_records_seeded_from_existing_profiles(tmp_path: Path) -> None:
     # Records that are not browserd's own: nothing seeded, start goes on, leases refuse 503.
     root.chmod(0o755)
     assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 0
+
+
+@pytest.mark.parametrize(
+    ("purpose", "on"),
+    [("sweep", True), ("apply_fill", False), ("apply_submit", False), ("profile_edit", False)],
+)
+def test_software_webgl_for_every_sweep_lease_and_no_other(purpose: str, on: bool) -> None:
+    """B20 (owner, 2026-11-04): software WebGL for every sweep lease, whatever its website
+    (Indeed's only until then); never for another purpose."""
+    switches = chromium.switches(request(purpose), "/leases/x", 9333)
+    webgl = [s for s in switches if "angle" in s or "swiftshader" in s]
+    assert webgl == (list(chromium.WEBGL_SWITCHES) if on else [])
+    assert switches[-2:] == ["--", "about:blank"]  # the address still comes last
