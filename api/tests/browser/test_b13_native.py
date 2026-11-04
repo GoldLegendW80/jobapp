@@ -223,7 +223,10 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
                 stolen = LeaseTools(store, client, str(uuid.uuid4()), got.lease.lease_id, got.token)
                 with pytest.raises(BrowserError):
                     await stolen.call("browser_click", {"ref": button, "_discovery": "native_get"})
-                assert (await one.navigate("http://elsewhere:8080/escape"))[1]
+                # B20: any public address opens (browserd's egress proxy refuses a private one;
+                # this stack lets `elsewhere` through as public).
+                view, refused = await one.navigate("http://elsewhere:8080/escape")
+                assert not refused, view
             finally:
                 await store.release(str(alice), got.lease.lease_id)
             with pytest.raises(BrowserError):
@@ -246,7 +249,8 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
         {"q": ["robot"], "remote": ["1"]},
         {"q": ["robot"], "remote": ["1"], "page": ["2"]},
     ]
-    assert not any(p["path"] in {"/apply", "/escape"} for p in observed)
+    assert not any(p["path"] == "/apply" for p in observed)  # "Search application" refused
+    assert "/escape" in [p["path"] for p in observed]
     native.completed = True
 
 
@@ -368,9 +372,10 @@ class Person(Lease):
 def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
     """2026-10-28, issue 716, on a website like Welcome to the Jungle (b13_pages.jungle): from its
     home with no search box to its search page by address; its cookie banner covers the search
-    box (`element_covered`), accepting it is refused, declining it closes it; the search runs in
+    box, which is typed in through the focus (B20); accepting the cookies passes and closes the
+    banner, as declining does (B20: no decline only rule, no `declined` key); the search runs in
     the page, its address unchanged, and lists the postings to a member; a posting opens. Signed
-    out, with no JavaScript, the same search shows only a count, no list."""
+    out (B20: JavaScript on), the banner shows too, and the same search shows only a count."""
     profile = str(uuid.uuid4())
     member = Person(native, "sweep", profile)  # the person signs in, as in the live view
     native.redactions.append(member.token)
@@ -391,15 +396,13 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         page = lease.tool("browser_snapshot")["snapshot"]
         box = ref(page, "searchbox", "What job")
         covered = lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)
-        assert covered["error"] == "element_covered", covered
-        for name in ("OK for me", "I choose"):
-            refused = lease.tool("browser_click", ref=ref(page, "button", name), **signed)
-            assert not refused["ok"], (name, refused)
-        declined = lease.tool("browser_click", ref=ref(page, "button", "No, thanks"), **signed)
-        assert declined["ok"], declined
-        assert declined.get("declined") is True, declined  # the api never counts it a search
+        assert covered["ok"], covered  # typed through the focus, under the banner
+        for name in ("I choose", "OK for me"):
+            chosen = lease.tool("browser_click", ref=ref(page, "button", name), **signed)
+            assert chosen["ok"], (name, chosen)
+            assert "declined" not in chosen, chosen
         page = lease.tool("browser_snapshot")["snapshot"]
-        assert "No, thanks" not in page
+        assert "OK for me" not in page
         box = ref(page, "searchbox", "What job")
         assert lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)["ok"]
         searched = lease.tool("browser_click", ref=ref(page, "button", "Search"), **signed)
@@ -423,26 +426,29 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         assert anonymous.tool("browser_navigate", url=JUNGLE, **marker)["ok"]
         assert anonymous.tool("browser_navigate", url=PAGES + "fr/jobs", **marker)["ok"]
         page = anonymous.tool("browser_snapshot")["snapshot"]
-        assert "No, thanks" not in page  # its banner needs JavaScript, off signed out
+        assert "No, thanks" in page  # its banner: JavaScript is on signed out too (B20)
         box = ref(page, "searchbox", "What job")
         typed = anonymous.tool("browser_type", ref=box, text="genai engineer", **marker)
-        assert not typed["ok"], typed
-        # A page with scripts takes no typing signed out (no script free proof); its search by
-        # address does, and shows a count, no list.
-        searched = PAGES + "fr/jobs?query=genai+engineer"
-        assert anonymous.tool("browser_navigate", url=searched, **marker)["ok"]
+        assert typed["ok"], typed  # through the focus
+        declined = anonymous.tool("browser_click", ref=ref(page, "button", "No, thanks"), **marker)
+        assert declined["ok"], declined
+        assert "declined" not in declined, declined
+        searched = anonymous.tool("browser_click", ref=ref(page, "button", "Search"), **marker)
+        assert searched["ok"], searched
+        assert anonymous.tool("browser_wait_for", text="9756 jobs found")["ok"]
         shot = anonymous.tool("browser_snapshot")
-        assert "9756 jobs found" in shot["snapshot"]
-        assert "GenAI Engineer" not in shot["snapshot"]
+        assert shot["url"] == PAGES + "fr/jobs", shot["url"]
+        assert "GenAI Engineer" not in shot["snapshot"]  # a count, no list, to no member
     finally:
         anonymous.end()
     observed = json.loads(fetched(native, "http://pages:8080/observed"))
     jungle = [p for p in observed if p["path"].startswith("/b13/jungle")]
-    assert {"path": "/b13/jungle/consent", "choice": ["declined"]} in [
-        {"path": p["path"], "choice": p["query"].get("choice")} for p in jungle
-    ]
-    assert not any(p["query"].get("choice") == ["accepted"] for p in jungle)
+    choices = [p["query"].get("choice") for p in jungle if p["path"] == "/b13/jungle/consent"]
+    assert choices == [["accepted"], ["declined"]]  # the member's Accept, the anonymous Decline
     assert not any(p.get("method") == "POST" for p in observed)
     lists = [p for p in jungle if p["path"] == "/b13/jungle/api/search"]
-    assert [(p["query"], p["member"]) for p in lists] == [({"query": ["GenAI Engineer"]}, True)]
+    assert [(p["query"], p["member"]) for p in lists] == [
+        ({"query": ["GenAI Engineer"]}, True),
+        ({"query": ["genai engineer"]}, False),
+    ]
     native.completed = True

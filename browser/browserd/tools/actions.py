@@ -351,13 +351,19 @@ class Tab:
 
     def _hop(self, request: Any) -> None:
         # A redirect hop of a main frame navigation to a host off the list: the route guard never
-        # sees it, so its load is stopped here and settle() takes the tab back. A discovery's hop
-        # meets its route again (a redirect is a new request there): any public address goes on.
+        # sees it (Playwright routes the first address of a chain only), so its load is stopped
+        # here and settle() takes the tab back. A discovery's hop to any public address goes on,
+        # but to a sign out address (line.signs_out): stopped and answered `line`, though the
+        # hop has left by then (declared: a redirect is seen after it is sent).
         try:
             if request.redirected_from is None or not request.is_navigation_request():
                 return
             frame = request.frame
-            if frame.parent_frame is not None or self.allowed(request.url):
+            if frame.parent_frame is not None:
+                return
+            if self.allowed(request.url) and not (
+                self.state.discovery and line.signs_out(request.url)
+            ):
                 return
         except Exception:
             return
@@ -645,6 +651,15 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             "lease %s: browser_navigate refused: %s host=%s", tab.lease_tag, code, host_of(url)
         )
         return refused(code)
+    if tab.state.discovery and line.signs_out(url):
+        # B20: a sign out address never opens (line.signs_out), refused before the dwell; the
+        # route refuses it too, from a link, a script or a popup.
+        log.warning(
+            "lease %s: browser_navigate refused by the line: sign_out host=%s",
+            tab.lease_tag,
+            host_of(url),
+        )
+        return refused("line")
     page = await tab.page()
     await tab.pacer.dwell()
     # Apply myself may open its form during PERSON_TIME. Automated navigation must still own
@@ -1134,8 +1149,19 @@ async def navigate_history(tab: Tab, args: dict[str, Any], back: bool) -> dict[s
     B20, measured on real Chromium, test_b20_native)."""
     page = await tab.page()
     place = await history_of(page)
-    if place is not None and not (place[0] > 0 if back else place[0] < place[1] - 1):
-        return failure("no_history", "There is no page to go to in this tab's history.")
+    if place is not None:
+        target = place[0] - 1 if back else place[0] + 1
+        if not 0 <= target < len(place[1]):
+            return failure("no_history", "There is no page to go to in this tab's history.")
+        if tab.discovery and line.signs_out(place[1][target]):
+            # The entry it would load is a sign out address (a page that changed its own
+            # address): refused before the move, as browser_navigate refuses it.
+            log.warning(
+                "lease %s: %s refused by the line: sign_out",
+                tab.lease_tag,
+                "browser_navigate_back" if back else "browser_navigate_forward",
+            )
+            return refused("line")
     await tab.pacer.dwell()
     tab.require_input()
     try:
@@ -1159,8 +1185,8 @@ async def navigate_history(tab: Tab, args: dict[str, Any], back: bool) -> dict[s
     return await tab.settle(await _here(tab))
 
 
-async def history_of(page: Any) -> tuple[int, int] | None:
-    """The tab's place in its history and the number of its entries (CDP), None when unread:
+async def history_of(page: Any) -> tuple[int, list[str]] | None:
+    """The tab's place in its history and the address of each entry (CDP), None when unread:
     Playwright's go_back answers None both with no entry and for a page restored from the back
     and forward cache, so it cannot tell them apart."""
     try:
@@ -1170,7 +1196,7 @@ async def history_of(page: Any) -> tuple[int, int] | None:
         finally:
             with contextlib.suppress(Exception):
                 await client.detach()
-        return int(found["currentIndex"]), len(found["entries"])
+        return int(found["currentIndex"]), [str(e.get("url") or "") for e in found["entries"]]
     except Exception:
         return None
 

@@ -44,9 +44,98 @@ def test_a_search_s_controls_pass(name: str, action: str) -> None:
     assert line.control(button(name), action) is None
 
 
-def test_a_posting_link_s_title_is_no_word_of_the_line() -> None:
-    link = {"tag": "a", "type": "", "role": "", "names": ["Post-doc, SharePoint Engineer"]}
-    assert line.control({**link, "credential": False}, "click") is None
+def link(name: str, **extra: object) -> dict:
+    facts = {"tag": "a", "type": "", "role": "", "names": [name], "credential": False}
+    return {**facts, **extra}
+
+
+# Signing out and changing the account are links too (review of B20, round 1): LinkedIn's "Sign
+# Out" in its Me menu (`<a href="/m/logout/">`), Indeed's "Sign out", in English, French and
+# German; and LinkedIn's Connect link ("Invite Jane Roe to connect").
+LEAVING_LINKS = [
+    "Sign Out", "Sign out", "Log out", "Logout", "SignOut", "Close account", "Delete account",
+    "Edit profile", "Change your password", "Account settings", "Connect",
+    "Invite Jane Roe to connect",
+    "Se déconnecter", "Déconnexion", "Supprimer le compte", "Modifier mon profil",
+    "Paramètres du compte",
+    "Abmelden", "Ausloggen", "Konto löschen", "Profil bearbeiten", "Kontoeinstellungen",
+]  # fmt: skip
+# A posting link's title says none of them, even with their words' starts side by side.
+POSTING_LINKS = [
+    "Logistics Engineer", "Logistics Outbound Coordinator", "Blog Outreach Manager",
+    "Sign Language Interpreter, Outreach", "Post-doc, SharePoint Engineer",
+    "Connected Vehicle Engineer", "Account Executive", "Profile Data Analyst", "Change Manager",
+    "Techniker Löschanlagen", "Se connecter",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name", LEAVING_LINKS)
+@pytest.mark.parametrize("action", ["click", "key"])
+def test_a_sign_out_or_account_link_is_the_line(name: str, action: str) -> None:
+    # "Delete account" and "Supprimer le compte" are detect's danger already.
+    assert line.control(link(name), action) in ("line", "danger")
+    assert line.control(link(name, role="menuitem"), action) in ("line", "danger")
+
+
+@pytest.mark.parametrize("name", POSTING_LINKS)
+@pytest.mark.parametrize("action", ["click", "key"])
+def test_a_posting_link_s_title_is_no_word_of_the_line(name: str, action: str) -> None:
+    assert line.control(link(name), action) is None
+
+
+# A sign out address, any method, any kind: a navigation, a link, `location.href`, a popup, a
+# fetch, an image. LinkedIn's Sign Out and Indeed's, on `.test` stand ins of their hosts.
+SIGN_OUT_ADDRESSES = [
+    "https://www.linkedin.test/m/logout/",
+    "https://secure.indeed.test/auth/logout?continue=x",
+    "https://jobs.example.test/sign-out",
+    "https://jobs.example.test/log/out",
+    "https://jobs.example.test/api/signOut",
+    "https://jobs.example.test/uas/logoutUser",
+    "https://jobs.example.test/auth?continue=%2Flogout",
+    "https://jobs.example.test/r?to=https%253A%252F%252Fjobs.example.test%252Fm%252Flogout",
+    "https://jobs.example.fr/deconnexion",
+    "https://jobs.example.de/abmelden",
+]
+
+
+@pytest.mark.parametrize("url", SIGN_OUT_ADDRESSES)
+@pytest.mark.parametrize(
+    ("method", "kind"),
+    [("GET", "document"), ("GET", "fetch"), ("GET", "image"), ("POST", "fetch"), ("HEAD", "xhr")],
+)
+def test_a_sign_out_address_never_leaves(url: str, method: str, kind: str) -> None:
+    assert line.request_refused(method, url, kind) == "sign_out"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.linkedin.test/jobs/view/logistics-outbound-coordinator-4012345/",
+        "https://jobs.example.test/jobs/blog-outreach-manager-42",
+        "https://jobs.example.test/catalog/outbound",
+        "https://jobs.example.test/search?q=Logistics%20Engineer&trk=nav_signin",
+        "https://jobs.example.test/sign-in?continue=%2Fjobs",
+    ],
+)
+def test_a_posting_or_a_search_address_is_no_sign_out(url: str) -> None:
+    assert line.request_refused("GET", url, "document") is None
+
+
+@pytest.mark.parametrize(
+    ("url", "refused"),
+    [
+        ("https://jobs.example.test/api/v1/sessions", True),
+        ("https://jobs.example.test/api/v1/sessions/current", True),
+        ("https://jobs.example.test/oauth/token", True),
+        ("https://jobs.example.test/logout", True),
+        ("https://jobs.example.test/api/saved-jobs/42", False),
+    ],
+)
+@pytest.mark.parametrize("method", ["DELETE", "PUT", "PATCH"])
+def test_a_delete_of_a_session_or_a_token_never_leaves(url: str, refused: bool, method) -> None:
+    """Welcome to the Jungle's way out, `DELETE /api/v1/sessions`, a script may trigger."""
+    assert (line.request_refused(method, url, "fetch") is not None) is refused
 
 
 @pytest.mark.parametrize(
@@ -198,6 +287,16 @@ def test_a_search_service_s_client_metadata_is_never_read() -> None:
         ("https://search.example.test/jobs/42", False),  # a host's search word is no search
         (JOBS + "/account/cookie-settings", False),
         (JOBS + "/", False),
+        # A search or consent word in a query value is a tracking parameter of the posting's
+        # own address, never a search (review of B20, round 1): its path says.
+        ("https://boards.greenhouse.test/examplerobotics/jobs/4012345?gh_src=jobsearch", False),
+        (JOBS + "/jobs/42?ref=search", False),
+        (JOBS + "/jobs/42?source=LinkedInJobSearch", False),
+        (JOBS + "/jobs/42?search=1", False),
+        (JOBS + "/jobs/42?cookie_consent=all", False),
+        (JOBS + "/jobs/42?from=consent.example.test", False),
+        (JOBS + "/search?ref=jobs-42", True),
+        (JOBS + "/careersection/jobsearch.ftl?lang=en", True),
     ],
 )
 def test_a_document_post_leaves_only_as_a_search_or_a_consent_choice(url, allowed) -> None:
@@ -205,8 +304,9 @@ def test_a_document_post_leaves_only_as_a_search_or_a_consent_choice(url, allowe
 
 
 @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS", "get"])
-@pytest.mark.parametrize("path", ["/jobs/42/apply", "/messaging", "/logout", "/" + "a" * 5000])
+@pytest.mark.parametrize("path", ["/jobs/42/apply", "/messaging", "/" + "a" * 5000])
 def test_a_get_always_leaves(method: str, path: str) -> None:
+    """Any GET but a sign out (test_a_sign_out_address_never_leaves)."""
     assert line.request_refused(method, JOBS + path, "document") is None
 
 
