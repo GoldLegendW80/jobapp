@@ -115,6 +115,7 @@ from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue
+from app.agents import catalog as agent_catalog
 from app.agents import definitions
 from app.agents import runs as agent_runs
 from app.browser import removals as browser_removals
@@ -413,6 +414,7 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
 
 
 async def reap_agent_runs(ctx: dict[str, Any], at_start: bool = False) -> int:
+    await asyncio.to_thread(agent_catalog.publish_once, sessions_of(ctx), clock_of(ctx)())  # A6
     count = await asyncio.to_thread(_reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
     if count:
         logger.warning("agent runs failed by the reaper", extra={"count": count, "start": at_start})

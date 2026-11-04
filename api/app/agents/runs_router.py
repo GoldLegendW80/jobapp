@@ -43,7 +43,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import sse
-from app.agents import definitions, live, operator, runs
+from app.agents import definitions, live, operator, overrides, runs
 from app.agents.models import FINAL_STATUSES, AgentRun, RunStatus
 from app.agents.schemas import (
     AgentList,
@@ -165,6 +165,10 @@ def _run_id(value: str) -> uuid.UUID:
 @router.get("", response_model=AgentList, responses=_401)
 def list_agents(user: CurrentUser, request: Request) -> AgentList:
     env = request.app.state.settings.app_env
+    # Not the chat agents, which start from their thread (app/agents/chat_router.py), nor the
+    # internal ones, which their own module starts. With what the Agents tab of Admin saved
+    # (A6), as a run would use it.
+    listed = overrides.effective(sessions_of(request), definitions.listed(env))
     return AgentList(
         items=[
             AgentOut(
@@ -176,9 +180,7 @@ def list_agents(user: CurrentUser, request: Request) -> AgentList:
                 test_only=agent.test_only,
                 needs_job=agent.needs_job,
             )
-            # Not the chat agents, which start from their thread (app/agents/chat_router.py),
-            # nor the internal ones, which their own module starts.
-            for agent in definitions.listed(env)
+            for agent in listed
         ]
     )
 

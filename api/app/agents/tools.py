@@ -9,9 +9,9 @@ which job it proposes changes to. Every read goes through the same service funct
 which filter on the user (app/jobs/service.py `jobs_of`). Another user's job, an unknown id and a
 malformed id all answer the same "not found".
 
-Tool names as Claude Code sees them: `mcp__<SERVER>__<tool>` (SERVER below). `allowed_names`
-is what the runner passes as `allowed_tools`; the PreToolUse gate (app/agents/runner.py) denies
-every other name.
+Tool names as Claude Code sees them: `mcp__<SERVER>__<tool>` (SERVER and `full_name` live in
+app/agents/sdk_options.py, which the api imports too). `allowed_names` is what the runner passes
+as `allowed_tools`; the PreToolUse gate (app/agents/runner.py) denies every other name.
 
 Tools:
 - get_job(job_id): one of the user's jobs, read only (A2), with its posting text (A3). For an
@@ -48,12 +48,13 @@ from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_serv
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app.agents import proposals
+from app.agents.sdk_options import SERVER as SERVER
+from app.agents.sdk_options import full_name as full_name
 from app.jobs import service as jobs_service
 from app.jobs.models import Job
 from app.profile.models import Profile
 from app.profile.schemas import SECTIONS
 
-SERVER = "app"
 DESCRIPTION_MAX = 6000
 POSTING_MAX = 20_000
 NOT_FOUND = "Job not found."
@@ -70,10 +71,6 @@ HIDDEN_FIELDS = {
     "search": ("boards", "browser_sources", "sweep_schedule", "compensation"),
     "preferences": ("onboarding",),
 }
-
-
-def full_name(name: str) -> str:
-    return f"mcp__{SERVER}__{name}"
 
 
 def text_result(text: str, *, error: bool = False) -> dict[str, Any]:

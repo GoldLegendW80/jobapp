@@ -16,6 +16,7 @@ from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents import admin_router as agents_admin_router
 from app.identity import admin_router, security
 from app.identity.deps import COOKIE_NAME, CSRF_REFUSED, UNAUTHORIZED, _calls, require_admin
 from app.identity.models import Invite, InviteKind, Role, User
@@ -162,6 +163,9 @@ def test_admin_routes_are_served_and_all_run_the_admin_check(app: FastAPI) -> No
         ("DELETE", f"{INVITES}/{{invite_id}}"),
         ("GET", "/api/admin/users"),
         ("PATCH", "/api/admin/users/{user_id}"),
+        ("GET", "/api/admin/agents"),
+        ("GET", "/api/admin/agents/{name}"),
+        ("POST", "/api/admin/agents/{name}/versions"),
     }
     for handler in (
         admin_router.list_invites,
@@ -169,6 +173,9 @@ def test_admin_routes_are_served_and_all_run_the_admin_check(app: FastAPI) -> No
         admin_router.revoke_invite,
         admin_router.list_users,
         admin_router.update_user,
+        agents_admin_router.list_agents,
+        agents_admin_router.read_agent,
+        agents_admin_router.save_version,
     ):
         # Plain def: the threadpool, never the event loop.
         assert not inspect.iscoroutinefunction(handler)

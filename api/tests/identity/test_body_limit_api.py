@@ -233,6 +233,10 @@ def schema_bound(schema: dict[str, Any], defs: dict[str, Any], depth: int = 0) -
 # Routes whose schema does not bound its own size, so the class is the bound: each with what
 # does limit it. A new one must be looked at and added here.
 UNBOUNDED_SCHEMAS = {
+    ("POST", "/api/admin/agents/{name}/versions"): (
+        "changes is free JSON checked by app.agents.overrides.Changes (extra fields refused, a "
+        "prompt at most 100,000 characters); the 1 MiB default class bounds it"
+    ),
     ("POST", "/api/agents/runs"): "input is free JSON, at most 16 KiB (runs_router)",
     ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
     ("PUT", "/api/documents/settings"): (
