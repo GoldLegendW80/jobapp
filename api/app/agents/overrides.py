@@ -129,8 +129,11 @@ def code_values(definition: definitions.AgentDefinition) -> dict[str, Any]:
 def check(definition: definitions.AgentDefinition, raw: Mapping[str, Any]) -> dict[str, Any]:
     """What a version stores for these changes: each field checked, then only the fields that
     differ from the code. OverrideError names the first field the agent cannot take."""
+    code = code_values(definition)
+    # A field sent as the code has it is no change (an empty default message included).
+    sent = {name: value for name, value in raw.items() if name not in code or value != code[name]}
     try:
-        parsed = Changes.model_validate(dict(raw))
+        parsed = Changes.model_validate(sent)
     except ValidationError as exc:
         first = exc.errors()[0]
         where = ".".join(str(part) for part in first.get("loc", ())) or "changes"
@@ -144,7 +147,6 @@ def check(definition: definitions.AgentDefinition, raw: Mapping[str, Any]) -> di
         given["tools"] = [name for name in definition.tools if name in set(given["tools"])]
     if "wall_time_s" in given and given["wall_time_s"] > definition.wall_time_s:
         raise OverrideError(f"wall_time_s: at most the code's {definition.wall_time_s:g} seconds")
-    code = code_values(definition)
     return {name: value for name, value in given.items() if value != code[name]}
 
 
