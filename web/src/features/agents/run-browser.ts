@@ -14,6 +14,23 @@ export const STARTING = "Your browser is starting.";
 export const ELSEWHERE =
   "The browser shows here while this website is searched.";
 
+/** The wait reason of browserd's browser_ask_person (B20): the assistant asks the person for help. */
+export const ASK_REASON = "ask_person";
+
+/**
+ * The sentence above the view while the lease waits for the person's help, else null. The host is
+ * browserd's own (the tab's address), never the model's words: a page can steer them (B12b).
+ */
+export function askText(lease: Lease): string | null {
+  if (lease.state !== "waiting_person" || lease.wait_reason !== ASK_REASON) {
+    return null;
+  }
+  const host = lease.wait_host?.trim();
+  return host
+    ? `The assistant needs your help on ${host}. Take over, do what the page asks, then Give back.`
+    : "The assistant needs your help on this page. Take over, do what the page asks, then Give back.";
+}
+
 export type RunBrowser =
   { show: "starting" } | { show: "elsewhere" } | { show: "live"; lease: Lease };
 

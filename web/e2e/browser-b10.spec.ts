@@ -18,7 +18,6 @@ import {
   setPassword,
   watchErrors,
 } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Browser B10's guards on LinkedIn searched as a job website (owner, 2026-10-28: every search
@@ -30,12 +29,12 @@ import { reviewFirst } from "./apply-one-click-helpers";
  * (tests/browser_pages/server.py, GET /b10/next, asked from inside the container).
  *
  * - Person C ticks LinkedIn in Find jobs and her search meets the security check on its first
- *   page: the summary says all LinkedIn work is paused for a week, the pause is recorded 7 days
- *   from the check and shown on the LinkedIn card, a second search that day does not open
- *   LinkedIn, and an application on a LinkedIn posting is blocked before any browser work.
- * - Person D's search meets the sign in page: the summary says LinkedIn needs her to sign in
- *   and nothing else was opened there; she holds no lease and waits in no queue, and nothing is
- *   saved.
+ *   page. Since B20 (owner, 2026-11-04) the browser search no longer pauses all LinkedIn work for
+ *   a week: the person solves a check (the agent asks, `browser_ask_person`), so no pause is
+ *   recorded, the LinkedIn card shows none, and a second search that day searches LinkedIn again.
+ * - Person D's search meets the sign in page: no wall ends the website by itself (B20), so the
+ *   summary does not say LinkedIn needs her to sign in; she holds no lease and waits in no queue,
+ *   and nothing is saved.
  * - Person B ticked nothing: LinkedIn stays off for B, with no pause and no search.
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
@@ -52,13 +51,7 @@ const shots = makeShots("browser-b10");
 const tail = () => Math.random().toString(36).slice(2, 12).padEnd(10, "x");
 const KEY = `sk-ant-api03-e2ediscovery${tail()}${tail()}Fb10`;
 const terms = (list: string[]) => ({ terms: list, advanced_regex: false });
-// A LinkedIn posting of the fixture pages (an address under BROWSER_SOURCES_BASE_URL's
-// linkedin/ counts as LinkedIn's, apply/caps.py), added by hand.
-const LINKEDIN_POSTING = "http://pages:8080/b8/linkedin/jobs/view/4100000201/";
-const PAUSED =
-  "LinkedIn showed a security check, so all LinkedIn work is paused for a week.";
-const SIGN_IN =
-  "LinkedIn needs you to sign in. Nothing else was opened on LinkedIn.";
+const PAUSED = /paused for a week|paused until|needs you to sign in/;
 
 type Job = { id: string; title: string; url: string | null };
 type LinkedIn = {
@@ -202,102 +195,53 @@ test.afterAll(async () => {
   clearAttempts([B, C, D]);
 });
 
-test("C meets LinkedIn's security check: paused with its date, not searched again, no apply", async () => {
+test("C meets LinkedIn's security check: no pause is recorded, and LinkedIn is searched again", async () => {
   const page = pages[C]!;
   nextWall("checkpoint");
   const dialog = await findJobs(page);
-  await expect(linkedinLine(dialog)).toContainText(PAUSED);
+  await expect(linkedinLine(dialog)).not.toContainText(PAUSED);
   await shots(page, "find-jobs-checkpoint", false);
   await dialog.getByRole("button", { name: "Done" }).click();
   const first = (await lastSources(page.request)).find(
     (source) => source.kind === "linkedin",
   );
   expect(first?.found).toBe(0);
+  expect(first?.error ?? "").not.toMatch(/paused|checkpoint/);
 
-  // The pause: 7 days from the check, shown with its date on the LinkedIn card.
+  // No 7 day pause: nothing recorded, nothing on the LinkedIn card.
   const state = await linkedinOf(page);
-  expect(state.paused_until).not.toBeNull();
-  const left = Date.parse(state.paused_until!) - Date.now();
-  expect(left).toBeGreaterThan(6.9 * 86_400_000);
-  expect(left).toBeLessThanOrEqual(7 * 86_400_000);
-  const day = await page.evaluate(
-    (iso) =>
-      new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" }),
-    state.paused_until!,
-  );
+  expect(state.paused_until).toBeNull();
   await page.goto("/account");
   const card = page.getByRole("region", { name: "LinkedIn", exact: true });
-  await expect(card.getByRole("status")).toHaveText(
-    `LinkedIn showed a security check, so all LinkedIn work is paused until ${day}.`,
-  );
-  await shots(page, "linkedin-paused");
+  await expect(card).toBeVisible();
+  await expect(card).not.toContainText(/security check|paused/);
+  await shots(page, "linkedin-not-paused");
 
-  // A second search the same day does not open LinkedIn: the start page's next answer is the
-  // plain one, so a page opened there would not be the check again.
+  // A second search the same day opens LinkedIn again.
   const again = await findJobs(page);
-  await expect(linkedinLine(again)).toContainText(/paused|not searched/);
+  await expect(linkedinLine(again)).not.toContainText(PAUSED);
   await again.getByRole("button", { name: "Done" }).click();
   const second = (await lastSources(page.request)).find(
     (source) => source.kind === "linkedin",
   );
-  expect(second?.error ?? "").toMatch(/paused|checkpoint/);
-
-  // A LinkedIn posting: an application on it is blocked by the guard before any browser work.
-  const created = await page.request.post("/api/jobs", {
-    headers: CSRF,
-    data: {
-      company: "Example Robotics",
-      title: "AI Engineer, Evaluation",
-      location: "Paris",
-      url: LINKEDIN_POSTING,
-    },
-  });
-  expect(created.status(), await created.text()).toBe(201);
-  const id = ((await created.json()) as { id: string }).id;
-  await page.goto(`/jobs/${id}`);
-  const apply = page.getByRole("region", { name: "Apply", exact: true });
-  await reviewFirst(page.request);
-  await apply.getByRole("button", { name: "Apply", exact: true }).click();
-  await expect
-    .poll(
-      async () => {
-        const answer = await page.request.get("/api/applications");
-        const body = (await answer.json()) as {
-          items: {
-            posting_id: string;
-            state: string;
-            error_code: string | null;
-          }[];
-        };
-        const found = body.items.find((item) => item.posting_id === id);
-        return found ? `${found.state} ${found.error_code}` : "none";
-      },
-      { timeout: 120_000, intervals: [5_000] },
-    )
-    .toBe("blocked linkedin_paused");
-  await page.reload();
-  await expect(
-    page
-      .getByRole("region", { name: "Apply", exact: true })
-      .getByText("The last attempt was blocked by a rule. Nothing was sent."),
-  ).toBeVisible();
-  await shots(page, "apply-on-linkedin-blocked");
+  expect(second?.error ?? "").not.toMatch(/paused|checkpoint/);
 });
 
-test("D meets LinkedIn's sign in page: told to sign in, no hand off", async () => {
+test("D meets LinkedIn's sign in page: no wall ends the website, no hand off", async () => {
   const page = pages[D]!;
   nextWall("signin");
   const dialog = await findJobs(page);
-  await expect(linkedinLine(dialog)).toContainText(SIGN_IN);
+  await expect(linkedinLine(dialog)).not.toContainText(PAUSED);
   await dialog.getByRole("button", { name: "Done" }).click();
   const source = (await lastSources(page.request)).find(
     (item) => item.kind === "linkedin",
   );
-  expect(source?.error ?? "").toMatch(/signin/);
+  expect(source?.error ?? "").not.toMatch(/signin/);
   expect(source?.found).toBe(0);
   const state = await linkedinOf(page);
   expect(state.paused_until).toBeNull();
-  await shots(page, "linkedin-needs-signin");
+  expect(state.needs_signin).toBe(false);
+  await shots(page, "linkedin-sign-in-page");
   // No hand off: D holds no lease of the browser and waits in no queue.
   const browserState = await page.request.get("/api/browser");
   expect(browserState.ok()).toBe(true);
