@@ -59,6 +59,12 @@ waits until a POST to that path is logged, 30 s at most). Any other POST to thes
 answered 200 and logged: GET /b20/log answers what they saw (method, host, path, an Upgrade
 header), so a test shows that what the line refuses never reached them.
 
+Browser B21 (api/tests/browser/test_b21_vie.py reads these pages as snapshots): a stand in of
+the VIE website on `mon-vie-via.businessfrance.test`, invented offers only: the offers list
+(b21/offres.html, /offres/recherche) with a "Voir plus d'offres" button that shows the hidden
+offers, an offer whose title is an h2 under two h1 (b21/offre-246286.html, /offres/246286) and
+one whose title is a div with no heading (b21/offre-246285.html, /offres/246285).
+
 Browser B10 on a job website (web/e2e/browser-b10.spec.ts): a LinkedIn search of the job websites
 opens LinkedIn's start page here (b8/linkedin/, BROWSER_SOURCES_BASE_URL). GET
 /b10/next?wall=checkpoint or ?wall=signin, asked from inside the container only (the browser's
@@ -119,6 +125,13 @@ B20_SEEN = threading.Condition(J15_LOCK)  # a request logged on a B20 host
 B20_PERSON = threading.Event()  # GET /b20/person: the sign in page's own submit goes
 B20_ATS = "http://ats.b20-hire.test:8080/example-robotics/jobs/42"
 B20_JOB = re.compile(r"/jobs/([0-9]{1,3})")
+# Browser B21 (see the doc): the VIE website's stand in, its addresses and their files.
+B21_HOST = "mon-vie-via.businessfrance.test"
+B21_PAGES = {
+    "/offres/recherche": "offres.html",
+    "/offres/246286": "offre-246286.html",
+    "/offres/246285": "offre-246285.html",
+}
 
 
 def b20_title(number: int) -> str:
@@ -501,6 +514,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         b20 = self.b20()
         if b20:
             return self.b20_page(b20, url, query)
+        if self.headers.get("Host", "").split(":")[0].lower() == B21_HOST:
+            if url.path not in B21_PAGES:
+                return self.send_error(404)
+            self.path = "/b21/" + B21_PAGES[url.path]
+            return super().do_GET()
         host = self.b19()
         if host:
             return self.b19_page(host, url, query)

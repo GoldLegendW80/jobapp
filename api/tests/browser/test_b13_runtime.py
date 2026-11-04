@@ -266,7 +266,7 @@ def test_a_page_addressing_the_assistant_gets_no_submit_and_no_unopened_posting(
     assert json.loads(texts[1])["error"] in {"submit", "line"}
     assert json.loads(texts[2]) == {
         "kept": 0,
-        "refused": [{"index": 0, "reason": "detail_not_opened"}],
+        "refused": [{"index": 0, "reason": "detail_not_opened", "do": finder.OPEN_THEN_REPORT}],
         "kept_in_all": 0,
     }
     assert tools.calls == ["browser_click"]
