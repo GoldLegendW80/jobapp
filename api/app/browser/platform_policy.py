@@ -18,9 +18,8 @@ selected website it reads, from the database and in a session of its own:
   `opened_at` and `platform` in every entry of the source in the sweep row (guard.reserve, under
   the person's platform lock and the row's lock) and commits, so a kill after the first page
   keeps the history the 7 day pause reads.
-- observe, on each page code read (the snapshot's address and text, bounded by the caller):
-  a checkpoint or block page records `checkpoint_at` (LinkedIn: also its `linkedin_checkpoints`
-  row) and a sign in page records its code, both committed before the page reaches the model.
+- observe: none (B20): a wall ends no website and records no checkpoint; the agent asks the
+  person. `wall()` only tells a sign in page for interactive.py.
 
 No platform has a page cap, LinkedIn included (owner, 2026-10-27 for the agent of a job website,
 jobs J18; 2026-10-28 for LinkedIn): its pacing (LinkedIn 10 to 30 seconds a page, shared by
@@ -316,43 +315,8 @@ class PlatformPolicy:
 
     async def observe(self, context: SourceContext, url: str, snapshot: str) -> str | None:
         """B20: the browser search no longer ends on a wall nor records a checkpoint (the agent
-        asks the person, browser_ask_person); kept for a caller that still reads walls."""
+        asks the person, browser_ask_person); kept only because InteractivePolicy names it."""
         return None
-
-    async def _observe_walls(self, context: SourceContext, url: str, snapshot: str) -> str | None:
-        platform = platform_for(context)
-        if platform == CUSTOM:
-            return None
-        code = wall(platform, url, snapshot, self.base_url)
-        if code is None:
-            return None
-        try:
-            await asyncio.to_thread(self._record, context, platform, code)
-        except Exception as exc:
-            logger.warning("platform wall record failed: error=%s", type(exc).__name__)
-            return "permission_unavailable"
-        return code
-
-    def _record(self, context: SourceContext, platform: str, code: str) -> None:
-        user, now = uuid.UUID(context.user_id), self.clock()
-        with self.sessions() as db:
-            try:
-                if code == "linkedin_checkpoint":
-                    linkedin_guard.record_checkpoint(db, user, now, "sweep")
-                if context.sweep_id is not None:
-                    guard.record_wall(
-                        db,
-                        user,
-                        uuid.UUID(str(context.sweep_id)),
-                        context.source_id,
-                        platform,
-                        code,
-                        now,
-                    )
-                db.commit()
-            except BaseException:
-                db.rollback()
-                raise
 
 
 def runtime_policy(settings: Any, sessions: Any) -> PlatformPolicy:

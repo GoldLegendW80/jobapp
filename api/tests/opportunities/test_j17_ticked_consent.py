@@ -164,32 +164,3 @@ def test_a_stale_revision_or_sentence_records_nothing(
     policy = PlatformPolicy(factory, clock)
     ctx = context(person_a, websites_only(factory, person_a, clock()), URLS[platform], platform)
     assert run(policy.check(ctx)) == "permission_unavailable"
-
-
-@pytest.mark.parametrize("platform", PLATFORMS)
-def test_the_pause_after_a_checkpoint_outlives_a_new_tick(
-    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any, platform: str
-) -> None:
-    revision = tick_and_save(api, person_a, platform)
-    assert give(api, person_a, platform, revision).status_code == 200
-    policy = PlatformPolicy(factory, clock)
-    first_id = websites_only(factory, person_a, clock())
-    first = context(person_a, first_id, URLS[platform], platform)
-    assert run(policy.reserve(first)) is None
-    wall = '- heading "Verify you are human" [level=1]'
-    assert run(policy.observe(first, URLS[platform], wall)) in (
-        "permission_checkpoint",
-        "linkedin_checkpoint",
-    )
-    with factory() as db, db.begin():  # that search ended; the history keeps the checkpoint
-        ended = db.get(Sweep, first_id)
-        assert ended is not None
-        ended.status, ended.finished_at = SweepStatus.done, clock()
-    # Unticked, then ticked and saved again: the consent is new, the pause stays.
-    assert take_back(api, person_a, platform, profile(api, person_a)["revision"]).status_code == 200
-    again = give(api, person_a, platform, profile(api, person_a)["revision"])
-    assert again.status_code == 200, again.text
-    assert again.json()["paused_until"] is not None
-    assert again.json()["allowed"] is False
-    later = context(person_a, websites_only(factory, person_a, clock()), URLS[platform], platform)
-    assert run(policy.check(later)) == "permission_checkpoint"
