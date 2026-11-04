@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+<main>
+  <h1>Sign in</h1>
+  <!-- The person's sign in (B20, review round 2): the page's own script submits the form when
+       the test says the person does (GET /b20/person), a document POST the line refuses in the
+       agent's turn and lets pass while the person holds the input. -->
+  <form method="post" action="/checkpoint/lg/login-submit">
+    <label>Email <input type="email" name="session_key" value="e2e-someone@example.org"></label>
+    <button type="submit">Sign in</button>
+  </form>
+  <p id="state">Waiting for the person</p>
+</main>
+<script>
+  fetch("/b20-person").then((r) => r.json()).then((answer) => {
+    if (!answer.go) return;
+    document.getElementById("state").textContent = "Sent by the person";
+    document.forms[0].submit();
+  });
+</script>
+</body>
+</html>

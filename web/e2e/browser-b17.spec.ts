@@ -27,14 +27,17 @@ import {
  * - Save and Start: the interactive finder (app/agents/fake_streams/browser_discovery.json, J15's
  *   recorded model) searches the website in A's own browser, signed in: every page it opened came
  *   with her member's cookie, the site saw GET requests only, and the posting's Send application
- *   button and the address the posting asks for were refused, as on the anonymous website. Each
- *   member page runs a script that tries a fetch POST, a sendBeacon, a keepalive POST, a
- *   WebSocket, a WebSocketStream, a Worker and an image at /j15/logout, and adds a hidden
- *   inline sandboxed frame that tries a POST, a WebSocket and a WebSocketStream: in A's own
- *   sign in session they reach the site, in the search none does, and the script finds no
- *   WebSocket, WebSocketStream nor Worker to make.
- * - The site ends every login (GET /b17/expire): the next search meets the sign in page, ends the
- *   website `platform_signin`, the summary asks to sign in again and the row says Sign in again.
+ *   button was refused by the line of the search (B20), as on the anonymous website; the address
+ *   the posting asks for is a public GET and no longer refused. Each member page runs a script
+ *   that tries a fetch POST, a sendBeacon, a keepalive POST, a WebSocket, a WebSocketStream, a
+ *   Worker and an image at /j15/logout, and adds a hidden inline sandboxed frame that tries a
+ *   POST, a WebSocket and a WebSocketStream: the search runs a normal browser (B20), so the
+ *   script is not restricted and its own requests reach the site as in A's sign in session;
+ *   only a POST to an address that says apply, message or payment, and any request to a sign
+ *   out address (the image at /j15/logout), are refused.
+ * - The site ends every login (GET /b17/expire): the next search meets the sign in page. That no
+ *   longer ends the website by itself (B20: the agent asks the person, and nobody watches here),
+ *   so no member page is read and the row keeps its state.
  * - Person B has no login of the website, and B's Done reads B's own browser only.
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
@@ -277,10 +280,15 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
   expect(own?.error, detail).not.toBe("platform_signin");
   expect(own?.found ?? 0, detail).toBeGreaterThanOrEqual(1);
 
-  // What the website saw: its members only pages, each with A's member's cookie, GET only;
-  // the refused Send application button sent nothing, the asked address was never opened.
+  // What the website saw: its members only pages, each with A's member's cookie; the refused
+  // Send application button sent nothing (the line), the asked address was a plain GET.
   const seen = siteLog().slice(before);
-  const read = seen.filter((item) => item.path.startsWith("/j15/"));
+  const read = seen.filter(
+    (item) =>
+      item.path.startsWith("/j15/") &&
+      !probed([item]).length &&
+      !item.path.startsWith(PROBE_RAN),
+  );
   expect(read.map((item) => item.path)).toEqual(
     expect.arrayContaining([
       "/j15/search?q=engineer&location=Paris&page=2",
@@ -291,54 +299,51 @@ test("Find jobs reads the members only postings signed in, and submits nothing",
     read.every((item) => item.member === true),
     JSON.stringify(seen),
   ).toBe(true);
-  expect(seen.every((item) => item.method === "GET")).toBe(true);
-  expect(seen.some((item) => item.path.includes("send"))).toBe(false);
-  // The member pages ran their script (JavaScript on), and none of its ways out reached the
-  // site: no POST, beacon, keepalive POST, WebSocket, WebSocketStream, Worker nor /j15/logout,
-  // and nothing of the sandboxed frame's (it runs in the page's process in a sweep lease, so
-  // the route and the script reach it).
+  // The line refused the Send application button: no POST at an address that says send.
+  expect(
+    seen.some((item) => item.method === "POST" && item.path.includes("send")),
+    JSON.stringify(seen),
+  ).toBe(false);
+  // The member pages ran their script (JavaScript on) in a normal browser (B20): nothing of it
+  // is restricted any more, so no attempt ends in a SecurityError.
   const ran = seen.filter((item) => item.path.startsWith(PROBE_RAN));
   expect(ran.length, JSON.stringify(seen)).toBeGreaterThanOrEqual(1);
   for (const item of ran) {
     const tried = new URLSearchParams(item.path.slice(PROBE_RAN.length));
-    expect(tried.get("ws"), item.path).toBe("err:SecurityError");
-    expect(tried.get("wss"), item.path).toBe("err:SecurityError");
-    expect(tried.get("worker"), item.path).toBe("err:SecurityError");
+    expect(tried.get("ws"), item.path).not.toBe("err:SecurityError");
+    expect(tried.get("wss"), item.path).not.toBe("err:SecurityError");
+    expect(tried.get("worker"), item.path).not.toBe("err:SecurityError");
   }
-  expect(probed(seen), JSON.stringify(seen)).toEqual([]);
+  expect(probed(seen).length, JSON.stringify(seen)).toBeGreaterThanOrEqual(1);
   expect(await sites(page)).toMatchObject([{ host: HOST, state: "signed_in" }]);
   before = siteLog().length;
 });
 
-test("an ended login stops the search and asks A to sign in again", async () => {
+test("an ended login the search cannot get past asks A to sign in again, and reads no member page", async () => {
   pages("/b17/expire");
   await openSetup(page);
-  const { sweep, line, summary } = await saveAndStart(page, sweepId);
-  await expect(line).toContainText(SIGN_IN_AGAIN);
-  await shots(page, "sign-in-again-summary");
+  const { sweep, summary } = await saveAndStart(page, sweepId);
+  await shots(page, "ended-login-summary");
   await page.keyboard.press("Escape");
   await expect(summary).toBeHidden();
 
+  // B20: a sign in wall is not a code of the source any more; the agent would ask the person,
+  // and nobody has the live view open here (`nobody_watching`).
   const own = sweep.sources.find((item) => item.kind === "custom");
   expect(own, JSON.stringify(sweep.sources)).toMatchObject({
     host: HOST,
-    error: "platform_signin",
     found: 0,
   });
+  expect(own?.error, JSON.stringify(sweep.sources)).not.toBe("platform_signin");
+  // It ended on the sign in page nobody solved (B20 keeps B17's mark): the login is marked
+  // expired, so the row says Sign in again (interactive._signed_out).
   expect(await sites(page)).toMatchObject([{ host: HOST, state: "expired" }]);
-  // The search stopped at the sign in page: nothing read as a member, nothing sent.
+  // The search met the sign in page: nothing read as a member, nothing sent to a send address.
   const seen = siteLog().slice(before);
   expect(seen.some((item) => item.member === true)).toBe(false);
-  expect(seen.every((item) => item.method === "GET")).toBe(true);
-
-  const setup = await openSetup(page);
-  const row = setup.getByRole("listitem").filter({ hasText: SITE });
-  await expect(
-    row.getByRole("button", { name: `Sign in to ${HOST}` }),
-  ).toHaveText("Sign in again");
-  await expect(row).toContainText("Your login on this website has ended.");
-  await shots(page, "sign-in-again");
-  await page.keyboard.press("Escape");
+  expect(
+    seen.some((item) => item.method === "POST" && item.path.includes("send")),
+  ).toBe(false);
   expect(errors).toEqual([]);
 });
 

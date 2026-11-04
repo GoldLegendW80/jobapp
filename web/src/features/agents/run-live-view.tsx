@@ -22,6 +22,7 @@ import { LiveBrowser } from "@/features/browser/live-browser";
 
 import {
   ELSEWHERE,
+  askText,
   STARTING,
   WEBSITE_AGENT,
   browserOfRun,
@@ -108,8 +109,18 @@ function RunningView({
   const view = browserOfRun(run, fresh ? query.data : undefined);
   if (view.show === "starting") return <Starting />;
   if (view.show === "elsewhere") return <Elsewhere />;
+  const ask = askText(view.lease);
   return (
-    <div ref={box} data-testid="run-live-view">
+    <div ref={box} data-testid="run-live-view" className="space-y-2">
+      {ask ? (
+        <p
+          role="status"
+          data-testid="run-ask-person"
+          className="break-words rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground"
+        >
+          {ask}
+        </p>
+      ) : null}
       <LiveBrowser key={view.lease.id} />
     </div>
   );

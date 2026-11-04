@@ -423,10 +423,12 @@ def test_time_limit_fails_the_sweep_keeping_what_was_stored(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     set_profile(factory, alice, search())
+    # The websites' bound is the sweep's whole one (B20: BROWSER_SEARCH_MAX_S), here 0.5 s.
     row = run(
         factory,
         new_sweep(factory, alice),
         timeout_s=0.5,
+        browser_s=0.5,
         browser=each_website([AI, APPLIED], hang_s=10.0),
     )
     assert (row.status, row.error) == (SweepStatus.failed, sweep.TIMED_OUT)

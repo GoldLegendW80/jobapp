@@ -29,7 +29,8 @@ words. A view gets no byte once its lease is no longer the current one, whatever
 
 The agent's side (`agent_turn`, for B5's tool calls): while the person holds the input the call
 waits, until Give back or TAKEOVER_S, then learns that the person used the browser, so the
-person's keys and the agent's never mix.
+person's keys and the agent's never mix. While the person holds the input of a sweep lease, its
+request floor does not apply (`person_holds`, B20): the person signs in or solves a check there.
 
 A person's own session (a lease without automation, browser B7: `look` and `signin`) has no
 agent: every viewer of it forwards the keyboard and the mouse from its start to its end, and Take
@@ -393,6 +394,22 @@ class Live:
             return self.input_viewer
         return None
 
+    def person_holds(self, lease_id: str) -> bool:
+        """B20: the person holds the input of that lease at this moment: it is the current lease,
+        taken over, before its deadline (TAKEOVER_S), and its holder's view is open or away less
+        than HOLDER_GRACE_S. A sweep lease's request floor (actions.Tab._line_route) does not
+        apply then: the agent's calls wait (`agent_turn`), so a request is the person's or the
+        page's (their sign in, a security check's verify; a timer or a listener an earlier
+        script of the agent left on the page runs too: declared). Read again for each request,
+        so the floor is back from the moment the input goes back, before tick() has run
+        (test_b20_person_holds.py)."""
+        if self.holder(lease_id) is None:
+            return False
+        now = self.manager.clock()
+        if now >= self.input_until:
+            return False
+        return self.absent_since is None or now - self.absent_since < HOLDER_GRACE_S
+
     def person(self, lease_id: str) -> bool:
         """That lease is the current one and a person's own session: the person holds the
         input from its start to its end (B7); or an agent's lease during the sign in hand off,
@@ -440,7 +457,7 @@ class Live:
         if (
             lease is not None
             and lease.lease_id == self.input_lease
-            and lease.wait_reason == "takeover"
+            and lease.wait_reason in ("takeover", "ask_person")
         ):
             lease.resume(self.manager.clock())
         self.input_lease = self.input_viewer = None
@@ -479,6 +496,16 @@ class Live:
                 or (self.absent_since is not None and now - self.absent_since >= HOLDER_GRACE_S)
             ):
                 self.give_back()
+        lease = self.manager.current()
+        if (  # B20: an ask nobody took over ends at its deadline, and the agent goes on
+            lease is not None
+            and lease.state == "waiting_person"
+            and lease.wait_reason == "ask_person"
+            and self.input_lease != lease.lease_id
+            and lease.wait_deadline is not None
+            and now >= lease.wait_deadline
+        ):
+            lease.resume(now)
         self.used &= {current} if current else set()
         wall = self.wall()
         self.nonces = {n: exp for n, exp in self.nonces.items() if exp >= wall}

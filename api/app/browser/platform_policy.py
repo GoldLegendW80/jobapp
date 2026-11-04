@@ -18,9 +18,8 @@ selected website it reads, from the database and in a session of its own:
   `opened_at` and `platform` in every entry of the source in the sweep row (guard.reserve, under
   the person's platform lock and the row's lock) and commits, so a kill after the first page
   keeps the history the 7 day pause reads.
-- observe, on each page code read (the snapshot's address and text, bounded by the caller):
-  a checkpoint or block page records `checkpoint_at` (LinkedIn: also its `linkedin_checkpoints`
-  row) and a sign in page records its code, both committed before the page reaches the model.
+- observe: none (B20): a wall ends no website and records no checkpoint; the agent asks the
+  person. `wall()` only tells a sign in page for interactive.py.
 
 No platform has a page cap, LinkedIn included (owner, 2026-10-27 for the agent of a job website,
 jobs J18; 2026-10-28 for LinkedIn): its pacing (LinkedIn 10 to 30 seconds a page, shared by
@@ -51,7 +50,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from app.browser import finder, linkedin_guard
-from app.browser.sources import PAGE_PAUSE_S, linkedin, parse_snapshot
+from app.browser.sources import linkedin, parse_snapshot
 from app.opportunities.platforms import guard
 
 if TYPE_CHECKING:
@@ -141,7 +140,10 @@ def platform_for(context: SourceContext) -> str:
 
 
 def pause_for(platform: str) -> tuple[float, float]:
-    return PAUSES.get(platform, PAGE_PAUSE_S)
+    """The page pause of the browser search: none (owner, 2026-11-04, B20: "as long as it
+    takes", the pace of the person's own browser). The pace hold across people stays
+    (sources.Pages), with this zero pause. PAUSES still orders the websites (interactive)."""
+    return (0.0, 0.0)
 
 
 def pace_key(platform: str, host: str, base_url: str | None = None) -> str:
@@ -204,6 +206,13 @@ def source_code(platform: str, refused: str, reserved: bool) -> str:
     return "permission_revoked" if reserved else "permission_unavailable"
 
 
+def _paused(refused: str | None) -> bool:
+    """No refusal, or only the 7 day pause after a security check, which the browser search no
+    longer keeps (owner, 2026-11-04, B20: the person solves the check). Consent stays: a
+    ticked website is its permission (J17)."""
+    return refused is None or refused.endswith("_paused") or refused == "permission_checkpoint"
+
+
 def refusal(
     db: Session, user_id: uuid.UUID, platform: str, sweep_id: uuid.UUID | None, now: datetime
 ) -> str | None:
@@ -250,7 +259,7 @@ class PlatformPolicy:
         except Exception as exc:
             logger.warning("platform check failed: error=%s", type(exc).__name__)
             return "permission_unavailable"
-        return None if refused is None else source_code(platform, refused, reserved)
+        return None if _paused(refused) else source_code(platform, refused, reserved)
 
     def _refusal(self, context: SourceContext, platform: str) -> str | None:
         with self.sessions() as db:
@@ -273,7 +282,7 @@ class PlatformPolicy:
         except Exception as exc:
             logger.warning("platform reservation failed: error=%s", type(exc).__name__)
             return "permission_unavailable"
-        if refused is not None:
+        if not _paused(refused):
             return source_code(platform, refused, False)
         self._run(context).reserved.add(context.source_id)
         return None
@@ -305,39 +314,9 @@ class PlatformPolicy:
                 raise
 
     async def observe(self, context: SourceContext, url: str, snapshot: str) -> str | None:
-        platform = platform_for(context)
-        if platform == CUSTOM:
-            return None
-        code = wall(platform, url, snapshot, self.base_url)
-        if code is None:
-            return None
-        try:
-            await asyncio.to_thread(self._record, context, platform, code)
-        except Exception as exc:
-            logger.warning("platform wall record failed: error=%s", type(exc).__name__)
-            return "permission_unavailable"
-        return code
-
-    def _record(self, context: SourceContext, platform: str, code: str) -> None:
-        user, now = uuid.UUID(context.user_id), self.clock()
-        with self.sessions() as db:
-            try:
-                if code == "linkedin_checkpoint":
-                    linkedin_guard.record_checkpoint(db, user, now, "sweep")
-                if context.sweep_id is not None:
-                    guard.record_wall(
-                        db,
-                        user,
-                        uuid.UUID(str(context.sweep_id)),
-                        context.source_id,
-                        platform,
-                        code,
-                        now,
-                    )
-                db.commit()
-            except BaseException:
-                db.rollback()
-                raise
+        """B20: the browser search no longer ends on a wall nor records a checkpoint (the agent
+        asks the person, browser_ask_person); kept only because InteractivePolicy names it."""
+        return None
 
 
 def runtime_policy(settings: Any, sessions: Any) -> PlatformPolicy:

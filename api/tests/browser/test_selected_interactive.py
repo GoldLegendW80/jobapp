@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 import json
+import math
 import random
 import threading
 from datetime import UTC, datetime
@@ -55,14 +56,8 @@ def selected(url=BASE, **search):
 
 class Tools(InteractiveTools):
     async def call(self, name, args):
-        scope = args["_discovery_scope"]
-        assert scope == {
-            "start": BASE,
-            "titles": ["robot"],
-            "places": [],
-            "filters": {"remote": "remote"},
-        }
-        args = {**args, "_discovery_scope": {**scope, "filters": {"remote": "1"}}}
+        # B20: browserd gets the start alone; the person's values are the prompt's context.
+        assert args["_discovery_scope"] == {"start": BASE}
         return await super().call(name, args)
 
 
@@ -445,25 +440,25 @@ def test_unrepresentable_native_query_is_explained_before_a_lease(search):
     assert not leases.acquired
 
 
-def test_elapsed_sweep_budget_does_not_open_a_source():
+def test_an_elapsed_sweep_deadline_still_opens_a_website():
+    """B20 (owner, 2026-11-04: "as long as it takes"): the sweep's deadline bounds its API
+    sources, never a website read in the browser."""
     entries, _, leases, tools, _ = asyncio.run(
         execute(selected(), "e2e-person", ScriptedFinder(lambda _: None), deadline=0)
     )
-    assert entries[0]["reason"] == "time_budget"
-    assert not tools.actions
-    assert leases.released == []
+    assert entries[0]["reason"] != "time_budget"
+    assert tools.actions == ["browser_navigate"]
+    assert leases.released == ["lease-1"]
 
 
 def test_private_criteria_and_instructions_cannot_change_native_scope():
     from app.browser.sources.interactive import searches_for
 
     scope = searches_for(selected(location={"terms": ["Paris"]}, contract_types=["CDI"])).scope
-    assert scope.tool_scope() == {
-        "start": BASE,
-        "titles": ["robot"],
-        "places": ["Paris"],
-        "filters": {"remote": "remote", "contract": "CDI"},
-    }
+    # B20: browserd gets the start alone; the saved values stay the agent's context.
+    assert scope.tool_scope() == {"start": BASE}
+    assert (scope.titles, scope.places) == (("robot",), ("Paris",))
+    assert dict(scope.filters) == {"remote": "remote", "contract": "CDI"}
     assert CANARY not in json.dumps(scope.tool_scope())
     assert scope.instructions == CANARY
     assert json.loads(scope.criteria)["location"]["terms"] == ["Paris"]
@@ -527,34 +522,28 @@ def test_fresh_permission_is_checked_after_pacing_and_before_initial_navigation(
     assert [event[0] for event in policy.events] == ["check", "check"]
 
 
-def test_observed_wall_is_awaited_before_model_text_and_releases_lease():
+def test_a_wall_page_reaches_the_agent_and_never_ends_the_website_by_itself():
+    """B20 (owner, 2026-11-04): a security check or a sign in wall no longer ends the website
+    nor records a checkpoint; the agent reads it and asks the person (browser_ask_person)."""
+
     class Wall(Policy):
         async def observe(self, context, url, snapshot):
-            await super().observe(context, url, snapshot)
-            self.allowed = False  # The fake commit completed before this method returns.
-            return "permission_checkpoint"
+            pytest.fail("a page was judged as a wall")
 
-    async def forbidden(_):
-        pytest.fail("wall text reached the model")
+    reached = []
+
+    async def script(session):
+        reached.append(session.current)
+        return finder.Ran()
 
     policy = Wall()
-    entries, _, leases, tools, _ = asyncio.run(
-        execute(selected(), "e2e-person", ScriptedFinder(forbidden), policy=policy)
+    entries, _, leases, _, _ = asyncio.run(
+        execute(selected(), "e2e-person", ScriptedFinder(script), policy=policy)
     )
-    assert entries[0]["reason"] == "permission_checkpoint"
+    assert reached == [BASE]
+    assert entries[0]["reason"] != "permission_checkpoint"
     assert leases.released == ["lease-1"]
-    assert [event[0] for event in policy.events] == [
-        "check",
-        "check",
-        "reserve",
-        "check",
-        "observe",
-    ]
-    observed = policy.events[-1]
-    assert observed[1].source_id == sweep._source_id("llm_browser", BASE)
-    assert observed[1].platform == "custom"
-    assert observed[2] == BASE
-    assert observed[3] == tools.pages[BASE]
+    assert "observe" not in [event[0] for event in policy.events]
 
 
 @pytest.mark.parametrize("stopped", ["token_budget", "turn_limit", "error", "cancelled", "busy"])
@@ -601,31 +590,23 @@ def test_a_website_has_no_page_cap_and_a_careers_page_keeps_its_ceilings():
     assert leases.released == ["lease-1"]
 
 
-def test_a_shorter_lease_cannot_be_widened_by_the_interactive_source():
-    entries, _, leases, tools, _ = asyncio.run(
-        execute(
-            selected(), "e2e-person", ScriptedFinder(lambda _: None), leases=FakeLeases(max_s=1)
-        )
-    )
-    assert entries[0]["reason"] == "lease_budget"
-    assert not tools.actions
-    assert leases.released == ["lease-1"]
-
-
-def test_a_longer_lease_is_cut_at_the_website_cap_the_pace_hold_is_sized_on():
-    """PACE_HOLD_S is the cap plus a margin: a search is cut at the cap of its lease's request,
-    however long the lease may run."""
+@pytest.mark.parametrize("max_s", [1, 5000])
+def test_a_lease_s_maximum_is_no_cap_of_the_website_search(max_s):
+    """B20 (owner, 2026-11-04: "as long as it takes"): neither a short nor a long lease bounds the
+    search; the idle timer of a lease nobody uses and the run's Cancel still end it."""
     ends = []
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         ends.append(session.pages.lease_until)
         return finder.Ran()
 
-    asyncio.run(
-        execute(selected(), "e2e-person", ScriptedFinder(script), leases=FakeLeases(max_s=5000))
+    entries, _, leases, tools, _ = asyncio.run(
+        execute(selected(), "e2e-person", ScriptedFinder(script), leases=FakeLeases(max_s=max_s))
     )
-    assert ends == [sources.WEBSITE_CAP_S] == [900]
-    assert sources.PACE_HOLD_S > sources.WEBSITE_CAP_S
+    assert ends == [math.inf]
+    assert entries[0]["reason"] != "lease_budget"
+    assert tools.actions == ["browser_navigate"]
+    assert leases.released == ["lease-1"]
 
 
 def test_model_does_not_get_an_empty_success_without_executing_search():

@@ -1,9 +1,9 @@
 """B19, the truthful outcome (2026-10-29): the session counts the app's refusals that make
 `search_refused` win over the agent's reason (interactive.outcome), as the production traces met
-them: the api's refusal of an address that is no observed link (LinkedIn's search address) and
-browserd's refusal of a navigation (Indeed's `host_not_allowed`); a page that did not load is
-no refusal. Enter in the box (browser_type's `submit`) is a search the session saw, so "no
-match" said after it is a searched website."""
+them: browserd's refusal of a navigation (Indeed's `host_not_allowed`), and since B20 the line's
+(`line`); a page that did not load is no refusal. B20 (owner, 2026-11-04): the api refuses no
+address of its own any more, and "no match" said after the agent acted on the website is a
+searched website."""
 
 from typing import Any
 
@@ -16,25 +16,6 @@ from tests.browser.test_multi_search import run
 from tests.browser.test_selected_interactive import selected
 
 
-def test_an_address_the_api_refuses_makes_the_refusal_win():
-    """LinkedIn, 2026-10-29: the agent's search address was refused before browserd (it was no
-    observed link), then it said there was no search control."""
-    answers: list = []
-
-    async def script(session: finder.FinderSession) -> finder.Ran:
-        await session.navigate("/fr/jobs")
-        answers.append(await session.navigate("/fr/jobs?query=genai+engineer"))  # never observed
-        session.report_none("no_search_control")
-        return finder.Ran()
-
-    entry, _, _ = run(selected(**SEARCH), Jungle(), ScriptedFinder(script))
-    [(text, error)] = answers
-    assert error is True
-    assert text.startswith("Refused: open only an observed link"), text
-    assert entry["refused"] == {"unobserved_address": 1}
-    assert entry["error"] == "search_refused"
-
-
 @pytest.mark.parametrize(
     ("code", "counted"),
     [
@@ -44,6 +25,7 @@ def test_an_address_the_api_refuses_makes_the_refusal_win():
         ("bad_url", True),
         ("submit", True),
         ("danger", True),
+        ("line", True),  # B20: the line of tools/line.py
         ("navigation_failed", False),  # the page's, not the app's
     ],
 )
@@ -74,26 +56,19 @@ def test_a_navigation_browserd_refuses_is_the_app_s_refusal(code, counted):
         assert entry["error"] == "no_job_list"
 
 
-def test_enter_in_the_box_is_a_search_the_session_saw():
+@pytest.mark.parametrize(("acted", "error"), [(True, None), (False, "nothing_reported")])
+def test_no_match_after_the_agent_acted_is_a_searched_website(acted, error):
     """A script box (Welcome to the Jungle's) searches on Enter and lists in place: "no match"
-    said after it is a searched website."""
-
-    class Entering(Jungle):
-        async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-            submit = args.get("submit") is True
-            answer = await super().call(name, args)
-            if name == "browser_type" and submit and answer["ok"]:
-                self.searched = self.typed
-            return answer
+    said after it is a searched website; said with nothing done on the website, it is not."""
 
     async def script(session: finder.FinderSession) -> finder.Ran:
-        await session.navigate("/fr/jobs")
-        await session.interact("browser_click", {"ref": "e20"})  # No, thanks
-        typed = {"ref": "e1", "text": "GenAI Engineer", "submit": True}
-        assert (await session.interact("browser_type", typed))[1] is False
+        if acted:
+            await session.navigate("/fr/jobs")
+            await session.interact("browser_click", {"ref": "e20"})  # No, thanks
+            typed = {"ref": "e1", "text": "GenAI Engineer", "submit": True}
+            assert (await session.interact("browser_type", typed))[1] is False
         session.report_none("no_match")
         return finder.Ran()
 
-    entry, _, _ = run(selected(**SEARCH), Entering(results={}), ScriptedFinder(script))
-    assert (entry["error"], entry["searches"]) == (None, 1)
-    assert entry["searched"] == [{"title": "genai engineer", "place": None}]
+    entry, _, _ = run(selected(**SEARCH), Jungle(results={}), ScriptedFinder(script))
+    assert entry["error"] == error

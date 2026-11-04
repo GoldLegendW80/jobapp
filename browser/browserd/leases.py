@@ -209,8 +209,10 @@ class Lease:
     def expired(self, now: float) -> str | None:
         """Why the lease must end now, or None."""
         if self.state == "waiting_person":
-            if self.wait_reason == "takeover":
-                return None  # Live.tick gives input back when the takeover allowance ends.
+            if self.wait_reason in ("takeover", "ask_person"):
+                # Live.tick gives input back when the takeover allowance ends, and resumes an
+                # ask nobody took over at its deadline (B20, tools/ask_person.py).
+                return None
             if self.wait_deadline is None or now < self.wait_deadline:
                 return None
             return "signin_timeout" if self.wait_reason == "signin" else "person_timeout"

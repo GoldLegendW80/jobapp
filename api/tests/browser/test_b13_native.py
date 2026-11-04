@@ -223,7 +223,10 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
                 stolen = LeaseTools(store, client, str(uuid.uuid4()), got.lease.lease_id, got.token)
                 with pytest.raises(BrowserError):
                     await stolen.call("browser_click", {"ref": button, "_discovery": "native_get"})
-                assert (await one.navigate("http://elsewhere:8080/escape"))[1]
+                # B20: any public address opens (browserd's egress proxy refuses a private one;
+                # this stack lets `elsewhere` through as public).
+                view, refused = await one.navigate("http://elsewhere:8080/escape")
+                assert not refused, view
             finally:
                 await store.release(str(alice), got.lease.lease_id)
             with pytest.raises(BrowserError):
@@ -246,56 +249,8 @@ def test_native_search_through_real_runtime(native, runtime: Runtime, alice, red
         {"q": ["robot"], "remote": ["1"]},
         {"q": ["robot"], "remote": ["1"], "page": ["2"]},
     ]
-    assert not any(p["path"] in {"/apply", "/escape"} for p in observed)
-    native.completed = True
-
-
-def test_native_hostile_controls_and_redirects(native):
-    failures = []
-    for legacy in (True, False):
-        for path in (
-            "handler",
-            "shadow",
-            "named",
-            "hidden",
-            "default",
-            "base",
-            "redirect-off",
-            "redirect-write",
-        ):
-            lease = Lease(native, "sweep")
-            native.redactions.append(lease.token)
-            scope = {"start": START + path, "titles": ["robot"], "places": [], "filters": {}}
-            marker = {"_discovery": "native_get", "_discovery_scope": scope}
-            try:
-                assert lease.capability is None
-                opened = lease.tool(
-                    "browser_navigate", url=scope["start"], **({} if legacy else marker)
-                )
-                assert opened["ok"], (legacy, path, opened)
-                button = ref(lease.snapshot(), "button", "Search")
-                answer = lease.tool("browser_click", ref=button, **marker)
-                if answer.get("ok"):
-                    failures.append((legacy, path))
-                assert answer["error"] in {"unsupported_discovery", "host_not_allowed"}
-            finally:
-                lease.end()
-    observed = json.loads(
-        native.execute(
-            "browser",
-            "python",
-            "-I",
-            "-c",
-            "import urllib.request; print(urllib.request.urlopen('http://pages:8080/observed').read().decode())",
-        )
-    )
-    assert not failures, failures
-    assert not any(p["path"] in {"/b13/custom-action", "/escape", "/remove"} for p in observed)
-    assert not any(p.get("method") == "POST" for p in observed)
-    assert [
-        p["path"] for p in observed if p["path"] in {"/b13/off/search", "/b13/write/search"}
-    ] == ["/b13/off/search", "/b13/write/search"]
-    assert not any(p["path"] == "/b13/search" for p in observed)
+    assert not any(p["path"] == "/apply" for p in observed)  # "Search application" refused
+    assert "/escape" in [p["path"] for p in observed]
     native.completed = True
 
 
@@ -308,104 +263,6 @@ def fetched(native, url: str) -> str:
         "-c",
         f"import urllib.request; print(urllib.request.urlopen({url!r}).read().decode())",
     )
-
-
-def test_native_start_page_redirect_on_its_own_host_is_followed(native):
-    """Jobs J18 (issue 716): the start page's own redirect to its locale path is followed and
-    its search runs; a start page redirected to another host or a write address is not, nor one
-    whose Location Python's urljoin keeps on the host while Chromium goes to `elsewhere`."""
-    answers = {}
-    for path in ("locale", "locale-off", "locale-write", "locale-slash", "locale-slashes"):
-        lease = Lease(native, "sweep")
-        native.redactions.append(lease.token)
-        scope = {
-            "start": START + path,
-            "titles": ["robot"],
-            "places": [],
-            "filters": {"remote": "0"},
-        }
-        marker = {"_discovery": "native_get", "_discovery_scope": scope}
-        try:
-            opened = lease.tool("browser_navigate", url=scope["start"], **marker)
-            answers[path] = opened
-            if path == "locale":
-                assert opened["ok"], opened
-                shot = lease.tool("browser_snapshot")
-                assert shot["url"] == START + "en/", shot
-                text = shot["snapshot"]
-                box = ref(text, "searchbox", "Query")
-                assert lease.tool("browser_type", ref=box, text="robot", **marker)["ok"]
-                found = lease.tool("browser_click", ref=ref(text, "button", "Search"), **marker)
-                assert found["ok"], found
-        finally:
-            lease.end()
-    for path in ("locale-off", "locale-write", "locale-slash", "locale-slashes"):
-        assert not answers[path]["ok"], (path, answers[path])
-    # `elsewhere` is this same fixture server under its other name, and its log records the
-    # Host of each request: one request sent there by the test shows the log sees that host,
-    # so no request of Chromium's to it means none was made.
-    fetched(native, "http://elsewhere:8080/b13/seen-elsewhere")
-    observed = json.loads(fetched(native, "http://pages:8080/observed"))
-    assert {"path": "/b13/seen-elsewhere", "host": "elsewhere:8080"} in [
-        {"path": p["path"], "host": p.get("host")} for p in observed
-    ]
-    chromium = [p for p in observed if p["path"] not in {"/observed", "/b13/seen-elsewhere"}]
-    assert not any(str(p.get("host")).startswith("elsewhere") for p in chromium), chromium
-    assert not any(
-        p["path"] in {"/escape", "/remove", "/b13/escape-slash", "/b13/escape-slashes"}
-        or "\\" in p["path"]
-        for p in chromium
-    )
-    assert {"path": "/b13/search", "query": {"q": ["robot"], "remote": ["0"]}} in [
-        {"path": p["path"], "query": p.get("query")} for p in observed
-    ]
-    native.completed = True
-
-
-def test_native_indeed_home_redirect_to_its_country_site_is_followed(native):
-    """Owner, 2026-10-28 and 2026-10-29 (B19): Indeed's home sends the start page to the
-    person's country site, a host of its family, and the search continues there. A redirect to
-    another domain is refused and its target never requested, and so is one to a host the
-    lease's list does not hold (test_b19_families holds the rest)."""
-    answers = {}
-    family = ["indeed.test", "*.indeed.test"]
-    for path, hosts in (
-        ("indeed", family),
-        ("indeed-off", family),
-        ("indeed", ["www.indeed.test"]),
-    ):
-        start = INDEED + path.removeprefix("indeed")
-        lease = Lease(native, "sweep", hosts=hosts)
-        native.redactions.append(lease.token)
-        scope = {"start": start, "titles": ["robot"], "places": [], "filters": {"remote": "0"}}
-        marker = {"_discovery": "native_get", "_discovery_scope": scope}
-        country = hosts is family
-        try:
-            opened = lease.tool("browser_navigate", url=start, **marker)
-            answers[path, country] = opened
-            if (path, country) == ("indeed", True):
-                assert opened["ok"], opened
-                shot = lease.tool("browser_snapshot")
-                assert shot["url"] == "http://fr.indeed.test:8080/b13/indeed", shot
-                text = shot["snapshot"]
-                box = ref(text, "searchbox", "Query")
-                assert lease.tool("browser_type", ref=box, text="robot", **marker)["ok"]
-                found = lease.tool("browser_click", ref=ref(text, "button", "Search"), **marker)
-                assert found["ok"], found
-        finally:
-            lease.end()
-    assert not answers["indeed-off", True]["ok"]
-    assert not answers["indeed", False]["ok"]  # the lease's list still bounds the family
-    observed = json.loads(fetched(native, "http://pages:8080/observed"))
-    hosts = [(p.get("host"), p["path"], p.get("query")) for p in observed]
-    assert ("fr.indeed.test:8080", "/b13/search", {"q": ["robot"], "remote": ["0"]}) in hosts
-    # The redirect to another domain was made (its page was requested), its target never was
-    # (`elsewhere` is in this log, test_native_start_page_redirect_on_its_own_host_is_followed);
-    # the run whose list holds the home alone never reached the country site (one request there).
-    assert ("www.indeed.test:8080", "/b13/indeed-off") in [(h, p) for h, p, _ in hosts]
-    assert not any(host.startswith("elsewhere") for host, _, _ in hosts if host), hosts
-    assert [h for h, p, _ in hosts if p == "/b13/indeed"].count("fr.indeed.test:8080") == 1
-    native.completed = True
 
 
 @pytest.mark.parametrize(
@@ -515,9 +372,10 @@ class Person(Lease):
 def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
     """2026-10-28, issue 716, on a website like Welcome to the Jungle (b13_pages.jungle): from its
     home with no search box to its search page by address; its cookie banner covers the search
-    box (`element_covered`), accepting it is refused, declining it closes it; the search runs in
+    box, which is typed in through the focus (B20); accepting the cookies passes and closes the
+    banner, as declining does (B20: no decline only rule, no `declined` key); the search runs in
     the page, its address unchanged, and lists the postings to a member; a posting opens. Signed
-    out, with no JavaScript, the same search shows only a count, no list."""
+    out (B20: JavaScript on), the banner shows too, and the same search shows only a count."""
     profile = str(uuid.uuid4())
     member = Person(native, "sweep", profile)  # the person signs in, as in the live view
     native.redactions.append(member.token)
@@ -525,7 +383,7 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         assert member.tool("browser_navigate", url=JUNGLE + "/session")["ok"]
     finally:
         member.end()
-    scope = {"start": JUNGLE, "titles": ["genai engineer"], "places": [], "filters": {}}
+    scope = {"start": JUNGLE}  # B20: browserd gets the start alone
     signed = {"_discovery": "native_get", "_discovery_scope": {**scope, "signed_in": True}}
     lease = Person(native, "sweep", profile)
     native.redactions.append(lease.token)
@@ -538,15 +396,13 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         page = lease.tool("browser_snapshot")["snapshot"]
         box = ref(page, "searchbox", "What job")
         covered = lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)
-        assert covered["error"] == "element_covered", covered
-        for name in ("OK for me", "I choose"):
-            refused = lease.tool("browser_click", ref=ref(page, "button", name), **signed)
-            assert not refused["ok"], (name, refused)
-        declined = lease.tool("browser_click", ref=ref(page, "button", "No, thanks"), **signed)
-        assert declined["ok"], declined
-        assert declined.get("declined") is True, declined  # the api never counts it a search
+        assert covered["ok"], covered  # typed through the focus, under the banner
+        for name in ("I choose", "OK for me"):
+            chosen = lease.tool("browser_click", ref=ref(page, "button", name), **signed)
+            assert chosen["ok"], (name, chosen)
+            assert "declined" not in chosen, chosen
         page = lease.tool("browser_snapshot")["snapshot"]
-        assert "No, thanks" not in page
+        assert "OK for me" not in page
         box = ref(page, "searchbox", "What job")
         assert lease.tool("browser_type", ref=box, text="GenAI Engineer", **signed)["ok"]
         searched = lease.tool("browser_click", ref=ref(page, "button", "Search"), **signed)
@@ -570,26 +426,29 @@ def test_native_a_website_like_the_jungle_is_searched_as_a_person_would(native):
         assert anonymous.tool("browser_navigate", url=JUNGLE, **marker)["ok"]
         assert anonymous.tool("browser_navigate", url=PAGES + "fr/jobs", **marker)["ok"]
         page = anonymous.tool("browser_snapshot")["snapshot"]
-        assert "No, thanks" not in page  # its banner needs JavaScript, off signed out
+        assert "No, thanks" in page  # its banner: JavaScript is on signed out too (B20)
         box = ref(page, "searchbox", "What job")
         typed = anonymous.tool("browser_type", ref=box, text="genai engineer", **marker)
-        assert not typed["ok"], typed
-        # A page with scripts takes no typing signed out (no script free proof); its search by
-        # address does, and shows a count, no list.
-        searched = PAGES + "fr/jobs?query=genai+engineer"
-        assert anonymous.tool("browser_navigate", url=searched, **marker)["ok"]
+        assert typed["ok"], typed  # through the focus
+        declined = anonymous.tool("browser_click", ref=ref(page, "button", "No, thanks"), **marker)
+        assert declined["ok"], declined
+        assert "declined" not in declined, declined
+        searched = anonymous.tool("browser_click", ref=ref(page, "button", "Search"), **marker)
+        assert searched["ok"], searched
+        assert anonymous.tool("browser_wait_for", text="9756 jobs found")["ok"]
         shot = anonymous.tool("browser_snapshot")
-        assert "9756 jobs found" in shot["snapshot"]
-        assert "GenAI Engineer" not in shot["snapshot"]
+        assert shot["url"] == PAGES + "fr/jobs", shot["url"]
+        assert "GenAI Engineer" not in shot["snapshot"]  # a count, no list, to no member
     finally:
         anonymous.end()
     observed = json.loads(fetched(native, "http://pages:8080/observed"))
     jungle = [p for p in observed if p["path"].startswith("/b13/jungle")]
-    assert {"path": "/b13/jungle/consent", "choice": ["declined"]} in [
-        {"path": p["path"], "choice": p["query"].get("choice")} for p in jungle
-    ]
-    assert not any(p["query"].get("choice") == ["accepted"] for p in jungle)
+    choices = [p["query"].get("choice") for p in jungle if p["path"] == "/b13/jungle/consent"]
+    assert choices == [["accepted"], ["declined"]]  # the member's Accept, the anonymous Decline
     assert not any(p.get("method") == "POST" for p in observed)
     lists = [p for p in jungle if p["path"] == "/b13/jungle/api/search"]
-    assert [(p["query"], p["member"]) for p in lists] == [({"query": ["GenAI Engineer"]}, True)]
+    assert [(p["query"], p["member"]) for p in lists] == [
+        ({"query": ["GenAI Engineer"]}, True),
+        ({"query": ["genai engineer"]}, False),
+    ]
     native.completed = True

@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "browser"))
 import pytest  # noqa: E402
 import sqlalchemy as sa  # noqa: E402
 from browserd import prep, signin  # noqa: E402
-from browserd.tools import discovery  # noqa: E402
+from browserd.tools import discovery, line  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
 from app.browser import site_logins, sources  # noqa: E402
@@ -44,12 +44,7 @@ user_a, user_b, redis_url = b7.user_a, b7.user_b, b3_support.redis_url
 Volume, row, start = b7.Volume, b7.row, b7.start
 
 SITE = "https://members.example.test/jobs/search"
-SCOPE = {
-    "start": "https://jobs.example.test/search",
-    "titles": ["robot"],
-    "places": [],
-    "filters": {},
-}
+SCOPE = {"start": "https://jobs.example.test/search"}  # B20: the start alone
 
 # --- browserd: the signed in scope and its request rule --------------------------------------
 
@@ -63,57 +58,6 @@ def test_scope_parse_takes_signed_in_as_a_strict_boolean() -> None:
 
 
 SIGNED = discovery.Scope.parse({**SCOPE, "signed_in": True})
-
-
-@pytest.mark.parametrize(
-    ("url", "method", "document", "allowed"),
-    [
-        ("https://jobs.example.test/search?q=robot", "GET", True, True),
-        ("https://jobs.example.test/jobs/42", "GET", True, True),
-        ("https://jobs.example.test/jobs/42", "HEAD", True, True),
-        ("https://jobs.example.test/search?q=robot", "POST", True, False),
-        ("https://jobs.example.test/search?q=other", "GET", True, False),
-        ("https://jobs.example.test/login?next=/search", "GET", True, False),
-        ("https://jobs.example.test/jobs/42/apply", "GET", True, False),
-        ("https://elsewhere.example.test/search?q=robot", "GET", True, False),
-        ("https://cdn.example.net/app.js", "GET", False, True),
-        ("https://jobs.example.test/api/me", "GET", False, True),
-        ("https://jobs.example.test/api/account", "GET", False, True),
-        ("https://jobs.example.test/api/search", "POST", False, False),
-        ("https://jobs.example.test/api/track", "PUT", False, False),
-        ("https://jobs.example.test/api/x", "DELETE", False, False),
-        ("https://jobs.example.test/api/x", "PATCH", False, False),
-        ("https://jobs.example.test/jobs/42/easyapply", "GET", False, False),
-        ("https://api.example.test/jobs/42/candidater", "GET", False, False),
-        ("https://api.example.test/v1/postuler", "GET", False, False),
-        ("https://api.example.test/v1/submit", "GET", False, False),
-        ("https://api.example.test/v1/delete", "GET", False, False),
-        ("https://u:p@cdn.example.net/app.js", "GET", False, False),
-        ("javascript:alert(1)", "GET", False, False),
-        ("https://cdn.example.net/" + "a" * 9000, "GET", False, False),
-    ],
-)
-def test_signed_request_lets_only_reads_leave(url, method, document, allowed) -> None:
-    assert discovery.signed_request(url, method, document, SIGNED) is allowed
-
-
-@pytest.mark.parametrize(
-    ("url", "signin"),
-    [
-        ("https://jobs.example.test/login", True),
-        ("https://jobs.example.test/Login?next=/search", True),
-        ("https://jobs.example.test/sign-in", True),
-        ("https://jobs.example.test/fr/connexion", True),
-        ("https://jobs.example.test/auth/callback", True),
-        ("https://jobs.example.test/sso/start", True),
-        ("https://jobs.example.test/jobs/42", False),
-        ("https://jobs.example.test/search?q=login", False),
-        ("https://jobs.example.test/", False),
-        ("not a url", False),
-    ],
-)
-def test_signin_url_reads_the_path_only(url, signin) -> None:
-    assert discovery.signin_url(url) is signin
 
 
 def get_form(native: bool) -> dict[str, Any]:
@@ -134,32 +78,17 @@ def get_form(native: bool) -> dict[str, Any]:
     }
 
 
-def test_a_page_with_scripts_is_refused_unless_signed_in() -> None:
-    anonymous = discovery.Scope.parse(SCOPE)
-    args = {"text": "robot"}
-    current = SCOPE["start"]
-    assert discovery.verdict(get_form(False), "browser_type", current, scope=anonymous, args=args)
-    assert (
-        discovery.verdict(get_form(True), "browser_type", current, scope=anonymous, args=args)
-        is None
-    )
-    assert (
-        discovery.verdict(get_form(False), "browser_type", current, scope=SIGNED, args=args) is None
-    )
-    # The query is still the frozen one, signed in or not.
-    other = {"text": "anything"}
-    assert discovery.verdict(get_form(False), "browser_type", current, scope=SIGNED, args=other)
-
-
-@pytest.mark.parametrize("label", ["Postuler", "Candidater", "Easy Apply", "Apply now", "Contact"])
+@pytest.mark.parametrize(
+    "label",
+    ["Postuler", "Candidater", "Easy Apply", "Apply now", "Bewerben", "Send message", "Connect"],
+)
 def test_apply_and_contact_buttons_stay_refused_signed_in(label: str) -> None:
-    facts = {
-        "tag": "button",
-        "type": "submit",
-        "names": [label],
-        "discovery": {**get_form(False)["discovery"], "name": ""},
-    }
-    assert discovery.verdict(facts, "browser_click", SCOPE["start"], scope=SIGNED) is not None
+    """The line (B20) holds signed in as anonymous: a button of a search form (GET) that applies
+    or writes to someone is refused, whatever the form."""
+    facts = {"tag": "button", "type": "submit", "names": [label], "native": {"method": "get"}}
+    assert line.control(facts, "click") is not None
+    search = {**facts, "names": ["Search"]}
+    assert line.control(search, "click") is None  # the same button that searches goes
 
 
 # --- browserd: the cookie store check ---------------------------------------------------------
@@ -333,10 +262,20 @@ class Logins:
 
 
 class ScopeTools(InteractiveTools):
+    """browserd's tools of the website (InteractiveTools) that note each call's scope; the
+    signed in flag is checked here, the rest of the scope by InteractiveTools (the start
+    alone). `answer` answers every call instead."""
+
     def __init__(self, answer: dict[str, Any] | None = None) -> None:
         super().__init__()
         self.scopes: list[dict[str, Any]] = []
         self.answer = answer
+        # browser_ask_person (B20): `watching` someone has the live view open; when asked,
+        # the person signs in (`signs_in`: the page becomes a member's) or gives the browser
+        # back as it was. browserd's lease, as interactive.ask_person polls it.
+        self.watching = self.signs_in = False
+        self.client, self.leases = Browserd(self), self
+        self.lease_id, self.user_id = "lease-1", ""
 
     async def call(self, name, args):
         scope = args["_discovery_scope"]
@@ -344,25 +283,60 @@ class ScopeTools(InteractiveTools):
         if self.answer is not None:
             self.actions.append(name)
             return self.answer
+        if name == "browser_ask_person":
+            self.actions.append(name)
+            if not self.watching:
+                return {"ok": False, "error": "nobody_watching"}
+            return {"ok": False, "error": "waiting_person", "left_s": 900}
         plain = {k: v for k, v in scope.items() if k != "signed_in"}
-        return await super().call(
-            name, {**args, "_discovery_scope": {**plain, "filters": {"remote": "1"}}}
-        )
+        return await super().call(name, {**args, "_discovery_scope": plain})
+
+    @property
+    def polls(self) -> int:
+        return self.client.polls
+
+    async def wait_person(self, *_args: Any) -> object:
+        return object()
+
+    async def resume(self, *_args: Any) -> object:
+        return object()
 
 
-def run_for(user: str, logins: Logins, tools: ScopeTools, monkeypatch) -> list[dict[str, Any]]:
+class Browserd:
+    """browserd's current lease while the person is asked: waiting for them on the first poll,
+    then given back (with a member's page when they signed in)."""
+
+    def __init__(self, site: ScopeTools) -> None:
+        self.site, self.polls = site, 0
+
+    async def current(self) -> dict[str, Any]:
+        self.polls += 1
+        lease_id = self.site.lease_id
+        if self.polls == 1:
+            return {"lease": {"lease_id": lease_id, "state": "waiting_person", "wait_host": HOST}}
+        if self.site.signs_in:
+            self.site.pages[self.site.current] = MEMBER_PAGE
+        return {"lease": {"lease_id": lease_id, "state": "active"}}
+
+
+MEMBER_PAGE = '- heading "Robot jobs for members"\n- searchbox "Query" [ref=e1]'
+
+
+async def nothing(_session):
+    return finder_ran()
+
+
+def run_for(
+    user: str, logins: Logins, tools: ScopeTools, monkeypatch, script: Any = nothing
+) -> list[dict[str, Any]]:
     class Runner(RUNNER):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **{**kwargs, "site_logins": logins})
 
     monkeypatch.setattr(selected_module.sources, "Runner", Runner)
-
-    async def nothing(_session):
-        return finder_ran()
-
     entries, *_ = asyncio.run(
         selected_module.execute(
-            selected_module.selected(), user, ScriptedFinder(nothing), tools=tools
+            selected_module.selected(), user, ScriptedFinder(script), tools=tools
         )
     )
     return entries
@@ -392,13 +366,15 @@ def test_only_the_person_who_signed_in_reads_the_site_signed_in(monkeypatch) -> 
     assert logins.expired == []
 
 
-def test_a_sign_in_page_while_signed_in_ends_platform_signin_and_expires(monkeypatch) -> None:
+def test_a_start_that_reads_no_page_marks_no_login(monkeypatch) -> None:
+    """A start browserd refused reads no page: the search ends there and no login is marked
+    (B20: only a sign in wall the search ended on marks it, below)."""
     alice = str(uuid.uuid4())
     logins = Logins({alice: {HOST}})
     tools = ScopeTools({"ok": False, "error": "signin_required", "message": "x"})
     [entry] = run_for(alice, logins, tools, monkeypatch)
-    assert entry["error"] == "platform_signin"
-    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] != "platform_signin"
+    assert logins.expired == []
     assert tools.actions == ["browser_navigate"]
 
 
@@ -411,28 +387,140 @@ def test_signin_required_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
     assert logins.expired == []
 
 
+SIGN_IN = '- heading "Sign in"\n- textbox "Email" [ref=e1]'
+# A sign in page platform_policy.wall does not tell (its heading is no sign in heading).
+UNTOLD = '- heading "Members area"\n- textbox "Email" [ref=e1]'
+
+
 class SignInPage(ScopeTools):
     """The website answers its sign in page at the search's own address: a heading, no redirect."""
 
-    def __init__(self) -> None:
+    def __init__(self, page: str = SIGN_IN) -> None:
         super().__init__()
-        self.pages[BASE] = '- heading "Sign in"\n- textbox "Email" [ref=e1]'
+        self.pages[BASE] = page
 
 
-def test_a_sign_in_heading_while_signed_in_ends_platform_signin_and_expires(monkeypatch) -> None:
+def reports(*steps: str) -> Any:
+    """The agent's script: ask the person ("ask"), read the page again ("read"), then report
+    no posting with the last step's reason."""
+
+    async def script(session):
+        for step in steps[:-1]:
+            if step == "ask":
+                await session.ask_person("Please sign in again on this website.")
+            elif step == "read":
+                await session.snapshot()
+        session.report_none(steps[-1])
+        return finder_ran()
+
+    return script
+
+
+def test_a_sign_in_page_the_search_ends_on_while_signed_in_expires_the_login(monkeypatch) -> None:
+    """B20 keeps B17's mark: the agent read the sign in page and ended there, nobody solved it,
+    so the login is marked expired (Account and Find jobs say Sign in again)."""
     alice = str(uuid.uuid4())
     logins = Logins({alice: {HOST}})
-    [entry] = run_for(alice, logins, SignInPage(), monkeypatch)
-    assert entry["error"] == "platform_signin"
+    tools = SignInPage()
+    [entry] = run_for(alice, logins, tools, monkeypatch)
     assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
+    assert all(s.get("signed_in") is True for s in tools.scopes)
+
+
+def test_asked_with_nobody_watching_the_login_is_marked_expired(monkeypatch) -> None:
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "signin_wall"))
+    assert "browser_ask_person" in tools.actions
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
+
+
+def test_a_sign_in_wall_the_agent_reports_marks_it_on_a_page_code_does_not_tell(
+    monkeypatch,
+) -> None:
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    [entry] = run_for(alice, logins, SignInPage(UNTOLD), monkeypatch, reports("signin_wall"))
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
+
+
+def test_the_person_who_signs_in_when_asked_keeps_the_login(monkeypatch) -> None:
+    """The person watches, signs in again in the live view and gives the browser back: the
+    search goes on from a member's page, so nothing is marked."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    tools.watching = tools.signs_in = True
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "read", "no_match"))
+    assert tools.polls == 2
+    assert logins.expired == []
+    assert entry["error"] != "signin_wall"
+
+
+@pytest.mark.parametrize("signs_in", [True, False], ids=["signed_in", "gave_back"])
+def test_a_report_with_no_new_read_after_the_person_had_the_browser_marks_nothing(
+    monkeypatch, signs_in: bool
+) -> None:
+    """Review of B20, round 2: the person had the browser through browser_ask_person (signed in
+    again, or gave it back), and the agent reports without reading the page again. The sign in
+    page read before the ask is no longer the browser's page: nothing is marked."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    tools.watching, tools.signs_in = True, signs_in
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "no_match"))
+    assert tools.polls == 2
+    assert logins.expired == []
+    assert entry["error"] != "signin_wall"
+
+
+def test_the_person_had_the_browser_so_the_agent_s_word_alone_marks_nothing(monkeypatch) -> None:
+    """After the person had the browser, a sign in wall the agent reports on a page that code
+    does not tell as one is the agent's word only: nothing is marked."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage(UNTOLD)
+    tools.watching = True
+    run_for(alice, logins, tools, monkeypatch, reports("ask", "read", "signin_wall"))
+    assert tools.polls == 2
+    assert logins.expired == []
+
+
+def test_the_person_watching_who_does_not_sign_in_leaves_the_login_marked(monkeypatch) -> None:
+    """The person had the browser and gave it back on the sign in page: nobody solved it."""
+    alice = str(uuid.uuid4())
+    logins = Logins({alice: {HOST}})
+    tools = SignInPage()
+    tools.watching = True
+    [entry] = run_for(alice, logins, tools, monkeypatch, reports("ask", "read", "signin_wall"))
+    assert logins.expired == [(alice, HOST)]
+    assert entry["error"] == "signin_wall"
 
 
 def test_a_sign_in_heading_while_anonymous_is_not_an_expiry(monkeypatch) -> None:
     bob = str(uuid.uuid4())
     logins = Logins({})
-    [entry] = run_for(bob, logins, SignInPage(), monkeypatch)
-    assert entry["error"] != "platform_signin"
+    [entry] = run_for(bob, logins, SignInPage(), monkeypatch, reports("ask", "signin_wall"))
+    assert entry["error"] == "signin_wall"  # the agent's own reason, as any website's
     assert logins.expired == []
+
+
+def test_a_mark_that_cannot_be_written_is_logged_and_the_website_ends_as_it_would(
+    monkeypatch, caplog
+) -> None:
+    class Down(Logins):
+        async def expire(self, user_id: str, host: str) -> None:
+            raise RuntimeError("database away")
+
+    alice = str(uuid.uuid4())
+    with caplog.at_level("WARNING", logger="app.browser.sources.interactive"):
+        [entry] = run_for(alice, Down({alice: {HOST}}), SignInPage(), monkeypatch)
+    assert entry["error"] == "signin_wall"
+    assert "could not be marked expired: error=RuntimeError" in caplog.text
 
 
 def test_the_migration_is_in_step(factory) -> None:

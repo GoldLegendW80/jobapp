@@ -705,8 +705,9 @@ SEARCHES_LISTED = 50  # the searches a website's summary names (all are counted,
 
 
 class SearchRanOut(BaseModel):
-    """One search the agent of a job website ran (jobs J18): a saved title it typed and the saved
-    place it typed or chose, if any."""
+    """One search the agent of a job website ran (jobs J18; since B20 from its own tool calls,
+    finder.FinderSession.searches): what it typed and the options it chose with it, or a saved
+    title and the saved place an address it opened held."""
 
     title: str
     place: str | None = None

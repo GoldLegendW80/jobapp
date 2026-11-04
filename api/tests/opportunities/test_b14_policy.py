@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import linkedin_guard
-from app.browser.models import LinkedInCheckpoint
 from app.browser.platform_policy import PlatformPolicy
 from app.browser.sources.interactive import SourceContext
 from app.jobs import sweep
@@ -29,8 +28,6 @@ URLS = {
     "welcome_to_the_jungle": "https://www.welcometothejungle.com/fr/jobs",
 }
 PLATFORMS = tuple(URLS)
-RESULTS = '- heading "Jobs" [level=1]\n- link "Robot Engineer" [ref=e3]'
-CHECKPOINT = '- heading "Verify you are human" [level=1]'
 
 
 def accept(api: Api, who: Person, platform: str) -> None:
@@ -151,7 +148,6 @@ def test_each_platform_is_refused_without_consent_and_reserved_durably_with_it(
     stored = entries(factory, sweep_id)[0]
     assert stored["opened_at"] == clock().isoformat()
     assert stored["platform"] == platform
-    assert run(policy.observe(ctx, URLS[platform], RESULTS)) is None
 
 
 @pytest.mark.parametrize("platform", PLATFORMS)
@@ -174,12 +170,10 @@ def test_consent_is_per_person(
     assert run(policy.check(a)) is None
     assert run(policy.check(b)) == "permission_unavailable"
     assert run(policy.reserve(b)) == "permission_unavailable"
-    # A's checkpoint pauses A only.
     assert run(policy.reserve(a)) is None
-    assert run(policy.observe(a, URLS[platform] + "?q=1", CHECKPOINT)) is not None
     accept(api, person_b, platform)
     assert run(policy.check(b)) is None
-    assert run(policy.check(a)) == "permission_checkpoint"
+    assert run(policy.reserve(b)) is None
 
 
 def test_a_stale_sentence_version_is_not_consent(
@@ -239,104 +233,40 @@ def test_revocation_after_the_first_page_stops_the_next_call(
     assert run(policy.check(ctx)) == "permission_revoked"
 
 
-@pytest.mark.parametrize("platform", ["freework", "indeed", "welcome_to_the_jungle"])
-def test_checkpoint_is_committed_before_the_page_returns_and_survives_stale_writes(
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_an_existing_pause_never_refuses_the_browser_search(
     api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any, platform: str
 ) -> None:
+    """B20 (owner, 2026-11-04): a checkpoint met earlier (Easy Apply's, or a website's history
+    entry) pauses the platform for apply and the guards, not for the browser search."""
     accept(api, person_a, platform)
-    policy = PlatformPolicy(factory, clock)
-    sweep_id = running(factory, person_a, clock(), [URLS[platform]])
-    ctx = context(person_a, sweep_id, URLS[platform], platform)
-    assert run(policy.reserve(ctx)) is None
-    assert run(policy.observe(ctx, URLS[platform], CHECKPOINT)) == "permission_checkpoint"
-    # The process is lost here: what a new session reads is what was committed.
-    stored = entries(factory, sweep_id)[0]
-    assert stored["checkpoint_at"] == clock().isoformat()
-    # A stale progress write, then a stale final write, of the same entry keep the record.
-    # The stale copy was read before the records: it holds their old values.
-    stale = sweep.Stats(
-        sources=[
-            {
-                "source_id": ctx.source_id,
-                "error": None,
-                "opened_at": None,
-                "checkpoint_at": None,
-                "platform": "custom",
-            }
-        ]
-    )
-    sweep.save_progress(factory, sweep_id, stale, clock())
-    sweep.finish_done(factory, sweep_id, stale, clock())
-    final = entries(factory, sweep_id)[0]
-    assert final["checkpoint_at"] == clock().isoformat()
-    assert final["opened_at"] == clock().isoformat()
-    assert final["platform"] == platform
-    with factory() as db:
-        assert guard.state(db, person_a.user_id, platform, clock()).paused_until == (
-            clock() + guard.PAUSE
-        )
-    # Turning the platform off and on again, or saving the Search tab, does not lift it.
-    turn_off(api, person_a, platform)
-    accept(api, person_a, platform)
-    later = PlatformPolicy(factory, lambda: clock() + timedelta(days=1))
-    next_sweep = running(factory, person_a, clock() + timedelta(days=1), [URLS[platform]])
-    assert run(later.check(context(person_a, next_sweep, URLS[platform], platform))) == (
-        "permission_checkpoint"
-    )
-
-
-@pytest.mark.parametrize("platform", ["freework", "indeed", "welcome_to_the_jungle"])
-def test_a_checkpoint_met_after_the_sweep_stopped_running_still_pauses_the_platform(
-    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any, platform: str
-) -> None:
-    """The reaper (or a cancel) ends the sweep row while the source still reads: the wall
-    page it then meets is recorded all the same, so the 7 day pause holds."""
-    accept(api, person_a, platform)
-    policy = PlatformPolicy(factory, clock)
-    sweep_id = running(factory, person_a, clock(), [URLS[platform]])
-    ctx = context(person_a, sweep_id, URLS[platform], platform)
-    assert run(policy.reserve(ctx)) is None
+    at = clock() - timedelta(hours=1)
     with factory() as db, db.begin():
-        row = db.get(Sweep, sweep_id)
-        assert row is not None
-        row.status, row.finished_at = SweepStatus.failed, clock()
-    assert run(policy.observe(ctx, URLS[platform], CHECKPOINT)) == "permission_checkpoint"
-    stored = entries(factory, sweep_id)[0]
-    assert stored["checkpoint_at"] == clock().isoformat()
-    assert stored["platform"] == platform
-    with factory() as db:
-        assert guard.state(db, person_a.user_id, platform, clock()).paused_until == (
-            clock() + guard.PAUSE
-        )
-
-
-def test_seven_day_pause_ends_exactly_at_seven_days(
-    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
-) -> None:
-    accept(api, person_a, "indeed")
-    met = clock()
-    first = running(factory, person_a, met, [URLS["indeed"]])
-    ctx = context(person_a, first, URLS["indeed"], "indeed")
-    policy = PlatformPolicy(factory, lambda: met)
-    assert run(policy.reserve(ctx)) is None
-    assert run(policy.observe(ctx, URLS["indeed"], CHECKPOINT)) == "permission_checkpoint"
-    sweep.finish_done(factory, first, sweep.Stats(), met)
-    for at, expected in (
-        (met + guard.PAUSE - timedelta(seconds=1), "permission_checkpoint"),
-        (met + guard.PAUSE, None),
-    ):
-        with factory() as db, db.begin():
-            for row in db.query(Sweep).filter(Sweep.user_id == person_a.user_id, Sweep.id != first):
-                db.delete(row)
-        later = running(factory, person_a, at, [URLS["indeed"]])
-        assert (
-            run(
-                PlatformPolicy(factory, lambda at=at: at).check(
-                    context(person_a, later, URLS["indeed"], "indeed")
+        if platform == "linkedin":
+            linkedin_guard.record_checkpoint(db, person_a.user_id, at, "easy_apply")
+        else:
+            db.add(
+                Sweep(
+                    user_id=person_a.user_id,
+                    trigger=SweepTrigger.manual,
+                    status=SweepStatus.done,
+                    started_at=at,
+                    finished_at=at + timedelta(minutes=1),
+                    stats={"sources": [{"platform": platform, "checkpoint_at": at.isoformat()}]},
                 )
             )
-            == expected
-        )
+    with factory() as db:
+        if platform == "linkedin":
+            assert linkedin_guard.refusal(db, person_a.user_id, clock()) == "linkedin_paused"
+        else:
+            assert guard.state(db, person_a.user_id, platform, clock()).paused_until is not None
+    policy = PlatformPolicy(factory, clock)
+    ctx = context(
+        person_a, running(factory, person_a, clock(), [URLS[platform]]), URLS[platform], platform
+    )
+    assert run(policy.check(ctx)) is None
+    assert run(policy.reserve(ctx)) is None
+    assert run(policy.check(ctx)) is None
 
 
 def test_checkpoint_in_the_second_entry_of_the_same_platform_pauses_it(
@@ -388,53 +318,6 @@ def test_no_daily_limit_a_second_sweep_of_the_day_opens_the_platform_again(
         sweep.finish_done(factory, second, sweep.Stats(), later)
 
 
-def test_linkedin_has_no_page_cap_and_keeps_its_checkpoint_table(
-    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
-) -> None:
-    accept(api, person_a, "linkedin")
-    one, two = URLS["linkedin"], "https://www.linkedin.com/jobs/search/"
-    sweep_id = running(factory, person_a, clock(), [one, two])
-    policy = PlatformPolicy(factory, clock)
-    first, second = (
-        context(person_a, sweep_id, one, "linkedin"),
-        context(person_a, sweep_id, two, "linkedin"),
-    )
-    assert run(policy.reserve(first)) is None
-    for page in range(12):
-        assert run(policy.check(first)) is None
-        assert run(policy.observe(first, f"{one}?start={page * 25}", RESULTS)) is None
-    # No page cap for LinkedIn either (owner, 2026-10-28): its pace and pause bound it.
-    assert run(policy.check(first)) is None
-    assert run(policy.check(second)) is None
-    other = PlatformPolicy(factory, clock)
-    ctx = context(person_a, sweep_id, one, "linkedin")
-    wall = "https://www.linkedin.com/checkpoint/challenge/"
-    assert run(other.observe(ctx, wall, RESULTS)) == "linkedin_checkpoint"
-    with factory() as db:
-        rows = db.query(LinkedInCheckpoint).filter_by(user_id=person_a.user_id).all()
-        assert [row.origin for row in rows] == ["sweep"]
-        assert linkedin_guard.refusal(db, person_a.user_id, clock()) == "linkedin_paused"
-    assert run(other.check(second)) == "permission_checkpoint"
-
-
-def test_sign_in_page_is_recorded_and_read_by_the_guard(
-    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
-) -> None:
-    accept(api, person_a, "welcome_to_the_jungle")
-    url = URLS["welcome_to_the_jungle"]
-    sweep_id = running(factory, person_a, clock(), [url])
-    policy = PlatformPolicy(factory, clock)
-    ctx = context(person_a, sweep_id, url, "welcome_to_the_jungle")
-    assert run(policy.reserve(ctx)) is None
-    signin = "https://www.welcometothejungle.com/fr/signin"
-    assert run(policy.observe(ctx, signin, RESULTS)) == "platform_signin"
-    assert entries(factory, sweep_id)[0]["error"] == "platform_signin"
-    with factory() as db:
-        state = guard.state(db, person_a.user_id, "welcome_to_the_jungle", clock())
-    assert state.needs_signin is True
-    assert state.paused_until is None
-
-
 def test_a_failed_write_stops_the_source(
     api: Api, person_a: Person, factory: sessionmaker[Session], clock: Any
 ) -> None:
@@ -448,7 +331,6 @@ def test_a_failed_write_stops_the_source(
     policy = PlatformPolicy(broken, clock)  # type: ignore[arg-type]
     assert run(policy.check(ctx)) == "permission_unavailable"
     assert run(policy.reserve(ctx)) == "permission_unavailable"
-    assert run(policy.observe(ctx, URLS["indeed"], CHECKPOINT)) == "permission_unavailable"
 
 
 def test_the_agent_of_linkedin_runs_again_in_a_second_sweep_of_the_day(

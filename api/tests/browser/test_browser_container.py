@@ -249,7 +249,7 @@ def test_the_container_as_compose_starts_it(stack: Stack) -> None:
     assert host["ReadonlyRootfs"] is True
     assert host["CapDrop"] == ["ALL"]
     assert sorted(c.removeprefix("CAP_") for c in host["CapAdd"]) == ["SETGID", "SETUID"]
-    assert host["Memory"] == host["MemorySwap"] == 1536 * 1024 * 1024
+    assert host["Memory"] == host["MemorySwap"] == 2048 * 1024 * 1024  # B20
     assert host["ShmSize"] == 128 * 1024 * 1024
     assert host["PidsLimit"] == 1024
     assert not host.get("PortBindings")
@@ -261,7 +261,7 @@ def test_the_container_as_compose_starts_it(stack: Stack) -> None:
         "print(open('/sys/fs/cgroup/memory.max').read().strip(),"
         " open('/sys/fs/cgroup/memory.swap.max').read().strip())"
     ).split()
-    assert limits == [str(1536 * 1024 * 1024), "0"]
+    assert limits == [str(2048 * 1024 * 1024), "0"]
     # browserd's effective capabilities: SETGID (6) and SETUID (7), nothing else.
     browserd = [pid for uid, pid, cmd in processes(stack) if uid == 0 and cmd == "python"]
     status = stack.python(f"print(open('/proc/{browserd[0]}/status').read())")
@@ -291,7 +291,7 @@ def test_a_lease_for_a_new_profile_and_a_second_lease_refused(
     lease = sweep_of_a
     assert lease["lease_token"]
     assert lease["purpose"] == "sweep"
-    assert lease["max_s"] == 900
+    assert lease["max_s"] == 86_400  # B20: a sweep lease lasts as long as the search
     mode = stack.execute("browser", "stat", "-c", "%a %u", f"/profiles/{A}").split()
     assert mode == ["700", "20001"]
     chromium = [uid for uid, _, cmd in processes(stack) if "chromium" in cmd]
@@ -324,15 +324,15 @@ def test_the_ai_snapshot_with_refs_of_the_pinned_playwright(stack: Stack) -> Non
 
 @pytest.mark.usefixtures("sweep_of_a")
 def test_languages_zone_user_agent_and_webgl(stack: Stack) -> None:
-    """Items 3, 4 and 7: the languages from the preferences, Chromium's own user agent, no
-    WebGL under Xvfb."""
+    """Items 3, 4 and 7: the languages from the preferences, Chromium's own user agent. WebGL
+    is not asserted: B20 asks for software WebGL on every sweep lease, and whether Debian's
+    arm64 Chromium ships SwiftShader is a declared open point (SPEC-browser)."""
     env = stack.probe("env", f"{PAGES}/headers")
     assert env["languages"] == ["fr-FR", "fr", "en-US", "en"]
     assert env["zone"] == "Europe/Paris"
     assert "Linux" in env["userAgent"]
     assert "Headless" not in env["userAgent"]
     assert env["webdriver"] is False
-    assert env["webgl"] is False
     assert env["accept_language"].startswith("fr-FR,fr;q=0.9")
 
 

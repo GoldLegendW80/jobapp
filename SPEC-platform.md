@@ -17,7 +17,7 @@ Who uses it: Harald, as operator. Friends never see this layer.
 | OS | Ubuntu 22.04, L4T R36.4.7 (JetPack 6), aarch64 |
 | Docker | 29.8.0, Compose v5.5.1, `nvidia` runtime registered (not used by this app) |
 
-RAM budget for the whole stack, all modules included: 6G, leaving the rest (about 1.4G of the Jetson's 7.4G) to the OS. Each service declares `mem_limit`. The budget was 5G until 2026-10-30, when the browser went from 1024m to 1536m (LinkedIn's signed in job search passed the memory guard of 1024m and its tab was closed mid search): the limits of compose.yml add up to 5760m, 5888m with the optional mail provider (the budget comment of compose.yml keeps the arithmetic; the parser's limit is a starting figure, set from measurements by ingestion G2b and G8).
+RAM budget for the whole stack, all modules included: 6.5G, leaving the rest (about 0.9G of the Jetson's 7.4G) to the OS. Each service declares `mem_limit`. The budget was 5G until 2026-10-30, when the browser went from 1024m to 1536m (LinkedIn's signed in job search passed the memory guard of 1024m and its tab was closed mid search), and 6G until 2026-11-04, when the browser went to 2048m by default (`BROWSER_MEM_LIMIT`, browser B20: the website search as on the owner's Mac, JavaScript and WebGL on for every sweep): the limits of compose.yml add up to 6272m, 6400m with the optional mail provider (the budget comment of compose.yml keeps the arithmetic; the parser's limit is a starting figure, set from measurements by ingestion G2b and G8).
 
 ## Tech stack
 

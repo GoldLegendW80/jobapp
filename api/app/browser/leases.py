@@ -108,7 +108,7 @@ LEASE_MAX_S = {
     "apply_submit": 900,
     "profile_edit": 900,
     "full_auto": 900,
-    "sweep": 900,
+    "sweep": 86_400,  # B20: as long as the search takes; the idle timer still ends a stuck one
 }
 PURPOSES = tuple(LEASE_MAX_S)
 TIERS = {

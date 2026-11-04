@@ -906,8 +906,8 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
     row = run(factory, new_sweep(factory, alice), runner(script, Refusing()))
     assert queries == ["robot", "arm"]
     entry = entry_of(row)
-    assert (entry["searches"], entry["found"], entry["postings"]) == (2, 3, 3)
-    assert entry["searched"] == [{"title": "robot", "place": None}, {"title": "arm", "place": None}]
+    # B20: the agent types what it judges right, so searches are no longer counted by title.
+    assert (entry["found"], entry["postings"]) == (3, 3)
     assert (entry["unwanted"], entry.get("duplicates", 0)) == (1, 0)
     # The refused click is counted, and the website, which gave verified postings, was searched
     # (2026-10-28: how it ends is what was read, interactive.outcome).
@@ -991,7 +991,7 @@ def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reac
     entry = entry_of(row)
     # Its detail page, then again after the next search (from the results page, round 2).
     assert read == ["flip", "flip"]
-    assert (entry["searches"], entry["error"], entry["outcome"]) == (2, None, "complete")
+    assert (entry["error"], entry["outcome"]) == (None, "complete")
     assert (entry["found"], entry["postings"], row.stats["new"]) == (1, 1, 1)
     assert (entry["unwanted"], entry["other_contract"]) == (2, 1)
     assert [(job.title, job.url) for job in jobs_of(factory, alice)] == [
