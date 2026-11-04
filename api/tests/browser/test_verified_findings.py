@@ -147,7 +147,8 @@ def test_unsupported_or_conflicting_employer_claims_are_refused(line):
         ({"published_on": "2026-02-30"}, "date_not_on_page"),
         ({"location": "Invented City"}, "location_not_on_page"),
         ({"url": "/unseen"}, "not_seen"),
-        ({"url": "https://elsewhere.example.test/job"}, "other_host"),
+        # Any public host may be opened (B20): one never seen on a page is not reported.
+        ({"url": "https://elsewhere.example.test/job"}, "not_seen"),
     ],
 )
 def test_invented_claims_cannot_cross_the_callback_boundary(claims, reason):
