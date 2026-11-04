@@ -43,6 +43,19 @@ search box outside any form whose Search button and Enter POST to the search ser
 an Apply button and an Easy Apply link beside it. Results are listed only for the words "genai
 engineer" (any case). GET /b19/log answers what those hosts saw (method, host, path).
 
+Browser B20 (api/tests/browser/test_b20_native.py), job websites only an unguarded agent can
+search (the search like Playwright CLI on the owner's Mac), on `.test` names: the board
+`www.b20-board.test` (b20/board.html) renders its results with JavaScript from GET /api/jobs?page=
+(12 a page, 3 pages, the first posting on the ATS host), loads the next page as the list scrolls
+to its end, opens a posting in the same tab (/jobs/<n>, no link back) or a second tab, and covers
+the page with a cookie banner whose form POSTs /consent (a 303 back with a cookie that hides it);
+`careers.b20-robotics.test` links its job search on another host of the company,
+`search.b20-robotics.test` (b20/search.html: a GET form to /results, a POST form to /search);
+`ats.b20-hire.test` shows the posting (b20/ats.html) with Save job, Follow, Send message, Easy
+Apply and an application form posted to the posting's address. Any other POST to these hosts is
+answered 200 and logged: GET /b20/log answers what they saw (method, host, path, an Upgrade
+header), so a test shows that what the line refuses never reached them.
+
 Browser B10 on a job website (web/e2e/browser-b10.spec.ts): a LinkedIn search of the job websites
 opens LinkedIn's start page here (b8/linkedin/, BROWSER_SOURCES_BASE_URL). GET
 /b10/next?wall=checkpoint or ?wall=signin, asked from inside the container only (the browser's
@@ -90,6 +103,42 @@ B19_HOSTS = {
 B19_LOG = []
 B19_JOB = "/fr/companies/example-robotics/jobs/genai-engineer_paris"
 B19_KEY = "3f2a9c1d0b8e7a65"  # gitleaks:allow (fake key of the .test fixture site)
+
+# Browser B20 (see the doc): the hosts of its job websites, and what they saw.
+B20_HOSTS = {
+    "www.b20-board.test",
+    "careers.b20-robotics.test",
+    "search.b20-robotics.test",
+    "ats.b20-hire.test",
+}
+B20_LOG = []
+B20_ATS = "http://ats.b20-hire.test:8080/example-robotics/jobs/42"
+B20_JOB = re.compile(r"/jobs/([0-9]{1,3})")
+
+
+def b20_title(number: int) -> str:
+    return f"Robot Engineer {number}" if number <= 12 else f"Drone Pilot {number}"
+
+
+def b20_jobs(page: int) -> list:
+    """The board's page of results: 12 postings, the first of page 1 on the ATS host."""
+    numbers = range(12 * (page - 1) + 1, 12 * page + 1) if 1 <= page <= 3 else range(0)
+    return [
+        {"title": "Robot Engineer", "url": B20_ATS}
+        if n == 1
+        else {"title": b20_title(n), "url": f"/jobs/{n}"}
+        for n in numbers
+    ]
+
+
+def b20_results(words: str) -> str:
+    found = " ".join(words.casefold().split()) == "robot"
+    body = (
+        f'<ul><li><a href="{B20_ATS}">Robot Engineer</a></li></ul>'
+        if found
+        else "<p>No jobs match this search.</p>"
+    )
+    return J15_PAGE.format(title="Results", body=body)
 
 
 def b19_words(text: str) -> bool:
@@ -272,6 +321,69 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def b20(self) -> str:
+        """The host of a B20 website, else ""; its request is logged."""
+        host = self.headers.get("Host", "").split(":")[0].lower()
+        if host not in B20_HOSTS:
+            return ""
+        with J15_LOCK:
+            B20_LOG.append(
+                {
+                    "method": self.command,
+                    "host": host,
+                    "path": self.path,
+                    "upgrade": self.headers.get("Upgrade", ""),
+                }
+            )
+        return host
+
+    def b20_file(self, name: str) -> None:
+        self.path = "/b20/" + name
+        return super().do_GET()
+
+    def b20_page(self, host: str, url, query) -> None:
+        """A page of a B20 website (see the doc)."""
+        if host == "www.b20-board.test" and url.path == "/":
+            return self.b20_file("board.html")
+        if host == "www.b20-board.test" and url.path == "/api/jobs":
+            page = query.get("page", ["1"])[0]
+            return self.send(json.dumps(b20_jobs(int(page) if page.isdecimal() else 0)))
+        job = B20_JOB.fullmatch(url.path)
+        if host == "www.b20-board.test" and job and 1 <= int(job.group(1)) <= 36:
+            title = b20_title(int(job.group(1)))
+            body = (
+                "<p>Employer: Example Robotics</p><p>Build robots with customers.</p>"
+            )
+            return self.send(J15_PAGE.format(title=title, body=body), "text/html")
+        if host == "careers.b20-robotics.test" and url.path == "/":
+            return self.b20_file("careers.html")
+        if host == "search.b20-robotics.test" and url.path == "/":
+            return self.b20_file("search.html")
+        if host == "search.b20-robotics.test" and url.path == "/results":
+            return self.send(b20_results(query.get("q", [""])[0]), "text/html")
+        if host == "ats.b20-hire.test" and url.path == "/example-robotics/jobs/42":
+            return self.b20_file("ats.html")
+        return self.send(J15_PAGE.format(title="Not found", body=""), "text/html")
+
+    def b20_post(self, host: str, url) -> None:
+        size = min(int(self.headers.get("Content-Length") or 0), 65536)
+        body = self.rfile.read(size).decode("utf-8", "replace")
+        asked = urllib.parse.parse_qs(body)
+        if host == "www.b20-board.test" and url.path == "/consent":
+            choice = asked.get("choice", ["none"])[0]
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header(
+                "Set-Cookie",
+                f"b20consent={'all' if choice == 'all' else 'none'}; Path=/",
+            )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        if host == "search.b20-robotics.test" and url.path == "/search":
+            return self.send(b20_results(asked.get("q", [""])[0]), "text/html")
+        return self.send(json.dumps({"received": True}))
+
     def b19(self) -> str:
         """The host of a B19 stand in name, else ""; its request is logged."""
         host = self.headers.get("Host", "").split(":")[0].lower()
@@ -333,6 +445,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.send(J15_PAGE.format(title="Not found", body=""), "text/html")
 
     def do_POST(self):
+        b20 = self.b20()
+        if b20:
+            return self.b20_post(b20, urllib.parse.urlsplit(self.path))
         host = self.b19()
         url = urllib.parse.urlsplit(self.path)
         if host == "abc-dsn.algolia.test" and url.path == "/1/indexes/*/queries":
@@ -362,9 +477,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(url.query)
+        b20 = self.b20()
+        if b20:
+            return self.b20_page(b20, url, query)
         host = self.b19()
         if host:
             return self.b19_page(host, url, query)
+        if url.path == "/b20/log":
+            with J15_LOCK:
+                return self.send(json.dumps(B20_LOG))
         if url.path == "/b19/log":
             with J15_LOCK:
                 return self.send(json.dumps(B19_LOG))

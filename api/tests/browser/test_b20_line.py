@@ -62,12 +62,17 @@ def test_a_posting_link_s_title_is_no_word_of_the_line() -> None:
 def test_a_submit_passes_in_a_search_or_consent_form_only(
     kinds: list[str], method: str, allowed: bool
 ) -> None:
-    facts = button("Go", type="submit", in_form=True, form_kinds=kinds, native={"method": method})
+    # FACTS_JS's shape: the form's method is `discovery.method` (part B: `native` was read).
+    facts = button(
+        "Go", type="submit", in_form=True, form_kinds=kinds, discovery={"method": method}
+    )
     assert (line.control(facts, "click") is None) is allowed
 
 
 def test_a_submit_word_wins_in_any_form() -> None:
-    facts = button("Submit", type="submit", in_form=True, form_kinds=[], native={"method": "get"})
+    facts = button(
+        "Submit", type="submit", in_form=True, form_kinds=[], discovery={"method": "get"}
+    )
     assert line.control(facts, "click") == "submit"
 
 
@@ -111,3 +116,179 @@ def test_every_playwright_cli_tool_is_a_discovery_tool() -> None:
 
     assert set(actions.TOOLS) >= discovery.TOOLS
     assert "browser_file_upload" not in discovery.TOOLS
+
+
+def test_a_get_form_of_more_than_40_fields_is_a_search_and_a_post_one_is_not() -> None:
+    """The method read where FACTS_JS writes it (`discovery.method`), never `native`."""
+    kinds = ["input:checkbox"] * 41 + ["button:submit"]
+    get = button("Go", type="submit", in_form=True, form_kinds=kinds, discovery={"method": "get"})
+    post = {**get, "discovery": {"method": "post"}}
+    assert line.control(get, "click") is None
+    assert line.control(post, "click") == "submit"
+    assert line.control({**get, "native": {"method": "get"}, "discovery": {}}, "click")
+
+
+JOBS = "https://jobs.example.test"
+ALGOLIA = (
+    "https://abc-dsn.algolia.test/1/indexes/*/queries?x-algolia-agent=Algolia%20for%20JavaScript"
+    "%20(4.24.0)%3B%20Browser%3B%20react-instantsearch%20(7.13.0)%3B%20e2e-connect-ui%20(1.0.0)"
+    "&x-algolia-api-key=3f2a9c1d0b8e7a65&x-algolia-application-id=E2E"  # gitleaks:allow (fake)
+)
+# A fetch, an XHR or a beacon POST to these never leaves: apply, submit, write to someone, sign
+# out, pay or change the account, glued, camel cased, spaced, encoded, in a key or a value.
+POST_REFUSED = [
+    "/apply", "/jobs/42/apply", "/api/quickapply", "/jobs/42/easyapply", "/api/v1/quickApply",
+    "/easy-apply", "/EasyApply", "/APPLY", "/%61pply", "/api/applications", "/candidature",
+    "/postuler", "/bewerbung", "/api/submitApplication", "/form/presubmit", "/api/messages",
+    "/api/sendmessage", "/api/sendMessage", "/messaging/conversations/7",
+    "/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage",
+    "/api/graphql?operationName=SendMessage", "/a?action=apply", "/a?do=submit",
+    "/invitations", "/api/sendinvite", "/connect", "/api/connections", "/comments/new",
+    "/reply", "/checkout", "/api/pay", "/billing/update", "/logout", "/sign-out", "/signout",
+    "/log/out", "/account/delete", "/settings/profile", "/api/removeSavedJob", "/sendmail",
+    "/" + "a" * 5000 + "/apply", "/" + "a" * 5000,
+]  # fmt: skip
+# The search, saving a job, following, consent, analytics: they leave.
+POST_PASSED = [
+    "/api/graphql?op=saveJob", "/api/saved-jobs", "/api/follows", "/li/track", "/collect",
+    "/1/indexes/jobs/queries", "/api/jobs/search", "/rum", "/api/impressions",
+    "/cookie-consent", "/api/consents", "/j/collect?v=2", "/api/jobs/42/views",
+    "/graphql?operationName=JobSearch", "/api/alerts?q=postdoc",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("path", POST_REFUSED)
+@pytest.mark.parametrize("kind", ["fetch", "xhr", "ping", "document"])
+def test_a_post_that_says_a_step_of_the_line_never_leaves(path: str, kind: str) -> None:
+    assert line.request_refused("POST", JOBS + path, kind) is not None
+
+
+@pytest.mark.parametrize("path", POST_PASSED)
+@pytest.mark.parametrize("kind", ["fetch", "xhr", "ping"])
+def test_a_page_s_own_post_that_is_no_step_of_the_line_leaves(path: str, kind: str) -> None:
+    assert line.request_refused("POST", JOBS + path, kind) is None
+
+
+def test_a_search_service_s_client_metadata_is_never_read() -> None:
+    """B19's Welcome to the Jungle: its Algolia client says "connect" and "application" in its
+    metadata; the search leaves, and the same words anywhere else in its address do not."""
+    assert line.request_refused("POST", ALGOLIA, "fetch") is None
+    assert line.request_refused("POST", ALGOLIA + "&op=apply", "fetch") == "line_post"
+    assert line.request_refused("POST", ALGOLIA.replace("indexes", "connect"), "xhr")
+
+
+@pytest.mark.parametrize(
+    ("url", "allowed"),
+    [
+        (JOBS + "/search", True),
+        (JOBS + "/careersection/jobsearch.ftl", True),
+        (JOBS + "/fr/recherche", True),
+        (JOBS + "/de/Suche", True),
+        (JOBS + "/consent", True),
+        (JOBS + "/cookie-consent/accept", True),
+        (JOBS + "/gdpr/save", True),
+        ("https://consent.example.test/save", True),
+        ("https://cookies.example.test/save", True),
+        (JOBS + "/example-robotics/jobs/42", False),  # an ATS's application form
+        (JOBS + "/jobs", False),
+        (JOBS + "/form", False),
+        (JOBS + "/careers/results.aspx", False),
+        (JOBS + "/search/apply", False),
+        (JOBS + "/consent?next=/apply", False),
+        ("https://search.example.test/jobs/42", False),  # a host's search word is no search
+        (JOBS + "/account/cookie-settings", False),
+        (JOBS + "/", False),
+    ],
+)
+def test_a_document_post_leaves_only_as_a_search_or_a_consent_choice(url, allowed) -> None:
+    assert (line.request_refused("POST", url, "document") is None) is allowed
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS", "get"])
+@pytest.mark.parametrize("path", ["/jobs/42/apply", "/messaging", "/logout", "/" + "a" * 5000])
+def test_a_get_always_leaves(method: str, path: str) -> None:
+    assert line.request_refused(method, JOBS + path, "document") is None
+
+
+@pytest.mark.parametrize("url", ["javascript:alert(1)", "file:///etc/passwd", "ws://x.test/", 7])
+def test_another_scheme_or_no_address_is_refused(url: object) -> None:
+    assert line.request_refused("POST", url, "fetch") is not None
+
+
+@pytest.mark.parametrize(
+    ("name", "method", "allowed"),
+    [
+        ("Search application", "post", False),
+        ("Search applications", "", False),  # no method read: not a GET, refused
+        ("Candidature", "post", False),
+        ("Bewerbung suchen", "post", False),
+        ("Postulación", "post", False),
+        ("SearchApplication", "post", False),
+        ("Search", "post", True),
+        ("Find", "post", True),
+        ("Search application", "get", True),  # a GET form is a search
+        ("Rechercher une candidature", "get", True),
+    ],
+)
+def test_an_application_s_noun_on_a_button_of_a_post_form_refuses(name, method, allowed) -> None:
+    """Part A of B20: a POST form holding a search field only, whose button names an
+    application, is no search form (fail closed); a GET one stays a search."""
+    facts = button(
+        name,
+        type="submit",
+        in_form=True,
+        form_kinds=["input:search", "button:submit"],
+        discovery={"method": method},
+    )
+    for action in ("click", "key"):
+        assert (line.control(facts, action) is None) is allowed, (name, method, action)
+
+
+class Route:
+    def __init__(self) -> None:
+        self.done: list[str] = []
+
+    async def fallback(self) -> None:
+        self.done.append("fallback")
+
+    async def abort(self, code: str = "") -> None:
+        self.done.append("abort")
+
+    async def fulfill(self, **_: object) -> None:
+        self.done.append("fulfill")
+
+
+class Unreadable:
+    """A request whose every property raises, as a request of a closed target may."""
+
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError("target closed")
+
+    def is_navigation_request(self) -> bool:
+        raise RuntimeError("target closed")
+
+
+class NoKind:
+    """A fetch POST to a message address whose resource type cannot be read."""
+
+    method, url, frame = "POST", "https://jobs.example.test/api/messages", None
+
+    def is_navigation_request(self) -> bool:
+        return False
+
+    @property
+    def resource_type(self) -> str:
+        raise RuntimeError("target closed")
+
+
+@pytest.mark.parametrize("request_", [Unreadable(), NoKind()], ids=["unreadable", "no_kind"])
+def test_a_request_the_route_cannot_read_is_refused_never_left_to_raise(request_) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from browserd.tools import actions
+
+    tab = actions.Tab(SimpleNamespace(hosts=()), actions.State(), None, None, lease_tag="e2e")
+    route = Route()
+    asyncio.run(tab._line_route(route, request_))
+    assert route.done == ["abort"]

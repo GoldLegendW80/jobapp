@@ -955,6 +955,8 @@ class FinderSession:
             return "Refused: this run has no interactive search permission.", True
         if self.stopped:
             return self._stop(self.stopped)
+        from app.browser.sources import SourceError
+
         try:
             shot = await self.pages.tools.call(
                 "browser_take_screenshot",
@@ -966,6 +968,8 @@ class FinderSession:
             )
         except BrowserError as exc:
             return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
+        except SourceError as exc:  # the website's permission, checked before every call
+            return self._stop(exc.code)
         data = shot.get("data")
         if not shot.get("ok") or not isinstance(data, str):
             return "The screenshot could not be taken.", True
@@ -983,9 +987,17 @@ class FinderSession:
             return self._stop(self.stopped)
         if not isinstance(reason, str) or not reason.strip():
             return "Refused: give one sentence for the person.", True
+        from app.browser.sources import SourceError
         from app.browser.sources.interactive import ask_person
 
-        answer = await ask_person(self.pages, reason[:300], self.interactive.tool_scope())
+        # A lease gone or a permission withdrawn while the person was asked stops the session,
+        # as every other tool does, never an exception out of the tool (B20, part B).
+        try:
+            answer = await ask_person(self.pages, reason[:300], self.interactive.tool_scope())
+        except BrowserError as exc:
+            return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
+        except SourceError as exc:
+            return self._stop(exc.code)
         return answer, False
 
     async def snapshot(self) -> tuple[str, bool]:

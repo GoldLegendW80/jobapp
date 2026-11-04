@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Example Jobs Board</title></head>
+<body>
+<!-- Browser B20: a job board only an unguarded agent searches. Its results are rendered by
+     JavaScript from /api/jobs, more load as the list scrolls to its end, a cookie banner over
+     the whole page posts its choice as a form to /consent, a posting opens in the same tab (Back
+     returns to the list) or in a second tab, and the first one is on an ATS host. -->
+<div id="banner" role="dialog" aria-label="Cookies"
+     style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10">
+  <form method="post" action="/consent" style="background:#fff;margin:200px auto;width:300px">
+    <p>We use cookies.</p>
+    <button type="submit" name="choice" value="all">Accept all</button>
+    <button type="submit" name="choice" value="none">Decline</button>
+  </form>
+</div>
+<main>
+  <h1>Robot jobs</h1>
+  <p><a href="/jobs/7" target="_blank">Open Robot Engineer 7 in a new tab</a></p>
+  <ul id="results" aria-label="Results"></ul>
+  <p id="more">Loading more jobs</p>
+</main>
+<script>
+(() => {
+  if (document.cookie.includes("b20consent=")) document.querySelector("#banner").remove();
+  let page = 0, loading = false;
+  const list = document.querySelector("#results"), more = document.querySelector("#more");
+  const load = () => {
+    if (loading || page >= 3) return;
+    loading = true;
+    fetch("/api/jobs?page=" + (page + 1)).then(r => r.json()).then(jobs => {
+      page += 1;
+      for (const job of jobs) {
+        const item = document.createElement("li"), link = document.createElement("a");
+        item.style.height = "140px";
+        link.href = job.url;
+        link.textContent = job.title;
+        item.append(link);
+        list.append(item);
+      }
+      if (page >= 3) more.textContent = "No more jobs";
+      loading = false;
+    });
+  };
+  load();
+  // More results when the end of the list comes into view (after the first page only).
+  new IntersectionObserver(seen => {
+    if (seen.some(e => e.isIntersecting) && page >= 1) load();
+  }).observe(more);
+})();
+</script>
+</body>
+</html>

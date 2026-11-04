@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Robot Engineer at Example Robotics</title></head>
+<body>
+<!-- Browser B20: a posting on an ATS host. Save job and Follow post to the ATS (allowed); Send
+     message and Easy Apply post to it (refused); the application form posts to the posting's own
+     address, with no apply word in it (refused: a document POST that is no search). Nothing of
+     this is ever sent by the search: the server's log (GET /b20/log) shows what reached it. -->
+<main>
+  <h1>Robot Engineer</h1>
+  <p>Employer: Example Robotics</p>
+  <p>Build robots with customers in Paris.</p>
+  <button id="save" type="button">Save job</button>
+  <button id="follow" type="button">Follow</button>
+  <button id="message" type="button">Send message</button>
+  <button id="easy" type="button">Easy Apply</button>
+  <form id="application" method="post" action="/example-robotics/jobs/42">
+    <label>Full name <input name="name"></label>
+    <label>Email <input type="email" name="email"></label>
+    <label>Resume <input type="file" name="cv"></label>
+    <button id="apply" type="submit">Apply for this job</button>
+  </form>
+  <p id="said" aria-live="polite"></p>
+</main>
+<script>
+(() => {
+  const said = document.querySelector("#said");
+  const post = (path, done) => () => fetch(path, {method: "POST", body: "x"})
+    .then(() => { said.textContent = done; }, () => { said.textContent = "Not sent"; });
+  document.querySelector("#save").addEventListener("click", post("/api/saved-jobs", "Saved"));
+  document.querySelector("#follow").addEventListener("click", post("/api/follows", "Following"));
+  document.querySelector("#message").addEventListener("click", post("/api/messages", "Sent"));
+  document.querySelector("#easy").addEventListener("click", post("/api/easyapply", "Applied"));
+})();
+</script>
+</body>
+</html>

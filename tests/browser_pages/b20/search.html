@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Example Robotics job search</title></head>
+<body>
+<!-- Browser B20: the company's job search on its own host: a GET search form, and an advanced
+     search form posted to /search (as older career sites do). -->
+<main>
+  <h1>Find a job at Example Robotics</h1>
+  <form method="get" action="/results" role="search">
+    <input type="search" name="q" aria-label="Keywords">
+    <button type="submit">Search</button>
+  </form>
+  <form method="post" action="/search">
+    <input type="text" name="q" aria-label="Advanced keywords">
+    <button type="submit">Find</button>
+  </form>
+</main>
+</body>
+</html>
