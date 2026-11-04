@@ -24,9 +24,10 @@ Two floors hold it in code:
   cookies, Search and Next page pass (the tables of api/tests/browser/test_b20_line.py).
 - **Requests** (`request_refused`): every request of a sweep's context goes through browserd's
   route. A document (a navigation, a form's submission) is refused when it is a POST, unless its
-  address says search; a fetch, an XHR, a beacon or any other POST is refused when its address
-  says apply, submit, message, invite, connect, comment, payment, sign out or account change
-  (POST_STEMS). A GET or a HEAD always leaves (any public host: browserd's egress proxy and the
+  address says a search or a consent choice (`search_or_consent`); a fetch, an XHR, a beacon or
+  any other POST is refused when its address says apply, submit, message, invite, connect,
+  comment, payment, sign out or account change (POST_INSIDE, POST_STEMS: its path, query keys
+  and query values, a search client's metadata aside), or is too long to be read whole. A GET or a HEAD always leaves (any public host: browserd's egress proxy and the
   host firewall keep private, loopback, tailnet and link local addresses out).
 
 What code cannot see is declared: a script that builds its own request by a means the route
@@ -39,9 +40,8 @@ whose requests meet the same route: that, not the script, is the last line.
 """
 
 import json
-import re
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from browserd import detect
 
@@ -140,8 +140,8 @@ def says_line(names: list[str]) -> bool:
 def search_form(facts: dict[str, Any]) -> bool:
     """A form whose submission is a search or a consent choice: GET, or one holding no field a
     person writes to someone, applies or signs in with (WRITES, an editable region)."""
-    native = facts.get("native")
-    method = str(native.get("method") or "").lower() if isinstance(native, dict) else ""
+    form = facts.get("discovery")  # FACTS_JS: the form's method is `discovery.method`
+    method = str(form.get("method") or "").lower() if isinstance(form, dict) else ""
     kinds = [k for k in facts.get("form_kinds") or [] if isinstance(k, str)]
     if any(k in WRITES or k.endswith(":editable") for k in kinds):
         return False
@@ -193,9 +193,13 @@ def control(facts: Any, action: str) -> str | None:
     return None
 
 
-# What a POST address may not say (folded, cut into words: `/voyager/api/messaging/...`,
-# `?action=apply`, `sendInvitation`, `/checkout`, `/logout`, `/account/delete`).
-POST_STEMS = (
+# What a POST address may not say, read in its path segments, its query keys and its query
+# values (CLIENT_KEYS aside), each folded and cut into words (`/voyager/api/messaging/...`,
+# `?action=apply`, `sendInvitation`, `/checkout`, `/logout`, `/account/delete`). POST_INSIDE is
+# read inside every word glued (B19's reading, part B of B20: `/api/quickapply`,
+# `/jobs/42/easyapply`, `/api/sendmessage` say it as `/apply` does); POST_STEMS, short or common
+# inside other words (`display`, `gmail`, `sharepoint`), at the start of a word only.
+POST_INSIDE = (
     "apply",
     "applica",
     "candidat",
@@ -205,6 +209,12 @@ POST_STEMS = (
     "messag",
     "conversation",
     "invit",
+    "logout",
+    "signout",
+    "checkout",
+    "sendmail",
+)
+POST_STEMS = (
     "connect",
     "relationship",
     "comment",
@@ -212,46 +222,83 @@ POST_STEMS = (
     "share",
     "publish",
     "pay",
-    "checkout",
     "purchas",
     "billing",
     "subscri",
-    "logout",
-    "signout",
     "account",
     "profile",
     "password",
     "setting",
     "delete",
     "remove",
-    "sendmail",
     "mail",
 )
 POST_PHRASES = (("sign", "out"), ("log", "out"))
-SEARCH_ADDRESS = ("search", "recherche", "suche", "query", "queries", "jobs")
-URL_MAX = 4096
+# A search service's client metadata, never read (B19): Algolia's JavaScript client lists its
+# libraries in `x-algolia-agent` ("react-instantsearch", "e2e-connect-ui"), its keys are random
+# strings, and `x-algolia-application-id` holds "application". Welcome to the Jungle searches
+# this way.
+CLIENT_KEYS = frozenset({"x-algolia-agent", "x-algolia-api-key", "x-algolia-application-id"})
+# A document POST that is a search or a consent choice says so, inside a word of its path or
+# query (`/search`, `/careersection/jobsearch.ftl`, `/recherche`, `/Suche`) or, for a consent,
+# of its host too (`consent.example.org/save`, `/cookie-consent`, `/gdpr`). Never "jobs": an
+# ATS's application form posts to `/<company>/jobs/<id>` (part B of B20).
+SEARCH_INSIDE = ("search", "recherch", "suche", "query", "queries")
+CONSENT_INSIDE = ("consent", "cookie", "gdpr")
+URL_MAX = 4096  # a POST to a longer address is refused: what lies past it is never read
 
 
-def _address_words(url: str) -> list[str]:
+def _texts(url: str) -> tuple[list[str], list[str]] | None:
+    """The path segments, query keys and query values (CLIENT_KEYS aside) of an address,
+    and its host's labels; None when it cannot be read whole (fail closed)."""
+    if len(url) > URL_MAX:
+        return None
     try:
-        parts = urlsplit(url[:URL_MAX])
+        parts = urlsplit(url)
+        pairs = parse_qsl(parts.query, keep_blank_values=True, max_num_fields=200)
+        host = parts.hostname or ""
     except ValueError:
-        return []
-    text = unquote(f"{parts.path} {parts.query}")
-    return detect.match_words(re.sub(r"[^A-Za-z0-9]+", " ", text))
+        return None
+    own = [(k, v) for k, v in pairs if k.lower() not in CLIENT_KEYS]
+    texts = [*unquote(parts.path).split("/"), *(k for k, _ in own), *(v for _, v in own)]
+    return texts, host.split(".")
+
+
+def _inside(texts: list[str], stems: tuple[str, ...]) -> bool:
+    glued = ["".join(detect.words(text)) for text in texts]
+    return any(stem in text for text in glued for stem in stems)
 
 
 def post_refused(url: str) -> bool:
-    words = _address_words(url)
+    """A POST address that says a step of the line (POST_INSIDE, POST_STEMS, POST_PHRASES), or
+    one that cannot be read whole."""
+    read = _texts(url)
+    if read is None:
+        return True
+    texts = read[0]
+    if _inside(texts, POST_INSIDE):
+        return True
+    words = [w for text in texts for w in detect.match_words(text)]
     if _starts(words, POST_STEMS):
         return True
     return any(all(_starts(words, (w,)) for w in phrase) for phrase in POST_PHRASES)
 
 
+def search_or_consent(url: str) -> bool:
+    """A document POST's address says a search or a consent choice (SEARCH_INSIDE,
+    CONSENT_INSIDE)."""
+    read = _texts(url)
+    if read is None:
+        return False
+    texts, labels = read
+    return _inside(texts, SEARCH_INSIDE) or _inside([*texts, *labels], CONSENT_INSIDE)
+
+
 def request_refused(method: object, url: object, kind: object) -> str | None:
     """None when the request leaves, else why (a code for the log, never the address): a
-    document POST that is no search (`document_post`), a POST whose address says a step of the
-    line (`line_post`), an address that is no http, https, data or blob one (`scheme`)."""
+    document POST that is no search nor consent choice (`document_post`), a POST whose address
+    says a step of the line (`line_post`), an address that is no http, https, data or blob one
+    (`scheme`)."""
     if not isinstance(url, str) or not isinstance(method, str):
         return "unreadable"
     scheme = url.split(":", 1)[0].lower()
@@ -263,9 +310,8 @@ def request_refused(method: object, url: object, kind: object) -> str | None:
         return None
     if post_refused(url):
         return "line_post"
-    if kind == "document":
-        words = _address_words(url)
-        return None if _starts(words, SEARCH_ADDRESS) else "document_post"
+    if kind == "document" and not search_or_consent(url):
+        return "document_post"
     return None
 
 
