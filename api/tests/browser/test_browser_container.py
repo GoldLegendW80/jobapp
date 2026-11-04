@@ -324,15 +324,15 @@ def test_the_ai_snapshot_with_refs_of_the_pinned_playwright(stack: Stack) -> Non
 
 @pytest.mark.usefixtures("sweep_of_a")
 def test_languages_zone_user_agent_and_webgl(stack: Stack) -> None:
-    """Items 3, 4 and 7: the languages from the preferences, Chromium's own user agent, no
-    WebGL under Xvfb."""
+    """Items 3, 4 and 7: the languages from the preferences, Chromium's own user agent. WebGL
+    is not asserted: B20 asks for software WebGL on every sweep lease, and whether Debian's
+    arm64 Chromium ships SwiftShader is a declared open point (SPEC-browser)."""
     env = stack.probe("env", f"{PAGES}/headers")
     assert env["languages"] == ["fr-FR", "fr", "en-US", "en"]
     assert env["zone"] == "Europe/Paris"
     assert "Linux" in env["userAgent"]
     assert "Headless" not in env["userAgent"]
     assert env["webdriver"] is False
-    assert env["webgl"] is False
     assert env["accept_language"].startswith("fr-FR,fr;q=0.9")
 
 
