@@ -272,6 +272,101 @@ def test_the_line_on_real_chromium_every_path_on_an_ats_posting(b20, search):
     assert posted == ["/api/saved-jobs", "/api/follows", "/api/saved-jobs"], posted
 
 
+# Every name the control tables refuse or pass (test_b20_line), as a button or a link the
+# agent's script makes and clicks: the script guard judges them as a click does (review of B20,
+# round 1: it read no phrase, so "Sign out" and "Candidature simplifiée" passed a script).
+CLICKED = """rows => rows.filter(([tag, name]) => {
+  const made = document.createElement(tag);
+  if (tag === "a") made.href = "#made"; else made.type = "button";
+  made.textContent = name;
+  document.body.append(made);
+  try { made.click(); return false; } catch (e) { return true; } finally { made.remove(); }
+}).map(([tag, name]) => tag + ":" + name)"""
+# A form with no method attribute (a React application form: `form.method` is "get") that holds
+# a field a person writes to someone or applies with: submit(), requestSubmit() and its button's
+# click() are refused, as search_form refuses its submission; a GET search form's pass.
+FORMS = """() => {
+  const sink = document.createElement("iframe");
+  sink.name = "sink";
+  document.body.append(sink);
+  const fields = {email: '<input type="email" name="e">', tel: '<input type="tel" name="t">',
+    file: '<input type="file" name="f">', password: '<input type="password" name="p">',
+    textarea: '<textarea name="m"></textarea>', editable: '<div contenteditable="true"></div>',
+    search: '<input type="search" name="q" value="robot">'};
+  const ways = {submit: f => f.submit(), requestSubmit: f => f.requestSubmit(),
+    requestSubmit_with: f => f.requestSubmit(f.querySelector("button")),
+    click: f => f.querySelector("button").click()};
+  const refused = [];
+  for (const [kind, html] of Object.entries(fields)) {
+    for (const [way, act] of Object.entries(ways)) {
+      const form = document.createElement("form");
+      form.action = "/results";
+      form.target = "sink";
+      form.innerHTML = html + "<button>Go</button>";
+      document.body.append(form);
+      try { act(form); } catch (e) { refused.push(kind + ":" + way); }
+      form.remove();
+    }
+  }
+  return refused;
+}"""
+
+
+def test_a_script_s_click_refuses_what_a_click_refuses_on_real_chromium(b20, search):
+    from tests.browser.test_b20_line import LEAVING_LINKS, PASSED, POSTING_LINKS, REFUSED
+
+    ats = search(ATS)
+    rows = [
+        *(["button", n] for n in [*REFUSED, *PASSED]),
+        *(["a", n] for n in [*LEAVING_LINKS, *POSTING_LINKS]),
+    ]
+    answer = ats.evaluate(f"() => ({CLICKED})({json.dumps(rows)})")
+    assert answer["ok"], answer
+    refused = json.loads(answer["result"])
+    assert refused == [*(f"button:{n}" for n in REFUSED), *(f"a:{n}" for n in LEAVING_LINKS)]
+    forms = ats.evaluate(FORMS)
+    assert forms["ok"], forms
+    expected = [
+        f"{kind}:{way}"
+        for kind in ("email", "tel", "file", "password", "textarea", "editable")
+        for way in ("submit", "requestSubmit", "requestSubmit_with", "click")
+    ]
+    assert json.loads(forms["result"]) == expected  # the search form's four ways passed
+    # Uncaught, a refusal is the tool's answer, counted by the api as the line's.
+    made = "() => { const b = document.createElement('button'); b.textContent = 'Log out';"
+    assert ats.evaluate(made + " document.body.append(b); b.click(); }")["error"] == "line"
+
+
+FETCH_GET = "() => fetch({path!r}).then(r => 'sent ' + r.status, e => 'refused ' + e.name)"
+
+
+def test_signing_out_never_happens_on_real_chromium_whatever_opens_it(b20, search):
+    """LinkedIn's "Sign Out" is a link to /m/logout/ and Indeed's a link too (review of B20,
+    round 1): a click on a sign out link, Enter on it focused, a typed address and a script's GET
+    are refused in English, French and German; a posting link still opens."""
+    before = len(seen(b20))
+    ats = search(ATS)
+    page = ats.page()
+    for name in ("Sign Out", "Se déconnecter", "Abmelden"):
+        refused = ats("browser_click", ref=named(page, "link", name))
+        assert refused["error"] == "line", (name, refused)
+    assert ats.evaluate("() => document.querySelector('#signout').focus()")["ok"]
+    entered = ats("browser_press_key", key="Enter")
+    assert entered["error"] == "line", entered
+    for path in ("/m/logout/", "/auth/logout?continue=x", "/fr/deconnexion"):
+        typed = ats("browser_navigate", url="http://ats.b20-hire.test:8080" + path)
+        assert typed["error"] == "line", (path, typed)
+        answer = ats.evaluate(FETCH_GET.format(path=path))
+        assert json.loads(answer["result"]) == "refused TypeError", (path, answer)
+    assert 'heading "Robot Engineer"' in ats.page()
+    opened = ats("browser_click", ref=named(ats.page(), "link", "Logistics Engineer"))
+    assert opened["ok"], opened
+    assert opened["url"].endswith("/jobs/7"), opened
+    paths = [s["path"] for s in seen(b20)[before:] if s["host"] == "ats.b20-hire.test"]
+    assert "/jobs/7" in paths
+    assert not [p for p in paths if "logout" in p or "deconnexion" in p or "abmelden" in p], paths
+
+
 # What code cannot see inside a script, each run as the agent's script: the request floor, not
 # the script guard, is what holds what it sends.
 UNSEEN = {

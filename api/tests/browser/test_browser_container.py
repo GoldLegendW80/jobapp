@@ -291,7 +291,7 @@ def test_a_lease_for_a_new_profile_and_a_second_lease_refused(
     lease = sweep_of_a
     assert lease["lease_token"]
     assert lease["purpose"] == "sweep"
-    assert lease["max_s"] == 900
+    assert lease["max_s"] == 86_400  # B20: a sweep lease lasts as long as the search
     mode = stack.execute("browser", "stat", "-c", "%a %u", f"/profiles/{A}").split()
     assert mode == ["700", "20001"]
     chromium = [uid for uid, _, cmd in processes(stack) if "chromium" in cmd]

@@ -2,11 +2,12 @@
 real ones (tests/browser_pages/server.py, b19/), under the `.test` stand in names of their
 platforms' families. Indeed's home sends the search to its country site with a query, its native
 GET form with Indeed's own field names searches by Enter, a posting opens with its tracking
-query, the person's own jobs never open, a page that sends the browser to the sign in host
-answers `signin_required`. Welcome to the Jungle's script search box outside any form searches
-by Enter and by its magnifier button through a POST to its search service, which renders the
-list; the Apply button and the Easy Apply link beside the box stay refused, and nothing is ever
-posted to the website itself.
+query. Since B20 any text is typed (a title not saved too), the person's own list and the sign in
+host open as any public address does (the api reads a sign in page, not browserd), and nothing
+of a query is logged. Welcome to the Jungle's script search box outside any form searches by
+Enter and by its magnifier button through a POST to its search service, which renders the list;
+the Apply button and the Easy Apply link beside the box stay refused, and nothing is ever posted
+to the website itself.
 Needs an existing BROWSER_TEST_IMAGE; never builds or pulls one.
 """
 
@@ -81,8 +82,8 @@ def test_indeed_s_country_site_is_searched_by_its_own_form(b19):
         assert opened["url"] == "http://fr.indeed.test:8080/?r=us"
         page = lease.tool("browser_snapshot")["snapshot"]
         what, where = ref(page, "textbox", "What"), ref(page, "textbox", "Where")
-        refused = lease.tool("browser_type", ref=what, text="Prompt Engineer", **marker)
-        assert refused["error"] == "unsupported_discovery", refused
+        unsaved = lease.tool("browser_type", ref=what, text="Prompt Engineer", **marker)
+        assert unsaved["ok"], unsaved  # B20: the agent types what it judges right
         assert lease.tool("browser_type", ref=where, text="Paris", **marker)["ok"]
         searched = lease.tool(
             "browser_type", ref=what, text="GenAI Engineer", submit=True, **marker
@@ -95,17 +96,21 @@ def test_indeed_s_country_site_is_searched_by_its_own_form(b19):
         assert "Build agents" in lease.tool("browser_snapshot")["snapshot"]
         assert lease.tool("browser_navigate", url="http://fr.indeed.test:8080/", **marker)["ok"]
         page = lease.tool("browser_snapshot")["snapshot"]
-        own = lease.tool("browser_click", ref=ref(page, "link", "My jobs"), **marker)
-        assert own["error"] == "unsupported_discovery", own  # the person's own list (round 1)
-        wall = lease.tool("browser_click", ref=ref(page, "link", "Recent search"), **marker)
-        assert wall["error"] == "signin_required", wall
+        # B20: the person's own list opens (here its sign in page, the login having expired),
+        # and so does a recent search sent to the sign in host; the api reads the sign in page.
+        for name in ("My jobs", "Recent search"):
+            assert lease.tool("browser_navigate", url="http://fr.indeed.test:8080/", **marker)["ok"]
+            page = lease.tool("browser_snapshot")["snapshot"]
+            moved = lease.tool("browser_click", ref=ref(page, "link", name), **marker)
+            assert moved["ok"], (name, moved)
+            assert moved["url"].startswith("http://secure.indeed.test:8080/auth?continue="), moved
         for off in ("http://secure.indeed.test:8080/auth", "http://elsewhere:8080/"):
-            assert lease.tool("browser_navigate", url=off, **marker)["error"] == "host_not_allowed"
+            assert lease.tool("browser_navigate", url=off, **marker)["ok"], off
     finally:
         lease.end()
     logs = b19.run("logs", "--no-color", "browser", check=False)
-    assert "stopped: host=secure.indeed.test" in logs
-    assert "continue" not in logs
+    assert "host=secure.indeed.test" not in logs  # nothing was stopped
+    assert "continue" not in logs  # no query is ever logged
 
 
 def test_the_jungle_s_script_box_searches_through_its_search_service(b19):
@@ -117,7 +122,8 @@ def test_the_jungle_s_script_box_searches_through_its_search_service(b19):
         assert lease.tool("browser_navigate", url=start, **marker)["ok"]
         page = lease.tool("browser_snapshot")["snapshot"]
         box, where = ref(page, "combobox", "Search for a job"), ref(page, "combobox", "Where")
-        assert not lease.tool("browser_type", ref=where, text="GenAI Engineer", **marker)["ok"]
+        # B20: any text is typed in any box, a title in the place box too; the place replaces it.
+        assert lease.tool("browser_type", ref=where, text="GenAI Engineer", **marker)["ok"]
         assert lease.tool("browser_type", ref=where, text="Paris", **marker)["ok"]
         searched = lease.tool("browser_type", ref=box, text="GenAI Engineer", submit=True, **marker)
         assert searched["ok"], searched
