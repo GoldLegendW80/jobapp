@@ -255,6 +255,11 @@ def test_verified_findings_become_scored_found_jobs_with_their_observed_facts_on
         "company": "Employer: Example Robotics",
         "published_on": "Published: 2026-10-20",
         "location": "Location: Paris, France",
+        # B21: the rule that accepted the title and each field.
+        "rule": "heading",
+        "company_rule": "label",
+        "published_on_rule": "label",
+        "location_rule": "label",
     }
     assert discovery[robot.id]["unknown"] == []
     assert discovery[arm.id]["unknown"] == ["company", "published_on", "location"]
