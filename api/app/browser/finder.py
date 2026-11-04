@@ -34,6 +34,13 @@ What code enforces, whatever the model asks (`FinderSession`):
   kept only when its title is on that page (both folded: NFKC, case folded, whitespace
   collapsed). Declared: this is a containment test, so a one word title passes on most pages;
   the address rules above are what bind the posting to the site.
+- a job website's posting (B21, owner 2026-11-04) is kept when its address is a page the agent
+  opened in this session (any of the last OPENED_MAX it read, `pages_read`) and its title equals
+  one of that page's headings or its words are in that page's visible text (case, accents,
+  spacing and punctuation aside, `title_on`), else the page's one clear primary heading is its
+  title; its company, location and date are the labelled ones, else the agent's when their words
+  are on the page, else none. An address it never opened is refused; the answer tells it what
+  to do (REPORT_ADVICE). The evidence stored names the rule that accepted the title.
 
 Nothing of a page or a posting goes into a log or the run's events.
 """
@@ -44,6 +51,7 @@ import asyncio
 import contextlib
 import importlib.util
 import json
+import logging
 import re
 import secrets
 import threading
@@ -67,6 +75,8 @@ from app.browser.client import BrowserError
 if TYPE_CHECKING:
     from app.agents.runner import RunContext
     from app.browser.sources import Pages
+
+logger = logging.getLogger("app.browser.finder")
 
 NAME = "browser_finder"
 TOOLS = ("browser_navigate", "browser_snapshot", "browser_wait_for", "report_postings")
@@ -136,6 +146,11 @@ SCOPE_VALUES_MAX = 100
 SCOPE_VALUE_MAX = 300
 SCOPE_BYTES_MAX = 32_768
 SEEN_MAX = 2000
+# The pages a job website's agent opened that its reports are verified on (B21): the last ones
+# read, each with its posting text, its visible words, its headings and fields; every record
+# holds at most about twice SNAPSHOT_MAX characters.
+OPENED_MAX = 200
+PROFILE_MAX = 10_000  # characters of the person's profile summary (app/profile/fit_summary.py)
 WAIT_MAX_S = 5.0
 # A job website's summary of its searches (B20, `FinderSession._note_search`): the searches it
 # counts, the characters of each name, the boxes and choices one search holds.
@@ -188,6 +203,29 @@ NO_POSTINGS = {
     "app_refused": "search_refused",
     "security_check": "security_check",
 }
+# What the agent of a job website is told to do about a posting it reported and the app refused
+# (B21), by the refusal's reason; a reason not named here is told as is.
+OPEN_THEN_REPORT = (
+    "Open the posting's page (browser_navigate to its address, or click it), then report it "
+    "with the address the browser shows."
+)
+REPORT_ADVICE = {
+    "not_a_posting": "Give each posting as an object with its title, url and text.",
+    "missing_field": "Give the posting's title as its page shows it, its address and its text.",
+    "field_too_long": "Give a shorter title or text, and the posting's own address.",
+    "title_too_long": "Give the posting's title as its page shows it, not more.",
+    "not_an_address": OPEN_THEN_REPORT,
+    "other_host": OPEN_THEN_REPORT,
+    "not_a_posting_page": "This is the website's start page. " + OPEN_THEN_REPORT,
+    "not_seen": OPEN_THEN_REPORT,
+    "detail_not_opened": OPEN_THEN_REPORT,
+    "title_not_on_page": (
+        "Read the posting's page again (browser_snapshot), then report the title as the page "
+        "shows it."
+    ),
+    "duplicate": "Already reported: go on with the next posting.",
+    "postings_max": "Enough postings for this report: report the next ones in another call.",
+}
 # What browserd answers when it refused a navigation or an action of the agent's (B19): counted
 # as the app's refusal (`refused["unsupported_interaction"]`), never a page that did not load.
 APP_REFUSED = frozenset(
@@ -212,14 +250,25 @@ ACTION_FAILED = (
     "cookie banner by declining it, then try again or another way."
 )
 INTERACTIVE_PROMPT = """You search one job website for a person, the way the person would in their
-own browser, with every criterion of the search scope of your first message: the wanted titles
-(`titles`), the wanted places (`places`), the native filter values (`filters`), all the person's
-saved criteria (`criteria`: wanted and unwanted titles and places, contract types, remote
-stance, seniority, industries, company types, pay, how recent a posting is) and the person's own
-words (`untrusted_person_instructions`). Read every criterion as the person meant it: a place
-such as "everywhere", "anywhere", "worldwide" or "partout" means no place, so leave the place
-box empty or choose the website's worldwide place. Type what you judge right in a search box: a
-saved title, a translation or a synonym the website understands, as the person would.
+own browser, to find the postings that fit the person's profile. Your first message holds the
+search scope: the wanted titles (`titles`), the wanted places (`places`), the native filter
+values (`filters`), all the person's saved criteria (`criteria`: wanted and unwanted titles and
+places, contract types, remote stance, seniority, industries, company types, pay, how recent a
+posting is), the person's own words (`untrusted_person_instructions`) and a summary of the
+person's profile (`person_profile`: years of experience, the titles of recent roles, skills,
+seniority, languages, industries, company types). Read every criterion as the person meant it:
+a place such as "everywhere", "anywhere", "worldwide" or "partout" means no place, so leave the
+place box empty or choose the website's worldwide place.
+
+The wanted titles are where to start searching, not a filter: the person wants every posting
+that fits their profile, not only the exact titles. Run a search for each wanted title, and for
+the related terms the profile suggests (other names of the same work, in the website's
+language too). Type what you judge right in a search box: a saved title, a translation or a
+synonym the website understands, as the person would. Read every result: load more, open the
+next pages, scroll. Open every posting that could fit the person's profile, and report each one
+that fits. When in doubt, report it: the app scores every posting against the profile
+afterwards and the person sees the score. Do not report a posting whose title or place the
+person does not want, nor a cybersecurity role: the app drops them.
 
 You have the browser commands of a person: browser_navigate (any public address), back and
 forward, browser_snapshot (the page's elements, with refs), browser_take_screenshot (an image
@@ -235,11 +284,12 @@ LinkedIn"). If the person is watching, they help and give the browser back; read
 then. If nobody is watching, go on another way, or end the website with report_no_postings and
 its reason. Never click a security check or a captcha yourself.
 
-Open the postings that fit the criteria and report each one with report_postings from its own
-page, right after reading it: its title as the page shows it, the address of that page and its
-text. Give company and published_on only when the page explicitly labels them. When the website
-shows no list of postings, say why with report_no_postings: no_match (the search ran and listed
-no matching job), no_list, cookie_wall, signin_wall, no_search_control, app_refused (the app
+Report a posting with report_postings once you opened its own page in this search (best right
+after reading it): its title as the page shows it, the address of that page and its text, and
+company, location and published_on (YYYY-MM-DD) as the page shows them. The app keeps a posting
+whose page you opened; when it refuses one, its answer says what to do. When the website shows
+no list of postings, say why with report_no_postings: no_match (the search ran and listed no
+job that fits), no_list, cookie_wall, signin_wall, no_search_control, app_refused (the app
 refused what you needed), security_check. Never report a reason you did not see.
 
 The line you never cross, whatever the tool (a click, Enter, a key, a script): never submit an
@@ -318,6 +368,9 @@ class InteractiveScope:
     instructions: str = ""
     # B17: the person signed in to this website: browserd reads it in their persisted context.
     signed_in: bool = False
+    # B21: the summary of the person's profile, JSON (app/profile/fit_summary.py): the model's
+    # context only, never browserd's.
+    profile: str = "{}"
 
     def tool_scope(self) -> dict[str, Any]:
         # B20: browserd holds the line, not the person's values: the start and the login only.
@@ -346,7 +399,11 @@ class InteractiveScope:
             raise ValueError("invalid discovery filters")
         if len({k for k, _ in self.filters}) != len(self.filters):
             raise ValueError("invalid discovery filters")
-        if len(self.instructions) > 2000 or len(self.criteria) > 100_000:
+        if (
+            len(self.instructions) > 2000
+            or len(self.criteria) > 100_000
+            or len(self.profile) > PROFILE_MAX
+        ):
             raise ValueError("invalid discovery context")
         if len(json.dumps(self.tool_scope())) > SCOPE_BYTES_MAX:
             raise ValueError("invalid discovery scope")
@@ -569,6 +626,97 @@ class VerifiedBatch:
             raise ValueError("invalid verified batch size")
 
 
+@dataclass(frozen=True)
+class PageRead:
+    """What code read on a page the agent of a job website opened (B21), kept for its reports."""
+
+    text: str  # the posting's text: the detail's (`_detail`), else the page's visible lines
+    words: str  # the page's visible text as its words (`_words`), one space at each end
+    headings: tuple[str, ...]  # every visible heading, as the page shows it
+    primary: str  # the page's one clear primary heading (`_detail`), else ""
+    fields: dict[str, tuple[str, str]]  # the labelled company, date and location (`_detail`)
+    read_at: str
+
+
+# A gender marker at the end of a reported title ("(H/F)", "F/H", "(m/w/d)", "(f/m/x)"): when
+# the title is not on the page with it, it is looked for without it (B21).
+GENDER_MARK = re.compile(
+    r"(?:[\s,\u2013\u2014-]+|(?=[(\[]))[(\[]?\s*(?:[hfmwdx]\s*/\s*){1,2}[hfmwdx]\s*[)\]]?\s*$", re.I
+)
+
+
+def _seen_text(root: Any) -> tuple[list[str], list[str]]:
+    """A page as a person reads it (B21): its visible lines and its headings, without hidden
+    elements, buttons, images and links (the titles of other postings a page lists are links)."""
+    from app.browser.sources import SKIPPED_ROLES
+
+    lines: list[str] = []
+    headings: list[str] = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.hidden or node.role in SKIPPED_ROLES or node.role == "link":
+            continue
+        line = " ".join(node.label().split())
+        if line:
+            lines.append(line)
+            if node.role == "heading" and len(line) <= TITLE_MAX:
+                headings.append(line)
+        stack.extend(reversed(node.children))
+    return lines, headings
+
+
+def _on_page(text: str, page: PageRead) -> bool:
+    """Whether a text's words are in the page's visible text as a sequence of whole words, case,
+    accents, spacing and punctuation aside (B21: a word sequence, never a pattern)."""
+    words = _words(text)
+    return bool(words) and f" {words} " in page.words
+
+
+def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
+    """The title a reported posting is stored with, and the rule that accepted it (B21): a
+    heading of the page it equals (case, accents, spacing and punctuation aside), as the page
+    shows it; else the title as reported when its words are in the page's visible text, with a
+    gender marker at its end set aside when the page has none; else the page's one clear
+    primary heading. None when none of them holds."""
+    words = _words(title)
+    if not words:
+        return None
+    heading = next((h for h in page.headings if _words(h) == words), None)
+    if heading is not None:
+        return heading, "heading"
+    if _on_page(title, page):
+        return title, "page_text"
+    bare = GENDER_MARK.sub("", title).strip()
+    if bare and bare != title and _on_page(bare, page):
+        return bare, "page_text"
+    if page.primary and len(page.primary) <= TITLE_MAX:
+        return page.primary, "primary_heading"
+    return None
+
+
+def claimed(value: object, key: str, page: PageRead) -> str | None:
+    """A company, location or published_on the agent reported for a page with no labelled
+    field of it (B21): kept when its words are in the page's visible text, a date only in ISO
+    form, else None (dropped, never a refusal)."""
+    if not isinstance(value, str):
+        return None
+    value = " ".join(value.split())
+    if (
+        not value
+        or len(value) > LOCATION_MAX
+        or any(c in "<>" or unicodedata.category(c).startswith("C") for c in value)
+    ):
+        return None
+    if key == "published_on":
+        try:
+            if date.fromisoformat(value).isoformat() != value:
+                return None
+        except ValueError:
+            return None
+    return value if _on_page(value, page) else None
+
+
 def _detail(root: Any) -> tuple[str, list[str], dict[str, tuple[str, str]]]:
     """Read the existing snapshot tree, keeping one primary detail and explicit fields."""
     from app.browser.sources import SKIPPED_ROLES
@@ -788,9 +936,9 @@ class FinderSession:
     on_verified: Callable[[VerifiedBatch], Awaitable[None]] | None = None
     verified_count: int = 0
     reported_urls: set[str] = field(default_factory=set)
-    detail_titles: list[str] = field(default_factory=list)
-    detail_fields: dict[str, tuple[str, str]] = field(default_factory=dict)
-    detail_read_at: str = ""
+    # A job website's pages opened in this session, oldest first, at most OPENED_MAX (B21): its
+    # reports are verified on any of them, not only the last one read.
+    pages_read: dict[str, PageRead] = field(default_factory=dict)
     clock: Callable[[], datetime] = _utcnow
     # A job website's searches (B20), read by the summary (interactive._Site): (what was typed,
     # what was chosen) once submitted, or (a saved title, a saved place) an address it opened
@@ -844,12 +992,21 @@ class FinderSession:
         key = canonical(url)
         if key:
             if self.interactive:
-                self.opened.clear()
                 if key not in self.seen and len(self.seen) >= SEEN_MAX:
                     self.seen.pop()
-                body, self.detail_titles, self.detail_fields = _detail(root)
-                self.detail_read_at = self.clock().isoformat()
-                self.opened[key] = body
+                body, titles, fields = _detail(root)
+                lines, headings = _seen_text(root)
+                self.pages_read.pop(key, None)  # read again: the newest record
+                self.pages_read[key] = PageRead(
+                    (body or "\n".join(lines))[:TEXT_MAX],
+                    f" {_words(' '.join(lines))} ",
+                    tuple(headings),
+                    titles[0] if titles else "",
+                    fields,
+                    self.clock().isoformat(),
+                )
+                while len(self.pages_read) > OPENED_MAX:
+                    del self.pages_read[next(iter(self.pages_read))]
             self.seen.add(key)
             if not self.interactive:
                 self.opened[key] = "\n".join(sources.visible_lines(root))[:TEXT_MAX]
@@ -1159,7 +1316,7 @@ class FinderSession:
             reason = self._keep(item)
             if reason:
                 self.refused[reason] += 1
-                refusals.append({"index": index, "reason": reason})
+                refusals.append(self._refusal(index, reason))
             else:
                 kept += 1
         answer = {"kept": kept, "refused": refusals[:50], "kept_in_all": len(self.found)}
@@ -1199,7 +1356,7 @@ class FinderSession:
             finding, reason = self._verified(item, {f.url for f in pending})
             if reason:
                 self.refused[reason] += 1
-                refusals.append({"index": index, "reason": reason})
+                refusals.append(self._refusal(index, reason))
             elif finding:
                 pending.append(finding)
             if len(pending) == VERIFIED_BATCH_MAX and not await flush():
@@ -1209,6 +1366,14 @@ class FinderSession:
         return json.dumps(
             {"kept": kept, "refused": refusals[:50], "kept_in_all": self.verified_count}
         ), False
+
+    def _refusal(self, index: int, reason: str) -> dict[str, Any]:
+        """A refused posting as the agent reads it: its index, the reason and, on a job
+        website, what to do about it (B21)."""
+        refusal: dict[str, Any] = {"index": index, "reason": reason}
+        if self.interactive is not None and reason in REPORT_ADVICE:
+            refusal["do"] = REPORT_ADVICE[reason]
+        return refusal
 
     def _verified(self, item: Any, pending: set[str]) -> tuple[VerifiedFinding | None, str]:
         if not isinstance(item, dict):
@@ -1220,47 +1385,49 @@ class FinderSession:
             return None, "missing_field"
         if len(item["url"]) > 2000 or len(item["text"]) > TEXT_MAX:
             return None, "field_too_long"
+        if not _words(title):
+            return None, "missing_field"
         url = canonical(urljoin(self.current, item["url"]))
         if not self.on_site(url):
             return None, "other_host"
         if url in {self.start, self.landed}:
             return None, "not_a_posting_page"
-        if url not in self.seen:
-            return None, "not_seen"
+        # B21: any page the agent opened in this session (the last OPENED_MAX), never one it
+        # did not open; a job website's verified postings have no cap (J18).
+        page = self.pages_read.get(url)
+        if page is None:
+            return None, "detail_not_opened" if url in self.seen else "not_seen"
         if url in self.reported_urls or url in pending:
             return None, "duplicate"
-        page = self.opened.get(url)  # a job website's verified postings have no cap (J18)
-        if page is None:
-            return None, "detail_not_opened"
-        actual = next((t for t in self.detail_titles if _norm(t) == _norm(title)), None)
-        if actual is None or len(actual) > TITLE_MAX:
+        if not page.text.strip():
+            return None, "missing_field"
+        found = title_on(page, title)
+        if found is None:
             return None, "title_not_on_page"
-        evidence = {"title": actual}
+        actual, rule = found
+        evidence = {"title": actual, "rule": rule}
         values: dict[str, str | None] = {}
-        for key, reason in (
-            ("company", "company_not_on_page"),
-            ("published_on", "date_not_on_page"),
-            ("location", "location_not_on_page"),
-        ):
-            observed = self.detail_fields.get(key)
-            claim = item.get(key)
-            if claim is not None and (
-                not isinstance(claim, str)
-                or (claim.strip() and (not observed or _norm(claim) != _norm(observed[0])))
-            ):
-                return None, reason
-            values[key] = observed[0] if observed else None
+        # The labelled field when the page has one, else the agent's value when its words are
+        # on the page, else none: a value that differs never refuses the posting (B21).
+        for key in ("company", "published_on", "location"):
+            observed = page.fields.get(key)
             if observed:
-                evidence[key] = observed[1]
+                values[key], evidence[key], evidence[f"{key}_rule"] = (
+                    observed[0], observed[1], "label"
+                )  # fmt: skip
+                continue
+            values[key] = claimed(item.get(key), key, page)
+            if values[key]:
+                evidence[key], evidence[f"{key}_rule"] = values[key], "page_text"
         return VerifiedFinding(
             actual,
             values["location"] or "",
             url,
-            page,
+            page.text,
             values["company"],
             values["published_on"],
             evidence,
-            self.detail_read_at,
+            page.read_at,
         ), ""
 
     def _keep(self, item: Any) -> str:
@@ -1282,16 +1449,23 @@ class FinderSession:
             return "other_host"
         if url in {self.start, self.landed}:
             return "not_a_posting_page"
-        if url not in self.seen:
+        read = self.pages_read.get(url) if self.interactive else None
+        if read is None and url not in self.seen:
             return "not_seen"
         if any(f.url == url for f in self.found):
             return "duplicate"
         if len(self.found) >= POSTINGS_MAX:
             return "postings_max"
-        page = self.opened.get(url)
-        if self.interactive and page is None:
-            return "detail_not_opened"
-        if page is not None and _norm(title) not in _norm(page):
+        if self.interactive:  # B21: as `_verified`, on any page opened in this session
+            if read is None:
+                return "detail_not_opened"
+            found = title_on(read, title)
+            if found is None:
+                return "title_not_on_page"
+            title, page = found[0], read.text
+        else:
+            page = self.opened.get(url)
+        if page is not None and not self.interactive and _norm(title) not in _norm(page):
             return "title_not_on_page"
         self.found.append(
             Found(
@@ -1318,6 +1492,10 @@ class FinderAgent:
 
     async def available(self, user_id: str) -> bool:  # pragma: no cover, a protocol
         raise NotImplementedError
+
+    async def profile(self, user_id: str) -> str:
+        """The summary of the person's profile the agent of a job website reads (B21), JSON."""
+        return "{}"
 
     async def __call__(self, session: FinderSession) -> Ran:  # pragma: no cover
         raise NotImplementedError
@@ -1356,6 +1534,7 @@ class FinderDefinition(definitions.AgentDefinition):
                         "filters": dict(scope.filters),
                         "criteria": json.loads(scope.criteria),
                         "untrusted_person_instructions": scope.instructions,
+                        "person_profile": json.loads(scope.profile),
                         "signed_in": scope.signed_in,
                     }
                 }
@@ -1435,6 +1614,27 @@ class RuntimeFinder(FinderAgent):
         return await asyncio.to_thread(
             _in_db, context.sessions, lambda db: credentials.get(db, person) is not None
         )
+
+    async def profile(self, user_id: str) -> str:
+        """The person's profile summary (app/profile/fit_summary.py, B21) from their stored
+        profile; an empty one when it cannot be read, so the search still runs on the
+        criteria alone (logged without any of its data)."""
+        from app.profile import fit_summary
+
+        context = self.context()
+        person = uuid.UUID(user_id)
+        try:
+            found = await asyncio.to_thread(
+                _in_db, context.sessions, lambda db: fit_summary.read(db, person)
+            )
+        except Exception as error:
+            logger.warning(
+                "the profile summary of a website search could not be read: error=%s",
+                type(error).__name__,
+            )
+            return "{}"
+        text = json.dumps(found, ensure_ascii=False)
+        return text if len(text) <= PROFILE_MAX else "{}"
 
     async def __call__(self, session: FinderSession) -> Ran:
         from app.agents import runner  # the SDK: the worker's image only
