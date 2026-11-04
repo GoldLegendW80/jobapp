@@ -141,8 +141,7 @@ def says_line(names: list[str]) -> bool:
 def search_form(facts: dict[str, Any]) -> bool:
     """A form whose submission is a search or a consent choice: GET, or one holding no field a
     person writes to someone, applies or signs in with (WRITES, an editable region)."""
-    form = facts.get("discovery")  # FACTS_JS: the form's method is `discovery.method`
-    method = str(form.get("method") or "").lower() if isinstance(form, dict) else ""
+    method = _method(facts)
     kinds = [k for k in facts.get("form_kinds") or [] if isinstance(k, str)]
     if any(k in WRITES or k.endswith(":editable") for k in kinds):
         return False
@@ -151,13 +150,26 @@ def search_form(facts: dict[str, Any]) -> bool:
     return len(kinds) <= 40  # a consent form, a search form posted (an old career site)
 
 
+# An application's noun on a button of a form that is no GET one: never a search, whatever
+# verb is beside it ("Search application", "Candidature", "Bewerbung suchen"; part A of B20).
+APPLICATION_STEMS = ("applica", "candidat", "bewerb", "postul")
+
+
+def _method(facts: dict[str, Any]) -> str:
+    form = facts.get("discovery")  # FACTS_JS: the form's method is `discovery.method`
+    return str(form.get("method") or "").lower() if isinstance(form, dict) else ""
+
+
 def _structural(facts: dict[str, Any], action: str) -> bool:
     """The detector's `submit` came from the element's structure alone (its type, the submit it
-    holds, Enter in a form's field), never from a lease selector or a submit word."""
+    holds, Enter in a form's field), never from a lease selector, a submit word, or an
+    application's noun on a button of a form that is not sent by GET (APPLICATION_STEMS)."""
     if facts.get("selector_hit") or facts.get("custom_submit"):
         return False
     names = [n for n in facts.get("names") or [] if isinstance(n, str)]
     if detect.button_like(facts) and detect.says_submit(names):
+        return False
+    if _method(facts) != "get" and _starts(detect._glued(names), APPLICATION_STEMS):
         return False
     return action in ("click", "key", "check")
 

@@ -213,3 +213,82 @@ def test_a_get_always_leaves(method: str, path: str) -> None:
 @pytest.mark.parametrize("url", ["javascript:alert(1)", "file:///etc/passwd", "ws://x.test/", 7])
 def test_another_scheme_or_no_address_is_refused(url: object) -> None:
     assert line.request_refused("POST", url, "fetch") is not None
+
+
+@pytest.mark.parametrize(
+    ("name", "method", "allowed"),
+    [
+        ("Search application", "post", False),
+        ("Search applications", "", False),  # no method read: not a GET, refused
+        ("Candidature", "post", False),
+        ("Bewerbung suchen", "post", False),
+        ("Postulación", "post", False),
+        ("SearchApplication", "post", False),
+        ("Search", "post", True),
+        ("Find", "post", True),
+        ("Search application", "get", True),  # a GET form is a search
+        ("Rechercher une candidature", "get", True),
+    ],
+)
+def test_an_application_s_noun_on_a_button_of_a_post_form_refuses(name, method, allowed) -> None:
+    """Part A of B20: a POST form holding a search field only, whose button names an
+    application, is no search form (fail closed); a GET one stays a search."""
+    facts = button(
+        name,
+        type="submit",
+        in_form=True,
+        form_kinds=["input:search", "button:submit"],
+        discovery={"method": method},
+    )
+    for action in ("click", "key"):
+        assert (line.control(facts, action) is None) is allowed, (name, method, action)
+
+
+class Route:
+    def __init__(self) -> None:
+        self.done: list[str] = []
+
+    async def fallback(self) -> None:
+        self.done.append("fallback")
+
+    async def abort(self, code: str = "") -> None:
+        self.done.append("abort")
+
+    async def fulfill(self, **_: object) -> None:
+        self.done.append("fulfill")
+
+
+class Unreadable:
+    """A request whose every property raises, as a request of a closed target may."""
+
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError("target closed")
+
+    def is_navigation_request(self) -> bool:
+        raise RuntimeError("target closed")
+
+
+class NoKind:
+    """A fetch POST to a message address whose resource type cannot be read."""
+
+    method, url, frame = "POST", "https://jobs.example.test/api/messages", None
+
+    def is_navigation_request(self) -> bool:
+        return False
+
+    @property
+    def resource_type(self) -> str:
+        raise RuntimeError("target closed")
+
+
+@pytest.mark.parametrize("request_", [Unreadable(), NoKind()], ids=["unreadable", "no_kind"])
+def test_a_request_the_route_cannot_read_is_refused_never_left_to_raise(request_) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from browserd.tools import actions
+
+    tab = actions.Tab(SimpleNamespace(hosts=()), actions.State(), None, None, lease_tag="e2e")
+    route = Route()
+    asyncio.run(tab._line_route(route, request_))
+    assert route.done == ["abort"]

@@ -276,6 +276,10 @@ class Tab:
         answered 204 No Content, which Chromium never commits, so the tab stays on the page it
         was on: an abort committed Chromium's own error page, `chrome-error://`, and the
         agent's next call was refused off the list (part B of B20, test_b20_native)."""
+        # Fail closed: a request that cannot be read is refused, and nothing read below (its
+        # kind, its address for the log) can keep it from being refused (part A of B20 found an
+        # unbound `kind` there).
+        kind = "unknown"
         try:
             frame = request.frame if request.is_navigation_request() else None
             main = frame is not None and frame.parent_frame is None
@@ -291,8 +295,12 @@ class Tab:
         if why is None:
             await route.fallback()
             return
+        try:
+            url = str(request.url)
+        except Exception:
+            url = ""
         if main and not self.state.blocked:
-            self.state.blocked.append(str(request.url)[:200])
+            self.state.blocked.append(url[:200] or "unreadable")
             self.state.stopped_kind = f"{kind}:{why}"
         if self.state.route_logged < ROUTE_LOGGED:
             self.state.route_logged += 1
@@ -300,7 +308,7 @@ class Tab:
                 "lease %s: a request refused by the line: %s host=%s kind=%s",
                 self.lease_tag,
                 why,
-                host_of(request.url),
+                host_of(url),
                 KIND_LOGGED.sub("", kind)[:20] or "unknown",
             )
         if frame is not None:
