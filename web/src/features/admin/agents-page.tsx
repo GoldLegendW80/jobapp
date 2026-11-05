@@ -150,15 +150,17 @@ function AgentGroups({ list, now }: { list: AgentList; now: Date }) {
 
 /**
  * The column widths shared by the six tables of the list, so their columns line up from one
- * section to the next (`sm:table-fixed`); Agent takes what is left and its descriptions wrap
- * inside it. Model, Version and Last run stay on one line.
+ * section to the next (`lg:table-fixed`); Agent takes what is left and its descriptions wrap
+ * inside it. Model, Version and Last run stay on one line. From 1024px up only: between 640px
+ * and 1024px the fixed widths would leave the Agent column almost nothing, so the table lays
+ * itself out there.
  */
 const COLUMNS = [
   { label: "Agent", className: "" },
-  { label: "Module", className: "sm:w-60" },
-  { label: "Model", className: "sm:w-44 sm:whitespace-nowrap" },
-  { label: "Version", className: "sm:w-32 sm:whitespace-nowrap" },
-  { label: "Last run", className: "sm:w-28 sm:whitespace-nowrap" },
+  { label: "Module", className: "lg:w-60" },
+  { label: "Model", className: "lg:w-44 lg:whitespace-nowrap" },
+  { label: "Version", className: "lg:w-32 lg:whitespace-nowrap" },
+  { label: "Last run", className: "lg:w-28 lg:whitespace-nowrap" },
 ];
 
 function AgentsTable({
@@ -171,7 +173,7 @@ function AgentsTable({
   now: Date;
 }) {
   return (
-    <Table className="sm:table-fixed">
+    <Table className="lg:table-fixed">
       <TableCaption className="sr-only">{title}, by name</TableCaption>
       <TableHeader>
         <TableRow>
@@ -212,10 +214,10 @@ function AgentsTable({
                 {agent.module}
               </code>
             </TableCell>
-            <TableCell label="Model" className="sm:whitespace-nowrap">
+            <TableCell label="Model" className="lg:whitespace-nowrap">
               {agent.model}
             </TableCell>
-            <TableCell label="Version" className="sm:whitespace-nowrap">
+            <TableCell label="Version" className="lg:whitespace-nowrap">
               {agent.overridden && agent.version !== null
                 ? `Version ${String(agent.version)}`
                 : "The code's"}
@@ -233,7 +235,7 @@ function AgentsTable({
                 </span>
               ) : null}
             </TableCell>
-            <TableCell label="Last run" className="sm:whitespace-nowrap">
+            <TableCell label="Last run" className="lg:whitespace-nowrap">
               {agent.last_run_at ? (
                 <time
                   dateTime={agent.last_run_at}

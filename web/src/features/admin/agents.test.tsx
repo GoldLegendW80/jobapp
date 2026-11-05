@@ -429,13 +429,13 @@ describe("the list", () => {
     const widths: string[][] = [];
     for (const name of ["Documents, by name", "Jobs and chat, by name"]) {
       const table = await screen.findByRole("table", { name });
-      expect(table).toHaveClass("sm:table-fixed");
+      expect(table).toHaveClass("lg:table-fixed");
       const heads = within(table).getAllByRole("columnheader");
       widths.push(heads.map((head) => head.className));
       for (const label of ["Model", "Version", "Last run"]) {
         expect(
           within(table).getByRole("columnheader", { name: label }),
-        ).toHaveClass("sm:whitespace-nowrap");
+        ).toHaveClass("lg:whitespace-nowrap");
       }
     }
     expect(widths[0]).toEqual(widths[1]);
