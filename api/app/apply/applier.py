@@ -38,6 +38,10 @@ Pacing (the owner, 2026-11-05: "you can add a random pacing to feel more like hu
 3 to 8 seconds."): between two of the agent's acts on the page, a pause drawn in PACE_S each time,
 counted from the end of the previous act (its snapshot returned); reads are not paced.
 
+The run is the fill job's (`worker.apply_fill`), so its outer bound is that job's timeout
+(`worker.apply_queue`, 5,520 s by default): the lease's hour of active time and an ask fit in it;
+past it the job is cancelled and the run ends through `interrupted`.
+
 Nothing of an answer, a typed value, a summary or a page goes into a log, an event or the job's
 result: events and logs carry ids, codes and counts. The summary and the confirmation's address
 are the run report's answer row (`agent:report`).
