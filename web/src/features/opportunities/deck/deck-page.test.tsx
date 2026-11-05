@@ -536,6 +536,19 @@ describe("filters", () => {
       );
     });
   });
+
+  it("keep the arrow keys for a focused filter box: they swipe nothing", async () => {
+    const { deck } = await open();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
+    const box = screen.getByRole("checkbox", { name: "Permanent" });
+    box.focus();
+    await user.keyboard("{ArrowRight}{ArrowLeft}");
+    expect(deck.calls.some((call) => call.startsWith("POST"))).toBe(false);
+    // A tap on the box's words ticks it too.
+    await user.click(screen.getByText("Permanent", { selector: "label" }));
+    expect(box).toBeChecked();
+  });
 });
 
 describe("the app shell", () => {

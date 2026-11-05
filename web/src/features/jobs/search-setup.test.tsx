@@ -396,6 +396,29 @@ it("shows the four plain lists, the unwanted ones under More options, and saves 
   });
 });
 
+it("saves the contract types ticked under More options, in the order shown, and unticks one", async () => {
+  const { profile, starts, user, dialog } = await open();
+  await openMore(user, dialog);
+  const types = within(dialog).getByRole("group", { name: "Contract types" });
+  for (const name of ["Freelance mission", "Permanent", "Fixed term"])
+    await user.click(within(types).getByRole("checkbox", { name }));
+  await user.click(within(types).getByText("Fixed term"));
+  expect(
+    within(types).getByRole("checkbox", { name: "Fixed term" }),
+  ).not.toBeChecked();
+  expect(
+    within(types).getByRole("checkbox", { name: "Freelance mission" }),
+  ).toBeChecked();
+  await toggle(user, dialog, "Free-Work");
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 8 }]);
+  });
+  expect(profile.saves[0]!.body.data).toMatchObject({
+    contract_types: ["CDI", "Freelance"],
+  });
+});
+
 it("keeps a conflicting draft editable and requires reviewing the current profile", async () => {
   const { profile, starts, user, dialog } = await open();
   profile.revision += 1;

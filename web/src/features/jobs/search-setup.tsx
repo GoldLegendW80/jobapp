@@ -391,7 +391,10 @@ function SetupForm({
                   <TargetFields form={form} />
                 </div>
                 <Field className={BLOCK}>
-                  <FieldLabel htmlFor={`${id}-instructions`}>
+                  <FieldLabel
+                    htmlFor={`${id}-instructions`}
+                    className="leading-none"
+                  >
                     Instructions for the assistant
                   </FieldLabel>
                   <Textarea
@@ -404,7 +407,7 @@ function SetupForm({
                       setInstructions(event.target.value);
                     }}
                   />
-                  <FieldDescription className="text-xs">
+                  <FieldDescription className="text-xs leading-4">
                     Optional, up to 2,000 characters, kept for your next
                     searches.
                   </FieldDescription>

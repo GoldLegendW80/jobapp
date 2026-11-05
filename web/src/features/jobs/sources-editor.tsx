@@ -286,7 +286,9 @@ export function SourcesEditor({
       </div>
 
       <Field className={BLOCK}>
-        <FieldLabel htmlFor={`${id}-address`}>Website address</FieldLabel>
+        <FieldLabel htmlFor={`${id}-address`} className="leading-none">
+          Website address
+        </FieldLabel>
         {/* One row at every width, as the word lists' box and its Add below. */}
         <div className="flex gap-2">
           <Input
@@ -328,7 +330,7 @@ export function SourcesEditor({
         {problem ? (
           <FieldError id={`${id}-problem`}>{problem}</FieldError>
         ) : (
-          <FieldDescription id={`${id}-hint`} className="text-xs">
+          <FieldDescription id={`${id}-hint`} className="text-xs leading-4">
             Websites are searched by the assistant with your model key. Job
             feeds and company job boards are read directly, at no cost.
           </FieldDescription>
@@ -664,8 +666,11 @@ function LinkedInSearchChoice({
 }) {
   const id = useId();
   return (
-    <FieldSet className="gap-1 pt-1 text-xs">
-      <FieldLegend variant="label" className="mb-1 text-xs">
+    <FieldSet className="gap-1 pt-1 text-xs has-[>[data-slot=radio-group]]:gap-1">
+      <FieldLegend
+        variant="label"
+        className="mb-1 data-[variant=label]:text-xs"
+      >
         How LinkedIn is searched
       </FieldLegend>
       <RadioGroup
@@ -687,14 +692,14 @@ function LinkedInSearchChoice({
             </span>
             <Label
               htmlFor={`${id}-${mode}`}
-              className="text-xs leading-normal font-normal"
+              className="text-xs leading-4 font-normal"
             >
               {LINKEDIN_SEARCH_LABELS[mode]}
             </Label>
           </div>
         ))}
       </RadioGroup>
-      <FieldDescription className="text-xs">
+      <FieldDescription className="text-xs leading-4">
         Easy Apply always uses your browser.
       </FieldDescription>
     </FieldSet>

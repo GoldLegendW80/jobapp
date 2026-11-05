@@ -108,6 +108,10 @@ describe("multi-select", () => {
     expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull();
     await user.click(rowBoxes()[1]!);
     expect(within(bar()).getByText("1 posting selected")).toBeVisible();
+    // Some of the view is selected: the header box says so, half ticked.
+    expect(
+      within(table()).getByRole("checkbox", { name: "Clear the selection" }),
+    ).toBePartiallyChecked();
     await user.keyboard("{Shift>}");
     await user.click(rowBoxes()[5]!);
     await user.keyboard("{/Shift}");

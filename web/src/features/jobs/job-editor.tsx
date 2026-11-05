@@ -240,7 +240,7 @@ export function NotesEditor({ job, save }: { job: JobDetail; save: Save }) {
           }}
           className="min-h-28 text-sm"
         />
-        <FieldDescription id={`${id}-help`} className="text-xs">
+        <FieldDescription id={`${id}-help`} className="text-xs leading-4">
           {tooLong
             ? `Too long: ${draft.length.toLocaleString("en-GB")} characters, at most ${NOTES_MAX.toLocaleString("en-GB")}.`
             : "Saved automatically as you type."}
@@ -356,7 +356,7 @@ export function FitControl({ job, save }: { job: JobDetail; save: Save }) {
             </Button>
           ) : null}
         </div>
-        <FieldDescription id={`${id}-help`} className="text-xs">
+        <FieldDescription id={`${id}-help`} className="text-xs leading-4">
           {job.fit_overridden
             ? "Set by hand: a rescore keeps it."
             : "Computed from the posting and your skills. A fit set by hand is kept by every rescore."}
