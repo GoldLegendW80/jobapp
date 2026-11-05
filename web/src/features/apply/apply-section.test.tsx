@@ -864,6 +864,11 @@ describe("a failing refresh", () => {
         "Writing your CV and letter, then sending. The form is filled and sent once they are ready.",
       ),
     ).toBeVisible();
+    expect(
+      within(section).getByText(
+        "The browser starts once your CV and letter are ready.",
+      ),
+    ).toBeVisible();
   });
 
   it("asks for the documents consent with a link, and writes nothing before", async () => {

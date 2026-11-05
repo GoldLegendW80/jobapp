@@ -413,7 +413,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   ? detail.data
                     ? retrySentence(detail.data.events)
                     : "The last attempt did not finish. The assistant tries again by itself."
-                  : "The browser starts soon. A screenshot of the filled form appears here when it is done."
+                  : application?.needs?.startsWith("documents:")
+                    ? "The browser starts once your CV and letter are ready."
+                    : "The browser starts soon. A screenshot of the filled form appears here when it is done."
               }
               leaseOf="none"
             />
