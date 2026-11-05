@@ -11,7 +11,8 @@ import { needOf } from "./needs-person-state";
 
 const DASHES = /[–—]| - /;
 const FACT = {
-  sentence: 'The assistant needs your answer for "Notice period *" on jobs.example.org.',
+  sentence:
+    'The assistant needs your answer for "Notice period *" on jobs.example.org.',
   label: "Notice period *",
   host: "jobs.example.org",
   kind: "fact" as const,
@@ -32,11 +33,19 @@ describe("One click Apply's question (A19)", () => {
     server.use(
       http.post("*/api/applications/:id/question", async ({ request }) => {
         sent.push(await request.json());
-        return HttpResponse.json({ ...application, state: "queued", needs: null });
+        return HttpResponse.json({
+          ...application,
+          state: "queued",
+          needs: null,
+        });
       }),
     );
     renderWithQuery(
-      <NeedsPerson application={application} job={makeDetail()} question={FACT} />,
+      <NeedsPerson
+        application={application}
+        job={makeDetail()}
+        question={FACT}
+      />,
     );
     expect(screen.getByText(FACT.sentence)).toBeInTheDocument();
     const send = screen.getByRole("button", { name: "Send the answer" });
@@ -44,7 +53,9 @@ describe("One click Apply's question (A19)", () => {
     await userEvent.type(screen.getByLabelText("Your answer"), "Two months");
     await userEvent.click(screen.getByLabelText("Remember this answer"));
     await userEvent.click(send);
-    await waitFor(() => expect(sent).toEqual([{ answer: "Two months", remember: true }]));
+    await waitFor(() => {
+      expect(sent).toEqual([{ answer: "Two months", remember: true }]);
+    });
   });
 
   it("asks an action of the person on the site, with no text box", () => {
@@ -56,7 +67,9 @@ describe("One click Apply's question (A19)", () => {
       />,
     );
     expect(screen.queryByLabelText("Your answer")).toBeNull();
-    expect(screen.getByRole("button", { name: "I did it, go on" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "I did it, go on" }),
+    ).toBeEnabled();
   });
 
   it("names the need in plain words, with no dash", () => {

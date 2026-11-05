@@ -59,14 +59,18 @@ export function AgentQuestion({
               className="min-h-20 rounded-md border bg-background p-2 text-sm"
               maxLength={5000}
               value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
+              onChange={(event) => {
+                setAnswer(event.target.value);
+              }}
             />
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
               checked={remember}
-              onChange={(event) => setRemember(event.target.checked)}
+              onChange={(event) => {
+                setRemember(event.target.checked);
+              }}
             />
             <span>Remember this answer</span>
           </label>
