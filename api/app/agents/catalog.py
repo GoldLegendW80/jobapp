@@ -39,6 +39,89 @@ STARTERS = {
     "documents": "A document generation, or a message in a document's chat",
 }
 
+
+@dataclass(frozen=True)
+class Category:
+    """A group of the Agents tab's list (agents A8): its key, its heading and one sentence."""
+
+    key: str
+    title: str
+    sentence: str
+
+
+# The groups of the Agents tab's list, in the order it shows them (agents A8, the owner's "group
+# them by categories").
+CATEGORIES: tuple[Category, ...] = (
+    Category(
+        "finding",
+        "Finding jobs",
+        "These agents search job websites and company careers pages for postings.",
+    ),
+    Category(
+        "applying",
+        "Applying",
+        "These agents fill in application forms, answer their open questions and check the "
+        "answers before anything is submitted.",
+    ),
+    Category(
+        "documents",
+        "Documents",
+        "These agents write and change the CVs, cover letters and proposals, and transcribe "
+        "the pages of scanned documents.",
+    ),
+    Category(
+        "profile",
+        "Profile and import",
+        "These agents read the documents a person uploads and propose what goes into their "
+        "profile.",
+    ),
+    Category(
+        "jobs",
+        "Jobs and chat",
+        "These agents assess a posting against the profile and answer questions about a job "
+        "in its chat.",
+    ),
+    Category(
+        "test",
+        "Test",
+        "These agents exist for the dev run panel and the tests, and are never listed in "
+        "production.",
+    ),
+)
+
+# The category of each agent, by its name: set here, never read from what the agent says of
+# itself. tests/agents/test_admin_agents.py fails when a registered agent is missing.
+CATEGORY_OF: dict[str, str] = {
+    "apply_answer": "applying",
+    "apply_check": "applying",
+    "apply_form": "applying",
+    "browser_discovery": "finding",
+    "browser_finder": "finding",
+    "document_transcribe": "documents",
+    "documents_base": "documents",
+    "documents_chat_base": "documents",
+    "documents_chat_cv": "documents",
+    "documents_chat_letter": "documents",
+    "documents_cv": "documents",
+    "documents_design": "documents",
+    "documents_letter": "documents",
+    "documents_proposal": "documents",
+    "echo": "test",
+    "job_chat": "jobs",
+    "profile_extract": "profile",
+    "triage": "jobs",
+}
+
+# Where an agent missing from CATEGORY_OF goes, by the package that registered it, so the list
+# still shows it.
+_PACKAGE_CATEGORY = {
+    "agents": "jobs",
+    "apply": "applying",
+    "browser": "finding",
+    "documents": "documents",
+    "ingestion": "profile",
+}
+
 _JOB_LINE = 'then a line "Job id: <the run\'s job id>" when the run is about a job'
 _TONE = "<the language asked>, <the tone asked>, <the template's soft lengths>"
 
@@ -217,6 +300,17 @@ def ceiling_of(definition: definitions.AgentDefinition) -> Ceiling:
 def package_of(definition: definitions.AgentDefinition) -> str:
     parts = definitions.module_of(definition.name).split(".")
     return parts[1] if len(parts) > 2 and parts[0] == "app" else ""
+
+
+def category_of(definition: definitions.AgentDefinition) -> str:
+    """The key of the agent's category in CATEGORIES (`CATEGORY_OF`). One missing from it, which
+    a test refuses, goes with the test agents when it is one, else with its package's agents."""
+    found = CATEGORY_OF.get(definition.name)
+    if found is not None:
+        return found
+    if definition.test_only:
+        return "test"
+    return _PACKAGE_CATEGORY.get(package_of(definition), "jobs")
 
 
 def starter(definition: definitions.AgentDefinition) -> str:

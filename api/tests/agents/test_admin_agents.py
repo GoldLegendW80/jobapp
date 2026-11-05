@@ -160,6 +160,83 @@ def test_the_tab_hides_test_agents_in_production(
     assert api.get(f"{AGENTS}/echo", token=admin).status_code == 404
 
 
+CATEGORY_KEYS = ["finding", "applying", "documents", "profile", "jobs", "test"]
+
+
+def test_every_registered_agent_has_a_category_from_the_fixed_list() -> None:
+    agents = catalog.load()
+    assert [category.key for category in catalog.CATEGORIES] == CATEGORY_KEYS
+    assert [category.title for category in catalog.CATEGORIES] == [
+        "Finding jobs",
+        "Applying",
+        "Documents",
+        "Profile and import",
+        "Jobs and chat",
+        "Test",
+    ]
+    for category in catalog.CATEGORIES:
+        # Hard rule 1: no dash used as a separator in a heading or its sentence.
+        assert not re.search(r"[–—]| - ", category.title + category.sentence), category
+        assert category.sentence.endswith(".")
+    # The app's own agents: a test elsewhere may register one of its own for a while.
+    product = {name for name in agents if definitions.module_of(name).startswith("app.")}
+    assert len(product) >= 18, sorted(product)
+    for name in product:
+        assert catalog.CATEGORY_OF.get(name) in CATEGORY_KEYS, f"{name} has no category"
+        assert catalog.category_of(agents[name]) == catalog.CATEGORY_OF[name]
+        # The test agents, and only they, are in Test (hidden in production with them).
+        assert (catalog.CATEGORY_OF[name] == "test") == agents[name].test_only, name
+    assert set(catalog.CATEGORY_OF) <= set(agents), "a category names an agent that is gone"
+    expected = {
+        "browser_discovery": "finding",
+        "browser_finder": "finding",
+        "apply_form": "applying",
+        "apply_answer": "applying",
+        "apply_check": "applying",
+        "documents_cv": "documents",
+        "documents_chat_letter": "documents",
+        "document_transcribe": "documents",
+        "profile_extract": "profile",
+        "triage": "jobs",
+        "job_chat": "jobs",
+        "echo": "test",
+    }
+    assert {name: catalog.CATEGORY_OF[name] for name in expected} == expected
+
+
+def test_an_agent_missing_from_the_categories_goes_with_its_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unlisted = dataclasses.replace(definitions.TRIAGE, name="a8_unlisted")
+    assert "a8_unlisted" not in catalog.CATEGORY_OF
+    assert catalog.category_of(unlisted) == "jobs"  # no module known
+    monkeypatch.setitem(definitions._MODULES, "a8_unlisted", "app.browser.finder")
+    assert catalog.category_of(unlisted) == "finding"
+    assert catalog.category_of(dataclasses.replace(definitions.ECHO, name="a8_test")) == "test"
+
+
+def test_the_list_returns_each_agents_category_and_the_groups_in_order(
+    api: Api, admin: str, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = api.get(AGENTS, token=admin).json()
+    assert [category["key"] for category in body["categories"]] == CATEGORY_KEYS
+    assert body["categories"][0] == {
+        "key": "finding",
+        "title": "Finding jobs",
+        "sentence": catalog.CATEGORIES[0].sentence,
+    }
+    category = {item["name"]: item["category"] for item in body["items"]}
+    assert category["browser_discovery"] == "finding"
+    assert category["profile_extract"] == "profile"
+    assert category["echo"] == "test"
+    assert set(category.values()) <= set(CATEGORY_KEYS)
+    production = app.state.settings.model_copy(update={"app_env": "production"})
+    monkeypatch.setattr(app.state, "settings", production)
+    body = api.get(AGENTS, token=admin).json()
+    assert "test" not in {item["category"] for item in body["items"]}
+    assert [category["key"] for category in body["categories"]] == CATEGORY_KEYS
+
+
 def test_only_an_admin_reaches_the_tab(
     api: Api, member: str, factory: sessionmaker[Session]
 ) -> None:
