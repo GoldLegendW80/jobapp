@@ -102,8 +102,10 @@ test("the runs page is empty and offers a test run", async () => {
   });
   expect(saved.status()).toBe(200);
   await page.getByRole("link", { name: "Runs" }).click();
-  await expect(page.getByRole("heading", { name: "Agent runs" })).toBeVisible();
-  await expect(page.getByText(/No run yet/)).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Assistant activity" }),
+  ).toBeVisible();
+  await expect(page.getByText(/No activity yet/)).toBeVisible();
   await expect(page.getByText("Test run", { exact: true })).toBeVisible();
   await expect(page.locator("body")).not.toContainText(/[–—]| - /);
   await shots(page, "empty");

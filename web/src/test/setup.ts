@@ -33,6 +33,13 @@ if (missing("ResizeObserver", globalThis)) {
     },
   });
 }
+// jsdom lays nothing out and only warns on window.scrollTo, which React Router's
+// ScrollRestoration calls on every navigation: a no op (tests spy on it where it matters).
+Object.defineProperty(window, "scrollTo", {
+  writable: true,
+  configurable: true,
+  value: () => {},
+});
 const proto = Element.prototype as unknown as Record<string, unknown>;
 for (const [name, fn] of [
   ["hasPointerCapture", () => false],

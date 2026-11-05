@@ -89,49 +89,55 @@ async function mockHealth(
 const status = (page: Page) =>
   page.getByRole("contentinfo").getByRole("status");
 const retry = (page: Page) =>
-  page.getByRole("button", { name: "Check the API again" });
+  page.getByRole("button", { name: "Check the server again" });
 
 test.describe("API status in the footer", () => {
-  test('shows "API ok" when the api answers 200', async ({ page }) => {
+  test('shows "Server reachable" when the api answers 200', async ({
+    page,
+  }) => {
     const calls = await mockHealth(page, (route) =>
       json(route, 200, { status: "ok" }),
     );
     await page.goto("/");
     await expect(page.getByRole("link", { name: "jobapp" })).toBeVisible();
-    await expect(status(page)).toContainText("API ok");
+    await expect(status(page)).toContainText("Server reachable");
     await expect(retry(page)).toBeEnabled();
     expect(calls.count).toBe(1);
   });
 
-  test('shows "API unavailable" on 503 and the reason', async ({ page }) => {
+  test('shows "Server unreachable" on 503 and the reason', async ({ page }) => {
     await mockHealth(page, (route) =>
       json(route, 503, { status: "error", detail: "database unavailable" }),
     );
     await page.goto("/");
-    await expect(status(page)).toContainText("API unavailable");
-    await expect(status(page)).toContainText(
-      "The API answered 503: database unavailable.",
-    );
+    await expect(status(page)).toContainText("Server unreachable");
+    await expect(status(page)).toContainText("database unavailable.");
   });
 
-  test('shows "API unavailable" when the connection fails', async ({
+  test('shows "Server unreachable" when the connection fails', async ({
     page,
   }) => {
     await mockHealth(page, (route) => route.abort("connectionrefused"));
     await page.goto("/");
-    await expect(status(page)).toContainText("API unavailable");
-    await expect(status(page)).toContainText("The API could not be reached.");
+    await expect(status(page)).toContainText("Server unreachable");
+    await expect(status(page)).toContainText(
+      "The app cannot reach the server. Check your connection, then try again.",
+    );
   });
 
-  test("shows Checking during a slow answer, then API ok", async ({ page }) => {
+  test("shows Checking during a slow answer, then Server reachable", async ({
+    page,
+  }) => {
     await mockHealth(page, async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await json(route, 200, { status: "ok" });
     });
     await page.goto("/");
-    await expect(status(page)).toContainText("Checking");
-    await expect(retry(page)).toBeDisabled();
-    await expect(status(page)).toContainText("API ok", { timeout: 5000 });
+    await expect(status(page)).toContainText("Checking the server");
+    await expect(retry(page)).toHaveCount(0);
+    await expect(status(page)).toContainText("Server reachable", {
+      timeout: 5000,
+    });
   });
 
   test("gives up after the five second timeout", async ({ page }) => {
@@ -143,7 +149,7 @@ test.describe("API status in the footer", () => {
     const started = Date.now();
     await page.goto("/");
     await expect(status(page)).toContainText(
-      "The API did not answer in time.",
+      "The server is slow to answer. Try again.",
       {
         timeout: 7000,
       },
@@ -158,12 +164,12 @@ test.describe("API status in the footer", () => {
         : json(route, 200, { status: "ok" }),
     );
     await page.goto("/");
-    await expect(status(page)).toContainText("API unavailable");
+    await expect(status(page)).toContainText("Server unreachable");
     await page.waitForTimeout(1500);
     expect(calls.count).toBe(1);
 
     await retry(page).click();
-    await expect(status(page)).toContainText("API ok");
+    await expect(status(page)).toContainText("Server reachable");
     await page.waitForTimeout(1000);
     expect(calls.count).toBe(2);
   });
@@ -173,11 +179,11 @@ test.describe("API status in the footer", () => {
       call === 1 ? route.abort("failed") : json(route, 200, { status: "ok" }),
     );
     await page.goto("/");
-    await expect(status(page)).toContainText("API unavailable");
+    await expect(status(page)).toContainText("Server unreachable");
     await retry(page).focus();
     await expect(retry(page)).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(status(page)).toContainText("API ok");
+    await expect(status(page)).toContainText("Server reachable");
   });
 
   test("does not refetch when the tab regains focus", async ({ page }) => {
@@ -185,7 +191,7 @@ test.describe("API status in the footer", () => {
       json(route, 503, { status: "error" }),
     );
     await page.goto("/");
-    await expect(status(page)).toContainText("API unavailable");
+    await expect(status(page)).toContainText("Server unreachable");
     await page.evaluate(() => {
       window.dispatchEvent(new Event("focus"));
       document.dispatchEvent(new Event("visibilitychange"));
@@ -205,7 +211,7 @@ test.describe("API status in the footer", () => {
     page.on("pageerror", (error) => errors.push(error.message));
     await mockHealth(page, (route) => json(route, 200, { status: "ok" }));
     await page.goto("/");
-    await expect(status(page)).toContainText("API ok");
+    await expect(status(page)).toContainText("Server reachable");
     // Tailwind and the theme tokens are applied: the ok dot is the success green, and the
     // check again button is fully opaque once transitions settle.
     const dot = status(page).locator("span").first();
@@ -238,7 +244,7 @@ test.describe("themes and viewports", () => {
         await page.emulateMedia({ colorScheme: scheme });
         await mockHealth(page, (route) => json(route, 200, { status: "ok" }));
         await page.goto("/");
-        await expect(status(page)).toContainText("API ok");
+        await expect(status(page)).toContainText("Server reachable");
 
         const background = await page.evaluate(
           () => getComputedStyle(document.body).backgroundColor,
@@ -283,7 +289,7 @@ test.describe("themes and viewports", () => {
         json(route, 503, { status: "error", detail: "database unavailable" }),
       );
       await page.goto("/");
-      await expect(status(page)).toContainText("API unavailable");
+      await expect(status(page)).toContainText("Server unreachable");
       await page.screenshot({
         path: path.join(evidence, `home-mobile-${scheme}-unavailable.png`),
         fullPage: true,

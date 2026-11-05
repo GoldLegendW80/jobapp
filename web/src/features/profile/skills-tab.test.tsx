@@ -59,8 +59,10 @@ describe("skills tab", () => {
     expect(screen.getByLabelText("Name of lacking category 1")).toHaveValue(
       "rust",
     );
-    expect(screen.getByLabelText("Name of gate 1")).toHaveValue("phd");
-    expect(screen.getByLabelText("Penalty of gate 1")).toHaveValue("25");
+    expect(screen.getByLabelText("Name of requirement 1")).toHaveValue("phd");
+    expect(
+      screen.getByLabelText("Points taken off of requirement 1"),
+    ).toHaveValue("25");
     expect(screen.getByText("25 points")).toBeVisible();
   });
 
@@ -303,15 +305,21 @@ describe("skills tab", () => {
 
   it("adds a gate with a penalty from the slider", async () => {
     const { user, state } = await openSkills();
-    await user.click(screen.getByRole("button", { name: "Add gate" }));
-    await user.type(screen.getByLabelText("Name of gate 2"), "clearance");
+    await user.click(screen.getByRole("button", { name: "Add a requirement" }));
+    await user.type(
+      screen.getByLabelText("Name of requirement 2"),
+      "clearance",
+    );
     await user.type(
       screen.getByLabelText("New term for clearance"),
       "security clearance{enter}",
     );
-    fireEvent.change(screen.getByLabelText("Penalty of gate 2"), {
-      target: { value: "40" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Points taken off of requirement 2"),
+      {
+        target: { value: "40" },
+      },
+    );
     expect(screen.getByText("40 points")).toBeVisible();
     await user.click(save());
     await screen.findByText("Skills saved.");
@@ -325,11 +333,11 @@ describe("skills tab", () => {
 
   it("refuses a duplicate gate name", async () => {
     const { user, state } = await openSkills();
-    await user.click(screen.getByRole("button", { name: "Add gate" }));
-    await user.type(screen.getByLabelText("Name of gate 2"), "PhD");
+    await user.click(screen.getByRole("button", { name: "Add a requirement" }));
+    await user.type(screen.getByLabelText("Name of requirement 2"), "PhD");
     await user.click(save());
     expect(
-      await screen.findByText("Another gate already has this name."),
+      await screen.findByText("Another requirement already has this name."),
     ).toBeVisible();
     expect(state.saves).toHaveLength(0);
   });
@@ -364,7 +372,9 @@ describe("skills tab", () => {
       }),
     ).toHaveTextContent("rustmatches rust");
     expect(
-      within(results).getByRole("list", { name: "Gates results" }),
+      within(results).getByRole("list", {
+        name: "Requirements you do not meet results",
+      }),
     ).toHaveTextContent("phdmatches phd");
     // Typing in the box never makes the section dirty.
     expect(screen.getByText("Unsaved changes")).toBeVisible();
@@ -419,7 +429,7 @@ describe("skills tab", () => {
   it("starts empty for a new user and saves a first category", async () => {
     const { user, state } = await openSkills(null);
     expect(screen.getAllByText("No category yet.")).toHaveLength(3);
-    expect(screen.getByText("No gate yet.")).toBeVisible();
+    expect(screen.getByText("None yet.")).toBeVisible();
     await user.type(screen.getByLabelText("Years of experience"), "2");
     await user.click(
       screen.getByRole("button", {

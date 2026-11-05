@@ -253,7 +253,7 @@ test("the CLI link sets up the admin, who lands signed in on /", async ({
     }),
   ).toBeVisible();
   await expect(page.getByRole("contentinfo").getByRole("status")).toContainText(
-    "API ok",
+    "Server reachable",
   );
   used = link.path;
 

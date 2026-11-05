@@ -138,7 +138,9 @@ test("A signs in to the site through the live view, on a phone", async () => {
       "This is your own session: you have the keyboard and the mouse.",
     ),
   ).toBeVisible({ timeout: 45_000 });
-  await expect(pageA.getByRole("button", { name: "Take over" })).toHaveCount(0);
+  await expect(
+    pageA.getByRole("button", { name: "Use the browser myself" }),
+  ).toHaveCount(0);
   const held = currentLease().lease;
   expect(held?.purpose).toBe("signin");
   profileA = held?.profile_id ?? "";

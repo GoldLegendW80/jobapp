@@ -23,12 +23,15 @@ const USD = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
+  maximumFractionDigits: 2,
 });
 const COUNT = new Intl.NumberFormat("en-US");
 
+/** "$0.68", to the cent; an amount above zero that would round to "$0.00" reads "Under $0.01". */
 export function formatCost(value: number | null | undefined): string {
-  return value === null || value === undefined ? "None yet" : USD.format(value);
+  if (value === null || value === undefined) return "None yet";
+  if (value > 0 && value < 0.005) return "Under $0.01";
+  return USD.format(value);
 }
 
 type Kind = CredentialKind | null | undefined;

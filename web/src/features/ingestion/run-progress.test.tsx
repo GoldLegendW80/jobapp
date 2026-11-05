@@ -156,19 +156,21 @@ describe("the run on the page", () => {
     expect(screen.queryByRole("button", { name: "Cancel the run" })).toBeNull();
     // A new run can be started again, above the summary.
     expect(
-      await screen.findByRole("heading", { name: "Start another run" }),
+      await screen.findByRole("heading", { name: "Start another reading" }),
     ).toBeVisible();
     expect(panel()).not.toHaveTextContent(RAW);
   });
 
   it("paused on its ceiling: shows what was spent and what Continue adds, and sends that figure", async () => {
     const { runs, state, user } = await show(ceiling(176_220));
-    expect(state).toHaveTextContent("The run has paused at its token ceiling.");
+    expect(state).toHaveTextContent(
+      "The reading paused at the limit you agreed to.",
+    );
     expect(screen.getByTestId("ceiling-spent")).toHaveTextContent(
-      "It has used 380,000 tokens, and its ceiling is 352,440 tokens.",
+      "It has used 380,000 tokens, and its limit is 352,440 tokens.",
     );
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
-      "Continue raises the ceiling by 176,220 tokens, to 528,660 tokens, and the run goes on. Cancel ends it here. Left paused for 24 hours, the run ends with what it has read.",
+      "Continue raises the limit by 176,220 tokens, to 528,660 tokens, and the run goes on. Cancel ends it here. Left paused for 24 hours, the run ends with what it has read.",
     );
     expect(screen.queryByRole("button", { name: /Resume/ })).toBeNull();
     expect(
@@ -202,7 +204,9 @@ describe("the run on the page", () => {
       "Nothing was added: the figure has changed. Continue now adds 352,440 tokens. Click it again if you agree.",
     );
     // Never a success: still paused, the ceiling as it was.
-    expect(state).toHaveTextContent("The run has paused at its token ceiling.");
+    expect(state).toHaveTextContent(
+      "The reading paused at the limit you agreed to.",
+    );
     expect(runs.runs[0]?.status).toBe("paused");
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
       "by 352,440 tokens, to 704,880 tokens,",
@@ -796,7 +800,7 @@ describe("the run on the page", () => {
       expect(state).toHaveAttribute("data-state", "ceiling");
     });
     expect(screen.getByTestId("ceiling-spent")).toHaveTextContent(
-      "It has used 540,000 tokens, and its ceiling is 528,660 tokens.",
+      "It has used 540,000 tokens, and its limit is 528,660 tokens.",
     );
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
       "by 352,440 tokens, to 881,100 tokens,",

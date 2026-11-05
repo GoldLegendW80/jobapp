@@ -231,7 +231,7 @@ describe("photo", () => {
     await user.click(screen.getByRole("button", { name: "Remove photo" }));
     expect(
       await screen.findByText(
-        "The photo was not removed. The API could not be reached.",
+        "The photo was not removed. The app cannot reach the server. Check your connection, then try again.",
       ),
     ).toBeVisible();
     expect(

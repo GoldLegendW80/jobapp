@@ -2,6 +2,8 @@
  * The words the documents screens use for the api's codes, in one place so the CV tab, the
  * document view and the posting cards say the same thing. No dashes as separators.
  */
+import { formatDateTime } from "@/lib/format";
+
 import type {
   BaseSource,
   DocumentOut,
@@ -107,14 +109,9 @@ export function fitLabel(version: VersionSummary): string {
   return "Not rendered yet";
 }
 
-const DATE = new Intl.DateTimeFormat("en", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
+/** A version's moment, in the app's one date format ("3 Nov 2026, 08:00"). */
 export function formatWhen(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : DATE.format(date);
+  return formatDateTime(iso);
 }
 
 const NUMBER = new Intl.NumberFormat("en");

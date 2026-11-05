@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { errorDetail, isApiError } from "@/lib/api";
+import { WORDING } from "@/lib/wording";
 
 import {
   documentsKey,
@@ -115,7 +116,9 @@ export function RunStart() {
   return (
     <section aria-labelledby="start-heading" className="flex flex-col gap-3">
       <h3 id="start-heading" className="text-base font-semibold tracking-tight">
-        {runs.data.runs.length > 0 ? "Start another run" : "Start a run"}
+        {runs.data.runs.length > 0
+          ? WORDING.startAnotherReading
+          : WORDING.startReading}
       </h3>
       <p className="text-sm text-muted-foreground">
         Choose the documents the agent reads, in the order you want them read.

@@ -14,12 +14,23 @@ import {
  * that nobody is billed with a subscription, and worded neutrally when the kind of credential
  * was not recorded.
  */
+describe("formatCost", () => {
+  it("shows an amount to the cent, and a tiny one as under a cent", () => {
+    expect(formatCost(0.6843)).toBe("$0.68");
+    expect(formatCost(12.5)).toBe("$12.50");
+    expect(formatCost(0)).toBe("$0.00");
+    expect(formatCost(0.004)).toBe("Under $0.01");
+    expect(formatCost(0.005)).toBe("$0.01");
+    expect(formatCost(null)).toBe("None yet");
+  });
+});
+
 describe("the amount of a run, by the kind of credential it used", () => {
   it("is the cost with an Anthropic API key", () => {
     expect(costLabel("anthropic_api_key")).toBe("Cost");
     expect(costQualifier("anthropic_api_key")).toBeNull();
     expect(costNote("anthropic_api_key")).toBeNull();
-    expect(describeCost(0.193, "anthropic_api_key")).toBe("$0.193");
+    expect(describeCost(0.193, "anthropic_api_key")).toBe("$0.19");
   });
 
   it("is an estimate at API prices, not a bill, with a Claude subscription", () => {
@@ -29,7 +40,7 @@ describe("the amount of a run, by the kind of credential it used", () => {
       "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
     );
     expect(describeCost(0.193, "claude_subscription")).toBe(
-      "$0.193 estimated at API prices, not a bill",
+      "$0.19 estimated at API prices, not a bill",
     );
   });
 
@@ -41,7 +52,7 @@ describe("the amount of a run, by the kind of credential it used", () => {
       expect(costNote(kind)).toBe(
         "The kind of credential this run used was not recorded, so whether this amount was billed is not known.",
       );
-      expect(describeCost(0.193, kind)).toBe("$0.193 at API prices");
+      expect(describeCost(0.193, kind)).toBe("$0.19 at API prices");
       // Neither "cost" nor "billed" nor "estimate" is claimed for it.
       for (const text of [
         costLabel(kind),
@@ -89,7 +100,7 @@ describe("the amount of a run, by the kind of credential it used", () => {
     }
     expect(costQualifier("claude_subscription")).toBe("Estimate, not a bill");
     expect(describeCost(0.193, "claude_subscription")).toBe(
-      "$0.193 estimated at API prices, not a bill",
+      "$0.19 estimated at API prices, not a bill",
     );
   });
 

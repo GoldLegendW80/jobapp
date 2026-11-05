@@ -213,7 +213,10 @@ test("Account starts a signed-in profile review, selected Replace and a user edi
     );
     await shots(page, "saved-section");
     await page
-      .getByRole("button", { name: "Cancel profile run", exact: true })
+      .getByRole("button", {
+        name: "Stop completing my profile on this site",
+        exact: true,
+      })
       .click();
     expect(errors).toEqual([]);
   } finally {

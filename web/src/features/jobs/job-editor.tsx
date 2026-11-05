@@ -40,7 +40,12 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { CURRENCIES } from "@/features/profile/api";
 import { describeError, errorDetail } from "@/lib/api";
-import { PAY_PERIOD_WORDS, WORDING, WORK_MODE_WORDS } from "@/lib/wording";
+import {
+  PAY_PERIOD_WORDS,
+  WORDING,
+  WORK_MODE_WORDS,
+  contractWord,
+} from "@/lib/wording";
 
 import { duplicateOf, isStale, type JobDetail, type JobPatch } from "./api";
 import { CONTRACT_TYPES, STATUSES, statusLabel } from "./labels";
@@ -535,7 +540,7 @@ function EditDetailsDialog({
             <NativeSelect {...field("contract_type")}>
               {CONTRACT_TYPES.map((type) => (
                 <option key={type} value={type}>
-                  {type}
+                  {contractWord(type)}
                 </option>
               ))}
             </NativeSelect>

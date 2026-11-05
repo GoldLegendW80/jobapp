@@ -98,7 +98,9 @@ describe("sign in to a site", () => {
         "This is your own session: you have the keyboard and the mouse.",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
     // While the session runs the card offers to close it, not to start another.
     expect(
       screen.queryByRole("button", { name: "Sign in to a site" }),

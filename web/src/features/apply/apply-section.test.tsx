@@ -1158,7 +1158,11 @@ describe("the submit lease on the job page", () => {
       const live = await watching(section);
       expect(within(live).getByRole("status")).toHaveTextContent(sentence);
       expect(view.screen.viewOnly).toBe(true);
-      for (const name of ["Take over", "Keyboard", "Approve and submit"]) {
+      for (const name of [
+        "Use the browser myself",
+        "Keyboard",
+        "Approve and submit",
+      ]) {
         expect(within(section).queryByRole("button", { name })).toBeNull();
       }
       expect(
@@ -1182,7 +1186,7 @@ describe("the submit lease on the job page", () => {
     await connected(opened);
     const live = await watching(section);
     expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
-    for (const name of ["Take over", "Cancel application"]) {
+    for (const name of ["Use the browser myself", "Cancel application"]) {
       expect(within(section).queryByRole("button", { name })).toBeNull();
     }
   });
@@ -1255,7 +1259,7 @@ describe("the submit lease on the job page", () => {
     const live = await watching(section);
     expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
     expect(
-      within(section).queryByRole("button", { name: "Take over" }),
+      within(section).queryByRole("button", { name: "Use the browser myself" }),
     ).toBeNull();
     expect(
       within(section).getAllByRole("button", { name: "Cancel application" }),

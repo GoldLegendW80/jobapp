@@ -44,11 +44,13 @@ describe("App shell", () => {
     expect(links[0]).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows API ok from a mocked /api/health in the footer", async () => {
+  it("reads Server reachable from a mocked /api/health in the footer", async () => {
     fakeSession(admin);
     renderApp("/");
     const footer = await screen.findByRole("contentinfo");
-    expect(await within(footer).findByText("API ok")).toBeInTheDocument();
+    expect(
+      await within(footer).findByText("Server reachable"),
+    ).toBeInTheDocument();
     // Help and contact are one click away from every signed in page.
     expect(
       within(footer).getByRole("link", { name: "Privacy and contact" }),
@@ -58,7 +60,7 @@ describe("App shell", () => {
   it("uses no dash separators in visible text", async () => {
     fakeSession(admin);
     const { container } = renderApp("/");
-    await screen.findByText("API ok");
+    await screen.findByText("Server reachable");
     expect(container.textContent).not.toMatch(/[–—]| - /);
   });
 });

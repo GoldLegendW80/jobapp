@@ -176,8 +176,12 @@ describe("your browser card", () => {
         "This is your own session: you have the keyboard and the mouse.",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Let the assistant continue" }),
+    ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Keyboard" }));
     await user.type(screen.getByLabelText("Type into your browser"), "a");
     expect(view.screen.keys).toEqual([0x61]);
@@ -200,7 +204,7 @@ describe("your browser card", () => {
     );
     expect(
       screen.getByText(
-        "You are watching your browser. Take over to use it yourself.",
+        "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
       ),
     ).toBeInTheDocument();
   });
@@ -224,7 +228,9 @@ describe("your browser card", () => {
       expect(
         screen.getByRole("button", { name: "Keyboard" }),
       ).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Use the browser myself" }),
+      ).toBeNull();
       expect(calls.takeovers).toEqual([]);
     },
   );
@@ -238,14 +244,16 @@ describe("your browser card", () => {
       </MemoryRouter>,
     );
     const view = await connected();
-    await user.click(screen.getByRole("button", { name: "Take over" }));
+    await user.click(
+      screen.getByRole("button", { name: "Use the browser myself" }),
+    );
     const ticket = only(calls.tickets as Array<{ viewer: string }>);
     expect(calls.takeovers).toEqual([{ viewer: ticket.viewer }]);
     expect(view.screen.viewOnly).toBe(false);
     expect(view.screen.focused).toBe(1);
     expect(
       screen.getByText(
-        "You have the keyboard and the mouse. Give back when you are done.",
+        "You have the keyboard and the mouse. Choose Let the assistant continue when you are done.",
       ),
     ).toBeInTheDocument();
 
@@ -257,10 +265,14 @@ describe("your browser card", () => {
     );
     expect(view.screen.keys).toEqual([0x6f, 0x6b, 0xff0d]);
 
-    await user.click(screen.getByRole("button", { name: "Give back" }));
+    await user.click(
+      screen.getByRole("button", { name: "Let the assistant continue" }),
+    );
     expect(calls.givebacks).toEqual([{ viewer: ticket.viewer }]);
     expect(view.screen.viewOnly).toBe(true);
-    expect(screen.getByRole("button", { name: "Take over" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Use the browser myself" }),
+    ).toBeEnabled();
   });
 
   it("sends no key while the assistant has the browser", async () => {
@@ -289,7 +301,9 @@ describe("your browser card", () => {
       view.events.disconnect();
     });
     expect(screen.getByText("The live view is closed.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Take over" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Use the browser myself" }),
+    ).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Reconnect" }));
     await waitFor(() => {
       expect(opened).toHaveLength(2);
@@ -328,7 +342,9 @@ describe("your browser card", () => {
       </MemoryRouter>,
     );
     await connected();
-    await user.click(screen.getByRole("button", { name: "Take over" }));
+    await user.click(
+      screen.getByRole("button", { name: "Use the browser myself" }),
+    );
     const ticket = only(calls.tickets as Array<{ viewer: string }>);
     unmount();
     await waitFor(() => {

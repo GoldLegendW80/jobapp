@@ -55,7 +55,7 @@ export function SiteProfileSlot({ initialUrl = "" }: { initialUrl?: string }) {
       )}
       <Button type="submit" disabled={start.isPending || !url.trim()}>
         {start.isPending
-          ? "Starting profile run"
+          ? "Starting to complete your profile on this site"
           : "Complete my profile on this site"}
       </Button>
     </form>

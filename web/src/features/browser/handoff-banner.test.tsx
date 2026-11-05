@@ -215,7 +215,7 @@ describe("HandoffBanner", () => {
       await within(live).findByText(/You have the keyboard and the mouse/),
     ).toBeInTheDocument();
     expect(
-      within(live).queryByRole("button", { name: /Take over/ }),
+      within(live).queryByRole("button", { name: /Use the browser myself/ }),
     ).not.toBeInTheDocument();
     expect(calls.tickets).toBe(1);
     expect(

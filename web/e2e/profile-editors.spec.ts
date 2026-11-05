@@ -294,7 +294,7 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
     results.getByRole("list", { name: "Competencies you have results" }),
   ).toContainText("llmmatches llms");
   await expect(
-    results.getByRole("list", { name: "Gates results" }),
+    results.getByRole("list", { name: "Requirements you do not meet results" }),
   ).toContainText("phdmatches phd");
   await expect(
     results.getByRole("list", { name: "Competencies you lack results" }),

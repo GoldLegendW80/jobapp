@@ -97,7 +97,7 @@ async function watchedRun(): Promise<AgentRun> {
   await pageA.goto("/account");
   await expect(
     pageA.getByText(
-      "You are watching your browser. Take over to use it yourself.",
+      "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
     ),
   ).toBeVisible({ timeout: 45_000 });
   return agent;
@@ -106,7 +106,9 @@ async function watchedRun(): Promise<AgentRun> {
 test("A watches, signs in through the banner's live view, and the run goes on", async () => {
   await pageA.setViewportSize({ width: 390, height: 844 });
   const agent = await watchedRun();
-  const takeOver = pageA.getByRole("button", { name: "Take over" });
+  const takeOver = pageA.getByRole("button", {
+    name: "Use the browser myself",
+  });
   try {
     await expect(takeOver).toBeVisible();
     agent.ask();
@@ -177,7 +179,7 @@ test("a second run starts signed in; Cancel ends the hand off with its sentence"
     await pageA.goto("/account");
     await expect(
       pageA.getByText(
-        "You are watching your browser. Take over to use it yourself.",
+        "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
       ),
     ).toBeVisible({ timeout: 45_000 });
     agent.ask();

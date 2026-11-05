@@ -27,8 +27,8 @@ export function askText(lease: Lease): string | null {
   }
   const host = lease.wait_host?.trim();
   return host
-    ? `The assistant needs your help on ${host}. Take over, do what the page asks, then Give back.`
-    : "The assistant needs your help on this page. Take over, do what the page asks, then Give back.";
+    ? `The assistant needs your help on ${host}. Choose Use the browser myself, do what the page asks, then Let the assistant continue.`
+    : "The assistant needs your help on this page. Choose Use the browser myself, do what the page asks, then Let the assistant continue.";
 }
 
 export type RunBrowser =

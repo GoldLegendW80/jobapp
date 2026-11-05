@@ -293,7 +293,7 @@ test("a new account starts empty, then holds the 433 rows with the CSV counts", 
     page.getByRole("navigation", { name: "Main" }).getByRole("link").first(),
   ).toHaveText("Jobs");
   await expect(page.getByRole("contentinfo").getByRole("status")).toContainText(
-    "API ok",
+    "Server reachable",
   );
   await shots(page, "empty");
 

@@ -18,6 +18,121 @@ export function contractWord(code: string): string {
   return CONTRACT_WORDS[code] ?? code;
 }
 
+/** A code as words when no word is known for it: "cv_writer" reads "Cv writer". */
+export function readableCode(code: string): string {
+  const words = code.replace(/[_\s]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : code;
+}
+
+/**
+ * What each assistant task is called on Assistant activity (/runs), by the agent id of
+ * api/app/agents: the agents of agents/definitions.py and every `definitions.register` of the
+ * other modules (browser, apply, ingestion, documents). An id this build does not know reads
+ * as words (readableCode), never as the raw id.
+ */
+export const AGENT_WORDS: Record<string, string> = {
+  echo: "Test agent",
+  triage: "Posting check",
+  job_chat: "Chat about a posting",
+  browser_finder: "Website reading",
+  browser_discovery: "Website search",
+  apply_form: "Filling an application form",
+  apply_answer: "Answer to an application question",
+  apply_check: "Check before applying",
+  profile_extract: "Reading your documents",
+  document_transcribe: "Reading a scanned page",
+  documents_cv: "CV for a posting",
+  documents_letter: "Cover letter",
+  documents_base: "Base CV",
+  documents_design: "Design taken from your CV",
+  documents_proposal: "Proposal message",
+  documents_chat_cv: "Chat about a CV",
+  documents_chat_letter: "Chat about a cover letter",
+  documents_chat_base: "Chat about a base CV",
+};
+
+export function agentWord(id: string): string {
+  return AGENT_WORDS[id] ?? readableCode(id);
+}
+
+/** The raw end codes a run can carry (Claude Code's result subtypes), as sentences. */
+const RUN_ERROR_WORDS: Record<string, string> = {
+  max_turns: "The run reached its limit of turns.",
+  error_max_turns: "The run reached its limit of turns.",
+  error_during_execution: "The assistant stopped on an error while it worked.",
+  timeout: "The run took longer than its time limit and was stopped.",
+  budget: "The run reached its token budget and was stopped.",
+  cancelled: "The run was cancelled.",
+};
+
+/**
+ * A run's stored error as a sentence. The runner stores sentences (api/app/agents/failures.py),
+ * which are kept; a bare code ("max_turns"), or one inside "The agent failed (...)", becomes
+ * words.
+ */
+export function runErrorWords(error: string): string {
+  const text = error.trim();
+  const code = /^[a-z][a-z0-9_]*$/.test(text)
+    ? text
+    : /^The agent failed \(([a-z][a-z0-9_]*)\)\.$/.exec(text)?.[1];
+  if (code === undefined) return text;
+  return (
+    RUN_ERROR_WORDS[code] ??
+    `The run stopped: ${readableCode(code).toLowerCase()}.`
+  );
+}
+
+/**
+ * Completing the person's profile on a site (apply, SPEC-apply "Complete my profile on a
+ * site"): the states of the run (api/app/apply/site_profile.py, SiteRunState) as sentences.
+ */
+export const SITE_PROFILE_STATE_WORDS: Record<string, string> = {
+  queued: "Waiting for your browser to be free.",
+  filling: "The assistant is filling in your profile on this site.",
+  needs_person: "Waiting for you.",
+  ready: "Ready for your review.",
+  saving: "Saving your changes on the site.",
+  done: "Done: your profile on this site is complete.",
+  cancelled: "Stopped. Nothing more is done on this site.",
+  failed: "Stopped before the end.",
+};
+
+export function siteProfileStateWord(state: string): string {
+  return SITE_PROFILE_STATE_WORDS[state] ?? `${readableCode(state)}.`;
+}
+
+/** Why completing the profile on a site, or one of its sections, needs the person, by code. */
+export const SITE_PROFILE_PROBLEM_WORDS: Record<string, string> = {
+  linkedin_off:
+    "LinkedIn is off in your Account, so the assistant did not open it.",
+  fill_interrupted:
+    "The filling stopped before it ended. Start again when you are ready.",
+  save_unknown:
+    "The app cannot tell whether the site saved your changes. Check them on the site.",
+  budget_exhausted:
+    "The assistant reached its limit before it finished this section.",
+  approval_expired: "Your approval expired. Look at this section again.",
+  screenshot_or_save_missing:
+    "The app could not capture this page or find where the site saves it. Check it on the site.",
+  section_missing: "This section is no longer on the site.",
+};
+
+export function siteProfileProblem(code: string): string {
+  return (
+    SITE_PROFILE_PROBLEM_WORDS[code] ??
+    `This needs your review: ${readableCode(code).toLowerCase()}.`
+  );
+}
+
+/** A template's tags (documents D7, the gallery), as words; a tag not listed shows as it is. */
+export const TEMPLATE_TAG_WORDS: Record<string, string> = {
+  "ats friendly": "Easy for hiring software to read",
+};
+
+export function templateTagWord(tag: string): string {
+  return TEMPLATE_TAG_WORDS[tag] ?? tag;
+}
+
 /** Where a posting's work is done (opportunities O3), as words. */
 export const WORK_MODE_WORDS: Record<string, string> = {
   remote: "Remote",
@@ -191,6 +306,26 @@ export const WORDING = {
   // (owner, 2026-10-28): its terms keep working as they are.
   listUsesRegularExpressions:
     "This list was saved as patterns by an earlier version. They keep working as they are, and the search reads the words in each.",
+  // Audit chapter 2: plain words for the screens that showed codes or jargon.
+  assistantActivity: "Assistant activity",
+  allActivity: "All activity",
+  // The live view (SPEC-browser): the person takes the keyboard and the mouse, the assistant's
+  // next action waits; giving them back lets it go on.
+  useBrowserMyself: "Use the browser myself",
+  letAssistantContinue: "Let the assistant continue",
+  easyForHiringSoftware: "Easy for hiring software to read",
+  // Profile, Skills: a gate is a requirement the person does not meet (api/app/jobs/scoring.py).
+  requirementsNotMet: "Requirements you do not meet",
+  addRequirement: "Add a requirement",
+  noneYet: "None yet.",
+  pointsTakenOff: "Points taken off",
+  // Ingestion: a run reads the documents.
+  startReading: "Start reading",
+  startAnotherReading: "Start another reading",
+  readingPausedAtLimit: "The reading paused at the limit you agreed to.",
+  serverUnreachable: "Server unreachable",
+  checkServerAgain: "Check the server again",
+  sessionEnded: "Your session ended. Sign in again to go back where you were.",
 } as const;
 
 /** The empty deck line when the profile has no skill: every fit is near 0. */

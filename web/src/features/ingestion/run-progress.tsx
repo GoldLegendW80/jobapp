@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { RunPanel } from "@/features/agents/run-panel";
+import { WORDING } from "@/lib/wording";
 
 import {
   documentsKey,
@@ -215,16 +216,16 @@ function RunView({ run }: { run: Run }) {
       headline = "The agent is reading your documents.";
     }
   } else if (run.status === "paused" && onCeiling) {
-    headline = "The run has paused at its token ceiling.";
+    headline = WORDING.readingPausedAtLimit;
     if (adds !== null && adds > 0) {
       body = (
         <>
           <p data-testid="ceiling-spent">
-            It has used {tokens(run.tokens.spent)} tokens, and its ceiling is{" "}
+            It has used {tokens(run.tokens.spent)} tokens, and its limit is{" "}
             {tokens(run.tokens.ceiling)} tokens.
           </p>
           <p data-testid="continue-adds">
-            Continue raises the ceiling by {tokens(adds)} tokens
+            Continue raises the limit by {tokens(adds)} tokens
             {raised !== null ? `, to ${tokens(raised)} tokens,` : null} and the
             run goes on. Cancel ends it here. {UNANSWERED}
           </p>
