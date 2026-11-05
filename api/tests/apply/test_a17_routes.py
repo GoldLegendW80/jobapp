@@ -41,6 +41,11 @@ CASES = (
     Case(
         "PUT", "/api/applications/{application_id}/answers/{field_key:path}", {"value": "Example"}
     ),
+    Case(
+        "POST",
+        "/api/applications/{application_id}/remember",
+        {"field_key": "missing", "value": "Example"},
+    ),
     Case("POST", "/api/applications/{application_id}/reject"),
     Case("POST", "/api/applications/{application_id}/cancel"),
     Case("POST", "/api/applications/{application_id}/submitted"),
@@ -68,6 +73,13 @@ CASES = (
     Case("GET", "/api/apply/queue", foreign_status=200, exception="owner-filtered queue"),
     Case("GET", "/api/apply/queue/count", foreign_status=200, exception="owner-filtered count"),
     Case("POST", "/api/apply/queue/{application_id}/reject", {"skip_posting": False}),
+    Case(
+        "POST",
+        "/api/apply/queue/approve",
+        {"items": [{"application_id": str(uuid.UUID(int=1)), "answers_hash": "a" * 64}]},
+        200,
+        "owner-checked per item: another person's reads as not found (test_approve_all_ready)",
+    ),
     Case("POST", "/api/applications/{application_id}/rehearsal", {"answer": "yes"}),
     Case("GET", "/api/apply/summary", foreign_status=200, exception="owner-filtered summary"),
     Case("GET", "/api/applications/{application_id}/manual"),
