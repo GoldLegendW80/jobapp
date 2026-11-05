@@ -51,6 +51,18 @@ Owner, 2026-11-05: "I want an agent to find the best job titles according to the
 - **The chips** under Job titles in the Search tab, Find jobs "What you want" and the wizard step "What you are looking for": "+ Analytics engineer" with its reason under it and a "Not for me" icon button beside it (hidden at once, kept away for good); a click adds it to the list being edited (the person still saves), and it leaves the suggestions; "More ideas". Under them a short chat: "Tell the assistant what you want to do" ("For example: move into product, stay in data, work remotely") and Send, one ask, its ideas joining the list; Enter sends it, never the page's form; the last message shows under the box with the count of the earlier ones and Clear, which forgets them all. States: nothing yet, in plain words (Add a model key; or "Add your CV, fill your profile or tell the assistant what you want to do", with the box ready; in the Find jobs dialog the same words without a link, which would drop the draft; in the wizard nothing until a key and something to read exist), on its way, failed with its reason and Try again, "No new title to suggest", and "No new idea this time" after a run that added nothing. A list of regular expressions gets no idea.
 - **The place chip** under Places (Search tab, Find jobs, the wizard step "Where"): the profile's city, else its country, "+ Lyon, from your profile", while the list does not hold it. No model.
 
+## About you
+
+Owner, 2026-11-05: "except for the general infos, just put informations on a .md should be well rendered and editable", then "No, I want a markdown that a model interpret, not just a view over today's field", and "Always think about navigation and number of click". Code in `api/app/profile/about_text.py` (parts, writer, checks), `about.py` (store, Done, Apply, Undo), `about_agent.py` and `about_tools.py` (the agent), `about_router.py`; the page in `web/src/features/profile/about-document.tsx` and `profile-one-page.tsx`.
+
+- **The document** is one Markdown text per person (at most 300,000 characters), the person's source for their experience, education, skills, facts and the prose of their answers. It is not a section: no revision, not in the export. A line `## Heading` outside a code fence starts a part; Experience, Education, Skills and Answers (and Expérience, Formation, Compétences, Réponses) are the employers, the schools, the skills the fit reads and the prose answers; any other heading is a fact block of that title. It saves as the person types (1 s after the last key, a version per save, 409 with the current text on another version).
+- **The conversion, once, by code**: the first read writes it from the stored sections (`about_text.convert`, golden test on the owner's fixture shapes, invented data): a job is `### Title, Organisation` and a line "March 2021 to now · Lyon · CDI", a school `### Degree, School` with its line and details, the skills "Years of experience: 5" then a line "- name: term, term" per category under What I have, Close to what I have, What I do not have and Requirements that lower my fit ("- name, lowers the fit by 25: terms"), the answers one `###` heading each (Notice period, Earliest start, Work authorisation, Relocation, Travel, Motivation, How I hear about jobs), and each fact block a part of its own. The sections are unchanged until the person applies something. Two things are not written: regular expression categories and gates (kept as stored, "edit them in the classic editor"), and a level one or two heading inside a fact block, written level three (it would start a part).
+- **Done** on a part asks the agent `profile_interpret` to read it as it was when Done was clicked: internal, private (its events hold sizes), on the documents writers' model for each kind of credential, 3 turns, 120 s, a token budget of twice the high estimate, one tool `submit_interpretation` (the fields of the part's kind, shape only), in the worker (job `profile_interpret` of the agents queue, its input a random key and the budget). Its first message is the part's kind, heading and text and what the profile holds of that kind now, every angle bracket escaped. A part with nothing in it needs no model. One at a time, at most 30 a UTC day (`about.DONES_PER_DAY`, one constant: the owner has not decided this number). Tests run it on the fake stream `profile_interpret`.
+- **The checks, by code**, before anything shows; a value that fails is not taken and the stored one stays: a job or a school goes through Fill my profile's citation checker (`ingestion.citations.check_item`) against the lines the model quotes from the part (the organisation or school as whole words, the dates with the month next to the year, the numbers), then its title, degree and place must be written word after word in those lines and its contract named there; every other value (a skills term or name, a fact block, an answer) must be written word after word in the part, and a number (years, a penalty) must be a number of the part. A category whose name the text lacks takes its first term as its name. An employer keeps its `key` while its organisation is unchanged; a new one takes the slug of its organisation (a number added when taken), so CV bullets keep their job.
+- **What the app understood**: under the part, the changes in a few lines ("1 job added: Intern at Example Labs, 2017 to 2018", "2 skills added to what I have: dbt, Airflow"), the values not taken and why, then Apply (one click) or Not now. Apply writes each changed section through `service.save_section`, one revision per section, so History and the rescore after a skills change work as for any save; it is refused (409) when the part was edited since Done or a section it writes changed since the reading. Locked facts (employers, schools) change only there. Undo puts back what each section held, while nothing changed them since.
+- **In step**: each part keeps the digest of its text and of what the profile held of it when they last agreed. A part edited since says "Your profile does not have this text yet" with one Update my profile button; a part whose fields changed elsewhere (Fill my profile, the classic editor) says so with "Rewrite from my profile"; fact blocks no part holds are listed with "Add them".
+- **Without a model key** the text still saves, and a line under Done says the app needs a key to update the profile from it, with a link to Account. On an API key the cost of a Done shows before it (`ingestion/pricing.py`); nothing about money on a subscription.
+
 ## Data model
 
 ```
@@ -61,6 +73,9 @@ profile_revisions(id bigserial, user_id fk, revision int, section text, data jso
 profile_title_suggestions(user_id pk fk users, suggestions jsonb, refreshed_at, basis text,
                           run_id fk agent_runs null, asked_at, auto_at, seen_at, asks_on date,
                           asks int, error text, dismissed jsonb, messages jsonb)
+profile_about(user_id pk fk users, text, version int, parts jsonb, interpretation jsonb null,
+              undo jsonb null, run_id fk agent_runs null, dones_on date, dones int,
+              created_at, updated_at)
 ```
 
 Every save of a section increments `revision` and appends one `profile_revisions` row; restoring an old version is a save of its data. Optimistic concurrency: a save sends the `revision` it was based on, and a stale one gets 409 with the current data (two tabs editing at once).
@@ -83,12 +98,19 @@ All require a session and act on the caller's own profile only.
 | POST /api/profile/title-suggestions | "More ideas", or `{message}` to the assistant (300 characters at most, 422 past it): one run; 409 while one runs, without a key or anything to read; 429 past 3 a day; 503 when the queue is down |
 | POST /api/profile/title-suggestions/dismiss | "Not for me" `{title}`: the idea leaves for good; 422 for a title that is not plain words |
 | DELETE /api/profile/title-suggestions/messages | the assistant forgets what the person wrote |
+| GET /api/profile/about | the About you document (written once from the profile), the state of each part, the estimate of a Done on each, the last reading and the last Apply; never calls a model |
+| PUT /api/profile/about | `{version, text}`, the text as typed; 409 with the current document on another version; 422 past the size or for a control character |
+| POST /api/profile/about/done | `{heading, version}`: read that part; 409 while one is read, without a key, for a stale version, a heading that is not a part or is twice in the text; 422 for a part too long; 429 past 30 a day; 503 when the queue is down |
+| POST /api/profile/about/apply, /undo, /discard | write the last reading (one revision per section), put back what the last Apply replaced, forget the last reading; 409 when the part or the profile changed since |
+| POST /api/profile/about/rewrite | `{heading?, version}`: write a part again from the profile, or add the fact blocks no part holds |
 
 Importer for Harald: `./deploy.sh profile import <email>` runs on the Mac, converts `../profile/facts.md`, `../profile/skills.json`, the title and location regexes of `../engine/boards.json` (its boards are no longer imported, 2026-10-28) and the `assemble.py` constants into the export format, and posts it for that user through a CLI in the api container. Conversion is a pure function with its own tests.
 
 ## Frontend
 
-`/profile` with one tab per section, a completeness bar, unsaved-change warning on leave, Save per section, "History" drawer per section with view and restore. Identity: photo upload with preview and crop to square. Experience: sortable lists of employers and schools. Facts: Markdown editor with preview (CodeMirror 6 or a plain textarea with preview; pick the lighter), blocks as collapsible sections. Skills: category editor with term chips. Search: chips for terms, toggles for contract types. The board table and its board check (`POST /api/profile/boards/check`) were deleted on 2026-10-28 (owner); a stored `search.boards`, `search.feeds`, old reader rows or `onboarding.starter_handled` are ignored on read, left out of `GET /api/profile` and dropped on the next save, with no migration. Answers: form fields. Export and Import buttons. Mobile friendly at 375px.
+`/profile` is one page, no tabs (product audit, chapter 2; owner, 2026-11-05: "Always think about navigation and nimber of click. App must be easy to use, syraight to the point"). Top to bottom: the photo, name and headline with "Ready for" (Scoring postings, Writing CVs, Filling forms, each with the one button that fixes it, from the completeness the api computes) in place of the completeness bar; Your CV (the CV card, its editor entry and actions, and "Add other documents" to Fill my profile); What you look for (the four search lists with the job title ideas, and "Websites and more in Find jobs"); About you (the document above, each part rendered by the safe renderer and edited in place with a live preview, a contents list sticky on desktop and chips on phones); Contact and links (the identity form). History (per section), Export, Import and the classic editor are under More. The safe renderer (`markdown.tsx`) reads tables too, and an underscore inside a word stays a character.
+
+The classic editor, kept for one release so a rollback is a click: `/profile?tab=<section>` and `/profile/cv` show a completeness bar, unsaved-change warning on leave, Save per section, "History" drawer per section with view and restore. Identity: photo upload with preview and crop to square. Experience: sortable lists of employers and schools. Facts: Markdown editor with preview (CodeMirror 6 or a plain textarea with preview; pick the lighter), blocks as collapsible sections. Skills: category editor with term chips. Search: chips for terms, toggles for contract types. The board table and its board check (`POST /api/profile/boards/check`) were deleted on 2026-10-28 (owner); a stored `search.boards`, `search.feeds`, old reader rows or `onboarding.starter_handled` are ignored on read, left out of `GET /api/profile` and dropped on the next save, with no migration. Answers: form fields. Export and Import buttons. Mobile friendly at 375px.
 
 ## Commands
 
@@ -99,11 +121,12 @@ As platform, plus `./deploy.sh profile import <email>`.
 ```
 api/app/profile/  models.py schemas.py router.py service.py importer.py cli.py
                   titles.py titles_input.py agents.py titles_tools.py titles_router.py
-                  prompts/titles.md
-api/alembic/versions/0003_profile.py 0032_profile_title_suggestions.py
+                  about_text.py about.py about_agent.py about_tools.py about_router.py
+                  prompts/titles.md prompts/interpret.md
+api/alembic/versions/0003_profile.py 0032_profile_title_suggestions.py 0034_profile_about.py
 api/tests/profile/
 web/src/features/profile/
-web/e2e/profile.spec.ts profile-titles.spec.ts
+web/e2e/profile.spec.ts profile-titles.spec.ts profile-about.spec.ts
 ```
 
 ## Testing strategy
@@ -115,7 +138,7 @@ web/e2e/profile.spec.ts profile-titles.spec.ts
 ## Boundaries
 
 - **Always:** validate on the server; keep revisions; user scoping on every query.
-- **Ask first:** changing a section's shape after real data exists (needs a data migration), letting agents write to the profile.
+- **Ask first:** changing a section's shape after real data exists (needs a data migration), letting agents write to the profile other than through what the person applies (the About you reading changes nothing until Apply, owner 2026-11-05).
 - **Never:** let generated documents or agents change locked facts; log profile contents; serve one user's photo to another.
 
 ## Success criteria
