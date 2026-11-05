@@ -468,7 +468,7 @@ function History({
                 role="listitem"
                 className="justify-between gap-2 rounded-none p-3"
               >
-                <ItemContent className="min-w-0 gap-0.5">
+                <ItemContent className="min-w-0 flex-auto gap-0.5">
                   <ItemTitle>
                     Version {one.number}, {ORIGIN_LABELS[one.origin]}
                   </ItemTitle>

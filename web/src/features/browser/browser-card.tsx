@@ -164,7 +164,7 @@ export function BrowserCard() {
                   role="listitem"
                   className="min-w-0 flex-col items-stretch gap-2 rounded-none p-3 sm:flex-row sm:flex-nowrap sm:items-start sm:justify-between"
                 >
-                  <ItemContent className="min-w-0 gap-0">
+                  <ItemContent className="min-w-0 flex-initial gap-0">
                     <ItemTitle className="w-auto break-all">
                       {site.host}
                     </ItemTitle>
