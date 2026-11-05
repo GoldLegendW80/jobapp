@@ -72,6 +72,14 @@ const HOLD_WAITS =
 const DIRECT_SUBMIT_STATUS =
   "The assistant fills the form again with the same answers, then sends it.";
 
+/** Where the person settles what the documents of an application wait for. */
+const DOCUMENTS_WAIT_LINKS: Partial<
+  Record<string, { to: string; label: string }>
+> = {
+  "documents:consent": { to: "/profile/cv", label: "Open the CV tab" },
+  "documents:credential": { to: "/account", label: "Open your account" },
+};
+
 /** What Apply does, by the person's "Let me review each filled form before it is sent" box. */
 const APPLY_SENDS =
   "The assistant fills the form and sends it. You can watch it live here.";
@@ -364,6 +372,16 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <p role="status" className="text-sm text-muted-foreground">
             {statusLine(application)}
           </p>
+          {application?.state === "queued" &&
+          application.needs &&
+          application.needs in DOCUMENTS_WAIT_LINKS ? (
+            <Link
+              to={DOCUMENTS_WAIT_LINKS[application.needs]?.to ?? "/profile/cv"}
+              className="w-fit text-sm font-medium underline underline-offset-4"
+            >
+              {DOCUMENTS_WAIT_LINKS[application.needs]?.label}
+            </Link>
+          ) : null}
           {reason ? (
             <Alert>
               <AlertDescription>
