@@ -10,7 +10,14 @@ mail stay the person's (hard rule 7), so the apply agent's lease never types int
 <label for="code">Code sent to your email</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code">
 <button type="submit">Create account</button>
 </form>
+<!-- Outside the form: a script that breaks a box's facts breaks those of its whole form. -->
+<label for="pin">Your PIN</label><input id="pin" name="pin" inputmode="numeric">
 <script>
+// A page script that breaks what browserd reads of a box (its attributes, its form), as a page
+// may: the typing there is refused `credential`, whatever the box is.
+for (const name of ["getAttribute", "closest"]) {
+  document.getElementById("pin")[name] = () => { throw new Error("not for you"); };
+}
 document.getElementById("account").onsubmit = async event => {
   event.preventDefault();
   await fetch("/_stub/submit/a19-account", {method: "POST", body: new FormData(event.currentTarget)});

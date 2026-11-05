@@ -224,7 +224,8 @@ def test_a_password_box_and_a_one_time_code_box_are_never_typed_into(a19, agent)
         agent, "browser_type", ref=ref(page, "textbox", "Email"), text="e2e-a19@example.org"
     )["ok"]
     page = agent.snapshot()
-    for label in ("Password", "Code sent to your email"):
+    # A box whose facts a page script breaks ("Your PIN") is refused too (round 1 of the review).
+    for label in ("Password", "Code sent to your email", "Your PIN"):
         box = ref(page, "textbox", label)
         for capability in (None, agent.capability):
             typed = agent.tool("browser_type", capability, ref=box, text="Invented42!")
@@ -232,9 +233,9 @@ def test_a_password_box_and_a_one_time_code_box_are_never_typed_into(a19, agent)
     values = agent.tool(
         "browser_evaluate",
         agent.capability,
-        function="() => [password.value, code.value, email.value]",
+        function="() => [password.value, code.value, pin.value, email.value]",
     )
-    assert json.loads(values["result"]) == ["", "", "e2e-a19@example.org"], values
+    assert json.loads(values["result"]) == ["", "", "", "e2e-a19@example.org"], values
     assert sent(a19, "a19-account") == []
 
 
@@ -307,6 +308,8 @@ def test_the_journey_s_recorded_stream_on_real_chromium(a19, agent):
     whose first message lacks the notice period asks for it on step 2 and sends nothing; a run
     whose first message holds the person's answer types it, clicks Submit itself and reports the
     confirmation page it read; the site records one submission."""
+    from app.apply import applier
+
     assert agent.put("cv.pdf", CV)["status"] == 200
     url, asked = replay(agent, calls_of('{"answers_to_your_questions": []}'))
     assert asked is not None, url
@@ -315,6 +318,7 @@ def test_the_journey_s_recorded_stream_on_real_chromium(a19, agent):
     assert asked["kind"] == "fact", asked
     page = agent.snapshot()
     assert 'textbox "What is your notice period?" [ref=e22]' in page, page
+    assert applier.shown(asked["field"], page)  # the label the job page shows is the page's
     assert sent(a19) == []
     answered = '{"answers_to_your_questions": [{"answer": "Six weeks"}]}'
     url, report = replay(agent, calls_of(answered))
