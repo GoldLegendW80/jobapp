@@ -436,7 +436,9 @@ describe("the Applications page", () => {
     await screen.findByText("Hold length saved.");
     expect(api.puts).toEqual([{ hold_s: 1800 }]);
     expect(screen.getByText(/30 minutes between a Full auto/)).toBeVisible();
-  });
+    // Five wrong values typed key by key, then a save: 4.1 s on the base already on a loaded
+    // machine, at the edge of the 5 s default.
+  }, 15_000);
 
   it("shows the api's sentence when the hold is refused", async () => {
     fakeSettings();
