@@ -1,9 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -66,44 +66,47 @@ export function PasteBox({
         mutation.mutate(text);
       }}
     >
-      <Label htmlFor={fieldId}>Or paste a text</Label>
-      <Textarea
-        id={fieldId}
-        rows={5}
-        value={text}
-        placeholder="For example the About section of your LinkedIn page, or notes on a project."
-        aria-describedby={countId}
-        aria-invalid={tooLong || undefined}
-        className="max-h-72"
-        onChange={(event) => {
-          setText(event.target.value);
-          if (outcome) setOutcome(undefined);
-        }}
-      />
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p
-          id={countId}
-          className={cn(
-            "text-xs text-muted-foreground tabular-nums",
-            tooLong && "font-medium text-destructive",
-          )}
-        >
-          {tooLong
-            ? `Too long: ${number.format(count)} of ${number.format(limits.paste_characters)} characters. Save it as a text file and add the file instead.`
-            : `${number.format(count)} of ${number.format(limits.paste_characters)} characters`}
-        </p>
-        <Button
-          type="submit"
-          variant="outline"
-          disabled={empty || tooLong || mutation.isPending}
-          aria-busy={mutation.isPending}
-        >
-          {mutation.isPending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
-          ) : null}
-          Add this text
-        </Button>
-      </div>
+      <Field className="gap-2" data-invalid={tooLong || undefined}>
+        <FieldLabel htmlFor={fieldId}>Or paste a text</FieldLabel>
+        <Textarea
+          id={fieldId}
+          rows={5}
+          value={text}
+          placeholder="For example the About section of your LinkedIn page, or notes on a project."
+          aria-describedby={countId}
+          aria-invalid={tooLong || undefined}
+          className="max-h-72"
+          onChange={(event) => {
+            setText(event.target.value);
+            if (outcome) setOutcome(undefined);
+          }}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Beside the button: none of the description's margins. */}
+          <FieldDescription
+            id={countId}
+            className={cn(
+              "text-xs tabular-nums nth-last-2:mt-0",
+              tooLong && "font-medium text-destructive",
+            )}
+          >
+            {tooLong
+              ? `Too long: ${number.format(count)} of ${number.format(limits.paste_characters)} characters. Save it as a text file and add the file instead.`
+              : `${number.format(count)} of ${number.format(limits.paste_characters)} characters`}
+          </FieldDescription>
+          <Button
+            type="submit"
+            variant="outline"
+            disabled={empty || tooLong || mutation.isPending}
+            aria-busy={mutation.isPending}
+          >
+            {mutation.isPending ? (
+              <Spinner aria-hidden="true" role={undefined} />
+            ) : null}
+            Add this text
+          </Button>
+        </div>
+      </Field>
       {outcome?.ok === false ? (
         <p role="alert" className="text-sm text-destructive">
           {outcome.message}

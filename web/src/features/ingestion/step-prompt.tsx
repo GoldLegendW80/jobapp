@@ -1,18 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  ArrowRight,
-  Check,
-  Copy,
-  Info,
-  LoaderCircle,
-  RotateCw,
-} from "lucide-react";
+import { ArrowRight, Check, Copy, Info, RotateCw } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { Spinner } from "@/components/ui/spinner";
 
 import { loadFailureSentence } from "./documents-api";
 import { getPrompt, promptKey } from "./prompt-api";
@@ -104,7 +100,7 @@ export function StepPrompt({ goTo }: StepProps) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the prompt
         </p>
       ) : query.isError ? (
@@ -167,12 +163,7 @@ export function StepPrompt({ goTo }: StepProps) {
 
                 <div className="flex flex-col gap-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <label
-                      htmlFor={`prompt-${id}`}
-                      className="text-sm font-medium"
-                    >
-                      Prompt for {name}
-                    </label>
+                    <Label htmlFor={`prompt-${id}`}>Prompt for {name}</Label>
                     <Button
                       type="button"
                       onClick={() => void onCopy(id, prompt)}
@@ -186,7 +177,7 @@ export function StepPrompt({ goTo }: StepProps) {
                       {outcome === "copied" ? "Copied" : "Copy the prompt"}
                     </Button>
                   </div>
-                  <textarea
+                  <Textarea
                     ref={text}
                     id={`prompt-${id}`}
                     readOnly
@@ -194,7 +185,8 @@ export function StepPrompt({ goTo }: StepProps) {
                     spellCheck={false}
                     value={prompt}
                     aria-describedby={`prompt-version-${id}`}
-                    className="w-full resize-y rounded-md border bg-muted/40 p-3 font-mono text-xs leading-relaxed outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    // The prompt is long: its 14 rows scroll, they do not grow with the text.
+                    className="resize-y bg-muted/40 p-3 font-mono text-xs leading-relaxed field-sizing-fixed md:text-xs dark:bg-muted/40"
                   />
                   <p
                     id={`prompt-copy-${id}`}

@@ -842,7 +842,9 @@ describe("the review of a run's proposals", () => {
     const body = api.calls[0]?.body as { proposal_ids: string[] };
     expect(body.proposal_ids).toHaveLength(2 * PAGE);
     expect(api.count("pending")).toBe(200);
-  });
+    // 100 proposals in the page, as the test below: about 4 s alone, past the 5 s default on a
+    // loaded machine, before this batch as after it.
+  }, 20_000);
 
   it("says how many a bulk accept takes when the section holds more than is shown", async () => {
     const many = Array.from({ length: 120 }, (_, index) =>

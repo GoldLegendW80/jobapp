@@ -3,6 +3,8 @@ import { ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, type ComponentType } from "react";
 import { Link, useSearchParams } from "react-router";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useTitle } from "@/lib/use-title";
 import { cn } from "@/lib/utils";
 
@@ -203,9 +205,12 @@ function StepLink({
         <span className="text-sm font-medium">
           <span className="sr-only">Step {number}:</span> {step.title}{" "}
           {step.ready ? null : (
-            <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+            <Badge
+              variant="secondary"
+              className="ml-1 bg-muted px-1.5 font-normal text-muted-foreground"
+            >
               Soon
-            </span>
+            </Badge>
           )}
         </span>{" "}
         <span className="text-xs text-muted-foreground">{step.summary}</span>
@@ -219,19 +224,20 @@ function StepLink({
     );
   }
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       aria-current={current ? "step" : undefined}
       onClick={() => {
         onOpen(step.id);
       }}
       className={cn(
         STEP_BOX,
-        "transition-colors outline-none hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "justify-start font-normal whitespace-normal transition-colors",
         current && "border-primary/60 bg-accent",
       )}
     >
       {body}
-    </button>
+    </Button>
   );
 }

@@ -68,12 +68,16 @@ describe("HealthDot", () => {
 
   it('shows "Server unreachable" with the reason on a 503', async () => {
     healthSequence(down);
+    const user = userEvent.setup();
     renderWithQuery(<HealthDot />);
     expect(await screen.findByText("Server unreachable")).toBeVisible();
     expect(status()).not.toHaveClass("sr-only");
     // The reason, for screen readers and on hover, never a status code.
     expect(status()).toHaveTextContent("database unavailable.");
-    expect(status()).toHaveAttribute("title", "database unavailable.");
+    await user.hover(status());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "database unavailable.",
+    );
     expect(status()).not.toHaveTextContent("503");
     expect(screen.queryByText("Server reachable")).not.toBeInTheDocument();
     expect(
@@ -262,6 +266,10 @@ describe("HealthDot accessibility", () => {
     expect(
       screen.getByRole("button", { name: "Check the server again" }),
     ).toHaveFocus();
+    // Its hint, once only a title, shows for the keyboard too.
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Check the server again",
+    );
     await user.keyboard("{Enter}");
     await screen.findByText("Server reachable");
     await waitFor(() => {

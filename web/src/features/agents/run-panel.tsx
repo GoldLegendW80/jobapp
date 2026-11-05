@@ -11,12 +11,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Ban,
   Brain,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   CircleDot,
   CircleX,
   Gauge,
-  LoaderCircle,
   MessageSquareText,
   Radio,
   ShieldX,
@@ -38,6 +38,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail } from "@/lib/api";
 import { agentWord, runErrorWords } from "@/lib/wording";
 import { cn } from "@/lib/utils";
@@ -80,7 +86,7 @@ export function StatusBadge({ status }: { status: RunStatus }) {
   return (
     <Badge variant={variant} data-status={status}>
       {status === "running" ? (
-        <LoaderCircle aria-hidden="true" className="animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
       ) : null}
       {STATUS_LABEL[status]}
     </Badge>
@@ -107,7 +113,7 @@ function ConnectionState({ state }: { state: Connection }) {
       {state === "live" ? (
         <Radio aria-hidden="true" className="size-3.5 text-emerald-600" />
       ) : state === "ended" ? null : (
-        <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} className="size-3.5" />
       )}
       {CONNECTION_LABEL[state]}
     </span>
@@ -242,16 +248,27 @@ function describeStep(
         title: failed ? "Tool error" : "Tool result",
         tone: failed ? "error" : undefined,
         body: (
-          <details className="text-xs">
-            <summary className="cursor-pointer text-muted-foreground">
-              {content.length > RESULT_SHOWN
-                ? `${content.length} characters`
-                : "Show"}
-            </summary>
-            <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 font-mono whitespace-pre-wrap">
-              {content.slice(0, RESULT_SHOWN * 4)}
-            </pre>
-          </details>
+          <Collapsible className="text-xs">
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="link"
+                className="group/fold h-auto gap-1 p-0 text-xs font-normal text-muted-foreground has-[>svg]:px-0"
+              >
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-3 transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none"
+                />
+                {content.length > RESULT_SHOWN
+                  ? `${content.length} characters`
+                  : "Show"}
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre className="mt-1 max-h-60 overflow-auto rounded-md bg-muted p-2 font-mono whitespace-pre-wrap">
+                {content.slice(0, RESULT_SHOWN * 4)}
+              </pre>
+            </CollapsibleContent>
+          </Collapsible>
         ),
       };
     }
@@ -453,7 +470,7 @@ export function RunPanel({
     return (
       <Card aria-busy="true">
         <CardContent className="flex items-center gap-2 text-sm text-muted-foreground">
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the run
         </CardContent>
       </Card>
@@ -516,7 +533,7 @@ export function RunPanel({
               aria-busy={cancel.isPending}
             >
               {cancel.isPending || stopping ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : (
                 <Square aria-hidden="true" />
               )}

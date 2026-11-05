@@ -1,8 +1,15 @@
 import { type FormEvent, useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import {
@@ -106,71 +113,81 @@ export function EditForm({
           "aria-invalid": problem ? true : undefined,
           "aria-describedby": described,
         };
+        const hintLine = hint ? (
+          <FieldDescription
+            id={`${fieldId}-hint`}
+            className="text-xs nth-last-2:mt-0"
+          >
+            {hint}
+          </FieldDescription>
+        ) : null;
+        const problemLine = problem ? (
+          <FieldError id={`${fieldId}-error`}>{problem}</FieldError>
+        ) : null;
+        if (field.kind === "flag")
+          return (
+            <Field
+              key={field.name}
+              orientation="horizontal"
+              className="gap-2"
+              data-invalid={problem ? true : undefined}
+            >
+              {/* A box has no read only state: `set` ignores a change while busy. */}
+              <Checkbox
+                id={fieldId}
+                aria-busy={shared["aria-busy"]}
+                autoFocus={shared.autoFocus}
+                aria-invalid={shared["aria-invalid"]}
+                aria-describedby={described}
+                checked={draft === true}
+                onCheckedChange={(checked) => {
+                  set(field.name, checked === true);
+                }}
+              />
+              <FieldContent className="gap-1.5">
+                <FieldLabel htmlFor={fieldId}>{field.label}</FieldLabel>
+                {hintLine}
+                {problemLine}
+              </FieldContent>
+            </Field>
+          );
         return (
-          <div key={field.name} className="flex flex-col gap-1.5">
-            {field.kind === "flag" ? (
-              <div className="flex items-center gap-2">
-                <input
-                  {...shared}
-                  type="checkbox"
-                  className="size-4"
-                  checked={draft === true}
-                  onChange={(event) => {
-                    set(field.name, event.target.checked);
-                  }}
-                />
-                <Label htmlFor={fieldId}>{field.label}</Label>
-              </div>
+          <Field
+            key={field.name}
+            className="gap-1.5"
+            data-invalid={problem ? true : undefined}
+          >
+            <FieldLabel htmlFor={fieldId}>
+              {field.label}
+              {field.kind === "lines" ? (
+                <span className="font-normal text-muted-foreground">
+                  {" "}
+                  (one per line)
+                </span>
+              ) : null}
+            </FieldLabel>
+            {field.kind === "text" || field.kind === "lines" ? (
+              <Textarea
+                {...shared}
+                value={String(draft)}
+                onChange={(event) => {
+                  set(field.name, event.target.value);
+                }}
+              />
             ) : (
-              <>
-                <Label htmlFor={fieldId}>
-                  {field.label}
-                  {field.kind === "lines" ? (
-                    <span className="font-normal text-muted-foreground">
-                      {" "}
-                      (one per line)
-                    </span>
-                  ) : null}
-                </Label>
-                {field.kind === "text" || field.kind === "lines" ? (
-                  <Textarea
-                    {...shared}
-                    value={String(draft)}
-                    onChange={(event) => {
-                      set(field.name, event.target.value);
-                    }}
-                  />
-                ) : (
-                  <Input
-                    {...shared}
-                    type="text"
-                    inputMode={field.kind === "number" ? "decimal" : undefined}
-                    value={String(draft)}
-                    onChange={(event) => {
-                      set(field.name, event.target.value);
-                    }}
-                  />
-                )}
-              </>
+              <Input
+                {...shared}
+                type="text"
+                inputMode={field.kind === "number" ? "decimal" : undefined}
+                value={String(draft)}
+                onChange={(event) => {
+                  set(field.name, event.target.value);
+                }}
+              />
             )}
-            {hint ? (
-              <p
-                id={`${fieldId}-hint`}
-                className="text-xs text-muted-foreground"
-              >
-                {hint}
-              </p>
-            ) : null}
-            {problem ? (
-              <p
-                id={`${fieldId}-error`}
-                role="alert"
-                className="text-sm text-destructive"
-              >
-                {problem}
-              </p>
-            ) : null}
-          </div>
+            {hintLine}
+            {problemLine}
+          </Field>
         );
       })}
       {refused && !at ? (
