@@ -374,3 +374,8 @@ The owner's answers during the product audit, in the session that built them.
      cybersecurity lines of the module sections below it.
   4. "More ideas" adds to the ideas shown: "add to them".
   5. In Find jobs, the line that names the Account page without a link: "yes".
+- 2026-11-05, the profile in Markdown narrowed (owner: "sorry, only facts and skills should be in
+  plain text or markdown. other fields remins on well structured inputs"). Only Facts and Skills
+  are written as plain text or Markdown; the model interprets the Skills text into the skills
+  section the fit reads (answer 1 above, for Skills). Experience, education, languages, the
+  answers, identity and the search stay structured inputs.
