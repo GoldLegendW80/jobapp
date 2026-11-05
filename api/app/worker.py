@@ -33,6 +33,10 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s
   never holds the fills and submits, and it takes one of the MAX_AGENT_RUNS slots. Tried once:
   after a worker stop the next tick queues it again (it clears arq's failed result first).
+- profile_titles(run_id): one run of the job titles agent (profile, app/profile/agents.py), in
+  this process like apply_decide, so it takes one of the MAX_AGENT_RUNS slots. Tried once.
+- profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
+  a skills save or an accepted Fill my profile item (app/profile/titles.py `due`).
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
@@ -423,6 +427,23 @@ async def reap_agent_runs_at_start(ctx: dict[str, Any]) -> int:
     return await reap_agent_runs(ctx, at_start=True)
 
 
+async def profile_titles(ctx: dict[str, Any], run_id: str) -> None:
+    """One run of the job titles agent, in this process (app/profile/agents.py)."""
+    from app.profile import agents as profile_agents
+
+    await profile_agents.execute(agent_context(ctx), uuid.UUID(run_id))
+
+
+async def profile_titles_tick(ctx: dict[str, Any]) -> int:
+    """Starts the automatic job title suggestions that are due (app/profile/titles.py `due`)."""
+    from app.profile import agents as profile_agents
+
+    redis = ctx.get("redis")
+    if redis is None:
+        return 0
+    return await profile_agents.tick(sessions_of(ctx), clock_of(ctx)(), redis)
+
+
 # --- queues -----------------------------------------------------------------------------------
 
 
@@ -483,8 +504,13 @@ def agents_queue() -> QueueSpec:
                 keep_result=0,
             ),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
+            func(profile_titles, name="profile_titles", timeout=job_timeout_s, max_tries=1),
+            func(profile_titles_tick, name="profile_titles_tick", timeout=60, max_tries=1),
         ],
-        cron_jobs=[cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60)],
+        cron_jobs=[
+            cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60),
+            cron(profile_titles_tick, name="cron:profile_titles", second=15, timeout=60),
+        ],
         # Two jobs at once: a third run waits in the queue (the reaper cron, a few milliseconds,
         # waits for a free slot too).
         max_jobs=MAX_AGENT_RUNS,
