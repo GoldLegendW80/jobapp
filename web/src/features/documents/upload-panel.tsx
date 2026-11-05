@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileUp, LoaderCircle, UserRoundPen } from "lucide-react";
+import { FileUp, UserRoundPen } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -12,6 +12,8 @@ import { Link } from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import {
   confirmDocument,
   documentsKey,
@@ -227,7 +229,7 @@ export function UploadPanel({
         <p id={hintId} className="text-sm text-muted-foreground">
           {WORDING.uploadCvHint}
         </p>
-        <input
+        <Input
           ref={input}
           type="file"
           accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -328,7 +330,7 @@ function Status({ children }: { children: string }) {
       role="status"
       className="flex items-center gap-2 text-sm text-muted-foreground"
     >
-      <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+      <Spinner aria-hidden="true" role={undefined} />
       {children}
     </p>
   );

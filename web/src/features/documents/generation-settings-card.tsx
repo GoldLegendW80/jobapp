@@ -22,6 +22,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { Switch } from "@/components/ui/switch";
 import type { SearchForm } from "@/features/profile/editor-forms";
 import { Group, TextField } from "@/features/profile/section-ui";
 
@@ -106,22 +107,17 @@ export function GenerationSettingsCard({ form }: { form: Form }) {
           control={control}
           name="documents.auto"
           render={({ field }) => (
-            <label className="flex w-fit items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                role="switch"
-                aria-checked={field.value}
-                className="size-4 accent-primary"
-                name={field.name}
-                ref={field.ref}
-                checked={field.value}
-                onBlur={field.onBlur}
-                onChange={(event) => {
-                  field.onChange(event.target.checked);
-                }}
-              />
-              Write documents automatically
-            </label>
+            <FormItem className="flex w-fit items-center gap-2">
+              <FormControl>
+                <Switch
+                  name={field.name}
+                  checked={field.value}
+                  onBlur={field.onBlur}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
+              <FormLabel>Write documents automatically</FormLabel>
+            </FormItem>
           )}
         />
         <p className="text-sm" aria-live="polite">

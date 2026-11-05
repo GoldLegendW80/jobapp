@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, ExternalLink, LoaderCircle, Wand2 } from "lucide-react";
+import { Download, ExternalLink, Wand2 } from "lucide-react";
 import { useId } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 
 import {
   failureSentence,
@@ -148,14 +150,17 @@ export function PostingDocumentCard({
       ) : null}
 
       {kind === "cv" && cvs.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={selectId} className="text-sm text-muted-foreground">
+        <Field className="gap-1.5">
+          <FieldLabel
+            htmlFor={selectId}
+            className="block leading-5 font-normal text-muted-foreground"
+          >
             Based on:{" "}
             <span className="font-medium text-foreground">
               {baseName ??
                 (currentBase === undefined ? "" : "a CV you deleted")}
             </span>
-          </label>
+          </FieldLabel>
           <NativeSelect
             id={selectId}
             value={selected}
@@ -169,7 +174,7 @@ export function PostingDocumentCard({
               </option>
             ))}
           </NativeSelect>
-        </div>
+        </Field>
       ) : null}
 
       {failure !== undefined ? (
@@ -208,7 +213,7 @@ export function PostingDocumentCard({
             }}
           >
             {write.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : null}
             {state.tag === "failed" ? "Try again" : "Write now"}
           </Button>
@@ -283,7 +288,7 @@ function StateLine({
           data-testid="card-state"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           {hasVersion ? "Writing a new version" : `Writing the ${noun}`}
         </p>
       );
@@ -302,7 +307,7 @@ function StateLine({
           data-testid="card-state"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Drawing the page
         </p>
       );

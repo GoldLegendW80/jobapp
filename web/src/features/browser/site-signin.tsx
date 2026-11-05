@@ -1,8 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, LoaderCircle, LogIn } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { Check, LogIn } from "lucide-react";
+import { Fragment, useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemContent,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail } from "@/lib/api";
 
 import {
@@ -129,7 +137,7 @@ export function SiteSignIn({
             }}
           >
             {done.isPending ? (
-              <LoaderCircle aria-hidden className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : null}
             Done
           </Button>
@@ -219,17 +227,21 @@ export function JobWebsitesSignIn({ urls }: { urls: string[] }) {
         For a website of Find jobs that shows its jobs to members only: sign in
         once, and the next searches read it signed in, in your own browser only.
       </p>
-      <ul className="divide-y rounded-md border">
+      <ItemGroup className="rounded-md border">
         {urls.map((url, index) => (
-          <li
-            key={`${url}:${index}`}
-            className="flex min-w-0 flex-wrap items-center gap-2 p-2 text-sm"
-          >
-            <span className="min-w-0 flex-1 break-all">{url}</span>
-            <SiteSignIn url={url} />
-          </li>
+          <Fragment key={`${url}:${index}`}>
+            {index > 0 ? <ItemSeparator /> : null}
+            <Item role="listitem" className="min-w-0 gap-2 rounded-none p-2">
+              <ItemContent className="min-w-0">
+                <ItemTitle className="w-auto font-normal break-all">
+                  {url}
+                </ItemTitle>
+              </ItemContent>
+              <SiteSignIn url={url} />
+            </Item>
+          </Fragment>
         ))}
-      </ul>
+      </ItemGroup>
     </section>
   );
 }

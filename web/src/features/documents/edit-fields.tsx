@@ -2,8 +2,15 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +23,9 @@ import {
   type Path,
 } from "./edit-content";
 import { inputId, useListMoves, type Form } from "./edit-lists";
+
+/** The small print under a field: extra small, and not pulled up when a line follows it. */
+const DESCRIPTION = "text-xs nth-last-2:mt-0";
 
 function counter(count: number, soft: number | null): string {
   const unit = count === 1 ? "character" : "characters";
@@ -79,26 +89,29 @@ export function TextField({
     },
   };
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-      <Label htmlFor={id} className={cn(hideLabel && "sr-only")}>
+    <Field className="min-w-0 flex-1 gap-1.5">
+      <FieldLabel
+        htmlFor={id}
+        className={cn("leading-none", hideLabel && "sr-only")}
+      >
         {label}
-      </Label>
+      </FieldLabel>
       {multiline ? <Textarea {...props} rows={3} /> : <Input {...props} />}
-      <p
+      <FieldDescription
         id={`${id}-count`}
         className={cn(
-          "text-xs text-muted-foreground",
+          DESCRIPTION,
           soft !== null &&
             count > soft &&
             "font-medium text-amber-700 dark:text-amber-400",
         )}
       >
         {counter(count, soft)}
-      </p>
+      </FieldDescription>
       {hint === undefined ? null : (
-        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+        <FieldDescription id={`${id}-hint`} className={DESCRIPTION}>
           {hint}
-        </p>
+        </FieldDescription>
       )}
       {notes.length === 0 ? null : (
         <ul
@@ -115,11 +128,12 @@ export function TextField({
         </ul>
       )}
       {error === undefined ? null : (
-        <p id={`${id}-error`} className="text-xs text-destructive">
+        // No alert of its own: the "Not saved" line above the form already announces it.
+        <FieldError id={`${id}-error`} role={undefined} className="text-xs">
           {error}
-        </p>
+        </FieldError>
       )}
-    </div>
+    </Field>
   );
 }
 
@@ -210,8 +224,10 @@ export function ListField({
   const lower = noun.toLowerCase();
   const of = context === undefined ? "" : ` of ${context}`;
   return (
-    <fieldset className="flex min-w-0 flex-col gap-2">
-      <legend className="text-sm font-medium">{legend}</legend>
+    <FieldSet className="min-w-0 gap-2">
+      <FieldLegend variant="label" className="mb-0">
+        {legend}
+      </FieldLegend>
       {children}
       {items.length === 0 ? null : (
         <ol className="flex flex-col gap-3">
@@ -269,6 +285,6 @@ export function ListField({
       <p aria-live="polite" className="sr-only">
         {moves.said}
       </p>
-    </fieldset>
+    </FieldSet>
   );
 }

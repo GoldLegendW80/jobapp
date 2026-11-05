@@ -1,11 +1,4 @@
-import {
-  Expand,
-  Hand,
-  Keyboard,
-  LoaderCircle,
-  RotateCw,
-  Undo2,
-} from "lucide-react";
+import { Expand, Hand, Keyboard, RotateCw, Undo2 } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -15,6 +8,8 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { describeError, errorDetail } from "@/lib/api";
 import { WORDING } from "@/lib/wording";
 
@@ -212,7 +207,7 @@ export function LiveBrowser({
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
         {phase === "connecting" && (
-          <LoaderCircle aria-hidden className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
         )}
         {line}
       </p>
@@ -273,7 +268,7 @@ export function LiveBrowser({
       </div>
       {/* The on screen keyboard of a phone: what is typed here goes to the browser, key by key. */}
       {watchOnly ? null : (
-        <textarea
+        <Textarea
           ref={keyboard}
           aria-label="Type into your browser"
           autoCapitalize="off"
@@ -282,7 +277,7 @@ export function LiveBrowser({
           spellCheck={false}
           onInput={typed}
           onKeyDown={special}
-          className="sr-only"
+          className="sr-only min-h-0"
         />
       )}
     </section>

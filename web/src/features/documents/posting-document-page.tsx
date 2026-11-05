@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, LoaderCircle, RotateCw } from "lucide-react";
+import { ArrowLeft, RotateCw } from "lucide-react";
 import { Link, useParams } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { getJob, jobKey } from "@/features/jobs/api";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
@@ -69,7 +70,7 @@ export function PostingDocumentPage() {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the document
         </p>
       ) : documents.isError ? (

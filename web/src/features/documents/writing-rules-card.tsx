@@ -6,13 +6,22 @@
  * save wins: the api keeps no revision). It sits inside the Search form, so nothing here submits it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { useId, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { Group } from "@/features/profile/section-ui";
 
 import {
@@ -124,26 +133,26 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
 
   return (
     <div className="flex flex-col gap-4" aria-busy={busy}>
-      <div className="flex flex-col gap-1">
-        <label className="flex w-fit items-center gap-2 text-sm font-medium">
-          <input
-            type="checkbox"
-            role="switch"
-            aria-checked={shown.no_dash_separators}
-            aria-describedby={`${id}-dash`}
-            className="size-4 accent-primary"
-            checked={shown.no_dash_separators}
-            onChange={(event) => {
-              save({ ...shown, no_dash_separators: event.target.checked });
-            }}
-          />
-          No dashes as separators
-        </label>
-        <p id={`${id}-dash`} className="text-xs text-muted-foreground">
-          An em dash, an en dash or a spaced hyphen used as a separator becomes
-          a comma. Hyphenated words and ranges of numbers keep a plain hyphen.
-        </p>
-      </div>
+      <Field orientation="horizontal">
+        <Switch
+          id={`${id}-dash-switch`}
+          aria-describedby={`${id}-dash`}
+          checked={shown.no_dash_separators}
+          onCheckedChange={(checked) => {
+            save({ ...shown, no_dash_separators: checked });
+          }}
+        />
+        <FieldContent className="gap-1">
+          <FieldLabel htmlFor={`${id}-dash-switch`}>
+            No dashes as separators
+          </FieldLabel>
+          <FieldDescription id={`${id}-dash`} className="text-xs">
+            An em dash, an en dash or a spaced hyphen used as a separator
+            becomes a comma. Hyphenated words and ranges of numbers keep a plain
+            hyphen.
+          </FieldDescription>
+        </FieldContent>
+      </Field>
 
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -166,28 +175,34 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
             className="flex flex-wrap gap-1.5"
           >
             {phrases.map((one) => (
-              <li
+              <Badge
+                asChild
                 key={one}
-                className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border bg-secondary py-0.5 pr-0.5 pl-2.5 text-xs text-secondary-foreground"
+                variant="secondary"
+                className="max-w-full min-w-0 overflow-visible border-border py-0.5 pr-0.5 pl-2.5 font-normal whitespace-normal"
               >
-                <span className="min-w-0 break-words">{one}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 shrink-0 rounded-full"
-                  aria-label={`Remove ${one}`}
-                  onClick={() => {
-                    setProblem(undefined);
-                    save({
-                      ...shown,
-                      banned_phrases: phrases.filter((other) => other !== one),
-                    });
-                  }}
-                >
-                  <X aria-hidden="true" />
-                </Button>
-              </li>
+                <li>
+                  <span className="min-w-0 break-words">{one}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 shrink-0 rounded-full"
+                    aria-label={`Remove ${one}`}
+                    onClick={() => {
+                      setProblem(undefined);
+                      save({
+                        ...shown,
+                        banned_phrases: phrases.filter(
+                          (other) => other !== one,
+                        ),
+                      });
+                    }}
+                  >
+                    <X aria-hidden="true" />
+                  </Button>
+                </li>
+              </Badge>
             ))}
           </ul>
         )}
@@ -219,7 +234,7 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
               onClick={add}
             >
               {busy ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : (
                 <Plus aria-hidden="true" />
               )}

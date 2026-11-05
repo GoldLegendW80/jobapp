@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -11,6 +11,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail } from "@/lib/api";
 
 import {
@@ -115,7 +116,7 @@ export function ForgetDialog({
               }}
             >
               {forget.isPending ? (
-                <LoaderCircle aria-hidden className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : null}
               Forget all logins
             </Button>

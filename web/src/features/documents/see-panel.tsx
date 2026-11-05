@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, ExternalLink, LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import { Download, ExternalLink } from "lucide-react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,6 +14,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -222,7 +232,7 @@ function Status({
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         {hasVersion
           ? "Writing a new version"
           : "Your first CV is being built from your profile"}
@@ -248,7 +258,7 @@ function Status({
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         Drawing the page
       </div>
     );
@@ -450,69 +460,72 @@ function History({
           Loading the versions
         </p>
       ) : (
-        <ul className="flex flex-col divide-y rounded-lg border">
-          {rows.map((one) => (
-            <li
-              key={one.number}
-              className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm"
-            >
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="font-medium">
-                  Version {one.number}, {ORIGIN_LABELS[one.origin]}
-                </span>
-                <span className="text-muted-foreground">
-                  {formatWhen(one.created_at)},{" "}
-                  {templateLabel(one.template_slug)}, {fitLabel(one)}
-                  {one.approved_at !== null ? ", approved" : ""}
-                  {one.frozen_at !== null
-                    ? `, sent on ${formatWhen(one.frozen_at)}`
-                    : ""}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant={one.number === shown ? "secondary" : "outline"}
-                  size="sm"
-                  aria-pressed={one.number === shown}
-                  aria-label={
-                    one.number === shown
-                      ? `Shown, version ${String(one.number)}`
-                      : `Open version ${String(one.number)}`
-                  }
-                  onClick={() => {
-                    onChoose(one.number);
-                  }}
-                >
-                  {one.number === shown ? "Shown" : "Open"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-label={`Restore version ${String(one.number)}`}
-                  disabled={busy}
-                  onClick={() => {
-                    onRestore(one);
-                  }}
-                >
-                  Restore
-                </Button>
-                {one.approved_at === null && one.frozen_at === null ? (
+        <ItemGroup className="rounded-lg border">
+          {rows.map((one, index) => (
+            <Fragment key={one.number}>
+              {index > 0 ? <ItemSeparator /> : null}
+              <Item
+                role="listitem"
+                className="justify-between gap-2 rounded-none p-3"
+              >
+                <ItemContent className="min-w-0 gap-0.5">
+                  <ItemTitle>
+                    Version {one.number}, {ORIGIN_LABELS[one.origin]}
+                  </ItemTitle>
+                  <ItemDescription className="line-clamp-none text-wrap">
+                    {formatWhen(one.created_at)},{" "}
+                    {templateLabel(one.template_slug)}, {fitLabel(one)}
+                    {one.approved_at !== null ? ", approved" : ""}
+                    {one.frozen_at !== null
+                      ? `, sent on ${formatWhen(one.frozen_at)}`
+                      : ""}
+                  </ItemDescription>
+                </ItemContent>
+                <ItemActions className="flex-wrap">
+                  <Button
+                    variant={one.number === shown ? "secondary" : "outline"}
+                    size="sm"
+                    aria-pressed={one.number === shown}
+                    aria-label={
+                      one.number === shown
+                        ? `Shown, version ${String(one.number)}`
+                        : `Open version ${String(one.number)}`
+                    }
+                    onClick={() => {
+                      onChoose(one.number);
+                    }}
+                  >
+                    {one.number === shown ? "Shown" : "Open"}
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    aria-label={`Approve version ${String(one.number)}`}
+                    aria-label={`Restore version ${String(one.number)}`}
                     disabled={busy}
                     onClick={() => {
-                      onApprove(one.number);
+                      onRestore(one);
                     }}
                   >
-                    Approve
+                    Restore
                   </Button>
-                ) : null}
-              </div>
-            </li>
+                  {one.approved_at === null && one.frozen_at === null ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Approve version ${String(one.number)}`}
+                      disabled={busy}
+                      onClick={() => {
+                        onApprove(one.number);
+                      }}
+                    >
+                      Approve
+                    </Button>
+                  ) : null}
+                </ItemActions>
+              </Item>
+            </Fragment>
           ))}
-        </ul>
+        </ItemGroup>
       )}
     </section>
   );

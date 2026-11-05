@@ -138,6 +138,39 @@ describe("AdvancedSection", () => {
     expect(toggle()).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("names the region it controls by its title, folded and open, and turns the chevron", () => {
+    render(
+      <AdvancedSection title="More options">
+        <p>body</p>
+      </AdvancedSection>,
+    );
+    const button = toggle("More options");
+    const region = screen.getByRole("region", { hidden: true });
+    const chevron = button.querySelector("svg");
+    expect(region).not.toBeVisible();
+    expect(region).toHaveAttribute("aria-label", "More options");
+    expect(button).toHaveAttribute("aria-controls", region.id);
+    expect(chevron).not.toHaveClass("rotate-180");
+    fireEvent.click(button);
+    expect(screen.getByRole("region", { name: "More options" })).toBe(region);
+    expect(region).toBeVisible();
+    expect(button).toHaveAttribute("aria-controls", region.id);
+    expect(chevron).toHaveClass("rotate-180");
+  });
+
+  it("cannot be closed while a field inside has an error", () => {
+    const onOpenChange = vi.fn();
+    render(
+      <AdvancedSection errorFieldId="ceiling" onOpenChange={onOpenChange}>
+        <input id="ceiling" aria-label="Ceiling" />
+      </AdvancedSection>,
+    );
+    fireEvent.click(toggle());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByLabelText("Ceiling")).toBeVisible();
+  });
+
   it("has a touch sized button at phone width", () => {
     render(
       <AdvancedSection>
