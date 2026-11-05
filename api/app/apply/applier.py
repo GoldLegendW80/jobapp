@@ -63,7 +63,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
 
 import sqlalchemy as sa
@@ -72,12 +72,18 @@ from sqlalchemy.orm import Session
 
 from app.agents import credentials, definitions, runs
 from app.agents.models import CredentialKind, RunStatus
-from app.apply import bank, caps, guardrails, run, states, submit
+from app.apply import bank, states
 from app.apply.models import AnswerSource, Application, ApplicationAnswer, Mode, State
 from app.browser import tool_sessions
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.profile import service as profile_service
+
+if TYPE_CHECKING:
+    from app.apply import run
+
+# `run`, `submit`, `caps` and `guardrails` are imported inside the functions that use them:
+# app/apply/agents.py imports this module to register its agent, and those import it back.
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +91,9 @@ NAME = "apply_agent"
 PURPOSE = "apply_agent"  # browserd's actions.AGENT_PURPOSE
 MODEL = "claude-sonnet-5-5"  # as the website search's agent (B20)
 MAX_TURNS = 10_000  # no cap of its own, as on the Mac: the lease's hour and the idle timer hold
-WALL_TIME_S = 7200.0
+# The lease's hour, inside the fill job; no longer than the longest agent the agents queue counts
+# (catalog._in_a_decision). An ask's wait counts in it (declared).
+WALL_TIME_S = 3600.0
 # The owner, 2026-11-05: "you can add a random pacing to feel more like human like between 3 to
 # 8 seconds." Seconds between two acts of the agent on the page, a new draw each time.
 PACE_S = (3.0, 8.0)
@@ -448,6 +456,8 @@ def _clicked_before(db: Session, application: Application) -> bool:
 def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Brief | str:
     """Before the lease: the refusals, then the documents and the first message (the caller
     commits either way)."""
+    from app.apply import caps, guardrails, run
+
     found = run._locked(db, application_id)
     if found is None:
         return "gone"
@@ -504,6 +514,8 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Brief | st
 
 def stopped_before(db: Session, application_id: uuid.UUID, code: str, now: datetime) -> str:
     """The emergency stop read on before the lease: `blocked` with its code."""
+    from app.apply import run
+
     found = run._locked(db, application_id)
     if found is None or found[0].state is not State.queued:
         return "superseded"
@@ -514,6 +526,8 @@ def stopped_before(db: Session, application_id: uuid.UUID, code: str, now: datet
 def arm(db: Session, application_id: uuid.UUID, now: datetime) -> bool:
     """`filling` to `submitting`, committed before browserd lets the agent's first act on a
     submit element through; False when the person cancelled meanwhile."""
+    from app.apply import run
+
     found = run._locked(db, application_id)
     if found is None or found[0].state is not State.filling:
         return False
@@ -571,6 +585,8 @@ def finish(
     """The end of the run, in one transaction (the caller commits): `submitted` on the
     confirmation the agent read, `submit_unknown` after a submit act it cannot confirm,
     `needs_person` on a question nobody watched, `failed` otherwise."""
+    from app.apply import run, submit
+
     found = run._locked(db, application_id)
     if found is None:
         return "gone"
@@ -605,6 +621,8 @@ def finish(
 
 def interrupted(db: Session, application_id: uuid.UUID, now: datetime) -> str:
     """A crash or a cancel: `submit_unknown` after a submit act, `failed` before it."""
+    from app.apply import run, submit
+
     found = run._locked(db, application_id)
     if found is None:
         return "gone"
@@ -653,6 +671,8 @@ def answer_question(
 ) -> Application:
     """The person's answer to the open question: stored on the application (and in Saved
     answers when `remember`), then the application is queued again (the caller commits)."""
+    from app.apply import run
+
     found = run._locked(db, application_id)
     if found is None or found[0].user_id != user_id:
         raise QuestionError(404, "No such application.")
@@ -711,6 +731,8 @@ class Services:
 async def apply(services: Services, application_id: uuid.UUID) -> str:
     """The job of a `direct` application: one run of the agent, from `queued` to its end or to
     `needs_person`. Returns a code for the log (no value of the person's)."""
+    from app.apply import run
+
     fill = services.fill
 
     def db[T](step: Callable[[Session], T]) -> Awaitable[T]:
@@ -841,6 +863,7 @@ class RuntimeApplier:
 
     async def __call__(self, session: ApplySession, first_message: str) -> Ran:
         from app.agents import runner  # the SDK: the worker's image only
+        from app.apply import run
         from app.apply.agents import _ended, _release
 
         context = self.context()

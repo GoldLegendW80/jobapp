@@ -1,7 +1,9 @@
 """The two tools One click Apply's agent has beside B20's browser set (A19, app/apply/applier.py),
 registered with `app.agents.tools.register` (worker only: this module imports the Claude Agent
 SDK): the upload of the documents placed on its lease, and `apply_done`. The browser set is
-`app/browser/finder_tools.py`'s, shared through `tool_sessions`.
+`app/browser/finder_tools.py`'s, shared through `tool_sessions` and imported by the run itself
+(`applier.RuntimeApplier`), never at the worker's start: it imports the finder, whose sweep
+agents the agents queue's timeout must not count (agents/catalog.py SWEEP_AGENTS).
 """
 
 from __future__ import annotations
@@ -12,13 +14,24 @@ from claude_agent_sdk import SdkMcpTool, tool
 
 from app.agents import tools as app_tools
 from app.apply import applier
-from app.browser import finder_tools
 
 NO_APPLICATION = "This run applies to nothing. Stop now."
+REF = {"type": "string", "pattern": "^e[0-9]+$"}  # as REF
+
+
+def _object(properties: dict[str, Any], required: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
 SCHEMAS: dict[str, dict[str, Any]] = {
-    "browser_file_upload": finder_tools._object(
+    "browser_file_upload": _object(
         {
-            "ref": finder_tools.REF,
+            "ref": REF,
             "paths": {
                 "type": "array",
                 "items": {"type": "string", "enum": ["cv.pdf", "letter.pdf"]},
@@ -28,7 +41,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         },
         ("paths",),
     ),
-    "apply_done": finder_tools._object(
+    "apply_done": _object(
         {
             "outcome": {"type": "string", "enum": ["submitted", "failed"]},
             "summary": {"type": "string", "maxLength": applier.SUMMARY_MAX},
