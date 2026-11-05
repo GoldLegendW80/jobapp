@@ -7,7 +7,6 @@ import {
 import {
   ArrowLeft,
   History,
-  LoaderCircle,
   Minus,
   Plus,
   RotateCcw,
@@ -27,6 +26,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Sheet,
   SheetContent,
@@ -35,6 +36,15 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -171,7 +181,7 @@ function HistoryBody({
             role="status"
             className="flex items-center gap-2 p-2 text-sm text-muted-foreground"
           >
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" />
             Loading versions
           </p>
         ) : versions.isError ? (
@@ -198,8 +208,9 @@ function HistoryBody({
             <ol className="flex flex-col gap-1">
               {items.map((item) => (
                 <li key={item.revision}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     aria-current={
                       selected === item.revision ? "true" : undefined
                     }
@@ -208,7 +219,7 @@ function HistoryBody({
                       setSelected(item.revision);
                     }}
                     className={cn(
-                      "flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      "h-auto w-full flex-col items-start gap-0.5 px-3 py-2 text-left font-normal whitespace-normal",
                       selected === item.revision && "bg-accent",
                     )}
                   >
@@ -219,17 +230,14 @@ function HistoryBody({
                       ) : null}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      <time
-                        dateTime={item.created_at}
-                        title={absoluteTime(item.created_at)}
-                      >
+                      <time dateTime={item.created_at}>
                         {relativeTime(item.created_at)}
                       </time>
                       <span aria-hidden="true">, </span>
                       <span className="sr-only">, </span>
                       {absoluteTime(item.created_at)}
                     </span>
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ol>
@@ -242,7 +250,7 @@ function HistoryBody({
                 onClick={() => void versions.fetchNextPage()}
               >
                 {versions.isFetchingNextPage ? (
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" />
                 ) : null}
                 {versions.isFetchingNextPage ? "Loading" : "Load more"}
               </Button>
@@ -378,7 +386,7 @@ function Compare({
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" />
           Loading revision {revision}
         </p>
       ) : version.isError ? (
@@ -408,7 +416,7 @@ function Compare({
               }}
             >
               {restore.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" />
               ) : (
                 <RotateCcw aria-hidden="true" />
               )}
@@ -614,49 +622,52 @@ function FieldDifferences({
             ? "No difference with the current version."
             : `${String(changed)} ${changed === 1 ? "field differs" : "fields differ"} from the current version.`}
         </p>
-        <label htmlFor={id} className="flex items-center gap-2 text-sm">
-          <input
+        <Label htmlFor={id} className="font-normal">
+          <Checkbox
             id={id}
-            type="checkbox"
-            className="size-4 accent-primary"
             checked={onlyChanges}
-            onChange={(event) => {
-              setOnlyChanges(event.target.checked);
+            onCheckedChange={(checked) => {
+              setOnlyChanges(checked === true);
             }}
           />
           Only differences
-        </label>
+        </Label>
       </div>
-      <table
+      <Table
         aria-label={`Revision ${String(revision)} and the current version`}
-        className="w-full table-fixed border-collapse text-xs sm:text-sm"
+        className="table-fixed border-collapse text-xs sm:text-sm"
       >
-        <thead>
-          <tr className="border-b text-left">
-            <th scope="col" className="w-[34%] py-2 pr-2 font-medium">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead scope="col" className={cn(HEAD, "w-[34%] pr-2")}>
               Field
-            </th>
-            <th scope="col" className="py-2 pr-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={cn(HEAD, "pr-2")}>
               Revision {revision}
-            </th>
-            <th scope="col" className="py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Current
-            </th>
-          </tr>
-        </thead>
-        <tbody>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {shown.map((row) => (
-            <tr
+            <TableRow
               key={row.path}
               data-status={row.status}
               className={cn(
-                "border-b align-top",
-                row.status !== "same" && "bg-amber-50 dark:bg-amber-950/40",
+                "align-top",
+                row.status === "same"
+                  ? "hover:bg-transparent"
+                  : "bg-amber-50 hover:bg-amber-50 dark:bg-amber-950/40 dark:hover:bg-amber-950/40",
               )}
             >
-              <th
+              <TableHead
                 scope="row"
-                className="py-2 pr-2 text-left font-normal [overflow-wrap:anywhere]"
+                className={cn(
+                  HEAD,
+                  "pr-2 align-top font-normal whitespace-normal [overflow-wrap:anywhere]",
+                )}
               >
                 <span className="font-medium">{row.label}</span>
                 {row.status !== "same" ? (
@@ -664,20 +675,24 @@ function FieldDifferences({
                     {STATUS_TEXT[row.status]}
                   </span>
                 ) : null}
-              </th>
-              <td className="py-2 pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              </TableHead>
+              <TableCell className={cn(CELL, "pr-2")}>
                 <Value value={row.revision} />
-              </td>
-              <td className="py-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              </TableCell>
+              <TableCell className={CELL}>
                 <Value value={row.current} />
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </section>
   );
 }
+
+/** The table keeps its own measure: no side padding but between columns, rows as tall as their text. */
+const HEAD = "h-auto px-0 py-2";
+const CELL = "px-0 py-2 align-top whitespace-pre-wrap [overflow-wrap:anywhere]";
 
 function Value({ value }: { value: string | undefined }) {
   if (value === undefined || value === "")

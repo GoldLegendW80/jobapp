@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { EMPTY } from "@/features/profile/api";
 
-import { StepLooking, StepPay, StepWork } from "./step-panels";
+import { StepLooking, StepPay, StepWhere, StepWork } from "./step-panels";
 import { draftOf, type Draft } from "./steps";
 
 beforeEach(() => {
@@ -90,6 +90,81 @@ describe("simple wizard panels (O10)", () => {
     expect(screen.getByTestId("saved")).toHaveTextContent(
       "Seasonal,Freelance,VIE",
     );
+  });
+
+  it("ticks a box from anywhere on its card, once per click, and marks the card", async () => {
+    function Work() {
+      const [draft, setDraft] = useState<Draft>(draftOf(EMPTY));
+      return (
+        <>
+          <StepWork
+            draft={draft}
+            change={(patch) => {
+              setDraft((old) => ({ ...old, ...patch }));
+            }}
+          />
+          <output data-testid="saved">{draft.contracts.join(",")}</output>
+        </>
+      );
+    }
+    render(<Work />);
+    const box = screen.getByRole("checkbox", { name: "VIE" });
+    const card = box.parentElement!;
+    expect(card.tagName).toBe("LABEL");
+    await userEvent.click(within(card).getByText("VIE"));
+    expect(box).toBeChecked();
+    expect(screen.getByTestId("saved")).toHaveTextContent(/^VIE$/);
+    // The card is marked while its box is ticked.
+    expect(card).toHaveClass("has-data-[state=checked]:border-primary");
+    expect(box).toHaveAttribute("data-state", "checked");
+    await userEvent.click(box);
+    expect(box).not.toBeChecked();
+    expect(screen.getByTestId("saved")).toBeEmptyDOMElement();
+    // The keyboard ticks it too.
+    box.focus();
+    await userEvent.keyboard(" ");
+    expect(box).toBeChecked();
+  });
+
+  it("chooses one remote stance by its card or the arrow keys", async () => {
+    function Where() {
+      const [draft, setDraft] = useState<Draft>(draftOf(EMPTY));
+      return (
+        <MemoryRouter>
+          <StepWhere
+            draft={draft}
+            change={(patch) => {
+              setDraft((old) => ({ ...old, ...patch }));
+            }}
+          />
+          <output data-testid="saved">{draft.remote ?? "none"}</output>
+        </MemoryRouter>
+      );
+    }
+    render(<Where />);
+    const stances = screen.getByRole("group", {
+      name: "Remote, hybrid or on site",
+    });
+    expect(within(stances).getAllByRole("radio")).toHaveLength(4);
+    expect(screen.getByTestId("saved")).toHaveTextContent("none");
+    await userEvent.click(within(stances).getByText("Hybrid"));
+    expect(
+      within(stances).getByRole("radio", { name: "Hybrid" }),
+    ).toBeChecked();
+    expect(screen.getByTestId("saved")).toHaveTextContent("hybrid");
+    // Held, as a person presses it: the next stance takes the focus and the choice.
+    await userEvent.keyboard("{ArrowDown>}");
+    await userEvent.keyboard("{/ArrowDown}");
+    const office = within(stances).getByRole("radio", { name: "On site" });
+    expect(office).toHaveFocus();
+    expect(office).toBeChecked();
+    expect(screen.getByTestId("saved")).toHaveTextContent("office");
+    expect(
+      within(stances).getByRole("radio", { name: "Hybrid" }),
+    ).not.toBeChecked();
+    // Anywhere, a box alone on its row, ticks from its words.
+    await userEvent.click(screen.getByText("Anywhere"));
+    expect(screen.getByRole("checkbox", { name: "Anywhere" })).toBeChecked();
   });
 
   it("folds pay figures without losing a typed value and restores the open preference", async () => {

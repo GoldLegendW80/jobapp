@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, matchRoutes, useLocation, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useMe } from "@/features/auth/auth-context";
 import { cn } from "@/lib/utils";
 
@@ -110,8 +111,8 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   return children;
 }
 
-const BAR =
-  "rounded-md bg-foreground/10 animate-pulse motion-reduce:animate-none";
+/** Darker than the skeleton's own accent, as before, and still under reduced motion. */
+const BAR = "bg-foreground/10 motion-reduce:animate-none";
 
 /**
  * The page's place while the gate decides: grey bars where a heading, a line and a few rows
@@ -128,12 +129,12 @@ function PageSkeleton() {
     >
       <span className="sr-only">Loading</span>
       <div aria-hidden="true" className="flex flex-col gap-3">
-        <div className={cn(BAR, "h-8 w-48")} />
-        <div className={cn(BAR, "h-4 w-full max-w-md")} />
+        <Skeleton className={cn(BAR, "h-8 w-48")} />
+        <Skeleton className={cn(BAR, "h-4 w-full max-w-md")} />
       </div>
       <div aria-hidden="true" className="flex flex-col gap-3">
         {[0, 1, 2, 3].map((row) => (
-          <div key={row} className={cn(BAR, "h-16 w-full")} />
+          <Skeleton key={row} className={cn(BAR, "h-16 w-full")} />
         ))}
       </div>
     </div>

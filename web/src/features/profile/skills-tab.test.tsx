@@ -148,6 +148,22 @@ describe("skills tab", () => {
     expect(chips("llm")).toHaveLength(3);
   });
 
+  it("turns the advanced switch on and off from its words too", async () => {
+    const { user } = await openSkills();
+    const advanced = screen.getByRole("switch", {
+      name: "Advanced (regular expressions) for agents",
+    });
+    expect(advanced).not.toBeChecked();
+    await user.click(
+      within(advanced.parentElement!).getByText(
+        "Advanced (regular expressions)",
+      ),
+    );
+    expect(advanced).toBeChecked();
+    await user.click(advanced);
+    expect(advanced).not.toBeChecked();
+  });
+
   it("revalidates chips when the advanced switch changes, and blocks the save", async () => {
     const { user, state } = await openSkills();
     await user.type(

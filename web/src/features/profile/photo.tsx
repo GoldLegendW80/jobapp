@@ -1,11 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  CircleAlert,
-  ImageUp,
-  LoaderCircle,
-  Trash2,
-  UserRound,
-} from "lucide-react";
+import { CircleAlert, ImageUp, Trash2, UserRound } from "lucide-react";
 import { useId, useRef, useState, type PointerEvent } from "react";
 import { toast } from "sonner";
 
@@ -20,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import {
@@ -362,9 +357,7 @@ function CropDialog({
               upload.mutate();
             }}
           >
-            {upload.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {upload.isPending ? <Spinner aria-hidden="true" /> : null}
             {upload.isPending ? "Uploading" : "Use this photo"}
           </Button>
         </DialogFooter>

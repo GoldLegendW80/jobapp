@@ -20,8 +20,11 @@ import {
   type UseFormReturn,
 } from "react-hook-form";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
 
@@ -134,22 +137,25 @@ export function TermChips<F extends FieldValues>({
           {title ?? label}
         </Heading>
         {regexSwitch ? (
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              role="switch"
-              aria-checked={isAdvanced}
+          <div className="flex items-center gap-2">
+            <Switch
+              size="sm"
+              id={`${id}-advanced`}
               aria-label={`Advanced (regular expressions) for ${label}`}
-              className="size-4 accent-primary"
               checked={isAdvanced}
-              onChange={(event) => {
-                advanced.field.onChange(event.target.checked);
+              onCheckedChange={(checked) => {
+                advanced.field.onChange(checked);
                 setProblem(undefined);
                 revalidate();
               }}
             />
-            Advanced (regular expressions)
-          </label>
+            <Label
+              htmlFor={`${id}-advanced`}
+              className="text-xs font-normal text-muted-foreground"
+            >
+              Advanced (regular expressions)
+            </Label>
+          </div>
         ) : null}
       </div>
       {description ? (
@@ -170,11 +176,13 @@ export function TermChips<F extends FieldValues>({
             const messageId = `${id}-term-${index}`;
             return (
               <li key={`${term}-${index}`} className="flex max-w-full flex-col">
-                <span
+                <Badge
+                  variant="secondary"
                   aria-invalid={message ? true : undefined}
                   aria-describedby={message ? messageId : undefined}
+                  // The border shows, and the remove button's focus ring is not cut off.
                   className={cn(
-                    "inline-flex max-w-full items-center gap-1 rounded-full border bg-secondary py-0.5 pr-0.5 pl-2.5 text-xs text-secondary-foreground",
+                    "max-w-full justify-start overflow-visible border-border py-0.5 pr-0.5 pl-2.5 font-normal",
                     isAdvanced && "font-mono",
                     message &&
                       "border-destructive bg-destructive/10 text-destructive",
@@ -183,17 +191,19 @@ export function TermChips<F extends FieldValues>({
                   <span className="min-w-0 truncate" title={term}>
                     {term}
                   </span>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-xs"
                     aria-label={`Remove ${term}`}
-                    className="rounded-full p-0.5 hover:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    className="size-4 rounded-full hover:bg-foreground/10 hover:text-inherit dark:hover:bg-foreground/10"
                     onClick={() => {
                       remove(index);
                     }}
                   >
                     <X aria-hidden="true" className="size-3" />
-                  </button>
-                </span>
+                  </Button>
+                </Badge>
                 {message ? (
                   <span
                     id={messageId}
