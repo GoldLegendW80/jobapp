@@ -32,6 +32,7 @@ default stays `model`, which is what every agent defined in this file runs on.
 """
 
 import re
+import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -49,6 +50,12 @@ if TYPE_CHECKING:
     from app.config import Settings
 
 DEFAULT_MODEL = "claude-opus-5-5"
+# The models an agent may run on: the ones the code names and the Agents tab of Admin offers
+# (agents A6). Claude models only, by their current ids.
+MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")
+# The effort levels Claude Code takes: the SDK's EffortLevel, in its order (xhigh falls back to
+# high on a model without it). tests/agents/test_admin_agents.py compares them with the SDK's.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_MAX_TURNS = 8
 DEFAULT_WALL_TIME_S = 600.0  # 10 minutes
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -159,6 +166,14 @@ class AgentDefinition:
     def live(self) -> bool:
         """Whether the answer of a run may be shown while it is written."""
         return self.live_text and not self.private_io
+
+    @property
+    def uses_default_message(self) -> bool:
+        """Whether a run's first message can be `default_message` (agents A6: the Agents tab
+        edits it only then). Only this class's own `prompt` reads it: a class with a `prompt` of
+        its own builds its first message in code, and a chat agent's is rebuilt from its thread
+        (A4). Derived from the class, so a new agent needs no list kept by hand."""
+        return not self.chat and type(self).prompt is AgentDefinition.prompt
 
     def model_for(self, kind: CredentialKind | str | None) -> str:
         """The model of a run on a credential of that kind (`model` when the kind is not named
@@ -336,6 +351,8 @@ AGENTS: dict[str, AgentDefinition] = {
     TRIAGE.name: TRIAGE,
     JOB_CHAT.name: JOB_CHAT,
 }
+# The module that registered each agent, for the Agents tab of Admin (agents A6).
+_MODULES: dict[str, str] = dict.fromkeys(AGENTS, __name__)
 
 
 def register(definition: AgentDefinition) -> AgentDefinition:
@@ -351,7 +368,14 @@ def register(definition: AgentDefinition) -> AgentDefinition:
     if existing is not None and existing != definition:
         raise ValueError(f"an agent named {name} is already registered")
     AGENTS[name] = definition
+    # The caller is the module body that registers its agent at import.
+    _MODULES.setdefault(name, str(sys._getframe(1).f_globals.get("__name__", "")))
     return definition
+
+
+def module_of(name: str) -> str:
+    """The Python module that registered the agent ("" when not known)."""
+    return _MODULES.get(name, "")
 
 
 def available(app_env: str) -> dict[str, AgentDefinition]:

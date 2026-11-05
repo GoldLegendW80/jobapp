@@ -5,6 +5,8 @@ import { Outlet, ScrollRestoration, type RouteObject } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AccountPage } from "@/features/account/account-page";
+import { AdminAgentPage } from "@/features/admin/agent-page";
+import { AdminAgentsPage } from "@/features/admin/agents-page";
 import { AdminUsersPage } from "@/features/admin/users-page";
 import { RunPage, RunsPage } from "@/features/agents/runs-page";
 import { QueuePage } from "@/features/apply/queue-page";
@@ -117,6 +119,22 @@ export const routes: RouteObject[] = [
                 element: (
                   <RequireAdmin>
                     <AdminUsersPage />
+                  </RequireAdmin>
+                ),
+              },
+              {
+                path: "admin/agents",
+                element: (
+                  <RequireAdmin>
+                    <AdminAgentsPage />
+                  </RequireAdmin>
+                ),
+              },
+              {
+                path: "admin/agents/:name",
+                element: (
+                  <RequireAdmin>
+                    <AdminAgentPage />
                   </RequireAdmin>
                 ),
               },

@@ -76,6 +76,7 @@ def test_schema(at_head: sa.Engine) -> None:
         "output_tokens",
         "cost_usd",
         "credential_kind",  # added by 0010 (issue #33)
+        "agent_version",  # added by 0031 (agents A6)
         "cancel_requested_at",
         "started_at",
         "finished_at",
@@ -87,6 +88,7 @@ def test_schema(at_head: sa.Engine) -> None:
     assert indexes["ix_agent_runs_user_id_created_at"]["column_names"][0] == "user_id"
     assert "ix_agent_runs_status_active" in indexes
     assert "ix_agent_runs_job_id" in indexes
+    assert indexes["ix_agent_runs_agent_created_at"]["column_names"][0] == "agent"
     uniques = {
         u["name"]: u["column_names"] for u in inspector.get_unique_constraints("agent_events")
     }

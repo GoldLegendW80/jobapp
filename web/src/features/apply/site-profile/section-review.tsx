@@ -131,11 +131,8 @@ function FieldRow({
   const mutable = canEditField(field) && !run.autosave;
   const dirty = value !== editText(field.value);
   return (
-    <TableRow>
-      <TableHead
-        scope="row"
-        className="h-auto min-w-36 p-3 align-top whitespace-normal"
-      >
+    <TableRow className="align-top">
+      <TableHead className="p-3 sm:min-w-36">
         {field.label}
         {field.required && (
           <span className="block text-xs text-muted-foreground">
@@ -143,62 +140,71 @@ function FieldRow({
           </span>
         )}
       </TableHead>
-      <TableCell className="min-w-40 p-3 align-top break-words whitespace-normal">
+      <TableCell
+        label="Value on the site"
+        className="p-3 sm:min-w-40 break-words"
+      >
         {valueText(field.current_value)}
       </TableCell>
-      <TableCell className="min-w-56 p-3 align-top whitespace-normal">
-        {mutable ? (
-          <div className="space-y-2">
-            <Textarea
-              aria-label={`Edit ${field.label}`}
-              value={value}
-              disabled={pending}
-              onChange={(event) => {
-                onChange(event.target.value);
-              }}
-              rows={2}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={pending || !dirty}
-              onClick={onSave}
-            >
-              Keep edit
-            </Button>
-            {dirty && (
+      <TableCell
+        label="Profile value or your edit"
+        className="p-3 sm:min-w-56 max-sm:items-start"
+      >
+        <div className="min-w-0">
+          {mutable ? (
+            <div className="space-y-2">
+              <Textarea
+                aria-label={`Edit ${field.label}`}
+                value={value}
+                disabled={pending}
+                onChange={(event) => {
+                  onChange(event.target.value);
+                }}
+                rows={2}
+              />
               <Button
                 size="sm"
-                variant="ghost"
-                disabled={pending}
-                onClick={onUndo}
+                variant="outline"
+                disabled={pending || !dirty}
+                onClick={onSave}
               >
-                Undo
+                Keep edit
               </Button>
-            )}
-          </div>
-        ) : (
-          <span className="break-words">{valueText(field.value)}</span>
-        )}
-        {field.refusal && (
-          <p className="mt-2 text-sm text-muted-foreground">
-            {refusals[field.refusal] ?? "This field is left for you to review."}
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {errorDetail(error) ?? describeError(error)}
-          </p>
-        )}
+              {dirty && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={onUndo}
+                >
+                  Undo
+                </Button>
+              )}
+            </div>
+          ) : (
+            <span className="break-words">{valueText(field.value)}</span>
+          )}
+          {field.refusal && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {refusals[field.refusal] ??
+                "This field is left for you to review."}
+            </p>
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {errorDetail(error) ?? describeError(error)}
+            </p>
+          )}
+        </div>
       </TableCell>
-      <TableCell className="min-w-28 p-3 align-top text-sm whitespace-normal">
+      <TableCell label="Source" className="p-3 sm:min-w-28 text-sm">
         {field.source === "left"
           ? "Left for you"
           : field.source === "person"
             ? "Your edit"
             : (sourceLabels[field.source] ?? field.source)}
       </TableCell>
-      <TableCell className="min-w-32 p-3 align-top whitespace-normal">
+      <TableCell label="Replace" className="p-3 sm:min-w-32">
         {field.current_value != null && field.current_value !== "" ? (
           mutable ? (
             <Label className="font-normal">
@@ -400,74 +406,70 @@ function SectionReviewContent({
               </figure>
             ))}
         </div>
-        <div className="max-w-full overflow-x-auto rounded-md border">
-          <Table className="caption-top">
-            <TableCaption className="mt-0 p-3 text-left">
-              Fields and their sources. Existing site values stay until you
-              select Replace.
-            </TableCaption>
-            <TableHeader className="bg-muted/40">
-              <TableRow>
-                {[
-                  "Field",
-                  "Value on the site",
-                  "Profile value or your edit",
-                  "Source",
-                  "Replace",
-                ].map((label) => (
-                  <TableHead className="h-auto p-3" key={label} scope="col">
-                    {label}
-                  </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {section.fields.map((field) => (
-                <FieldRow
-                  key={field.field_key}
-                  field={field}
-                  run={editable ? run : { ...run, autosave: true }}
-                  value={fieldValue(field)}
-                  replace={
-                    pendingEdit?.field === field.field_key
-                      ? (pendingEdit.changes.replace ?? field.replace)
-                      : field.replace
-                  }
-                  pending={editPending || save.isPending}
-                  error={
-                    edit.variables?.field === field.field_key
-                      ? edit.error
-                      : null
-                  }
-                  onChange={(value) => {
-                    setConfirm(null);
-                    setDrafts((current) => ({
-                      ...current,
-                      [field.field_key]: { base: editText(field.value), value },
-                    }));
-                  }}
-                  onSave={() => {
-                    saveField(field, { value: fieldValue(field) });
-                  }}
-                  onUndo={() => {
-                    setConfirm(null);
-                    setDrafts((current) => {
-                      return Object.fromEntries(
-                        Object.entries(current).filter(
-                          ([key]) => key !== field.field_key,
-                        ),
-                      );
-                    });
-                    if (edit.variables?.field === field.field_key) edit.reset();
-                  }}
-                  onReplace={(replace) => {
-                    saveField(field, { replace });
-                  }}
-                />
+        <Table>
+          <TableCaption className="p-3">
+            Fields and their sources. Existing site values stay until you select
+            Replace.
+          </TableCaption>
+          <TableHeader>
+            <TableRow>
+              {[
+                "Field",
+                "Value on the site",
+                "Profile value or your edit",
+                "Source",
+                "Replace",
+              ].map((label) => (
+                <TableHead className="p-3" key={label}>
+                  {label}
+                </TableHead>
               ))}
-            </TableBody>
-          </Table>
-        </div>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {section.fields.map((field) => (
+              <FieldRow
+                key={field.field_key}
+                field={field}
+                run={editable ? run : { ...run, autosave: true }}
+                value={fieldValue(field)}
+                replace={
+                  pendingEdit?.field === field.field_key
+                    ? (pendingEdit.changes.replace ?? field.replace)
+                    : field.replace
+                }
+                pending={editPending || save.isPending}
+                error={
+                  edit.variables?.field === field.field_key ? edit.error : null
+                }
+                onChange={(value) => {
+                  setConfirm(null);
+                  setDrafts((current) => ({
+                    ...current,
+                    [field.field_key]: { base: editText(field.value), value },
+                  }));
+                }}
+                onSave={() => {
+                  saveField(field, { value: fieldValue(field) });
+                }}
+                onUndo={() => {
+                  setConfirm(null);
+                  setDrafts((current) => {
+                    return Object.fromEntries(
+                      Object.entries(current).filter(
+                        ([key]) => key !== field.field_key,
+                      ),
+                    );
+                  });
+                  if (edit.variables?.field === field.field_key) edit.reset();
+                }}
+                onReplace={(replace) => {
+                  saveField(field, { replace });
+                }}
+              />
+            ))}
+          </TableBody>
+        </Table>
         {save.error && (
           <p role="alert" className="text-sm text-destructive">
             {errorDetail(save.error) ?? describeError(save.error)} The section

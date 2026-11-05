@@ -13,7 +13,8 @@ export function Moment({
   className,
 }: {
   at: string;
-  now: Date;
+  /** The page's clock, so every time of a table moves together; now when absent. */
+  now?: Date;
   className?: string;
 }) {
   return (

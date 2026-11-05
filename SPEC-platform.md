@@ -111,7 +111,7 @@ def health(session: Session = Depends(get_session)) -> dict[str, str]:
     return {"status": "ok"}
 ```
 
-Frontend: function components, shadcn primitives, data through TanStack Query, no global state library until one is needed. Ruff and Prettier with default settings. Names in English.
+Frontend: function components, shadcn primitives, data through TanStack Query, no global state library until one is needed. Every table is drawn with `components/ui/table.tsx` (agents A8; its test fails on table markup drawn elsewhere). Ruff and Prettier with default settings. Names in English.
 
 ## Testing strategy
 

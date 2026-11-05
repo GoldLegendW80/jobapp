@@ -8,14 +8,18 @@
 # snapshot with refs), which a release may drop; api/tests/browser/test_browser_container.py
 # fails loudly when it does. Bump PLAYWRIGHT_VERSION and browserd/pages.py together, on purpose.
 #
-# Chromium is pinned by Debian version (bookworm-security) and the image is rebuilt when Debian
-# publishes a security update: build with --build-arg CHROMIUM_VERSION=<new version>.
-# bookworm-security serves only its latest Chromium, so an older pin fails the build. To bump,
-# set the Candidate this prints: docker run --rm debian:bookworm-slim sh -c
+# Debian 13 (trixie), the stable release: on 2026-11-05 the deploy found no Chromium at all for
+# arm64 in Debian 12 (bookworm, oldstable: "Package chromium is not available"), so the browser
+# image did not build and the browser was not deployed (browser B22).
+# Chromium comes from trixie-security. CHROMIUM_VERSION pins it when set (build with
+# --build-arg CHROMIUM_VERSION=<version>); unset, the build installs the archive's current one and
+# prints it ("chromium <version>" in the build log), the version to pin next. trixie-security
+# serves only its latest Chromium, so a pin fails the build once Debian publishes an update: set
+# the Candidate this prints: docker run --rm debian:trixie-slim sh -c
 # 'apt-get update -qq && apt-cache policy chromium'
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
-ARG CHROMIUM_VERSION=156.0.8078.47-1~deb12u1
+ARG CHROMIUM_VERSION=
 ARG PLAYWRIGHT_VERSION=1.55.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -28,6 +32,7 @@ RUN apt-get update \
       xvfb x11vnc websockify novnc \
       fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
       python3 python3-venv ca-certificates tzdata tini \
+ && dpkg-query -W -f='chromium ${Version}\n' chromium \
  && rm -rf /var/lib/apt/lists/*
 
 # extra_ca: a bundle pip trusts beside the image's own, given only behind a TLS inspecting proxy

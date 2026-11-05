@@ -1,5 +1,6 @@
 import { useTitle } from "@/lib/use-title";
 
+import { AdminTabs } from "./admin-tabs";
 import { InvitesSection } from "./invites-section";
 import { UsersSection } from "./users-section";
 
@@ -15,6 +16,7 @@ export function AdminUsersPage() {
           revoke links that are no longer needed.
         </p>
       </header>
+      <AdminTabs />
       <UsersSection />
       <InvitesSection />
     </div>

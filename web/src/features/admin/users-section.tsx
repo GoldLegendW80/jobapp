@@ -72,7 +72,6 @@ import {
 } from "./api";
 import { message } from "./errors";
 import { Moment } from "./moment";
-import { ACTIONS, BODY, cell, HEAD, ROW } from "./table-cell";
 
 type Action = "promote" | "demote" | "disable" | "enable";
 
@@ -236,122 +235,97 @@ function UsersTable({
   onAction: (user: AdminUser, action: Action) => void;
 }) {
   return (
-    <div
-      className={cn(
-        "sm:overflow-x-auto sm:rounded-lg sm:border",
-        busy && "opacity-60",
-      )}
-      aria-busy={busy}
-    >
-      <Table className="max-sm:block">
-        <TableCaption className="sr-only">Accounts, by name</TableCaption>
-        <TableHeader className="bg-muted/50 text-xs max-sm:sr-only">
-          <TableRow>
-            <TableHead scope="col" className={HEAD}>
-              Name
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Role
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Status
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Last sign in
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Sessions
-            </TableHead>
-            <TableHead scope="col" className={cn(HEAD, "text-right")}>
-              <span className="sr-only">Actions</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody className={BODY}>
-          {items.map((user) => {
-            const self = user.id === meId;
-            const protectedAdmin =
-              lastAdmin && user.is_active && user.role === "admin";
-            return (
-              <TableRow
-                key={user.id}
-                data-disabled={!user.is_active || undefined}
-                className={cn(ROW, "data-disabled:text-muted-foreground")}
-              >
-                <TableHead
-                  scope="row"
-                  className={cn(
-                    "h-auto px-3 py-2 whitespace-normal text-inherit max-sm:px-0 max-sm:pb-2 max-sm:text-base",
-                    !user.is_active && "opacity-70",
-                  )}
+    <Table busy={busy}>
+      <TableCaption className="sr-only">Accounts, by name</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Name</TableHead>
+          <TableHead>Role</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Last sign in</TableHead>
+          <TableHead>Sessions</TableHead>
+          <TableHead className="text-right">
+            <span className="sr-only">Actions</span>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {items.map((user) => {
+          const self = user.id === meId;
+          const protectedAdmin =
+            lastAdmin && user.is_active && user.role === "admin";
+          return (
+            <TableRow
+              key={user.id}
+              data-disabled={!user.is_active || undefined}
+            >
+              <TableHead className={cn(!user.is_active && "opacity-70")}>
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1 break-words">
+                  {displayName(user)}
+                  {self ? (
+                    <Badge variant="secondary" aria-label="(you)">
+                      You
+                    </Badge>
+                  ) : null}
+                </span>
+                <span className="block text-xs font-normal break-all text-muted-foreground">
+                  {user.email}
+                </span>
+              </TableHead>
+              <TableCell label="Role">
+                <Badge
+                  variant="outline"
+                  className={
+                    user.role === "admin"
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "text-muted-foreground"
+                  }
                 >
-                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1 break-words">
-                    {displayName(user)}
-                    {self ? (
-                      <Badge variant="secondary" aria-label="(you)">
-                        You
-                      </Badge>
-                    ) : null}
+                  {user.role === "admin" ? "Admin" : "Member"}
+                </Badge>
+              </TableCell>
+              <TableCell label="Status">
+                {user.is_active ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-2 rounded-full bg-success"
+                    />
+                    Active
                   </span>
-                  <span className="block text-xs font-normal break-all text-muted-foreground">
-                    {user.email}
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <span
+                      aria-hidden="true"
+                      className="size-2 rounded-full border border-muted-foreground"
+                    />
+                    Disabled
                   </span>
-                </TableHead>
-                <TableCell {...cell("Role")}>
-                  <Badge
-                    variant="outline"
-                    className={
-                      user.role === "admin"
-                        ? "border-primary/30 bg-primary/10 text-primary"
-                        : "text-muted-foreground"
-                    }
-                  >
-                    {user.role === "admin" ? "Admin" : "Member"}
-                  </Badge>
-                </TableCell>
-                <TableCell {...cell("Status")}>
-                  {user.is_active ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span
-                        aria-hidden="true"
-                        className="size-2 rounded-full bg-success"
-                      />
-                      Active
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                      <span
-                        aria-hidden="true"
-                        className="size-2 rounded-full border border-muted-foreground"
-                      />
-                      Disabled
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell {...cell("Last sign in")}>
-                  {user.last_login_at ? (
-                    <Moment at={user.last_login_at} now={now} />
-                  ) : (
-                    <span className="text-muted-foreground">Never</span>
-                  )}
-                </TableCell>
-                <TableCell {...cell("Sessions")}>
-                  <span className="tabular-nums">{user.sessions}</span>
-                </TableCell>
-                <TableCell className={ACTIONS}>
-                  <ActionsMenu
-                    user={user}
-                    self={self}
-                    protectedAdmin={protectedAdmin}
-                    onAction={onAction}
-                  />
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
+                )}
+              </TableCell>
+              <TableCell label="Last sign in">
+                {user.last_login_at ? (
+                  <Moment at={user.last_login_at} now={now} />
+                ) : (
+                  <span className="text-muted-foreground">Never</span>
+                )}
+              </TableCell>
+              <TableCell label="Sessions">
+                <span className="tabular-nums">{user.sessions}</span>
+              </TableCell>
+              <TableCell className="text-right max-sm:pt-2 max-sm:text-left">
+                <ActionsMenu
+                  user={user}
+                  self={self}
+                  protectedAdmin={protectedAdmin}
+                  onAction={onAction}
+                />
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

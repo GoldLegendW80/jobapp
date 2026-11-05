@@ -634,20 +634,15 @@ function FieldDifferences({
         </Label>
       </div>
       <Table
+        stacked={false}
         aria-label={`Revision ${String(revision)} and the current version`}
         className="table-fixed border-collapse text-xs sm:text-sm"
       >
         <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead scope="col" className={cn(HEAD, "w-[34%] pr-2")}>
-              Field
-            </TableHead>
-            <TableHead scope="col" className={cn(HEAD, "pr-2")}>
-              Revision {revision}
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Current
-            </TableHead>
+          <TableRow>
+            <TableHead className="w-[34%]">Field</TableHead>
+            <TableHead>Revision {revision}</TableHead>
+            <TableHead>Current</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -657,18 +652,11 @@ function FieldDifferences({
               data-status={row.status}
               className={cn(
                 "align-top",
-                row.status === "same"
-                  ? "hover:bg-transparent"
-                  : "bg-amber-50 hover:bg-amber-50 dark:bg-amber-950/40 dark:hover:bg-amber-950/40",
+                row.status !== "same" &&
+                  "bg-amber-50 hover:bg-amber-50 dark:bg-amber-950/40 dark:hover:bg-amber-950/40",
               )}
             >
-              <TableHead
-                scope="row"
-                className={cn(
-                  HEAD,
-                  "pr-2 align-top font-normal whitespace-normal [overflow-wrap:anywhere]",
-                )}
-              >
+              <TableHead className="font-normal [overflow-wrap:anywhere]">
                 <span className="font-medium">{row.label}</span>
                 {row.status !== "same" ? (
                   <span className="mt-1 block text-xs font-medium text-amber-800 dark:text-amber-300">
@@ -676,10 +664,10 @@ function FieldDifferences({
                   </span>
                 ) : null}
               </TableHead>
-              <TableCell className={cn(CELL, "pr-2")}>
+              <TableCell className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                 <Value value={row.revision} />
               </TableCell>
-              <TableCell className={CELL}>
+              <TableCell className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                 <Value value={row.current} />
               </TableCell>
             </TableRow>
@@ -689,10 +677,6 @@ function FieldDifferences({
     </section>
   );
 }
-
-/** The table keeps its own measure: no side padding but between columns, rows as tall as their text. */
-const HEAD = "h-auto px-0 py-2";
-const CELL = "px-0 py-2 align-top whitespace-pre-wrap [overflow-wrap:anywhere]";
 
 function Value({ value }: { value: string | undefined }) {
   if (value === undefined || value === "")

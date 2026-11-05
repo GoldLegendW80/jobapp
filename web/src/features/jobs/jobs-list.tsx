@@ -240,8 +240,13 @@ export function JobsList({
   };
 
   return (
-    <div ref={boxRef} className="lg:rounded-lg lg:border">
+    // The rows draw their own cards under 1024px: the table's border shows from there up only.
+    <div
+      ref={boxRef}
+      className="[&>[data-slot=table-container]]:max-lg:rounded-none [&>[data-slot=table-container]]:max-lg:border-0"
+    >
       <Table
+        stacked={false}
         role="table"
         aria-label="Postings"
         aria-rowcount={total + 1}

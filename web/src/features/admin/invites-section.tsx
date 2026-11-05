@@ -44,7 +44,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { isApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 import {
   INVITES_PAGE_SIZE,
@@ -57,7 +56,6 @@ import {
 import { message } from "./errors";
 import { InviteDialog } from "./invite-dialog";
 import { Moment } from "./moment";
-import { ACTIONS, BODY, cell, HEAD, ROW } from "./table-cell";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
   active: {
@@ -218,90 +216,69 @@ function InvitesTable({
   busy: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        "sm:overflow-x-auto sm:rounded-lg sm:border",
-        busy && "opacity-60",
-      )}
-      aria-busy={busy}
-    >
-      <Table className="max-sm:block">
-        <TableCaption className="sr-only">Invites, newest first</TableCaption>
-        <TableHeader className="bg-muted/50 text-xs max-sm:sr-only">
-          <TableRow>
-            <TableHead scope="col" className={HEAD}>
-              Email
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Kind
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Role
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Status
-            </TableHead>
-            <TableHead scope="col" className={HEAD}>
-              Expires
-            </TableHead>
-            <TableHead scope="col" className={cn(HEAD, "text-right")}>
-              <span className="sr-only">Actions</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody className={BODY}>
-          {items.map((invite) => {
-            const status = STATUS[invite.status];
-            return (
-              <TableRow key={invite.id} className={ROW}>
-                <TableHead
-                  scope="row"
-                  className="h-auto px-3 py-2 break-all whitespace-normal max-sm:px-0 max-sm:pb-2 max-sm:text-base"
-                >
-                  {invite.email}
-                  {invite.created_by_name ? (
-                    <span className="block text-xs font-normal text-muted-foreground">
-                      by {invite.created_by_name}
-                    </span>
-                  ) : null}
-                </TableHead>
-                <TableCell {...cell("Kind")}>{KIND[invite.kind]}</TableCell>
-                <TableCell {...cell("Role")}>
-                  {invite.role ? (
-                    ROLE[invite.role]
-                  ) : (
-                    <span className="text-muted-foreground">Unchanged</span>
-                  )}
-                </TableCell>
-                <TableCell {...cell("Status")}>
-                  <Badge variant="outline" className={status.className}>
-                    {status.label}
-                  </Badge>
-                </TableCell>
-                <TableCell {...cell("Expires")}>
-                  <When invite={invite} now={now} />
-                </TableCell>
-                <TableCell className={ACTIONS}>
-                  {invite.status === "active" ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="max-sm:w-full"
-                      onClick={() => {
-                        onRevoke(invite);
-                      }}
-                      aria-label={`Revoke the link for ${invite.email}`}
-                    >
-                      Revoke
-                    </Button>
-                  ) : null}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
+    <Table busy={busy}>
+      <TableCaption className="sr-only">Invites, newest first</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Email</TableHead>
+          <TableHead>Kind</TableHead>
+          <TableHead>Role</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Expires</TableHead>
+          <TableHead className="text-right">
+            <span className="sr-only">Actions</span>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {items.map((invite) => {
+          const status = STATUS[invite.status];
+          return (
+            <TableRow key={invite.id}>
+              <TableHead className="break-all">
+                {invite.email}
+                {invite.created_by_name ? (
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    by {invite.created_by_name}
+                  </span>
+                ) : null}
+              </TableHead>
+              <TableCell label="Kind">{KIND[invite.kind]}</TableCell>
+              <TableCell label="Role">
+                {invite.role ? (
+                  ROLE[invite.role]
+                ) : (
+                  <span className="text-muted-foreground">Unchanged</span>
+                )}
+              </TableCell>
+              <TableCell label="Status">
+                <Badge variant="outline" className={status.className}>
+                  {status.label}
+                </Badge>
+              </TableCell>
+              <TableCell label="Expires">
+                <When invite={invite} now={now} />
+              </TableCell>
+              <TableCell className="text-right max-sm:pt-2 max-sm:text-left">
+                {invite.status === "active" ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="max-sm:w-full"
+                    onClick={() => {
+                      onRevoke(invite);
+                    }}
+                    aria-label={`Revoke the link for ${invite.email}`}
+                  >
+                    Revoke
+                  </Button>
+                ) : null}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

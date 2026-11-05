@@ -161,6 +161,9 @@ const EXPECTED: Array<[number, RegExp]> = [
   [409, /\/api\/admin\/invites/],
   // The account page asks for the model credential; none saved is a 404 (agents A1).
   [404, /\/api\/me\/model-credential$/],
+  // Find jobs' sources editor asks whether an address is a company job board; a plain
+  // website is a 422, read as "add it as a website" (audit chapter 1, #746).
+  [422, /\/api\/jobs\/boards\/detect$/],
 ];
 
 /** Console errors, except the browser's own lines for answers the journey expects. */

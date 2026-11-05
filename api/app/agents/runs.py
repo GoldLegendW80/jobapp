@@ -16,8 +16,9 @@ run, and the cancel of a queued run; from the claim on, only the run's own runne
 """
 
 import enum
+import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -29,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.agents.models import (
     FINAL_STATUSES,
     AgentEvent,
+    AgentOverride,
     AgentRun,
     CredentialKind,
     RunStatus,
@@ -334,13 +336,45 @@ def reap_orphans(db: Session, now: datetime) -> int:
 
 
 def reap_stale(
-    db: Session, now: datetime, running_after: timedelta, queued_after: timedelta
+    db: Session,
+    now: datetime,
+    running_after: timedelta,
+    queued_after: timedelta,
+    own_after: Callable[[float], timedelta] | None = None,
 ) -> int:
     """Periodically: runs running longer than any limit allows (the runner could not write its
-    end), and runs queued so long that their queue message must be lost. The caller commits."""
+    end), and runs queued so long that their queue message must be lost. The caller commits.
+
+    A run whose recorded version raised its wall time (agents A7) is stale only once it is past
+    `own_after` of that wall time too: the value saved, read without the ceiling, so never
+    before the runner's own clock has stopped it."""
     stale_running = sa.and_(
         AgentRun.status == RunStatus.running, AgentRun.started_at < now - running_after
     )
+    if own_after is not None:
+        raised = db.execute(
+            sa.select(
+                AgentRun.id, AgentRun.started_at, AgentOverride.changes["wall_time_s"].label("wall")
+            )
+            .join(
+                AgentOverride,
+                sa.and_(
+                    AgentOverride.agent == AgentRun.agent,
+                    AgentOverride.version == AgentRun.agent_version,
+                ),
+            )
+            .where(stale_running)
+        ).all()
+        kept = [
+            row.id
+            for row in raised
+            if isinstance(row.wall, int | float)
+            and not isinstance(row.wall, bool)
+            and math.isfinite(row.wall)
+            and row.started_at >= now - max(running_after, own_after(float(row.wall)))
+        ]
+        if kept:
+            stale_running = sa.and_(stale_running, AgentRun.id.not_in(kept))
     count = _fail_where(db, stale_running, STALE, now)
     stale_queued = sa.and_(
         AgentRun.status == RunStatus.queued, AgentRun.created_at < now - queued_after
