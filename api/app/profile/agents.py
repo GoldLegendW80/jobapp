@@ -6,11 +6,13 @@ It asks of the runner (app/agents/runner.py, "What a definition can ask of a run
   tick); POST /api/agents/runs refuses it and GET /api/agents does not list it;
 - `private_io`, `live_text=False`: the events hold the tool's name and sizes, never a title;
 - `model_by_credential`: the documents writers' model for each kind of credential,
-  MAX_TURNS turns, WALL_TIME_S, and `titles.TOKEN_BUDGET` in the run's input;
+  MAX_TURNS turns, WALL_TIME_S, and the ceiling of `titles.estimate` for the run's first
+  message (at most `titles.TOKEN_BUDGET`) in the run's input;
 - one tool, `submit_titles` (titles_tools.py): the list, checked for shape and kept for the run
   (`submit`), read back here once the run has ended (`take`) and judged by `titles.check`.
 
-The prompt holds the person's profile summary, so the run is executed in the worker by
+The prompt holds the person's profile, the text of their documents and what they wrote to the
+agent (titles_input.py), so the run is executed in the worker by
 `execute`, the job JOB of the agents queue (one of its MAX_AGENT_RUNS slots), never through
 `run_agent`: the request is built from the stored profile in a thread, held in this process
 under the random key of the run's input while the run lasts (the pattern of apply's answer

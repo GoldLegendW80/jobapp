@@ -1,5 +1,5 @@
 {
- "description": "The job titles agent (profile): eight titles, five of which the code checks refuse (already wanted, cybersecurity, a dash, a never apply rule, repeated); the default stream.",
+ "description": "The job titles agent (profile): eight titles, five of which the code checks refuse (already wanted, an unwanted title, a dash, a never apply rule, repeated); the default stream.",
  "steps": [
   {
    "message": {
@@ -65,8 +65,8 @@
           "language": "en"
          },
          {
-          "title": "Security data engineer",
-          "reason": "Your pipelines fit a security team.",
+          "title": "Data intern",
+          "reason": "Your pipelines fit a first role.",
           "language": "en"
          },
          {

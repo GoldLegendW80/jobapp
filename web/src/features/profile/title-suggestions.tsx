@@ -2,30 +2,44 @@
  * Ideas the person adds in one click instead of typing (owner, 2026-11-05: "I want an agent to
  * find the best job titles according to the profile"; SPEC-profile, "Job title suggestions").
  *
- * `TitleSuggestions`, under Job titles: the job titles agent's last suggestions, each "+ Analytics
- * engineer" with its one line reason under it. A click adds the title to the list being edited
- * (the form's draft: the person still saves as before), and the idea leaves the suggestions.
- * "More ideas" asks the agent again (a few times a day; on an API key the cost estimate shows
- * before the click, on a subscription nothing is said about money). The states: nothing yet
- * (with the one thing that makes ideas possible: a model key, or a CV), on its way, failed (the
- * reason and Try again), and nothing new after the checks. Opening a page never calls a model:
- * the server answers the stored ideas, already checked against the saved search.
+ * `TitleSuggestions`, under Job titles: the job titles agent's ideas, each "+ Analytics engineer"
+ * with its one line reason under it and a "Not for me" icon button beside it. A click adds the
+ * title to the list being edited (the form's draft: the person still saves as before), and the
+ * idea leaves the suggestions; "Not for me" removes it for good. "More ideas" asks the agent
+ * again and its ideas join after the ones shown (owner: "add to them"). Under them, a short chat:
+ * "Tell the assistant what you want to do" and Send, which runs the agent with the message (one
+ * ask, as More ideas); the last message shows under the box with Clear, and the automatic
+ * refreshes read the last few too. A few asks a day; on an API key the cost estimate shows before
+ * the click, on a subscription nothing is said about money. The states: nothing yet (a model key,
+ * or something to read: a CV, a profile or a message, which the box gives at once), on its way,
+ * failed (the reason and Try again), nothing new after the checks, and a run that added nothing.
+ * Opening a page never calls a model: the server answers the stored ideas, already checked
+ * against the saved search.
  *
  * `PlaceSuggestion`, under Places: the city of the profile (else its country), "+ Lyon, from your
  * profile", while the list does not hold it. Read from the profile the page already loaded; no
  * model.
  *
  * Both take the list as it is now and an `onAdd`, so the forms of the Search tab and Find jobs
- * (search-lists.tsx) and the wizard's text fields (onboarding/step-panels.tsx) share them.
+ * (search-lists.tsx) and the wizard's text fields (onboarding/step-panels.tsx) share them. Both
+ * sit inside those forms: nothing here is a form, and Enter in the message box sends the message
+ * instead of submitting the page's form.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, RefreshCw } from "lucide-react";
-import { useId } from "react";
+import { Plus, RefreshCw, Send, X } from "lucide-react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { money } from "@/features/documents/labels";
 import { describeError } from "@/lib/api";
 import { SUGGESTION_WORDS as W } from "@/lib/wording";
@@ -33,6 +47,8 @@ import { SUGGESTION_WORDS as W } from "@/lib/wording";
 import { getProfile, profileKey } from "./api";
 import {
   askMoreTitles,
+  clearTitleMessages,
+  dismissTitle,
   placeOf,
   sameTitle,
   titleSuggestionsKey,
@@ -43,7 +59,7 @@ import {
 const MUTED = "text-xs text-muted-foreground";
 const LINK = "font-medium text-foreground underline underline-offset-4";
 
-/** The money line before "More ideas": an API key only. */
+/** The money line before "More ideas" and Send: an API key only. */
 function costLine(data: Suggestions): string | null {
   const cost = data.estimate?.cost;
   if (!cost) return null;
@@ -70,14 +86,34 @@ export function TitleSuggestions({
   const id = useId();
   const client = useQueryClient();
   const query = useTitleSuggestions();
+  const [draft, setDraft] = useState("");
+  // Ideas dismissed in this view, hidden at once while the server records it.
+  const [gone, setGone] = useState<readonly string[]>([]);
+  const store = (data: Suggestions) => {
+    client.setQueryData(titleSuggestionsKey, data);
+  };
+  const reread = () => {
+    void client.invalidateQueries({ queryKey: titleSuggestionsKey });
+  };
   const more = useMutation({
-    mutationFn: askMoreTitles,
-    onSuccess: (data) => {
-      client.setQueryData(titleSuggestionsKey, data);
+    mutationFn: (message: string | undefined) => askMoreTitles(message),
+    onSuccess: (data, message) => {
+      store(data);
+      if (message !== undefined) setDraft("");
     },
-    onError: () => {
-      void client.invalidateQueries({ queryKey: titleSuggestionsKey });
+    onError: reread,
+  });
+  const dismiss = useMutation({
+    mutationFn: dismissTitle,
+    onSuccess: store,
+    onError: (_error, title) => {
+      setGone((list) => list.filter((one) => one !== title));
+      reread();
     },
+  });
+  const clear = useMutation({
+    mutationFn: clearTitleMessages,
+    onSuccess: store,
   });
   const data = query.data;
   if (quiet && data?.needs !== null) return null;
@@ -100,37 +136,57 @@ export function TitleSuggestions({
       </Section>
     );
   }
-  if (data.needs === "model_key" || data.needs === "cv") {
-    const key = data.needs === "model_key";
+  if (data.needs === "model_key") {
     return (
       <Section id={id}>
         {links ? (
           <p className={MUTED}>
-            {key ? W.needsKey : W.needsCv}{" "}
-            <Link to={key ? "/account" : "/profile/fill"} className={LINK}>
-              {key ? W.addKey : W.addCv}
+            {W.needsKey}{" "}
+            <Link to="/account" className={LINK}>
+              {W.addKey}
             </Link>
           </p>
         ) : (
-          <p className={MUTED}>{key ? W.needsKeyThere : W.needsCvThere}</p>
+          <p className={MUTED}>{W.needsKeyThere}</p>
         )}
       </Section>
     );
   }
   const shown = data.suggestions.filter(
-    (one) => !current.some((title) => sameTitle(title, one.title)),
+    (one) =>
+      !current.some((title) => sameTitle(title, one.title)) &&
+      !gone.includes(one.title),
   );
+  const empty = data.needs === "input";
   const running = data.status === "running" || more.isPending;
   const failed = data.status === "failed" && !running;
   const never = data.refreshed_at === null;
   const canAsk = data.asks_left > 0 && !running;
-  const ask = () => {
-    more.mutate();
-  };
   const cost = costLine(data);
+  const message = draft.trim();
+  const send = () => {
+    if (canAsk && message) more.mutate(message);
+  };
+  const editError = dismiss.isError
+    ? dismiss.error
+    : clear.isError
+      ? clear.error
+      : null;
+  const last = data.messages.at(-1);
   return (
     <Section id={id}>
-      {shown.length > 0 ? (
+      {empty ? (
+        links ? (
+          <p className={MUTED}>
+            {W.needsInput}{" "}
+            <Link to="/profile/fill" className={LINK}>
+              {W.addCv}
+            </Link>
+          </p>
+        ) : (
+          <p className={MUTED}>{W.needsInputThere}</p>
+        )
+      ) : shown.length > 0 ? (
         <ul
           aria-labelledby={`${id}-heading`}
           className="flex flex-wrap gap-x-4 gap-y-2"
@@ -140,24 +196,44 @@ export function TitleSuggestions({
               key={one.title}
               className="flex max-w-full min-w-0 flex-col items-start gap-0.5 sm:max-w-64"
             >
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 max-w-full rounded-full px-2.5 font-normal"
-                aria-label={`Add ${one.title} to ${label}`}
-                aria-describedby={
-                  one.reason ? `${id}-reason-${index}` : undefined
-                }
-                onClick={() => {
-                  onAdd(one.title);
-                }}
-              >
-                <Plus aria-hidden="true" />
-                <span className="truncate" lang={one.language}>
-                  {one.title}
-                </span>
-              </Button>
+              <span className="flex max-w-full min-w-0 items-center gap-0.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 max-w-full min-w-0 rounded-full px-2.5 font-normal"
+                  aria-label={`Add ${one.title} to ${label}`}
+                  aria-describedby={
+                    one.reason ? `${id}-reason-${index}` : undefined
+                  }
+                  onClick={() => {
+                    onAdd(one.title);
+                  }}
+                >
+                  <Plus aria-hidden="true" />
+                  <span className="truncate" lang={one.language}>
+                    {one.title}
+                  </span>
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="text-muted-foreground"
+                      aria-label={`${W.notForMe}: ${one.title}`}
+                      onClick={() => {
+                        setGone((list) => [...list, one.title]);
+                        dismiss.mutate(one.title);
+                      }}
+                    >
+                      <X aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{W.notForMe}</TooltipContent>
+                </Tooltip>
+              </span>
               {one.reason ? (
                 <span
                   id={`${id}-reason-${index}`}
@@ -191,16 +267,22 @@ export function TitleSuggestions({
           data.error
         ) : more.isError ? (
           describeError(more.error)
+        ) : editError ? (
+          describeError(editError)
+        ) : data.note && shown.length > 0 ? (
+          data.note
         ) : null}
       </p>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        {canAsk ? (
+        {canAsk && !empty ? (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="-ml-2 h-7 px-2"
-            onClick={ask}
+            onClick={() => {
+              more.mutate(undefined);
+            }}
           >
             <RefreshCw aria-hidden="true" />
             {failed ? W.retry : never ? W.suggest : W.more}
@@ -209,6 +291,68 @@ export function TitleSuggestions({
         {canAsk && cost ? <span className={MUTED}>{cost}</span> : null}
         {!running && data.asks_left === 0 ? (
           <span className={MUTED}>{W.askedEnough(data.asks_per_day)}</span>
+        ) : null}
+      </div>
+      <div className="flex flex-col gap-1.5 pt-1">
+        <Label htmlFor={`${id}-message`} className="text-xs">
+          {W.chatLabel}
+        </Label>
+        <div className="flex items-end gap-2">
+          <Textarea
+            id={`${id}-message`}
+            value={draft}
+            rows={1}
+            maxLength={data.message_max}
+            placeholder={W.chatPlaceholder}
+            autoComplete="off"
+            disabled={!canAsk}
+            className="min-h-9 resize-none py-1.5"
+            onChange={(event) => {
+              setDraft(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              // One line: Enter sends the message (never the page's form, never a new line),
+              // except while an input method composes a word.
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                send();
+              }
+            }}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9"
+            disabled={!canAsk || !message}
+            onClick={send}
+          >
+            <Send aria-hidden="true" />
+            {W.send}
+          </Button>
+        </div>
+        {last ? (
+          <p className={`${MUTED} flex flex-wrap items-baseline gap-x-2`}>
+            <span className="min-w-0 break-words">
+              {W.lastMessage(last.text)}
+              {data.messages.length > 1
+                ? ` ${W.earlier(data.messages.length - 1)}`
+                : null}
+            </span>
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
+              aria-label={W.clearName}
+              disabled={clear.isPending}
+              onClick={() => {
+                clear.mutate();
+              }}
+            >
+              {W.clear}
+            </Button>
+          </p>
         ) : null}
       </div>
     </Section>
