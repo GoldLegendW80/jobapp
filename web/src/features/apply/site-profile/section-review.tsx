@@ -129,7 +129,7 @@ function FieldRow({
   const dirty = value !== editText(field.value);
   return (
     <TableRow className="align-top">
-      <TableHead className="p-3 min-w-36">
+      <TableHead className="p-3 sm:min-w-36">
         {field.label}
         {field.required && (
           <span className="block text-xs text-muted-foreground">
@@ -137,10 +137,16 @@ function FieldRow({
           </span>
         )}
       </TableHead>
-      <TableCell className="p-3 min-w-40 break-words">
+      <TableCell
+        label="Value on the site"
+        className="p-3 sm:min-w-40 break-words"
+      >
         {valueText(field.current_value)}
       </TableCell>
-      <TableCell className="p-3 min-w-56">
+      <TableCell
+        label="Profile value or your edit"
+        className="p-3 sm:min-w-56 max-sm:items-start"
+      >
         {mutable ? (
           <div className="space-y-2">
             <Textarea
@@ -185,14 +191,14 @@ function FieldRow({
           </p>
         )}
       </TableCell>
-      <TableCell className="p-3 min-w-28 text-sm">
+      <TableCell label="Source" className="p-3 sm:min-w-28 text-sm">
         {field.source === "left"
           ? "Left for you"
           : field.source === "person"
             ? "Your edit"
             : (sourceLabels[field.source] ?? field.source)}
       </TableCell>
-      <TableCell className="p-3 min-w-32">
+      <TableCell label="Replace" className="p-3 sm:min-w-32">
         {field.current_value != null && field.current_value !== "" ? (
           mutable ? (
             <label className="flex items-center gap-2">
@@ -396,7 +402,7 @@ function SectionReviewContent({
               </figure>
             ))}
         </div>
-        <Table stacked={false}>
+        <Table>
           <TableCaption className="p-3">
             Fields and their sources. Existing site values stay until you select
             Replace.

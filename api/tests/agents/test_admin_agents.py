@@ -195,7 +195,7 @@ def test_every_registered_agent_has_a_category_from_the_fixed_list() -> None:
         "apply_check": "applying",
         "documents_cv": "documents",
         "documents_chat_letter": "documents",
-        "document_transcribe": "documents",
+        "document_transcribe": "profile",
         "profile_extract": "profile",
         "triage": "jobs",
         "job_chat": "jobs",
@@ -209,9 +209,12 @@ def test_an_agent_missing_from_the_categories_goes_with_its_package(
 ) -> None:
     unlisted = dataclasses.replace(definitions.TRIAGE, name="a8_unlisted")
     assert "a8_unlisted" not in catalog.CATEGORY_OF
-    assert catalog.category_of(unlisted) == "jobs"  # no module known
+    assert catalog.category_of(unlisted) == "other"  # no module known
     monkeypatch.setitem(definitions._MODULES, "a8_unlisted", "app.browser.finder")
     assert catalog.category_of(unlisted) == "finding"
+    monkeypatch.setitem(definitions._MODULES, "a8_unlisted", "app.nowhere.thing")
+    assert catalog.category_of(unlisted) == "other"  # a package the map does not know
+    assert "other" not in CATEGORY_KEYS  # so the page lists it under Other
     assert catalog.category_of(dataclasses.replace(definitions.ECHO, name="a8_test")) == "test"
 
 

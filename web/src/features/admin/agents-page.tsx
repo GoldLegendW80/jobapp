@@ -148,6 +148,19 @@ function AgentGroups({ list, now }: { list: AgentList; now: Date }) {
   );
 }
 
+/**
+ * The column widths shared by the six tables of the list, so their columns line up from one
+ * section to the next (`sm:table-fixed`); Agent takes what is left and its descriptions wrap
+ * inside it. Model, Version and Last run stay on one line.
+ */
+const COLUMNS = [
+  { label: "Agent", className: "" },
+  { label: "Module", className: "sm:w-60" },
+  { label: "Model", className: "sm:w-44 sm:whitespace-nowrap" },
+  { label: "Version", className: "sm:w-32 sm:whitespace-nowrap" },
+  { label: "Last run", className: "sm:w-28 sm:whitespace-nowrap" },
+];
+
 function AgentsTable({
   title,
   items,
@@ -158,15 +171,15 @@ function AgentsTable({
   now: Date;
 }) {
   return (
-    <Table>
+    <Table className="sm:table-fixed">
       <TableCaption className="sr-only">{title}, by name</TableCaption>
       <TableHeader>
         <TableRow>
-          <TableHead>Agent</TableHead>
-          <TableHead>Module</TableHead>
-          <TableHead>Model</TableHead>
-          <TableHead>Version</TableHead>
-          <TableHead>Last run</TableHead>
+          {COLUMNS.map((column) => (
+            <TableHead key={column.label} className={column.className}>
+              {column.label}
+            </TableHead>
+          ))}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -195,12 +208,14 @@ function AgentsTable({
               </span>
             </TableHead>
             <TableCell label="Module">
-              <code className="text-xs [overflow-wrap:anywhere]">
+              <code className="text-xs max-sm:[overflow-wrap:anywhere]">
                 {agent.module}
               </code>
             </TableCell>
-            <TableCell label="Model">{agent.model}</TableCell>
-            <TableCell label="Version">
+            <TableCell label="Model" className="sm:whitespace-nowrap">
+              {agent.model}
+            </TableCell>
+            <TableCell label="Version" className="sm:whitespace-nowrap">
               {agent.overridden && agent.version !== null
                 ? `Version ${String(agent.version)}`
                 : "The code's"}
@@ -218,7 +233,7 @@ function AgentsTable({
                 </span>
               ) : null}
             </TableCell>
-            <TableCell label="Last run">
+            <TableCell label="Last run" className="sm:whitespace-nowrap">
               {agent.last_run_at ? (
                 <time
                   dateTime={agent.last_run_at}

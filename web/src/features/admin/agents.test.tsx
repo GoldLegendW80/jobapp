@@ -173,13 +173,13 @@ const CATEGORIES: AgentCategory[] = [
     key: "documents",
     title: "Documents",
     sentence:
-      "These agents write and change the CVs, cover letters and proposals, and transcribe the pages of scanned documents.",
+      "These agents write and change the CVs, cover letters and proposals.",
   },
   {
     key: "profile",
     title: "Profile and import",
     sentence:
-      "These agents read the documents a person uploads and propose what goes into their profile.",
+      "These agents read the documents a person uploads, transcribe their scanned pages and propose what goes into their profile.",
   },
   {
     key: "jobs",
@@ -321,7 +321,7 @@ describe("the list", () => {
       agent("apply_answer", "applying"),
       agent("apply_form", "applying"),
       SUMMARY,
-      agent("document_transcribe", "documents"),
+      agent("documents_letter", "documents"),
       agent("documents_cv", "documents", {
         version: 3,
         overridden: true,
@@ -364,7 +364,7 @@ describe("the list", () => {
     ).toEqual(["apply_answer", "apply_form"]);
     const documents = screen.getByRole("region", { name: "Documents (2)" });
     expect(
-      within(documents).getByRole("link", { name: "document_transcribe" }),
+      within(documents).getByRole("link", { name: "documents_letter" }),
     ).toBeInTheDocument();
     // A saved version and a code change notice keep their badges in the section.
     const cv = within(documents).getByRole("row", { name: /documents_cv/ });
@@ -417,6 +417,28 @@ describe("the list", () => {
     expect(
       screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
     ).toEqual(["Other (2)"]);
+  });
+
+  it("gives every section's table the same fixed columns, one line for Model, Version and Last run", async () => {
+    fakeSession(admin);
+    fakeAgents(makePage(), undefined, [
+      agent("documents_letter", "documents"),
+      agent("triage", "jobs"),
+    ]);
+    renderApp("/admin/agents");
+    const widths: string[][] = [];
+    for (const name of ["Documents, by name", "Jobs and chat, by name"]) {
+      const table = await screen.findByRole("table", { name });
+      expect(table).toHaveClass("sm:table-fixed");
+      const heads = within(table).getAllByRole("columnheader");
+      widths.push(heads.map((head) => head.className));
+      for (const label of ["Model", "Version", "Last run"]) {
+        expect(
+          within(table).getByRole("columnheader", { name: label }),
+        ).toHaveClass("sm:whitespace-nowrap");
+      }
+    }
+    expect(widths[0]).toEqual(widths[1]);
   });
 
   it("says so when no agent is registered", async () => {

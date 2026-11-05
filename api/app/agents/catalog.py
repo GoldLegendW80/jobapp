@@ -66,14 +66,13 @@ CATEGORIES: tuple[Category, ...] = (
     Category(
         "documents",
         "Documents",
-        "These agents write and change the CVs, cover letters and proposals, and transcribe "
-        "the pages of scanned documents.",
+        "These agents write and change the CVs, cover letters and proposals.",
     ),
     Category(
         "profile",
         "Profile and import",
-        "These agents read the documents a person uploads and propose what goes into their "
-        "profile.",
+        "These agents read the documents a person uploads, transcribe their scanned pages and "
+        "propose what goes into their profile.",
     ),
     Category(
         "jobs",
@@ -97,7 +96,7 @@ CATEGORY_OF: dict[str, str] = {
     "apply_form": "applying",
     "browser_discovery": "finding",
     "browser_finder": "finding",
-    "document_transcribe": "documents",
+    "document_transcribe": "profile",
     "documents_base": "documents",
     "documents_chat_base": "documents",
     "documents_chat_cv": "documents",
@@ -304,13 +303,14 @@ def package_of(definition: definitions.AgentDefinition) -> str:
 
 def category_of(definition: definitions.AgentDefinition) -> str:
     """The key of the agent's category in CATEGORIES (`CATEGORY_OF`). One missing from it, which
-    a test refuses, goes with the test agents when it is one, else with its package's agents."""
+    a test refuses, goes with the test agents when it is one, else with its package's agents; one
+    of a package the map does not know gets "other", which the page shows under Other."""
     found = CATEGORY_OF.get(definition.name)
     if found is not None:
         return found
     if definition.test_only:
         return "test"
-    return _PACKAGE_CATEGORY.get(package_of(definition), "jobs")
+    return _PACKAGE_CATEGORY.get(package_of(definition), "other")
 
 
 def starter(definition: definitions.AgentDefinition) -> str:
