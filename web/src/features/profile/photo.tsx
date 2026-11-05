@@ -4,6 +4,7 @@ import { useId, useRef, useState, type PointerEvent } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -99,20 +100,19 @@ export function PhotoField({ profile }: { profile: Profile }) {
   return (
     <section aria-label="Photo" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-4">
-        <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-full border bg-muted">
+        {/* The person icon shows until the photo has loaded, and when there is none. */}
+        <Avatar className="size-24 border">
           {etag ? (
-            <img
+            <AvatarImage
               src={photoUrl(etag)}
               alt="Your profile photo"
-              className="size-full object-cover"
+              className="object-cover"
             />
-          ) : (
-            <UserRound
-              aria-hidden="true"
-              className="size-10 text-muted-foreground"
-            />
-          )}
-        </div>
+          ) : null}
+          <AvatarFallback>
+            <UserRound aria-hidden="true" className="size-10" />
+          </AvatarFallback>
+        </Avatar>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"

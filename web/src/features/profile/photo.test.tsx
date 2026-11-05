@@ -31,6 +31,12 @@ const pngFile = (name = "me.png") =>
 const release = vi.fn();
 
 beforeEach(() => {
+  // The Avatar shows its image once the browser says it loaded: jsdom loads none, so every
+  // image reads as loaded, with a width.
+  vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+  vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(
+    300,
+  );
   vi.mocked(crop.loadImage).mockResolvedValue({
     image: {} as CanvasImageSource,
     width: 400,
@@ -45,6 +51,7 @@ beforeEach(() => {
 afterEach(() => {
   toast.dismiss();
   release.mockReset();
+  vi.restoreAllMocks();
 });
 
 async function open(options: { photo?: string | null } = {}) {
