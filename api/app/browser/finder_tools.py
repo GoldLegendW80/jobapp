@@ -177,7 +177,8 @@ def _factory(name: str) -> app_tools.Factory:
     def make(scope: app_tools.Scope) -> SdkMcpTool[Any]:
         @tool(name, DESCRIPTIONS[name], SCHEMAS[name])
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
-            session = tool_sessions.session_of(scope.run_id)
+            # The search's own session first (as B20 built it), else another agent's (A19).
+            session = finder.session_of(scope.run_id) or tool_sessions.session_of(scope.run_id)
             if session is None:
                 return app_tools.text_result(NO_SITE, error=True)
             args = scope.redact(args) if isinstance(args, dict) else {}

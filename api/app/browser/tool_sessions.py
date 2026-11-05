@@ -1,7 +1,8 @@
 """Which session a browser tool call of an agent run acts on. B20's Playwright CLI tools
 (`finder_tools.py`) are registered once under their names and shared by the website search's
-agent (`finder.py`) and One click Apply's (apply A19, `app/apply/applier.py`): each module that
-runs such an agent registers how it finds the session of a run, and a run has one at most.
+agent (`finder.py`, looked up first by `finder_tools`) and One click Apply's (apply A19,
+`app/apply/applier.py`): each other module that runs such an agent registers how it finds the
+session of a run, and a run has one at most.
 """
 
 import uuid
