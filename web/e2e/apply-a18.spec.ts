@@ -109,6 +109,10 @@ test("Account starts a signed-in profile review, selected Replace and a user edi
     await stub.reset();
     await signUp(page, person);
     await page.goto("/account");
+    // Folded under "Websites you are signed in to" (audit chapter 2).
+    await page
+      .getByRole("button", { name: "Complete my profile on a website" })
+      .click();
     await page
       .getByLabel("Site address", { exact: true })
       .fill(SITE + "portal.html?variant=signin");
@@ -334,6 +338,10 @@ test("Workday-style pages reopen for Save readback and LinkedIn needs the person
       headers: CSRF,
     });
     await page.goto("/account");
+    // Folded under "Websites you are signed in to" (audit chapter 2).
+    await page
+      .getByRole("button", { name: "Complete my profile on a website" })
+      .click();
     await page
       .getByLabel("Site address", { exact: true })
       .fill(SITE + "linkedin.html");

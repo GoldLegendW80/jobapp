@@ -1,5 +1,5 @@
 import { MemoryRouter } from "react-router";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
-import { BrowserCard } from "./browser-card";
+import { BrowserCard, PROFILE_TITLE, TITLE } from "./browser-card";
 import { type Browser, waitText } from "./browser-api";
 import { screenFactory, type Screen } from "./screen";
 
@@ -32,10 +32,29 @@ const FREE: Browser = {
   queue: [],
 };
 const MINE: Browser = { ...FREE, lease: LEASE, holder: "you" };
-// "Look at my browser" (browser B7): the person's own session, the person's input throughout.
-const LOOK = { ...LEASE, purpose: "look", automation: false };
-const LOOKING: Browser = { ...FREE, lease: LOOK, holder: "you" };
+// A website's Sign in (browser B17): the person's own session, the person's input throughout.
+const SIGNIN = { ...LEASE, purpose: "signin", automation: false };
+const SIGNING_IN: Browser = { ...FREE, lease: SIGNIN, holder: "you" };
 const TICKET = "t".repeat(43);
+
+type Site = {
+  host: string;
+  state: "signed_in" | "expired";
+  signed_in_at: string;
+};
+// Two job websites of invented hosts: one signed in, one whose login a search found ended.
+const TWO_SITES: Site[] = [
+  {
+    host: "members.example.test",
+    state: "signed_in",
+    signed_in_at: "2026-11-03T09:00:00Z",
+  },
+  {
+    host: "jobs.example.org",
+    state: "expired",
+    signed_in_at: "2026-10-20T09:00:00Z",
+  },
+];
 
 interface Calls {
   tickets: unknown[];
@@ -46,7 +65,11 @@ interface Calls {
   headers: Headers[];
 }
 
-function fakeServer(state: { browser: Browser; session?: unknown }): Calls {
+function fakeServer(state: {
+  browser: Browser;
+  session?: unknown;
+  sites?: Site[];
+}): Calls {
   const calls: Calls = {
     tickets: [],
     takeovers: [],
@@ -57,13 +80,16 @@ function fakeServer(state: { browser: Browser; session?: unknown }): Calls {
   };
   server.use(
     http.get("*/api/browser", () => HttpResponse.json(state.browser)),
+    http.get("*/api/browser/sites", () =>
+      HttpResponse.json({ sites: state.sites ?? [] }),
+    ),
     http.post("*/api/browser/sessions", async ({ request }) => {
       calls.sessions.push(await request.json());
       calls.headers.push(request.headers);
       if (state.session)
         return HttpResponse.json(state.session, { status: 202 });
-      state.browser = LOOKING;
-      return HttpResponse.json({ lease: LOOK, queue: null }, { status: 201 });
+      state.browser = SIGNING_IN;
+      return HttpResponse.json({ lease: SIGNIN, queue: null }, { status: 201 });
     }),
     http.delete("*/api/browser/sessions/current", () => {
       calls.deletes += 1;
@@ -150,9 +176,140 @@ async function connected() {
   return view;
 }
 
-describe("your browser card", () => {
-  it("starts the person's own session with the keyboard and the mouse", async () => {
-    const calls = fakeServer({ browser: FREE });
+const card = () => screen.getByRole("heading", { level: 2, name: TITLE });
+
+describe("websites you are signed in to", () => {
+  it("lists only the websites the browser is signed in to, each with its Sign in", async () => {
+    fakeServer({ browser: FREE, sites: TWO_SITES });
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    expect(card()).toBeInTheDocument();
+    const list = await screen.findByRole("list", { name: TITLE });
+    const lines = within(list).getAllByRole("listitem");
+    expect(
+      lines.map((line) => line.firstChild?.firstChild?.textContent),
+    ).toEqual(["members.example.test", "jobs.example.org"]);
+    const [kept, ended] = lines;
+    if (!kept || !ended) throw new Error("two lines expected");
+    expect(kept).toHaveTextContent("Since 3 Nov 2026");
+    expect(kept).toHaveTextContent("Signed in");
+    expect(
+      within(kept).getByRole("button", {
+        name: "Sign in to members.example.test",
+      }),
+    ).toHaveTextContent("Sign in");
+    expect(
+      within(ended).getByRole("button", {
+        name: "Sign in to jobs.example.org",
+      }),
+    ).toHaveTextContent("Sign in again");
+    expect(ended).toHaveTextContent("Your login on this website has ended.");
+    // One Forget all logins for every website, never one per line.
+    expect(
+      screen.getAllByRole("button", { name: "Forget all logins" }),
+    ).toHaveLength(1);
+    expect(
+      within(list).queryByRole("button", { name: "Forget all logins" }),
+    ).toBeNull();
+    // Nothing of the old card: no session of its own, no address to type, no LinkedIn switch.
+    for (const gone of [
+      "Look at my browser",
+      "Sign in to a site",
+      "Close my browser",
+      "LinkedIn search",
+    ])
+      expect(screen.queryByRole("button", { name: gone })).toBeNull();
+    expect(screen.queryByLabelText("Search words")).toBeNull();
+    expect(screen.queryByText(/LinkedIn/)).toBeNull();
+  });
+
+  it("says where sign in happens when no website is signed in", async () => {
+    fakeServer({ browser: FREE, sites: [] });
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("no-sites")).toHaveTextContent(
+      "None yet. You sign in to a website from its line in Find jobs.",
+    );
+    expect(screen.getByRole("link", { name: "Find jobs" })).toHaveAttribute(
+      "href",
+      "/jobs?find=1",
+    );
+    expect(screen.queryByRole("list", { name: TITLE })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Forget all logins" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when the websites cannot be read, and reads them again", async () => {
+    const state = { browser: FREE, sites: TWO_SITES };
+    fakeServer(state);
+    let fail = true;
+    server.use(
+      http.get("*/api/browser/sites", () =>
+        fail
+          ? HttpResponse.json({ detail: "Try again later." }, { status: 503 })
+          : HttpResponse.json({ sites: state.sites }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your websites could not be read.",
+    );
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByRole("list", { name: TITLE }),
+    ).toBeInTheDocument();
+  });
+
+  it("folds Complete my profile on a website, and opens it for an address a page sent", async () => {
+    fakeServer({ browser: FREE });
+    const user = userEvent.setup();
+    const first = renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    const fold = await screen.findByRole("button", { name: PROFILE_TITLE });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText("Site address")).toBeNull();
+    await user.click(fold);
+    expect(screen.getByLabelText("Site address")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Complete my profile on this site" }),
+    ).toBeDisabled();
+    first.unmount();
+
+    renderWithQuery(
+      <MemoryRouter
+        initialEntries={[
+          `/account?profile_site=${encodeURIComponent("https://portal.example.org/")}`,
+        ]}
+      >
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    expect(
+      await screen.findByRole("button", { name: PROFILE_TITLE }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByLabelText("Site address")).toHaveValue(
+      "https://portal.example.org/",
+    );
+  });
+
+  it("signs in again to a listed website in the person's own session, with the keyboard and the mouse", async () => {
+    const calls = fakeServer({ browser: FREE, sites: TWO_SITES });
     const user = userEvent.setup();
     const { unmount } = renderWithQuery(
       <MemoryRouter>
@@ -160,24 +317,27 @@ describe("your browser card", () => {
       </MemoryRouter>,
     );
     await user.click(
-      await screen.findByRole("button", { name: "Look at my browser" }),
+      await screen.findByRole("button", {
+        name: "Sign in to jobs.example.org",
+      }),
     );
-    expect(calls.sessions).toEqual([{ purpose: "look" }]);
+    expect(calls.sessions).toEqual([
+      { purpose: "signin", address: "https://jobs.example.org/" },
+    ]);
     expect(only(calls.headers).get("X-Requested-With")).toBe("jobapp");
     const view = await connected();
     expect(view.url).toBe(
       `ws://${window.location.host}/vnc/websockify?ticket=${TICKET}`,
     );
     expect(view.screen.viewOnly).toBe(false);
-    const asked = only(calls.tickets as Array<{ viewer: string }>);
-    expect(asked.viewer).toMatch(/^[0-9a-f-]{36}$/);
+    // The session's one live view, in its line: the card does not show a second one.
+    expect(opened).toHaveLength(1);
     expect(
       screen.getByText(
         "This is your own session: you have the keyboard and the mouse.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Keyboard" }));
     await user.type(screen.getByLabelText("Type into your browser"), "a");
     expect(view.screen.keys).toEqual([0x61]);
@@ -406,46 +566,6 @@ describe("your browser card", () => {
     expect(opened).toHaveLength(0);
   });
 
-  it("closes the session", async () => {
-    const calls = fakeServer({ browser: MINE });
-    const user = userEvent.setup();
-    renderWithQuery(
-      <MemoryRouter>
-        <BrowserCard />
-      </MemoryRouter>,
-    );
-    const view = await connected();
-    await user.click(screen.getByRole("button", { name: "Close my browser" }));
-    expect(calls.deletes).toBe(1);
-    await screen.findByRole("button", { name: "Look at my browser" });
-    expect(view.screen.disconnected).toBe(true);
-  });
-
-  it("shows the place in the queue", async () => {
-    fakeServer({
-      browser: FREE,
-      session: {
-        lease: null,
-        queue: { purpose: "look", position: 1, estimated_wait_s: 330 },
-      },
-    });
-    const user = userEvent.setup();
-    renderWithQuery(
-      <MemoryRouter>
-        <BrowserCard />
-      </MemoryRouter>,
-    );
-    await user.click(
-      await screen.findByRole("button", { name: "Look at my browser" }),
-    );
-    expect(
-      await screen.findByText("Your browser starts in about 6 minutes."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Look at my browser" }),
-    ).toBeDisabled();
-  });
-
   it("says when the browser is not available", async () => {
     fakeServer({ browser: { ...FREE, available: false } });
     renderWithQuery(
@@ -456,13 +576,10 @@ describe("your browser card", () => {
     expect(
       await screen.findByText("The browser is not available right now."),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Look at my browser" }),
-    ).toBeDisabled();
   });
 
   it("has no dashes in its copy", async () => {
-    fakeServer({ browser: MINE });
+    fakeServer({ browser: MINE, sites: TWO_SITES });
     const { container } = renderWithQuery(
       <MemoryRouter>
         <BrowserCard />

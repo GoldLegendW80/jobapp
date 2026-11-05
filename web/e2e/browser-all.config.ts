@@ -9,8 +9,8 @@ import { defineConfig, devices } from "@playwright/test";
  *
  *   browser-b3   leases and the queue of the api (task B3)
  *   browser-b4   the live view of an assistant's lease: Take over and Give back (task B4)
- *   browser-b7   Sign in to a site, the profile kept across leases and a restart, Forget all
- *                logins (task B7)
+ *   browser-b7   a website's Sign in from Find jobs, listed on Account, the profile kept across
+ *                leases and a restart, Forget all logins (task B7)
  *   browser-b10  LinkedIn as a job website: its security check pauses all LinkedIn work for a
  *                week, a second search does not open it and an application is blocked; its
  *                sign in page stops the search with no hand off (B10's guards, on a website)

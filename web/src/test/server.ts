@@ -117,7 +117,7 @@ export const handlers = [
       consent: { granted: false, at: null, version: null, current_version: 1 },
     }),
   ),
-  // The browser free, no session of the person (the Account page's Your browser card).
+  // The browser free, no session of the person (the Account page's websites card).
   http.get("*/api/browser", () =>
     HttpResponse.json({
       available: true,
@@ -127,6 +127,8 @@ export const handlers = [
       queue: [],
     }),
   ),
+  // No website signed in (the Account page's Websites you are signed in to).
+  http.get("*/api/browser/sites", () => HttpResponse.json({ sites: [] })),
   // No agent run and no proposal yet (job detail's Agent assessment section).
   http.get("*/api/agents/runs", () => HttpResponse.json({ items: [] })),
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),

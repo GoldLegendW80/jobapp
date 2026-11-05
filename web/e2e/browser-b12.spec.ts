@@ -131,7 +131,7 @@ test("A watches, signs in through the banner's live view, and the run goes on", 
     // B, at the same moment, sees no banner of A's.
     await pageB.goto("/account");
     await expect(
-      pageB.getByRole("heading", { name: "Your browser" }),
+      pageB.getByRole("heading", { name: "Websites you are signed in to" }),
     ).toBeVisible();
     await expect(pageB.getByRole("region", BANNER)).toHaveCount(0);
 
@@ -221,7 +221,7 @@ test("nobody watching: the run is answered at once and nothing waits", async () 
   }
   await pageA.goto("/account");
   await expect(
-    pageA.getByRole("heading", { name: "Your browser" }),
+    pageA.getByRole("heading", { name: "Websites you are signed in to" }),
   ).toBeVisible();
   await expect(pageA.getByRole("region", BANNER)).toHaveCount(0);
 });
