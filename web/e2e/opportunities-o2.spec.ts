@@ -20,9 +20,10 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * the deck adds none of its own), so the card exists and is kept out only by the deck's folded
  * match of that rule: on /discover the cybersecurity card never shows. A Likes the first card (Review first: the toast says the documents are being written),
  * Passes the second with the left arrow, undoes the Pass (the card is back), Passes it again by
- * a mouse drag, reloads (the deck is empty, with the threshold named, and Undo last has nothing
- * to undo). The Like is in the review queue (/applications). Person B, signed in beside A, has
- * an empty deck, and A's posting answers 404 to B's Pass and its undo.
+ * a mouse drag, reloads (the deck is empty, with the threshold named, and neither Pass, Like
+ * nor Undo last shows, since nothing is left to swipe or undo). The Like is in the review queue
+ * (/applications). Person B, signed in beside A, has an empty deck, and A's posting answers 404
+ * to B's Pass and its undo.
  *
  * Locally, as opportunities-all.config.ts says, then:
  *   E2E_CADDY_URL=... E2E_ATS_FORMS_URL=... E2E_COMPOSE_PROJECT=... \
@@ -99,7 +100,7 @@ test("A swipes: Like, Pass, undo, Pass again; the cybersecurity role never shows
 
   await pageA.goto("/discover");
   await expect(heading(pageA)).toHaveText(titles.first);
-  await expect(pageA.getByTestId("deck-mode")).toHaveText("Review first");
+  await expect(pageA.getByTestId("deck-mode")).toHaveText("Like: Review first");
   await expect(pageA.getByText("2 postings left")).toBeVisible();
   await expect(pageA.getByText(/Cyber.?security/)).toHaveCount(0);
   await shots(pageA, "deck");
@@ -131,7 +132,10 @@ test("A swipes: Like, Pass, undo, Pass again; the cybersecurity role never shows
 
   await pageA.reload();
   await expect(pageA.getByText(EMPTY)).toBeVisible();
-  await expect(pageA.getByRole("button", { name: "Undo last" })).toBeDisabled();
+  for (const name of ["Pass", "Like", "Undo last"])
+    await expect(pageA.getByRole("button", { name, exact: true })).toHaveCount(
+      0,
+    );
   await expect(
     pageA.getByRole("link", { name: "Find new postings" }),
   ).toBeVisible();

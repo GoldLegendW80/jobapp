@@ -11,6 +11,7 @@ import {
   cliLink,
   makeShots,
   newContext,
+  openPostingMore,
   root,
   setPassword,
   signIn,
@@ -476,6 +477,8 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
   await expect(
     page.getByTestId("posting-text").locator("p").first(),
   ).toBeVisible();
+  // The files and the history are folded under "More about this posting".
+  await openPostingMore(page);
   const files = page.getByRole("list", { name: "Files" });
   await expect(files).toContainText("cv.pdf");
   await expect(

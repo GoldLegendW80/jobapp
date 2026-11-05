@@ -177,9 +177,14 @@ export const WORDING = {
   uploadCvHint:
     "Drop a PDF or a Word document here, or choose it. The app keeps the file in your documents and reads its text. Turning it into a CV you can edit uses your Anthropic API key: until one is saved, that part waits.",
   applicationSettings: "Application settings",
+  // The posting page: Apply and the documents first, the rest folded.
+  yourApplication: "Your application",
+  moreAboutPosting: "More about this posting",
   addWebsites: "Add websites",
   // Opportunities O3.
   pay: "Pay",
+  // A posting that states no pay, said in a muted style wherever pay is shown.
+  payNotGiven: "Pay not given",
   workMode: "Work mode",
   notStated: "Not stated",
   payLowest: "Lowest pay",

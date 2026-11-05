@@ -389,6 +389,133 @@ describe("the review queue page", () => {
     expect(api.cancels).toEqual([item.id]);
   });
 
+  it("says what the page is for, and promises no review that one click Apply does not make", async () => {
+    fakeQueue([queueItem(1, "ready")]);
+    renderApp(PATH);
+    await screen.findByRole("article", { name: /Robotics Engineer 1/ });
+    await waitFor(() => {
+      expect(screen.getByTestId("queue-intro")).toHaveTextContent(
+        /^Your applications\. Anything that needs your answer or approval waits here\.$/,
+      );
+    });
+    expect(document.body.textContent).not.toMatch(
+      /Nothing is sent until you approve it|Your review queue/,
+    );
+  });
+
+  it("offers It was submitted and Try again on an item the app could not confirm, each after a confirmation", async () => {
+    const item = queueItem(1, "submit_unknown");
+    const api = fakeQueue([item, queueItem(2, "submit_unknown")]);
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const unknown = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    expect(unknown).toHaveTextContent("We could not confirm this application.");
+    within(unknown).getByRole("link", { name: "Open the posting" });
+
+    // "Not yet" sends nothing.
+    await user.click(
+      within(unknown).getByRole("button", { name: "It was submitted" }),
+    );
+    let dialog = await screen.findByRole("alertdialog", {
+      name: "Mark this application as submitted?",
+    });
+    expect(dialog).toHaveTextContent(
+      "Only do this if you saw the confirmation.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Not yet" }));
+    expect(api.decisions).toEqual([]);
+
+    await user.click(
+      within(unknown).getByRole("button", { name: "It was submitted" }),
+    );
+    dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Mark as submitted" }),
+    );
+    await screen.findByText(
+      "Recorded Robotics Engineer 1 at Example Robotics as submitted.",
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("article", { name: /Robotics Engineer 1/ }),
+      ).toBeNull();
+    });
+    expect(
+      screen.getByRole("heading", { name: "Application queue" }),
+    ).toHaveFocus();
+
+    const second = card("Robotics Engineer 2");
+    await user.click(within(second).getByRole("button", { name: "Try again" }));
+    dialog = await screen.findByRole("alertdialog", {
+      name: "Fill and approve again?",
+    });
+    expect(dialog).toHaveTextContent(
+      "If the first one went through, the company may receive two applications.",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Fill and approve again" }),
+    );
+    await within(second).findByRole("button", { name: "Approve and submit" });
+    expect(api.decisions).toEqual([
+      { id: item.id, action: "submitted" },
+      { id: queueItem(2, "x").id, action: "retry" },
+    ]);
+  });
+
+  it("offers Try again, not It was submitted, on an item the site refused", async () => {
+    const item = queueItem(1, "refused_by_site");
+    const api = fakeQueue([item]);
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const refused = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    expect(refused).toHaveTextContent("The site showed errors after the click");
+    expect(
+      within(refused).queryByRole("button", { name: "It was submitted" }),
+    ).toBeNull();
+    within(refused).getByRole("link", { name: "Open the posting" });
+    await user.click(
+      within(refused).getByRole("button", { name: "Try again" }),
+    );
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Fill and approve again",
+      }),
+    );
+    await within(refused).findByRole("button", { name: "Approve and submit" });
+    expect(api.decisions).toEqual([{ id: item.id, action: "retry" }]);
+  });
+
+  it("shows the api's sentence when Try again is refused, and keeps the card", async () => {
+    const api = fakeQueue([queueItem(1, "submit_unknown")]);
+    api.next = {
+      detail: "This application changed meanwhile. Read it again.",
+      code: "state_changed",
+    };
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const unknown = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    await user.click(
+      within(unknown).getByRole("button", { name: "Try again" }),
+    );
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Fill and approve again",
+      }),
+    );
+    await within(unknown).findByText(
+      "This application changed meanwhile. Read it again.",
+    );
+    expect(
+      within(unknown).getByRole("button", { name: "It was submitted" }),
+    ).toBeEnabled();
+  });
+
   it("offers a retry when the queue cannot be loaded", async () => {
     let calls = 0;
     server.use(

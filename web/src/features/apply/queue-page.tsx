@@ -24,8 +24,18 @@ import { applySettingsKey, getApplySettings } from "./settings-api";
 const QUEUE_MAX = 200;
 
 /**
- * /applications, the review queue (SPEC-apply.md, "Frontend"): the applications of the person's
- * Likes, those waiting for the person first, then those under way. The page reads the queue
+ * What the page is for. It promises no review: since one click Apply (owner, 2026-11-01) an Apply
+ * click sends the form without one by default, and only what needs the person waits here.
+ */
+export const INTRO =
+  "Your applications. Anything that needs your answer or approval waits here.";
+/** Added in Full auto, where a Like is the approval of what passes every check. */
+export const FULL_AUTO_INTRO =
+  "In Full auto your Like is your approval: the app sends what passes every check once the hold ends, unless you cancel it here.";
+
+/**
+ * /applications, the review queue (SPEC-apply.md, "Frontend"): the person's applications (of a
+ * Like or of an Apply click), those waiting for the person first, then those under way. The page reads the queue
  * again by itself while something is under way, and keeps the app shell's count in step. With
  * Full auto, its day so far comes first, and each hold counts down on the server's clock.
  */
@@ -74,12 +84,9 @@ export function QueuePage() {
         >
           Application queue
         </h1>
-        <p className="text-muted-foreground">
-          {settings.data === undefined
-            ? "Your review queue: the applications of the postings you like."
-            : fullAuto
-              ? "Your review queue. In Full auto your Like is your approval: the app submits what passes every check once the hold ends, unless you cancel it here, and everything else waits here for you."
-              : "Your review queue: the assistant fills the form of each posting you like, then waits. Nothing is sent until you approve it."}
+        <p data-testid="queue-intro" className="text-muted-foreground">
+          {INTRO}
+          {fullAuto ? ` ${FULL_AUTO_INTRO}` : null}
         </p>
       </header>
       <FullAutoSummary on={fullAuto} />

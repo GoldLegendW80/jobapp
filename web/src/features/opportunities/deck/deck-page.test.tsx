@@ -53,6 +53,23 @@ async function open(
   return { deck, app };
 }
 
+/** A precise pointer (a mouse) or a touch screen, as the media query `(pointer: fine)` says. */
+function finePointer(on: boolean) {
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        matches: on && query === "(pointer: fine)",
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  );
+}
+
 function reducedMotion(on: boolean) {
   vi.spyOn(window, "matchMedia").mockImplementation(
     (query: string) =>
@@ -112,11 +129,59 @@ describe("the card", () => {
     expect(likeButton()).toHaveAttribute("aria-keyshortcuts", "ArrowRight");
   });
 
-  it("names the mode a Like runs in and links it to the Applications settings", async () => {
-    await open(undefined, { mode: "full_auto" });
-    const badge = screen.getByTestId("deck-mode");
-    expect(badge).toHaveTextContent("Full auto");
-    expect(badge).toHaveAttribute("href", "/settings/applications");
+  it.each([
+    ["review", "Like: Review first"],
+    ["full_auto", "Like: Full auto"],
+  ] as const)(
+    "names the mode a Like runs in (%s) and links it to the Applications settings",
+    async (mode, said) => {
+      await open(undefined, { mode });
+      const badge = screen.getByTestId("deck-mode");
+      expect(badge).toHaveTextContent(new RegExp(`^${said}$`));
+      expect(badge).toHaveAttribute("href", "/settings/applications");
+    },
+  );
+
+  it("says Pay not given, muted, when the posting states no pay", async () => {
+    await open([makeCard(1, { pay: null })]);
+    const shown = await card();
+    expect(within(shown).getByText("Pay not given")).toHaveClass(
+      "text-muted-foreground",
+    );
+    expect(shown).toHaveAccessibleName(
+      "Example Role 1 at Example Robotics 1, Lyon, France, Permanent, Pay not given, Fit 89",
+    );
+  });
+
+  it("names Pass and Like under their round buttons, and a tap on the name acts too", async () => {
+    const { deck } = await open();
+    const controls = screen.getByTestId("deck-controls");
+    for (const name of ["Pass", "Like"]) {
+      const label = within(controls).getByText(name, { selector: "label" });
+      expect(label).toBeVisible();
+      expect(label).toHaveAttribute(
+        "for",
+        screen.getByRole("button", { name }).id,
+      );
+    }
+    await userEvent.click(
+      within(controls).getByText("Like", { selector: "label" }),
+    );
+    await onTop("Example Role 2");
+    expect(deck.calls).toContain(`POST like ${makeCard(1).id}`);
+  });
+
+  it("offers the keys only to a precise pointer", async () => {
+    finePointer(true);
+    const first = await open();
+    expect(screen.getByTestId("deck-keys")).toHaveTextContent(
+      "Keys: left arrow to pass, right arrow to like, U to undo the last one.",
+    );
+    first.app.unmount();
+    finePointer(false);
+    await open();
+    expect(screen.queryByTestId("deck-keys")).toBeNull();
+    expect(passButton()).toBeVisible();
   });
 
   it("opens the posting's text under More", async () => {
@@ -244,12 +309,16 @@ describe("a Pass", () => {
   });
 
   it("of the last card leaves only its undo: no Like is ever sent for a passed card", async () => {
+    finePointer(true);
     const { deck } = await open([makeCard(1)]);
     await userEvent.click(passButton());
     expect(
       await screen.findByText("Nothing new above your threshold of 70."),
     ).toBeVisible();
-    expect(likeButton()).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Like" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pass" })).toBeNull();
+    expect(undoButton()).toBeEnabled();
+    expect(screen.queryByTestId("deck-keys")).toBeNull();
     await userEvent.keyboard("{ArrowRight}");
     expect(deck.calls.some((c) => c.startsWith("POST like"))).toBe(false);
     await userEvent.click(undoButton());
@@ -392,6 +461,20 @@ describe("pages and the empty deck", () => {
     expect(
       screen.getByRole("link", { name: "Search options" }),
     ).toHaveAttribute("href", "/profile?tab=search");
+  });
+
+  it("shows no Pass, Like, Undo last or keys without a card", async () => {
+    finePointer(true);
+    withPostingsAndSkills();
+    fakeDeck([]);
+    renderApp("/discover");
+    expect(
+      await screen.findByText("Nothing new above your threshold of 70."),
+    ).toBeVisible();
+    expect(screen.queryByTestId("deck-controls")).toBeNull();
+    for (const name of ["Pass", "Like", /Undo last/])
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(screen.queryByTestId("deck-keys")).toBeNull();
   });
 
   it("says there is no posting yet and opens Find jobs", async () => {

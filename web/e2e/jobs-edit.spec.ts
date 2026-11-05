@@ -16,6 +16,7 @@ import {
   cliLink,
   makeShots,
   newContext,
+  openPostingMore,
   root,
   setPassword,
   watchErrors,
@@ -280,6 +281,10 @@ test("a detail page: status, notes autosave and fit set by hand", async () => {
   ).toBeVisible();
   const id = page.url().split("/jobs/")[1]!;
   edited = { id, title };
+
+  // Status, fit, notes and the history are folded under "More about this posting"; the page
+  // keeps it open from here on, reloads included.
+  await openPostingMore(page);
 
   // Status: changes at once, the history follows, a reload keeps it.
   await page.getByLabel("Status", { exact: true }).selectOption("shortlisted");
