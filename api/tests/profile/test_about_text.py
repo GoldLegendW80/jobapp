@@ -1,7 +1,7 @@
-"""The "About you" document, pure (app/profile/about_text.py): the parts, the writer that
-converts a profile once (golden output for the owner's fixture shapes, invented data), the round
-trip through a reading that states what the text says, and the checks that refuse a value the
-text does not write."""
+"""The "About you" document, pure (app/profile/about_text.py): the parts (skills, answers, fact
+blocks), the writer that converts a profile once (golden output for the owner's fixture shapes,
+invented data), the round trip through a reading that states what the text says, the checks that
+refuse a value the text does not write, and the facts read by code."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from app.profile import about_text as t
 from app.profile.schemas import validate_section
 
 FIXTURES = Path(__file__).parent / "fixtures"
+SECTIONS = ("identity", "experience", "search", "preferences")
 
 
 def owner() -> dict[str, Any]:
@@ -24,38 +25,6 @@ def owner() -> dict[str, Any]:
 
 
 SMALL: dict[str, Any] = {
-    "experience": {
-        "employers": [
-            {
-                "key": "example-robotics",
-                "organisation": "Example Robotics",
-                "title": "Data engineer",
-                "start": "2021-03",
-                "end": None,
-                "location": "Lyon",
-                "contract": "CDI",
-            },
-            {
-                "key": "exdata",
-                "organisation": "Example Data",
-                "title": "Analyst",
-                "start": "2018",
-                "end": "2021",
-                "location": "Paris",
-                "contract": None,
-            },
-        ],
-        "education": [
-            {
-                "school": "Example School of Engineering",
-                "degree": "Master of data science",
-                "start": "2016",
-                "end": "2018",
-                "location": None,
-                "details": "Thesis on streaming joins.",
-            }
-        ],
-    },
     "skills": {
         "years_experience": 5,
         "have": [
@@ -81,8 +50,24 @@ SMALL: dict[str, Any] = {
         "notice_period": "Three months.",
         "motivation": "I like small teams.\n\nAnd useful tools.",
         "work_authorization": [
-            {"country": "France", "answer": "EU citizen.", "needs_sponsorship": False}
+            {"country": "France", "answer": "EU citizen.", "needs_sponsorship": False},
+            {"country": "Canada", "answer": "Work permit needed.", "needs_sponsorship": None},
         ],
+        "preferred_name": "Sam",
+        "highest_degree": "Master of data science",
+        "highest_degree_year": 2018,
+        "willing_onsite": True,
+        "willing_hybrid": False,
+        "background_check_consent": True,
+        "reference_check_consent": False,
+        "salary_stance": "range",
+        "salary_ranges": [
+            {"currency": "EUR", "minimum": 50000, "maximum": 60000, "period": "year"},
+            {"currency": "CHF", "minimum": 700, "period": "day"},
+        ],
+        "eeo_policy": "stored",
+        "eeo_answers": [{"topic": "gender", "answer": "Woman"}],
+        "leave_blank": ["Date of birth"],
     },
 }
 
@@ -91,35 +76,13 @@ def small() -> dict[str, Any]:
     return {name: validate_section(name, data) for name, data in SMALL.items()}
 
 
-def _entries(body: str) -> list[str]:
-    return [c if c.startswith("### ") else f"### {c}" for c in body.split("\n### ") if c.strip()]
+def said(value: bool, quote: str) -> t.SaidIn:
+    return t.SaidIn(value=value, quote=quote)
 
 
-def faithful(part: t.Part, sections: dict[str, Any], owned: list[str]) -> t.Interpretation:
-    """What a model that reads the part well submits: the values the writer wrote, each with the
-    lines that state it."""
-    if part.kind == "experience":
-        fields = ("organisation", "title", "start", "end", "location", "contract")
-        return t.Interpretation(
-            employers=[
-                t.EmployerIn(**{f: e[f] for f in fields}, excerpts=[lines])
-                for e, lines in zip(
-                    sections["experience"]["employers"], _entries(part.body), strict=True
-                )
-            ],
-            blocks=[],
-        )
-    if part.kind == "education":
-        fields = ("school", "degree", "start", "end", "location", "details")
-        return t.Interpretation(
-            education=[
-                t.SchoolIn(**{f: e[f] for f in fields}, excerpts=[lines.split("\n\n")[0]])
-                for e, lines in zip(
-                    sections["experience"]["education"], _entries(part.body), strict=True
-                )
-            ],
-            blocks=[],
-        )
+def faithful(part: t.Part, sections: dict[str, Any]) -> t.Interpretation:
+    """What a model that reads the part well submits: the values the writer wrote, each switch
+    with the line that states it."""
     if part.kind == "skills":
         skills = sections["skills"]
         return t.Interpretation(
@@ -136,33 +99,62 @@ def faithful(part: t.Part, sections: dict[str, Any], owned: list[str]) -> t.Inte
                 if not g["advanced_regex"]
             ],
         )
-    if part.kind == "answers":
-        answers = sections["answers"]
-        return t.Interpretation(
-            answers=t.AnswersIn(
-                **{name: answers[name] for name in t.ANSWERS},
-                work_authorization=[
-                    t.AuthorizationIn(country=w["country"], answer=w["answer"])
-                    for w in answers["work_authorization"]
-                ],
-            )
+    answers = sections["answers"]
+    switches = {
+        name: said(answers[name], t.SWITCHES[name][2 if answers[name] else 3])
+        for name in t.SWITCHES
+        if answers[name] is not None
+    }
+    sponsor = lambda need: (  # noqa: E731
+        None if need is None else said(need, f"Sponsorship needed: {'yes' if need else 'no'}.")
+    )
+    stance = answers["salary_stance"]
+    return t.Interpretation(
+        answers=t.AnswersIn(
+            **{name: answers[name] for name in t.PROSE},
+            highest_degree_year=answers["highest_degree_year"],
+            work_authorization=[
+                t.AuthorizationIn(
+                    country=w["country"],
+                    answer=w["answer"],
+                    needs_sponsorship=sponsor(w["needs_sponsorship"]),
+                )
+                for w in answers["work_authorization"]
+            ],
+            salary_stance=None
+            if stance is None
+            else t.ChoiceIn(value=stance, quote=t.STANCES[stance][1]),
+            salary_ranges=[
+                t.RangeIn(
+                    **{k: r[k] for k in ("currency", "minimum", "maximum", "period")},
+                    quote=t._range_words(r),
+                )
+                for r in answers["salary_ranges"]
+            ],
+            eeo_policy=t.ChoiceIn(
+                value=answers["eeo_policy"], quote=t.POLICIES[answers["eeo_policy"]][1]
+            ),
+            eeo_answers=[t.EeoIn(**one) for one in answers["eeo_answers"]],
+            leave_blank=answers["leave_blank"],
+            **switches,
         )
-    return t.Interpretation(blocks=[t.BlockIn(title=title) for title in owned])
+    )
 
 
-def round_trip(sections: dict[str, Any]) -> dict[str, Any]:
-    return round_trip_with(sections, {})
-
-
-def round_trip_with(sections: dict[str, Any], allow: dict[str, list[str]]) -> dict[str, Any]:
+def round_trip(
+    sections: dict[str, Any], allow: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     converted = t.convert(sections)
     current = copy.deepcopy(sections)
     for part in t.split(converted.text)[1]:
         owned = converted.parts[part.key]["blocks"]
-        outcome = t.interpret(part, current, owned, faithful(part, sections, owned))
+        if part.kind == "facts":
+            outcome = t.read_facts(part, current, owned)
+        else:
+            outcome = t.interpret(part, current, faithful(part, sections))
         assert outcome is not None
         assert outcome.refused == [], (part.heading, outcome.refused)
-        assert outcome.lines == allow.get(part.heading, []), (part.heading, outcome.lines)
+        assert outcome.lines == (allow or {}).get(part.heading, []), (part.heading, outcome.lines)
         current.update(outcome.changes)
     return current
 
@@ -172,15 +164,17 @@ def test_the_owner_s_profile_converts_to_the_golden_document() -> None:
     assert converted.text == (FIXTURES / "owner_about.md").read_text(encoding="utf-8")
     preamble, parts = t.split(converted.text)
     assert preamble == ""
-    assert [p.kind for p in parts[:3]] == ["experience", "education", "skills"]
+    assert parts[0].kind == "skills"
     assert parts[-1].kind == "answers"
-    assert {p.kind for p in parts[3:-1]} == {"facts"}
-    # Every part is in step with the profile it was written from.
+    assert {p.kind for p in parts[1:-1]} == {"facts"}
     for part in parts:
         state = converted.parts[part.key]
         assert state["applied"] == part.digest
         assert state["basis"] == t.basis(part.kind, owner(), state["blocks"])
-    # The regular expression categories and gates are not written: the code keeps them.
+    # Only skills, facts and answers are written: the jobs, schools, identity and search stay
+    # forms (owner, 2026-11-05), and regular expressions stay as stored.
+    assert "### GenAI Engineer, Lumetra Group" not in converted.text
+    assert "e2e-lucien.quillard@example.org" not in converted.text.split("## IDENTITY")[0]
     assert t.advanced_count(owner()) == 9
     assert "\\b" not in converted.text
 
@@ -193,22 +187,31 @@ def test_converting_reading_and_applying_gives_the_profile_back() -> None:
     expected["facts"]["blocks"][0]["body"] = (
         "- Built the streaming platform\n### Tools\nKafka, Flink"
     )
-    sections = small()
-    current = round_trip_with(sections, allow={"Projects": ["1 fact block updated: Projects"]})
-    assert current == expected
+    assert round_trip(small(), {"Projects": ["1 fact block updated: Projects"]}) == expected
 
 
-def test_the_writer_keeps_a_part_per_heading_and_dates_in_words() -> None:
+def test_the_answers_are_short_sentences_under_their_headings() -> None:
     text = t.convert(small()).text
-    assert "### Data engineer, Example Robotics\nMarch 2021 to now · Lyon · CDI" in text
-    assert "### Analyst, Example Data\n2018 to 2021 · Paris\n" in text
-    assert "- data tools: Python, Spark, Airflow\n- sql: SQL, dbt" in text
-    assert "- phd, lowers the fit by 30: PhD required" in text
-    # A level two heading inside a block would start a part: it is written one level down.
-    assert "## Projects\n\n- Built the streaming platform\n### Tools\nKafka, Flink" in text
-    # A block whose title reads as another kind keeps its own part.
+    answers = text.split("## Answers\n\n")[1]
+    for line in (
+        "### Work authorisation\n- France: EU citizen.\n  Sponsorship needed: no.\n"
+        "- Canada: Work permit needed.\n",
+        "### Highest degree\nMaster of data science\n\nYear: 2018",
+        "### Salary on forms\nOn forms, I give the salary range below.",
+        "### Salary ranges\n- EUR 50000 to 60000 a year\n- CHF 700 or more a day",
+        "### Working on site\nYes, I can work on site.",
+        "### Hybrid work\nNo, I cannot work hybrid.",
+        "### Background checks\nYes, I consent to background checks.",
+        "### Reference checks\nNo, I do not consent to reference checks.",
+        "### Equal opportunity questions\nI answer the equal opportunity questions with the "
+        "answers below.\n\n- Gender: Woman",
+        "### Questions I leave blank\n- Date of birth",
+    ):
+        assert line in answers, line
+    # The other sections are not in the document.
+    assert t.kind_of("Experience") == "facts"
     headings = [p.heading for p in t.split(text)[1]]
-    assert headings == ["Experience", "Education", "Skills", "Projects", "Notes: Skills", "Answers"]
+    assert headings == ["Skills", "Projects", "Notes: Skills", "Answers"]
 
 
 def test_a_heading_inside_a_code_fence_starts_no_part() -> None:
@@ -217,120 +220,41 @@ def test_a_heading_inside_a_code_fence_starts_no_part() -> None:
     assert [(p.heading, p.kind) for p in parts] == [("Skills", "skills"), ("Travel notes", "facts")]
     assert parts[0].body == "```\n## not a part\n```"
     assert t.kind_of("  COMPÉTENCES ") == "skills"
+    assert t.kind_of("Réponses") == "answers"
 
 
 def _part(sections: dict[str, Any], kind: str) -> t.Part:
     return next(p for p in t.split(t.convert(sections).text)[1] if p.kind == kind)
 
 
-def test_a_job_the_text_does_not_write_is_not_taken_and_the_stored_one_stays() -> None:
-    sections = small()
-    part = _part(sections, "experience")
-    given = faithful(part, sections, [])
-    assert given.employers is not None
-    invented = given.employers[1].model_copy(update={"start": "2017"})  # the text says 2018
-    elsewhere = given.employers[0].model_copy(
-        update={"organisation": "Example Space", "excerpts": ["### Founder, Example Space 2016"]}
-    )
-    given = given.model_copy(update={"employers": [given.employers[0], invented, elsewhere]})
-    outcome = t.interpret(part, sections, [], given)
-    assert outcome is not None
-    assert outcome.lines == []
-    assert outcome.refused == [
-        "A job at Example Data: its dates, title or place are not written that way in this part.",
-        "A job at Example Space: its dates, title or place are not written that way in this part.",
-    ]
-    assert outcome.changes["experience"] == sections["experience"]
-
-
-def test_a_title_or_place_must_be_written_in_the_lines_the_job_cites() -> None:
-    sections = small()
-    part = _part(sections, "experience")
-    given = faithful(part, sections, [])
-    assert given.employers is not None
-    for change in ({"title": "Lead data engineer"}, {"location": "Marseille"}, {"contract": "CDD"}):
-        one = given.employers[0].model_copy(update=change)
-        outcome = t.interpret(part, sections, [], given.model_copy(update={"employers": [one]}))
-        assert outcome is not None
-        # Refused, so the stored job stays; the other job is no longer in the reading.
-        assert [e["key"] for e in outcome.changes["experience"]["employers"]] == [
-            "example-robotics"
-        ], change
-        assert len(outcome.refused) == 1
-
-
-def test_an_employer_keeps_its_key_while_its_organisation_is_unchanged() -> None:
-    sections = small()
-    body = (
-        "### Senior data engineer, Example Robotics\nMarch 2021 to now · Lyon · permanent\n\n"
-        "### Analyst, Example Data\n2018 to 2021 · Paris\n\n"
-        "### Intern, Example Data\n2017 · Paris"
-    )
-    part = t.Part("Experience", body)
-    entries = _entries(body)
-    given = t.Interpretation(
-        employers=[
-            t.EmployerIn(
-                organisation="Example Robotics",
-                title="Senior data engineer",
-                start="2021-03",
-                end="now",
-                location="Lyon",
-                contract="permanent",
-                excerpts=[entries[0]],
-            ),
-            t.EmployerIn(
-                organisation="Example Data",
-                title="Analyst",
-                start="2018",
-                end="2021",
-                location="Paris",
-                excerpts=[entries[1]],
-            ),
-            t.EmployerIn(
-                organisation="Example Data",
-                title="Intern",
-                start="2017",
-                end="2017",
-                location="Paris",
-                excerpts=[entries[2]],
-            ),
-        ]
-    )
-    outcome = t.interpret(part, sections, [], given)
-    assert outcome is not None
-    assert outcome.refused == []
-    employers = outcome.changes["experience"]["employers"]
-    # The stored keys stay (exdata is not the slug of its organisation); a second position at
-    # the same organisation takes a key of its own.
-    assert [e["key"] for e in employers] == ["example-robotics", "exdata", "example-data"]
-    assert employers[0]["contract"] == "CDI"
-    assert outcome.lines == [
-        "1 job added: Intern at Example Data, 2017 to 2017",
-        "1 job updated: Senior data engineer at Example Robotics, March 2021 to now",
-    ]
-
-
-def test_a_skill_the_text_does_not_write_is_not_taken() -> None:
+def test_a_skill_or_a_number_the_text_does_not_write_is_not_taken() -> None:
     sections = small()
     part = _part(sections, "skills")
-    given = faithful(part, sections, [])
+    given = faithful(part, sections)
     assert given.categories is not None
     data = given.categories[0].model_copy(update={"terms": ["Python", "Spark", "Airflow", "Rust"]})
     lacking = t.CategoryIn(bucket="none", name="kotlin", terms=["Kotlin"])
+    gate = t.GateIn(name="phd", terms=["PhD required"], penalty=40)
     given = given.model_copy(
-        update={"categories": [data, *given.categories[1:], lacking], "years_experience": 7}
+        update={
+            "categories": [data, *given.categories[1:], lacking],
+            "gates": [gate],
+            "years_experience": 7,
+        }
     )
-    outcome = t.interpret(part, sections, [], given)
+    outcome = t.interpret(part, sections, given)
     assert outcome is not None
     assert outcome.refused == [
         "Years of experience: the number is not written in this part.",
         "1 term of data tools: not written in this part.",
         "1 term of kotlin: not written in this part.",
+        "phd: its penalty is not written in this part.",
     ]
-    assert outcome.lines == []
+    assert outcome.lines == ["1 skill removed from requirements that lower my fit: PhD required"]
+    skills = outcome.changes["skills"]
+    assert skills["years_experience"] == 5  # the stored years stay
     # The regular expression category stays where it was.
-    assert outcome.changes["skills"] == sections["skills"]
+    assert skills["have"] == sections["skills"]["have"]
 
 
 def test_skills_changes_are_summed_up_and_a_name_the_text_lacks_takes_its_first_term() -> None:
@@ -348,11 +272,10 @@ def test_skills_changes_are_summed_up_and_a_name_the_text_lacks_takes_its_first_
         ],
         gates=[],
     )
-    outcome = t.interpret(part, sections, [], given)
+    outcome = t.interpret(part, sections, given)
     assert outcome is not None
     assert outcome.refused == []
-    have = outcome.changes["skills"]["have"]
-    assert [c["name"] for c in have] == ["dbt", "cloud"]  # "data tools" is not written here
+    assert [c["name"] for c in outcome.changes["skills"]["have"]] == ["dbt", "cloud"]
     assert outcome.lines == [
         "Years of experience: 6",
         "2 skills removed from what I have: Spark, SQL",
@@ -360,39 +283,124 @@ def test_skills_changes_are_summed_up_and_a_name_the_text_lacks_takes_its_first_
     ]
 
 
-def test_an_answer_or_a_block_the_text_does_not_write_is_not_taken() -> None:
+def test_a_yes_or_no_the_text_does_not_state_clearly_is_left_as_it_was_and_said() -> None:
+    sections = small()
+    part = t.Part(
+        "Answers",
+        "### Background checks\nI do not mind them.\n\n"
+        "### Reference checks\nYes, but no calls to my employer, reference checks only.\n\n"
+        "### Working on site\nNo, I cannot work on site.\n\n"
+        "### Work authorisation\n- France: EU citizen.\n  Sponsorship needed: yes.\n\n"
+        "### Motivation\nI like small teams.",
+    )
+    given = t.Interpretation(
+        answers=t.AnswersIn(
+            motivation="I like small teams.",
+            background_check_consent=said(True, "I do not mind them."),
+            reference_check_consent=said(
+                True, "Yes, but no calls to my employer, reference checks only."
+            ),
+            willing_onsite=said(False, "No, I cannot work on site."),
+            # The model says yes, but quotes a line of another topic.
+            willing_hybrid=said(True, "Yes, I can work on site."),
+            work_authorization=[
+                t.AuthorizationIn(
+                    country="France",
+                    answer="EU citizen.",
+                    needs_sponsorship=said(True, "Sponsorship needed: yes."),
+                )
+            ],
+        )
+    )
+    outcome = t.interpret(part, sections, given)
+    assert outcome is not None
+    answers = outcome.changes["answers"]
+    assert answers["background_check_consent"] is True  # unchanged
+    assert answers["reference_check_consent"] is False  # unchanged
+    assert answers["willing_hybrid"] is False  # unchanged
+    assert answers["willing_onsite"] is False
+    assert outcome.refused == [
+        "Not changed: the text does not say clearly whether you can work hybrid. Start the line "
+        "with Yes or No.",
+        "Not changed: the text does not say clearly whether you consent to background checks. "
+        "Start the line with Yes or No.",
+        "Not changed: the text does not say clearly whether you consent to reference checks. "
+        "Start the line with Yes or No.",
+        "Not changed: the text does not say how you answer the salary on forms.",
+        "Not changed: the text does not say how you answer the equal opportunity questions.",
+    ]
+    assert answers["salary_stance"] == "range"
+    assert answers["eeo_policy"] == "stored"
+    # Each change to a switch is a line of its own, old value and new.
+    assert "Working on site: yes to no" in outcome.lines
+    assert "Sponsorship for France: no to yes" in outcome.lines
+    assert f"{t.AUTHORIZATION} for Canada: removed" in outcome.lines
+    assert any(
+        line.startswith("Salary range: EUR 50000 to 60000 a year to none") for line in outcome.lines
+    )
+
+
+def test_a_salary_or_an_equal_opportunity_answer_not_written_is_not_taken() -> None:
     sections = small()
     part = _part(sections, "answers")
-    given = faithful(part, sections, [])
+    given = faithful(part, sections)
     assert given.answers is not None
+    ranges = [
+        given.answers.salary_ranges[0].model_copy(update={"maximum": 65000}),
+        given.answers.salary_ranges[1],
+    ]
     answers = given.answers.model_copy(
         update={
+            "salary_ranges": ranges,
+            "eeo_answers": [t.EeoIn(topic="age", answer="Forty")],
+            "eeo_policy": t.ChoiceIn(value="leave", quote=t.POLICIES["stored"][1]),
             "notice_period": "One month.",
-            "travel": None,
-            "work_authorization": [t.AuthorizationIn(country="Canada", answer="EU citizen.")],
         }
     )
-    outcome = t.interpret(part, sections, [], given.model_copy(update={"answers": answers}))
+    outcome = t.interpret(part, sections, t.Interpretation(answers=answers))
     assert outcome is not None
     assert outcome.refused == [
         "Notice period: not written that way in this part.",
-        "Work authorisation for Canada: not written there.",
+        "Not changed: the text does not say clearly how you answer the equal opportunity "
+        "questions.",
+        "Not changed: a salary range in EUR is not written clearly.",
+        "Not changed: your age answer is not written there.",
     ]
+    stored = sections["answers"]
+    # The range not written as read stays as stored, in its place.
+    assert outcome.changes["answers"]["salary_ranges"] == stored["salary_ranges"]
+    assert outcome.changes["answers"]["eeo_policy"] == "stored"
     assert outcome.changes["answers"]["notice_period"] == "Three months."
-    assert outcome.lines == ["1 answer updated: Work authorisation"]
-    block = t.Part("Projects", "- Built the streaming platform")
-    given = t.Interpretation(blocks=[t.BlockIn(title="Projects", body="Built a search engine")])
-    outcome = t.interpret(block, sections, ["Projects"], given)
-    assert outcome is not None
-    assert outcome.refused == ["A fact block, Projects: not written that way in this part."]
-    assert outcome.changes["facts"]["blocks"] == [sections["facts"]["blocks"][1]]
-    assert outcome.lines == ["1 fact block removed: Projects"]
+    # The gender answer is no longer in the reading: its removal is its own line.
+    assert "Gender answer: Woman to none" in outcome.lines
+
+
+def test_a_fact_part_is_its_block_read_by_code() -> None:
+    sections = small()
+    part = t.Part("Projects", "- Built a search engine")
+    outcome = t.read_facts(part, sections, ["Projects"])
+    assert outcome.refused == []
+    assert outcome.changes["facts"]["blocks"][0] == {
+        "title": "Projects",
+        "body": "- Built a search engine",
+    }
+    assert outcome.lines == ["1 fact block updated: Projects"]
+    emptied = t.read_facts(t.Part("Projects", ""), sections, ["Projects"])
+    assert emptied.changes["facts"]["blocks"] == [sections["facts"]["blocks"][1]]
+    assert emptied.lines == ["1 fact block removed: Projects"]
+    clash = t.read_facts(t.Part("Notes: Skills", "Another."), sections, [])
+    assert clash.refused == ["Skills: another part already has a block of this title."]
+    assert clash.changes == {}
+    renamed = t.read_facts(t.Part("Notes: Skills", "Kept."), sections, ["Skills"])
+    assert renamed.changes["facts"]["blocks"][1] == {"title": "Skills", "body": "Kept."}
 
 
 def test_a_reading_without_its_kind_is_no_answer() -> None:
     sections = small()
-    assert t.interpret(_part(sections, "experience"), sections, [], t.Interpretation()) is None
-    assert t.interpret(_part(sections, "skills"), sections, [], t.Interpretation(gates=[])) is None
+    assert t.interpret(_part(sections, "skills"), sections, t.Interpretation(gates=[])) is None
+    assert (
+        t.interpret(_part(sections, "answers"), sections, t.Interpretation(categories=[])) is None
+    )
 
 
 @pytest.mark.parametrize(

@@ -1,24 +1,27 @@
-"""The "About you" document of each person: the text they write, Done, what the app understood,
-Apply and Undo (SPEC-profile, "About you"; the parts, the writer and the checks: about_text.py).
+"""The "About you" document of each person (its skills, answers and facts): the text they
+write, Done, what the app understood, Apply and Undo (SPEC-profile, "About you"; the parts, the
+writer and the checks: about_text.py).
 
 **The document** is made once, by code, from the profile the first time it is read (`_row`:
 `about_text.convert`), so after the conversion the sections are unchanged until the person
 applies something. It saves as the person types (`save_text`, a version per save: a stale one is
 refused, two tabs). It is not a section: no revision, never exported.
 
-**Done** on a part (`start`) asks the agent `profile_interpret` (about_agent.py) to read that
-part, as it was when Done was clicked, against what the profile holds of it. It needs a model
-credential; a part with nothing in it needs no model (its reading is that it states nothing).
-At most DONES_PER_DAY a UTC day, one at a time. When the run ends (`finish`), code checks what it
-read (`about_text.interpret`) and keeps the changes, the summary and the values not taken. Nothing
-of the profile changes then.
+**Done** on a part reads it. A fact part is read by code (`about_text.read_facts`: the block of
+its heading and text) and applied at once, with Undo after it. The skills and the answers parts
+are read by the agent `profile_interpret` (about_agent.py), as they were when Done was clicked,
+against what the profile holds of them. That needs a model credential; a part with nothing in it
+needs no model (its reading is that it states nothing). At most DONES_PER_DAY a UTC day, one at a
+time. When the run ends (`finish`), code checks what it read (`about_text.interpret`) and keeps
+the changes, the summary and the values not taken. Nothing of the profile changes then.
 
 **Apply** (`apply`) writes each changed section through the profile's own save, one revision
 each, so History and the rescore after a skills change work as for any save. It is refused when
 the part was edited since Done, or when a section it writes changed since the reading (another
-tab, Fill my profile, the classic editor): the person clicks Done again. Locked facts (employers,
-schools) change only here. **Undo** puts back what each section held before the last Apply,
-while nothing has changed them since.
+tab, Fill my profile, the classic editor): the person clicks Done again. What were switches in the
+answers (the consents, the equal opportunity answers, a sponsorship, the salary) change only
+here, each on its own line of the summary. **Undo** puts back what each section held before the
+last Apply, while nothing has changed them since.
 
 **In step.** Each part keeps the digest of its text and of what the profile held of it the last
 time they agreed (`about_text.in_step`). A part edited since reads `edited`; a part whose fields
@@ -281,9 +284,9 @@ def start(
     db: Session, user_id: uuid.UUID, heading: str, version: int, now: datetime
 ) -> uuid.UUID | None:
     """Done on the part `heading` of the text at `version`: the run of its reading, queued (the
-    caller commits, then queues about_agent.JOB), or None when the part is empty and its
-    reading is made here. Raises StaleError, and RefusedError `running`, `no_part`, `duplicate`,
-    `too_long`, `no_credential`, `asked_enough`, `busy`."""
+    caller commits, then queues about_agent.JOB), or None when code reads it here: a fact part,
+    applied at once, or an empty part. Raises StaleError, and RefusedError `running`, `no_part`,
+    `duplicate`, `too_long`, `no_credential`, `asked_enough`, `busy`."""
     row = _row(db, user_id, now, lock=True)
     if row.version != version:
         raise StaleError
@@ -300,14 +303,16 @@ def start(
         "digest": part.digest,
         "asked_at": now.isoformat(),
     }
-    if not part.body.strip():
+    if part.kind == "facts" or not part.body.strip():
+        # Read by code: a fact block is its text as written (applied at once, Undo after it),
+        # an empty part states nothing.
         row.interpretation = {**asked, "status": "running", "run_id": None}
         db.flush()
-        empty: dict[str, Any] = {about_text.READS[part.kind][0]: []}
-        if part.kind == "answers":
-            empty = {"answers": {}}
-        sections = _sections(db, user_id, now)
-        _record(row, _request(part, sections, _owned(row, part)), Interpretation(**empty), now)
+        empty = Interpretation(categories=[], gates=[], answers=about_text.AnswersIn())
+        _record(row, _request(part, _sections(db, user_id, now), _owned(row, part)), empty, now)
+        db.flush()  # apply reads the row again
+        if part.kind == "facts" and (row.interpretation or {}).get("changes"):
+            apply(db, user_id, now)
         return None
     if credentials.get(db, user_id) is None:
         raise RefusedError("no_credential")
@@ -355,16 +360,21 @@ def run_request(db: Session, run_id: uuid.UUID, now: datetime) -> tuple[str, Req
     return str((run.input or {}).get("request", "")), request
 
 
+def _read(request: Request, given: Interpretation | None) -> about_text.Outcome | None:
+    """What a part changes, checked: a fact part by code, skills and answers from the model."""
+    if request.kind == "facts":
+        return about_text.read_facts(request.part, request.sections, request.owned)
+    if given is None:
+        return None
+    return about_text.interpret(request.part, request.sections, given)
+
+
 def _record(
     row: ProfileAbout, request: Request, given: Interpretation | None, now: datetime
 ) -> None:
     """Check a reading against its part and keep what Apply will write."""
     asked = dict(row.interpretation or {})
-    found = (
-        None
-        if given is None
-        else about_text.interpret(request.part, request.sections, list(request.owned), given)
-    )
+    found = _read(request, given)
     if found is None:
         row.interpretation = {**asked, "status": "failed", "error": "no_answer"}
         return

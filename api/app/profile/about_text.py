@@ -1,36 +1,31 @@
 """The "About you" document: its parts, the writer that converts a profile into it, and the code
-that checks what the model read in a part before anything is shown (SPEC-profile, "About you";
-owner, 2026-11-05: "except for the general infos, just put informations on a .md should be well
-rendered and editable", then "No, I want a markdown that a model interpret, not just a view over
-today's field").
+that checks a reading before anything is shown (SPEC-profile, "About you"; owner, 2026-11-05:
+"a markdown that a model interpret", narrowed the same day: "only facts and skills should be in
+plain text or markdown. other fields remins on well structured inputs").
 
 Pure: no database, no network, no model call (about.py stores the document and runs the agent).
 
 **Parts.** The document is Markdown. A line `## Heading` outside a fenced code block starts a
-part; what comes before the first one is kept and never read. A part's kind follows its heading
-(`kind_of`, case and spaces aside): Experience, Education, Skills and Answers (and their French
-names) are the employers, the schools, the skills the fit reads and the prose of the answers;
-any other heading is a fact block of that title. A part is identified by its heading's `key`.
+part; what comes before the first one is kept and never read. A part headed Skills (or
+Compétences, case and spaces aside) holds the skills the fit reads; any other part is one fact
+block of that title. A part is identified by its heading's `key`.
 
-**The writer** (`convert`, `body_of`) is deterministic: from the stored sections it writes each
-part so that every value can be found again in its text, the way `check` reads it. A dated
-entry is a `### Title, Organisation` heading and one line "March 2021 to now · Lyon · CDI"; a
-skills category is a line "- name: term, term"; a fact block is a part of its own, its heading
-lines of level one or two written as level three (they would start a part). Regular expression
-categories and gates (`advanced_regex`) are not written: the code keeps them as stored.
+**The writer** (`convert`, `body_of`) is deterministic: from the stored sections it writes the
+skills part so that every value can be found again in its text, "Years of experience: 5" then a
+line "- name: term, term" per category under What I have, Close to what I have, What I do not
+have and Requirements that lower my fit ("- name, lowers the fit by 25: terms"), and each fact
+block as a part of its own, its level one and two headings written as level three (they would
+start a part). Regular expression categories and gates (`advanced_regex`) are not written: the
+code keeps them as stored. No other section is written: experience, education, languages,
+answers, identity and the search stay forms.
 
-**The check** (`interpret`), first failing reason wins for each value; a value that fails is not
-taken, and the stored one stays:
-- an employer or a school is checked by Fill my profile's citation checker
-  (`ingestion.citations.check_item`) against the lines the model quotes from the part: its
-  organisation or school as whole words, its dates with the month next to the year, its numbers;
-  then its title, degree and place must be written, word after word, in those lines, and its
-  contract named there;
-- every other value (a skills term or name, a fact block, an answer) must be written, word after
-  word, in the part (`written`: the words of N(value), the citation checker's normalisation,
-  appear in that order in N(part)); a number (years, a penalty) must be a number of the part.
-An employer keeps its `key` while its organisation is unchanged (a new one takes the slug of its
-organisation), so the CV bullets that cite it keep their job.
+**Reading a part.** A fact part needs no model: it is the block, its heading the title and its
+text the body, as written (`read_facts`). The skills part is read by the agent; code checks
+every value against the text (`interpret`), first failing reason wins, and a value that fails is
+not taken (the stored one stays): every term and name must be written, word after word, in the
+part (`Written`: the words of the citation checker's normalisation, `ingestion.citations`, in that
+order); the years and a gate's penalty must be numbers of the part (`citations.numbers_of`). A
+category whose name the text lacks takes its first term as its name.
 """
 
 from __future__ import annotations
@@ -46,41 +41,23 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ingestion import citations
-from app.ingestion.items import fold, slug
-from app.profile.schemas import (
-    LINE_MAX,
-    Employer,
-    ExperienceSection,
-    School,
-    SkillsSection,
-    format_period,
-    validate_section,
-)
+from app.ingestion.items import fold
+from app.profile.schemas import LINE_MAX, SkillsSection, validate_section
 
 TEXT_MAX = 300_000  # characters of the whole document
 PART_MAX = 20_000  # characters of one part a Done may send to the model
 SHOWN_MAX = 3  # names a summary line lists before "and N more"
 
-Kind = Literal["experience", "education", "skills", "answers", "facts"]
+Kind = Literal["skills", "answers", "facts"]
 HEADINGS: dict[str, Kind] = {
-    "experience": "experience",
-    "work experience": "experience",
-    "expérience": "experience",
-    "expériences": "experience",
-    "education": "education",
-    "formation": "education",
-    "études": "education",
     "skills": "skills",
     "compétences": "skills",
     "answers": "answers",
     "réponses": "answers",
 }
-TITLES: dict[str, str] = {
-    "experience": "Experience",
-    "education": "Education",
-    "skills": "Skills",
-    "answers": "Answers",
-}
+SKILLS_TITLE = "Skills"
+ANSWERS_TITLE = "Answers"
+NOTES = "Notes: "  # before the title of a block that would read as another kind
 BUCKETS = {
     "have": "What I have",
     "adjacent": "Close to what I have",
@@ -88,24 +65,6 @@ BUCKETS = {
 }
 GATES = "Requirements that lower my fit"
 YEARS = "Years of experience"
-# The prose answers a part holds, in the order the writer puts them.
-ANSWERS = {
-    "notice_period": "Notice period",
-    "earliest_start": "Earliest start",
-    "relocation": "Relocation",
-    "travel": "Travel",
-    "motivation": "Motivation",
-    "heard_about": "How I hear about jobs",
-}
-AUTHORIZATION = "Work authorisation"
-CONTRACT_WORDS = {
-    "CDI": ("cdi", "permanent"),
-    "CDD": ("cdd", "fixed term"),
-    "apprenticeship": ("apprenticeship", "apprentice", "alternance"),
-    "freelance": ("freelance", "freelancer", "self employed"),
-    "internship": ("internship", "intern"),
-    "other": ("other contract",),
-}
 
 _PART = re.compile(r"^##[ \t]+(\S.*?)[ \t]*$")
 _TOP = re.compile(r"^#{1,2}[ \t]+(?=\S)")
@@ -196,48 +155,6 @@ def demote(body: str) -> str:
 # --- the writer ---------------------------------------------------------------------------------
 
 
-def _when(start: str | None, end: str | None, present: bool) -> str | None:
-    if start and end:
-        return f"{format_period(start)} to {format_period(end)}"
-    if start:
-        return f"{format_period(start)} to now" if present else f"From {format_period(start)}"
-    return f"Until {format_period(end)}" if end else None
-
-
-def _line(*parts: str | None) -> str:
-    return " · ".join(part for part in parts if part)
-
-
-def _contract(value: str | None) -> str | None:
-    words = CONTRACT_WORDS.get(value or "")
-    return None if words is None else value if value in ("CDI", "CDD") else words[0]
-
-
-def _write_experience(sections: Mapping[str, Any]) -> str:
-    entries = []
-    for one in (sections.get("experience") or {}).get("employers") or []:
-        line = _line(
-            _when(one["start"], one.get("end"), True),
-            one.get("location"),
-            _contract(one.get("contract")),
-        )
-        entries.append(f"### {one['title']}, {one['organisation']}\n{line}")
-    return "\n\n".join(entries)
-
-
-def _write_education(sections: Mapping[str, Any]) -> str:
-    entries = []
-    for one in (sections.get("experience") or {}).get("education") or []:
-        lines = [f"### {one['degree']}, {one['school']}"]
-        line = _line(_when(one.get("start"), one.get("end"), False), one.get("location"))
-        if line:
-            lines.append(line)
-        if one.get("details"):
-            lines.append(f"\n{one['details']}")
-        entries.append("\n".join(lines))
-    return "\n\n".join(entries)
-
-
 def _years(value: float) -> str:
     return f"{value:g}"
 
@@ -265,24 +182,16 @@ def _write_skills(sections: Mapping[str, Any]) -> str:
     return "\n\n".join(chunks)
 
 
-def _write_answers(sections: Mapping[str, Any]) -> str:
-    answers = sections.get("answers") or {}
-    chunks = []
-    for name, title in ANSWERS.items():
-        if answers.get(name):
-            chunks.append(f"### {title}\n{demote(answers[name])}")
-        if name == "earliest_start" and answers.get("work_authorization"):
-            lines = [
-                f"- {one['country']}: " + one["answer"].replace("\n", "\n  ")
-                for one in answers["work_authorization"]
-            ]
-            chunks.append(f"### {AUTHORIZATION}\n" + "\n".join(lines))
-    return "\n\n".join(chunks)
-
-
 def block_heading(title: str) -> str:
     """The heading of a fact block's part: its title, unless that reads as another kind."""
-    return title if kind_of(title) == "facts" else f"Notes: {title}"
+    return title if kind_of(title) == "facts" else f"{NOTES}{title}"
+
+
+def block_title(heading: str) -> str:
+    """The title of the block a fact part is: its heading, without the prefix `block_heading`
+    gave a title that reads as another kind."""
+    rest = heading[len(NOTES) :] if heading.startswith(NOTES) else heading
+    return rest if kind_of(rest) != "facts" else heading
 
 
 def blocks_of(sections: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -291,10 +200,6 @@ def blocks_of(sections: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 def body_of(kind: Kind, sections: Mapping[str, Any], owned: Sequence[str] = ()) -> str:
     """The body the writer gives a part of this kind; for facts, the bodies of its blocks."""
-    if kind == "experience":
-        return _write_experience(sections)
-    if kind == "education":
-        return _write_education(sections)
     if kind == "skills":
         return _write_skills(sections)
     if kind == "answers":
@@ -311,14 +216,13 @@ class Converted:
 
 
 def convert(sections: Mapping[str, Any]) -> Converted:
-    """The document of a profile, and the state of each part (in step with the sections)."""
-    parts: list[tuple[Part, list[str]]] = []
-    for kind in ("experience", "education", "skills"):
-        parts.append((Part(TITLES[kind], body_of(kind, sections)), []))
+    """The document of a profile (the skills part, a part per fact block, then the answers), and
+    the state of each part (in step with the sections)."""
+    parts: list[tuple[Part, list[str]]] = [(Part(SKILLS_TITLE, body_of("skills", sections)), [])]
     for block in blocks_of(sections):
         heading = block_heading(block["title"])
         parts.append((Part(heading, demote(block["body"])), [block["title"]]))
-    parts.append((Part(TITLES["answers"], body_of("answers", sections)), []))
+    parts.append((Part(ANSWERS_TITLE, body_of("answers", sections)), []))
     state: dict[str, dict[str, Any]] = {}
     for part, owned in parts:
         if part.key not in state:
@@ -337,15 +241,10 @@ def in_step(part: Part, sections: Mapping[str, Any], owned: Sequence[str]) -> di
 
 # --- what a part holds in the sections ------------------------------------------------------------
 
-_PROSE = tuple(ANSWERS)
-
 
 def held(kind: Kind, sections: Mapping[str, Any], owned: Sequence[str] = ()) -> Any:
     """What the sections hold of a part's kind: what the part replaces, and what its basis
     hashes. Regular expression categories and gates are not a part's."""
-    if kind in ("experience", "education"):
-        name = "employers" if kind == "experience" else "education"
-        return (sections.get("experience") or {}).get(name) or []
     if kind == "skills":
         skills = sections.get("skills") or {}
         return {
@@ -356,13 +255,7 @@ def held(kind: Kind, sections: Mapping[str, Any], owned: Sequence[str] = ()) -> 
             },
         }
     if kind == "answers":
-        answers = sections.get("answers") or {}
-        held_answers: dict[str, Any] = {name: answers.get(name) for name in _PROSE}
-        held_answers["work_authorization"] = [
-            {"country": one["country"], "answer": one["answer"]}
-            for one in answers.get("work_authorization") or []
-        ]
-        return held_answers
+        return validate_section("answers", sections.get("answers") or {})
     titles = {key_of(title) for title in owned}
     return [b for b in blocks_of(sections) if key_of(b["title"]) in titles]
 
@@ -386,31 +279,10 @@ def advanced_count(sections: Mapping[str, Any]) -> int:
 # --- what the model submits -----------------------------------------------------------------------
 
 _SHORT = 4 * LINE_MAX
-_LONG = 2 * PART_MAX
 
 
 class _In(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class EmployerIn(_In):
-    organisation: str = Field(max_length=_SHORT)
-    title: str = Field(max_length=_SHORT)
-    start: str = Field(max_length=40)
-    end: str | None = Field(default=None, max_length=40)
-    location: str | None = Field(default=None, max_length=_SHORT)
-    contract: str | None = Field(default=None, max_length=40)
-    excerpts: list[str] = Field(max_length=citations.EXCERPTS_MAX)
-
-
-class SchoolIn(_In):
-    school: str = Field(max_length=_SHORT)
-    degree: str = Field(max_length=_SHORT)
-    start: str | None = Field(default=None, max_length=40)
-    end: str | None = Field(default=None, max_length=40)
-    location: str | None = Field(default=None, max_length=_SHORT)
-    details: str | None = Field(default=None, max_length=_LONG)
-    excerpts: list[str] = Field(max_length=citations.EXCERPTS_MAX)
 
 
 class CategoryIn(_In):
@@ -425,47 +297,406 @@ class GateIn(_In):
     penalty: int | None = Field(default=None, ge=0, le=100)
 
 
-class BlockIn(_In):
-    title: str = Field(max_length=_SHORT)
-    # Left out: the whole body of the part, as written (no copy to make, nothing to mistype).
-    body: str | None = Field(default=None, max_length=_LONG)
+# --- the answers part -----------------------------------------------------------------------------
+#
+# The answers are written one `###` heading each, short sentences the person can change. A prose
+# answer must be written word after word in the part. A value that was a switch (a yes or no, the
+# equal opportunity choice and answers, a work authorisation's sponsorship, the salary stance and
+# ranges) comes with the line that states it (`quote`): the line must be written in the part and
+# name its topic, a yes or no is that line's only yes or no word, a figure a number of it. A value
+# the text does not state that way is not changed, and the reading says so. Each such change is a
+# line of its own in the summary, old value and new.
+
+PROSE = {
+    "notice_period": "Notice period",
+    "earliest_start": "Earliest start",
+    "salary_policy": "Salary sentence",
+    "relocation": "Relocation",
+    "travel": "Travel",
+    "motivation": "Motivation",
+    "heard_about": "How I hear about jobs",
+    "preferred_name": "Preferred name",
+    "pronouns": "Pronouns",
+    "years_experience_stated": "Years of experience, as I say it",
+    "highest_degree": "Highest degree",
+}
+# A yes or no: its heading, its topic word (the quote must name it), its two sentences and what
+# the reading says when the text does not state it.
+SWITCHES = {
+    "willing_onsite": (
+        "Working on site", "site", "Yes, I can work on site.", "No, I cannot work on site.",
+        "whether you can work on site",
+    ),
+    "willing_hybrid": (
+        "Hybrid work", "hybrid", "Yes, I can work hybrid.", "No, I cannot work hybrid.",
+        "whether you can work hybrid",
+    ),
+    "previously_applied_default": (
+        "Applied before", "applied", "Yes, by default I say I applied before.",
+        "No, by default I say I have not applied before.", "whether you applied before",
+    ),
+    "background_check_consent": (
+        "Background checks", "background", "Yes, I consent to background checks.",
+        "No, I do not consent to background checks.",
+        "whether you consent to background checks",
+    ),
+    "reference_check_consent": (
+        "Reference checks", "reference", "Yes, I consent to reference checks.",
+        "No, I do not consent to reference checks.", "whether you consent to reference checks",
+    ),
+}  # fmt: skip
+AUTHORIZATION = "Work authorisation"
+SALARY = "Salary on forms"
+STANCES = {
+    "leave_blank": ("blank", "On forms, I leave the salary blank."),
+    "range": ("range", "On forms, I give the salary range below."),
+    "sentence": ("sentence", "On forms, I write the salary sentence."),
+}
+RANGES = "Salary ranges"
+PERIODS = {
+    "year": ("year", "yearly", "annual"),
+    "month": ("month", "monthly"),
+    "day": ("day", "daily"),
+}
+EEO = "Equal opportunity questions"
+POLICIES = {
+    "decline": ("decline", "I decline the equal opportunity questions."),
+    "leave": ("blank", "I leave the equal opportunity questions blank."),
+    "stored": ("below", "I answer the equal opportunity questions with the answers below."),
+}
+TOPICS = {
+    "gender": "Gender",
+    "ethnicity": "Ethnicity",
+    "race": "Race",
+    "disability": "Disability",
+    "veteran": "Veteran status",
+    "sexual_orientation": "Sexual orientation",
+    "age": "Age",
+}
+LEAVE_BLANK = "Questions I leave blank"
+YES = frozenset({"yes", "oui"})
+NO = frozenset({"no", "non"})
+
+
+def _yes_no(value: bool | None) -> str:
+    return "not set" if value is None else "yes" if value else "no"
+
+
+def _range_words(one: Mapping[str, Any]) -> str:
+    per = f"a {one.get('period') or 'year'}"
+    if one.get("maximum") is None:
+        return f"{one['currency']} {one['minimum']} or more {per}"
+    return f"{one['currency']} {one['minimum']} to {one['maximum']} {per}"
+
+
+def _write_answers(sections: Mapping[str, Any]) -> str:
+    answers = sections.get("answers") or {}
+    chunks: list[str] = []
+
+    def add(title: str, body: str) -> None:
+        chunks.append(f"### {title}\n{body}")
+
+    if answers.get("work_authorization"):
+        lines = []
+        for one in answers["work_authorization"]:
+            line = f"- {one['country']}: " + demote(one["answer"]).replace("\n", "\n  ")
+            sponsor = one.get("needs_sponsorship")
+            if sponsor is not None:
+                line += f"\n  Sponsorship needed: {'yes' if sponsor else 'no'}."
+            lines.append(line)
+        add(AUTHORIZATION, "\n".join(lines))
+    for name, title in PROSE.items():
+        if name == "highest_degree":
+            continue
+        if answers.get(name):
+            add(title, demote(answers[name]))
+    if answers.get("highest_degree") or answers.get("highest_degree_year"):
+        lines = [answers.get("highest_degree") or ""]
+        if answers.get("highest_degree_year"):
+            lines.append(f"Year: {answers['highest_degree_year']}")
+        add(PROSE["highest_degree"], "\n\n".join(line for line in lines if line))
+    if answers.get("salary_stance"):
+        add(SALARY, STANCES[answers["salary_stance"]][1])
+    if answers.get("salary_ranges"):
+        add(RANGES, "\n".join(f"- {_range_words(one)}" for one in answers["salary_ranges"]))
+    for name, (title, _, yes, no, _) in SWITCHES.items():
+        if answers.get(name) is not None:
+            add(title, yes if answers[name] else no)
+    policy = answers.get("eeo_policy") or "decline"
+    eeo = [POLICIES[policy][1]]
+    if answers.get("eeo_answers"):
+        eeo.append(
+            "\n".join(
+                f"- {TOPICS[one['topic']]}: {one['answer']}" for one in answers["eeo_answers"]
+            )
+        )
+    add(EEO, "\n\n".join(eeo))
+    if answers.get("leave_blank"):
+        add(LEAVE_BLANK, "\n".join(f"- {line}" for line in answers["leave_blank"]))
+    return "\n\n".join(chunks)
+
+
+class SaidIn(_In):
+    """A yes or no, with the line of the part that states it."""
+
+    value: bool
+    quote: str = Field(max_length=_SHORT)
 
 
 class AuthorizationIn(_In):
     country: str = Field(max_length=_SHORT)
-    answer: str = Field(max_length=_LONG)
+    answer: str = Field(max_length=2 * PART_MAX)
+    needs_sponsorship: SaidIn | None = None
+
+
+class RangeIn(_In):
+    currency: str = Field(max_length=8)
+    minimum: int = Field(ge=0, le=100_000_000)
+    maximum: int | None = Field(default=None, ge=0, le=100_000_000)
+    period: Literal["year", "month", "day"] = "year"
+    quote: str = Field(max_length=_SHORT)
+
+
+class EeoIn(_In):
+    topic: Literal[
+        "gender", "ethnicity", "race", "disability", "veteran", "sexual_orientation", "age"
+    ]
+    answer: str = Field(max_length=_SHORT)
+
+
+class ChoiceIn(_In):
+    value: str = Field(max_length=40)
+    quote: str = Field(max_length=_SHORT)
 
 
 class AnswersIn(_In):
-    notice_period: str | None = Field(default=None, max_length=_LONG)
-    earliest_start: str | None = Field(default=None, max_length=_LONG)
-    relocation: str | None = Field(default=None, max_length=_LONG)
-    travel: str | None = Field(default=None, max_length=_LONG)
-    motivation: str | None = Field(default=None, max_length=_LONG)
-    heard_about: str | None = Field(default=None, max_length=_LONG)
+    notice_period: str | None = Field(default=None, max_length=2 * PART_MAX)
+    earliest_start: str | None = Field(default=None, max_length=2 * PART_MAX)
+    salary_policy: str | None = Field(default=None, max_length=2 * PART_MAX)
+    relocation: str | None = Field(default=None, max_length=2 * PART_MAX)
+    travel: str | None = Field(default=None, max_length=2 * PART_MAX)
+    motivation: str | None = Field(default=None, max_length=2 * PART_MAX)
+    heard_about: str | None = Field(default=None, max_length=2 * PART_MAX)
+    preferred_name: str | None = Field(default=None, max_length=_SHORT)
+    pronouns: str | None = Field(default=None, max_length=_SHORT)
+    years_experience_stated: str | None = Field(default=None, max_length=_SHORT)
+    highest_degree: str | None = Field(default=None, max_length=_SHORT)
+    highest_degree_year: int | None = Field(default=None, ge=1950, le=2100)
     work_authorization: list[AuthorizationIn] = Field(default_factory=list, max_length=50)
+    salary_stance: ChoiceIn | None = None
+    salary_ranges: list[RangeIn] = Field(default_factory=list, max_length=10)
+    eeo_policy: ChoiceIn | None = None
+    eeo_answers: list[EeoIn] = Field(default_factory=list, max_length=7)
+    leave_blank: list[str] = Field(default_factory=list, max_length=50)
+    willing_onsite: SaidIn | None = None
+    willing_hybrid: SaidIn | None = None
+    previously_applied_default: SaidIn | None = None
+    background_check_consent: SaidIn | None = None
+    reference_check_consent: SaidIn | None = None
+
+
+def _states(written: Written, said: SaidIn, topic: str) -> bool | None:
+    """The yes or no a quote states about its topic, or None when it is not clear: the quote
+    must be written in the part, name the topic and hold one kind of yes or no word only."""
+    if not written(said.quote):
+        return None
+    words = set(_words(said.quote))
+    if not Written(said.quote)(topic):
+        return None
+    yes, no = bool(words & YES), bool(words & NO)
+    return None if yes == no else yes
+
+
+def _answers(
+    part: Part, stored: Mapping[str, Any], given: AnswersIn, out: Outcome
+) -> dict[str, Any]:
+    written = Written(part.text)
+    result = dict(stored)
+    for name, title in PROSE.items():
+        value = (getattr(given, name) or "").strip() or None
+        if value is None or written(value):
+            result[name] = value
+        else:
+            out.refused.append(f"{title}: not written that way in this part.")
+    year = given.highest_degree_year
+    if year is None or written.number(year):
+        result["highest_degree_year"] = year
+    else:
+        out.refused.append(f"{PROSE['highest_degree']}: its year is not written in this part.")
+
+    for name, (_, topic, _, _, whether) in SWITCHES.items():
+        said = getattr(given, name)
+        if said is None:
+            if stored.get(name) is not None:
+                out.refused.append(f"Not changed: the text does not say {whether}.")
+            continue
+        value = _states(written, said, topic)
+        if value is None or value != said.value:
+            out.refused.append(
+                f"Not changed: the text does not say clearly {whether}. Start the line with Yes "
+                "or No."
+            )
+            continue
+        result[name] = value
+
+    sponsorship = {
+        fold(one["country"]): one.get("needs_sponsorship")
+        for one in stored.get("work_authorization") or []
+    }
+    countries = []
+    for one in given.work_authorization:
+        if not (written(one.country) and written(one.answer)):
+            out.refused.append(f"{AUTHORIZATION} for {_named(one.country)}: not written there.")
+            countries += [
+                s
+                for s in stored.get("work_authorization") or []
+                if fold(s["country"]) == fold(one.country)
+            ]
+            continue
+        need = sponsorship.get(fold(one.country))
+        if one.needs_sponsorship is not None:
+            value = _states(written, one.needs_sponsorship, "sponsorship")
+            if value is None or value != one.needs_sponsorship.value:
+                out.refused.append(
+                    f"Not changed: the text does not say clearly whether {_named(one.country)} "
+                    "needs a sponsorship."
+                )
+            else:
+                need = value
+        countries.append(
+            {
+                "country": one.country.strip(),
+                "answer": one.answer.strip(),
+                "needs_sponsorship": need,
+            }
+        )
+    result["work_authorization"] = countries
+
+    for name, choices, what in (
+        ("salary_stance", STANCES, "how you answer the salary on forms"),
+        ("eeo_policy", POLICIES, "how you answer the equal opportunity questions"),
+    ):
+        choice: ChoiceIn | None = getattr(given, name)
+        if choice is None:
+            if stored.get(name) is not None:
+                out.refused.append(f"Not changed: the text does not say {what}.")
+            continue
+        word = choices.get(choice.value, ("", ""))[0]
+        if word and written(choice.quote) and Written(choice.quote)(word):
+            result[name] = choice.value
+        else:
+            out.refused.append(f"Not changed: the text does not say clearly {what}.")
+
+    ranges = []
+    for one in given.salary_ranges:
+        quote = Written(one.quote)
+        ok = (
+            written(one.quote)
+            and quote(one.currency)
+            and quote.number(one.minimum)
+            and (one.maximum is None or quote.number(one.maximum))
+            and any(quote(word) for word in PERIODS[one.period])
+        )
+        if ok:
+            ranges.append(
+                {
+                    "currency": one.currency.strip().upper(),
+                    "minimum": one.minimum,
+                    "maximum": one.maximum,
+                    "period": one.period,
+                }
+            )
+        else:
+            out.refused.append(
+                f"Not changed: a salary range in {_named(one.currency)} is not written clearly."
+            )
+            ranges += [
+                r
+                for r in stored.get("salary_ranges") or []
+                if r["currency"] == one.currency.strip().upper()
+            ]
+    result["salary_ranges"] = ranges
+
+    eeo = []
+    for one in given.eeo_answers:
+        if written(TOPICS[one.topic]) and written(one.answer):
+            eeo.append({"topic": one.topic, "answer": one.answer.strip()})
+        else:
+            out.refused.append(
+                f"Not changed: your {TOPICS[one.topic].lower()} answer is not written there."
+            )
+            eeo += [e for e in stored.get("eeo_answers") or [] if e["topic"] == one.topic]
+    result["eeo_answers"] = eeo
+    blank = [line.strip() for line in given.leave_blank if written(line)]
+    if len(blank) < len([line for line in given.leave_blank if line.strip()]):
+        out.refused.append(f"{LEAVE_BLANK}: a line not written that way in this part.")
+    result["leave_blank"] = blank
+    return result
+
+
+def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
+    """Prose in one line; every switch, sponsorship, salary and equal opportunity change on its
+    own line, old value and new."""
+    lines = []
+    prose = [title for name, title in PROSE.items() if before.get(name) != after.get(name)]
+    if before.get("highest_degree_year") != after.get("highest_degree_year"):
+        prose.append("Year of the highest degree")
+    if prose:
+        lines.append(f"{_many(len(prose), 'answer')} updated: {', '.join(prose)}")
+    for name, (title, *_rest) in SWITCHES.items():
+        if before.get(name) != after.get(name):
+            lines.append(f"{title}: {_yes_no(before.get(name))} to {_yes_no(after.get(name))}")
+    old = {fold(one["country"]): one for one in before.get("work_authorization") or []}
+    new = {fold(one["country"]): one for one in after.get("work_authorization") or []}
+    for key, one in new.items():
+        was = old.get(key)
+        if was is None:
+            lines.append(f"{AUTHORIZATION} for {one['country']}: added")
+        elif was.get("answer") != one["answer"]:
+            lines.append(f"{AUTHORIZATION} for {one['country']}: answer updated")
+        if was is not None and was.get("needs_sponsorship") != one.get("needs_sponsorship"):
+            lines.append(
+                f"Sponsorship for {one['country']}: {_yes_no(was.get('needs_sponsorship'))} to "
+                f"{_yes_no(one.get('needs_sponsorship'))}"
+            )
+    for key, one in old.items():
+        if key not in new:
+            lines.append(f"{AUTHORIZATION} for {one['country']}: removed")
+    for name, title in (("salary_stance", SALARY), ("eeo_policy", EEO)):
+        if before.get(name) != after.get(name):
+            lines.append(
+                f"{title}: {before.get(name) or 'not set'} to {after.get(name) or 'not set'}"
+            )
+    old_ranges = {one["currency"]: one for one in before.get("salary_ranges") or []}
+    new_ranges = {one["currency"]: one for one in after.get("salary_ranges") or []}
+    for currency in [*new_ranges, *[c for c in old_ranges if c not in new_ranges]]:
+        was, now = old_ranges.get(currency), new_ranges.get(currency)
+        if was != now:
+            lines.append(
+                f"Salary range: {_range_words(was) if was else 'none'} to "
+                f"{_range_words(now) if now else 'none'}"
+            )
+    old_eeo = {one["topic"]: one["answer"] for one in before.get("eeo_answers") or []}
+    new_eeo = {one["topic"]: one["answer"] for one in after.get("eeo_answers") or []}
+    for topic in TOPICS:
+        if old_eeo.get(topic) != new_eeo.get(topic):
+            lines.append(
+                f"{TOPICS[topic]} answer: {old_eeo.get(topic) or 'none'} to "
+                f"{new_eeo.get(topic) or 'none'}"
+            )
+    if (before.get("leave_blank") or []) != (after.get("leave_blank") or []):
+        lines.append(f"{LEAVE_BLANK}: updated")
+    return lines
 
 
 class Interpretation(_In):
-    """What `submit_interpretation` takes: the fields of the part's kind, shape only."""
+    """What `submit_interpretation` takes: the skills, or the answers, the part states, shape
+    only."""
 
-    employers: list[EmployerIn] | None = Field(default=None, max_length=60)
-    education: list[SchoolIn] | None = Field(default=None, max_length=40)
     years_experience: float | None = Field(default=None, ge=0, le=60)
     categories: list[CategoryIn] | None = Field(default=None, max_length=200)
     gates: list[GateIn] | None = Field(default=None, max_length=100)
-    blocks: list[BlockIn] | None = Field(default=None, max_length=50)
     answers: AnswersIn | None = None
-
-
-# What each kind reads of an interpretation; a kind whose first field is missing gave no answer.
-READS: dict[Kind, tuple[str, ...]] = {
-    "experience": ("employers", "blocks"),
-    "education": ("education", "blocks"),
-    "skills": ("categories", "gates", "years_experience"),
-    "answers": ("answers",),
-    "facts": ("blocks",),
-}
 
 
 # --- the check ------------------------------------------------------------------------------------
@@ -500,41 +731,6 @@ class Written:
         return _years(value) in self.numbers
 
 
-EMPLOYER_TYPES = {
-    "organisation": "name",
-    "title": "text",
-    "start": "date",
-    "end": "date",
-    "location": "text",
-    "contract": "enum",
-}
-SCHOOL_TYPES = {
-    "school": "name",
-    "degree": "text",
-    "start": "date",
-    "end": "date",
-    "location": "text",
-}
-_PRESENT = frozenset({"now", "present", "today", "current", "aujourd'hui", "en cours"})
-
-
-def _cited(
-    types: Mapping[str, str],
-    value: dict[str, Any],
-    document: citations.Document,
-    excerpts: Sequence[str],
-) -> Written | None:
-    """The cited lines as words when the citation checker accepts `value`, else None."""
-    found = citations.check_item(types, value, document, excerpts)
-    if isinstance(found, citations.Refusal):
-        return None
-    return Written("\n".join(one.excerpt for one in found.citations))
-
-
-def _end(value: str | None) -> str | None:
-    return None if value is None or value.strip().casefold() in _PRESENT else value.strip()
-
-
 @dataclass
 class Outcome:
     """What a part changes once checked: the sections to write (stored form), the summary, the
@@ -561,117 +757,6 @@ def _listed(names: Sequence[str]) -> str:
     return shown if rest <= 0 else f"{shown} and {rest} more"
 
 
-def _contract_of(text: str | None) -> str | None:
-    """The contract a model named, as the schema writes it ("permanent" is CDI); None for none,
-    and "?" for a word that is not a contract."""
-    if text is None or not text.strip():
-        return None
-    if text in CONTRACT_WORDS:
-        return text
-    wanted = fold(text)
-    found = [name for name, words in CONTRACT_WORDS.items() if wanted in (fold(name), *words)]
-    return found[0] if found else "?"
-
-
-def _employers(
-    part: Part, stored: list[dict[str, Any]], given: list[EmployerIn], out: Outcome
-) -> list[dict[str, Any]]:
-    document = citations.prepare(part.text)
-    taken: list[dict[str, Any] | None] = []  # None: a new entry, keyed below
-    new: list[tuple[int, dict[str, Any]]] = []
-    used: set[int] = set()
-    for one in given:
-        contract = _contract_of(one.contract)
-        value = {
-            "organisation": one.organisation.strip(),
-            "title": one.title.strip(),
-            "start": one.start.strip(),
-            "end": _end(one.end),
-            "location": (one.location or "").strip() or None,
-            "contract": None if contract == "?" else contract,
-        }
-        lines = _cited(EMPLOYER_TYPES, value, document, one.excerpts)
-        entry: dict[str, Any] | None = None
-        if (
-            lines is not None
-            and contract != "?"
-            and lines(value["title"])
-            and (value["location"] is None or lines(value["location"]))
-            and (contract is None or any(lines(word) for word in CONTRACT_WORDS[contract]))
-        ):
-            try:
-                entry = Employer.model_validate({"key": "x", **value}).model_dump(mode="json")
-            except ValidationError:
-                entry = None
-        same = slug(value["organisation"])
-        match = next(
-            (i for i, s in enumerate(stored) if i not in used and slug(s["organisation"]) == same),
-            None,
-        )
-        if match is not None:
-            used.add(match)
-        if entry is None:
-            out.refused.append(
-                f"A job at {_named(value['organisation'])}: its dates, title or place are not "
-                "written that way in this part."
-            )
-            if match is not None:  # the stored one stays as it is
-                taken.append(stored[match])
-            continue
-        if match is not None:
-            taken.append({**entry, "key": stored[match]["key"]})
-        else:
-            new.append((len(taken), {**entry, "key": same}))
-            taken.append(None)
-    keys = {one["key"] for one in taken if one is not None}
-    for at, entry in new:
-        key, number = entry["key"], 2
-        while key in keys:
-            key, number = f"{entry['key']}-{number}", number + 1
-        keys.add(key)
-        taken[at] = {**entry, "key": key}
-    return [one for one in taken if one is not None]
-
-
-def _schools(
-    part: Part, stored: list[dict[str, Any]], given: list[SchoolIn], out: Outcome
-) -> list[dict[str, Any]]:
-    document = citations.prepare(part.text)
-    written = Written(part.text)
-    taken: list[dict[str, Any]] = []
-    for one in given:
-        value = {
-            "school": one.school.strip(),
-            "degree": one.degree.strip(),
-            "start": (one.start or "").strip() or None,
-            "end": _end(one.end) or None,
-            "location": (one.location or "").strip() or None,
-        }
-        lines = _cited(SCHOOL_TYPES, value, document, one.excerpts)
-        details = (one.details or "").strip() or None
-        ok = (
-            lines is not None
-            and lines(value["degree"])
-            and (value["location"] is None or lines(value["location"]))
-            and (details is None or written(details))
-        )
-        if ok:
-            try:
-                taken.append(
-                    School.model_validate({**value, "details": details}).model_dump(mode="json")
-                )
-                continue
-            except ValidationError:
-                pass
-        out.refused.append(
-            f"A school, {_named(value['school'])}: its dates, degree or place are not written "
-            "that way in this part."
-        )
-        same = fold(value["school"])
-        taken += [s for s in stored if fold(s["school"]) == same and s not in taken]
-    return taken
-
-
 def _terms(written: Written, terms: Sequence[str], what: str, out: Outcome) -> list[str]:
     kept = [term.strip() for term in terms if written(term)]
     dropped = len([term for term in terms if term.strip()]) - len(kept)
@@ -690,16 +775,14 @@ def _skills(
         ]
         for bucket in (*BUCKETS, "gates")
     }
-    reserved = {fold(one["name"]) for pairs in advanced.values() for _, one in pairs}
-    seen = set(reserved)
-    result: dict[str, Any] = {"years_experience": stored.get("years_experience")}
+    seen = {fold(one["name"]) for pairs in advanced.values() for _, one in pairs}
+    result: dict[str, Any] = {"years_experience": None}
     if given.years_experience is not None:
         if written.number(given.years_experience):
             result["years_experience"] = float(given.years_experience)
         else:
+            result["years_experience"] = stored.get("years_experience")
             out.refused.append(f"{YEARS}: the number is not written in this part.")
-    else:
-        result["years_experience"] = None
     plain: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in (*BUCKETS, "gates")}
     for one in given.categories or []:
         terms = _terms(written, one.terms, one.name, out)
@@ -732,84 +815,14 @@ def _skills(
     return result
 
 
-def _answers(
-    part: Part, stored: Mapping[str, Any], given: AnswersIn, out: Outcome
-) -> dict[str, Any]:
-    written = Written(part.text)
-    result = dict(stored)
-    for name, title in ANSWERS.items():
-        value = (getattr(given, name) or "").strip() or None
-        if value is None or written(value):
-            result[name] = value
-        else:
-            out.refused.append(f"{title}: not written that way in this part.")
-    sponsorship = {
-        fold(one["country"]): one.get("needs_sponsorship")
-        for one in stored.get("work_authorization") or []
-    }
-    countries = []
-    for one in given.work_authorization:
-        if written(one.country) and written(one.answer):
-            countries.append(
-                {
-                    "country": one.country.strip(),
-                    "answer": one.answer.strip(),
-                    "needs_sponsorship": sponsorship.get(fold(one.country)),
-                }
-            )
-        else:
-            out.refused.append(f"{AUTHORIZATION} for {_named(one.country)}: not written there.")
-    result["work_authorization"] = countries
-    return result
-
-
-def _blocks(
-    part: Part,
-    stored: list[dict[str, Any]],
-    owned: Sequence[str],
-    given: list[BlockIn],
-    out: Outcome,
-) -> list[dict[str, Any]]:
-    written = Written(part.text)
-    mine = {key_of(title) for title in owned}
-    others = {key_of(b["title"]) for b in stored if key_of(b["title"]) not in mine}
-    new: list[dict[str, Any]] = []
-    for one in given:
-        title = one.title.strip()
-        body = part.body.strip() if one.body is None else one.body.strip()
-        if not written(title) or not body or (one.body is not None and not written(body)):
-            out.refused.append(f"A fact block, {_named(title)}: not written that way in this part.")
-            continue
-        if key_of(title) in others or key_of(title) in {key_of(b["title"]) for b in new}:
-            out.refused.append(f"{_named(title)}: another part already has a block of this title.")
-            continue
-        new.append({"title": title, "body": body})
-    at = next((i for i, b in enumerate(stored) if key_of(b["title"]) in mine), len(stored))
-    kept = [b for b in stored if key_of(b["title"]) not in mine]
-    at = min(at, len(kept))
-    out.blocks = [b["title"] for b in new]
-    return [*kept[:at], *new, *kept[at:]]
-
-
-def _period_words(entry: Mapping[str, Any], present: bool) -> str:
-    when = _when(entry.get("start"), entry.get("end"), present)
-    return f", {when}" if when else ""
-
-
-def _diff_lines(
-    what: str,
-    before: list[dict[str, Any]],
-    after: list[dict[str, Any]],
-    identity: Any,
-    label: Any,
-) -> list[str]:
-    old = {identity(one): one for one in before}
-    new = {identity(one): one for one in after}
+def _diff_lines(what: str, before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[str]:
+    old = {key_of(one["title"]): one for one in before}
+    new = {key_of(one["title"]): one for one in after}
     lines = []
     for verb, names in (
-        ("added", [label(new[k]) for k in new if k not in old]),
-        ("updated", [label(new[k]) for k in new if k in old and old[k] != new[k]]),
-        ("removed", [label(old[k]) for k in old if k not in new]),
+        ("added", [new[k]["title"] for k in new if k not in old]),
+        ("updated", [new[k]["title"] for k in new if k in old and old[k] != new[k]]),
+        ("removed", [old[k]["title"] for k in old if k not in new]),
     ):
         if names:
             lines.append(f"{_many(len(names), what)} {verb}: {_listed(names)}")
@@ -837,72 +850,7 @@ def _skills_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[s
     return lines
 
 
-def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
-    changed = [title for name, title in ANSWERS.items() if before.get(name) != after.get(name)]
-    if (
-        held("answers", {"answers": before})["work_authorization"]
-        != held("answers", {"answers": after})["work_authorization"]
-    ):
-        changed.append(AUTHORIZATION)
-    return [f"{_many(len(changed), 'answer')} updated: {', '.join(changed)}"] if changed else []
-
-
-def interpret(
-    part: Part, sections: Mapping[str, Any], owned: Sequence[str], given: Interpretation
-) -> Outcome | None:
-    """What the part changes, checked; None when the model gave nothing for its kind."""
-    kind = part.kind
-    if getattr(given, READS[kind][0]) is None:
-        return None
-    out = Outcome()
-    experience = dict(sections.get("experience") or ExperienceSection().model_dump(mode="json"))
-    if kind == "experience":
-        experience["employers"] = _employers(
-            part, experience.get("employers") or [], given.employers or [], out
-        )
-        out.lines += _diff_lines(
-            "job",
-            held("experience", sections),
-            experience["employers"],
-            lambda e: e["key"],
-            lambda e: f"{e['title']} at {e['organisation']}{_period_words(e, True)}",
-        )
-        out.changes["experience"] = experience
-    elif kind == "education":
-        experience["education"] = _schools(
-            part, experience.get("education") or [], given.education or [], out
-        )
-        out.lines += _diff_lines(
-            "school",
-            held("education", sections),
-            experience["education"],
-            lambda s: (fold(s["school"]), s.get("start")),
-            lambda s: f"{s['degree']}, {s['school']}{_period_words(s, False)}",
-        )
-        out.changes["experience"] = experience
-    elif kind == "skills":
-        stored = sections.get("skills") or SkillsSection().model_dump(mode="json")
-        skills = {**stored, **_skills(part, stored, given, out)}
-        out.lines += _skills_lines(held("skills", sections), held("skills", {"skills": skills}))
-        out.changes["skills"] = skills
-    elif kind == "answers" and given.answers is not None:
-        stored = sections.get("answers") or {}
-        answers = _answers(part, stored, given.answers, out)
-        out.lines += _answers_lines(stored, answers)
-        out.changes["answers"] = answers
-    if kind in ("experience", "education", "facts") and given.blocks is not None:
-        stored_blocks = blocks_of(sections)
-        blocks = _blocks(part, stored_blocks, owned, given.blocks, out)
-        out.lines += _diff_lines(
-            "fact block",
-            held("facts", sections, owned),
-            held("facts", {"facts": {"blocks": blocks}}, out.blocks),
-            lambda b: key_of(b["title"]),
-            lambda b: b["title"],
-        )
-        out.changes["facts"] = {"blocks": blocks}
-    elif kind in ("experience", "education"):
-        out.blocks = list(owned)
+def _validated(out: Outcome) -> Outcome:
     for name, data in list(out.changes.items()):
         try:
             out.changes[name] = validate_section(name, data)
@@ -910,3 +858,49 @@ def interpret(
             out.refused.append(f"The {name} could not be saved as read: nothing of it is taken.")
             del out.changes[name]
     return out
+
+
+def interpret(part: Part, sections: Mapping[str, Any], given: Interpretation) -> Outcome | None:
+    """What the skills or the answers part changes, checked; None when the model gave nothing
+    of the part's kind."""
+    out = Outcome()
+    if part.kind == "answers":
+        if given.answers is None:
+            return None
+        stored_answers = held("answers", sections)
+        answers = _answers(part, stored_answers, given.answers, out)
+        out.lines += _answers_lines(stored_answers, answers)
+        out.changes["answers"] = answers
+        return _validated(out)
+    if given.categories is None:
+        return None
+    stored = sections.get("skills") or SkillsSection().model_dump(mode="json")
+    skills = {**stored, **_skills(part, stored, given, out)}
+    out.lines += _skills_lines(held("skills", sections), held("skills", {"skills": skills}))
+    out.changes["skills"] = skills
+    return _validated(out)
+
+
+def read_facts(part: Part, sections: Mapping[str, Any], owned: Sequence[str]) -> Outcome:
+    """A fact part read by code: the block of its heading and its text as written (an empty part
+    is no block), in the place of the blocks the part held; a title another block holds is
+    refused."""
+    out = Outcome()
+    stored = blocks_of(sections)
+    mine = {key_of(title) for title in owned}
+    title, body = block_title(part.heading).strip(), part.body.strip()
+    new = [{"title": title, "body": body}] if body else []
+    if new and any(
+        key_of(b["title"]) == key_of(title) for b in stored if key_of(b["title"]) not in mine
+    ):
+        out.refused.append(f"{_named(title)}: another part already has a block of this title.")
+        out.blocks = list(owned)
+        return out
+    at = next((i for i, b in enumerate(stored) if key_of(b["title"]) in mine), len(stored))
+    kept = [b for b in stored if key_of(b["title"]) not in mine]
+    at = min(at, len(kept))
+    blocks = [*kept[:at], *new, *kept[at:]]
+    out.blocks = [b["title"] for b in new]
+    out.lines = _diff_lines("fact block", held("facts", sections, owned), new)
+    out.changes["facts"] = {"blocks": blocks}
+    return _validated(out)

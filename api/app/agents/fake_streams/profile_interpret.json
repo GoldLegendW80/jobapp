@@ -1,5 +1,5 @@
 {
- "description": "The agent that reads a part of the About you document (profile): an Experience part with one job changed, one added and one the text does not write, which the check refuses; the default stream.",
+ "description": "The agent that reads a part of the About you document (profile): a Skills part with the years changed, one skill added to what the person has, one to what they lack, and one term the text does not write, which the check refuses; the default stream.",
  "steps": [
   {
    "message": {
@@ -48,53 +48,27 @@
        "id": "toolu_interpret_01",
        "name": "mcp__app__submit_interpretation",
        "input": {
-        "employers": [
+        "years_experience": 5,
+        "categories": [
          {
-          "organisation": "Example Robotics",
-          "title": "Senior data engineer",
-          "start": "2021-03",
-          "end": "now",
-          "location": "Lyon",
-          "contract": "CDI",
-          "excerpts": [
-           "### Senior data engineer, Example Robotics\nMarch 2021 to now · Lyon · CDI"
+          "bucket": "have",
+          "name": "data",
+          "terms": [
+           "SQL",
+           "dbt",
+           "Airflow",
+           "Spark"
           ]
          },
          {
-          "organisation": "Example Data",
-          "title": "Analyst",
-          "start": "2018",
-          "end": "2021",
-          "location": "Paris",
-          "contract": null,
-          "excerpts": [
-           "### Analyst, Example Data\n2018 to 2021 · Paris"
-          ]
-         },
-         {
-          "organisation": "Example Labs",
-          "title": "Intern",
-          "start": "2017",
-          "end": "2018",
-          "location": "Grenoble",
-          "contract": "internship",
-          "excerpts": [
-           "### Intern, Example Labs\n2017 to 2018 · Grenoble · internship"
-          ]
-         },
-         {
-          "organisation": "Example Space",
-          "title": "Founder",
-          "start": "2016",
-          "end": "2017",
-          "location": "Nice",
-          "contract": null,
-          "excerpts": [
-           "### Founder, Example Space\n2016 to 2017 · Nice"
+          "bucket": "none",
+          "name": "java",
+          "terms": [
+           "Java"
           ]
          }
         ],
-        "blocks": []
+        "gates": []
        }
       }
      ],

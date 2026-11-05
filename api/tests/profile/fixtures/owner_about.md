@@ -1,35 +1,3 @@
-## Experience
-
-### GenAI Engineer, Lumetra Group
-March 2025 to now · Nantes
-
-### Auto-entrepreneur (self-employed), NoxTechSolutions
-May 2023 to now · Nantes · freelance
-
-### Full-stack Developer (apprenticeship), OLMEA
-September 2021 to June 2024 · Saint-Nazaire · apprenticeship
-
-### Help desk assistant, Velmor
-June 2021 to August 2021 · Nantes
-
-### Web developer, Studio Marée 17
-February 2021 to May 2021 · La Rochelle
-
-## Education
-
-### Master of Engineering, ORBITECH Institute of Technology
-September 2020 to June 2024 · Nantes
-
-2020 – 2024. Major: Data Science
-
-### Bachelor of Mathematics, Université de Kervan Haute-Loire
-
-2017 – 2020
-
-### Baccalauréat Général, Lycée Clément Arnaud, Angers
-
-Mathematics and physics, Mention Bien
-
 ## Skills
 
 Years of experience: 5
@@ -194,17 +162,24 @@ Outward material names skills and outcomes, never lists of files or tickets.
 
 ## Answers
 
+### Work authorisation
+- France: French national, free to work anywhere in the EU, so no sponsorship is needed in France.
+  Sponsorship needed: no.
+- European Union: French national, free to work anywhere in the EU, so no sponsorship is needed in France.
+  Sponsorship needed: no.
+- Canada: Work permit needed.
+  Sponsorship needed: yes.
+- United Kingdom: Sponsorship would be needed.
+  Sponsorship needed: yes.
+
 ### Notice period
 One month notice period.
 
 ### Earliest start
 February 2027 (date fields: 2027-02-01)
 
-### Work authorisation
-- France: French national, free to work anywhere in the EU, so no sponsorship is needed in France.
-- European Union: French national, free to work anywhere in the EU, so no sponsorship is needed in France.
-- Canada: Work permit needed.
-- United Kingdom: Sponsorship would be needed.
+### Salary sentence
+No figure from the assistant; Lucien types it himself.
 
 ### Relocation
 Hybrid around Nantes or fully remote. Open to moving to Lyon. Two office days a week is fine.
@@ -217,3 +192,9 @@ He likes small teams that put useful tools in front of real users quickly, and w
 
 ### How I hear about jobs
 The company's careers page, or a referral when there was one.
+
+### Equal opportunity questions
+I decline the equal opportunity questions.
+
+### Questions I leave blank
+- Demographic and voluntary self-identification questions: left empty; Lucien decides on each one.
